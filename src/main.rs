@@ -9,7 +9,6 @@ fn main() -> iced::Result {
         .run()
 }
 
-#[derive(Default)]
 struct App;
 
 #[derive(Debug, Clone)]
