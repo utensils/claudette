@@ -1,0 +1,13 @@
+[package]
+name = "claudette"
+version = "0.1.0"
+edition = "2024"
+description = "Claude's missing better half — a companion tool for Claude Code"
+
+[dependencies]
+iced = "0.14"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+
+# libghostty integration (terminal emulation) — not yet stable, requires zig toolchain
+# ghostty = "0.1"
