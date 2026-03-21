@@ -6,10 +6,10 @@ use iced::{Background, Border, Element, Fill, Theme};
 use crate::message::Message;
 use crate::ui::style;
 
-pub fn view_add_repo_modal<'a>(
+fn modal_backdrop<'a>(
     base: Element<'a, Message>,
-    path_input: &str,
-    error: Option<&String>,
+    card: Element<'a, Message>,
+    on_dismiss: Message,
 ) -> Element<'a, Message> {
     let backdrop: Element<'_, Message> = mouse_area(
         container(column![])
@@ -20,10 +20,36 @@ pub fn view_add_repo_modal<'a>(
                 ..Default::default()
             }),
     )
-    .on_press(Message::HideAddRepo)
+    .on_press(on_dismiss)
     .into();
 
-    let mut modal_content = column![
+    let overlay = center(opaque(card)).width(Fill).height(Fill);
+
+    iced::widget::stack![base, backdrop, overlay].into()
+}
+
+fn modal_card(content: Element<'_, Message>) -> Element<'_, Message> {
+    container(content)
+        .width(460)
+        .padding(24)
+        .style(|_theme: &Theme| container::Style {
+            background: Some(Background::Color(style::MODAL_BG)),
+            border: Border {
+                radius: 8.0.into(),
+                width: 1.0,
+                color: style::MODAL_BORDER,
+            },
+            ..Default::default()
+        })
+        .into()
+}
+
+pub fn view_add_repo_modal<'a>(
+    base: Element<'a, Message>,
+    path_input: &str,
+    error: Option<&String>,
+) -> Element<'a, Message> {
+    let mut content = column![
         text("Add Repository").size(20),
         text_input(
             "Enter repository path (e.g., /home/user/projects/my-repo)",
@@ -37,10 +63,10 @@ pub fn view_add_repo_modal<'a>(
     .spacing(12);
 
     if let Some(err) = error {
-        modal_content = modal_content.push(text(err.clone()).size(14).color(style::ERROR));
+        content = content.push(text(err.clone()).size(14).color(style::ERROR));
     }
 
-    modal_content = modal_content.push(
+    content = content.push(
         row![
             button(text("Cancel").size(14))
                 .on_press(Message::HideAddRepo)
@@ -69,20 +95,73 @@ pub fn view_add_repo_modal<'a>(
         .align_y(iced::Alignment::Center),
     );
 
-    let modal_card = container(modal_content)
-        .width(460)
-        .padding(24)
-        .style(|_theme: &Theme| container::Style {
-            background: Some(Background::Color(style::MODAL_BG)),
-            border: Border {
-                radius: 8.0.into(),
-                width: 1.0,
-                color: style::MODAL_BORDER,
-            },
-            ..Default::default()
-        });
+    modal_backdrop(base, modal_card(content.into()), Message::HideAddRepo)
+}
 
-    let overlay = center(opaque(modal_card)).width(Fill).height(Fill);
+pub fn view_create_workspace_modal<'a>(
+    base: Element<'a, Message>,
+    repo_name: &str,
+    name_input: &str,
+    error: Option<&String>,
+) -> Element<'a, Message> {
+    let branch_preview = if name_input.trim().is_empty() {
+        "claudette/<name>".to_string()
+    } else {
+        format!("claudette/{}", name_input.trim())
+    };
 
-    iced::widget::stack![base, backdrop, overlay].into()
+    let mut content = column![
+        text("New Workspace").size(20),
+        text(format!("Repository: {repo_name}"))
+            .size(14)
+            .color(style::DIM),
+        text_input("Workspace name", name_input)
+            .on_input(Message::CreateWorkspaceNameChanged)
+            .on_submit(Message::ConfirmCreateWorkspace)
+            .padding(10)
+            .size(16),
+        text(format!("Branch: {branch_preview}"))
+            .size(12)
+            .color(style::FAINT),
+    ]
+    .spacing(12);
+
+    if let Some(err) = error {
+        content = content.push(text(err.clone()).size(14).color(style::ERROR));
+    }
+
+    content = content.push(
+        row![
+            button(text("Cancel").size(14))
+                .on_press(Message::HideCreateWorkspace)
+                .style(|theme: &Theme, status| {
+                    let mut s = button::secondary(theme, status);
+                    s.border = Border {
+                        radius: 4.0.into(),
+                        ..s.border
+                    };
+                    s
+                })
+                .padding([8, 16]),
+            Space::new().width(8),
+            button(text("Create").size(14))
+                .on_press(Message::ConfirmCreateWorkspace)
+                .style(|theme: &Theme, status| {
+                    let mut s = button::primary(theme, status);
+                    s.border = Border {
+                        radius: 4.0.into(),
+                        ..s.border
+                    };
+                    s
+                })
+                .padding([8, 16]),
+        ]
+        .align_y(iced::Alignment::Center),
+    );
+
+    modal_backdrop(
+        base,
+        modal_card(content.into()),
+        Message::HideCreateWorkspace,
+    )
 }

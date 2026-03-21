@@ -1,7 +1,8 @@
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct Repository {
-    pub id: usize,
+    pub id: String,
     pub path: String,
     pub name: String,
-    pub collapsed: bool,
+    pub created_at: String,
 }

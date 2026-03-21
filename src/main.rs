@@ -1,4 +1,6 @@
 mod app;
+mod db;
+mod git;
 mod message;
 mod model;
 mod ui;

@@ -5,7 +5,14 @@ edition = "2024"
 description = "Claude's missing better half — a companion tool for Claude Code"
 
 [dependencies]
-iced = "0.14"
+iced = { version = "0.14", features = ["tokio"] }
+rusqlite = { version = "0.34", features = ["bundled"] }
+tokio = { version = "1", features = ["process", "fs"] }
+uuid = { version = "1", features = ["v4"] }
+dirs = "6"
+
+[dev-dependencies]
+tempfile = "3"
 
 # libghostty integration (terminal emulation) — not yet stable, requires zig toolchain
 # ghostty = "0.1"

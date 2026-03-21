@@ -8,7 +8,7 @@ use crate::ui::style;
 pub fn view_main_content<'a>(
     repositories: &'a [Repository],
     workspaces: &'a [Workspace],
-    selected_workspace: Option<usize>,
+    selected_workspace: Option<&str>,
 ) -> Element<'a, Message> {
     let content: Element<'_, Message> = if let Some(ws_id) = selected_workspace {
         if let Some(ws) = workspaces.iter().find(|w| w.id == ws_id) {
