@@ -35,6 +35,25 @@ pub const STATUS_STOPPED: Color = Color::from_rgb(0.8, 0.2, 0.2);
 // Error
 pub const ERROR: Color = Color::from_rgb(0.9, 0.3, 0.3);
 
+// Tooltip
+pub const TOOLTIP_BG: Color = Color::from_rgb(0.2, 0.2, 0.24);
+pub const TOOLTIP_BORDER: Color = Color::from_rgb(0.3, 0.3, 0.35);
+
+use iced::{Background, Border, Theme};
+
+pub fn tooltip_style(_theme: &Theme) -> iced::widget::container::Style {
+    iced::widget::container::Style {
+        background: Some(Background::Color(TOOLTIP_BG)),
+        border: Border {
+            radius: 4.0.into(),
+            width: 1.0,
+            color: TOOLTIP_BORDER,
+        },
+        text_color: Some(TEXT),
+        ..Default::default()
+    }
+}
+
 use crate::model::AgentStatus;
 
 pub fn agent_status_color(status: &AgentStatus) -> Color {

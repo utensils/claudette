@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use iced::widget::{Column, Space, button, column, container, row, scrollable, text};
+use iced::widget::{Column, Space, button, column, container, row, scrollable, text, tooltip};
 use iced::{Background, Border, Element, Fill, Padding, Theme};
 
 use crate::message::{Message, SidebarFilter};
@@ -181,20 +181,25 @@ fn view_repo_group<'a>(
         })
         .padding([6, 8])
         .width(Fill),
-        button(text("+").size(14).color(style::MUTED))
-            .on_press(Message::ShowCreateWorkspace(repo_id_for_create))
-            .style(|theme: &Theme, status| {
-                let mut s = button::text(theme, status);
-                if matches!(status, button::Status::Hovered) {
-                    s.background = Some(Background::Color(style::HOVER_BG));
-                }
-                s.border = Border {
-                    radius: 4.0.into(),
-                    ..Default::default()
-                };
-                s
-            })
-            .padding([4, 8]),
+        tooltip(
+            button(text("+").size(14).color(style::MUTED))
+                .on_press(Message::ShowCreateWorkspace(repo_id_for_create))
+                .style(|theme: &Theme, status| {
+                    let mut s = button::text(theme, status);
+                    if matches!(status, button::Status::Hovered) {
+                        s.background = Some(Background::Color(style::HOVER_BG));
+                    }
+                    s.border = Border {
+                        radius: 4.0.into(),
+                        ..Default::default()
+                    };
+                    s
+                })
+                .padding([4, 8]),
+            "New workspace",
+            tooltip::Position::Bottom,
+        )
+        .style(style::tooltip_style),
     ]
     .padding(Padding {
         top: 0.0,
@@ -250,52 +255,67 @@ fn view_workspace_entry<'a>(
     let ws_id = ws.id.clone();
     let action = if is_archived {
         row![
-            button(text("\u{21BB}").size(11).color(style::MUTED)) // restore
-                .on_press(Message::RestoreWorkspace(ws_id.clone()))
-                .style(|theme: &Theme, status| {
-                    let mut s = button::text(theme, status);
-                    if matches!(status, button::Status::Hovered) {
-                        s.background = Some(Background::Color(style::HOVER_BG));
-                    }
-                    s.border = Border {
-                        radius: 4.0.into(),
-                        ..Default::default()
-                    };
-                    s
-                })
-                .padding([2, 6]),
-            button(text("\u{2715}").size(11).color(style::MUTED)) // delete
-                .on_press(Message::DeleteWorkspace(ws_id.clone()))
-                .style(|theme: &Theme, status| {
-                    let mut s = button::text(theme, status);
-                    if matches!(status, button::Status::Hovered) {
-                        s.background = Some(Background::Color(style::HOVER_BG));
-                    }
-                    s.border = Border {
-                        radius: 4.0.into(),
-                        ..Default::default()
-                    };
-                    s
-                })
-                .padding([2, 6]),
+            tooltip(
+                button(text("\u{21BB}").size(11).color(style::MUTED))
+                    .on_press(Message::RestoreWorkspace(ws_id.clone()))
+                    .style(|theme: &Theme, status| {
+                        let mut s = button::text(theme, status);
+                        if matches!(status, button::Status::Hovered) {
+                            s.background = Some(Background::Color(style::HOVER_BG));
+                        }
+                        s.border = Border {
+                            radius: 4.0.into(),
+                            ..Default::default()
+                        };
+                        s
+                    })
+                    .padding([2, 6]),
+                "Restore",
+                tooltip::Position::Bottom,
+            )
+            .style(style::tooltip_style),
+            tooltip(
+                button(text("\u{2715}").size(11).color(style::MUTED))
+                    .on_press(Message::DeleteWorkspace(ws_id.clone()))
+                    .style(|theme: &Theme, status| {
+                        let mut s = button::text(theme, status);
+                        if matches!(status, button::Status::Hovered) {
+                            s.background = Some(Background::Color(style::HOVER_BG));
+                        }
+                        s.border = Border {
+                            radius: 4.0.into(),
+                            ..Default::default()
+                        };
+                        s
+                    })
+                    .padding([2, 6]),
+                "Delete",
+                tooltip::Position::Bottom,
+            )
+            .style(style::tooltip_style),
         ]
         .spacing(2)
     } else {
         row![
-            button(text("\u{2193}").size(11).color(style::MUTED)) // archive
-                .on_press(Message::ArchiveWorkspace(ws_id.clone()))
-                .style(|theme: &Theme, status| {
-                    let mut s = button::text(theme, status);
-                    if matches!(status, button::Status::Hovered) {
-                        s.background = Some(Background::Color(style::HOVER_BG));
-                    }
-                    s.border = Border {
-                        radius: 4.0.into(),
-                        ..Default::default()
-                    };
-                    s
-                })
-                .padding([2, 6]),
+            tooltip(
+                button(text("\u{2193}").size(11).color(style::MUTED))
+                    .on_press(Message::ArchiveWorkspace(ws_id.clone()))
+                    .style(|theme: &Theme, status| {
+                        let mut s = button::text(theme, status);
+                        if matches!(status, button::Status::Hovered) {
+                            s.background = Some(Background::Color(style::HOVER_BG));
+                        }
+                        s.border = Border {
+                            radius: 4.0.into(),
+                            ..Default::default()
+                        };
+                        s
+                    })
+                    .padding([2, 6]),
+                "Archive",
+                tooltip::Position::Bottom,
+            )
+            .style(style::tooltip_style),
         ]
         .spacing(2)
     };
