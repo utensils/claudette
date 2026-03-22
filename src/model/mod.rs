@@ -1,4 +1,5 @@
 mod chat_message;
+pub mod diff;
 mod repository;
 mod workspace;
 

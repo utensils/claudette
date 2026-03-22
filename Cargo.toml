@@ -25,6 +25,7 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["NSD
 
 [dev-dependencies]
 tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 # libghostty integration (terminal emulation) — not yet stable, requires zig toolchain
 # ghostty = "0.1"

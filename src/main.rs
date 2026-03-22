@@ -1,6 +1,7 @@
 mod agent;
 mod app;
 mod db;
+mod diff;
 mod git;
 mod message;
 mod model;
