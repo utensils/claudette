@@ -179,6 +179,53 @@ pub fn view_create_workspace_modal<'a>(
     )
 }
 
+pub fn view_delete_workspace_modal<'a>(
+    base: Element<'a, Message>,
+    ws_name: &str,
+) -> Element<'a, Message> {
+    let content = column![
+        text("Delete Workspace").size(20),
+        text(format!(
+            "Are you sure you want to delete \"{ws_name}\"? The git branch will be kept if it has unmerged commits."
+        ))
+        .size(14)
+        .color(style::DIM),
+        row![
+            button(text("Cancel").size(14))
+                .on_press(Message::HideDeleteWorkspace)
+                .style(|theme: &Theme, status| {
+                    let mut s = button::secondary(theme, status);
+                    s.border = Border {
+                        radius: 4.0.into(),
+                        ..s.border
+                    };
+                    s
+                })
+                .padding([8, 16]),
+            Space::new().width(8),
+            button(text("Delete").size(14).color(style::ERROR))
+                .on_press(Message::ConfirmDeleteWorkspace)
+                .style(|theme: &Theme, status| {
+                    let mut s = button::secondary(theme, status);
+                    s.border = Border {
+                        radius: 4.0.into(),
+                        ..s.border
+                    };
+                    s
+                })
+                .padding([8, 16]),
+        ]
+        .align_y(iced::Alignment::Center),
+    ]
+    .spacing(12);
+
+    modal_backdrop(
+        base,
+        modal_card(content.into()),
+        Message::HideDeleteWorkspace,
+    )
+}
+
 pub fn view_relink_repo_modal<'a>(
     base: Element<'a, Message>,
     repo_name: &str,

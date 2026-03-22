@@ -37,6 +37,9 @@ pub struct App {
     relink_repo_path_input: String,
     relink_repo_error: Option<String>,
 
+    // Delete workspace confirmation
+    show_delete_workspace: Option<String>, // Some(ws_id)
+
     // Fuzzy finder
     show_fuzzy_finder: bool,
     fuzzy_query: String,
@@ -73,6 +76,7 @@ impl App {
             show_relink_repo: None,
             relink_repo_path_input: String::new(),
             relink_repo_error: None,
+            show_delete_workspace: None,
             show_fuzzy_finder: false,
             fuzzy_query: String::new(),
             fuzzy_selected_index: 0,
@@ -496,6 +500,15 @@ impl App {
 
             // --- Delete ---
             Message::DeleteWorkspace(ws_id) => {
+                self.show_delete_workspace = Some(ws_id);
+            }
+            Message::HideDeleteWorkspace => {
+                self.show_delete_workspace = None;
+            }
+            Message::ConfirmDeleteWorkspace => {
+                let Some(ws_id) = self.show_delete_workspace.take() else {
+                    return Task::none();
+                };
                 let ws = self.workspaces.iter().find(|w| w.id == ws_id).cloned();
                 let Some(ws) = ws else {
                     return Task::none();
@@ -514,9 +527,9 @@ impl App {
                     async move {
                         // Remove worktree if active
                         if let Some(wt_path) = &ws.worktree_path {
-                            crate::git::remove_worktree(&repo.path, wt_path).await.ok(); // best effort
+                            crate::git::remove_worktree(&repo.path, wt_path).await.ok();
                         }
-                        // Delete branch (best effort)
+                        // Safe delete — preserves branch if it has unmerged commits
                         crate::git::branch_delete(&repo.path, &ws.branch_name)
                             .await
                             .ok();
@@ -572,6 +585,8 @@ impl App {
             Message::EscapePressed => {
                 if self.show_fuzzy_finder {
                     self.show_fuzzy_finder = false;
+                } else if self.show_delete_workspace.is_some() {
+                    self.show_delete_workspace = None;
                 } else if self.show_relink_repo.is_some() {
                     self.show_relink_repo = None;
                 } else if self.show_create_workspace.is_some() {
@@ -625,6 +640,16 @@ impl App {
                 self.fuzzy_selected_index,
                 &self.repositories,
             );
+        }
+
+        if let Some(ws_id) = &self.show_delete_workspace {
+            let ws_name = self
+                .workspaces
+                .iter()
+                .find(|w| w.id == *ws_id)
+                .map(|w| w.name.as_str())
+                .unwrap_or("this workspace");
+            return ui::view_delete_workspace_modal(base, ws_name);
         }
 
         if let Some(repo_id) = &self.show_create_workspace {

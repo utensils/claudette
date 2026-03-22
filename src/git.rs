@@ -133,7 +133,9 @@ pub async fn has_unmerged_commits(
     Ok(count > 0)
 }
 
+/// Safe branch delete — fails if the branch has unmerged commits.
+/// Callers should treat failure as non-fatal (the branch is preserved).
 pub async fn branch_delete(repo_path: &str, branch: &str) -> Result<(), GitError> {
-    run_git(repo_path, &["branch", "-D", branch]).await?;
+    run_git(repo_path, &["branch", "-d", branch]).await?;
     Ok(())
 }

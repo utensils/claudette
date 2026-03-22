@@ -51,6 +51,8 @@ pub enum Message {
     RestoreWorkspace(String),
     WorkspaceRestored(Result<(String, String), String>), // Ok((ws_id, worktree_path))
     DeleteWorkspace(String),
+    HideDeleteWorkspace,
+    ConfirmDeleteWorkspace,
     WorkspaceDeleted(Result<String, String>),
 
     // Fuzzy finder
