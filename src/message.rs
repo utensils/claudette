@@ -66,6 +66,9 @@ pub enum Message {
     #[allow(dead_code)]
     FuzzyConfirm,
 
+    // App lifecycle
+    ApplyDockIcon,
+
     // Keyboard
     EscapePressed,
 }

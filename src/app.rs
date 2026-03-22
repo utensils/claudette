@@ -92,7 +92,9 @@ impl App {
             Message::DataLoaded,
         );
 
-        (app, load_task)
+        let startup = Task::batch([load_task, Task::done(Message::ApplyDockIcon)]);
+
+        (app, startup)
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -589,6 +591,11 @@ impl App {
                 self.fuzzy_query.clear();
             }
 
+            // --- App lifecycle ---
+            Message::ApplyDockIcon => {
+                set_dock_icon();
+            }
+
             // --- Escape ---
             Message::EscapePressed => {
                 if self.show_fuzzy_finder {
@@ -727,3 +734,33 @@ impl App {
         Theme::Dark
     }
 }
+
+/// Sets the macOS dock icon programmatically.
+///
+/// On macOS, `iced::window::Settings::icon` only affects the titlebar (which macOS doesn't
+/// display). The dock icon requires setting it via NSApplication after Iced has initialized.
+#[cfg(target_os = "macos")]
+fn set_dock_icon() {
+    use objc2::AnyThread;
+    use objc2_app_kit::{NSApplication, NSImage};
+    use objc2_foundation::{MainThreadMarker, NSData};
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+
+    unsafe {
+        let data = NSData::initWithBytes_length(
+            NSData::alloc(),
+            crate::ICON_PNG.as_ptr().cast(),
+            crate::ICON_PNG.len(),
+        );
+        if let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) {
+            let app = NSApplication::sharedApplication(mtm);
+            app.setApplicationIconImage(Some(&image));
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_dock_icon() {}
