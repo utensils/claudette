@@ -1,15 +1,66 @@
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::Arc;
 
 use iced::event;
 use iced::keyboard::{self, Key};
-use iced::widget::Row;
+use iced::widget::{Row, markdown};
 use iced::{Element, Subscription, Task, Theme};
+use tokio::sync::Mutex;
 
+use crate::agent::{self, StreamEvent};
 use crate::db::Database;
 use crate::message::{Message, SidebarFilter};
-use crate::model::{AgentStatus, Repository, Workspace, WorkspaceStatus};
+use crate::model::{AgentStatus, ChatMessage, ChatRole, Repository, Workspace, WorkspaceStatus};
 use crate::ui;
+
+/// Subscription data for an agent stream — hashes only by ws_id for dedup.
+#[derive(Clone)]
+struct AgentSubData {
+    ws_id: String,
+    event_rx: Arc<Mutex<Option<tokio::sync::mpsc::Receiver<StreamEvent>>>>,
+}
+
+impl Hash for AgentSubData {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.ws_id.hash(state);
+    }
+}
+
+fn agent_stream(data: &AgentSubData) -> Pin<Box<dyn futures::Stream<Item = Message> + Send>> {
+    let rx = data.event_rx.clone();
+    let ws_id = data.ws_id.clone();
+    Box::pin(futures::stream::unfold(
+        (rx, ws_id),
+        |(rx, ws_id)| async move {
+            // Take receiver out so we don't hold the mutex across recv().await
+            let mut receiver = rx.lock().await.take()?;
+            let event = receiver.recv().await;
+            // Put receiver back for the next iteration
+            *rx.lock().await = Some(receiver);
+            let event = event?;
+            Some((Message::AgentStreamEvent(ws_id.clone(), event), (rx, ws_id)))
+        },
+    ))
+}
+
+/// Handle returned when an agent is spawned — stored on App for communication.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct AgentHandle {
+    pub stdin_tx: tokio::sync::mpsc::Sender<String>,
+    pub event_rx: Arc<Mutex<Option<tokio::sync::mpsc::Receiver<StreamEvent>>>>,
+    pub session_id: String,
+    pub pid: u32,
+}
+
+/// Per-workspace agent state stored on App.
+struct AgentState {
+    handle: AgentHandle,
+    streaming_content: String,
+}
 
 pub struct App {
     repositories: Vec<Repository>,
@@ -44,6 +95,16 @@ pub struct App {
     show_fuzzy_finder: bool,
     fuzzy_query: String,
     fuzzy_selected_index: usize,
+
+    // Agent state per workspace
+    agents: HashMap<String, AgentState>,
+
+    // Chat state
+    chat_messages: HashMap<String, Vec<ChatMessage>>,
+    chat_input: String,
+
+    // Markdown rendering cache: workspace_id -> vec of parsed items per message
+    markdown_cache: HashMap<String, Vec<Vec<markdown::Item>>>,
 }
 
 fn claudette_home() -> PathBuf {
@@ -80,6 +141,10 @@ impl App {
             show_fuzzy_finder: false,
             fuzzy_query: String::new(),
             fuzzy_selected_index: 0,
+            agents: HashMap::new(),
+            chat_messages: HashMap::new(),
+            chat_input: String::new(),
+            markdown_cache: HashMap::new(),
         };
 
         let load_task = Task::perform(
@@ -104,10 +169,24 @@ impl App {
                 self.sidebar_visible = !self.sidebar_visible;
             }
             Message::SelectWorkspace(id) => {
-                self.selected_workspace = Some(id);
+                self.selected_workspace = Some(id.clone());
                 if self.show_fuzzy_finder {
                     self.show_fuzzy_finder = false;
                     self.fuzzy_query.clear();
+                }
+                self.chat_input.clear();
+
+                // Load chat history if not already loaded
+                if !self.chat_messages.contains_key(&id) {
+                    let db_path = self.db_path.clone();
+                    let ws_id = id.clone();
+                    return Task::perform(
+                        async move {
+                            let db = Database::open(&db_path).map_err(|e| e.to_string())?;
+                            db.list_chat_messages(&ws_id).map_err(|e| e.to_string())
+                        },
+                        move |result| Message::ChatHistoryLoaded(id, result),
+                    );
                 }
             }
             Message::ToggleRepoCollapsed(id) => {
@@ -413,6 +492,18 @@ impl App {
 
             // --- Archive ---
             Message::ArchiveWorkspace(ws_id) => {
+                // Stop agent first if running
+                if self.agents.contains_key(&ws_id) {
+                    let pid = self.agents[&ws_id].handle.pid;
+                    self.agents.remove(&ws_id);
+                    if let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == ws_id) {
+                        ws.agent_status = AgentStatus::Idle;
+                    }
+                    tokio::spawn(async move {
+                        let _ = agent::stop_agent(pid).await;
+                    });
+                }
+
                 let ws = self.workspaces.iter().find(|w| w.id == ws_id).cloned();
                 let Some(ws) = ws else {
                     return Task::none();
@@ -519,6 +610,15 @@ impl App {
                 let Some(ws_id) = self.show_delete_workspace.take() else {
                     return Task::none();
                 };
+
+                // Stop agent if running
+                if let Some(state) = self.agents.remove(&ws_id) {
+                    let pid = state.handle.pid;
+                    tokio::spawn(async move {
+                        let _ = agent::stop_agent(pid).await;
+                    });
+                }
+
                 let ws = self.workspaces.iter().find(|w| w.id == ws_id).cloned();
                 let Some(ws) = ws else {
                     return Task::none();
@@ -535,15 +635,12 @@ impl App {
 
                 return Task::perform(
                     async move {
-                        // Remove worktree if active
                         if let Some(wt_path) = &ws.worktree_path {
                             crate::git::remove_worktree(&repo.path, wt_path).await.ok();
                         }
-                        // Safe delete — preserves branch if it has unmerged commits
                         crate::git::branch_delete(&repo.path, &ws.branch_name)
                             .await
                             .ok();
-                        // Delete from DB
                         let db = Database::open(&db_path).map_err(|e| e.to_string())?;
                         db.delete_workspace(&ws.id).map_err(|e| e.to_string())?;
                         Ok(ws.id)
@@ -553,6 +650,8 @@ impl App {
             }
             Message::WorkspaceDeleted(Ok(ws_id)) => {
                 self.workspaces.retain(|w| w.id != ws_id);
+                self.chat_messages.remove(&ws_id);
+                self.markdown_cache.remove(&ws_id);
                 if self.selected_workspace.as_deref() == Some(&ws_id) {
                     self.selected_workspace = None;
                 }
@@ -610,8 +709,360 @@ impl App {
                     self.show_add_repo = false;
                 }
             }
+
+            // --- Agent Lifecycle ---
+            Message::AgentStart(ws_id) => {
+                let ws = self.workspaces.iter().find(|w| w.id == ws_id).cloned();
+                let Some(ws) = ws else {
+                    return Task::none();
+                };
+                let Some(worktree_path) = ws.worktree_path.clone() else {
+                    return Task::none();
+                };
+
+                if let Some(w) = self.workspaces.iter_mut().find(|w| w.id == ws_id) {
+                    w.agent_status = AgentStatus::Running;
+                }
+
+                let session_id = uuid::Uuid::new_v4().to_string();
+
+                return Task::perform(
+                    async move {
+                        let spawned =
+                            agent::spawn_agent(std::path::Path::new(&worktree_path), &session_id)
+                                .await?;
+
+                        let handle = AgentHandle {
+                            stdin_tx: spawned.stdin_tx,
+                            event_rx: Arc::new(Mutex::new(Some(spawned.event_rx))),
+                            session_id: spawned.session_id,
+                            pid: spawned.pid,
+                        };
+
+                        Ok((ws_id, handle))
+                    },
+                    Message::AgentSpawned,
+                );
+            }
+            Message::AgentSpawned(Ok((ws_id, handle))) => {
+                // Add system message
+                let sys_msg = ChatMessage {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    workspace_id: ws_id.clone(),
+                    role: ChatRole::System,
+                    content: "Agent started".into(),
+                    cost_usd: None,
+                    duration_ms: None,
+                    created_at: String::new(),
+                };
+                self.chat_messages
+                    .entry(ws_id.clone())
+                    .or_default()
+                    .push(sys_msg.clone());
+                self.rebuild_markdown_cache(&ws_id);
+
+                // Persist system message
+                let db_path = self.db_path.clone();
+                let persist_task = Task::perform(
+                    async move {
+                        let db = Database::open(&db_path).map_err(|e| e.to_string())?;
+                        db.insert_chat_message(&sys_msg)
+                            .map_err(|e| e.to_string())?;
+                        Ok(sys_msg)
+                    },
+                    Message::ChatMessageSaved,
+                );
+
+                self.agents.insert(
+                    ws_id,
+                    AgentState {
+                        handle,
+                        streaming_content: String::new(),
+                    },
+                );
+
+                return persist_task;
+            }
+            Message::AgentSpawned(Err(e)) => {
+                eprintln!("Failed to spawn agent: {e}");
+                // Reset any workspaces still marked as Running back to Error
+                let running: Vec<_> = self
+                    .workspaces
+                    .iter()
+                    .filter(|w| matches!(w.agent_status, AgentStatus::Running))
+                    .map(|w| w.id.clone())
+                    .collect();
+                for ws_id in &running {
+                    if let Some(ws) = self.workspaces.iter_mut().find(|w| &w.id == ws_id) {
+                        ws.agent_status = AgentStatus::Error(e.clone());
+                    }
+                    let sys_msg = ChatMessage {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        workspace_id: ws_id.clone(),
+                        role: ChatRole::System,
+                        content: format!("Failed to start agent: {e}"),
+                        cost_usd: None,
+                        duration_ms: None,
+                        created_at: String::new(),
+                    };
+                    self.chat_messages
+                        .entry(ws_id.clone())
+                        .or_default()
+                        .push(sys_msg);
+                    self.rebuild_markdown_cache(ws_id);
+                }
+            }
+
+            Message::AgentStop(ws_id) => {
+                if let Some(state) = self.agents.remove(&ws_id) {
+                    let pid = state.handle.pid;
+                    if let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == ws_id) {
+                        ws.agent_status = AgentStatus::Idle;
+                    }
+
+                    // Add system message
+                    let sys_msg = ChatMessage {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        workspace_id: ws_id.clone(),
+                        role: ChatRole::System,
+                        content: "Agent stopped".into(),
+                        cost_usd: None,
+                        duration_ms: None,
+                        created_at: String::new(),
+                    };
+                    self.chat_messages
+                        .entry(ws_id.clone())
+                        .or_default()
+                        .push(sys_msg.clone());
+                    self.rebuild_markdown_cache(&ws_id);
+
+                    let db_path = self.db_path.clone();
+                    return Task::batch([
+                        Task::perform(async move { agent::stop_agent(pid).await }, move |result| {
+                            Message::AgentStopped(result.map(|()| ws_id.clone()))
+                        }),
+                        Task::perform(
+                            async move {
+                                let db = Database::open(&db_path).map_err(|e| e.to_string())?;
+                                db.insert_chat_message(&sys_msg)
+                                    .map_err(|e| e.to_string())?;
+                                Ok(sys_msg)
+                            },
+                            Message::ChatMessageSaved,
+                        ),
+                    ]);
+                }
+            }
+            Message::AgentStopped(Ok(_ws_id)) => {
+                // Agent already removed from self.agents in AgentStop
+            }
+            Message::AgentStopped(Err(e)) => {
+                eprintln!("Failed to stop agent: {e}");
+            }
+
+            // --- Agent Stream Events ---
+            Message::AgentStreamEvent(ws_id, event) => {
+                return self.handle_stream_event(&ws_id, event);
+            }
+
+            // --- Chat ---
+            Message::ChatInputChanged(text) => {
+                self.chat_input = text;
+            }
+            Message::ChatSend => {
+                let Some(ws_id) = self.selected_workspace.clone() else {
+                    return Task::none();
+                };
+                let content = self.chat_input.trim().to_string();
+                if content.is_empty() {
+                    return Task::none();
+                }
+                if !self.agents.contains_key(&ws_id) {
+                    return Task::none();
+                }
+                self.chat_input.clear();
+
+                // Create user message
+                let user_msg = ChatMessage {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    workspace_id: ws_id.clone(),
+                    role: ChatRole::User,
+                    content: content.clone(),
+                    cost_usd: None,
+                    duration_ms: None,
+                    created_at: String::new(),
+                };
+
+                self.chat_messages
+                    .entry(ws_id.clone())
+                    .or_default()
+                    .push(user_msg.clone());
+                self.rebuild_markdown_cache(&ws_id);
+
+                // Send to agent via stdin
+                let mut tasks = vec![];
+                if let Some(state) = self.agents.get(&ws_id) {
+                    let stdin_tx = state.handle.stdin_tx.clone();
+                    tasks.push(Task::perform(
+                        async move {
+                            agent::send_user_message(&stdin_tx, &content).await.ok();
+                        },
+                        |()| Message::ChatInputChanged(String::new()), // no-op callback
+                    ));
+                }
+
+                // Persist user message
+                let db_path = self.db_path.clone();
+                tasks.push(Task::perform(
+                    async move {
+                        let db = Database::open(&db_path).map_err(|e| e.to_string())?;
+                        db.insert_chat_message(&user_msg)
+                            .map_err(|e| e.to_string())?;
+                        Ok(user_msg)
+                    },
+                    Message::ChatMessageSaved,
+                ));
+
+                return Task::batch(tasks);
+            }
+            Message::ChatMessageSaved(Ok(_msg)) => {
+                // Message persisted successfully
+            }
+            Message::ChatMessageSaved(Err(e)) => {
+                eprintln!("Failed to save chat message: {e}");
+            }
+            Message::ChatHistoryLoaded(ws_id, Ok(messages)) => {
+                self.chat_messages.insert(ws_id.clone(), messages);
+                self.rebuild_markdown_cache(&ws_id);
+            }
+            Message::ChatHistoryLoaded(_ws_id, Err(e)) => {
+                eprintln!("Failed to load chat history: {e}");
+            }
+
+            // --- Markdown link ---
+            Message::ChatLinkClicked(url) => {
+                if let Err(e) = open::that(&url) {
+                    eprintln!("Failed to open URL {url}: {e}");
+                }
+            }
         }
         Task::none()
+    }
+
+    fn handle_stream_event(&mut self, ws_id: &str, event: StreamEvent) -> Task<Message> {
+        match event {
+            StreamEvent::Stream {
+                event:
+                    agent::InnerStreamEvent::ContentBlockDelta {
+                        delta: agent::Delta::Text { text },
+                        ..
+                    },
+            } => {
+                if let Some(state) = self.agents.get_mut(ws_id) {
+                    state.streaming_content.push_str(&text);
+                }
+            }
+            StreamEvent::Assistant { message } => {
+                // Complete assistant message — persist and add to chat
+                let full_text: String = message
+                    .content
+                    .iter()
+                    .filter_map(|block| match block {
+                        agent::ContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                // Clear streaming content
+                if let Some(state) = self.agents.get_mut(ws_id) {
+                    state.streaming_content.clear();
+                }
+
+                let assistant_msg = ChatMessage {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    workspace_id: ws_id.to_string(),
+                    role: ChatRole::Assistant,
+                    content: full_text,
+                    cost_usd: None,
+                    duration_ms: None,
+                    created_at: String::new(),
+                };
+
+                self.chat_messages
+                    .entry(ws_id.to_string())
+                    .or_default()
+                    .push(assistant_msg.clone());
+                self.rebuild_markdown_cache(ws_id);
+
+                let db_path = self.db_path.clone();
+                return Task::perform(
+                    async move {
+                        let db = Database::open(&db_path).map_err(|e| e.to_string())?;
+                        db.insert_chat_message(&assistant_msg)
+                            .map_err(|e| e.to_string())?;
+                        Ok(assistant_msg)
+                    },
+                    Message::ChatMessageSaved,
+                );
+            }
+            StreamEvent::Result {
+                total_cost_usd,
+                duration_ms,
+                ..
+            } => {
+                // Agent finished processing — update last assistant message cost
+                if let Some(msgs) = self.chat_messages.get(ws_id)
+                    && let Some(last_msg) =
+                        msgs.iter().rev().find(|m| m.role == ChatRole::Assistant)
+                    && let (Some(cost), Some(dur)) = (total_cost_usd, duration_ms)
+                {
+                    let msg_id = last_msg.id.clone();
+                    let db_path = self.db_path.clone();
+                    return Task::perform(
+                        async move {
+                            let db = Database::open(&db_path).map_err(|e| e.to_string())?;
+                            db.update_chat_message_cost(&msg_id, cost, dur)
+                                .map_err(|e| e.to_string())?;
+                            Ok(())
+                        },
+                        |_: Result<(), String>| Message::ChatInputChanged(String::new()),
+                    );
+                }
+
+                // Clear streaming
+                if let Some(state) = self.agents.get_mut(ws_id) {
+                    state.streaming_content.clear();
+                }
+            }
+            _ => {
+                // Other events (system init, message_start, etc.) — ignored for now
+            }
+        }
+        Task::none()
+    }
+
+    fn rebuild_markdown_cache(&mut self, ws_id: &str) {
+        if let Some(messages) = self.chat_messages.get(ws_id) {
+            let cache = self
+                .markdown_cache
+                .entry(ws_id.to_string())
+                .or_insert_with(|| Vec::with_capacity(messages.len()));
+
+            // Truncate if messages were removed
+            if cache.len() > messages.len() {
+                cache.truncate(messages.len());
+            }
+
+            // Only parse new messages beyond what's already cached
+            for msg in messages.iter().skip(cache.len()) {
+                if msg.role == ChatRole::Assistant {
+                    cache.push(markdown::parse(&msg.content).collect());
+                } else {
+                    cache.push(Vec::new());
+                }
+            }
+        }
     }
 
     fn fuzzy_filtered_workspaces(&self) -> impl Iterator<Item = &Workspace> {
@@ -638,10 +1089,36 @@ impl App {
             ));
         }
 
+        // Get chat data for selected workspace
+        let (msgs, md_items, streaming) = if let Some(ws_id) = &self.selected_workspace {
+            let msgs = self
+                .chat_messages
+                .get(ws_id)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
+            let md = self
+                .markdown_cache
+                .get(ws_id)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
+            let streaming = self
+                .agents
+                .get(ws_id)
+                .map(|s| s.streaming_content.as_str())
+                .unwrap_or("");
+            (msgs, md, streaming)
+        } else {
+            (&[] as &[ChatMessage], &[] as &[Vec<markdown::Item>], "")
+        };
+
         layout = layout.push(ui::view_main_content(
             &self.repositories,
             &self.workspaces,
             self.selected_workspace.as_deref(),
+            msgs,
+            &self.chat_input,
+            streaming,
+            md_items,
         ));
 
         let base: Element<'_, Message> = layout.into();
@@ -709,7 +1186,7 @@ impl App {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        event::listen_with(|event, _status, _id| {
+        let keyboard_sub = event::listen_with(|event, _status, _id| {
             if let iced::Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) =
                 &event
             {
@@ -727,7 +1204,24 @@ impl App {
                 }
             }
             None
-        })
+        });
+
+        // Agent streaming subscriptions — one per active agent
+        let agent_subs: Vec<Subscription<Message>> = self
+            .agents
+            .iter()
+            .map(|(ws_id, state)| {
+                let data = AgentSubData {
+                    ws_id: ws_id.clone(),
+                    event_rx: state.handle.event_rx.clone(),
+                };
+                Subscription::run_with(data, agent_stream)
+            })
+            .collect();
+
+        let mut subs = vec![keyboard_sub];
+        subs.extend(agent_subs);
+        Subscription::batch(subs)
     }
 
     pub fn theme(&self) -> Theme {

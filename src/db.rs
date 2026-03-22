@@ -2,7 +2,7 @@ use std::path::Path;
 
 use rusqlite::{Connection, params};
 
-use crate::model::{Repository, Workspace, WorkspaceStatus};
+use crate::model::{ChatMessage, ChatRole, Repository, Workspace, WorkspaceStatus};
 
 pub struct Database {
     conn: Connection,
@@ -60,6 +60,25 @@ impl Database {
                 );
 
                 PRAGMA user_version = 1;",
+            )?;
+        }
+
+        if version < 2 {
+            self.conn.execute_batch(
+                "CREATE TABLE chat_messages (
+                    id            TEXT PRIMARY KEY,
+                    workspace_id  TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                    role          TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
+                    content       TEXT NOT NULL,
+                    cost_usd      REAL,
+                    duration_ms   INTEGER,
+                    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+
+                CREATE INDEX idx_chat_messages_workspace
+                    ON chat_messages(workspace_id, created_at);
+
+                PRAGMA user_version = 2;",
             )?;
         }
 
@@ -171,12 +190,94 @@ impl Database {
             .execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
         Ok(())
     }
+
+    // --- Chat Messages ---
+
+    #[allow(dead_code)]
+    pub fn insert_chat_message(&self, msg: &ChatMessage) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "INSERT INTO chat_messages (id, workspace_id, role, content, cost_usd, duration_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                msg.id,
+                msg.workspace_id,
+                msg.role.as_str(),
+                msg.content,
+                msg.cost_usd,
+                msg.duration_ms,
+            ],
+        )?;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub fn list_chat_messages(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Vec<ChatMessage>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, workspace_id, role, content, cost_usd, duration_ms, created_at
+             FROM chat_messages WHERE workspace_id = ?1 ORDER BY created_at, rowid",
+        )?;
+        let rows = stmt.query_map(params![workspace_id], |row| {
+            let role_str: String = row.get(2)?;
+            Ok(ChatMessage {
+                id: row.get(0)?,
+                workspace_id: row.get(1)?,
+                role: ChatRole::from_str(&role_str),
+                content: row.get(3)?,
+                cost_usd: row.get(4)?,
+                duration_ms: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    #[allow(dead_code)]
+    pub fn update_chat_message_content(
+        &self,
+        id: &str,
+        content: &str,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE chat_messages SET content = ?1 WHERE id = ?2",
+            params![content, id],
+        )?;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub fn update_chat_message_cost(
+        &self,
+        id: &str,
+        cost_usd: f64,
+        duration_ms: i64,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE chat_messages SET cost_usd = ?1, duration_ms = ?2 WHERE id = ?3",
+            params![cost_usd, duration_ms, id],
+        )?;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub fn delete_chat_messages_for_workspace(
+        &self,
+        workspace_id: &str,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "DELETE FROM chat_messages WHERE workspace_id = ?1",
+            params![workspace_id],
+        )?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{AgentStatus, WorkspaceStatus};
+    use crate::model::{AgentStatus, ChatRole, WorkspaceStatus};
 
     fn make_repo(id: &str, path: &str, name: &str) -> Repository {
         Repository {
@@ -277,5 +378,116 @@ mod tests {
         db.delete_repository("r1").unwrap();
         let workspaces = db.list_workspaces().unwrap();
         assert!(workspaces.is_empty());
+    }
+
+    // --- Chat message tests ---
+
+    fn make_chat_msg(id: &str, ws_id: &str, role: ChatRole, content: &str) -> ChatMessage {
+        ChatMessage {
+            id: id.into(),
+            workspace_id: ws_id.into(),
+            role,
+            content: content.into(),
+            cost_usd: None,
+            duration_ms: None,
+            created_at: String::new(),
+        }
+    }
+
+    fn setup_db_with_workspace() -> Database {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w1", "r1", "fix-bug"))
+            .unwrap();
+        db
+    }
+
+    #[test]
+    fn test_insert_and_list_chat_messages() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "hello"))
+            .unwrap();
+        db.insert_chat_message(&make_chat_msg("m2", "w1", ChatRole::Assistant, "hi there"))
+            .unwrap();
+        let msgs = db.list_chat_messages("w1").unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].content, "hello");
+        assert_eq!(msgs[1].content, "hi there");
+    }
+
+    #[test]
+    fn test_chat_messages_filtered_by_workspace() {
+        let db = setup_db_with_workspace();
+        db.insert_workspace(&make_workspace("w2", "r1", "feature"))
+            .unwrap();
+        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "for w1"))
+            .unwrap();
+        db.insert_chat_message(&make_chat_msg("m2", "w2", ChatRole::User, "for w2"))
+            .unwrap();
+        let msgs = db.list_chat_messages("w1").unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].content, "for w1");
+    }
+
+    #[test]
+    fn test_update_chat_message_content() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::Assistant, "partial"))
+            .unwrap();
+        db.update_chat_message_content("m1", "partial response complete")
+            .unwrap();
+        let msgs = db.list_chat_messages("w1").unwrap();
+        assert_eq!(msgs[0].content, "partial response complete");
+    }
+
+    #[test]
+    fn test_update_chat_message_cost() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::Assistant, "done"))
+            .unwrap();
+        db.update_chat_message_cost("m1", 0.005, 2000).unwrap();
+        let msgs = db.list_chat_messages("w1").unwrap();
+        assert!((msgs[0].cost_usd.unwrap() - 0.005).abs() < f64::EPSILON);
+        assert_eq!(msgs[0].duration_ms.unwrap(), 2000);
+    }
+
+    #[test]
+    fn test_delete_chat_messages_for_workspace() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "msg1"))
+            .unwrap();
+        db.insert_chat_message(&make_chat_msg("m2", "w1", ChatRole::Assistant, "msg2"))
+            .unwrap();
+        db.delete_chat_messages_for_workspace("w1").unwrap();
+        let msgs = db.list_chat_messages("w1").unwrap();
+        assert!(msgs.is_empty());
+    }
+
+    #[test]
+    fn test_chat_messages_cascade_on_workspace_delete() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "hello"))
+            .unwrap();
+        db.insert_chat_message(&make_chat_msg("m2", "w1", ChatRole::Assistant, "hi"))
+            .unwrap();
+        db.delete_workspace("w1").unwrap();
+        let msgs = db.list_chat_messages("w1").unwrap();
+        assert!(msgs.is_empty());
+    }
+
+    #[test]
+    fn test_chat_message_role_roundtrip() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "user msg"))
+            .unwrap();
+        db.insert_chat_message(&make_chat_msg("m2", "w1", ChatRole::Assistant, "asst msg"))
+            .unwrap();
+        db.insert_chat_message(&make_chat_msg("m3", "w1", ChatRole::System, "sys msg"))
+            .unwrap();
+        let msgs = db.list_chat_messages("w1").unwrap();
+        assert_eq!(msgs[0].role, ChatRole::User);
+        assert_eq!(msgs[1].role, ChatRole::Assistant);
+        assert_eq!(msgs[2].role, ChatRole::System);
     }
 }

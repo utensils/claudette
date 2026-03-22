@@ -1,3 +1,4 @@
+pub mod chat_panel;
 mod fuzzy_finder;
 mod main_content;
 mod modal;

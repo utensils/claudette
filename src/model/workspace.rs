@@ -4,6 +4,7 @@ pub enum AgentStatus {
     Running,
     Idle,
     Stopped,
+    Error(String),
 }
 
 impl AgentStatus {
@@ -12,6 +13,7 @@ impl AgentStatus {
             Self::Running => "Running",
             Self::Idle => "Idle",
             Self::Stopped => "Stopped",
+            Self::Error(_) => "Error",
         }
     }
 }

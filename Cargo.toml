@@ -5,11 +5,15 @@ edition = "2024"
 description = "Claude's missing better half — a companion tool for Claude Code"
 
 [dependencies]
-iced = { version = "0.14", features = ["tokio"] }
+futures = "0.3"
+iced = { version = "0.14", features = ["tokio", "markdown", "highlighter"] }
 rusqlite = { version = "0.34", features = ["bundled"] }
-tokio = { version = "1", features = ["process", "fs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["process", "fs", "io-util", "time", "sync"] }
 uuid = { version = "1", features = ["v4"] }
 dirs = "6"
+open = "5"
 rand = "0.8"
 rfd = "0.17.2"
 image = { version = "0.25", default-features = false, features = ["png"] }

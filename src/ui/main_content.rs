@@ -1,45 +1,32 @@
-use iced::widget::{Space, center, column, container, row, text};
+use iced::widget::{Space, center, column, container, markdown, text};
 use iced::{Element, Fill};
 
 use crate::message::Message;
-use crate::model::{Repository, Workspace};
+use crate::model::{AgentStatus, ChatMessage, Repository, Workspace};
+use crate::ui::chat_panel;
 use crate::ui::style;
 
 pub fn view_main_content<'a>(
     repositories: &'a [Repository],
     workspaces: &'a [Workspace],
     selected_workspace: Option<&str>,
+    chat_messages: &'a [ChatMessage],
+    chat_input: &str,
+    streaming_text: &'a str,
+    markdown_items: &'a [Vec<markdown::Item>],
 ) -> Element<'a, Message> {
     let content: Element<'_, Message> = if let Some(ws_id) = selected_workspace {
         if let Some(ws) = workspaces.iter().find(|w| w.id == ws_id) {
-            let repo_name = repositories
-                .iter()
-                .find(|r| r.id == ws.repository_id)
-                .map(|r| r.name.as_str())
-                .unwrap_or("Unknown");
-
-            center(
-                column![
-                    text(&ws.name).size(24),
-                    text(format!("{} / {}", repo_name, ws.branch_name))
-                        .size(14)
-                        .color(style::DIM),
-                    Space::new().height(12),
-                    row![
-                        text("\u{25CF}")
-                            .size(12)
-                            .color(style::agent_status_color(&ws.agent_status)),
-                        Space::new().width(6),
-                        text(ws.agent_status.label())
-                            .size(14)
-                            .color(style::agent_status_color(&ws.agent_status)),
-                    ]
-                    .align_y(iced::Alignment::Center),
-                ]
-                .spacing(4)
-                .align_x(iced::Alignment::Center),
+            let is_running = ws.agent_status == AgentStatus::Running;
+            chat_panel::view_chat_panel(
+                ws,
+                repositories,
+                chat_messages,
+                chat_input,
+                streaming_text,
+                markdown_items,
+                is_running,
             )
-            .into()
         } else {
             center(text("Workspace not found").size(16).color(style::FAINT)).into()
         }

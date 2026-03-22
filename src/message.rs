@@ -1,4 +1,5 @@
-use crate::model::{Repository, Workspace};
+use crate::agent::StreamEvent;
+use crate::model::{ChatMessage, Repository, Workspace};
 
 #[derive(Debug, Clone)]
 pub enum SidebarFilter {
@@ -71,4 +72,20 @@ pub enum Message {
 
     // Keyboard
     EscapePressed,
+
+    // --- Agent lifecycle ---
+    AgentStart(String), // workspace_id
+    AgentStop(String),  // workspace_id
+    AgentSpawned(Result<(String, crate::app::AgentHandle), String>), // Ok((ws_id, handle))
+    AgentStopped(Result<String, String>), // Ok(ws_id)
+    AgentStreamEvent(String, StreamEvent), // workspace_id, event
+
+    // --- Chat ---
+    ChatInputChanged(String),
+    ChatSend,
+    ChatMessageSaved(Result<ChatMessage, String>),
+    ChatHistoryLoaded(String, Result<Vec<ChatMessage>, String>), // ws_id, result
+
+    // --- Markdown link ---
+    ChatLinkClicked(String), // URL
 }

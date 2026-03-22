@@ -40,6 +40,13 @@ pub const WARNING: Color = Color::from_rgb(0.9, 0.7, 0.2);
 pub const TOOLTIP_BG: Color = Color::from_rgb(0.2, 0.2, 0.24);
 pub const TOOLTIP_BORDER: Color = Color::from_rgb(0.3, 0.3, 0.35);
 
+// Chat
+pub const CHAT_USER_BG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.06);
+pub const CHAT_SYSTEM_BG: Color = Color::from_rgba(0.9, 0.7, 0.2, 0.08);
+pub const CHAT_INPUT_BG: Color = Color::from_rgb(0.12, 0.12, 0.14);
+pub const CHAT_INPUT_BORDER: Color = Color::from_rgb(0.22, 0.22, 0.26);
+pub const CHAT_HEADER_BG: Color = Color::from_rgb(0.1, 0.1, 0.12);
+
 use iced::{Background, Border, Theme};
 
 pub fn tooltip_style(_theme: &Theme) -> iced::widget::container::Style {
@@ -62,5 +69,6 @@ pub fn agent_status_color(status: &AgentStatus) -> Color {
         AgentStatus::Running => STATUS_RUNNING,
         AgentStatus::Idle => STATUS_IDLE,
         AgentStatus::Stopped => STATUS_STOPPED,
+        AgentStatus::Error(_) => ERROR,
     }
 }
