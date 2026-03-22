@@ -38,11 +38,14 @@ pub struct App {
     fuzzy_selected_index: usize,
 }
 
-fn db_path() -> PathBuf {
-    dirs::data_dir()
+fn claudette_home() -> PathBuf {
+    dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("claudette")
-        .join("claudette.db")
+        .join(".claudette")
+}
+
+fn db_path() -> PathBuf {
+    claudette_home().join("claudette.db")
 }
 
 impl App {
@@ -205,10 +208,8 @@ impl App {
                 let db_path = self.db_path.clone();
                 let branch_name = format!("claudette/{ws_name}");
 
-                let worktree_base = dirs::data_dir()
-                    .unwrap_or_else(|| PathBuf::from("."))
-                    .join("claudette")
-                    .join("worktrees")
+                let worktree_base = claudette_home()
+                    .join("workspaces")
                     .join(&repo.name)
                     .join(&ws_name);
                 let worktree_path_str = worktree_base.to_string_lossy().to_string();
@@ -308,10 +309,8 @@ impl App {
                 };
                 let db_path = self.db_path.clone();
 
-                let worktree_base = dirs::data_dir()
-                    .unwrap_or_else(|| PathBuf::from("."))
-                    .join("claudette")
-                    .join("worktrees")
+                let worktree_base = claudette_home()
+                    .join("workspaces")
                     .join(&repo.name)
                     .join(&ws.name);
                 let worktree_path_str = worktree_base.to_string_lossy().to_string();
