@@ -10,6 +10,7 @@ rusqlite = { version = "0.34", features = ["bundled"] }
 tokio = { version = "1", features = ["process", "fs"] }
 uuid = { version = "1", features = ["v4"] }
 dirs = "6"
+rand = "0.8"
 rfd = "0.17.2"
 
 [dev-dependencies]

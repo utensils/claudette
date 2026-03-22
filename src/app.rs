@@ -297,8 +297,10 @@ impl App {
 
             // --- Create Workspace ---
             Message::ShowCreateWorkspace(repo_id) => {
+                let namer = crate::names::NameGenerator::new();
+                let generated = namer.generate();
                 self.show_create_workspace = Some(repo_id);
-                self.create_workspace_name.clear();
+                self.create_workspace_name = format!("{}-{}", generated.adjective, generated.plant);
                 self.create_workspace_error = None;
             }
             Message::HideCreateWorkspace => {
@@ -306,6 +308,12 @@ impl App {
             }
             Message::CreateWorkspaceNameChanged(name) => {
                 self.create_workspace_name = name;
+                self.create_workspace_error = None;
+            }
+            Message::RegenerateWorkspaceName => {
+                let namer = crate::names::NameGenerator::new();
+                let generated = namer.generate();
+                self.create_workspace_name = format!("{}-{}", generated.adjective, generated.plant);
                 self.create_workspace_error = None;
             }
             Message::ConfirmCreateWorkspace => {

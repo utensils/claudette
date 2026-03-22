@@ -42,6 +42,7 @@ pub enum Message {
     ShowCreateWorkspace(String), // repo_id
     HideCreateWorkspace,
     CreateWorkspaceNameChanged(String),
+    RegenerateWorkspaceName,
     ConfirmCreateWorkspace,
     WorkspaceCreated(Result<Workspace, String>),
 

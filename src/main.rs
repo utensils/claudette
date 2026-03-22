@@ -3,6 +3,7 @@ mod db;
 mod git;
 mod message;
 mod model;
+mod names;
 mod ui;
 
 use app::App;

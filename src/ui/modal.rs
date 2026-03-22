@@ -128,11 +128,27 @@ pub fn view_create_workspace_modal<'a>(
         text(format!("Repository: {repo_name}"))
             .size(14)
             .color(style::DIM),
-        text_input("Workspace name", name_input)
-            .on_input(Message::CreateWorkspaceNameChanged)
-            .on_submit(Message::ConfirmCreateWorkspace)
-            .padding(10)
-            .size(16),
+        row![
+            text_input("Workspace name", name_input)
+                .on_input(Message::CreateWorkspaceNameChanged)
+                .on_submit(Message::ConfirmCreateWorkspace)
+                .padding(10)
+                .size(16)
+                .width(Fill),
+            Space::new().width(8),
+            button(text("\u{21BB}").size(16).color(style::MUTED))
+                .on_press(Message::RegenerateWorkspaceName)
+                .style(|theme: &Theme, status| {
+                    let mut s = button::secondary(theme, status);
+                    s.border = Border {
+                        radius: 4.0.into(),
+                        ..s.border
+                    };
+                    s
+                })
+                .padding([10, 12]),
+        ]
+        .align_y(iced::Alignment::Center),
         text(format!("Branch: {branch_preview}"))
             .size(12)
             .color(style::FAINT),
