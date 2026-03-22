@@ -217,7 +217,7 @@ impl Database {
     ) -> Result<Vec<ChatMessage>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
             "SELECT id, workspace_id, role, content, cost_usd, duration_ms, created_at
-             FROM chat_messages WHERE workspace_id = ?1 ORDER BY created_at",
+             FROM chat_messages WHERE workspace_id = ?1 ORDER BY created_at, rowid",
         )?;
         let rows = stmt.query_map(params![workspace_id], |row| {
             let role_str: String = row.get(2)?;

@@ -94,7 +94,7 @@ pub fn view_chat_panel<'a>(
                 if let Some(items) = markdown_items.get(i) {
                     view_assistant_message(items)
                 } else {
-                    view_user_message(&msg.content) // fallback
+                    view_assistant_fallback(&msg.content)
                 }
             }
             ChatRole::System => view_system_message(&msg.content),
@@ -126,13 +126,17 @@ pub fn view_chat_panel<'a>(
         send_btn = send_btn.on_press(Message::ChatSend);
     }
 
+    let mut chat_input_widget = text_input("Type a message...", chat_input)
+        .on_input(Message::ChatInputChanged)
+        .padding(10)
+        .size(14)
+        .width(Fill);
+    if is_agent_running {
+        chat_input_widget = chat_input_widget.on_submit(Message::ChatSend);
+    }
+
     let input_row = row![
-        text_input("Type a message...", chat_input)
-            .on_input(Message::ChatInputChanged)
-            .on_submit(Message::ChatSend)
-            .padding(10)
-            .size(14)
-            .width(Fill),
+        chat_input_widget,
         Space::new().width(8),
         send_btn.padding([8, 16]),
     ]
@@ -188,6 +192,17 @@ fn view_assistant_message<'a>(items: &'a [markdown::Item]) -> Element<'a, Messag
         text("Agent").size(12).color(style::MUTED),
         Space::new().height(4),
         markdown::view(items, Theme::Dark).map(Message::ChatLinkClicked),
+    ])
+    .padding([10, 14])
+    .width(Fill)
+    .into()
+}
+
+fn view_assistant_fallback(content: &str) -> Element<'_, Message> {
+    container(column![
+        text("Agent").size(12).color(style::MUTED),
+        Space::new().height(4),
+        text(content).size(14),
     ])
     .padding([10, 14])
     .width(Fill)

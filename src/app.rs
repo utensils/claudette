@@ -35,10 +35,12 @@ fn agent_stream(data: &AgentSubData) -> Pin<Box<dyn futures::Stream<Item = Messa
     Box::pin(futures::stream::unfold(
         (rx, ws_id),
         |(rx, ws_id)| async move {
-            let mut rx_guard = rx.lock().await;
-            let receiver = rx_guard.as_mut()?;
-            let event = receiver.recv().await?;
-            drop(rx_guard);
+            // Take receiver out so we don't hold the mutex across recv().await
+            let mut receiver = rx.lock().await.take()?;
+            let event = receiver.recv().await;
+            // Put receiver back for the next iteration
+            *rx.lock().await = Some(receiver);
+            let event = event?;
             Some((Message::AgentStreamEvent(ws_id.clone(), event), (rx, ws_id)))
         },
     ))
@@ -783,8 +785,32 @@ impl App {
             }
             Message::AgentSpawned(Err(e)) => {
                 eprintln!("Failed to spawn agent: {e}");
-                // Find which workspace this was for and reset status
-                // The error message contains the ws_id context from the task
+                // Reset any workspaces still marked as Running back to Error
+                let running: Vec<_> = self
+                    .workspaces
+                    .iter()
+                    .filter(|w| matches!(w.agent_status, AgentStatus::Running))
+                    .map(|w| w.id.clone())
+                    .collect();
+                for ws_id in &running {
+                    if let Some(ws) = self.workspaces.iter_mut().find(|w| &w.id == ws_id) {
+                        ws.agent_status = AgentStatus::Error(e.clone());
+                    }
+                    let sys_msg = ChatMessage {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        workspace_id: ws_id.clone(),
+                        role: ChatRole::System,
+                        content: format!("Failed to start agent: {e}"),
+                        cost_usd: None,
+                        duration_ms: None,
+                        created_at: String::new(),
+                    };
+                    self.chat_messages
+                        .entry(ws_id.clone())
+                        .or_default()
+                        .push(sys_msg);
+                    self.rebuild_markdown_cache(ws_id);
+                }
             }
 
             Message::AgentStop(ws_id) => {
@@ -849,6 +875,9 @@ impl App {
                 };
                 let content = self.chat_input.trim().to_string();
                 if content.is_empty() {
+                    return Task::none();
+                }
+                if !self.agents.contains_key(&ws_id) {
                     return Task::none();
                 }
                 self.chat_input.clear();
@@ -1015,17 +1044,24 @@ impl App {
 
     fn rebuild_markdown_cache(&mut self, ws_id: &str) {
         if let Some(messages) = self.chat_messages.get(ws_id) {
-            let items: Vec<Vec<markdown::Item>> = messages
-                .iter()
-                .map(|msg| {
-                    if msg.role == ChatRole::Assistant {
-                        markdown::parse(&msg.content).collect()
-                    } else {
-                        Vec::new()
-                    }
-                })
-                .collect();
-            self.markdown_cache.insert(ws_id.to_string(), items);
+            let cache = self
+                .markdown_cache
+                .entry(ws_id.to_string())
+                .or_insert_with(|| Vec::with_capacity(messages.len()));
+
+            // Truncate if messages were removed
+            if cache.len() > messages.len() {
+                cache.truncate(messages.len());
+            }
+
+            // Only parse new messages beyond what's already cached
+            for msg in messages.iter().skip(cache.len()) {
+                if msg.role == ChatRole::Assistant {
+                    cache.push(markdown::parse(&msg.content).collect());
+                } else {
+                    cache.push(Vec::new());
+                }
+            }
         }
     }
 
