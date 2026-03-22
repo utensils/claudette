@@ -51,14 +51,27 @@ pub fn view_add_repo_modal<'a>(
 ) -> Element<'a, Message> {
     let mut content = column![
         text("Add Repository").size(20),
-        text_input(
-            "Enter repository path (e.g., /home/user/projects/my-repo)",
-            path_input
-        )
-        .on_input(Message::AddRepoPathChanged)
-        .on_submit(Message::ConfirmAddRepo)
-        .padding(10)
-        .size(16),
+        row![
+            text_input("Repository path", path_input)
+                .on_input(Message::AddRepoPathChanged)
+                .on_submit(Message::ConfirmAddRepo)
+                .padding(10)
+                .size(16)
+                .width(Fill),
+            Space::new().width(8),
+            button(text("Browse").size(14))
+                .on_press(Message::BrowseRepoPath)
+                .style(|theme: &Theme, status| {
+                    let mut s = button::secondary(theme, status);
+                    s.border = Border {
+                        radius: 4.0.into(),
+                        ..s.border
+                    };
+                    s
+                })
+                .padding([10, 16]),
+        ]
+        .align_y(iced::Alignment::Center),
     ]
     .spacing(12);
 
@@ -179,11 +192,27 @@ pub fn view_relink_repo_modal<'a>(
         ))
         .size(14)
         .color(style::DIM),
-        text_input("Enter new repository path", path_input)
-            .on_input(Message::RelinkRepoPathChanged)
-            .on_submit(Message::ConfirmRelinkRepo)
-            .padding(10)
-            .size(16),
+        row![
+            text_input("New repository path", path_input)
+                .on_input(Message::RelinkRepoPathChanged)
+                .on_submit(Message::ConfirmRelinkRepo)
+                .padding(10)
+                .size(16)
+                .width(Fill),
+            Space::new().width(8),
+            button(text("Browse").size(14))
+                .on_press(Message::BrowseRelinkPath)
+                .style(|theme: &Theme, status| {
+                    let mut s = button::secondary(theme, status);
+                    s.border = Border {
+                        radius: 4.0.into(),
+                        ..s.border
+                    };
+                    s
+                })
+                .padding([10, 16]),
+        ]
+        .align_y(iced::Alignment::Center),
     ]
     .spacing(12);
 

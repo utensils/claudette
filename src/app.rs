@@ -133,6 +133,23 @@ impl App {
                 self.add_repo_path_input = value;
                 self.add_repo_error = None;
             }
+            Message::BrowseRepoPath => {
+                return Task::perform(
+                    async {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Select Repository")
+                            .pick_folder()
+                            .await
+                            .map(|h| h.path().to_string_lossy().to_string())
+                    },
+                    Message::RepoPathSelected,
+                );
+            }
+            Message::RepoPathSelected(Some(path)) => {
+                self.add_repo_path_input = path;
+                self.add_repo_error = None;
+            }
+            Message::RepoPathSelected(None) => {}
             Message::ConfirmAddRepo => {
                 let path = self.add_repo_path_input.trim().to_string();
 
@@ -220,6 +237,23 @@ impl App {
                 self.relink_repo_path_input = value;
                 self.relink_repo_error = None;
             }
+            Message::BrowseRelinkPath => {
+                return Task::perform(
+                    async {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Select Repository")
+                            .pick_folder()
+                            .await
+                            .map(|h| h.path().to_string_lossy().to_string())
+                    },
+                    Message::RelinkPathSelected,
+                );
+            }
+            Message::RelinkPathSelected(Some(path)) => {
+                self.relink_repo_path_input = path;
+                self.relink_repo_error = None;
+            }
+            Message::RelinkPathSelected(None) => {}
             Message::ConfirmRelinkRepo => {
                 let Some(repo_id) = self.show_relink_repo.clone() else {
                     return Task::none();

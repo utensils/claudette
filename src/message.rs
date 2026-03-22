@@ -22,6 +22,8 @@ pub enum Message {
     ShowAddRepo,
     HideAddRepo,
     AddRepoPathChanged(String),
+    BrowseRepoPath,
+    RepoPathSelected(Option<String>),
     ConfirmAddRepo,
     RepoAdded(Result<Repository, String>),
 
@@ -31,6 +33,8 @@ pub enum Message {
     ShowRelinkRepo(String),                    // repo_id
     HideRelinkRepo,
     RelinkRepoPathChanged(String),
+    BrowseRelinkPath,
+    RelinkPathSelected(Option<String>),
     ConfirmRelinkRepo,
     RepoRelinked(Result<(String, String), String>), // Ok((repo_id, new_path))
 
