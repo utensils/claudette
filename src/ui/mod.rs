@@ -1,4 +1,7 @@
 pub mod chat_panel;
+mod diff_content;
+mod diff_file_tree;
+pub mod diff_viewer;
 mod fuzzy_finder;
 mod icon_picker;
 mod main_content;
@@ -12,5 +15,6 @@ pub use main_content::view_main_content;
 pub use modal::{
     view_add_repo_modal, view_app_settings_modal, view_create_workspace_modal,
     view_delete_workspace_modal, view_relink_repo_modal, view_repo_settings_modal,
+    view_revert_file_modal,
 };
 pub use sidebar::view_sidebar;

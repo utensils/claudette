@@ -316,6 +316,49 @@ pub fn view_relink_repo_modal<'a>(
     modal_backdrop(base, modal_card(content.into()), Message::HideRelinkRepo)
 }
 
+pub fn view_revert_file_modal<'a>(
+    base: Element<'a, Message>,
+    file_path: &str,
+) -> Element<'a, Message> {
+    let content = column![
+        text("Revert File").size(20),
+        text(format!(
+            "Revert \"{file_path}\" to its state before this workspace's changes? This action cannot be undone."
+        ))
+        .size(14)
+        .color(style::DIM),
+        row![
+            button(text("Cancel").size(14))
+                .on_press(Message::DiffCancelRevert)
+                .style(|theme: &Theme, status| {
+                    let mut s = button::secondary(theme, status);
+                    s.border = Border {
+                        radius: 4.0.into(),
+                        ..s.border
+                    };
+                    s
+                })
+                .padding([8, 16]),
+            Space::new().width(8),
+            button(text("Revert").size(14).color(style::ERROR))
+                .on_press(Message::DiffConfirmRevert)
+                .style(|theme: &Theme, status| {
+                    let mut s = button::secondary(theme, status);
+                    s.border = Border {
+                        radius: 4.0.into(),
+                        ..s.border
+                    };
+                    s
+                })
+                .padding([8, 16]),
+        ]
+        .align_y(iced::Alignment::Center),
+    ]
+    .spacing(12);
+
+    modal_backdrop(base, modal_card(content.into()), Message::DiffCancelRevert)
+}
+
 pub fn view_repo_settings_modal<'a>(
     base: Element<'a, Message>,
     name_input: &str,

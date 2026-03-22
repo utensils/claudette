@@ -40,6 +40,25 @@ pub const WARNING: Color = Color::from_rgb(0.9, 0.7, 0.2);
 pub const TOOLTIP_BG: Color = Color::from_rgb(0.2, 0.2, 0.24);
 pub const TOOLTIP_BORDER: Color = Color::from_rgb(0.3, 0.3, 0.35);
 
+// Diff backgrounds
+pub const DIFF_ADDED_BG: Color = Color::from_rgba(0.0, 0.5, 0.0, 0.15);
+pub const DIFF_REMOVED_BG: Color = Color::from_rgba(0.5, 0.0, 0.0, 0.15);
+
+// Diff text
+pub const DIFF_ADDED_TEXT: Color = Color::from_rgb(0.4, 0.9, 0.4);
+pub const DIFF_REMOVED_TEXT: Color = Color::from_rgb(0.9, 0.4, 0.4);
+pub const DIFF_HUNK_HEADER: Color = Color::from_rgb(0.4, 0.6, 0.9);
+pub const DIFF_LINE_NUMBER: Color = Color::from_rgb(0.4, 0.4, 0.45);
+
+// File status indicators
+pub const FILE_STATUS_ADDED: Color = Color::from_rgb(0.3, 0.8, 0.3);
+pub const FILE_STATUS_MODIFIED: Color = Color::from_rgb(0.8, 0.7, 0.2);
+pub const FILE_STATUS_DELETED: Color = Color::from_rgb(0.8, 0.3, 0.3);
+pub const FILE_STATUS_RENAMED: Color = Color::from_rgb(0.4, 0.6, 0.9);
+
+// Diff layout
+pub const DIFF_FILE_TREE_WIDTH: f32 = 250.0;
+
 // Chat
 pub const CHAT_USER_BG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.06);
 pub const CHAT_SYSTEM_BG: Color = Color::from_rgba(0.9, 0.7, 0.2, 0.08);

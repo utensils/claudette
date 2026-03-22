@@ -6,24 +6,20 @@ use tokio::process::Command;
 use crate::model::diff::{DiffFile, DiffHunk, DiffLine, DiffLineType, FileDiff, FileStatus};
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum DiffError {
     CommandFailed(String),
-    NoWorktree,
 }
 
 impl fmt::Display for DiffError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::CommandFailed(msg) => write!(f, "Diff operation failed: {msg}"),
-            Self::NoWorktree => write!(f, "Workspace has no worktree"),
         }
     }
 }
 
 impl std::error::Error for DiffError {}
 
-#[allow(dead_code)]
 async fn run_git(path: &str, args: &[&str]) -> Result<String, DiffError> {
     let output = Command::new("git")
         .args(["-C", path])
@@ -41,13 +37,11 @@ async fn run_git(path: &str, args: &[&str]) -> Result<String, DiffError> {
 }
 
 /// Get the merge base between two refs.
-#[allow(dead_code)]
 pub async fn merge_base(repo_path: &str, branch: &str, base: &str) -> Result<String, DiffError> {
     run_git(repo_path, &["merge-base", base, branch]).await
 }
 
 /// List all changed files between merge base and current working tree.
-#[allow(dead_code)]
 pub async fn changed_files(
     worktree_path: &str,
     merge_base: &str,
@@ -119,7 +113,6 @@ fn parse_name_status_line(line: &str) -> Option<DiffFile> {
 }
 
 /// Get the unified diff for a specific file.
-#[allow(dead_code)]
 pub async fn file_diff(
     worktree_path: &str,
     merge_base: &str,
@@ -168,7 +161,6 @@ pub async fn file_diff(
 }
 
 /// Revert a file to its merge-base version.
-#[allow(dead_code)]
 pub async fn revert_file(
     worktree_path: &str,
     merge_base: &str,
@@ -192,7 +184,6 @@ pub async fn revert_file(
 }
 
 /// Parse unified diff output into structured data.
-#[allow(dead_code)]
 pub fn parse_unified_diff(raw: &str, path: &str) -> FileDiff {
     if raw.contains("Binary files") && raw.contains("differ") {
         return FileDiff {
@@ -288,7 +279,6 @@ pub fn parse_unified_diff(raw: &str, path: &str) -> FileDiff {
     }
 }
 
-#[allow(dead_code)]
 struct HunkBuilder {
     old_start: u32,
     new_start: u32,
@@ -298,7 +288,6 @@ struct HunkBuilder {
     lines: Vec<DiffLine>,
 }
 
-#[allow(dead_code)]
 impl HunkBuilder {
     fn build(self) -> DiffHunk {
         DiffHunk {
@@ -310,7 +299,6 @@ impl HunkBuilder {
     }
 }
 
-#[allow(dead_code)]
 fn parse_hunk_header(line: &str) -> Option<HunkBuilder> {
     // Format: @@ -old_start,old_count +new_start,new_count @@ optional context
     let after_at = line.strip_prefix("@@ ")?;
