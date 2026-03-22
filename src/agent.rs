@@ -1,11 +1,10 @@
 #![allow(dead_code)]
 
 use std::path::Path;
-use std::process::ExitStatus;
 
 use serde::Deserialize;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::Command;
 use tokio::sync::mpsc;
 
 // ---------------------------------------------------------------------------
@@ -106,147 +105,131 @@ pub fn parse_stream_line(line: &str) -> Result<StreamEvent, serde_json::Error> {
 // Agent process manager
 // ---------------------------------------------------------------------------
 
-#[derive(Debug)]
-pub enum AgentError {
-    SpawnFailed(String),
-    WriteFailed(String),
-    ProcessNotRunning,
+/// Result of spawning an agent process — individual parts for flexible storage.
+pub struct SpawnedAgent {
+    pub stdin_tx: mpsc::Sender<String>,
+    pub event_rx: mpsc::Receiver<StreamEvent>,
+    pub session_id: String,
+    pub pid: u32,
 }
 
-impl std::fmt::Display for AgentError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::SpawnFailed(msg) => write!(f, "Failed to spawn agent: {msg}"),
-            Self::WriteFailed(msg) => write!(f, "Failed to write to agent: {msg}"),
-            Self::ProcessNotRunning => write!(f, "Agent process is not running"),
+/// Spawn a Claude Code CLI process with bidirectional JSON streaming.
+pub async fn spawn_agent(working_dir: &Path, session_id: &str) -> Result<SpawnedAgent, String> {
+    let mut child = Command::new("claude")
+        .args([
+            "--print",
+            "--output-format",
+            "stream-json",
+            "--input-format",
+            "stream-json",
+            "--verbose",
+            "--session-id",
+            session_id,
+        ])
+        .current_dir(working_dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn claude: {e}"))?;
+
+    let pid = child
+        .id()
+        .ok_or_else(|| "Process exited immediately".to_string())?;
+
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "Failed to capture stdin".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Failed to capture stdout".to_string())?;
+
+    // Stdin writer task
+    let (stdin_tx, mut stdin_rx) = mpsc::channel::<String>(32);
+    tokio::spawn(async move {
+        let mut stdin = stdin;
+        while let Some(msg) = stdin_rx.recv().await {
+            if stdin.write_all(msg.as_bytes()).await.is_err() {
+                break;
+            }
+            if stdin.write_all(b"\n").await.is_err() {
+                break;
+            }
+            if stdin.flush().await.is_err() {
+                break;
+            }
         }
-    }
-}
+    });
 
-impl std::error::Error for AgentError {}
-
-pub struct ClaudeCodeAgent {
-    child: Child,
-    stdin_tx: mpsc::Sender<String>,
-    session_id: String,
-}
-
-impl ClaudeCodeAgent {
-    /// Spawn a new Claude CLI process with bidirectional streaming.
-    ///
-    /// Returns the agent handle and a receiver for parsed stream events.
-    pub async fn spawn(
-        working_dir: &Path,
-        session_id: &str,
-    ) -> Result<(Self, mpsc::Receiver<StreamEvent>), AgentError> {
-        let mut child = Command::new("claude")
-            .args([
-                "--print",
-                "--output-format",
-                "stream-json",
-                "--input-format",
-                "stream-json",
-                "--verbose",
-                "--session-id",
-                session_id,
-            ])
-            .current_dir(working_dir)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .map_err(|e| AgentError::SpawnFailed(e.to_string()))?;
-
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| AgentError::SpawnFailed("Failed to capture stdin".into()))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| AgentError::SpawnFailed("Failed to capture stdout".into()))?;
-
-        // Stdin writer task
-        let (stdin_tx, mut stdin_rx) = mpsc::channel::<String>(32);
-        tokio::spawn(async move {
-            let mut stdin = stdin;
-            while let Some(msg) = stdin_rx.recv().await {
-                if stdin.write_all(msg.as_bytes()).await.is_err() {
-                    break;
-                }
-                if stdin.write_all(b"\n").await.is_err() {
-                    break;
-                }
-                if stdin.flush().await.is_err() {
-                    break;
-                }
+    // Stdout reader task
+    let (event_tx, event_rx) = mpsc::channel::<StreamEvent>(128);
+    tokio::spawn(async move {
+        let reader = BufReader::new(stdout);
+        let mut lines = reader.lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            if line.trim().is_empty() {
+                continue;
             }
-        });
-
-        // Stdout reader task
-        let (event_tx, event_rx) = mpsc::channel::<StreamEvent>(128);
-        tokio::spawn(async move {
-            let reader = BufReader::new(stdout);
-            let mut lines = reader.lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                if line.trim().is_empty() {
-                    continue;
-                }
-                match parse_stream_line(&line) {
-                    Ok(event) => {
-                        if event_tx.send(event).await.is_err() {
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to parse stream event: {e}\nLine: {line}");
+            match parse_stream_line(&line) {
+                Ok(event) => {
+                    if event_tx.send(event).await.is_err() {
+                        break;
                     }
                 }
+                Err(e) => {
+                    eprintln!("Failed to parse stream event: {e}\nLine: {line}");
+                }
             }
-        });
+        }
+    });
 
-        Ok((
-            Self {
-                child,
-                stdin_tx,
-                session_id: session_id.to_string(),
-            },
-            event_rx,
-        ))
-    }
+    // Wait for process exit in background, let the event channel close naturally
+    tokio::spawn(async move {
+        let _ = child.wait().await;
+    });
 
-    /// Send a user message to the agent via stdin.
-    pub async fn send_message(&self, content: &str) -> Result<(), AgentError> {
-        let msg = serde_json::json!({
-            "type": "user",
-            "content": content,
-        })
-        .to_string();
+    Ok(SpawnedAgent {
+        stdin_tx,
+        event_rx,
+        session_id: session_id.to_string(),
+        pid,
+    })
+}
 
-        self.stdin_tx
-            .send(msg)
-            .await
-            .map_err(|e| AgentError::WriteFailed(e.to_string()))
-    }
+/// Send a user message to the agent via its stdin channel.
+pub async fn send_user_message(
+    stdin_tx: &mpsc::Sender<String>,
+    content: &str,
+) -> Result<(), String> {
+    let msg = serde_json::json!({
+        "type": "user",
+        "content": content,
+    })
+    .to_string();
 
-    /// Get the session ID for this agent.
-    pub fn session_id(&self) -> &str {
-        &self.session_id
-    }
+    stdin_tx
+        .send(msg)
+        .await
+        .map_err(|e| format!("Failed to send message: {e}"))
+}
 
-    /// Stop the agent process. Kills and waits for exit.
-    pub async fn stop(&mut self) -> Result<(), AgentError> {
-        self.child
-            .kill()
-            .await
-            .map_err(|e| AgentError::WriteFailed(e.to_string()))?;
-        let _ = self.child.wait().await;
+/// Stop an agent process by killing it.
+pub async fn stop_agent(pid: u32) -> Result<(), String> {
+    let output = tokio::process::Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .output()
+        .await
+        .map_err(|e| format!("Failed to kill agent: {e}"))?;
+
+    if output.status.success() {
         Ok(())
-    }
-
-    /// Check if the process has exited without blocking.
-    pub fn try_wait(&mut self) -> Option<ExitStatus> {
-        self.child.try_wait().ok().flatten()
+    } else {
+        Err(format!(
+            "kill failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ))
     }
 }
 
