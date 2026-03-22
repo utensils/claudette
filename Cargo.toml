@@ -12,6 +12,7 @@ uuid = { version = "1", features = ["v4"] }
 dirs = "6"
 rand = "0.8"
 rfd = "0.17.2"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -1,6 +1,10 @@
-# Claudette
+<p align="center">
+  <img src="assets/logo.png" alt="Claudette" width="128" />
+</p>
 
-Claude's missing better half — a companion tool for Claude Code usage.
+<h1 align="center">Claudette</h1>
+
+<p align="center">Claude's missing better half — a companion tool for Claude Code usage.</p>
 
 Claudette is a cross-platform desktop application built with Rust and [Iced](https://iced.rs). It aims to provide a lightweight interface for managing and orchestrating Claude Code sessions, similar in spirit to [Conductor.build](https://conductor.build) but with a focused feature set.
 
