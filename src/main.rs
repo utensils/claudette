@@ -13,7 +13,10 @@ fn main() -> iced::Result {
         include_bytes!("../assets/logo.png"),
         image::ImageFormat::Png,
     )
-    .map(|img| img.resize(256, 256, image::imageops::FilterType::Lanczos3).into_rgba8())
+    .map(|img| {
+        img.resize(256, 256, image::imageops::FilterType::Lanczos3)
+            .into_rgba8()
+    })
     .map_err(|e| eprintln!("Warning: failed to decode window icon: {e}"))
     .ok()
     .and_then(|img| {
