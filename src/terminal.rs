@@ -6,6 +6,12 @@ use iced_term::{ColorPalette, Terminal};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
+/// Seed the ID counter so it starts above any existing DB IDs.
+/// Call once at startup with the max terminal_tab id from the database.
+pub fn seed_next_id(max_existing: u64) {
+    NEXT_ID.store(max_existing + 1, Ordering::Relaxed);
+}
+
 /// Generate a unique terminal ID (monotonically increasing).
 pub fn next_terminal_id() -> u64 {
     NEXT_ID.fetch_add(1, Ordering::Relaxed)

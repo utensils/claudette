@@ -370,6 +370,14 @@ impl Database {
         Ok(())
     }
 
+    pub fn max_terminal_tab_id(&self) -> Result<i64, rusqlite::Error> {
+        self.conn.query_row(
+            "SELECT COALESCE(MAX(id), 0) FROM terminal_tabs",
+            [],
+            |row| row.get(0),
+        )
+    }
+
     pub fn list_terminal_tabs_by_workspace(
         &self,
         workspace_id: &str,

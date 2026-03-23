@@ -232,6 +232,9 @@ impl App {
                 let worktree_base = db
                     .get_app_setting("worktree_base_dir")
                     .map_err(|e| e.to_string())?;
+                // Seed the terminal ID counter above any existing DB IDs
+                let max_id = db.max_terminal_tab_id().map_err(|e| e.to_string())?;
+                terminal::seed_next_id(max_id as u64);
                 Ok((repos, workspaces, worktree_base))
             },
             Message::DataLoaded,
