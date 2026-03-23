@@ -82,6 +82,21 @@ impl Database {
             )?;
         }
 
+        if version < 3 {
+            self.conn.execute_batch(
+                "ALTER TABLE repositories ADD COLUMN icon TEXT;
+                 ALTER TABLE repositories ADD COLUMN path_slug TEXT;
+                 UPDATE repositories SET path_slug = name WHERE path_slug IS NULL;
+
+                 CREATE TABLE app_settings (
+                     key   TEXT PRIMARY KEY,
+                     value TEXT NOT NULL
+                 );
+
+                 PRAGMA user_version = 3;",
+            )?;
+        }
+
         Ok(())
     }
 
@@ -89,22 +104,24 @@ impl Database {
 
     pub fn insert_repository(&self, repo: &Repository) -> Result<(), rusqlite::Error> {
         self.conn.execute(
-            "INSERT INTO repositories (id, path, name) VALUES (?1, ?2, ?3)",
-            params![repo.id, repo.path, repo.name],
+            "INSERT INTO repositories (id, path, name, path_slug) VALUES (?1, ?2, ?3, ?4)",
+            params![repo.id, repo.path, repo.name, repo.path_slug],
         )?;
         Ok(())
     }
 
     pub fn list_repositories(&self) -> Result<Vec<Repository>, rusqlite::Error> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, path, name, created_at FROM repositories ORDER BY name")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT id, path, name, icon, path_slug, created_at FROM repositories ORDER BY name",
+        )?;
         let rows = stmt.query_map([], |row| {
             Ok(Repository {
                 id: row.get(0)?,
                 path: row.get(1)?,
                 name: row.get(2)?,
-                created_at: row.get(3)?,
+                icon: row.get(3)?,
+                path_slug: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                created_at: row.get(5)?,
                 path_valid: true, // validated after load
             })
         })?;
@@ -122,6 +139,51 @@ impl Database {
     pub fn delete_repository(&self, id: &str) -> Result<(), rusqlite::Error> {
         self.conn
             .execute("DELETE FROM repositories WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub fn update_repository_name(&self, id: &str, name: &str) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE repositories SET name = ?1 WHERE id = ?2",
+            params![name, id],
+        )?;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub fn update_repository_icon(
+        &self,
+        id: &str,
+        icon: Option<&str>,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE repositories SET icon = ?1 WHERE id = ?2",
+            params![icon, id],
+        )?;
+        Ok(())
+    }
+
+    // --- App Settings ---
+
+    #[allow(dead_code)]
+    pub fn get_app_setting(&self, key: &str) -> Result<Option<String>, rusqlite::Error> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT value FROM app_settings WHERE key = ?1")?;
+        let mut rows = stmt.query(params![key])?;
+        match rows.next()? {
+            Some(row) => Ok(Some(row.get(0)?)),
+            None => Ok(None),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn set_app_setting(&self, key: &str, value: &str) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?1, ?2)",
+            params![key, value],
+        )?;
         Ok(())
     }
 
@@ -284,6 +346,8 @@ mod tests {
             id: id.into(),
             path: path.into(),
             name: name.into(),
+            path_slug: name.into(),
+            icon: None,
             created_at: String::new(),
             path_valid: true,
         }
@@ -489,5 +553,81 @@ mod tests {
         assert_eq!(msgs[0].role, ChatRole::User);
         assert_eq!(msgs[1].role, ChatRole::Assistant);
         assert_eq!(msgs[2].role, ChatRole::System);
+    }
+
+    // --- Repository settings tests ---
+
+    #[test]
+    fn test_update_repository_name() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        db.update_repository_name("r1", "My Custom Name").unwrap();
+        let repos = db.list_repositories().unwrap();
+        assert_eq!(repos[0].name, "My Custom Name");
+        // path_slug should remain unchanged
+        assert_eq!(repos[0].path_slug, "repo1");
+    }
+
+    #[test]
+    fn test_update_repository_icon() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+
+        // Set icon
+        db.update_repository_icon("r1", Some("rocket")).unwrap();
+        let repos = db.list_repositories().unwrap();
+        assert_eq!(repos[0].icon.as_deref(), Some("rocket"));
+
+        // Clear icon
+        db.update_repository_icon("r1", None).unwrap();
+        let repos = db.list_repositories().unwrap();
+        assert!(repos[0].icon.is_none());
+    }
+
+    #[test]
+    fn test_repository_path_slug_persisted() {
+        let db = Database::open_in_memory().unwrap();
+        let repo = Repository {
+            id: "r1".into(),
+            path: "/tmp/my-project".into(),
+            name: "My Project".into(),
+            path_slug: "my-project".into(),
+            icon: None,
+            created_at: String::new(),
+            path_valid: true,
+        };
+        db.insert_repository(&repo).unwrap();
+        let repos = db.list_repositories().unwrap();
+        assert_eq!(repos[0].name, "My Project");
+        assert_eq!(repos[0].path_slug, "my-project");
+    }
+
+    // --- App settings tests ---
+
+    #[test]
+    fn test_get_set_app_setting() {
+        let db = Database::open_in_memory().unwrap();
+        db.set_app_setting("worktree_base_dir", "/custom/path")
+            .unwrap();
+        let val = db.get_app_setting("worktree_base_dir").unwrap();
+        assert_eq!(val.as_deref(), Some("/custom/path"));
+    }
+
+    #[test]
+    fn test_get_app_setting_missing() {
+        let db = Database::open_in_memory().unwrap();
+        let val = db.get_app_setting("nonexistent_key").unwrap();
+        assert!(val.is_none());
+    }
+
+    #[test]
+    fn test_set_app_setting_upsert() {
+        let db = Database::open_in_memory().unwrap();
+        db.set_app_setting("key1", "value1").unwrap();
+        db.set_app_setting("key1", "value2").unwrap();
+        let val = db.get_app_setting("key1").unwrap();
+        assert_eq!(val.as_deref(), Some("value2"));
     }
 }

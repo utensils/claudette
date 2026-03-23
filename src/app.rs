@@ -88,6 +88,22 @@ pub struct App {
     relink_repo_path_input: String,
     relink_repo_error: Option<String>,
 
+    // Repo settings modal
+    show_repo_settings: Option<String>, // Some(repo_id)
+    repo_settings_name_input: String,
+    repo_settings_icon_input: Option<String>,
+    repo_settings_error: Option<String>,
+
+    // Icon picker (sub-modal of repo settings)
+    show_icon_picker: bool,
+    icon_picker_query: String,
+
+    // App settings modal
+    show_app_settings: bool,
+    app_settings_worktree_base_input: String,
+    app_settings_error: Option<String>,
+    worktree_base_dir: PathBuf,
+
     // Delete workspace confirmation
     show_delete_workspace: Option<String>, // Some(ws_id)
 
@@ -137,6 +153,16 @@ impl App {
             show_relink_repo: None,
             relink_repo_path_input: String::new(),
             relink_repo_error: None,
+            show_repo_settings: None,
+            repo_settings_name_input: String::new(),
+            repo_settings_icon_input: None,
+            repo_settings_error: None,
+            show_icon_picker: false,
+            icon_picker_query: String::new(),
+            show_app_settings: false,
+            app_settings_worktree_base_input: String::new(),
+            app_settings_error: None,
+            worktree_base_dir: claudette_home().join("workspaces"),
             show_delete_workspace: None,
             show_fuzzy_finder: false,
             fuzzy_query: String::new(),
@@ -152,7 +178,10 @@ impl App {
                 let db = Database::open(&path).map_err(|e| e.to_string())?;
                 let repos = db.list_repositories().map_err(|e| e.to_string())?;
                 let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
-                Ok((repos, workspaces))
+                let worktree_base = db
+                    .get_app_setting("worktree_base_dir")
+                    .map_err(|e| e.to_string())?;
+                Ok((repos, workspaces, worktree_base))
             },
             Message::DataLoaded,
         );
@@ -198,12 +227,15 @@ impl App {
             }
 
             // --- Data Loading ---
-            Message::DataLoaded(Ok((mut repos, workspaces))) => {
+            Message::DataLoaded(Ok((mut repos, workspaces, worktree_base))) => {
                 for repo in &mut repos {
                     repo.path_valid = std::path::Path::new(&repo.path).join(".git").exists();
                 }
                 self.repositories = repos;
                 self.workspaces = workspaces;
+                if let Some(base) = worktree_base {
+                    self.worktree_base_dir = PathBuf::from(base);
+                }
             }
             Message::DataLoaded(Err(e)) => {
                 eprintln!("Failed to load data from database: {e}");
@@ -259,10 +291,13 @@ impl App {
                             .map(|n| n.to_string_lossy().to_string())
                             .unwrap_or_else(|| path.clone());
 
+                        let path_slug = name.clone();
                         let repo = Repository {
                             id: uuid::Uuid::new_v4().to_string(),
                             path,
                             name,
+                            path_slug,
+                            icon: None,
                             created_at: String::new(),
                             path_valid: true,
                         };
@@ -445,11 +480,8 @@ impl App {
                 let db_path = self.db_path.clone();
                 let branch_name = format!("claudette/{ws_name}");
 
-                let worktree_base = claudette_home()
-                    .join("workspaces")
-                    .join(&repo.name)
-                    .join(&ws_name);
-                let worktree_path_str = worktree_base.to_string_lossy().to_string();
+                let worktree_path = self.worktree_base_dir.join(&repo.path_slug).join(&ws_name);
+                let worktree_path_str = worktree_path.to_string_lossy().to_string();
 
                 return Task::perform(
                     async move {
@@ -560,11 +592,8 @@ impl App {
                 };
                 let db_path = self.db_path.clone();
 
-                let worktree_base = claudette_home()
-                    .join("workspaces")
-                    .join(&repo.name)
-                    .join(&ws.name);
-                let worktree_path_str = worktree_base.to_string_lossy().to_string();
+                let worktree_path = self.worktree_base_dir.join(&repo.path_slug).join(&ws.name);
+                let worktree_path_str = worktree_path.to_string_lossy().to_string();
 
                 return Task::perform(
                     async move {
@@ -690,6 +719,133 @@ impl App {
                 self.fuzzy_query.clear();
             }
 
+            // --- Repository settings ---
+            Message::ShowRepoSettings(repo_id) => {
+                if let Some(repo) = self.repositories.iter().find(|r| r.id == repo_id) {
+                    self.repo_settings_name_input = repo.name.clone();
+                    self.repo_settings_icon_input = repo.icon.clone();
+                    self.repo_settings_error = None;
+                    self.show_repo_settings = Some(repo_id);
+                }
+            }
+            Message::HideRepoSettings => {
+                self.show_repo_settings = None;
+                self.show_icon_picker = false;
+                self.repo_settings_error = None;
+            }
+            Message::RepoSettingsNameChanged(name) => {
+                self.repo_settings_name_input = name;
+                self.repo_settings_error = None;
+            }
+            Message::ShowIconPicker => {
+                self.show_icon_picker = true;
+                self.icon_picker_query.clear();
+            }
+            Message::HideIconPicker => {
+                self.show_icon_picker = false;
+            }
+            Message::IconPickerQueryChanged(query) => {
+                self.icon_picker_query = query;
+            }
+            Message::SelectIcon(icon) => {
+                self.repo_settings_icon_input = icon;
+                self.show_icon_picker = false;
+            }
+            Message::ConfirmRepoSettings => {
+                let Some(repo_id) = self.show_repo_settings.clone() else {
+                    return Task::none();
+                };
+                let name = self.repo_settings_name_input.trim().to_string();
+                if name.is_empty() {
+                    self.repo_settings_error = Some("Name cannot be empty".into());
+                    return Task::none();
+                }
+                let icon = self.repo_settings_icon_input.clone();
+                let db_path = self.db_path.clone();
+
+                return Task::perform(
+                    async move {
+                        let db = Database::open(&db_path).map_err(|e| e.to_string())?;
+                        db.update_repository_name(&repo_id, &name)
+                            .map_err(|e| e.to_string())?;
+                        db.update_repository_icon(&repo_id, icon.as_deref())
+                            .map_err(|e| e.to_string())?;
+                        Ok((repo_id, name, icon))
+                    },
+                    Message::RepoSettingsUpdated,
+                );
+            }
+            Message::RepoSettingsUpdated(Ok((repo_id, name, icon))) => {
+                if let Some(repo) = self.repositories.iter_mut().find(|r| r.id == repo_id) {
+                    repo.name = name;
+                    repo.icon = icon;
+                }
+                self.show_repo_settings = None;
+                self.show_icon_picker = false;
+                self.repo_settings_error = None;
+            }
+            Message::RepoSettingsUpdated(Err(e)) => {
+                self.repo_settings_error = Some(e);
+            }
+
+            // --- App settings ---
+            Message::ShowAppSettings => {
+                self.app_settings_worktree_base_input =
+                    self.worktree_base_dir.to_string_lossy().to_string();
+                self.app_settings_error = None;
+                self.show_app_settings = true;
+            }
+            Message::HideAppSettings => {
+                self.show_app_settings = false;
+                self.app_settings_error = None;
+            }
+            Message::AppSettingsWorktreeBaseChanged(path) => {
+                self.app_settings_worktree_base_input = path;
+                self.app_settings_error = None;
+            }
+            Message::BrowseWorktreeBase => {
+                return Task::perform(
+                    async {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Choose worktree base directory")
+                            .pick_folder()
+                            .await
+                            .map(|h| h.path().to_string_lossy().to_string())
+                    },
+                    Message::WorktreeBaseSelected,
+                );
+            }
+            Message::WorktreeBaseSelected(Some(path)) => {
+                self.app_settings_worktree_base_input = path;
+                self.app_settings_error = None;
+            }
+            Message::WorktreeBaseSelected(None) => {}
+            Message::ConfirmAppSettings => {
+                let path = self.app_settings_worktree_base_input.trim().to_string();
+                if path.is_empty() {
+                    self.app_settings_error = Some("Path cannot be empty".into());
+                    return Task::none();
+                }
+                let db_path = self.db_path.clone();
+                return Task::perform(
+                    async move {
+                        let db = Database::open(&db_path).map_err(|e| e.to_string())?;
+                        db.set_app_setting("worktree_base_dir", &path)
+                            .map_err(|e| e.to_string())?;
+                        Ok(path)
+                    },
+                    Message::AppSettingsUpdated,
+                );
+            }
+            Message::AppSettingsUpdated(Ok(path)) => {
+                self.worktree_base_dir = PathBuf::from(path);
+                self.show_app_settings = false;
+                self.app_settings_error = None;
+            }
+            Message::AppSettingsUpdated(Err(e)) => {
+                self.app_settings_error = Some(e);
+            }
+
             // --- App lifecycle ---
             Message::ApplyDockIcon => {
                 set_dock_icon();
@@ -697,7 +853,13 @@ impl App {
 
             // --- Escape ---
             Message::EscapePressed => {
-                if self.show_fuzzy_finder {
+                if self.show_icon_picker {
+                    self.show_icon_picker = false;
+                } else if self.show_repo_settings.is_some() {
+                    self.show_repo_settings = None;
+                } else if self.show_app_settings {
+                    self.show_app_settings = false;
+                } else if self.show_fuzzy_finder {
                     self.show_fuzzy_finder = false;
                 } else if self.show_delete_workspace.is_some() {
                     self.show_delete_workspace = None;
@@ -1122,6 +1284,35 @@ impl App {
         ));
 
         let base: Element<'_, Message> = layout.into();
+
+        // Icon picker layered on top of repo settings modal
+        if self.show_icon_picker && self.show_repo_settings.is_some() {
+            let repo_settings_base = ui::view_repo_settings_modal(
+                base,
+                &self.repo_settings_name_input,
+                self.repo_settings_icon_input.as_deref(),
+                self.repo_settings_error.as_ref(),
+            );
+            let filtered = crate::icons::search(&self.icon_picker_query);
+            return ui::view_icon_picker(repo_settings_base, &self.icon_picker_query, &filtered);
+        }
+
+        if self.show_repo_settings.is_some() {
+            return ui::view_repo_settings_modal(
+                base,
+                &self.repo_settings_name_input,
+                self.repo_settings_icon_input.as_deref(),
+                self.repo_settings_error.as_ref(),
+            );
+        }
+
+        if self.show_app_settings {
+            return ui::view_app_settings_modal(
+                base,
+                &self.app_settings_worktree_base_input,
+                self.app_settings_error.as_ref(),
+            );
+        }
 
         if self.show_fuzzy_finder {
             let filtered: Vec<_> = self.fuzzy_filtered_workspaces().collect();

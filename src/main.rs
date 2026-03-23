@@ -3,6 +3,7 @@ mod app;
 mod db;
 mod diff;
 mod git;
+mod icons;
 mod message;
 mod model;
 mod names;

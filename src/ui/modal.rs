@@ -1,8 +1,9 @@
 use iced::widget::{
-    Space, button, center, column, container, mouse_area, opaque, row, text, text_input,
+    Space, button, center, column, container, mouse_area, opaque, row, svg, text, text_input,
 };
 use iced::{Background, Border, Element, Fill, Theme};
 
+use crate::icons;
 use crate::message::Message;
 use crate::ui::style;
 
@@ -313,4 +314,177 @@ pub fn view_relink_repo_modal<'a>(
     );
 
     modal_backdrop(base, modal_card(content.into()), Message::HideRelinkRepo)
+}
+
+pub fn view_repo_settings_modal<'a>(
+    base: Element<'a, Message>,
+    name_input: &str,
+    icon_input: Option<&'a str>,
+    error: Option<&String>,
+) -> Element<'a, Message> {
+    let icon_name = icon_input.unwrap_or(icons::DEFAULT_ICON);
+    let icon_preview: Element<'_, Message> = if let Some(svg_data) = icons::get(icon_name) {
+        row![
+            svg(icons::svg_handle(svg_data)).width(24).height(24),
+            Space::new().width(8),
+            text(icon_name).size(14).color(style::DIM),
+        ]
+        .align_y(iced::Alignment::Center)
+        .into()
+    } else {
+        text("No icon").size(14).color(style::FAINT).into()
+    };
+
+    let mut content = column![
+        text("Repository Settings").size(20),
+        // Display name
+        text("Display Name").size(14).color(style::DIM),
+        text_input("Repository name", name_input)
+            .on_input(Message::RepoSettingsNameChanged)
+            .on_submit(Message::ConfirmRepoSettings)
+            .padding(10)
+            .size(16),
+        // Icon
+        text("Icon").size(14).color(style::DIM),
+        row![
+            icon_preview,
+            Space::new().width(Fill),
+            button(text("Change").size(14))
+                .on_press(Message::ShowIconPicker)
+                .style(|theme: &Theme, status| {
+                    let mut s = button::secondary(theme, status);
+                    s.border = Border {
+                        radius: 4.0.into(),
+                        ..s.border
+                    };
+                    s
+                })
+                .padding([6, 12]),
+            Space::new().width(8),
+            button(text("Clear").size(14))
+                .on_press(Message::SelectIcon(None))
+                .style(|theme: &Theme, status| {
+                    let mut s = button::secondary(theme, status);
+                    s.border = Border {
+                        radius: 4.0.into(),
+                        ..s.border
+                    };
+                    s
+                })
+                .padding([6, 12]),
+        ]
+        .align_y(iced::Alignment::Center),
+    ]
+    .spacing(12);
+
+    if let Some(err) = error {
+        content = content.push(text(err.clone()).size(14).color(style::ERROR));
+    }
+
+    content = content.push(
+        row![
+            button(text("Cancel").size(14))
+                .on_press(Message::HideRepoSettings)
+                .style(|theme: &Theme, status| {
+                    let mut s = button::secondary(theme, status);
+                    s.border = Border {
+                        radius: 4.0.into(),
+                        ..s.border
+                    };
+                    s
+                })
+                .padding([8, 16]),
+            Space::new().width(8),
+            button(text("Save").size(14))
+                .on_press(Message::ConfirmRepoSettings)
+                .style(|theme: &Theme, status| {
+                    let mut s = button::primary(theme, status);
+                    s.border = Border {
+                        radius: 4.0.into(),
+                        ..s.border
+                    };
+                    s
+                })
+                .padding([8, 16]),
+        ]
+        .align_y(iced::Alignment::Center),
+    );
+
+    modal_backdrop(base, modal_card(content.into()), Message::HideRepoSettings)
+}
+
+pub fn view_app_settings_modal<'a>(
+    base: Element<'a, Message>,
+    worktree_base_input: &str,
+    error: Option<&String>,
+) -> Element<'a, Message> {
+    let default_path = dirs::home_dir()
+        .unwrap_or_default()
+        .join(".claudette")
+        .join("workspaces");
+
+    let mut content = column![
+        text("Settings").size(20),
+        text("Worktree Base Directory").size(14).color(style::DIM),
+        row![
+            text_input("Worktree base directory", worktree_base_input)
+                .on_input(Message::AppSettingsWorktreeBaseChanged)
+                .on_submit(Message::ConfirmAppSettings)
+                .padding(10)
+                .size(16)
+                .width(Fill),
+            Space::new().width(8),
+            button(text("Browse").size(14))
+                .on_press(Message::BrowseWorktreeBase)
+                .style(|theme: &Theme, status| {
+                    let mut s = button::secondary(theme, status);
+                    s.border = Border {
+                        radius: 4.0.into(),
+                        ..s.border
+                    };
+                    s
+                })
+                .padding([10, 16]),
+        ]
+        .align_y(iced::Alignment::Center),
+        text(format!("Default: {}", default_path.display()))
+            .size(12)
+            .color(style::FAINT),
+    ]
+    .spacing(12);
+
+    if let Some(err) = error {
+        content = content.push(text(err.clone()).size(14).color(style::ERROR));
+    }
+
+    content = content.push(
+        row![
+            button(text("Cancel").size(14))
+                .on_press(Message::HideAppSettings)
+                .style(|theme: &Theme, status| {
+                    let mut s = button::secondary(theme, status);
+                    s.border = Border {
+                        radius: 4.0.into(),
+                        ..s.border
+                    };
+                    s
+                })
+                .padding([8, 16]),
+            Space::new().width(8),
+            button(text("Save").size(14))
+                .on_press(Message::ConfirmAppSettings)
+                .style(|theme: &Theme, status| {
+                    let mut s = button::primary(theme, status);
+                    s.border = Border {
+                        radius: 4.0.into(),
+                        ..s.border
+                    };
+                    s
+                })
+                .padding([8, 16]),
+        ]
+        .align_y(iced::Alignment::Center),
+    );
+
+    modal_backdrop(base, modal_card(content.into()), Message::HideAppSettings)
 }

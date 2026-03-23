@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
-use iced::widget::{Column, Space, button, column, container, row, scrollable, text, tooltip};
+use iced::widget::{Column, Space, button, column, container, row, scrollable, svg, text, tooltip};
 use iced::{Background, Border, Element, Fill, Padding, Theme};
 
+use crate::icons;
 use crate::message::{Message, SidebarFilter};
 use crate::model::{Repository, Workspace, WorkspaceStatus};
 use crate::ui::style;
@@ -70,24 +71,41 @@ pub fn view_sidebar<'a>(
             }),
     );
 
-    // Add repo button
+    // Footer: Add repo + Settings
     content = content.push(
-        button(
-            row![
-                text("+").size(16),
-                Space::new().width(6),
-                text("Add repository").size(14),
-            ]
-            .align_y(iced::Alignment::Center),
-        )
-        .on_press(Message::ShowAddRepo)
-        .style(|theme: &Theme, status| {
-            let mut style = button::text(theme, status);
-            style.text_color = style::MUTED;
-            style
-        })
-        .padding([10, 16])
-        .width(Fill),
+        row![
+            button(
+                row![
+                    text("+").size(16),
+                    Space::new().width(6),
+                    text("Add repository").size(14),
+                ]
+                .align_y(iced::Alignment::Center),
+            )
+            .on_press(Message::ShowAddRepo)
+            .style(|theme: &Theme, status| {
+                let mut style = button::text(theme, status);
+                style.text_color = style::MUTED;
+                style
+            })
+            .padding([10, 16])
+            .width(Fill),
+            button(text("\u{2699}").size(16).color(style::MUTED))
+                .on_press(Message::ShowAppSettings)
+                .style(|theme: &Theme, status| {
+                    let mut s = button::text(theme, status);
+                    if matches!(status, button::Status::Hovered) {
+                        s.background = Some(Background::Color(style::HOVER_BG));
+                    }
+                    s.border = Border {
+                        radius: 4.0.into(),
+                        ..Default::default()
+                    };
+                    s
+                })
+                .padding([10, 12]),
+        ]
+        .align_y(iced::Alignment::Center),
     );
 
     container(scrollable(content).height(Fill))
@@ -162,17 +180,29 @@ fn view_repo_group<'a>(
 
     let repo_id = repo.id.clone();
 
+    // Render repo icon (Lucide SVG or default)
+    let icon_name = repo.icon.as_deref().unwrap_or(icons::DEFAULT_ICON);
+    let icon_widget: Element<'_, Message> = if let Some(svg_data) = icons::get(icon_name) {
+        svg(icons::svg_handle(svg_data)).width(14).height(14).into()
+    } else {
+        text("\u{1F4C1}").size(12).into()
+    };
+
     let name_label = if repo.path_valid {
         row![
             text(chevron).size(10).color(style::MUTED),
-            Space::new().width(6),
+            Space::new().width(4),
+            icon_widget,
+            Space::new().width(4),
             text(&repo.name).size(14),
         ]
         .align_y(iced::Alignment::Center)
     } else {
         row![
             text("\u{26A0}").size(10).color(style::WARNING),
-            Space::new().width(6),
+            Space::new().width(4),
+            icon_widget,
+            Space::new().width(4),
             text(&repo.name).size(14).color(style::WARNING),
         ]
         .align_y(iced::Alignment::Center)
@@ -211,6 +241,28 @@ fn view_repo_group<'a>(
                     })
                     .padding([4, 8]),
                 "New workspace",
+                tooltip::Position::Bottom,
+            )
+            .style(style::tooltip_style),
+        );
+        let repo_id_for_settings = repo.id.clone();
+        header_row = header_row.push(
+            tooltip(
+                button(text("\u{2699}").size(14).color(style::MUTED))
+                    .on_press(Message::ShowRepoSettings(repo_id_for_settings))
+                    .style(|theme: &Theme, status| {
+                        let mut s = button::text(theme, status);
+                        if matches!(status, button::Status::Hovered) {
+                            s.background = Some(Background::Color(style::HOVER_BG));
+                        }
+                        s.border = Border {
+                            radius: 4.0.into(),
+                            ..Default::default()
+                        };
+                        s
+                    })
+                    .padding([4, 8]),
+                "Settings",
                 tooltip::Position::Bottom,
             )
             .style(style::tooltip_style),

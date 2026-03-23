@@ -17,7 +17,8 @@ pub enum Message {
     SetSidebarFilter(SidebarFilter),
 
     // Data loading
-    DataLoaded(Result<(Vec<Repository>, Vec<Workspace>), String>),
+    #[allow(clippy::type_complexity)]
+    DataLoaded(Result<(Vec<Repository>, Vec<Workspace>, Option<String>), String>),
 
     // Add repository
     ShowAddRepo,
@@ -27,6 +28,19 @@ pub enum Message {
     RepoPathSelected(Option<String>),
     ConfirmAddRepo,
     RepoAdded(Result<Repository, String>),
+
+    // Repository settings
+    ShowRepoSettings(String), // repo_id
+    HideRepoSettings,
+    RepoSettingsNameChanged(String),
+    ConfirmRepoSettings,
+    RepoSettingsUpdated(Result<(String, String, Option<String>), String>), // Ok((repo_id, name, icon))
+
+    // Icon picker
+    ShowIconPicker,
+    HideIconPicker,
+    IconPickerQueryChanged(String),
+    SelectIcon(Option<String>), // icon name or None to clear
 
     // Repository management
     RemoveRepository(String),                  // repo_id
@@ -38,6 +52,15 @@ pub enum Message {
     RelinkPathSelected(Option<String>),
     ConfirmRelinkRepo,
     RepoRelinked(Result<(String, String), String>), // Ok((repo_id, new_path))
+
+    // App settings
+    ShowAppSettings,
+    HideAppSettings,
+    AppSettingsWorktreeBaseChanged(String),
+    BrowseWorktreeBase,
+    WorktreeBaseSelected(Option<String>),
+    ConfirmAppSettings,
+    AppSettingsUpdated(Result<String, String>), // Ok(new_worktree_base)
 
     // Create workspace
     ShowCreateWorkspace(String), // repo_id
