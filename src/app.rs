@@ -667,6 +667,8 @@ impl App {
                                 .map_err(|e| e.to_string())?;
                         }
                         let db = Database::open(&db_path).map_err(|e| e.to_string())?;
+                        db.delete_terminal_tabs_for_workspace(&ws.id)
+                            .map_err(|e| e.to_string())?;
                         db.update_workspace_status(&ws.id, &WorkspaceStatus::Archived, None)
                             .map_err(|e| e.to_string())?;
                         Ok(ws.id)
@@ -1394,7 +1396,8 @@ impl App {
                         let sort_order = self
                             .terminal_tabs
                             .get(&ws_id)
-                            .map(|tabs| tabs.len() as i32)
+                            .and_then(|tabs| tabs.iter().map(|t| t.sort_order).max())
+                            .map(|max| max + 1)
                             .unwrap_or(0);
                         let tab = TerminalTab {
                             id: id as i64,
@@ -1516,10 +1519,23 @@ impl App {
                         iced_term::actions::Action::ChangeTitle(title) => {
                             for tabs in self.terminal_tabs.values_mut() {
                                 if let Some(tab) = tabs.iter_mut().find(|t| t.id == id as i64) {
-                                    tab.title = title;
+                                    tab.title = title.clone();
                                     break;
                                 }
                             }
+                            // Persist the updated title to the database
+                            let db_path = self.db_path.clone();
+                            let tab_id = id as i64;
+                            return Task::perform(
+                                async move {
+                                    if let Ok(db) = Database::open(&db_path)
+                                        && let Err(e) = db.update_terminal_tab_title(tab_id, &title)
+                                    {
+                                        eprintln!("Failed to update terminal tab title: {e}");
+                                    }
+                                },
+                                |()| Message::ApplyDockIcon, // fire-and-forget; ApplyDockIcon is idempotent
+                            );
                         }
                         iced_term::actions::Action::Ignore => {}
                     }
@@ -1571,7 +1587,8 @@ impl App {
                         let sort_order = self
                             .terminal_tabs
                             .get(&ws_id)
-                            .map(|tabs| tabs.len() as i32)
+                            .and_then(|tabs| tabs.iter().map(|t| t.sort_order).max())
+                            .map(|max| max + 1)
                             .unwrap_or(0);
                         let tab = TerminalTab {
                             id: id as i64,
@@ -1610,8 +1627,6 @@ impl App {
             }
             Message::DividerDragUpdate(x, y) => {
                 if self.dragging_divider.is_none() {
-                    // Not dragging — just track position for when a drag starts
-                    self.last_cursor_position = iced::Point::new(x, y);
                     return Task::none();
                 }
                 if !self.drag_cursor_initialized {
