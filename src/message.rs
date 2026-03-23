@@ -1,12 +1,25 @@
 use crate::agent::StreamEvent;
 use crate::model::diff::{DiffFile, DiffViewMode, FileDiff};
-use crate::model::{ChatMessage, Repository, Workspace};
+use crate::model::{ChatMessage, Repository, TerminalTab, Workspace};
 
 #[derive(Debug, Clone)]
 pub enum SidebarFilter {
     All,
     Active,
     Archived,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RightSidebarTab {
+    AllFiles,
+    Changes,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DividerDrag {
+    LeftSidebar,
+    RightSidebar,
+    Terminal,
 }
 
 #[derive(Debug, Clone)]
@@ -113,8 +126,10 @@ pub enum Message {
     // --- Markdown link ---
     ChatLinkClicked(String), // URL
 
-    // --- Diff viewer ---
-    ToggleDiffViewer,
+    // --- Right sidebar / Diff ---
+    ToggleRightSidebar,
+    SetRightSidebarTab(RightSidebarTab),
+    DiffClearSelection,
     DiffRefresh,
     DiffFilesLoaded(Result<(Vec<DiffFile>, String), String>), // Ok((files, merge_base))
     DiffSelectFile(String),                                   // file path
@@ -124,4 +139,23 @@ pub enum Message {
     DiffConfirmRevert,
     DiffCancelRevert,
     DiffFileReverted(Result<String, String>), // Ok(file_path)
+
+    // --- Terminal ---
+    TerminalCreate(String),                                 // workspace_id
+    TerminalCreated(Result<(String, TerminalTab), String>), // Ok((ws_id, tab))
+    TerminalClose(u64),                                     // terminal_id
+    TerminalClosed(Result<i64, String>),                    // Ok(tab_id)
+    TerminalSelectTab(u64),                                 // terminal_id
+    TerminalTogglePanel,                                    // Ctrl/Cmd+`
+    TerminalEvent(iced_term::Event),                        // event from backend
+    TerminalTabsLoaded(String, Result<Vec<TerminalTab>, String>), // ws_id, tabs
+
+    // Script output (foundation for §4.7)
+    #[allow(dead_code)]
+    ScriptOutputCreate(String, String), // workspace_id, command
+
+    // --- Panel resizing ---
+    DividerDragStart(DividerDrag),
+    DividerDragUpdate(f32, f32), // cursor_x, cursor_y
+    DividerDragEnd,
 }

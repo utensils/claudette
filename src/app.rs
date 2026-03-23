@@ -13,9 +13,11 @@ use tokio::sync::Mutex;
 use crate::agent::{self, StreamEvent};
 use crate::db::Database;
 use crate::message::{Message, SidebarFilter};
-use crate::model::diff::{DiffFile, DiffViewMode, DiffViewState, FileDiff};
-use crate::model::{AgentStatus, ChatMessage, ChatRole, Repository, Workspace, WorkspaceStatus};
-use crate::{diff, git, ui};
+use crate::model::diff::{DiffFile, DiffViewMode, FileDiff};
+use crate::model::{
+    AgentStatus, ChatMessage, ChatRole, Repository, TerminalTab, Workspace, WorkspaceStatus,
+};
+use crate::{diff, git, terminal, ui};
 
 /// Subscription data for an agent stream — hashes only by ws_id for dedup.
 #[derive(Clone)]
@@ -123,8 +125,11 @@ pub struct App {
     // Markdown rendering cache: workspace_id -> vec of parsed items per message
     markdown_cache: HashMap<String, Vec<Vec<markdown::Item>>>,
 
-    // Diff viewer state
-    diff_visible: bool,
+    // Right sidebar state
+    right_sidebar_visible: bool,
+    right_sidebar_tab: crate::message::RightSidebarTab,
+
+    // Diff state
     diff_files: Vec<DiffFile>,
     diff_selected_file: Option<String>,
     diff_content: Option<FileDiff>,
@@ -133,6 +138,20 @@ pub struct App {
     diff_error: Option<String>,
     diff_revert_target: Option<String>,
     diff_merge_base: Option<String>,
+
+    // Terminal state
+    terminals: HashMap<u64, iced_term::Terminal>,
+    terminal_tabs: HashMap<String, Vec<TerminalTab>>,
+    active_terminal_tab: HashMap<String, u64>,
+    terminal_panel_visible: bool,
+
+    // Panel sizing & drag state
+    sidebar_width: f32,
+    right_sidebar_width: f32,
+    terminal_height: f32,
+    dragging_divider: Option<crate::message::DividerDrag>,
+    drag_cursor_initialized: bool,
+    last_cursor_position: iced::Point,
 }
 
 fn claudette_home() -> PathBuf {
@@ -183,7 +202,8 @@ impl App {
             chat_messages: HashMap::new(),
             chat_input: String::new(),
             markdown_cache: HashMap::new(),
-            diff_visible: false,
+            right_sidebar_visible: true,
+            right_sidebar_tab: crate::message::RightSidebarTab::Changes,
             diff_files: Vec::new(),
             diff_selected_file: None,
             diff_content: None,
@@ -192,6 +212,16 @@ impl App {
             diff_error: None,
             diff_revert_target: None,
             diff_merge_base: None,
+            terminals: HashMap::new(),
+            terminal_tabs: HashMap::new(),
+            active_terminal_tab: HashMap::new(),
+            terminal_panel_visible: true,
+            sidebar_width: ui::style::SIDEBAR_WIDTH,
+            right_sidebar_width: ui::style::RIGHT_SIDEBAR_WIDTH,
+            terminal_height: 300.0,
+            dragging_divider: None,
+            drag_cursor_initialized: false,
+            last_cursor_position: iced::Point::ORIGIN,
         };
 
         let load_task = Task::perform(
@@ -202,6 +232,9 @@ impl App {
                 let worktree_base = db
                     .get_app_setting("worktree_base_dir")
                     .map_err(|e| e.to_string())?;
+                // Seed the terminal ID counter above any existing DB IDs
+                let max_id = db.max_terminal_tab_id().map_err(|e| e.to_string())?;
+                terminal::seed_next_id(max_id as u64);
                 Ok((repos, workspaces, worktree_base))
             },
             Message::DataLoaded,
@@ -227,43 +260,62 @@ impl App {
                 self.chat_input.clear();
 
                 // Reset diff state when switching workspaces
-                if self.diff_visible {
-                    self.diff_files.clear();
-                    self.diff_selected_file = None;
-                    self.diff_content = None;
-                    self.diff_error = None;
-                    self.diff_merge_base = None;
-                    self.diff_revert_target = None;
-                    // Set diff_visible to false so ToggleDiffViewer will re-open
-                    // and reload diff data for the new workspace
-                    self.diff_visible = false;
-                    let mut tasks = vec![];
-                    if !self.chat_messages.contains_key(&id) {
-                        let db_path = self.db_path.clone();
-                        let ws_id = id.clone();
-                        tasks.push(Task::perform(
-                            async move {
-                                let db = Database::open(&db_path).map_err(|e| e.to_string())?;
-                                db.list_chat_messages(&ws_id).map_err(|e| e.to_string())
-                            },
-                            move |result| Message::ChatHistoryLoaded(id, result),
-                        ));
-                    }
-                    tasks.push(Task::done(Message::ToggleDiffViewer));
-                    return Task::batch(tasks);
+                self.diff_files.clear();
+                self.diff_selected_file = None;
+                self.diff_content = None;
+                self.diff_error = None;
+                self.diff_merge_base = None;
+                self.diff_revert_target = None;
+
+                let mut tasks = vec![];
+
+                // Auto-load changed files for the right sidebar
+                if let Some(task) = self.load_diff_files_task() {
+                    self.diff_loading = true;
+                    tasks.push(task);
                 }
 
                 // Load chat history if not already loaded
                 if !self.chat_messages.contains_key(&id) {
                     let db_path = self.db_path.clone();
                     let ws_id = id.clone();
-                    return Task::perform(
+                    let ws_id_cb = id.clone();
+                    tasks.push(Task::perform(
                         async move {
                             let db = Database::open(&db_path).map_err(|e| e.to_string())?;
                             db.list_chat_messages(&ws_id).map_err(|e| e.to_string())
                         },
-                        move |result| Message::ChatHistoryLoaded(id, result),
-                    );
+                        move |result| Message::ChatHistoryLoaded(ws_id_cb, result),
+                    ));
+                }
+
+                // Lazily load terminal tabs if not already loaded
+                if !self.terminal_tabs.contains_key(&id) {
+                    let db_path = self.db_path.clone();
+                    let ws_id = id.clone();
+                    tasks.push(Task::perform(
+                        async move {
+                            let db = Database::open(&db_path).map_err(|e| e.to_string())?;
+                            db.list_terminal_tabs_by_workspace(&ws_id)
+                                .map_err(|e| e.to_string())
+                        },
+                        {
+                            let ws_id = id.clone();
+                            move |result| Message::TerminalTabsLoaded(ws_id, result)
+                        },
+                    ));
+                } else if self
+                    .terminal_tabs
+                    .get(&id)
+                    .map(|t| t.is_empty())
+                    .unwrap_or(false)
+                {
+                    // Already loaded but empty — ensure at least 1 terminal exists
+                    tasks.push(Task::done(Message::TerminalCreate(id.clone())));
+                }
+
+                if !tasks.is_empty() {
+                    return Task::batch(tasks);
                 }
             }
             Message::ToggleRepoCollapsed(id) => {
@@ -563,8 +615,9 @@ impl App {
             Message::WorkspaceCreated(Ok(ws)) => {
                 let ws_id = ws.id.clone();
                 self.workspaces.push(ws);
-                self.selected_workspace = Some(ws_id);
+                self.selected_workspace = Some(ws_id.clone());
                 self.show_create_workspace = None;
+                return Task::done(Message::TerminalCreate(ws_id));
             }
             Message::WorkspaceCreated(Err(msg)) => {
                 self.create_workspace_error = Some(msg);
@@ -572,6 +625,14 @@ impl App {
 
             // --- Archive ---
             Message::ArchiveWorkspace(ws_id) => {
+                // Destroy all terminals for this workspace
+                if let Some(tabs) = self.terminal_tabs.remove(&ws_id) {
+                    for tab in &tabs {
+                        self.terminals.remove(&(tab.id as u64));
+                    }
+                }
+                self.active_terminal_tab.remove(&ws_id);
+
                 // Stop agent first if running
                 if self.agents.contains_key(&ws_id) {
                     let pid = self.agents[&ws_id].handle.pid;
@@ -606,6 +667,8 @@ impl App {
                                 .map_err(|e| e.to_string())?;
                         }
                         let db = Database::open(&db_path).map_err(|e| e.to_string())?;
+                        db.delete_terminal_tabs_for_workspace(&ws.id)
+                            .map_err(|e| e.to_string())?;
                         db.update_workspace_status(&ws.id, &WorkspaceStatus::Archived, None)
                             .map_err(|e| e.to_string())?;
                         Ok(ws.id)
@@ -671,6 +734,7 @@ impl App {
                     ws.worktree_path = Some(wt_path);
                     ws.agent_status = AgentStatus::Idle;
                 }
+                return Task::done(Message::TerminalCreate(ws_id));
             }
             Message::WorkspaceRestored(Err(e)) => {
                 eprintln!("Failed to restore workspace: {e}");
@@ -729,6 +793,12 @@ impl App {
                 self.workspaces.retain(|w| w.id != ws_id);
                 self.chat_messages.remove(&ws_id);
                 self.markdown_cache.remove(&ws_id);
+                if let Some(tabs) = self.terminal_tabs.remove(&ws_id) {
+                    for tab in &tabs {
+                        self.terminals.remove(&(tab.id as u64));
+                    }
+                }
+                self.active_terminal_tab.remove(&ws_id);
                 if self.selected_workspace.as_deref() == Some(&ws_id) {
                     self.selected_workspace = None;
                 }
@@ -911,8 +981,9 @@ impl App {
                     self.diff_revert_target = None;
                 } else if self.show_fuzzy_finder {
                     self.show_fuzzy_finder = false;
-                } else if self.diff_visible {
-                    self.diff_visible = false;
+                } else if self.diff_selected_file.is_some() {
+                    self.diff_selected_file = None;
+                    self.diff_content = None;
                 } else if self.show_delete_workspace.is_some() {
                     self.show_delete_workspace = None;
                 } else if self.show_relink_repo.is_some() {
@@ -1160,66 +1231,35 @@ impl App {
                 }
             }
 
-            // --- Diff Viewer ---
-            Message::ToggleDiffViewer => {
-                let Some(ws_id) = self.selected_workspace.clone() else {
-                    return Task::none();
-                };
-
-                if self.diff_visible {
-                    self.diff_visible = false;
-                    return Task::none();
+            // --- Right sidebar / Diff ---
+            Message::ToggleRightSidebar => {
+                self.right_sidebar_visible = !self.right_sidebar_visible;
+                // Auto-load changed files when opening if empty
+                if self.right_sidebar_visible
+                    && self.diff_files.is_empty()
+                    && let Some(task) = self.load_diff_files_task()
+                {
+                    self.diff_loading = true;
+                    return task;
                 }
-
-                let ws = self.workspaces.iter().find(|w| w.id == ws_id).cloned();
-                let Some(ws) = ws else {
-                    return Task::none();
-                };
-                let Some(worktree_path) = ws.worktree_path.clone() else {
-                    self.diff_error = Some("Workspace has no worktree (archived?)".into());
-                    self.diff_visible = true;
-                    return Task::none();
-                };
-
-                self.diff_visible = true;
-                self.diff_loading = true;
-                self.diff_error = None;
+            }
+            Message::SetRightSidebarTab(tab) => {
+                self.right_sidebar_tab = tab;
+            }
+            Message::DiffClearSelection => {
+                self.diff_selected_file = None;
+                self.diff_content = None;
+            }
+            Message::DiffRefresh => {
                 self.diff_files.clear();
                 self.diff_selected_file = None;
                 self.diff_content = None;
-
-                let repo = self
-                    .repositories
-                    .iter()
-                    .find(|r| r.id == ws.repository_id)
-                    .cloned();
-                let Some(repo) = repo else {
-                    return Task::none();
-                };
-
-                return Task::perform(
-                    async move {
-                        let base_branch = git::default_branch(&repo.path)
-                            .await
-                            .map_err(|e| e.to_string())?;
-                        let mb = diff::merge_base(&worktree_path, "HEAD", &base_branch)
-                            .await
-                            .map_err(|e| e.to_string())?;
-                        let files = diff::changed_files(&worktree_path, &mb)
-                            .await
-                            .map_err(|e| e.to_string())?;
-                        Ok((files, mb))
-                    },
-                    Message::DiffFilesLoaded,
-                );
-            }
-            Message::DiffRefresh => {
-                // Re-trigger the same load as ToggleDiffViewer but without toggling
-                if !self.diff_visible {
-                    return Task::none();
+                self.diff_error = None;
+                self.diff_merge_base = None;
+                if let Some(task) = self.load_diff_files_task() {
+                    self.diff_loading = true;
+                    return task;
                 }
-                self.diff_visible = false; // toggle off, then back on
-                return Task::done(Message::ToggleDiffViewer);
             }
             Message::DiffFilesLoaded(Ok((files, merge_base))) => {
                 self.diff_loading = false;
@@ -1341,6 +1381,282 @@ impl App {
             Message::DiffFileReverted(Err(e)) => {
                 self.diff_error = Some(format!("Failed to revert: {e}"));
             }
+
+            // --- Terminal ---
+            Message::TerminalCreate(ws_id) => {
+                let ws = self.workspaces.iter().find(|w| w.id == ws_id);
+                let Some(wt_path) = ws.and_then(|w| w.worktree_path.as_deref()) else {
+                    return Task::none();
+                };
+
+                let id = terminal::next_terminal_id();
+                match terminal::create_terminal(id, std::path::Path::new(wt_path)) {
+                    Ok(term) => {
+                        self.terminals.insert(id, term);
+                        let sort_order = self
+                            .terminal_tabs
+                            .get(&ws_id)
+                            .and_then(|tabs| tabs.iter().map(|t| t.sort_order).max())
+                            .map(|max| max + 1)
+                            .unwrap_or(0);
+                        let tab = TerminalTab {
+                            id: id as i64,
+                            workspace_id: ws_id.clone(),
+                            title: format!("Terminal {}", sort_order + 1),
+                            is_script_output: false,
+                            sort_order,
+                            created_at: String::new(),
+                        };
+                        self.terminal_tabs
+                            .entry(ws_id.clone())
+                            .or_default()
+                            .push(tab.clone());
+                        self.active_terminal_tab.insert(ws_id.clone(), id);
+
+                        let db_path = self.db_path.clone();
+                        return Task::perform(
+                            async move {
+                                let db = Database::open(&db_path).map_err(|e| e.to_string())?;
+                                db.insert_terminal_tab(&tab).map_err(|e| e.to_string())?;
+                                Ok((ws_id, tab))
+                            },
+                            Message::TerminalCreated,
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to create terminal: {e}");
+                    }
+                }
+            }
+            Message::TerminalCreated(Ok(_)) => {}
+            Message::TerminalCreated(Err(e)) => {
+                eprintln!("Failed to persist terminal tab: {e}");
+            }
+
+            Message::TerminalClose(terminal_id) => {
+                self.terminals.remove(&terminal_id);
+                let tab_id = terminal_id as i64;
+                let mut affected_ws = None;
+                for (ws_id, tabs) in &mut self.terminal_tabs {
+                    if let Some(pos) = tabs.iter().position(|t| t.id == tab_id) {
+                        tabs.remove(pos);
+                        affected_ws = Some(ws_id.clone());
+                        break;
+                    }
+                }
+                if let Some(ws_id) = &affected_ws
+                    && self.active_terminal_tab.get(ws_id) == Some(&terminal_id)
+                {
+                    let new_active = self
+                        .terminal_tabs
+                        .get(ws_id)
+                        .and_then(|tabs| tabs.first())
+                        .map(|t| t.id as u64);
+                    if let Some(id) = new_active {
+                        self.active_terminal_tab.insert(ws_id.clone(), id);
+                    } else {
+                        self.active_terminal_tab.remove(ws_id);
+                    }
+                }
+
+                // Auto-recreate if last terminal was closed
+                if let Some(ws_id) = &affected_ws {
+                    let is_empty = self
+                        .terminal_tabs
+                        .get(ws_id)
+                        .map(|t| t.is_empty())
+                        .unwrap_or(true);
+                    if is_empty {
+                        let ws_id = ws_id.clone();
+                        let db_path = self.db_path.clone();
+                        return Task::batch([
+                            Task::perform(
+                                async move {
+                                    let db = Database::open(&db_path).map_err(|e| e.to_string())?;
+                                    db.delete_terminal_tab(tab_id).map_err(|e| e.to_string())?;
+                                    Ok(tab_id)
+                                },
+                                Message::TerminalClosed,
+                            ),
+                            Task::done(Message::TerminalCreate(ws_id)),
+                        ]);
+                    }
+                }
+
+                let db_path = self.db_path.clone();
+                return Task::perform(
+                    async move {
+                        let db = Database::open(&db_path).map_err(|e| e.to_string())?;
+                        db.delete_terminal_tab(tab_id).map_err(|e| e.to_string())?;
+                        Ok(tab_id)
+                    },
+                    Message::TerminalClosed,
+                );
+            }
+            Message::TerminalClosed(Ok(_)) => {}
+            Message::TerminalClosed(Err(e)) => {
+                eprintln!("Failed to delete terminal tab: {e}");
+            }
+
+            Message::TerminalSelectTab(terminal_id) => {
+                if let Some(ws_id) = &self.selected_workspace {
+                    self.active_terminal_tab.insert(ws_id.clone(), terminal_id);
+                }
+            }
+
+            Message::TerminalTogglePanel => {
+                self.terminal_panel_visible = !self.terminal_panel_visible;
+            }
+
+            Message::TerminalEvent(event) => {
+                let iced_term::Event::BackendCall(id, cmd) = event;
+                if let Some(term) = self.terminals.get_mut(&id) {
+                    let action = term.handle(iced_term::Command::ProxyToBackend(cmd));
+                    match action {
+                        iced_term::actions::Action::Shutdown => {
+                            return Task::done(Message::TerminalClose(id));
+                        }
+                        iced_term::actions::Action::ChangeTitle(title) => {
+                            for tabs in self.terminal_tabs.values_mut() {
+                                if let Some(tab) = tabs.iter_mut().find(|t| t.id == id as i64) {
+                                    tab.title = title.clone();
+                                    break;
+                                }
+                            }
+                            // Persist the updated title to the database
+                            let db_path = self.db_path.clone();
+                            let tab_id = id as i64;
+                            return Task::perform(
+                                async move {
+                                    if let Ok(db) = Database::open(&db_path)
+                                        && let Err(e) = db.update_terminal_tab_title(tab_id, &title)
+                                    {
+                                        eprintln!("Failed to update terminal tab title: {e}");
+                                    }
+                                },
+                                |()| Message::ApplyDockIcon, // fire-and-forget; ApplyDockIcon is idempotent
+                            );
+                        }
+                        iced_term::actions::Action::Ignore => {}
+                    }
+                }
+            }
+
+            Message::TerminalTabsLoaded(ws_id, Ok(tabs)) => {
+                if tabs.is_empty() {
+                    // Auto-create a terminal if none exist (always at least 1)
+                    self.terminal_tabs.insert(ws_id.clone(), Vec::new());
+                    return Task::done(Message::TerminalCreate(ws_id));
+                }
+                let ws = self.workspaces.iter().find(|w| w.id == ws_id);
+                if let Some(wt_path) = ws.and_then(|w| w.worktree_path.as_deref()) {
+                    let mut first_id = None;
+                    for tab in &tabs {
+                        let id = tab.id as u64;
+                        if !self.terminals.contains_key(&id)
+                            && let Ok(term) =
+                                terminal::create_terminal(id, std::path::Path::new(wt_path))
+                        {
+                            self.terminals.insert(id, term);
+                        }
+                        if first_id.is_none() {
+                            first_id = Some(id);
+                        }
+                    }
+                    if let Some(id) = first_id {
+                        self.active_terminal_tab.entry(ws_id.clone()).or_insert(id);
+                    }
+                }
+                self.terminal_tabs.insert(ws_id, tabs);
+            }
+            Message::TerminalTabsLoaded(_ws_id, Err(e)) => {
+                eprintln!("Failed to load terminal tabs: {e}");
+            }
+
+            Message::ScriptOutputCreate(ws_id, command) => {
+                let ws = self.workspaces.iter().find(|w| w.id == ws_id);
+                let Some(wt_path) = ws.and_then(|w| w.worktree_path.as_deref()) else {
+                    return Task::none();
+                };
+
+                let id = terminal::next_terminal_id();
+                match terminal::create_script_terminal(id, std::path::Path::new(wt_path), &command)
+                {
+                    Ok(term) => {
+                        self.terminals.insert(id, term);
+                        let sort_order = self
+                            .terminal_tabs
+                            .get(&ws_id)
+                            .and_then(|tabs| tabs.iter().map(|t| t.sort_order).max())
+                            .map(|max| max + 1)
+                            .unwrap_or(0);
+                        let tab = TerminalTab {
+                            id: id as i64,
+                            workspace_id: ws_id.clone(),
+                            title: command,
+                            is_script_output: true,
+                            sort_order,
+                            created_at: String::new(),
+                        };
+                        self.terminal_tabs
+                            .entry(ws_id.clone())
+                            .or_default()
+                            .push(tab.clone());
+                        self.active_terminal_tab.insert(ws_id.clone(), id);
+
+                        let db_path = self.db_path.clone();
+                        return Task::perform(
+                            async move {
+                                let db = Database::open(&db_path).map_err(|e| e.to_string())?;
+                                db.insert_terminal_tab(&tab).map_err(|e| e.to_string())?;
+                                Ok((ws_id, tab))
+                            },
+                            Message::TerminalCreated,
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to create script terminal: {e}");
+                    }
+                }
+            }
+
+            // --- Panel resizing ---
+            Message::DividerDragStart(divider) => {
+                self.dragging_divider = Some(divider);
+                self.drag_cursor_initialized = false;
+            }
+            Message::DividerDragUpdate(x, y) => {
+                if self.dragging_divider.is_none() {
+                    return Task::none();
+                }
+                if !self.drag_cursor_initialized {
+                    self.last_cursor_position = iced::Point::new(x, y);
+                    self.drag_cursor_initialized = true;
+                    return Task::none();
+                }
+
+                let dx = x - self.last_cursor_position.x;
+                let dy = y - self.last_cursor_position.y;
+                self.last_cursor_position = iced::Point::new(x, y);
+
+                if let Some(divider) = self.dragging_divider {
+                    match divider {
+                        crate::message::DividerDrag::LeftSidebar => {
+                            self.sidebar_width = (self.sidebar_width + dx).clamp(150.0, 500.0);
+                        }
+                        crate::message::DividerDrag::RightSidebar => {
+                            self.right_sidebar_width =
+                                (self.right_sidebar_width - dx).clamp(150.0, 500.0);
+                        }
+                        crate::message::DividerDrag::Terminal => {
+                            self.terminal_height = (self.terminal_height - dy).clamp(100.0, 800.0);
+                        }
+                    }
+                }
+            }
+            Message::DividerDragEnd => {
+                self.dragging_divider = None;
+            }
         }
         Task::none()
     }
@@ -1461,6 +1777,35 @@ impl App {
         }
     }
 
+    /// Build an async task that loads changed files for the currently selected workspace.
+    /// Returns `None` if no workspace is selected or the workspace has no worktree.
+    fn load_diff_files_task(&self) -> Option<Task<Message>> {
+        let ws_id = self.selected_workspace.as_ref()?;
+        let ws = self.workspaces.iter().find(|w| w.id == *ws_id)?;
+        let worktree_path = ws.worktree_path.clone()?;
+        let repo = self
+            .repositories
+            .iter()
+            .find(|r| r.id == ws.repository_id)?;
+        let repo_path = repo.path.clone();
+
+        Some(Task::perform(
+            async move {
+                let base_branch = git::default_branch(&repo_path)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let mb = diff::merge_base(&worktree_path, "HEAD", &base_branch)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let files = diff::changed_files(&worktree_path, &mb)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok((files, mb))
+            },
+            Message::DiffFilesLoaded,
+        ))
+    }
+
     fn fuzzy_filtered_workspaces(&self) -> impl Iterator<Item = &Workspace> {
         let query = self.fuzzy_query.to_lowercase();
         self.workspaces.iter().filter(move |ws| {
@@ -1482,6 +1827,10 @@ impl App {
                 self.selected_workspace.as_deref(),
                 &self.sidebar_filter,
                 &self.repo_collapsed,
+                self.sidebar_width,
+            ));
+            layout = layout.push(ui::divider::vertical_divider(
+                crate::message::DividerDrag::LeftSidebar,
             ));
         }
 
@@ -1507,14 +1856,16 @@ impl App {
             (&[] as &[ChatMessage], &[] as &[Vec<markdown::Item>], "")
         };
 
-        let diff_state = DiffViewState {
-            visible: self.diff_visible,
-            files: &self.diff_files,
-            selected_file: self.diff_selected_file.as_deref(),
-            content: self.diff_content.as_ref(),
-            view_mode: self.diff_view_mode,
-            loading: self.diff_loading,
-            error: self.diff_error.as_deref(),
+        let (term_tabs, active_term) = if let Some(ws_id) = &self.selected_workspace {
+            let tabs = self
+                .terminal_tabs
+                .get(ws_id)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
+            let active = self.active_terminal_tab.get(ws_id).copied();
+            (tabs, active)
+        } else {
+            (&[] as &[TerminalTab], None)
         };
 
         layout = layout.push(ui::view_main_content(
@@ -1525,10 +1876,49 @@ impl App {
             &self.chat_input,
             streaming,
             md_items,
-            &diff_state,
+            &self.diff_files,
+            self.diff_selected_file.as_deref(),
+            self.diff_content.as_ref(),
+            self.diff_view_mode,
+            self.diff_loading,
+            self.diff_error.as_deref(),
+            &self.terminals,
+            term_tabs,
+            active_term,
+            self.terminal_panel_visible,
+            self.terminal_height,
         ));
 
-        let base: Element<'_, Message> = layout.into();
+        // Right sidebar
+        if self.right_sidebar_visible {
+            layout = layout.push(ui::divider::vertical_divider(
+                crate::message::DividerDrag::RightSidebar,
+            ));
+            layout = layout.push(ui::view_right_sidebar(
+                self.right_sidebar_tab,
+                &self.diff_files,
+                self.diff_selected_file.as_deref(),
+                self.diff_view_mode,
+                self.diff_loading,
+                self.right_sidebar_width,
+            ));
+        }
+
+        // Wrap in Column with toolbar at top
+        let base: Element<'_, Message> = iced::widget::Column::new()
+            .push(ui::view_status_bar(
+                self.sidebar_visible,
+                self.terminal_panel_visible,
+                self.right_sidebar_visible,
+            ))
+            .push(
+                iced::widget::container(layout)
+                    .width(iced::Fill)
+                    .height(iced::Fill),
+            )
+            .width(iced::Fill)
+            .height(iced::Fill)
+            .into();
 
         // Icon picker layered on top of repo settings modal
         if self.show_icon_picker && self.show_repo_settings.is_some() {
@@ -1626,27 +2016,32 @@ impl App {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        let keyboard_sub = event::listen_with(|event, _status, _id| {
-            if let iced::Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) =
-                &event
-            {
+        let input_sub = event::listen_with(|event, _status, _id| match &event {
+            iced::Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
                 match key {
                     Key::Character(c) if c.as_ref() == "b" && modifiers.command() => {
-                        return Some(Message::ToggleSidebar);
+                        Some(Message::ToggleSidebar)
                     }
                     Key::Character(c) if c.as_ref() == "k" && modifiers.command() => {
-                        return Some(Message::ToggleFuzzyFinder);
+                        Some(Message::ToggleFuzzyFinder)
                     }
                     Key::Character(c) if c.as_ref() == "d" && modifiers.command() => {
-                        return Some(Message::ToggleDiffViewer);
+                        Some(Message::ToggleRightSidebar)
                     }
-                    Key::Named(keyboard::key::Named::Escape) => {
-                        return Some(Message::EscapePressed);
+                    Key::Character(c) if c.as_ref() == "`" && modifiers.command() => {
+                        Some(Message::TerminalTogglePanel)
                     }
-                    _ => {}
+                    Key::Named(keyboard::key::Named::Escape) => Some(Message::EscapePressed),
+                    _ => None,
                 }
             }
-            None
+            iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+                Some(Message::DividerDragUpdate(position.x, position.y))
+            }
+            iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
+                Some(Message::DividerDragEnd)
+            }
+            _ => None,
         });
 
         // Agent streaming subscriptions — one per active agent
@@ -1662,8 +2057,16 @@ impl App {
             })
             .collect();
 
-        let mut subs = vec![keyboard_sub];
+        // Terminal subscriptions — one per live terminal instance
+        let terminal_subs: Vec<Subscription<Message>> = self
+            .terminals
+            .values()
+            .map(|term| term.subscription().map(Message::TerminalEvent))
+            .collect();
+
+        let mut subs = vec![input_sub];
         subs.extend(agent_subs);
+        subs.extend(terminal_subs);
         Subscription::batch(subs)
     }
 

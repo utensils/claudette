@@ -124,7 +124,7 @@ pub fn view_diff_file_tree<'a>(
     ];
 
     container(content)
-        .width(Length::Fixed(style::DIFF_FILE_TREE_WIDTH))
+        .width(Fill)
         .height(Fill)
         .style(|_theme: &Theme| container::Style {
             background: Some(Background::Color(style::SIDEBAR_BG)),

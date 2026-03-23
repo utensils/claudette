@@ -7,6 +7,7 @@ mod icons;
 mod message;
 mod model;
 mod names;
+mod terminal;
 mod ui;
 
 use app::App;

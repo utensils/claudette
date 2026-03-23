@@ -56,15 +56,27 @@ pub const FILE_STATUS_MODIFIED: Color = Color::from_rgb(0.8, 0.7, 0.2);
 pub const FILE_STATUS_DELETED: Color = Color::from_rgb(0.8, 0.3, 0.3);
 pub const FILE_STATUS_RENAMED: Color = Color::from_rgb(0.4, 0.6, 0.9);
 
-// Diff layout
-pub const DIFF_FILE_TREE_WIDTH: f32 = 250.0;
-
 // Chat
 pub const CHAT_USER_BG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.06);
 pub const CHAT_SYSTEM_BG: Color = Color::from_rgba(0.9, 0.7, 0.2, 0.08);
 pub const CHAT_INPUT_BG: Color = Color::from_rgb(0.12, 0.12, 0.14);
 pub const CHAT_INPUT_BORDER: Color = Color::from_rgb(0.22, 0.22, 0.26);
 pub const CHAT_HEADER_BG: Color = Color::from_rgb(0.1, 0.1, 0.12);
+
+// Right sidebar
+pub const RIGHT_SIDEBAR_WIDTH: f32 = 250.0;
+
+// Status bar
+pub const STATUS_BAR_HEIGHT: f32 = 24.0;
+pub const STATUS_BAR_BG: Color = Color::from_rgb(0.08, 0.08, 0.10);
+pub const TOGGLE_ICON_ACTIVE: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.25);
+pub const TOGGLE_ICON_INACTIVE: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.08);
+pub const TOGGLE_ICON_BORDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.15);
+
+// Terminal
+pub const TERMINAL_TAB_BG: Color = Color::from_rgb(0.12, 0.12, 0.14);
+pub const TERMINAL_TAB_ACTIVE_BG: Color = Color::from_rgb(0.18, 0.18, 0.22);
+pub const TERMINAL_TAB_BORDER: Color = Color::from_rgb(0.2, 0.2, 0.24);
 
 use iced::{Background, Border, Theme};
 

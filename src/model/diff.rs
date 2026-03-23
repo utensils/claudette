@@ -50,14 +50,3 @@ pub struct DiffLine {
     pub old_line_number: Option<u32>,
     pub new_line_number: Option<u32>,
 }
-
-/// Bundled read-only diff state for passing to view functions.
-pub struct DiffViewState<'a> {
-    pub visible: bool,
-    pub files: &'a [DiffFile],
-    pub selected_file: Option<&'a str>,
-    pub content: Option<&'a FileDiff>,
-    pub view_mode: DiffViewMode,
-    pub loading: bool,
-    pub error: Option<&'a str>,
-}

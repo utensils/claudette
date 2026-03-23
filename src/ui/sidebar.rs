@@ -14,6 +14,7 @@ pub fn view_sidebar<'a>(
     selected_workspace: Option<&str>,
     filter: &'a SidebarFilter,
     repo_collapsed: &HashMap<String, bool>,
+    width: f32,
 ) -> Element<'a, Message> {
     let mut content = Column::new().spacing(4).padding([12, 0]);
 
@@ -109,7 +110,7 @@ pub fn view_sidebar<'a>(
     );
 
     container(scrollable(content).height(Fill))
-        .width(style::SIDEBAR_WIDTH)
+        .width(width)
         .height(Fill)
         .style(|_theme: &Theme| container::Style {
             background: Some(Background::Color(style::SIDEBAR_BG)),

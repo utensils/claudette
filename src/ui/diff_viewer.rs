@@ -1,31 +1,57 @@
-use iced::widget::{Space, column, container, row, text};
+use iced::widget::{Space, button, column, container, row, text};
 use iced::{Background, Border, Element, Fill, Theme};
 
 use crate::message::Message;
 use crate::model::diff::{DiffFile, DiffViewMode, FileDiff};
-use crate::ui::{diff_content, diff_file_tree, style};
+use crate::ui::{diff_content, style};
 
-pub fn view_diff_viewer<'a>(
-    files: &'a [DiffFile],
-    selected_file: Option<&str>,
+/// Renders the diff content panel (no file tree — that lives in the right sidebar).
+/// Shows a thin header with the selected file path and a back button.
+pub fn view_diff_content_panel<'a>(
+    files: &[DiffFile],
+    selected_file: Option<&'a str>,
     content: Option<&'a FileDiff>,
     view_mode: DiffViewMode,
     loading: bool,
     error: Option<&'a str>,
 ) -> Element<'a, Message> {
-    // File tree on the left
-    let file_tree = diff_file_tree::view_diff_file_tree(files, selected_file, view_mode);
+    // Header with file path and back button
+    let file_label = selected_file.unwrap_or("No file selected");
+    let header = container(
+        row![
+            button(text("\u{2190}").size(14).color(style::MUTED))
+                .on_press(Message::DiffClearSelection)
+                .style(|theme: &Theme, status| {
+                    let mut s = button::text(theme, status);
+                    s.border = Border {
+                        radius: 4.0.into(),
+                        ..s.border
+                    };
+                    s
+                })
+                .padding([2, 8]),
+            text(file_label).size(13).color(style::TEXT),
+            Space::new().width(Fill),
+        ]
+        .align_y(iced::Alignment::Center)
+        .spacing(8)
+        .padding([6, 12]),
+    )
+    .width(Fill)
+    .style(|_theme: &Theme| container::Style {
+        background: Some(Background::Color(style::CHAT_HEADER_BG)),
+        ..Default::default()
+    });
 
-    // Divider
-    let divider = container(column![])
-        .width(1)
-        .height(Fill)
+    let header_divider = container(column![])
+        .height(1)
+        .width(Fill)
         .style(|_theme: &Theme| container::Style {
             background: Some(Background::Color(style::DIVIDER)),
             ..Default::default()
         });
 
-    // Content area on the right
+    // Content area
     let content_area: Element<'_, Message> = if let Some(err) = error {
         container(
             column![
@@ -50,47 +76,7 @@ pub fn view_diff_viewer<'a>(
         diff_content::view_diff_placeholder("Select a file to view changes")
     };
 
-    // Header with close button
-    let header = container(
-        row![
-            text("Diff Viewer").size(14).color(style::TEXT),
-            Space::new().width(Fill),
-            iced::widget::button(text("\u{2715}").size(14).color(style::MUTED))
-                .on_press(Message::ToggleDiffViewer)
-                .style(|theme: &Theme, status| {
-                    let mut s = iced::widget::button::text(theme, status);
-                    s.border = Border {
-                        radius: 4.0.into(),
-                        ..s.border
-                    };
-                    s
-                })
-                .padding([2, 8]),
-        ]
-        .align_y(iced::Alignment::Center)
-        .padding([6, 12]),
-    )
-    .width(Fill)
-    .style(|_theme: &Theme| container::Style {
-        background: Some(Background::Color(style::CHAT_HEADER_BG)),
-        border: Border {
-            width: 0.0,
-            ..Default::default()
-        },
-        ..Default::default()
-    });
-
-    let header_divider = container(column![])
-        .height(1)
-        .width(Fill)
-        .style(|_theme: &Theme| container::Style {
-            background: Some(Background::Color(style::DIVIDER)),
-            ..Default::default()
-        });
-
-    let body = row![file_tree, divider, content_area];
-
-    column![header, header_divider, body]
+    column![header, header_divider, content_area]
         .width(Fill)
         .height(Fill)
         .into()
