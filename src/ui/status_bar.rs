@@ -26,18 +26,21 @@ pub fn view_status_bar(
             Message::ToggleRightSidebar,
         ),
     ]
-    .spacing(2)
+    .spacing(4)
     .align_y(iced::Alignment::Center);
 
-    let bar = row![Space::new().width(Fill), icons].padding([0, 8]);
+    let bar = row![Space::new().width(Fill), icons]
+        .align_y(iced::Alignment::Center)
+        .padding([0, 6]);
 
     container(bar)
         .width(Fill)
         .height(style::STATUS_BAR_HEIGHT)
+        .center_y(Fill)
         .style(|_theme: &Theme| container::Style {
             background: Some(Background::Color(style::STATUS_BAR_BG)),
             border: Border {
-                width: 1.0,
+                width: 0.0,
                 color: style::DIVIDER,
                 radius: 0.0.into(),
             },
@@ -88,20 +91,16 @@ fn panel_toggle_icon(
         }
     };
 
-    button(
-        container(icon)
-            .padding(2)
-            .style(|_theme: &Theme| container::Style {
-                border: Border {
-                    width: 1.0,
-                    color: style::TOGGLE_ICON_BORDER,
-                    radius: 2.0.into(),
-                },
-                ..Default::default()
-            }),
-    )
+    button(container(icon).style(|_theme: &Theme| container::Style {
+        border: Border {
+            width: 1.0,
+            color: style::TOGGLE_ICON_BORDER,
+            radius: 2.0.into(),
+        },
+        ..Default::default()
+    }))
     .on_press(message)
-    .padding(2)
+    .padding([2, 3])
     .style(|_theme: &Theme, _status| button::Style {
         background: None,
         text_color: Color::TRANSPARENT,

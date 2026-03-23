@@ -1810,18 +1810,18 @@ impl App {
             ));
         }
 
-        // Wrap in Column with status bar at bottom
+        // Wrap in Column with toolbar at top
         let base: Element<'_, Message> = iced::widget::Column::new()
-            .push(
-                iced::widget::container(layout)
-                    .width(iced::Fill)
-                    .height(iced::Fill),
-            )
             .push(ui::view_status_bar(
                 self.sidebar_visible,
                 self.terminal_panel_visible,
                 self.right_sidebar_visible,
             ))
+            .push(
+                iced::widget::container(layout)
+                    .width(iced::Fill)
+                    .height(iced::Fill),
+            )
             .width(iced::Fill)
             .height(iced::Fill)
             .into();
