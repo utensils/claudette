@@ -1,9 +1,16 @@
-use iced::widget::{Space, button, column, container, markdown, row, scrollable, text, text_input};
+use iced::widget::{
+    Space, button, column, container, markdown, row, scrollable, text, text_input,
+};
 use iced::{Background, Border, Element, Fill, Length, Theme};
 
 use crate::message::Message;
 use crate::model::{ChatMessage, ChatRole, Repository, Workspace};
 use crate::ui::style;
+
+/// Stable widget ID for the chat text input, used for focus management.
+pub fn chat_input_id() -> iced::widget::Id {
+    iced::widget::Id::new("chat-input")
+}
 
 /// Renders the full chat panel for a selected workspace.
 pub fn view_chat_panel<'a>(
@@ -127,6 +134,7 @@ pub fn view_chat_panel<'a>(
     }
 
     let mut chat_input_widget = text_input("Type a message...", chat_input)
+        .id(chat_input_id())
         .on_input(Message::ChatInputChanged)
         .padding(10)
         .size(14)

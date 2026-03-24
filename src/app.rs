@@ -148,6 +148,7 @@ pub struct App {
     terminal_tabs: HashMap<String, Vec<TerminalTab>>,
     active_terminal_tab: HashMap<String, u64>,
     terminal_panel_visible: bool,
+    terminal_focused: bool,
 
     // Panel sizing & drag state
     sidebar_width: f32,
@@ -222,6 +223,7 @@ impl App {
             terminal_tabs: HashMap::new(),
             active_terminal_tab: HashMap::new(),
             terminal_panel_visible: true,
+            terminal_focused: false,
             sidebar_width: ui::style::SIDEBAR_WIDTH,
             right_sidebar_width: ui::style::RIGHT_SIDEBAR_WIDTH,
             terminal_height: 300.0,
@@ -1161,6 +1163,7 @@ impl App {
 
             // --- Chat ---
             Message::ChatInputChanged(text) => {
+                self.terminal_focused = false;
                 self.handle_chat_input_changed(text);
             }
             Message::ChatSend => {
@@ -1366,8 +1369,13 @@ impl App {
                             .push(tab.clone());
                         self.active_terminal_tab.insert(ws_id.clone(), id);
 
+                        // Focus chat input to unfocus the new terminal so it
+                        // doesn't capture keystrokes meant for other widgets
+                        let focus_chat = iced::widget::operation::focus(
+                            ui::chat_panel::chat_input_id(),
+                        );
                         let db_path = self.db_path.clone();
-                        return Task::perform(
+                        let persist = Task::perform(
                             async move {
                                 let db = Database::open(&db_path).map_err(|e| e.to_string())?;
                                 db.insert_terminal_tab(&tab).map_err(|e| e.to_string())?;
@@ -1375,6 +1383,7 @@ impl App {
                             },
                             Message::TerminalCreated,
                         );
+                        return Task::batch([persist, focus_chat]);
                     }
                     Err(e) => {
                         eprintln!("Failed to create terminal: {e}");
@@ -1455,6 +1464,16 @@ impl App {
                 if let Some(ws_id) = &self.selected_workspace {
                     self.active_terminal_tab.insert(ws_id.clone(), terminal_id);
                 }
+                self.terminal_focused = true;
+                if let Some(term) = self.terminals.get(&terminal_id) {
+                    return iced_term::TerminalView::focus(term.widget_id().clone());
+                }
+            }
+            Message::TerminalFocusView(terminal_id) => {
+                self.terminal_focused = true;
+                if let Some(term) = self.terminals.get(&terminal_id) {
+                    return iced_term::TerminalView::focus(term.widget_id().clone());
+                }
             }
 
             Message::TerminalTogglePanel => {
@@ -1463,6 +1482,14 @@ impl App {
 
             Message::TerminalEvent(event) => {
                 let iced_term::Event::BackendCall(id, cmd) = event;
+                // Drop keyboard input when terminal isn't focused.
+                // backend::Command is not pub, so we check via Debug format.
+                if !self.terminal_focused {
+                    let dbg = format!("{cmd:?}");
+                    if dbg.starts_with("Write(") || dbg.starts_with("Scroll(") {
+                        return Task::none();
+                    }
+                }
                 if let Some(term) = self.terminals.get_mut(&id) {
                     let action = term.handle(iced_term::Command::ProxyToBackend(cmd));
                     match action {
@@ -1521,6 +1548,10 @@ impl App {
                     }
                 }
                 self.terminal_tabs.insert(ws_id, tabs);
+                // Unfocus restored terminals so they don't capture keystrokes
+                return iced::widget::operation::focus(
+                    ui::chat_panel::chat_input_id(),
+                );
             }
             Message::TerminalTabsLoaded(_ws_id, Err(e)) => {
                 eprintln!("Failed to load terminal tabs: {e}");
@@ -1557,8 +1588,11 @@ impl App {
                             .push(tab.clone());
                         self.active_terminal_tab.insert(ws_id.clone(), id);
 
+                        let focus_chat = iced::widget::operation::focus(
+                            ui::chat_panel::chat_input_id(),
+                        );
                         let db_path = self.db_path.clone();
-                        return Task::perform(
+                        let persist = Task::perform(
                             async move {
                                 let db = Database::open(&db_path).map_err(|e| e.to_string())?;
                                 db.insert_terminal_tab(&tab).map_err(|e| e.to_string())?;
@@ -1566,6 +1600,7 @@ impl App {
                             },
                             Message::TerminalCreated,
                         );
+                        return Task::batch([persist, focus_chat]);
                     }
                     Err(e) => {
                         eprintln!("Failed to create script terminal: {e}");

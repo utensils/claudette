@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use iced::widget::{Column, Row, Space, button, container, row, text};
+use iced::widget::{Column, Row, Space, button, container, mouse_area, row, text};
 use iced::{Background, Border, Element, Fill};
 use iced_term::{Terminal, TerminalView};
 
@@ -30,7 +30,10 @@ pub fn view_terminal_panel<'a>(
 
     let terminal_content: Element<'_, Message> = if let Some(active_id) = active_tab_id {
         if let Some(term) = terminals.get(&active_id) {
-            TerminalView::show(term).map(Message::TerminalEvent)
+            // Wrap in mouse_area so clicking the terminal focuses it
+            mouse_area(TerminalView::show(term).map(Message::TerminalEvent))
+                .on_press(Message::TerminalFocusView(active_id))
+                .into()
         } else {
             container(text("Terminal initializing...").color(style::MUTED))
                 .center(Fill)
