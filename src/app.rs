@@ -1946,7 +1946,7 @@ impl App {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        let input_sub = event::listen_with(|event, _status, _id| match &event {
+        let input_sub = event::listen_with(|event, status, _id| match &event {
             iced::Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
                 match key {
                     Key::Character(c) if c.as_ref() == "b" && modifiers.command() => {
@@ -1961,10 +1961,15 @@ impl App {
                     Key::Character(c) if c.as_ref() == "`" && modifiers.command() => {
                         Some(Message::TerminalTogglePanel)
                     }
-                    Key::Named(keyboard::key::Named::ArrowUp) if modifiers.alt() => {
+                    // Only handle Up/Down when no widget (e.g. terminal) has captured the event
+                    Key::Named(keyboard::key::Named::ArrowUp)
+                        if modifiers.is_empty() && status == event::Status::Ignored =>
+                    {
                         Some(Message::ChatHistoryUp)
                     }
-                    Key::Named(keyboard::key::Named::ArrowDown) if modifiers.alt() => {
+                    Key::Named(keyboard::key::Named::ArrowDown)
+                        if modifiers.is_empty() && status == event::Status::Ignored =>
+                    {
                         Some(Message::ChatHistoryDown)
                     }
                     Key::Named(keyboard::key::Named::Escape) => Some(Message::EscapePressed),
