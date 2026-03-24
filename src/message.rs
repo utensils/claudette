@@ -151,6 +151,7 @@ pub enum Message {
     TerminalClose(u64),                                     // terminal_id
     TerminalClosed(Result<i64, String>),                    // Ok(tab_id)
     TerminalSelectTab(u64),                                 // terminal_id
+    TerminalFocusView(u64),                                 // terminal_id — focus on click
     TerminalTogglePanel,                                    // Ctrl/Cmd+`
     TerminalEvent(iced_term::Event),                        // event from backend
     TerminalTabsLoaded(String, Result<Vec<TerminalTab>, String>), // ws_id, tabs
