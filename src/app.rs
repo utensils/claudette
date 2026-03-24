@@ -1371,9 +1371,9 @@ impl App {
 
                         // Focus chat input to unfocus the new terminal so it
                         // doesn't capture keystrokes meant for other widgets
-                        let focus_chat = iced::widget::operation::focus(
-                            ui::chat_panel::chat_input_id(),
-                        );
+                        self.terminal_focused = false;
+                        let focus_chat =
+                            iced::widget::operation::focus(ui::chat_panel::chat_input_id());
                         let db_path = self.db_path.clone();
                         let persist = Task::perform(
                             async move {
@@ -1485,10 +1485,7 @@ impl App {
                 // Drop keyboard input when terminal isn't focused.
                 // backend::Command is not pub, so we check via Debug format.
                 if !self.terminal_focused {
-                    let dbg = format!("{cmd:?}");
-                    if dbg.starts_with("Write(") || dbg.starts_with("Scroll(") {
-                        return Task::none();
-                    }
+                    return Task::none();
                 }
                 if let Some(term) = self.terminals.get_mut(&id) {
                     let action = term.handle(iced_term::Command::ProxyToBackend(cmd));
@@ -1549,9 +1546,8 @@ impl App {
                 }
                 self.terminal_tabs.insert(ws_id, tabs);
                 // Unfocus restored terminals so they don't capture keystrokes
-                return iced::widget::operation::focus(
-                    ui::chat_panel::chat_input_id(),
-                );
+                self.terminal_focused = false;
+                return iced::widget::operation::focus(ui::chat_panel::chat_input_id());
             }
             Message::TerminalTabsLoaded(_ws_id, Err(e)) => {
                 eprintln!("Failed to load terminal tabs: {e}");
@@ -1588,9 +1584,9 @@ impl App {
                             .push(tab.clone());
                         self.active_terminal_tab.insert(ws_id.clone(), id);
 
-                        let focus_chat = iced::widget::operation::focus(
-                            ui::chat_panel::chat_input_id(),
-                        );
+                        self.terminal_focused = false;
+                        let focus_chat =
+                            iced::widget::operation::focus(ui::chat_panel::chat_input_id());
                         let db_path = self.db_path.clone();
                         let persist = Task::perform(
                             async move {
