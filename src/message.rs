@@ -59,10 +59,12 @@ pub enum Message {
     IconPickerQueryChanged(String),
     SelectIcon(Option<String>), // icon name or None to clear
 
-    // Repository management
-    RemoveRepository(String),                  // repo_id
+    // Repository removal (with confirmation)
+    ShowRemoveRepository(String), // repo_id — opens confirmation modal
+    HideRemoveRepository,         // cancel
+    ConfirmRemoveRepository,      // user confirmed — proceed with cleanup
     RepositoryRemoved(Result<String, String>), // Ok(repo_id)
-    ShowRelinkRepo(String),                    // repo_id
+    ShowRelinkRepo(String),       // repo_id
     HideRelinkRepo,
     RelinkRepoPathChanged(String),
     BrowseRelinkPath,

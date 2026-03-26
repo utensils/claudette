@@ -243,6 +243,81 @@ pub fn view_delete_workspace_modal<'a>(
     )
 }
 
+pub fn view_remove_repo_modal<'a>(
+    base: Element<'a, Message>,
+    repo_name: &str,
+    active_count: usize,
+    archived_count: usize,
+    error: Option<&String>,
+) -> Element<'a, Message> {
+    let mut content = column![
+        text("Remove Repository").size(20),
+        text(format!("Are you sure you want to remove \"{repo_name}\"?"))
+            .size(14)
+            .color(style::DIM),
+        text(
+            "This will NOT delete the repository from disk — it only unregisters it from Claudette."
+        )
+        .size(13)
+        .color(style::DIM),
+    ]
+    .spacing(12);
+
+    if active_count > 0 || archived_count > 0 {
+        let mut impact = String::from("This will permanently destroy:");
+        if active_count > 0 {
+            impact.push_str(&format!(
+                "\n  \u{2022} {active_count} active workspace(s) (agents will be stopped)"
+            ));
+        }
+        if archived_count > 0 {
+            impact.push_str(&format!(
+                "\n  \u{2022} {archived_count} archived workspace(s) and their chat history"
+            ));
+        }
+        content = content.push(text(impact).size(13).color(style::ERROR));
+    }
+
+    if let Some(err) = error {
+        content = content.push(text(err.clone()).size(14).color(style::ERROR));
+    }
+
+    content = content.push(
+        row![
+            button(text("Cancel").size(14))
+                .on_press(Message::HideRemoveRepository)
+                .style(|theme: &Theme, status| {
+                    let mut s = button::secondary(theme, status);
+                    s.border = Border {
+                        radius: 4.0.into(),
+                        ..s.border
+                    };
+                    s
+                })
+                .padding([8, 16]),
+            Space::new().width(8),
+            button(text("Remove").size(14).color(style::ERROR))
+                .on_press(Message::ConfirmRemoveRepository)
+                .style(|theme: &Theme, status| {
+                    let mut s = button::secondary(theme, status);
+                    s.border = Border {
+                        radius: 4.0.into(),
+                        ..s.border
+                    };
+                    s
+                })
+                .padding([8, 16]),
+        ]
+        .align_y(iced::Alignment::Center),
+    );
+
+    modal_backdrop(
+        base,
+        modal_card(content.into()),
+        Message::HideRemoveRepository,
+    )
+}
+
 pub fn view_relink_repo_modal<'a>(
     base: Element<'a, Message>,
     repo_name: &str,
@@ -361,6 +436,7 @@ pub fn view_revert_file_modal<'a>(
 
 pub fn view_repo_settings_modal<'a>(
     base: Element<'a, Message>,
+    repo_id: &str,
     name_input: &str,
     icon_input: Option<&'a str>,
     error: Option<&String>,
@@ -423,6 +499,45 @@ pub fn view_repo_settings_modal<'a>(
     if let Some(err) = error {
         content = content.push(text(err.clone()).size(14).color(style::ERROR));
     }
+
+    // Danger zone — remove repository
+    let repo_id_owned = repo_id.to_string();
+    content = content.push(Space::new().height(4));
+    content = content.push(
+        container(
+            row![
+                column![
+                    text("Remove Repository").size(14),
+                    text("Unregister this repository and delete all its workspaces")
+                        .size(12)
+                        .color(style::DIM),
+                ]
+                .spacing(2),
+                Space::new().width(Fill),
+                button(text("Remove").size(14).color(style::ERROR))
+                    .on_press(Message::ShowRemoveRepository(repo_id_owned))
+                    .style(|theme: &Theme, status| {
+                        let mut s = button::secondary(theme, status);
+                        s.border = Border {
+                            radius: 4.0.into(),
+                            ..s.border
+                        };
+                        s
+                    })
+                    .padding([6, 12]),
+            ]
+            .align_y(iced::Alignment::Center),
+        )
+        .padding(12)
+        .style(|_theme: &Theme| container::Style {
+            border: Border {
+                radius: 4.0.into(),
+                width: 1.0,
+                color: style::MODAL_BORDER,
+            },
+            ..Default::default()
+        }),
+    );
 
     content = content.push(
         row![

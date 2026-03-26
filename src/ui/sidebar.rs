@@ -296,7 +296,7 @@ fn view_repo_group<'a>(
             .push(
                 tooltip(
                     button(text("\u{2715}").size(12).color(style::MUTED))
-                        .on_press(Message::RemoveRepository(repo_id_for_remove))
+                        .on_press(Message::ShowRemoveRepository(repo_id_for_remove))
                         .style(|theme: &Theme, status| {
                             let mut s = button::text(theme, status);
                             if matches!(status, button::Status::Hovered) {
@@ -425,7 +425,7 @@ fn view_workspace_entry<'a>(
     } else {
         row![
             tooltip(
-                button(text("\u{2193}").size(11).color(style::MUTED))
+                button(text("\u{2611}").size(11).color(style::MUTED))
                     .on_press(Message::ArchiveWorkspace(ws_id.clone()))
                     .style(|theme: &Theme, status| {
                         let mut s = button::text(theme, status);

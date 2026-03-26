@@ -112,6 +112,10 @@ pub struct App {
     // Delete workspace confirmation
     show_delete_workspace: Option<String>, // Some(ws_id)
 
+    // Remove repository confirmation
+    show_remove_repository: Option<String>, // Some(repo_id)
+    remove_repo_error: Option<String>,
+
     // Fuzzy finder
     show_fuzzy_finder: bool,
     fuzzy_query: String,
@@ -200,6 +204,8 @@ impl App {
             app_settings_error: None,
             worktree_base_dir: claudette_home().join("workspaces"),
             show_delete_workspace: None,
+            show_remove_repository: None,
+            remove_repo_error: None,
             show_fuzzy_finder: false,
             fuzzy_query: String::new(),
             fuzzy_selected_index: 0,
@@ -430,11 +436,61 @@ impl App {
                 self.add_repo_error = Some(msg);
             }
 
-            // --- Remove Repository ---
-            Message::RemoveRepository(repo_id) => {
+            // --- Remove Repository (with confirmation) ---
+            Message::ShowRemoveRepository(repo_id) => {
+                // Close settings modal if the user clicked "Remove" from there
+                self.show_repo_settings = None;
+                self.remove_repo_error = None;
+                self.show_remove_repository = Some(repo_id);
+            }
+            Message::HideRemoveRepository => {
+                self.show_remove_repository = None;
+            }
+            Message::ConfirmRemoveRepository => {
+                let Some(repo_id) = self.show_remove_repository.clone() else {
+                    return Task::none();
+                };
+                self.remove_repo_error = None;
+
+                // Stop all running agents for this repo's workspaces
+                let ws_ids: Vec<String> = self
+                    .workspaces
+                    .iter()
+                    .filter(|w| w.repository_id == repo_id)
+                    .map(|w| w.id.clone())
+                    .collect();
+
+                for ws_id in &ws_ids {
+                    if let Some(state) = self.agents.remove(ws_id) {
+                        let pid = state.handle.pid;
+                        tokio::spawn(async move {
+                            let _ = agent::stop_agent(pid).await;
+                        });
+                    }
+                }
+
+                // Collect worktree paths and repo path for async cleanup
+                let worktree_paths: Vec<String> = self
+                    .workspaces
+                    .iter()
+                    .filter(|w| w.repository_id == repo_id)
+                    .filter_map(|w| w.worktree_path.clone())
+                    .collect();
+
+                let repo = self.repositories.iter().find(|r| r.id == repo_id).cloned();
+                let Some(repo) = repo else {
+                    return Task::none();
+                };
                 let db_path = self.db_path.clone();
+                let repo_path = repo.path.clone();
+
                 return Task::perform(
                     async move {
+                        // Remove all worktree directories
+                        for wt_path in &worktree_paths {
+                            crate::git::remove_worktree(&repo_path, wt_path).await.ok();
+                        }
+                        // Delete from DB (cascades to workspaces, chat_messages, terminal_tabs)
                         let db = Database::open(&db_path).map_err(|e| e.to_string())?;
                         db.delete_repository(&repo_id).map_err(|e| e.to_string())?;
                         Ok(repo_id)
@@ -443,8 +499,45 @@ impl App {
                 );
             }
             Message::RepositoryRemoved(Ok(repo_id)) => {
-                self.repositories.retain(|r| r.id != repo_id);
+                // Dismiss confirmation modal
+                self.show_remove_repository = None;
+
+                // Collect workspace IDs before removing them
+                let ws_ids: Vec<String> = self
+                    .workspaces
+                    .iter()
+                    .filter(|w| w.repository_id == repo_id)
+                    .map(|w| w.id.clone())
+                    .collect();
+
+                // Drain any agents (catches late spawns that arrived after Confirm)
+                for ws_id in &ws_ids {
+                    if let Some(state) = self.agents.remove(ws_id) {
+                        let pid = state.handle.pid;
+                        tokio::spawn(async move {
+                            let _ = agent::stop_agent(pid).await;
+                        });
+                    }
+                }
+
+                // Clean up per-workspace in-memory state
+                for ws_id in &ws_ids {
+                    self.chat_messages.remove(ws_id);
+                    self.markdown_cache.remove(ws_id);
+                    if let Some(tabs) = self.terminal_tabs.remove(ws_id) {
+                        for tab in &tabs {
+                            self.terminals.remove(&(tab.id as u64));
+                        }
+                    }
+                    self.active_terminal_tab.remove(ws_id);
+                }
+
+                // Remove workspaces and repository
                 self.workspaces.retain(|w| w.repository_id != repo_id);
+                self.repositories.retain(|r| r.id != repo_id);
+                self.repo_collapsed.remove(&repo_id);
+
+                // Clear selection if it pointed to a removed workspace
                 if let Some(sel) = &self.selected_workspace
                     && !self.workspaces.iter().any(|w| w.id == *sel)
                 {
@@ -453,6 +546,7 @@ impl App {
             }
             Message::RepositoryRemoved(Err(e)) => {
                 eprintln!("Failed to remove repository: {e}");
+                self.remove_repo_error = Some(format!("Failed to remove repository: {e}"));
             }
 
             // --- Re-link Repository ---
@@ -997,6 +1091,8 @@ impl App {
                     self.diff_content = None;
                 } else if self.show_delete_workspace.is_some() {
                     self.show_delete_workspace = None;
+                } else if self.show_remove_repository.is_some() {
+                    self.show_remove_repository = None;
                 } else if self.show_relink_repo.is_some() {
                     self.show_relink_repo = None;
                 } else if self.show_create_workspace.is_some() {
@@ -1041,6 +1137,15 @@ impl App {
                 );
             }
             Message::AgentSpawned(Ok((ws_id, handle))) => {
+                // Guard: if the workspace was removed while spawning, kill the orphan
+                if !self.workspaces.iter().any(|w| w.id == ws_id) {
+                    let pid = handle.pid;
+                    tokio::spawn(async move {
+                        let _ = agent::stop_agent(pid).await;
+                    });
+                    return Task::none();
+                }
+
                 // Add system message
                 let sys_msg = ChatMessage {
                     id: uuid::Uuid::new_v4().to_string(),
@@ -1883,8 +1988,10 @@ impl App {
 
         // Icon picker layered on top of repo settings modal
         if self.show_icon_picker && self.show_repo_settings.is_some() {
+            let repo_id = self.show_repo_settings.as_deref().unwrap_or("");
             let repo_settings_base = ui::view_repo_settings_modal(
                 base,
+                repo_id,
                 &self.repo_settings_name_input,
                 self.repo_settings_icon_input.as_deref(),
                 self.repo_settings_error.as_ref(),
@@ -1894,8 +2001,10 @@ impl App {
         }
 
         if self.show_repo_settings.is_some() {
+            let repo_id = self.show_repo_settings.as_deref().unwrap_or("");
             return ui::view_repo_settings_modal(
                 base,
+                repo_id,
                 &self.repo_settings_name_input,
                 self.repo_settings_icon_input.as_deref(),
                 self.repo_settings_error.as_ref(),
@@ -1923,6 +2032,32 @@ impl App {
 
         if let Some(file_path) = &self.diff_revert_target {
             return ui::view_revert_file_modal(base, file_path);
+        }
+
+        if let Some(repo_id) = &self.show_remove_repository {
+            let repo_name = self
+                .repositories
+                .iter()
+                .find(|r| r.id == *repo_id)
+                .map(|r| r.name.as_str())
+                .unwrap_or("this repository");
+            let active_count = self
+                .workspaces
+                .iter()
+                .filter(|w| w.repository_id == *repo_id && w.status == WorkspaceStatus::Active)
+                .count();
+            let archived_count = self
+                .workspaces
+                .iter()
+                .filter(|w| w.repository_id == *repo_id && w.status == WorkspaceStatus::Archived)
+                .count();
+            return ui::view_remove_repo_modal(
+                base,
+                repo_name,
+                active_count,
+                archived_count,
+                self.remove_repo_error.as_ref(),
+            );
         }
 
         if let Some(ws_id) = &self.show_delete_workspace {
