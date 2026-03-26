@@ -208,12 +208,26 @@ pub async fn run_turn(
     // Prompt as positional argument
     args.push(prompt.to_string());
 
-    let mut child = Command::new("claude")
-        .args(&args)
+    let mut cmd = Command::new("claude");
+    cmd.args(&args)
         .current_dir(working_dir)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    // Strip OAuth tokens inherited from a parent Claude Code session — these
+    // use the sk-ant-oat* prefix and are not valid for subprocess API calls.
+    // Preserve real API keys (sk-ant-api*) so users who authenticate that way
+    // continue to work.
+    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY")
+        && !key.starts_with("sk-ant-api")
+    {
+        cmd.env_remove("ANTHROPIC_API_KEY");
+    }
+    cmd.env_remove("CLAUDECODE");
+    cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
+
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("Failed to spawn claude: {e}"))?;
 
