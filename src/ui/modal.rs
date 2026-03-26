@@ -248,6 +248,7 @@ pub fn view_remove_repo_modal<'a>(
     repo_name: &str,
     active_count: usize,
     archived_count: usize,
+    error: Option<&String>,
 ) -> Element<'a, Message> {
     let mut content = column![
         text("Remove Repository").size(20),
@@ -275,6 +276,10 @@ pub fn view_remove_repo_modal<'a>(
             ));
         }
         content = content.push(text(impact).size(13).color(style::ERROR));
+    }
+
+    if let Some(err) = error {
+        content = content.push(text(err.clone()).size(14).color(style::ERROR));
     }
 
     content = content.push(

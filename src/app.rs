@@ -114,6 +114,7 @@ pub struct App {
 
     // Remove repository confirmation
     show_remove_repository: Option<String>, // Some(repo_id)
+    remove_repo_error: Option<String>,
 
     // Fuzzy finder
     show_fuzzy_finder: bool,
@@ -204,6 +205,7 @@ impl App {
             worktree_base_dir: claudette_home().join("workspaces"),
             show_delete_workspace: None,
             show_remove_repository: None,
+            remove_repo_error: None,
             show_fuzzy_finder: false,
             fuzzy_query: String::new(),
             fuzzy_selected_index: 0,
@@ -438,15 +440,17 @@ impl App {
             Message::ShowRemoveRepository(repo_id) => {
                 // Close settings modal if the user clicked "Remove" from there
                 self.show_repo_settings = None;
+                self.remove_repo_error = None;
                 self.show_remove_repository = Some(repo_id);
             }
             Message::HideRemoveRepository => {
                 self.show_remove_repository = None;
             }
             Message::ConfirmRemoveRepository => {
-                let Some(repo_id) = self.show_remove_repository.take() else {
+                let Some(repo_id) = self.show_remove_repository.clone() else {
                     return Task::none();
                 };
+                self.remove_repo_error = None;
 
                 // Stop all running agents for this repo's workspaces
                 let ws_ids: Vec<String> = self
@@ -495,6 +499,9 @@ impl App {
                 );
             }
             Message::RepositoryRemoved(Ok(repo_id)) => {
+                // Dismiss confirmation modal
+                self.show_remove_repository = None;
+
                 // Collect workspace IDs before removing them
                 let ws_ids: Vec<String> = self
                     .workspaces
@@ -502,6 +509,16 @@ impl App {
                     .filter(|w| w.repository_id == repo_id)
                     .map(|w| w.id.clone())
                     .collect();
+
+                // Drain any agents (catches late spawns that arrived after Confirm)
+                for ws_id in &ws_ids {
+                    if let Some(state) = self.agents.remove(ws_id) {
+                        let pid = state.handle.pid;
+                        tokio::spawn(async move {
+                            let _ = agent::stop_agent(pid).await;
+                        });
+                    }
+                }
 
                 // Clean up per-workspace in-memory state
                 for ws_id in &ws_ids {
@@ -529,6 +546,7 @@ impl App {
             }
             Message::RepositoryRemoved(Err(e)) => {
                 eprintln!("Failed to remove repository: {e}");
+                self.remove_repo_error = Some(format!("Failed to remove repository: {e}"));
             }
 
             // --- Re-link Repository ---
@@ -2033,7 +2051,13 @@ impl App {
                 .iter()
                 .filter(|w| w.repository_id == *repo_id && w.status == WorkspaceStatus::Archived)
                 .count();
-            return ui::view_remove_repo_modal(base, repo_name, active_count, archived_count);
+            return ui::view_remove_repo_modal(
+                base,
+                repo_name,
+                active_count,
+                archived_count,
+                self.remove_repo_error.as_ref(),
+            );
         }
 
         if let Some(ws_id) = &self.show_delete_workspace {
