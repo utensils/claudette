@@ -1856,9 +1856,7 @@ impl App {
                 let workspaces_to_check: Vec<_> = self
                     .workspaces
                     .iter()
-                    .filter(|ws| {
-                        ws.status == WorkspaceStatus::Active && ws.worktree_path.is_some()
-                    })
+                    .filter(|ws| ws.status == WorkspaceStatus::Active && ws.worktree_path.is_some())
                     .map(|ws| (ws.id.clone(), ws.worktree_path.clone().unwrap()))
                     .collect();
 
@@ -2437,8 +2435,12 @@ impl App {
             );
         }
 
-        // Branch refresh subscription (every 5 seconds for active workspaces)
-        if !self.workspaces.is_empty() {
+        // Branch refresh subscription (every 5 seconds when active workspaces with worktrees exist)
+        let has_active_worktrees = self
+            .workspaces
+            .iter()
+            .any(|ws| ws.status == WorkspaceStatus::Active && ws.worktree_path.is_some());
+        if has_active_worktrees {
             subs.push(
                 iced::time::every(std::time::Duration::from_secs(5))
                     .map(|_| Message::RefreshBranches),

@@ -141,6 +141,14 @@ pub async fn branch_delete(repo_path: &str, branch: &str) -> Result<(), GitError
 }
 
 /// Get the current branch name for a worktree or repository.
+/// Returns an error if in a detached HEAD state.
 pub async fn current_branch(repo_path: &str) -> Result<String, GitError> {
-    run_git(repo_path, &["rev-parse", "--abbrev-ref", "HEAD"]).await
+    let branch = run_git(repo_path, &["rev-parse", "--abbrev-ref", "HEAD"]).await?;
+    if branch == "HEAD" {
+        // Detached HEAD state - not on a branch
+        return Err(GitError::CommandFailed(
+            "In detached HEAD state (not on a branch)".into(),
+        ));
+    }
+    Ok(branch)
 }
