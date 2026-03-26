@@ -215,11 +215,15 @@ pub async fn run_turn(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    // Strip Claude Code's internal environment so the spawned `claude` process
-    // discovers its own auth. OAuth tokens (sk-ant-oat*) from subscription sessions
-    // are not valid for subprocess use; real API keys (sk-ant-api*) are stored in
-    // the user's claude config and will be picked up automatically.
-    cmd.env_remove("ANTHROPIC_API_KEY");
+    // Strip OAuth tokens inherited from a parent Claude Code session — these
+    // use the sk-ant-oat* prefix and are not valid for subprocess API calls.
+    // Preserve real API keys (sk-ant-api*) so users who authenticate that way
+    // continue to work.
+    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY")
+        && !key.starts_with("sk-ant-api")
+    {
+        cmd.env_remove("ANTHROPIC_API_KEY");
+    }
     cmd.env_remove("CLAUDECODE");
     cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
 
