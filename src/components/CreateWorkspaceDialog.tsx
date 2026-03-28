@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useApp } from "../contexts/AppContext";
+import { generateWorkspaceName } from "../utils/nameGenerator";
 
 interface Props {
   onClose: () => void;
@@ -15,8 +16,8 @@ function toBranchName(name: string): string {
 export function CreateWorkspaceDialog({ onClose }: Props) {
   const { repositories, createWorkspace } = useApp();
   const [repoId, setRepoId] = useState(repositories[0]?.id ?? "");
-  const [name, setName] = useState("");
-  const [branch, setBranch] = useState("");
+  const [name, setName] = useState(generateWorkspaceName);
+  const [branch, setBranch] = useState(() => toBranchName(name));
   const [branchEdited, setBranchEdited] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -27,6 +28,14 @@ export function CreateWorkspaceDialog({ onClose }: Props) {
     setName(value);
     if (!branchEdited) {
       setBranch(toBranchName(value));
+    }
+  }
+
+  function handleRegenerate() {
+    const newName = generateWorkspaceName();
+    setName(newName);
+    if (!branchEdited) {
+      setBranch(toBranchName(newName));
     }
   }
 
@@ -78,13 +87,37 @@ export function CreateWorkspaceDialog({ onClose }: Props) {
 
           <label className="form-label">
             Workspace Name
-            <input
-              className="form-input"
-              value={name}
-              onChange={(e) => handleNameChange(e.target.value)}
-              placeholder="Fix auth bug"
-              autoFocus
-            />
+            <div className="form-input-with-action">
+              <input
+                className="form-input"
+                value={name}
+                onChange={(e) => handleNameChange(e.target.value)}
+                placeholder="wild-clover-hopping"
+                autoFocus
+              />
+              <button
+                type="button"
+                className="btn-icon"
+                onClick={handleRegenerate}
+                title="Generate new name"
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M2 8a6 6 0 0 1 10.3-4.2" />
+                  <path d="M14 8a6 6 0 0 1-10.3 4.2" />
+                  <polyline points="12 2 12.5 4.5 10 5" />
+                  <polyline points="4 11 3.5 13.5 6 13" />
+                </svg>
+              </button>
+            </div>
           </label>
 
           <label className="form-label">

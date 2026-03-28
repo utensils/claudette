@@ -489,6 +489,16 @@ select.form-input {
   cursor: pointer;
 }
 
+.form-input-with-action {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.form-input-with-action .form-input {
+  flex: 1;
+}
+
 .form-hint {
   font-size: var(--font-size-xs);
   color: var(--text-muted);
