@@ -1,24 +1,28 @@
 # Claudette
 
-Cross-platform desktop orchestrator for parallel Claude Code agents, built with Rust and Iced.
+Cross-platform desktop orchestrator for parallel Claude Code agents, built with Tauri v2 + React.
 
-## Build & test commands
+## Build & run commands
 
 ```bash
-cargo run                    # Build and run (debug)
-cargo build --release        # Optimized release binary
-cargo test --all-features    # Run all tests
+bun install                          # Install frontend dependencies
+bun run tauri dev                    # Run in development mode (hot-reload)
+bun run tauri build                  # Build release binary
+bun run build                        # Build frontend only
+
+# Rust backend (run from src-tauri/)
 cargo clippy --all-targets --all-features  # Lint (must pass with zero warnings)
-cargo fmt --all --check      # Check formatting
+cargo fmt --all --check              # Check formatting
+cargo test --all-features            # Run Rust tests
 ```
 
 IMPORTANT: CI sets `RUSTFLAGS="-Dwarnings"` — all compiler warnings are errors. Fix warnings before committing.
 
 ## Code style
 
-- Rust edition 2024 — use modern idioms (`let chains`, `gen blocks` if stabilized, etc.)
-- Default `rustfmt` and `clippy` rules — no custom overrides
-- Prefer `cargo fmt` before committing; CI enforces it
+- **Frontend**: TypeScript + React — use functional components, hooks, and modern React patterns
+- **Backend**: Rust edition 2021 — default `rustfmt` and `clippy` rules, no custom overrides
+- Prefer `cargo fmt` and consistent TypeScript formatting before committing; CI enforces both
 
 ## Commit conventions
 
@@ -29,51 +33,64 @@ IMPORTANT: CI sets `RUSTFLAGS="-Dwarnings"` — all compiler warnings are errors
 
 ## Architecture
 
-- **GUI**: Iced 0.14 (Elm architecture — `Message` enum, `update()`, `view()`)
-- **Async runtime**: Tokio (via Iced's `tokio` feature) for process management and git operations
-- **Data persistence**: SQLite via rusqlite (bundled)
+- **Frontend**: React 19 + TypeScript + Vite (SPA served by Tauri)
+- **Backend**: Tauri v2 (Rust) — commands, event system, plugin ecosystem
+- **Process management**: Tokio async runtime (via Tauri) for spawning Claude Code agents
+- **Data persistence**: SQLite via rusqlite (or Tauri plugin) for workspace metadata, chat history, settings
 - **Git operations**: Shelling out to `git` via `tokio::process::Command` for worktree ops
-- **Terminal emulation**: libghostty integration planned (blocked on library stabilization; requires Zig toolchain)
+- **IPC**: Tauri command system — Rust functions callable from JS via `invoke()`
 
-When adding new features, follow the Iced/Elm pattern: define messages in the `Message` enum, handle them in `update()`, render in `view()`.
+### Tauri pattern
+
+- **Rust commands** are defined with `#[tauri::command]` and registered in `src-tauri/src/lib.rs`
+- **Frontend** calls commands via `import { invoke } from "@tauri-apps/api/core"`
+- **Events** can be emitted from Rust and listened to in JS (and vice versa)
+- **Plugins** extend functionality (e.g., `tauri-plugin-opener`, `tauri-plugin-shell`)
 
 ## Project structure
 
 ```
-src/
-  main.rs          — entry point, application wiring only
-  app.rs           — App struct, new(), update(), view(), subscription(), theme()
-  message.rs       — Message enum (single source of truth for all messages)
-  db.rs            — SQLite database: connection, migrations, CRUD operations
-  git.rs           — async git worktree operations (shells out to `git`)
-  model/           — data types (no UI or IO logic)
-    mod.rs
-    repository.rs
-    workspace.rs
-  ui/              — view functions, one file per major UI region
-    mod.rs
-    sidebar.rs
-    main_content.rs
-    modal.rs
-    fuzzy_finder.rs
-    style.rs       — shared color constants and styling helpers
+package.json               — Frontend dependencies and scripts
+index.html                 — Web entry point
+vite.config.ts             — Vite bundler config
+tsconfig.json              — TypeScript config
+src/                       — Frontend source (React + TypeScript)
+  main.tsx                 — React entry point
+  App.tsx                  — Root component
+  App.css                  — Root styles
+  assets/                  — Static assets (images, SVGs)
+src-tauri/                 — Rust backend (Tauri core)
+  tauri.conf.json          — Tauri config (app ID, window settings, build commands)
+  Cargo.toml               — Rust dependencies
+  build.rs                 — Tauri build script
+  src/
+    main.rs                — Desktop entry point
+    lib.rs                 — Main Rust logic, Tauri builder setup, command registration
+  capabilities/            — Security capabilities (permissions for JS command access)
+    default.json
+  icons/                   — App icons (png, icns, ico)
+assets/                    — Workspace icon SVGs (for UI)
 ```
 
 ### Guidelines for new code
 
-- **Data types** go in `model/` — keep them free of UI and IO dependencies
-- **Service/IO modules** (`db.rs`, `git.rs`) live at `src/` level — they handle persistence and external process interaction
-- **UI views** go in `ui/` — each major panel or overlay gets its own file. View functions take data by reference and return `Element<Message>`
-- **Message variants** all live in `message.rs` — never define messages elsewhere
-- **Update logic** stays in `app.rs` — this is the only place that mutates `App` state
-- **Colors and styling constants** go in `ui/style.rs` — don't scatter inline color literals
-- Add a new module when a file would exceed ~300 lines, or when a feature is logically distinct (e.g., `ui/diff_viewer.rs`, `model/checkpoint.rs`)
+#### Frontend (`src/`)
+- **Components** go in `src/components/` — one file per component, named `PascalCase.tsx`
+- **Hooks** go in `src/hooks/` — custom hooks for shared logic
+- **Types** go in `src/types/` — shared TypeScript interfaces and types
+- **Services** go in `src/services/` — Tauri command wrappers (invoke calls)
+- **State management**: Use React context + hooks, or a lightweight state lib if needed
+
+#### Backend (`src-tauri/src/`)
+- **Commands** are defined with `#[tauri::command]` — group related commands in modules
+- **Data types** used by commands go in `src-tauri/src/model/`
+- **Service/IO modules** (`db.rs`, `git.rs`) live at `src-tauri/src/` level
+- Keep command handlers thin — delegate to service modules
 
 ### Database conventions
 
-- `rusqlite::Connection` is not `Send` — do NOT store it on `App`. Instead, store `db_path: PathBuf` and open a fresh connection in each `Task::perform` closure
+- `rusqlite::Connection` is not `Send` — open connections within Tauri command handlers, not stored on app state
 - Schema migrations use `PRAGMA user_version` — bump the version when adding new migrations
-- UI-only state (e.g., collapsed sections, selection) is NOT persisted — keep it in `App` fields
 
 ## Project context
 
@@ -82,8 +99,20 @@ src/
 - P0 features: workspace management, agent chat, diff viewer, integrated terminal, checkpoints, git/GitHub integration, scripts, repo settings
 - Target platforms: macOS (Apple Silicon + Intel) and Linux (x86_64, Wayland + X11)
 
+## System dependencies (Linux)
+
+Arch Linux:
+```bash
+sudo pacman -S --needed webkit2gtk-4.1 base-devel curl wget file openssl appmenu-gtk-module libappindicator-gtk3 librsvg xdotool
+```
+
+Ubuntu/Debian:
+```bash
+sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+```
+
 ## Dependencies
 
 - Add dependencies conservatively — binary size target is < 30 MB
 - Cold start target is < 2 seconds to interactive UI
-- When choosing crates, prefer well-maintained options with minimal transitive dependencies
+- When choosing crates or npm packages, prefer well-maintained options with minimal transitive dependencies

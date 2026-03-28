@@ -1,9 +1,22 @@
-# Rust / Cargo
-/target
-debug/
-**/*.rs.bk
-*.pdb
-**/mutants.out*/
+# Dependencies
+node_modules
+
+# Build output
+dist
+dist-ssr
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+lerna-debug.log*
+*.local
+
+# Rust / Cargo (inside src-tauri/)
+src-tauri/target/
+src-tauri/gen/schemas
 
 # macOS
 .DS_Store
@@ -14,7 +27,8 @@ debug/
 .directory
 
 # VS Code
-.vscode/
+.vscode/*
+!.vscode/extensions.json
 
 # Neovim
 *.swp
@@ -22,7 +36,7 @@ debug/
 tags
 
 # JetBrains
-#.idea/
+.idea
 
 # Conductor
 .context/

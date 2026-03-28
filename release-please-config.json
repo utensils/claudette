@@ -1,5 +1,5 @@
 {
-  "release-type": "rust",
+  "release-type": "node",
   "changelog-sections": [
     { "type": "feat", "section": "Features" },
     { "type": "fix", "section": "Bug Fixes" },
@@ -8,6 +8,11 @@
     { "type": "chore", "section": "Miscellaneous", "hidden": true }
   ],
   "packages": {
-    ".": {}
+    ".": {
+      "extra-files": [
+        "src-tauri/Cargo.toml",
+        "src-tauri/tauri.conf.json"
+      ]
+    }
   }
 }

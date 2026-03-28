@@ -4,50 +4,68 @@
 
 <h1 align="center">Claudette</h1>
 
-<p align="center">Claude's missing better half — a companion tool for Claude Code usage.</p>
+<p align="center">Cross-platform desktop orchestrator for parallel Claude Code agents.</p>
 
-Claudette is a cross-platform desktop application built with Rust and [Iced](https://iced.rs). It aims to provide a lightweight interface for managing and orchestrating Claude Code sessions, similar in spirit to [Conductor.build](https://conductor.build) but with a focused feature set.
+Claudette is an open-source alternative to [Conductor](https://docs.conductor.build/) — bringing isolated workspaces, parallel agent orchestration, and unified review/merge to both macOS and Linux. Built with [Tauri v2](https://v2.tauri.app/) + React.
+
+## Features (Planned)
+
+- **Workspace management** — Isolated git worktrees per task with their own Claude Code agent
+- **Agent chat** — Rich chat interface with markdown rendering and syntax highlighting
+- **Diff viewer** — Side-by-side or unified diffs of workspace changes
+- **Integrated terminal** — Terminal sessions scoped to each workspace
+- **Checkpoints** — Automatic snapshots before each agent turn with revert capability
+- **Git integration** — Branch management, push/pull, PR creation
+- **Scripts** — Setup, run, and archive scripts per repository
+
+See [Issue #5](https://github.com/utensils/Claudette/issues/5) for the full PRD.
 
 ## Prerequisites
 
-- [Rust](https://rustup.rs/) (stable toolchain, edition 2024)
-- Platform dependencies for Iced:
-  - **macOS**: Xcode Command Line Tools (`xcode-select --install`)
-  - **Linux**: `pkg-config`, `libfontconfig-dev`, `libxkbcommon-dev`, and a Vulkan driver. On Debian/Ubuntu:
-    ```sh
-    sudo apt install pkg-config libfontconfig-dev libxkbcommon-dev libvulkan-dev
-    ```
+- [Rust](https://rustup.rs/) (1.94+)
+- [Bun](https://bun.sh/) (1.x+)
 
-## Getting started
+### macOS
 
-```sh
-# Build and run (debug)
-cargo run
+```bash
+xcode-select --install
+```
 
-# Build optimized release binary
-cargo build --release
+### Linux (Arch)
 
-# Run tests
-cargo test
+```bash
+sudo pacman -S --needed webkit2gtk-4.1 base-devel curl wget file openssl appmenu-gtk-module libappindicator-gtk3 librsvg xdotool
+```
 
-# Lint
-cargo clippy
+### Linux (Ubuntu/Debian)
+
+```bash
+sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+```
+
+## Development
+
+```bash
+bun install           # Install frontend dependencies
+bun run tauri dev     # Start in dev mode (hot-reload)
+```
+
+## Build
+
+```bash
+bun run tauri build   # Produce release binary
 ```
 
 ## Project structure
 
 ```
-src/
-  main.rs      # Application entry point and Iced app scaffold
-Cargo.toml     # Dependencies and project metadata
+src/                   — Frontend (React + TypeScript)
+src-tauri/             — Backend (Rust + Tauri v2)
+  src/lib.rs           — Main Rust logic and command registration
+  tauri.conf.json      — Tauri configuration
+assets/                — Workspace icon SVGs
 ```
 
-## Future plans
+## License
 
-- **Terminal emulation** via [libghostty](https://github.com/ghostty-org/ghostty) — integration is planned once the library stabilizes (requires zig toolchain to build).
-
-## Development notes
-
-- The project uses Rust edition 2024.
-- Iced renders via wgpu (Vulkan/Metal/DX12) by default.
-- Editor configs for VS Code and Neovim are gitignored — use your preferred setup.
+TBD
