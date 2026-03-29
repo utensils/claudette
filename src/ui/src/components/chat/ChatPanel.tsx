@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useAppStore } from "../../stores/useAppStore";
@@ -26,6 +26,7 @@ export function ChatPanel() {
   );
   const updateWorkspace = useAppStore((s) => s.updateWorkspace);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useAgentStream();
 
@@ -45,9 +46,12 @@ export function ChatPanel() {
   // Load chat history when workspace changes
   useEffect(() => {
     if (!selectedWorkspaceId) return;
-    loadChatHistory(selectedWorkspaceId).then((msgs) => {
-      setChatMessages(selectedWorkspaceId, msgs);
-    });
+    setError(null);
+    loadChatHistory(selectedWorkspaceId)
+      .then((msgs) => {
+        setChatMessages(selectedWorkspaceId, msgs);
+      })
+      .catch((e) => console.error("Failed to load chat history:", e));
   }, [selectedWorkspaceId, setChatMessages]);
 
   // Auto-scroll to bottom
@@ -61,6 +65,7 @@ export function ChatPanel() {
     const content = chatInput.trim();
     if (!content || !selectedWorkspaceId) return;
 
+    setError(null);
     setChatInput("");
     addChatMessage(selectedWorkspaceId, {
       id: crypto.randomUUID(),
@@ -76,9 +81,10 @@ export function ChatPanel() {
     try {
       await sendChatMessage(selectedWorkspaceId, content);
     } catch (e) {
-      updateWorkspace(selectedWorkspaceId, {
-        agent_status: { Error: String(e) },
-      });
+      const errMsg = String(e);
+      console.error("sendChatMessage failed:", errMsg);
+      setError(errMsg);
+      updateWorkspace(selectedWorkspaceId, { agent_status: "Idle" });
     }
   };
 
@@ -87,8 +93,8 @@ export function ChatPanel() {
     try {
       await stopAgent(selectedWorkspaceId);
       updateWorkspace(selectedWorkspaceId, { agent_status: "Stopped" });
-    } catch {
-      // ignore
+    } catch (e) {
+      console.error("stopAgent failed:", e);
     }
   };
 
@@ -98,6 +104,19 @@ export function ChatPanel() {
       handleSend();
     }
   };
+
+  const agentStatusLabel =
+    typeof ws.agent_status === "string"
+      ? ws.agent_status
+      : `Error: ${ws.agent_status.Error}`;
+
+  const agentStatusColor =
+    ws.agent_status === "Running"
+      ? "var(--status-running)"
+      : ws.agent_status === "Stopped" ||
+          typeof ws.agent_status !== "string"
+        ? "var(--status-stopped)"
+        : "var(--status-idle)";
 
   return (
     <div className={styles.panel}>
@@ -109,15 +128,9 @@ export function ChatPanel() {
         <div className={styles.headerRight}>
           <span
             className={styles.statusBadge}
-            style={{
-              color: isRunning
-                ? "var(--status-running)"
-                : "var(--status-idle)",
-            }}
+            style={{ color: agentStatusColor }}
           >
-            {typeof ws.agent_status === "string"
-              ? ws.agent_status
-              : "Error"}
+            {agentStatusLabel}
           </span>
           {isRunning ? (
             <button className={styles.stopBtn} onClick={handleStop}>
@@ -128,6 +141,8 @@ export function ChatPanel() {
       </div>
 
       <div className={styles.messages}>
+        {error && <div className={styles.errorBanner}>{error}</div>}
+
         {messages.length === 0 && !streaming ? (
           <div className={styles.empty}>
             Send a message to start a conversation
