@@ -1,0 +1,32 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.card {
+  background: var(--app-bg);
+  border: 1px solid var(--sidebar-border);
+  border-radius: var(--border-radius);
+  width: 420px;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.header {
+  padding: 16px 20px 0;
+}
+
+.title {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.body {
+  padding: 16px 20px 20px;
+}

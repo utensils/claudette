@@ -1,4 +1,6 @@
-#[derive(Debug, Clone, PartialEq)]
+use serde::Serialize;
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[allow(dead_code)]
 pub enum ChatRole {
     User,
@@ -6,7 +8,6 @@ pub enum ChatRole {
     System,
 }
 
-#[allow(dead_code)]
 impl ChatRole {
     pub fn as_str(&self) -> &str {
         match self {
@@ -15,17 +16,21 @@ impl ChatRole {
             Self::System => "system",
         }
     }
+}
 
-    pub fn from_str(s: &str) -> Self {
-        match s {
+impl std::str::FromStr for ChatRole {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
             "assistant" => Self::Assistant,
             "system" => Self::System,
             _ => Self::User,
-        }
+        })
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 #[allow(dead_code)]
 pub struct ChatMessage {
     pub id: String,

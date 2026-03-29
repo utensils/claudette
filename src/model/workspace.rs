@@ -1,4 +1,6 @@
-#[derive(Debug, Clone, PartialEq)]
+use serde::Serialize;
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[allow(dead_code)]
 pub enum AgentStatus {
     Running,
@@ -18,7 +20,7 @@ impl AgentStatus {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum WorkspaceStatus {
     Active,
     Archived,
@@ -31,16 +33,20 @@ impl WorkspaceStatus {
             Self::Archived => "archived",
         }
     }
+}
 
-    pub fn from_str(s: &str) -> Self {
-        match s {
+impl std::str::FromStr for WorkspaceStatus {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
             "archived" => Self::Archived,
             _ => Self::Active,
-        }
+        })
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 #[allow(dead_code)]
 pub struct Workspace {
     pub id: String,

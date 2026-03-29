@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 // ---------------------------------------------------------------------------
 
 /// Top-level JSON line from Claude CLI stdout.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum StreamEvent {
     #[serde(rename = "system")]
@@ -46,7 +46,7 @@ pub enum StreamEvent {
     Unknown,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum InnerStreamEvent {
     #[serde(rename = "message_start")]
@@ -75,7 +75,7 @@ pub enum InnerStreamEvent {
     Unknown,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum Delta {
     #[serde(rename = "text_delta")]
@@ -98,7 +98,7 @@ pub enum Delta {
 }
 
 /// Content block info from `content_block_start` events.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum StartContentBlock {
     #[serde(rename = "tool_use")]
@@ -112,14 +112,14 @@ pub enum StartContentBlock {
 }
 
 /// Message payload from `user` type events (tool results fed back to the model).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserEventMessage {
     #[serde(default)]
     pub content: Vec<UserContentBlock>,
 }
 
 /// Content block within a `user` event message.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum UserContentBlock {
     #[serde(rename = "tool_result")]
@@ -133,12 +133,12 @@ pub enum UserContentBlock {
     Unknown,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssistantMessage {
     pub content: Vec<ContentBlock>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ContentBlock {
     #[serde(rename = "text")]
@@ -161,7 +161,7 @@ pub fn parse_stream_line(line: &str) -> Result<StreamEvent, serde_json::Error> {
 // ---------------------------------------------------------------------------
 
 /// Events emitted by an agent turn (stream events + process lifecycle).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub enum AgentEvent {
     /// A parsed stream event from stdout.
     Stream(StreamEvent),

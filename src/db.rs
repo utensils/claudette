@@ -2,7 +2,7 @@ use std::path::Path;
 
 use rusqlite::{Connection, params};
 
-use crate::model::{ChatMessage, ChatRole, Repository, TerminalTab, Workspace, WorkspaceStatus};
+use crate::model::{ChatMessage, Repository, TerminalTab, Workspace, WorkspaceStatus};
 
 pub struct Database {
     conn: Connection,
@@ -231,7 +231,7 @@ impl Database {
         )?;
         let rows = stmt.query_map([], |row| {
             let status_str: String = row.get(5)?;
-            let status = WorkspaceStatus::from_str(&status_str);
+            let status: WorkspaceStatus = status_str.parse().unwrap();
             let agent_status = if status == WorkspaceStatus::Archived {
                 crate::model::AgentStatus::Stopped
             } else {
@@ -304,7 +304,7 @@ impl Database {
             Ok(ChatMessage {
                 id: row.get(0)?,
                 workspace_id: row.get(1)?,
-                role: ChatRole::from_str(&role_str),
+                role: role_str.parse().unwrap(),
                 content: row.get(3)?,
                 cost_usd: row.get(4)?,
                 duration_ms: row.get(5)?,

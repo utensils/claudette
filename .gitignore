@@ -1,9 +1,17 @@
 # Rust / Cargo
 /target
+**/target/
 debug/
 **/*.rs.bk
 *.pdb
 **/mutants.out*/
+
+# Node / Frontend
+node_modules/
+src/ui/dist/
+
+# Tauri generated
+src-tauri/gen/
 
 # macOS
 .DS_Store

@@ -1,6 +1,8 @@
-/// Metadata for a terminal tab. The actual terminal emulator state
-/// (iced_term::Terminal, PTY process) is ephemeral and stored on App.
-#[derive(Debug, Clone)]
+use serde::Serialize;
+
+/// Metadata for a terminal tab. The actual PTY process state is
+/// ephemeral and managed by the Tauri backend.
+#[derive(Debug, Clone, Serialize)]
 #[allow(dead_code)]
 pub struct TerminalTab {
     pub id: i64,
