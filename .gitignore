@@ -1,9 +1,14 @@
 # Rust / Cargo
 /target
+**/target/
 debug/
 **/*.rs.bk
 *.pdb
 **/mutants.out*/
+
+# Node / Frontend
+node_modules/
+dist/
 
 # macOS
 .DS_Store
