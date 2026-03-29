@@ -1,123 +1,96 @@
 # Permission Handling Design
 
+**Status**: Research complete, ready for implementation
+**Date**: 2026-03-29
+
 ## Problem
 
-Claude Code CLI tools (Bash, Edit, etc.) can require user approval before executing. In `--print` mode with `stdin(null)`, these tools are auto-denied — the agent notes that permission was required and gives up. We need to support the approve/deny/provide-instructions flow like the interactive CLI.
+Claude Code CLI tools (Bash, Edit, etc.) can require user approval before executing. In `--print` mode, tools that need approval are auto-denied — the agent notes that permission was required and gives up. We need to support the approve/deny flow like the interactive CLI.
 
-## Solution: Bidirectional Stream-JSON Protocol
+## Research Findings
 
-The CLI supports `--input-format stream-json` alongside `--output-format stream-json` when using `--print`. This enables a bidirectional protocol where:
+### What does NOT work
 
-1. The CLI sends **permission requests** as JSON on stdout
-2. Our app sends **permission responses** as JSON on stdin
+We investigated several approaches that turned out to be non-viable:
 
-### CLI Flags
+1. **Removing `--print` and using interactive mode**: The CLI enters a TUI/terminal mode that doesn't work with piped stdin/stdout. The process hangs.
 
+2. **`--input-format stream-json` with `control_request`/`control_response`**: The `control_request` protocol is an internal SDK mechanism, not exposed to CLI users. While `--input-format stream-json` exists, it's for sending user messages — the CLI does NOT emit `control_request` events on stdout for permission prompts. Tools are silently auto-denied in `--print` mode regardless of stdin format.
+
+3. **`--permission-prompt-tool`**: This flag does not exist in CLI version 2.1.87. It may be a planned feature or exists only in the Agent SDK.
+
+4. **Writing `y`/`n` to stdin**: `--print` mode does not read from stdin for approval decisions.
+
+### What DOES work
+
+Two viable approaches exist for CLI 2.1.87:
+
+#### Option A: `--allowedTools` (Pre-approval via CLI flag)
+
+```bash
+claude -p --allowedTools "Bash,Read,Edit,Write,Glob,Grep" "your prompt"
 ```
-claude --print \
-  --output-format stream-json \
-  --input-format stream-json \
-  --verbose \
-  --session-id SESSION \
-  PROMPT
-```
 
-### Protocol
+- Tools listed execute without prompting
+- Supports pattern matching: `Bash(git:*)`, `Bash(npm run *)`
+- Static — must be decided before the turn starts
+- Cannot approve/deny individual tool calls in real-time
 
-**Permission request (stdout from CLI):**
-```json
-{
-  "type": "control_request",
-  "request_id": "unique-id",
-  "request": {
-    "subtype": "can_use_tool",
-    "tool_name": "Bash",
-    "input": { "command": "git checkout main" },
-    "tool_use_id": "tool-123"
+#### Option B: Claude Agent SDK (Programmatic control)
+
+The Python/TypeScript Agent SDK provides a `canUseTool` callback for real-time approval:
+
+```typescript
+import { query } from "@anthropic-ai/claude-agent-sdk";
+
+for await (const msg of query({
+  prompt: "...",
+  options: {
+    canUseTool: async (toolName, input) => {
+      // Show UI, wait for user decision
+      return { behavior: "allow" };
+    }
   }
-}
+})) { ... }
 ```
 
-**Approve (stdin to CLI):**
-```json
-{
-  "type": "control_response",
-  "request_id": "unique-id",
-  "response": { "behavior": "allow" }
-}
-```
+This is the only way to get real-time approve/deny per tool call.
 
-**Deny (stdin to CLI):**
-```json
-{
-  "type": "control_response",
-  "request_id": "unique-id",
-  "response": { "behavior": "deny", "message": "Not allowed" }
-}
-```
+## Recommended Approach
 
-**Approve with modified input (stdin to CLI):**
-```json
-{
-  "type": "control_response",
-  "request_id": "unique-id",
-  "response": {
-    "behavior": "allow",
-    "updatedInput": { "command": "git checkout -b feature" }
-  }
-}
-```
+### Phase 1: `--allowedTools` (Implement now)
 
-## Implementation Plan
+Use `--allowedTools` to pre-approve common tools. Make the allowed tools list configurable per workspace so users can control the permission level.
 
-### 1. Update `agent.rs` (claudette-core)
+**Default allowed tools**: `Read,Glob,Grep,WebSearch,WebFetch` (read-only, safe)
 
-- Add `--input-format stream-json` to CLI args
-- Keep `--print` mode and prompt as positional arg
-- Keep stdin piped (not null) — already done
-- Add new event type for permission requests:
-  ```rust
-  pub enum AgentEvent {
-      Stream(StreamEvent),
-      PermissionRequest(PermissionRequest),
-      ProcessExited(Option<i32>),
-  }
+**User can escalate to**: `Read,Glob,Grep,Edit,Write,Bash,WebSearch,WebFetch` (full access)
 
-  pub struct PermissionRequest {
-      pub request_id: String,
-      pub tool_name: String,
-      pub tool_use_id: String,
-      pub input: serde_json::Value,
-  }
-  ```
-- Parse `control_request` events in the stdout reader task
-- Expose stdin writer on `TurnHandle` for sending responses
+Implementation:
+- Add `allowed_tools: Vec<String>` parameter to `agent::run_turn()`
+- Pass `--allowedTools` flag to the CLI when non-empty
+- Add a permission level selector in the chat UI header (e.g., "Read-only" / "Standard" / "Full access")
+- Store the setting per workspace in the database
 
-### 2. Update `commands/chat.rs` (src-tauri)
+### Phase 2: Agent SDK integration (Future)
 
-- Store stdin writer in `AgentSessionState`
-- Emit `agent-permission-request` Tauri event when a `PermissionRequest` is received
-- Add `respond_to_permission` command:
-  ```rust
-  pub async fn respond_to_permission(
-      workspace_id: String,
-      request_id: String,
-      behavior: String,      // "allow" or "deny"
-      message: Option<String>,
-  ) -> Result<(), String>
-  ```
-  Writes the `control_response` JSON to stdin
+Replace the CLI subprocess with the Claude Agent SDK for full programmatic control:
+- Real-time approve/deny per tool call
+- Ability to modify tool inputs before execution
+- No subprocess overhead
+- Requires switching from Rust subprocess to either:
+  - A Node.js sidecar running the Agent SDK
+  - Or waiting for a Rust Agent SDK
 
-### 3. Update frontend
+This is a larger architectural change and should be tracked as a separate effort.
 
-- Add `PermissionRequest` type
-- In `useAgentStream`, detect `agent-permission-request` events
-- Show approval UI in ChatPanel: tool name, input details, Approve/Deny buttons
-- Wire buttons to `respond_to_permission` command
+## Files to modify (Phase 1)
 
-## Verification
+### Backend
+- `src/agent.rs` — Add `allowed_tools` parameter to `run_turn()`, pass `--allowedTools` flag
+- `src/db.rs` — Add workspace permission level storage (or use `app_settings`)
+- `src-tauri/src/commands/chat.rs` — Pass allowed tools when spawning agent turn
 
-1. Send a prompt that triggers a Bash command (e.g., "run git status")
-2. The approval banner should appear with the command
-3. Clicking Approve should send the response and the tool should execute
-4. Clicking Deny should deny the tool and Claude should acknowledge it
+### Frontend
+- Chat header — Add permission level dropdown/toggle
+- Store — Add permission level state per workspace
