@@ -3,8 +3,8 @@
   "version": "0.1.0",
   "identifier": "com.claudette.app",
   "build": {
-    "beforeDevCommand": "cd ../src/ui && bun run dev",
-    "beforeBuildCommand": "cd ../src/ui && bun run build",
+    "beforeDevCommand": "bun run dev",
+    "beforeBuildCommand": "bun run build",
     "devUrl": "http://localhost:1420",
     "frontendDist": "../src/ui/dist"
   },

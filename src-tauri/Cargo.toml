@@ -16,4 +16,4 @@ dirs = "6"
 portable-pty = "0.8"
 
 [build-dependencies]
-tauri-build = "2"
+tauri-build = { version = "2", features = [] }
