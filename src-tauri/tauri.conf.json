@@ -1,0 +1,32 @@
+{
+  "productName": "Claudette",
+  "version": "0.1.0",
+  "identifier": "com.claudette.app",
+  "build": {
+    "beforeDevCommand": "cd ../src/ui && bun run dev",
+    "beforeBuildCommand": "cd ../src/ui && bun run build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../src/ui/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Claudette",
+        "width": 1200,
+        "height": 800,
+        "center": true,
+        "decorations": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "../assets/logo.png"
+    ]
+  }
+}

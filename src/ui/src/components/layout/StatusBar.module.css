@@ -1,0 +1,32 @@
+.bar {
+  display: flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 8px;
+  background: var(--sidebar-bg);
+  border-top: 1px solid var(--sidebar-border);
+  gap: 4px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.toggle {
+  background: none;
+  border: 1px solid var(--divider);
+  color: var(--text-dim);
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.toggle:hover {
+  background: var(--hover-bg);
+}
+
+.toggle.active {
+  color: var(--text-primary);
+  background: var(--selected-bg);
+}

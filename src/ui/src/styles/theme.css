@@ -1,0 +1,83 @@
+:root {
+  /* Sidebar */
+  --sidebar-bg: rgb(26, 26, 31);
+  --sidebar-border: rgb(46, 46, 56);
+  --sidebar-width: 260px;
+
+  /* Text */
+  --text-primary: rgb(230, 230, 235);
+  --text-muted: rgb(128, 128, 137);
+  --text-dim: rgb(115, 115, 128);
+  --text-faint: rgb(102, 102, 115);
+  --text-separator: rgb(89, 89, 102);
+
+  /* Interactive */
+  --hover-bg: rgba(255, 255, 255, 0.05);
+  --hover-bg-subtle: rgba(255, 255, 255, 0.04);
+  --selected-bg: rgba(255, 255, 255, 0.08);
+  --divider: rgb(51, 51, 61);
+
+  /* Agent status */
+  --status-running: rgb(51, 204, 77);
+  --status-idle: rgb(128, 128, 128);
+  --status-stopped: rgb(204, 51, 51);
+
+  /* Diff */
+  --diff-added-bg: rgba(0, 128, 0, 0.15);
+  --diff-removed-bg: rgba(128, 0, 0, 0.15);
+  --diff-added-text: rgb(102, 230, 102);
+  --diff-removed-text: rgb(230, 102, 102);
+  --diff-hunk-header: rgb(102, 153, 230);
+  --diff-line-number: rgb(102, 102, 115);
+
+  /* Chat */
+  --chat-user-bg: rgba(255, 255, 255, 0.06);
+  --chat-system-bg: rgba(230, 179, 51, 0.08);
+  --chat-input-bg: rgb(31, 31, 36);
+  --chat-header-bg: rgb(26, 26, 31);
+
+  /* Terminal */
+  --terminal-tab-bg: rgb(31, 31, 36);
+  --terminal-tab-active-bg: rgb(46, 46, 56);
+
+  /* General */
+  --app-bg: rgb(18, 18, 22);
+  --border-radius: 8px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background: var(--app-bg);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  font-size: 13px;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}

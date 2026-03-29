@@ -1,0 +1,102 @@
+.viewer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--sidebar-border);
+  background: var(--chat-header-bg);
+}
+
+.backBtn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.backBtn:hover {
+  color: var(--text-primary);
+}
+
+.fileName {
+  font-family: monospace;
+  font-size: 13px;
+}
+
+.content {
+  flex: 1;
+  overflow: auto;
+}
+
+.center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.diffTable {
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.hunkHeader {
+  background: rgba(102, 153, 230, 0.1);
+  color: var(--diff-hunk-header);
+  padding: 2px 12px;
+  font-size: 12px;
+}
+
+.line {
+  display: flex;
+  min-height: 20px;
+  padding: 0 4px;
+}
+
+.lineAdded {
+  background: var(--diff-added-bg);
+}
+
+.lineRemoved {
+  background: var(--diff-removed-bg);
+}
+
+.lineNum {
+  width: 48px;
+  text-align: right;
+  padding-right: 8px;
+  color: var(--diff-line-number);
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.linePrefix {
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+  color: var(--text-dim);
+}
+
+.lineAdded .linePrefix {
+  color: var(--diff-added-text);
+}
+
+.lineRemoved .linePrefix {
+  color: var(--diff-removed-text);
+}
+
+.lineContent {
+  flex: 1;
+  white-space: pre;
+  overflow-x: auto;
+}

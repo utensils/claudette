@@ -1,4 +1,6 @@
-#[derive(Debug, Clone)]
+use serde::Serialize;
+
+#[derive(Debug, Clone, Serialize)]
 #[allow(dead_code)]
 pub struct Repository {
     pub id: String,

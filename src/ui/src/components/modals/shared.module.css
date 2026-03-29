@@ -1,0 +1,91 @@
+.field {
+  margin-bottom: 12px;
+}
+
+.label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.input {
+  width: 100%;
+  background: var(--chat-input-bg);
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  padding: 8px 12px;
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+}
+
+.input:focus {
+  border-color: var(--text-dim);
+}
+
+.inputRow {
+  display: flex;
+  gap: 8px;
+}
+
+.inputRow .input {
+  flex: 1;
+}
+
+.error {
+  color: var(--status-stopped);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.hint {
+  color: var(--text-dim);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.btn {
+  background: var(--selected-bg);
+  border: 1px solid var(--divider);
+  color: var(--text-primary);
+  padding: 6px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.btn:hover {
+  background: var(--hover-bg);
+}
+
+.btnDanger {
+  composes: btn;
+  color: var(--status-stopped);
+  border-color: var(--status-stopped);
+}
+
+.btnDanger:hover {
+  background: rgba(204, 51, 51, 0.15);
+}
+
+.btnPrimary {
+  composes: btn;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.warning {
+  background: var(--chat-system-bg);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}

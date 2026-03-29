@@ -1,4 +1,6 @@
-#[derive(Debug, Clone, PartialEq)]
+use serde::Serialize;
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum FileStatus {
     Added,
     Modified,
@@ -6,19 +8,19 @@ pub enum FileStatus {
     Renamed { from: String },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DiffFile {
     pub path: String,
     pub status: FileStatus,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub enum DiffViewMode {
     Unified,
     SideBySide,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct FileDiff {
     #[allow(dead_code)]
     pub path: String,
@@ -26,7 +28,7 @@ pub struct FileDiff {
     pub is_binary: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DiffHunk {
     #[allow(dead_code)]
     pub old_start: u32,
@@ -36,14 +38,14 @@ pub struct DiffHunk {
     pub lines: Vec<DiffLine>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum DiffLineType {
     Context,
     Added,
     Removed,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DiffLine {
     pub line_type: DiffLineType,
     pub content: String,
