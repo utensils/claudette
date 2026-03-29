@@ -42,19 +42,29 @@ export function TerminalPanel() {
     ? terminalTabs[selectedWorkspaceId] || []
     : [];
 
-  // Load terminal tabs on workspace change
+  // Load terminal tabs on workspace change; auto-create one if none exist.
   useEffect(() => {
     if (!selectedWorkspaceId) return;
-    listTerminalTabs(selectedWorkspaceId).then((t) => {
-      setTerminalTabs(selectedWorkspaceId, t);
-      if (t.length > 0 && !activeTerminalTabId) {
-        setActiveTerminalTab(t[0].id);
+    listTerminalTabs(selectedWorkspaceId).then(async (t) => {
+      if (t.length > 0) {
+        setTerminalTabs(selectedWorkspaceId, t);
+        if (!activeTerminalTabId) {
+          setActiveTerminalTab(t[0].id);
+        }
+      } else {
+        try {
+          const tab = await createTerminalTab(selectedWorkspaceId);
+          addTerminalTab(selectedWorkspaceId, tab);
+        } catch {
+          // ignore — terminal creation is best-effort
+        }
       }
     });
   }, [
     selectedWorkspaceId,
     setTerminalTabs,
     setActiveTerminalTab,
+    addTerminalTab,
     activeTerminalTabId,
   ]);
 
