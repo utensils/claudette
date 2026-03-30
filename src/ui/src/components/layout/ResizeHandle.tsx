@@ -4,8 +4,6 @@ import styles from "./ResizeHandle.module.css";
 interface ResizeHandleProps {
   direction: "horizontal" | "vertical";
   onResize: (delta: number) => void;
-  minSize?: number;
-  maxSize?: number;
 }
 
 export function ResizeHandle({

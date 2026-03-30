@@ -176,7 +176,9 @@ pub async fn open_workspace_in_terminal(worktree_path: String) -> Result<(), Str
     #[cfg(target_os = "linux")]
     {
         // Try common Linux terminal emulators
-        let xterm_cmd = format!("cd '{}' && exec bash", worktree_path);
+        // For xterm: escape single quotes by replacing ' with '\''
+        let xterm_escaped = worktree_path.replace('\'', r"'\''");
+        let xterm_cmd = format!("cd '{}' && exec bash", xterm_escaped);
         let terminals: Vec<(&str, Vec<&str>)> = vec![
             (
                 "gnome-terminal",
@@ -220,12 +222,15 @@ pub async fn open_workspace_in_terminal(worktree_path: String) -> Result<(), Str
     #[cfg(target_os = "macos")]
     {
         // Use AppleScript to open Terminal.app
+        // Escape both single quotes and backslashes for AppleScript string within shell command
+        let escaped = worktree_path.replace('\\', r"\\").replace('\'', r"'\''");
+
         let script = format!(
             r#"tell application "Terminal"
                 activate
-                do script "cd '{}'"
+                do script "cd '{}'; exec bash"
             end tell"#,
-            worktree_path.replace('\'', "'\\''")
+            escaped
         );
 
         tokio::process::Command::new("osascript")

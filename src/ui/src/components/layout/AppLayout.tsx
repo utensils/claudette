@@ -57,8 +57,6 @@ export function AppLayout() {
             <ResizeHandle
               direction="horizontal"
               onResize={handleLeftResize}
-              minSize={150}
-              maxSize={600}
             />
           </>
         )}
@@ -81,8 +79,6 @@ export function AppLayout() {
               <ResizeHandle
                 direction="vertical"
                 onResize={handleTerminalResize}
-                minSize={100}
-                maxSize={800}
               />
               <div
                 className={styles.terminal}
@@ -98,8 +94,6 @@ export function AppLayout() {
             <ResizeHandle
               direction="horizontal"
               onResize={handleRightResize}
-              minSize={150}
-              maxSize={600}
             />
             <div
               className={styles.rightSidebar}
