@@ -3,7 +3,7 @@ members = ["src-tauri"]
 resolver = "2"
 
 [package]
-name = "claudette-core"
+name = "claudette"
 version = "0.1.0"
 edition = "2024"
 description = "Claude's missing better half — a companion tool for Claude Code"

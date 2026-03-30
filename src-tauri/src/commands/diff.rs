@@ -1,9 +1,9 @@
 use tauri::State;
 
-use claudette_core::db::Database;
-use claudette_core::diff;
-use claudette_core::git;
-use claudette_core::model::diff::{DiffFile, FileDiff};
+use claudette::db::Database;
+use claudette::diff;
+use claudette::git;
+use claudette::model::diff::{DiffFile, FileDiff};
 
 use crate::state::AppState;
 
@@ -72,9 +72,9 @@ pub async fn revert_file(
     status: String,
 ) -> Result<(), String> {
     let file_status = match status.as_str() {
-        "Added" => claudette_core::model::diff::FileStatus::Added,
-        "Deleted" => claudette_core::model::diff::FileStatus::Deleted,
-        _ => claudette_core::model::diff::FileStatus::Modified,
+        "Added" => claudette::model::diff::FileStatus::Added,
+        "Deleted" => claudette::model::diff::FileStatus::Deleted,
+        _ => claudette::model::diff::FileStatus::Modified,
     };
 
     diff::revert_file(&worktree_path, &merge_base, &file_path, &file_status)

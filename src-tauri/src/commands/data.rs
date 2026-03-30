@@ -1,8 +1,8 @@
 use serde::Serialize;
 use tauri::State;
 
-use claudette_core::db::Database;
-use claudette_core::model::{Repository, Workspace};
+use claudette::db::Database;
+use claudette::model::{Repository, Workspace};
 
 use crate::state::AppState;
 

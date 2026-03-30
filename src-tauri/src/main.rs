@@ -7,7 +7,7 @@ mod state;
 
 use std::path::PathBuf;
 
-use claudette_core::db::Database;
+use claudette::db::Database;
 
 fn main() {
     // Determine database and worktree paths.

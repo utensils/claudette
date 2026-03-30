@@ -2,9 +2,9 @@ use std::path::Path;
 
 use tauri::State;
 
-use claudette_core::db::Database;
-use claudette_core::git;
-use claudette_core::model::Repository;
+use claudette::db::Database;
+use claudette::git;
+use claudette::model::Repository;
 
 use crate::state::AppState;
 

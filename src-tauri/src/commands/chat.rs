@@ -1,9 +1,9 @@
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
-use claudette_core::agent::{self, AgentEvent, StreamEvent};
-use claudette_core::db::Database;
-use claudette_core::model::{ChatMessage, ChatRole};
+use claudette::agent::{self, AgentEvent, StreamEvent};
+use claudette::db::Database;
+use claudette::model::{ChatMessage, ChatRole};
 
 use crate::state::{AgentSessionState, AppState};
 
@@ -141,7 +141,7 @@ pub async fn send_chat_message(
                     .content
                     .iter()
                     .filter_map(|block| {
-                        if let claudette_core::agent::ContentBlock::Text { text } = block {
+                        if let claudette::agent::ContentBlock::Text { text } = block {
                             Some(text.as_str())
                         } else {
                             None

@@ -1,6 +1,6 @@
 use tauri::State;
 
-use claudette_core::db::Database;
+use claudette::db::Database;
 
 use crate::state::AppState;
 

@@ -58,7 +58,7 @@ src/
 ### 3.1 Directory Structure
 
 ```
-Cargo.toml              <- workspace root + claudette-core lib package
+Cargo.toml              <- workspace root + claudette lib package
 src/
   lib.rs                <- re-exports backend modules (replaces main.rs)
   db.rs                 <- kept as-is
@@ -80,7 +80,7 @@ src/
       types/            <- TypeScript types matching Rust models
       styles/           <- CSS custom properties and theme
 src-tauri/              <- Tauri binary crate (flat layout)
-  Cargo.toml            <- depends on claudette-core
+  Cargo.toml            <- depends on claudette
   tauri.conf.json
   build.rs
   capabilities/
@@ -96,14 +96,14 @@ assets/
 
 ### 3.2 Cargo Workspace
 
-The root `Cargo.toml` becomes both the workspace root and the `claudette-core` library package:
+The root `Cargo.toml` becomes both the workspace root and the `claudette` library package:
 
 ```toml
 [workspace]
 members = ["src-tauri"]
 
 [package]
-name = "claudette-core"
+name = "claudette"
 version = "0.1.0"
 edition = "2024"
 
@@ -131,7 +131,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-claudette-core = { path = ".." }
+claudette = { path = ".." }
 tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
@@ -406,7 +406,7 @@ Dark theme matching existing Iced color palette, translated to CSS custom proper
 |-------|---------|
 | Frontend dev server | `cd src/ui && bun run dev` |
 | Tauri dev mode | `cargo tauri dev` (requires `beforeDevCommand` in `tauri.conf.json`, see below) |
-| Backend tests | `cargo test -p claudette-core` |
+| Backend tests | `cargo test -p claudette` |
 | Rust lint | `cargo clippy --workspace` |
 | TypeScript check | `cd src/ui && bunx tsc --noEmit` |
 | Release build | `cargo tauri build` |

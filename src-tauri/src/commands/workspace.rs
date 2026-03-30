@@ -2,10 +2,10 @@ use std::path::PathBuf;
 
 use tauri::State;
 
-use claudette_core::db::Database;
-use claudette_core::git;
-use claudette_core::model::{AgentStatus, Workspace, WorkspaceStatus};
-use claudette_core::names::NameGenerator;
+use claudette::db::Database;
+use claudette::git;
+use claudette::model::{AgentStatus, Workspace, WorkspaceStatus};
+use claudette::names::NameGenerator;
 
 use crate::state::AppState;
 

@@ -1,7 +1,7 @@
 use tauri::State;
 
-use claudette_core::db::Database;
-use claudette_core::model::TerminalTab;
+use claudette::db::Database;
+use claudette::model::TerminalTab;
 
 use crate::state::AppState;
 

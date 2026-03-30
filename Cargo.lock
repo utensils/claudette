@@ -313,7 +313,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "claudette-core"
+name = "claudette"
 version = "0.1.0"
 dependencies = [
  "dirs",
@@ -332,7 +332,7 @@ dependencies = [
 name = "claudette-tauri"
 version = "0.1.0"
 dependencies = [
- "claudette-core",
+ "claudette",
  "dirs",
  "portable-pty",
  "serde",

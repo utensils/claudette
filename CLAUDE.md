@@ -50,7 +50,7 @@ IMPORTANT: CI sets `RUSTFLAGS="-Dwarnings"` — all compiler warnings are errors
 ## Project structure
 
 ```
-Cargo.toml              — workspace root + claudette-core lib crate
+Cargo.toml              — workspace root + claudette lib crate
 src/
   lib.rs                — library entry point, re-exports backend modules
   db.rs                 — SQLite database: connection, migrations, CRUD
@@ -82,7 +82,7 @@ src/
       types/            — TypeScript types matching Rust models
       styles/           — CSS custom properties (dark theme)
 src-tauri/
-  Cargo.toml            — Tauri binary crate (depends on claudette-core)
+  Cargo.toml            — Tauri binary crate (depends on claudette)
   tauri.conf.json       — Tauri configuration
   src/
     main.rs             — Tauri entry point, command registration
@@ -94,8 +94,8 @@ src-tauri/
 ### Guidelines for new code
 
 - **Data types** go in `model/` — keep them free of UI and IO dependencies. All model types must derive `Serialize`.
-- **Service/IO modules** (`db.rs`, `git.rs`, `diff.rs`, `agent.rs`) live at `src/` level in the `claudette-core` crate
-- **Tauri commands** go in `src-tauri/src/commands/` — thin wrappers that call into `claudette-core`
+- **Service/IO modules** (`db.rs`, `git.rs`, `diff.rs`, `agent.rs`) live at `src/` level in the `claudette` crate
+- **Tauri commands** go in `src-tauri/src/commands/` — thin wrappers that call into `claudette`
 - **React components** go in `src/ui/src/components/` — organized by feature area
 - **State** lives in the Zustand store (`useAppStore`) — UI state in React, agent sessions in Rust-side `AppState`
 - **Streaming data** (agent events, PTY output) flows via Tauri events, consumed by React hooks
