@@ -13,6 +13,43 @@ struct AgentStreamPayload {
     event: AgentEvent,
 }
 
+/// Map a permission level name to the list of tools to pre-approve.
+fn tools_for_level(level: &str) -> Vec<String> {
+    match level {
+        "full" => [
+            "Bash",
+            "Read",
+            "Write",
+            "Edit",
+            "Glob",
+            "Grep",
+            "WebSearch",
+            "WebFetch",
+            "NotebookEdit",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
+        "standard" => [
+            "Read",
+            "Write",
+            "Edit",
+            "Glob",
+            "Grep",
+            "WebSearch",
+            "WebFetch",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
+        // "readonly" or anything else
+        _ => ["Read", "Glob", "Grep", "WebSearch", "WebFetch"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+    }
+}
+
 #[tauri::command]
 pub async fn load_chat_history(
     workspace_id: String,
@@ -27,6 +64,7 @@ pub async fn load_chat_history(
 pub async fn send_chat_message(
     workspace_id: String,
     content: String,
+    permission_level: Option<String>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
@@ -57,6 +95,10 @@ pub async fn send_chat_message(
     db.insert_chat_message(&user_msg)
         .map_err(|e| e.to_string())?;
 
+    // Resolve allowed tools from permission level.
+    let level = permission_level.as_deref().unwrap_or("readonly");
+    let allowed_tools = tools_for_level(level);
+
     // Get or create agent session.
     let mut agents = state.agents.write().await;
     let session = agents
@@ -77,6 +119,7 @@ pub async fn send_chat_message(
         &session_id,
         &content,
         is_resume,
+        &allowed_tools,
     )
     .await?;
 

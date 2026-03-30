@@ -53,6 +53,10 @@ interface AppState {
   ) => void;
   toggleToolActivityCollapsed: (wsId: string, index: number) => void;
 
+  // -- Permissions --
+  permissionLevel: Record<string, string>;
+  setPermissionLevel: (wsId: string, level: string) => void;
+
   // -- Diff --
   diffFiles: DiffFile[];
   diffMergeBase: string | null;
@@ -202,6 +206,13 @@ export const useAppStore = create<AppState>((set) => ({
           i === index ? { ...a, collapsed: !a.collapsed } : a
         ),
       },
+    })),
+
+  // -- Permissions --
+  permissionLevel: {},
+  setPermissionLevel: (wsId, level) =>
+    set((s) => ({
+      permissionLevel: { ...s.permissionLevel, [wsId]: level },
     })),
 
   // -- Diff --

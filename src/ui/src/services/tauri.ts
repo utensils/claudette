@@ -79,9 +79,14 @@ export function loadChatHistory(workspaceId: string): Promise<ChatMessage[]> {
 
 export function sendChatMessage(
   workspaceId: string,
-  content: string
+  content: string,
+  permissionLevel?: string
 ): Promise<void> {
-  return invoke("send_chat_message", { workspaceId, content });
+  return invoke("send_chat_message", {
+    workspaceId,
+    content,
+    permissionLevel: permissionLevel ?? null,
+  });
 }
 
 export function stopAgent(workspaceId: string): Promise<void> {

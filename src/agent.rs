@@ -183,19 +183,27 @@ pub struct TurnHandle {
 ///
 /// For the first turn, uses `--session-id` to establish the session.
 /// For subsequent turns, uses `--resume` to continue the conversation.
+///
+/// `allowed_tools` pre-approves tools so they run without interactive
+/// permission prompts (e.g. `["Bash", "Read", "Edit"]`).
 pub async fn run_turn(
     working_dir: &Path,
     session_id: &str,
     prompt: &str,
     is_resume: bool,
+    allowed_tools: &[String],
 ) -> Result<TurnHandle, String> {
     let mut args = vec![
         "--print".to_string(),
         "--output-format".to_string(),
         "stream-json".to_string(),
         "--verbose".to_string(),
-        "--include-partial-messages".to_string(),
     ];
+
+    if !allowed_tools.is_empty() {
+        args.push("--allowedTools".to_string());
+        args.push(allowed_tools.join(","));
+    }
 
     if is_resume {
         args.push("--resume".to_string());

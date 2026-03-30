@@ -46,6 +46,12 @@ export function ChatPanel() {
   const activities = selectedWorkspaceId
     ? toolActivities[selectedWorkspaceId] || []
     : [];
+  const permissionLevel = useAppStore((s) =>
+    selectedWorkspaceId
+      ? s.permissionLevel[selectedWorkspaceId] || "readonly"
+      : "readonly"
+  );
+  const setPermissionLevel = useAppStore((s) => s.setPermissionLevel);
   const isRunning = ws?.agent_status === "Running";
 
   // Load chat history when workspace changes, seed prompt history from it.
@@ -96,7 +102,7 @@ export function ChatPanel() {
     updateWorkspace(selectedWorkspaceId, { agent_status: "Running" });
 
     try {
-      await sendChatMessage(selectedWorkspaceId, content);
+      await sendChatMessage(selectedWorkspaceId, content, permissionLevel);
     } catch (e) {
       const errMsg = String(e);
       console.error("sendChatMessage failed:", errMsg);
@@ -169,6 +175,20 @@ export function ChatPanel() {
           {repo && <span className={styles.repoName}>{repo.name}</span>}
         </div>
         <div className={styles.headerRight}>
+          <select
+            className={styles.permissionSelect}
+            value={permissionLevel}
+            onChange={(e) =>
+              selectedWorkspaceId &&
+              setPermissionLevel(selectedWorkspaceId, e.target.value)
+            }
+            disabled={isRunning}
+            title="Tool permission level for this workspace"
+          >
+            <option value="readonly">Read-only</option>
+            <option value="standard">Standard</option>
+            <option value="full">Full access</option>
+          </select>
           <span
             className={styles.statusBadge}
             style={{ color: agentStatusColor }}
