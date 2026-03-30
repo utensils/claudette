@@ -1,6 +1,5 @@
 import { useAppStore } from "../../stores/useAppStore";
 import { AddRepoModal } from "./AddRepoModal";
-import { CreateWorkspaceModal } from "./CreateWorkspaceModal";
 import { DeleteWorkspaceModal } from "./DeleteWorkspaceModal";
 import { RemoveRepoModal } from "./RemoveRepoModal";
 import { RepoSettingsModal } from "./RepoSettingsModal";
@@ -13,8 +12,6 @@ export function ModalRouter() {
   switch (activeModal) {
     case "addRepo":
       return <AddRepoModal />;
-    case "createWorkspace":
-      return <CreateWorkspaceModal />;
     case "deleteWorkspace":
       return <DeleteWorkspaceModal />;
     case "removeRepo":

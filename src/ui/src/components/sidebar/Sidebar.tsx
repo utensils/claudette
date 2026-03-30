@@ -1,5 +1,11 @@
+import { useRef } from "react";
 import { useAppStore } from "../../stores/useAppStore";
-import { archiveWorkspace, restoreWorkspace } from "../../services/tauri";
+import {
+  archiveWorkspace,
+  restoreWorkspace,
+  generateWorkspaceName,
+  createWorkspace,
+} from "../../services/tauri";
 import { Settings, Link, X } from "lucide-react";
 import styles from "./Sidebar.module.css";
 
@@ -12,8 +18,26 @@ export function Sidebar() {
   const setSidebarFilter = useAppStore((s) => s.setSidebarFilter);
   const repoCollapsed = useAppStore((s) => s.repoCollapsed);
   const toggleRepoCollapsed = useAppStore((s) => s.toggleRepoCollapsed);
+  const addWorkspace = useAppStore((s) => s.addWorkspace);
   const openModal = useAppStore((s) => s.openModal);
   const updateWorkspace = useAppStore((s) => s.updateWorkspace);
+
+  const creatingRef = useRef(false);
+
+  const handleCreateWorkspace = async (repoId: string) => {
+    if (creatingRef.current) return;
+    creatingRef.current = true;
+    try {
+      const name = await generateWorkspaceName();
+      const ws = await createWorkspace(repoId, name);
+      addWorkspace(ws);
+      selectWorkspace(ws.id);
+    } catch (e) {
+      console.error("Failed to create workspace:", e);
+    } finally {
+      creatingRef.current = false;
+    }
+  };
 
   const filteredWorkspaces = workspaces.filter((ws) => {
     if (sidebarFilter === "active") return ws.status === "Active";
@@ -93,10 +117,7 @@ export function Sidebar() {
                       className={styles.iconBtn}
                       onClick={(e) => {
                         e.stopPropagation();
-                        openModal("createWorkspace", {
-                          repoId: repo.id,
-                          repoName: repo.name,
-                        });
+                        handleCreateWorkspace(repo.id);
                       }}
                       title="New workspace"
                     >
