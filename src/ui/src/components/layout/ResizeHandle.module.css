@@ -1,0 +1,27 @@
+.handle {
+  position: relative;
+  background: transparent;
+  z-index: 10;
+}
+
+.horizontal {
+  width: 4px;
+  cursor: col-resize;
+  flex-shrink: 0;
+}
+
+.horizontal:hover,
+.horizontal:active {
+  background: var(--accent-primary);
+}
+
+.vertical {
+  height: 4px;
+  cursor: row-resize;
+  flex-shrink: 0;
+}
+
+.vertical:hover,
+.vertical:active {
+  background: var(--accent-primary);
+}
