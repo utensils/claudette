@@ -177,7 +177,7 @@ export function Sidebar() {
                           }}
                           title="Archive"
                         >
-                          ⊘
+                          <X size={12} />
                         </button>
                       ) : (
                         <>

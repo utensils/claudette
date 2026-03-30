@@ -6,7 +6,7 @@ export function useBranchRefresh() {
   const updateWorkspace = useAppStore((s) => s.updateWorkspace);
 
   useEffect(() => {
-    const interval = setInterval(async () => {
+    const refresh = async () => {
       try {
         const updates = await refreshBranches();
         for (const [wsId, branchName] of updates) {
@@ -15,8 +15,11 @@ export function useBranchRefresh() {
       } catch {
         // Silently ignore refresh errors
       }
-    }, 5000);
+    };
 
+    // Run immediately on mount, then poll.
+    refresh();
+    const interval = setInterval(refresh, 5000);
     return () => clearInterval(interval);
   }, [updateWorkspace]);
 }
