@@ -97,6 +97,9 @@ pub async fn send_chat_message(
 
     // Resolve allowed tools from permission level.
     let level = permission_level.as_deref().unwrap_or("readonly");
+    if !matches!(level, "readonly" | "standard" | "full") {
+        eprintln!("[chat] Unknown permission level {level:?}, falling back to readonly");
+    }
     let allowed_tools = tools_for_level(level);
 
     // Get or create agent session.

@@ -6,6 +6,8 @@ import {
   loadChatHistory,
   sendChatMessage,
   stopAgent,
+  getAppSetting,
+  setAppSetting,
 } from "../../services/tauri";
 import { useAgentStream } from "../../hooks/useAgentStream";
 import styles from "./ChatPanel.module.css";
@@ -53,6 +55,14 @@ export function ChatPanel() {
   );
   const setPermissionLevel = useAppStore((s) => s.setPermissionLevel);
   const isRunning = ws?.agent_status === "Running";
+
+  // Load persisted permission level when workspace changes.
+  useEffect(() => {
+    if (!selectedWorkspaceId) return;
+    getAppSetting(`permission_level:${selectedWorkspaceId}`).then((val) => {
+      if (val) setPermissionLevel(selectedWorkspaceId, val);
+    });
+  }, [selectedWorkspaceId, setPermissionLevel]);
 
   // Load chat history when workspace changes, seed prompt history from it.
   useEffect(() => {
@@ -178,10 +188,15 @@ export function ChatPanel() {
           <select
             className={styles.permissionSelect}
             value={permissionLevel}
-            onChange={(e) =>
-              selectedWorkspaceId &&
-              setPermissionLevel(selectedWorkspaceId, e.target.value)
-            }
+            onChange={(e) => {
+              if (!selectedWorkspaceId) return;
+              const level = e.target.value;
+              setPermissionLevel(selectedWorkspaceId, level);
+              setAppSetting(
+                `permission_level:${selectedWorkspaceId}`,
+                level
+              );
+            }}
             disabled={isRunning}
             title="Tool permission level for this workspace"
           >

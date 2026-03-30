@@ -198,6 +198,7 @@ pub async fn run_turn(
         "--output-format".to_string(),
         "stream-json".to_string(),
         "--verbose".to_string(),
+        "--include-partial-messages".to_string(),
     ];
 
     if !allowed_tools.is_empty() {
