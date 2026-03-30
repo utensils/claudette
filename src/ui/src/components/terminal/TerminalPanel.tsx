@@ -32,6 +32,7 @@ export function TerminalPanel() {
   const setActiveTerminalTab = useAppStore((s) => s.setActiveTerminalTab);
   const toggleTerminalPanel = useAppStore((s) => s.toggleTerminalPanel);
 
+  const autoCreatedRef = useRef<string | null>(null);
   const termRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -51,12 +52,13 @@ export function TerminalPanel() {
         if (!activeTerminalTabId) {
           setActiveTerminalTab(t[0].id);
         }
-      } else {
+      } else if (autoCreatedRef.current !== selectedWorkspaceId) {
+        autoCreatedRef.current = selectedWorkspaceId;
         try {
           const tab = await createTerminalTab(selectedWorkspaceId);
           addTerminalTab(selectedWorkspaceId, tab);
         } catch {
-          // ignore — terminal creation is best-effort
+          autoCreatedRef.current = null;
         }
       }
     });
