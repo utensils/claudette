@@ -169,6 +169,80 @@ pub async fn refresh_branches(state: State<'_, AppState>) -> Result<Vec<(String,
     Ok(updates)
 }
 
+#[tauri::command]
+pub async fn open_workspace_in_terminal(worktree_path: String) -> Result<(), String> {
+    eprintln!("Opening terminal for path: {}", worktree_path);
+
+    #[cfg(target_os = "linux")]
+    {
+        // Try common Linux terminal emulators
+        let xterm_cmd = format!("cd '{}' && exec bash", worktree_path);
+        let terminals: Vec<(&str, Vec<&str>)> = vec![
+            (
+                "gnome-terminal",
+                vec!["--working-directory", &worktree_path],
+            ),
+            ("konsole", vec!["--workdir", &worktree_path]),
+            (
+                "xfce4-terminal",
+                vec!["--working-directory", &worktree_path],
+            ),
+            ("xterm", vec!["-e", "bash", "-c", &xterm_cmd]),
+            ("alacritty", vec!["--working-directory", &worktree_path]),
+            ("kitty", vec!["--directory", &worktree_path]),
+        ];
+
+        let mut errors = Vec::new();
+        for (terminal, args) in &terminals {
+            let mut cmd = tokio::process::Command::new(terminal);
+            for arg in args {
+                cmd.arg(arg);
+            }
+
+            match cmd.spawn() {
+                Ok(_) => {
+                    eprintln!("Successfully launched {} with args: {:?}", terminal, args);
+                    return Ok(());
+                }
+                Err(e) => {
+                    eprintln!("Failed to launch {}: {}", terminal, e);
+                    errors.push(format!("{}: {}", terminal, e));
+                }
+            }
+        }
+
+        Err(format!(
+            "No terminal emulator found. Tried: {}",
+            errors.join(", ")
+        ))
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // Use AppleScript to open Terminal.app
+        let script = format!(
+            r#"tell application "Terminal"
+                activate
+                do script "cd '{}'"
+            end tell"#,
+            worktree_path.replace('\'', "'\\''")
+        );
+
+        tokio::process::Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .spawn()
+            .map_err(|e| format!("Failed to open terminal: {}", e))?;
+
+        Ok(())
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        Err("Unsupported platform".to_string())
+    }
+}
+
 fn now_iso() -> String {
     let dur = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

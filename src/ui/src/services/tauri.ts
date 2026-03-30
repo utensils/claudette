@@ -71,6 +71,10 @@ export function refreshBranches(): Promise<[string, string][]> {
   return invoke("refresh_branches");
 }
 
+export function openWorkspaceInTerminal(worktreePath: string): Promise<void> {
+  return invoke("open_workspace_in_terminal", { worktreePath });
+}
+
 // -- Chat --
 
 export function loadChatHistory(workspaceId: string): Promise<ChatMessage[]> {

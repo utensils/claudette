@@ -11,12 +11,9 @@ interface ResizeHandleProps {
 export function ResizeHandle({
   direction,
   onResize,
-  minSize = 150,
-  maxSize = 600,
 }: ResizeHandleProps) {
   const isDraggingRef = useRef(false);
   const startPosRef = useRef(0);
-  const startSizeRef = useRef(0);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -52,7 +49,7 @@ export function ResizeHandle({
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
     };
-  }, [direction, onResize, minSize, maxSize]);
+  }, [direction, onResize]);
 
   return (
     <div

@@ -11,6 +11,7 @@ import {
 } from "../../services/tauri";
 import { useAgentStream } from "../../hooks/useAgentStream";
 import { AgentQuestionCard } from "./AgentQuestionCard";
+import { WorkspaceActions } from "./WorkspaceActions";
 import styles from "./ChatPanel.module.css";
 
 export function ChatPanel() {
@@ -201,6 +202,10 @@ export function ChatPanel() {
           {repo && <span className={styles.repoName}>{repo.name}</span>}
         </div>
         <div className={styles.headerRight}>
+          <WorkspaceActions
+            worktreePath={ws.worktree_path}
+            disabled={isRunning}
+          />
           <select
             className={styles.permissionSelect}
             value={permissionLevel}

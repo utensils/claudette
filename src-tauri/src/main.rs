@@ -41,6 +41,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             // Data
@@ -57,6 +58,7 @@ fn main() {
             commands::workspace::delete_workspace,
             commands::workspace::generate_workspace_name,
             commands::workspace::refresh_branches,
+            commands::workspace::open_workspace_in_terminal,
             // Chat
             commands::chat::load_chat_history,
             commands::chat::send_chat_message,

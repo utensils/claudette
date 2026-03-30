@@ -19,7 +19,21 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "capabilities": [
+        {
+          "identifier": "main-capability",
+          "description": "Main application permissions",
+          "windows": ["main"],
+          "permissions": [
+            "core:default",
+            "dialog:default",
+            "shell:default",
+            "clipboard-manager:allow-write-text",
+            "clipboard-manager:allow-read-text"
+          ]
+        }
+      ]
     }
   },
   "bundle": {
