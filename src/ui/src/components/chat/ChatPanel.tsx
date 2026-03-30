@@ -59,9 +59,20 @@ export function ChatPanel() {
   // Load persisted permission level when workspace changes.
   useEffect(() => {
     if (!selectedWorkspaceId) return;
-    getAppSetting(`permission_level:${selectedWorkspaceId}`).then((val) => {
-      if (val) setPermissionLevel(selectedWorkspaceId, val);
-    });
+    let cancelled = false;
+    getAppSetting(`permission_level:${selectedWorkspaceId}`)
+      .then((val) => {
+        if (cancelled) return;
+        if (val === "readonly" || val === "standard" || val === "full") {
+          setPermissionLevel(selectedWorkspaceId, val);
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to load permission level:", err);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [selectedWorkspaceId, setPermissionLevel]);
 
   // Load chat history when workspace changes, seed prompt history from it.
@@ -188,17 +199,24 @@ export function ChatPanel() {
           <select
             className={styles.permissionSelect}
             value={permissionLevel}
-            onChange={(e) => {
+            onChange={async (e) => {
               if (!selectedWorkspaceId) return;
-              const level = e.target.value;
+              const previous = permissionLevel;
+              const level = e.target.value as "readonly" | "standard" | "full";
               setPermissionLevel(selectedWorkspaceId, level);
-              setAppSetting(
-                `permission_level:${selectedWorkspaceId}`,
-                level
-              );
+              try {
+                await setAppSetting(
+                  `permission_level:${selectedWorkspaceId}`,
+                  level
+                );
+              } catch (err) {
+                console.error("Failed to persist permission level:", err);
+                setPermissionLevel(selectedWorkspaceId, previous);
+              }
             }}
             disabled={isRunning}
             title="Tool permission level for this workspace"
+            aria-label="Tool permission level for this workspace"
           >
             <option value="readonly">Read-only</option>
             <option value="standard">Standard</option>

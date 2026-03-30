@@ -13,41 +13,38 @@ struct AgentStreamPayload {
     event: AgentEvent,
 }
 
+const TOOLS_FULL: &[&str] = &[
+    "Bash",
+    "Read",
+    "Write",
+    "Edit",
+    "Glob",
+    "Grep",
+    "WebSearch",
+    "WebFetch",
+    "NotebookEdit",
+];
+
+const TOOLS_STANDARD: &[&str] = &[
+    "Read",
+    "Write",
+    "Edit",
+    "Glob",
+    "Grep",
+    "WebSearch",
+    "WebFetch",
+];
+
+const TOOLS_READONLY: &[&str] = &["Read", "Glob", "Grep", "WebSearch", "WebFetch"];
+
 /// Map a permission level name to the list of tools to pre-approve.
 fn tools_for_level(level: &str) -> Vec<String> {
-    match level {
-        "full" => [
-            "Bash",
-            "Read",
-            "Write",
-            "Edit",
-            "Glob",
-            "Grep",
-            "WebSearch",
-            "WebFetch",
-            "NotebookEdit",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect(),
-        "standard" => [
-            "Read",
-            "Write",
-            "Edit",
-            "Glob",
-            "Grep",
-            "WebSearch",
-            "WebFetch",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect(),
-        // "readonly" or anything else
-        _ => ["Read", "Glob", "Grep", "WebSearch", "WebFetch"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect(),
-    }
+    let tools: &[&str] = match level {
+        "full" => TOOLS_FULL,
+        "standard" => TOOLS_STANDARD,
+        _ => TOOLS_READONLY,
+    };
+    tools.iter().map(|s| (*s).to_string()).collect()
 }
 
 #[tauri::command]

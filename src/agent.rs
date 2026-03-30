@@ -179,20 +179,13 @@ pub struct TurnHandle {
     pub pid: u32,
 }
 
-/// Run a single agent turn by spawning `claude -p` with the given prompt.
-///
-/// For the first turn, uses `--session-id` to establish the session.
-/// For subsequent turns, uses `--resume` to continue the conversation.
-///
-/// `allowed_tools` pre-approves tools so they run without interactive
-/// permission prompts (e.g. `["Bash", "Read", "Edit"]`).
-pub async fn run_turn(
-    working_dir: &Path,
+/// Build the CLI arguments for a `claude -p` invocation.
+pub fn build_claude_args(
     session_id: &str,
     prompt: &str,
     is_resume: bool,
     allowed_tools: &[String],
-) -> Result<TurnHandle, String> {
+) -> Vec<String> {
     let mut args = vec![
         "--print".to_string(),
         "--output-format".to_string(),
@@ -214,8 +207,25 @@ pub async fn run_turn(
         args.push(session_id.to_string());
     }
 
-    // Prompt as positional argument
     args.push(prompt.to_string());
+    args
+}
+
+/// Run a single agent turn by spawning `claude -p` with the given prompt.
+///
+/// For the first turn, uses `--session-id` to establish the session.
+/// For subsequent turns, uses `--resume` to continue the conversation.
+///
+/// `allowed_tools` pre-approves tools so they run without interactive
+/// permission prompts (e.g. `["Bash", "Read", "Edit"]`).
+pub async fn run_turn(
+    working_dir: &Path,
+    session_id: &str,
+    prompt: &str,
+    is_resume: bool,
+    allowed_tools: &[String],
+) -> Result<TurnHandle, String> {
+    let args = build_claude_args(session_id, prompt, is_resume, allowed_tools);
 
     let mut cmd = Command::new("claude");
     cmd.args(&args)
@@ -637,5 +647,31 @@ mod tests {
             }
             _ => panic!("Expected System event"),
         }
+    }
+
+    #[test]
+    fn test_build_args_first_turn_no_tools() {
+        let args = build_claude_args("sess-1", "hello", false, &[]);
+        assert!(args.contains(&"--print".to_string()));
+        assert!(args.contains(&"--session-id".to_string()));
+        assert!(args.contains(&"sess-1".to_string()));
+        assert!(args.last() == Some(&"hello".to_string()));
+        assert!(!args.contains(&"--allowedTools".to_string()));
+        assert!(!args.contains(&"--resume".to_string()));
+    }
+
+    #[test]
+    fn test_build_args_resume() {
+        let args = build_claude_args("sess-1", "continue", true, &[]);
+        assert!(args.contains(&"--resume".to_string()));
+        assert!(!args.contains(&"--session-id".to_string()));
+    }
+
+    #[test]
+    fn test_build_args_with_allowed_tools() {
+        let tools = vec!["Bash".to_string(), "Read".to_string(), "Edit".to_string()];
+        let args = build_claude_args("sess-1", "hello", false, &tools);
+        let idx = args.iter().position(|a| a == "--allowedTools").unwrap();
+        assert_eq!(args[idx + 1], "Bash,Read,Edit");
     }
 }

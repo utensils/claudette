@@ -9,6 +9,8 @@ import type {
   TerminalTab,
 } from "../types";
 
+export type PermissionLevel = "readonly" | "standard" | "full";
+
 export interface ToolActivity {
   toolUseId: string;
   toolName: string;
@@ -54,8 +56,8 @@ interface AppState {
   toggleToolActivityCollapsed: (wsId: string, index: number) => void;
 
   // -- Permissions --
-  permissionLevel: Record<string, string>;
-  setPermissionLevel: (wsId: string, level: string) => void;
+  permissionLevel: Record<string, PermissionLevel>;
+  setPermissionLevel: (wsId: string, level: PermissionLevel) => void;
 
   // -- Diff --
   diffFiles: DiffFile[];
