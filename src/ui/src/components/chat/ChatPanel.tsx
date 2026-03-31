@@ -47,15 +47,19 @@ export function ChatPanel() {
   const streaming = selectedWorkspaceId
     ? streamingContent[selectedWorkspaceId] || ""
     : "";
+  const completedTurnsMap = useAppStore((s) => s.completedTurns);
+  const toggleCompletedTurn = useAppStore((s) => s.toggleCompletedTurn);
+  const completedTurns = selectedWorkspaceId
+    ? completedTurnsMap[selectedWorkspaceId] ?? []
+    : [];
   const activities = selectedWorkspaceId
     ? toolActivities[selectedWorkspaceId] || []
     : [];
-  const permissionLevel = useAppStore((s) =>
-    selectedWorkspaceId
-      ? s.permissionLevel[selectedWorkspaceId] || "full"
-      : "readonly"
-  );
+  const permissionLevelMap = useAppStore((s) => s.permissionLevel);
   const setPermissionLevel = useAppStore((s) => s.setPermissionLevel);
+  const permissionLevel = selectedWorkspaceId
+    ? permissionLevelMap[selectedWorkspaceId] ?? "full"
+    : "full";
   const agentQuestion = useAppStore((s) => s.agentQuestion);
   const setAgentQuestion = useAppStore((s) => s.setAgentQuestion);
   const isRunning = ws?.agent_status === "Running";
@@ -279,6 +283,49 @@ export function ChatPanel() {
               </div>
             ))}
 
+            {completedTurns.map((turn, ti) => (
+              <div key={turn.id} className={styles.turnSummary}>
+                <button
+                  className={styles.turnHeader}
+                  onClick={() =>
+                    selectedWorkspaceId &&
+                    toggleCompletedTurn(selectedWorkspaceId, ti)
+                  }
+                >
+                  <span className={styles.toolChevron}>
+                    {turn.collapsed ? ">" : "v"}
+                  </span>
+                  <span className={styles.turnLabel}>
+                    {turn.activities.length} tool call
+                    {turn.activities.length !== 1 ? "s" : ""}
+                    {turn.messageCount > 0 &&
+                      `, ${turn.messageCount} message${turn.messageCount !== 1 ? "s" : ""}`}
+                  </span>
+                </button>
+                {!turn.collapsed && (
+                  <div className={styles.turnActivities}>
+                    {turn.activities.map((act) => (
+                      <div
+                        key={act.toolUseId}
+                        className={styles.toolActivity}
+                      >
+                        <div className={styles.toolHeader}>
+                          <span className={styles.toolName}>
+                            {act.toolName}
+                          </span>
+                          {act.summary && (
+                            <span className={styles.toolSummary}>
+                              {act.summary}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+
             {activities.length > 0 && (
               <div className={styles.toolActivities}>
                 {activities.map((act, i) => (
@@ -294,6 +341,11 @@ export function ChatPanel() {
                         {act.collapsed ? ">" : "v"}
                       </span>
                       <span className={styles.toolName}>{act.toolName}</span>
+                      {act.summary && (
+                        <span className={styles.toolSummary}>
+                          {act.summary}
+                        </span>
+                      )}
                     </button>
                     {!act.collapsed && (
                       <pre className={styles.toolContent}>

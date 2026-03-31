@@ -208,6 +208,53 @@
   gap: 4px;
 }
 
+.turnSummary {
+  border: 1px solid var(--divider);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+
+.turnHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
+}
+
+.turnHeader:hover {
+  background: var(--hover-bg);
+}
+
+.turnLabel {
+  color: var(--text-dim);
+}
+
+.turnActivities {
+  border-top: 1px solid var(--divider);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.turnActivities .toolActivity {
+  border: none;
+  border-radius: 0;
+}
+
+.turnActivities .toolHeader {
+  padding: 2px 8px;
+  cursor: default;
+}
+
 .toolActivity {
   border: 1px solid var(--divider);
   border-radius: 4px;
@@ -240,6 +287,21 @@
 .toolName {
   font-weight: 500;
   color: var(--text-primary);
+  flex-shrink: 0;
+}
+
+.toolSummary {
+  color: var(--text-dim);
+  font-family: monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.toolSummary::before {
+  content: "— ";
+  color: var(--text-faint);
 }
 
 .toolContent {

@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "../stores/useAppStore";
 import type { AgentQuestionItem } from "../stores/useAppStore";
 import type { AgentStreamPayload } from "../types/agent-events";
+import { extractToolSummary } from "./toolSummary";
 
 const ASK_USER_QUESTION_TOOL = "AskUserQuestion";
 
@@ -70,18 +71,23 @@ export function useAgentStream() {
   );
   const updateWorkspace = useAppStore((s) => s.updateWorkspace);
   const setAgentQuestion = useAppStore((s) => s.setAgentQuestion);
+  const finalizeTurn = useAppStore((s) => s.finalizeTurn);
 
   // Map content block index → { toolUseId, toolName } for the current turn.
   // Reset on process exit.
   const blockToolMapRef = useRef<
     Record<number, { toolUseId: string; toolName: string }>
   >({});
+  // Count assistant messages in the current turn for the summary.
+  const turnMessageCountRef = useRef<Record<string, number>>({});
 
   useEffect(() => {
     const unlisten = listen<AgentStreamPayload>("agent-stream", (event) => {
       const { workspace_id: wsId, event: agentEvent } = event.payload;
 
       if ("ProcessExited" in agentEvent) {
+        finalizeTurn(wsId, turnMessageCountRef.current[wsId] || 0);
+        turnMessageCountRef.current[wsId] = 0;
         updateWorkspace(wsId, { agent_status: "Idle" });
         setStreamingContent(wsId, "");
         blockToolMapRef.current = {};
@@ -154,33 +160,50 @@ export function useAgentStream() {
                       inputJson: "",
                       resultText: "",
                       collapsed: true,
+                      summary: "",
                     });
                   }
                   break;
                 }
                 case "content_block_stop": {
                   const entry = blockToolMapRef.current[inner.index];
-                  if (entry?.toolName === ASK_USER_QUESTION_TOOL) {
-                    // Read accumulated input JSON from the tool activity
-                    const activities =
-                      useAppStore.getState().toolActivities[wsId] || [];
-                    const activity = activities.find(
-                      (a) => a.toolUseId === entry.toolUseId
+                  if (!entry) break;
+
+                  // Read accumulated input JSON from the tool activity.
+                  const activities =
+                    useAppStore.getState().toolActivities[wsId] || [];
+                  const activity = activities.find(
+                    (a) => a.toolUseId === entry.toolUseId
+                  );
+
+                  // Extract a one-line summary from the tool input.
+                  if (activity?.inputJson) {
+                    const summary = extractToolSummary(
+                      entry.toolName,
+                      activity.inputJson
                     );
-                    if (activity?.inputJson) {
-                      try {
-                        const parsed = JSON.parse(activity.inputJson);
-                        const questions = parseAskUserQuestion(parsed);
-                        if (questions.length > 0) {
-                          setAgentQuestion({
-                            workspaceId: wsId,
-                            toolUseId: entry.toolUseId,
-                            questions,
-                          });
-                        }
-                      } catch {
-                        // Malformed JSON — ignore, question won't show
+                    if (summary) {
+                      updateToolActivity(wsId, entry.toolUseId, { summary });
+                    }
+                  }
+
+                  // Handle AskUserQuestion specifically.
+                  if (
+                    entry.toolName === ASK_USER_QUESTION_TOOL &&
+                    activity?.inputJson
+                  ) {
+                    try {
+                      const parsed = JSON.parse(activity.inputJson);
+                      const questions = parseAskUserQuestion(parsed);
+                      if (questions.length > 0) {
+                        setAgentQuestion({
+                          workspaceId: wsId,
+                          toolUseId: entry.toolUseId,
+                          questions,
+                        });
                       }
+                    } catch {
+                      // Malformed JSON — ignore, question won't show
                     }
                   }
                   break;
@@ -191,6 +214,8 @@ export function useAgentStream() {
           }
           case "assistant": {
             // Full message received — it's already persisted by the backend.
+            turnMessageCountRef.current[wsId] =
+              (turnMessageCountRef.current[wsId] || 0) + 1;
             // Build display text from content blocks.
             const text = streamEvent.message.content
               .filter(
@@ -246,5 +271,6 @@ export function useAgentStream() {
     appendToolActivityInput,
     updateWorkspace,
     setAgentQuestion,
+    finalizeTurn,
   ]);
 }

@@ -17,6 +17,14 @@ export interface ToolActivity {
   inputJson: string;
   resultText: string;
   collapsed: boolean;
+  summary: string;
+}
+
+export interface CompletedTurn {
+  id: string;
+  activities: ToolActivity[];
+  messageCount: number;
+  collapsed: boolean;
 }
 
 export interface AgentQuestionItem {
@@ -54,6 +62,7 @@ interface AppState {
   chatInput: string;
   streamingContent: Record<string, string>;
   toolActivities: Record<string, ToolActivity[]>;
+  completedTurns: Record<string, CompletedTurn[]>;
   setChatMessages: (wsId: string, messages: ChatMessage[]) => void;
   addChatMessage: (wsId: string, message: ChatMessage) => void;
   setChatInput: (input: string) => void;
@@ -67,6 +76,8 @@ interface AppState {
     updates: Partial<ToolActivity>
   ) => void;
   toggleToolActivityCollapsed: (wsId: string, index: number) => void;
+  finalizeTurn: (wsId: string, messageCount: number) => void;
+  toggleCompletedTurn: (wsId: string, turnIndex: number) => void;
   appendToolActivityInput: (
     wsId: string,
     toolUseId: string,
@@ -179,6 +190,7 @@ export const useAppStore = create<AppState>((set) => ({
   chatInput: "",
   streamingContent: {},
   toolActivities: {},
+  completedTurns: {},
   setChatMessages: (wsId, messages) =>
     set((s) => ({
       chatMessages: { ...s.chatMessages, [wsId]: messages },
@@ -239,6 +251,33 @@ export const useAppStore = create<AppState>((set) => ({
           a.toolUseId === toolUseId
             ? { ...a, inputJson: a.inputJson + partialJson }
             : a
+        ),
+      },
+    })),
+  finalizeTurn: (wsId, messageCount) =>
+    set((s) => {
+      const activities = s.toolActivities[wsId] || [];
+      if (activities.length === 0) return {};
+      const turn: CompletedTurn = {
+        id: crypto.randomUUID(),
+        activities: activities.map((a) => ({ ...a, collapsed: true })),
+        messageCount,
+        collapsed: true,
+      };
+      return {
+        completedTurns: {
+          ...s.completedTurns,
+          [wsId]: [...(s.completedTurns[wsId] || []), turn],
+        },
+        toolActivities: { ...s.toolActivities, [wsId]: [] },
+      };
+    }),
+  toggleCompletedTurn: (wsId, turnIndex) =>
+    set((s) => ({
+      completedTurns: {
+        ...s.completedTurns,
+        [wsId]: (s.completedTurns[wsId] || []).map((t, i) =>
+          i === turnIndex ? { ...t, collapsed: !t.collapsed } : t
         ),
       },
     })),
