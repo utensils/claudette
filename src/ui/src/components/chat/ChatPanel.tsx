@@ -291,10 +291,19 @@ export function ChatPanel() {
               <div
                 key={turn.id}
                 className={styles.turnSummary}
+                role="button"
+                tabIndex={0}
                 onClick={() =>
                   selectedWorkspaceId &&
                   toggleCompletedTurn(selectedWorkspaceId, ti)
                 }
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    selectedWorkspaceId &&
+                      toggleCompletedTurn(selectedWorkspaceId, ti);
+                  }
+                }}
               >
                 <div className={styles.turnHeader}>
                   <span className={styles.toolChevron}>

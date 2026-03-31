@@ -260,7 +260,14 @@ export const useAppStore = create<AppState>((set) => ({
       if (activities.length === 0) return {};
       const turn: CompletedTurn = {
         id: crypto.randomUUID(),
-        activities: activities.map((a) => ({ ...a, collapsed: true })),
+        activities: activities.map((a) => ({
+          toolUseId: a.toolUseId,
+          toolName: a.toolName,
+          inputJson: "",
+          resultText: "",
+          collapsed: true,
+          summary: a.summary,
+        })),
         messageCount,
         collapsed: true,
       };

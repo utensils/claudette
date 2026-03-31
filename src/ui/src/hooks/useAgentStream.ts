@@ -214,9 +214,6 @@ export function useAgentStream() {
           }
           case "assistant": {
             // Full message received — it's already persisted by the backend.
-            turnMessageCountRef.current[wsId] =
-              (turnMessageCountRef.current[wsId] || 0) + 1;
-            // Build display text from content blocks.
             const text = streamEvent.message.content
               .filter(
                 (b): b is { type: "text"; text: string } => b.type === "text"
@@ -224,6 +221,8 @@ export function useAgentStream() {
               .map((b) => b.text)
               .join("");
             if (text) {
+              turnMessageCountRef.current[wsId] =
+                (turnMessageCountRef.current[wsId] || 0) + 1;
               addChatMessage(wsId, {
                 id: crypto.randomUUID(),
                 workspace_id: wsId,

@@ -134,7 +134,9 @@ pub async fn send_chat_message(
         let mut got_init = false;
         while let Some(event) = rx.recv().await {
             // Track whether the CLI initialized successfully.
-            if let AgentEvent::Stream(StreamEvent::System { .. }) = &event {
+            if let AgentEvent::Stream(StreamEvent::System { subtype, .. }) = &event
+                && subtype == "init"
+            {
                 got_init = true;
             }
 
@@ -187,7 +189,7 @@ pub async fn send_chat_message(
                 && let (Some(cost), Some(dur)) = (total_cost_usd, duration_ms)
                 && let Ok(db) = Database::open(&db_path)
                 && let Ok(msgs) = db.list_chat_messages(&ws_id)
-                && let Some(last) = msgs.last()
+                && let Some(last) = msgs.iter().rfind(|m| m.role == ChatRole::Assistant)
             {
                 let _ = db.update_chat_message_cost(&last.id, *cost, *dur);
             }

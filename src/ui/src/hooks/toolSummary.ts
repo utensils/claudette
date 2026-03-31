@@ -19,7 +19,7 @@ export function extractToolSummary(
         return input.pattern ?? "";
       case "Grep":
         return input.pattern
-          ? `${input.pattern}${input.path ? ` in ${input.path}` : ""}`
+          ? truncate(`${input.pattern}${input.path ? ` in ${input.path}` : ""}`, 80)
           : "";
       case "WebFetch":
         return input.url ?? "";
@@ -30,8 +30,8 @@ export function extractToolSummary(
       case "LSP":
         return input.action ?? "";
       case "TodoWrite":
-        return input.todos
-          ? `${(input.todos as unknown[]).length} items`
+        return Array.isArray(input.todos)
+          ? `${input.todos.length} items`
           : "";
       default:
         // For unknown tools, try common field names.
@@ -52,5 +52,6 @@ export function extractToolSummary(
 
 function truncate(s: string, max: number): string {
   if (s.length <= max) return s;
-  return s.slice(0, max) + "...";
+  if (max <= 3) return s.slice(0, max);
+  return s.slice(0, max - 3) + "...";
 }

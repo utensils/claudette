@@ -65,6 +65,8 @@ export class ErrorBoundary extends Component<Props, State> {
               cursor: "pointer",
             }}
           >
+            {/* Only useful for transient render errors. If the error is caused
+                by corrupted store state, the same crash will recur immediately. */}
             Try Again
           </button>
         </div>
