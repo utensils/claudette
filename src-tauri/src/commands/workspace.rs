@@ -1,7 +1,11 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
+use serde::Serialize;
 use tauri::State;
+use tokio::process::Command as TokioCommand;
 
+use claudette::config;
 use claudette::db::Database;
 use claudette::git;
 use claudette::model::{AgentStatus, Workspace, WorkspaceStatus};
@@ -9,12 +13,28 @@ use claudette::names::NameGenerator;
 
 use crate::state::AppState;
 
+#[derive(Serialize, Clone)]
+pub struct SetupResult {
+    pub source: String,
+    pub script: String,
+    pub output: String,
+    pub exit_code: Option<i32>,
+    pub success: bool,
+    pub timed_out: bool,
+}
+
+#[derive(Serialize)]
+pub struct CreateWorkspaceResult {
+    pub workspace: Workspace,
+    pub setup_result: Option<SetupResult>,
+}
+
 #[tauri::command]
 pub async fn create_workspace(
     repo_id: String,
     name: String,
     state: State<'_, AppState>,
-) -> Result<Workspace, String> {
+) -> Result<CreateWorkspaceResult, String> {
     // Validate workspace name.
     let forbidden = ['/', '\\', ':', '?', '*', '[', ' ', '~', '.'];
     if name.is_empty() || name.chars().any(|c| forbidden.contains(&c)) || name.ends_with(".lock") {
@@ -28,12 +48,16 @@ pub async fn create_workspace(
         .find(|r| r.id == repo_id)
         .ok_or("Repository not found")?;
 
+    // Capture setup script info before moving repo fields.
+    let repo_path = repo.path.clone();
+    let settings_setup_script = repo.setup_script.clone();
+
     let branch_name = format!("claudette/{name}");
     let worktree_base = state.worktree_base_dir.read().await;
     let worktree_path: PathBuf = worktree_base.join(&repo.path_slug).join(&name);
     let worktree_path_str = worktree_path.to_string_lossy().to_string();
 
-    let actual_path = git::create_worktree(&repo.path, &branch_name, &worktree_path_str)
+    let actual_path = git::create_worktree(&repo_path, &branch_name, &worktree_path_str)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -42,7 +66,7 @@ pub async fn create_workspace(
         repository_id: repo_id,
         name,
         branch_name,
-        worktree_path: Some(actual_path),
+        worktree_path: Some(actual_path.clone()),
         status: WorkspaceStatus::Active,
         agent_status: AgentStatus::Idle,
         status_line: String::new(),
@@ -51,7 +75,136 @@ pub async fn create_workspace(
 
     db.insert_workspace(&ws).map_err(|e| e.to_string())?;
 
-    Ok(ws)
+    // Resolve and execute setup script.
+    let setup_result = resolve_and_run_setup(
+        Path::new(&repo_path),
+        Path::new(&actual_path),
+        settings_setup_script.as_deref(),
+    )
+    .await;
+
+    Ok(CreateWorkspaceResult {
+        workspace: ws,
+        setup_result,
+    })
+}
+
+/// Resolve the setup script from .claudette.json or settings fallback, then execute it.
+async fn resolve_and_run_setup(
+    repo_path: &Path,
+    worktree_path: &Path,
+    settings_script: Option<&str>,
+) -> Option<SetupResult> {
+    // 1. Check .claudette.json
+    let (script, source) = match config::load_config(repo_path) {
+        Ok(Some(cfg)) => {
+            if let Some(setup) = cfg.scripts.and_then(|s| s.setup) {
+                (setup, "repo")
+            } else if let Some(fallback) = settings_script {
+                (fallback.to_string(), "settings")
+            } else {
+                return None;
+            }
+        }
+        Ok(None) => {
+            if let Some(fallback) = settings_script {
+                (fallback.to_string(), "settings")
+            } else {
+                return None;
+            }
+        }
+        Err(parse_err) => {
+            // Malformed .claudette.json — warn but fall back to settings script.
+            eprintln!("[setup] {parse_err}");
+            if let Some(fallback) = settings_script {
+                (fallback.to_string(), "settings")
+            } else {
+                return Some(SetupResult {
+                    source: "repo".to_string(),
+                    script: String::new(),
+                    output: parse_err,
+                    exit_code: None,
+                    success: false,
+                    timed_out: false,
+                });
+            }
+        }
+    };
+
+    // 2. Execute the script.
+    let mut child = match TokioCommand::new("sh")
+        .arg("-c")
+        .arg(&script)
+        .current_dir(worktree_path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return Some(SetupResult {
+                source: source.to_string(),
+                script,
+                output: format!("Failed to spawn script: {e}"),
+                exit_code: None,
+                success: false,
+                timed_out: false,
+            });
+        }
+    };
+
+    // 3. Wait with 5-minute timeout.
+    match tokio::time::timeout(Duration::from_secs(300), child.wait()).await {
+        Ok(Ok(status)) => {
+            // Process finished — read any remaining output from pipes.
+            let mut stdout_buf = Vec::new();
+            let mut stderr_buf = Vec::new();
+            if let Some(mut out) = child.stdout.take() {
+                let _ = tokio::io::AsyncReadExt::read_to_end(&mut out, &mut stdout_buf).await;
+            }
+            if let Some(mut err) = child.stderr.take() {
+                let _ = tokio::io::AsyncReadExt::read_to_end(&mut err, &mut stderr_buf).await;
+            }
+            let stdout = String::from_utf8_lossy(&stdout_buf);
+            let stderr = String::from_utf8_lossy(&stderr_buf);
+            let combined = if stderr.is_empty() {
+                stdout.to_string()
+            } else if stdout.is_empty() {
+                stderr.to_string()
+            } else {
+                format!("{stdout}\n{stderr}")
+            };
+            let code = status.code();
+            Some(SetupResult {
+                source: source.to_string(),
+                script,
+                output: combined,
+                exit_code: code,
+                success: code == Some(0),
+                timed_out: false,
+            })
+        }
+        Ok(Err(e)) => Some(SetupResult {
+            source: source.to_string(),
+            script,
+            output: format!("Script execution error: {e}"),
+            exit_code: None,
+            success: false,
+            timed_out: false,
+        }),
+        Err(_) => {
+            // Timeout — explicitly kill the child process.
+            let _ = child.kill().await;
+            Some(SetupResult {
+                source: source.to_string(),
+                script,
+                output: "Setup script timed out after 5 minutes".to_string(),
+                exit_code: None,
+                success: false,
+                timed_out: true,
+            })
+        }
+    }
 }
 
 #[tauri::command]

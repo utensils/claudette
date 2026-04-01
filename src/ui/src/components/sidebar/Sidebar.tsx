@@ -29,9 +29,15 @@ export function Sidebar() {
     creatingRef.current = true;
     try {
       const name = await generateWorkspaceName();
-      const ws = await createWorkspace(repoId, name);
-      addWorkspace(ws);
-      selectWorkspace(ws.id);
+      const result = await createWorkspace(repoId, name);
+      addWorkspace(result.workspace);
+      selectWorkspace(result.workspace.id);
+      if (result.setup_result && !result.setup_result.success) {
+        console.warn("Setup script failed:", result.setup_result.output);
+        alert(
+          `Setup script failed (source: ${result.setup_result.source}):\n${result.setup_result.output}`
+        );
+      }
     } catch (e) {
       console.error("Failed to create workspace:", e);
     } finally {

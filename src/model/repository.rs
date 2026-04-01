@@ -12,6 +12,8 @@ pub struct Repository {
     /// Lucide icon name (e.g. "rocket", "code"). None means use default icon.
     pub icon: Option<String>,
     pub created_at: String,
+    /// Per-user setup script configured in the Settings UI. None means no script.
+    pub setup_script: Option<String>,
     /// Runtime-only: whether the repo path still exists on disk. Not persisted.
     pub path_valid: bool,
 }

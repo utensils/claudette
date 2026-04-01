@@ -1,12 +1,21 @@
 use std::path::Path;
 
+use serde::Serialize;
 use tauri::State;
 
+use claudette::config;
 use claudette::db::Database;
 use claudette::git;
 use claudette::model::Repository;
 
 use crate::state::AppState;
+
+#[derive(Serialize)]
+pub struct RepoConfigInfo {
+    pub has_config_file: bool,
+    pub setup_script: Option<String>,
+    pub parse_error: Option<String>,
+}
 
 #[tauri::command]
 pub async fn add_repository(
@@ -32,6 +41,7 @@ pub async fn add_repository(
         path_slug,
         icon: None,
         created_at: now_iso(),
+        setup_script: None,
         path_valid: true,
     };
 
@@ -46,12 +56,15 @@ pub async fn update_repository_settings(
     id: String,
     name: String,
     icon: Option<String>,
+    setup_script: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     db.update_repository_name(&id, &name)
         .map_err(|e| e.to_string())?;
     db.update_repository_icon(&id, icon.as_deref())
+        .map_err(|e| e.to_string())?;
+    db.update_repository_setup_script(&id, setup_script.as_deref())
         .map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -102,6 +115,38 @@ pub async fn remove_repository(id: String, state: State<'_, AppState>) -> Result
     db.delete_repository(&id).map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+/// Read .claudette.json config for a registered repository (by ID).
+#[tauri::command]
+pub async fn get_repo_config(
+    repo_id: String,
+    state: State<'_, AppState>,
+) -> Result<RepoConfigInfo, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let repos = db.list_repositories().map_err(|e| e.to_string())?;
+    let repo = repos
+        .iter()
+        .find(|r| r.id == repo_id)
+        .ok_or("Repository not found")?;
+
+    match config::load_config(Path::new(&repo.path)) {
+        Ok(Some(cfg)) => Ok(RepoConfigInfo {
+            has_config_file: true,
+            setup_script: cfg.scripts.and_then(|s| s.setup),
+            parse_error: None,
+        }),
+        Ok(None) => Ok(RepoConfigInfo {
+            has_config_file: false,
+            setup_script: None,
+            parse_error: None,
+        }),
+        Err(e) => Ok(RepoConfigInfo {
+            has_config_file: true,
+            setup_script: None,
+            parse_error: Some(e),
+        }),
+    }
 }
 
 fn slug_from_path(path: &str) -> String {

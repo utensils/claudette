@@ -115,6 +115,14 @@ impl Database {
             )?;
         }
 
+        if version < 5 {
+            self.conn.execute_batch(
+                "ALTER TABLE repositories ADD COLUMN setup_script TEXT;
+
+                 PRAGMA user_version = 5;",
+            )?;
+        }
+
         Ok(())
     }
 
@@ -130,7 +138,8 @@ impl Database {
 
     pub fn list_repositories(&self) -> Result<Vec<Repository>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, path, name, icon, path_slug, created_at FROM repositories ORDER BY name",
+            "SELECT id, path, name, icon, path_slug, created_at, setup_script
+             FROM repositories ORDER BY name",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(Repository {
@@ -140,6 +149,7 @@ impl Database {
                 icon: row.get(3)?,
                 path_slug: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
                 created_at: row.get(5)?,
+                setup_script: row.get(6)?,
                 path_valid: true, // validated after load
             })
         })?;
@@ -178,6 +188,18 @@ impl Database {
         self.conn.execute(
             "UPDATE repositories SET icon = ?1 WHERE id = ?2",
             params![icon, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_repository_setup_script(
+        &self,
+        id: &str,
+        script: Option<&str>,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE repositories SET setup_script = ?1 WHERE id = ?2",
+            params![script, id],
         )?;
         Ok(())
     }
@@ -441,6 +463,7 @@ mod tests {
             path_slug: name.into(),
             icon: None,
             created_at: String::new(),
+            setup_script: None,
             path_valid: true,
         }
     }
@@ -688,6 +711,7 @@ mod tests {
             path_slug: "my-project".into(),
             icon: None,
             created_at: String::new(),
+            setup_script: None,
             path_valid: true,
         };
         db.insert_repository(&repo).unwrap();

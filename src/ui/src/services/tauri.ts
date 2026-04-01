@@ -7,6 +7,10 @@ import type {
   FileDiff,
   TerminalTab,
 } from "../types";
+import type {
+  CreateWorkspaceResult,
+  RepoConfigInfo,
+} from "../types/repository";
 
 // -- Data --
 
@@ -29,9 +33,10 @@ export function addRepository(path: string): Promise<Repository> {
 export function updateRepositorySettings(
   id: string,
   name: string,
-  icon: string | null
+  icon: string | null,
+  setupScript: string | null
 ): Promise<void> {
-  return invoke("update_repository_settings", { id, name, icon });
+  return invoke("update_repository_settings", { id, name, icon, setupScript });
 }
 
 export function relinkRepository(id: string, path: string): Promise<void> {
@@ -42,12 +47,16 @@ export function removeRepository(id: string): Promise<void> {
   return invoke("remove_repository", { id });
 }
 
+export function getRepoConfig(repoId: string): Promise<RepoConfigInfo> {
+  return invoke("get_repo_config", { repoId });
+}
+
 // -- Workspace --
 
 export function createWorkspace(
   repoId: string,
   name: string
-): Promise<Workspace> {
+): Promise<CreateWorkspaceResult> {
   return invoke("create_workspace", { repoId, name });
 }
 

@@ -51,6 +51,7 @@ fn main() {
             commands::repository::update_repository_settings,
             commands::repository::relink_repository,
             commands::repository::remove_repository,
+            commands::repository::get_repo_config,
             // Workspace
             commands::workspace::create_workspace,
             commands::workspace::archive_workspace,
