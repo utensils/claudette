@@ -46,7 +46,7 @@ The server binary:
 - Manages its own `AppState` (DB, agents, PTYs) in-process
 - Exits when stdin closes (SSH disconnects)
 
-This avoids running a long-lived daemon or managing ports. The user installs `claudette-server` on the remote machine (a single static binary), and SSH invokes it on demand.
+This avoids running a long-lived daemon or managing ports. The user installs `claudette-server` on the remote machine (a single self-contained headless binary), and SSH invokes it on demand.
 
 ### 2.2 Protocol: JSON-RPC over stdin/stdout
 
@@ -59,12 +59,20 @@ Each message is a single JSON line (newline-delimited).
 {"id": 3, "method": "write_pty", "params": {"pty_id": 1, "data": [104, 105, 10]}}
 ```
 
-**Response** (server → client):
+**Response** (server → client, exactly one per request):
+
+Success:
 ```json
 {"id": 1, "result": {"repositories": [...], "workspaces": [...]}}
 {"id": 2, "result": null}
-{"id": 2, "error": "Workspace not found"}
 ```
+
+Error (mutually exclusive with `result`):
+```json
+{"id": 2, "error": {"code": -1, "message": "Workspace not found"}}
+```
+
+A response contains either `result` or `error`, never both. The `error` object has `code` (integer) and `message` (string).
 
 **Event** (server → client, unsolicited):
 ```json
@@ -90,8 +98,11 @@ pub struct RemoteConnection {
     user: String,
     ssh_process: tokio::process::Child,
     stdin: tokio::process::ChildStdin,
-    pending_requests: HashMap<u64, oneshot::Sender<serde_json::Value>>,
+    pending_requests: Arc<Mutex<HashMap<u64, oneshot::Sender<serde_json::Value>>>>,
     next_request_id: AtomicU64,
+    /// Background task reading stdout — routes responses to pending_requests
+    /// and events to the Tauri event bus.
+    reader_task: tokio::task::JoinHandle<()>,
 }
 ```
 
@@ -165,13 +176,12 @@ interface Workspace {
 ### 4.2 `connect_remote` flow
 
 1. Look up saved connection by ID
-2. Spawn `ssh -o StrictHostKeyChecking=accept-new user@host -p port claudette-server`
-3. Read the first response (server init / handshake)
-4. Send `load_initial_data` request
+2. Spawn `ssh user@host -p port claudette-server` (uses the system's default SSH host key verification — the user's `~/.ssh/known_hosts` and SSH config apply as normal; Claudette does not override host key policy)
+3. Start background reader task that reads stdout lines, routes responses to pending request channels, and forwards events to the Tauri event bus
+4. Send `load_initial_data` request as the first protocol message
 5. Receive remote repos and workspaces
 6. Tag each with `remote_connection_id`
-7. Start background reader task that routes events to Tauri event bus
-8. Return merged data to frontend
+7. Return merged data to frontend
 
 ### 4.3 `disconnect_remote` flow
 
@@ -201,7 +211,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1", features = ["v4"] }
-dirs = "6"
+dirs = "5"
 portable-pty = "0.8"
 ```
 
@@ -213,21 +223,34 @@ members = ["src-tauri", "src-server"]
 
 ### 5.2 Main loop
 
+Each request is dispatched into its own tokio task so the read loop stays free for concurrent requests (critical for PTY — `write_pty` must be processable while `spawn_pty` is streaming output). Parse errors produce a JSON error response rather than terminating the server.
+
 ```rust
 #[tokio::main]
 async fn main() {
-    let state = AppState::new(db_path, worktree_base_dir);
+    let state = Arc::new(AppState::new(db_path, worktree_base_dir));
     let stdin = tokio::io::stdin();
-    let stdout = tokio::io::stdout();
+    let writer = Arc::new(tokio::sync::Mutex::new(tokio::io::stdout()));
     let reader = BufReader::new(stdin);
-    let writer = tokio::sync::Mutex::new(stdout);
 
-    // Read JSON-RPC requests line by line
     let mut lines = reader.lines();
     while let Ok(Some(line)) = lines.next_line().await {
-        let request: Request = serde_json::from_str(&line)?;
-        let response = handle_request(&state, &writer, request).await;
-        write_line(&writer, &response).await;
+        let request: Request = match serde_json::from_str(&line) {
+            Ok(r) => r,
+            Err(e) => {
+                let err = json!({"id": null, "error": {"code": -32700, "message": format!("Parse error: {e}")}});
+                write_line(&writer, &err).await;
+                continue;
+            }
+        };
+
+        // Spawn each request as a separate task for concurrency.
+        let state = Arc::clone(&state);
+        let writer = Arc::clone(&writer);
+        tokio::spawn(async move {
+            let response = handle_request(&state, &writer, request).await;
+            write_line(&writer, &response).await;
+        });
     }
 }
 ```
@@ -288,6 +311,7 @@ The frontend doesn't change how it calls commands. The Tauri command layer handl
 ## 7. Security
 
 - **Authentication**: Relies entirely on SSH — key-based or password auth via the user's SSH config. Claudette does not store passwords.
+- **Host key verification**: Uses the system's default SSH host key policy (`~/.ssh/known_hosts`). Claudette does not override or weaken host key checking. If the remote host is not in `known_hosts`, SSH will prompt the user interactively (or reject the connection if `StrictHostKeyChecking=yes`). This is important because `claudette-server` accepts commands that can modify files and execute shell commands.
 - **Encryption**: All traffic encrypted by SSH.
 - **Authorization**: The remote `claudette-server` runs as the SSH user, inheriting their filesystem permissions.
 - **No exposed ports**: The server binary only communicates via stdin/stdout. There is no network listener to secure.
@@ -297,13 +321,17 @@ The frontend doesn't change how it calls commands. The Tauri command layer handl
 The user needs `claudette-server` installed on the remote machine:
 
 ```bash
-# On the remote machine:
-cargo install claudette-server
-# Or copy the binary:
+# Option 1: Build from a checked-out repo
+cargo install --path src-server
+
+# Option 2: Install directly from the git repo
+cargo install --git https://github.com/utensils/Claudette.git --bin claudette-server
+
+# Option 3: Copy a locally built binary
 scp target/release/claudette-server user@remote:~/.local/bin/
 ```
 
-The binary is a single static executable with no GUI dependencies (no Tauri, no WebKit). It only depends on the `claudette` core crate + SQLite + tokio.
+The installed `claudette-server` is a single command-line executable with no GUI dependencies (no Tauri, no WebKit). It is a standard dynamically linked binary produced by Cargo that depends on the `claudette` core crate, SQLite (bundled), and tokio.
 
 ## 9. Implementation Phases
 
