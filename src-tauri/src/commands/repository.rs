@@ -130,7 +130,14 @@ pub async fn get_repo_config(
         .find(|r| r.id == repo_id)
         .ok_or("Repository not found")?;
 
-    match config::load_config(Path::new(&repo.path)) {
+    // Run sync file I/O off the async runtime thread.
+    let repo_path = repo.path.clone();
+    let config_result =
+        tokio::task::spawn_blocking(move || config::load_config(Path::new(&repo_path)))
+            .await
+            .map_err(|e| format!("Config load task failed: {e}"))?;
+
+    match config_result {
         Ok(Some(cfg)) => Ok(RepoConfigInfo {
             has_config_file: true,
             setup_script: cfg.scripts.and_then(|s| s.setup),

@@ -19,6 +19,7 @@ export function Sidebar() {
   const repoCollapsed = useAppStore((s) => s.repoCollapsed);
   const toggleRepoCollapsed = useAppStore((s) => s.toggleRepoCollapsed);
   const addWorkspace = useAppStore((s) => s.addWorkspace);
+  const addChatMessage = useAppStore((s) => s.addChatMessage);
   const openModal = useAppStore((s) => s.openModal);
   const updateWorkspace = useAppStore((s) => s.updateWorkspace);
 
@@ -32,11 +33,19 @@ export function Sidebar() {
       const result = await createWorkspace(repoId, name);
       addWorkspace(result.workspace);
       selectWorkspace(result.workspace.id);
-      if (result.setup_result && !result.setup_result.success) {
-        console.warn("Setup script failed:", result.setup_result.output);
-        alert(
-          `Setup script failed (source: ${result.setup_result.source}):\n${result.setup_result.output}`
-        );
+      if (result.setup_result) {
+        const sr = result.setup_result;
+        const label = sr.source === "repo" ? ".claudette.json" : "settings";
+        const status = sr.success ? "completed" : sr.timed_out ? "timed out" : "failed";
+        addChatMessage(result.workspace.id, {
+          id: crypto.randomUUID(),
+          workspace_id: result.workspace.id,
+          role: "System",
+          content: `Setup script (${label}) ${status}${sr.output ? `:\n${sr.output}` : ""}`,
+          cost_usd: null,
+          duration_ms: null,
+          created_at: new Date().toISOString(),
+        });
       }
     } catch (e) {
       console.error("Failed to create workspace:", e);

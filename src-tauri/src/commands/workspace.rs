@@ -131,13 +131,15 @@ async fn resolve_and_run_setup(
         }
     };
 
-    // 2. Execute the script.
+    // 2. Execute the script in its own process group so we can kill the
+    //    entire tree on timeout (prevents orphan grandchild processes).
     let mut child = match TokioCommand::new("sh")
         .arg("-c")
         .arg(&script)
         .current_dir(worktree_path)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        .process_group(0)
         .spawn()
     {
         Ok(c) => c,
@@ -153,18 +155,33 @@ async fn resolve_and_run_setup(
         }
     };
 
-    // 3. Wait with 5-minute timeout.
+    let pid = child.id();
+
+    // 3. Read stdout/stderr concurrently with waiting to avoid pipe buffer
+    //    deadlocks (OS pipe buffers are ~64KB — scripts like `npm install`
+    //    easily exceed that).
+    let stdout_handle = child.stdout.take();
+    let stderr_handle = child.stderr.take();
+
+    let stdout_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        if let Some(mut out) = stdout_handle {
+            let _ = tokio::io::AsyncReadExt::read_to_end(&mut out, &mut buf).await;
+        }
+        buf
+    });
+    let stderr_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        if let Some(mut err) = stderr_handle {
+            let _ = tokio::io::AsyncReadExt::read_to_end(&mut err, &mut buf).await;
+        }
+        buf
+    });
+
     match tokio::time::timeout(Duration::from_secs(300), child.wait()).await {
         Ok(Ok(status)) => {
-            // Process finished — read any remaining output from pipes.
-            let mut stdout_buf = Vec::new();
-            let mut stderr_buf = Vec::new();
-            if let Some(mut out) = child.stdout.take() {
-                let _ = tokio::io::AsyncReadExt::read_to_end(&mut out, &mut stdout_buf).await;
-            }
-            if let Some(mut err) = child.stderr.take() {
-                let _ = tokio::io::AsyncReadExt::read_to_end(&mut err, &mut stderr_buf).await;
-            }
+            let stdout_buf = stdout_task.await.unwrap_or_default();
+            let stderr_buf = stderr_task.await.unwrap_or_default();
             let stdout = String::from_utf8_lossy(&stdout_buf);
             let stderr = String::from_utf8_lossy(&stderr_buf);
             let combined = if stderr.is_empty() {
@@ -193,8 +210,14 @@ async fn resolve_and_run_setup(
             timed_out: false,
         }),
         Err(_) => {
-            // Timeout — explicitly kill the child process.
+            // Timeout — kill the entire process group, then reap the child.
+            if let Some(pgid) = pid {
+                unsafe {
+                    libc::kill(-(pgid as i32), libc::SIGKILL);
+                }
+            }
             let _ = child.kill().await;
+            let _ = child.wait().await; // reap to avoid zombie
             Some(SetupResult {
                 source: source.to_string(),
                 script,
