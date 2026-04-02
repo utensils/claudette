@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { GitBranch } from "lucide-react";
+import { GitBranch, LayoutDashboard } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import {
   loadChatHistory,
@@ -43,6 +43,7 @@ export function ChatPanel() {
   useAgentStream();
 
   const defaultBranchesMap = useAppStore((s) => s.defaultBranches);
+  const selectWorkspace = useAppStore((s) => s.selectWorkspace);
 
   const ws = workspaces.find((w) => w.id === selectedWorkspaceId);
   const repo = repositories.find((r) => r.id === ws?.repository_id);
@@ -244,6 +245,14 @@ export function ChatPanel() {
     <div className={styles.panel}>
       <div className={styles.header}>
         <div className={styles.headerLeft}>
+          <button
+            className={styles.dashboardBtn}
+            onClick={() => selectWorkspace(null)}
+            title="Back to dashboard"
+            type="button"
+          >
+            <LayoutDashboard size={14} />
+          </button>
           {repo ? (
             <span className={styles.branchInfo}>
               <span className={styles.repoName}>{repo.name}</span>
