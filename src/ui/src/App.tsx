@@ -10,6 +10,7 @@ function App() {
   const setWorktreeBaseDir = useAppStore((s) => s.setWorktreeBaseDir);
   const setDefaultBranches = useAppStore((s) => s.setDefaultBranches);
   const setTerminalFontSize = useAppStore((s) => s.setTerminalFontSize);
+  const setLastMessages = useAppStore((s) => s.setLastMessages);
 
   useEffect(() => {
     loadInitialData().then((data) => {
@@ -17,6 +18,12 @@ function App() {
       setWorkspaces(data.workspaces);
       setWorktreeBaseDir(data.worktree_base_dir);
       setDefaultBranches(data.default_branches);
+      // Index last messages by workspace_id for dashboard display.
+      const msgMap: Record<string, (typeof data.last_messages)[0]> = {};
+      for (const msg of data.last_messages) {
+        msgMap[msg.workspace_id] = msg;
+      }
+      setLastMessages(msgMap);
     });
     getAppSetting("terminal_font_size")
       .then((val) => {
@@ -26,7 +33,7 @@ function App() {
         }
       })
       .catch((err) => console.error("Failed to load terminal font size:", err));
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages]);
 
   return <AppLayout />;
 }

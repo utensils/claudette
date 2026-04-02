@@ -5,7 +5,7 @@ use tauri::State;
 
 use claudette::db::Database;
 use claudette::git;
-use claudette::model::{Repository, Workspace};
+use claudette::model::{ChatMessage, Repository, Workspace};
 
 use crate::state::AppState;
 
@@ -16,6 +16,8 @@ pub struct InitialData {
     pub worktree_base_dir: String,
     /// Maps repo ID → default branch name (e.g., "main", "master").
     pub default_branches: HashMap<String, String>,
+    /// Most recent chat message per workspace (for dashboard display).
+    pub last_messages: Vec<ChatMessage>,
 }
 
 #[tauri::command]
@@ -52,10 +54,13 @@ pub async fn load_initial_data(state: State<'_, AppState>) -> Result<InitialData
     let branch_results = futures::future::join_all(branch_futures).await;
     let default_branches: HashMap<String, String> = branch_results.into_iter().flatten().collect();
 
+    let last_messages = db.last_message_per_workspace().map_err(|e| e.to_string())?;
+
     Ok(InitialData {
         repositories,
         workspaces,
         worktree_base_dir,
         default_branches,
+        last_messages,
     })
 }

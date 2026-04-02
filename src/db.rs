@@ -363,6 +363,35 @@ impl Database {
         Ok(())
     }
 
+    /// Get the most recent chat message for each workspace (for dashboard display).
+    /// Uses a correlated subquery with rowid tie-breaking to guarantee exactly
+    /// one row per workspace even when multiple messages share the same timestamp.
+    pub fn last_message_per_workspace(&self) -> Result<Vec<ChatMessage>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT m.id, m.workspace_id, m.role, m.content, m.cost_usd, m.duration_ms, m.created_at
+             FROM chat_messages m
+             WHERE m.rowid = (
+                 SELECT rowid FROM chat_messages c2
+                 WHERE c2.workspace_id = m.workspace_id
+                 ORDER BY c2.created_at DESC, c2.rowid DESC
+                 LIMIT 1
+             )",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let role_str: String = row.get(2)?;
+            Ok(ChatMessage {
+                id: row.get(0)?,
+                workspace_id: row.get(1)?,
+                role: role_str.parse().unwrap(),
+                content: row.get(3)?,
+                cost_usd: row.get(4)?,
+                duration_ms: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })?;
+        rows.collect()
+    }
+
     #[allow(dead_code)]
     pub fn delete_chat_messages_for_workspace(
         &self,
@@ -828,5 +857,55 @@ mod tests {
             .unwrap();
         let tabs = db.list_terminal_tabs_by_workspace("w1").unwrap();
         assert_eq!(tabs[0].title, "My Custom Terminal");
+    }
+
+    #[test]
+    fn test_last_message_per_workspace() {
+        let db = setup_db_with_workspace();
+        db.insert_workspace(&make_workspace("w2", "r1", "feature"))
+            .unwrap();
+        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "first"))
+            .unwrap();
+        db.insert_chat_message(&make_chat_msg("m2", "w1", ChatRole::Assistant, "second"))
+            .unwrap();
+        db.insert_chat_message(&make_chat_msg(
+            "m3",
+            "w2",
+            ChatRole::User,
+            "other workspace",
+        ))
+        .unwrap();
+
+        let last = db.last_message_per_workspace().unwrap();
+        assert_eq!(last.len(), 2);
+
+        let w1_msg = last.iter().find(|m| m.workspace_id == "w1").unwrap();
+        assert_eq!(w1_msg.content, "second");
+
+        let w2_msg = last.iter().find(|m| m.workspace_id == "w2").unwrap();
+        assert_eq!(w2_msg.content, "other workspace");
+    }
+
+    #[test]
+    fn test_last_message_per_workspace_same_timestamp() {
+        let db = setup_db_with_workspace();
+        // Insert two messages with identical timestamps — the later rowid should win.
+        let mut m1 = make_chat_msg("m1", "w1", ChatRole::User, "first");
+        m1.created_at = "2026-01-01 00:00:00".into();
+        let mut m2 = make_chat_msg("m2", "w1", ChatRole::Assistant, "second");
+        m2.created_at = "2026-01-01 00:00:00".into();
+        db.insert_chat_message(&m1).unwrap();
+        db.insert_chat_message(&m2).unwrap();
+
+        let last = db.last_message_per_workspace().unwrap();
+        assert_eq!(last.len(), 1);
+        assert_eq!(last[0].content, "second");
+    }
+
+    #[test]
+    fn test_last_message_empty_when_no_messages() {
+        let db = setup_db_with_workspace();
+        let last = db.last_message_per_workspace().unwrap();
+        assert!(last.is_empty());
     }
 }
