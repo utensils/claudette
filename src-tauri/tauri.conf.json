@@ -1,6 +1,5 @@
 {
   "productName": "Claudette",
-  "version": "0.1.0",
   "identifier": "com.claudette.app",
   "build": {
     "beforeDevCommand": "bun run dev",
