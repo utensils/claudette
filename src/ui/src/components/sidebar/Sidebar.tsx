@@ -19,7 +19,7 @@ function RepoIcon({ icon }: { icon: string }) {
     .join("");
   const LucideIcon = icons[pascalName as keyof typeof icons];
 
-  if (LucideIcon && typeof LucideIcon === "function") {
+  if (LucideIcon) {
     return <LucideIcon size={14} className={styles.repoIcon} />;
   }
   return <span className={styles.repoIcon}>{icon}</span>;
