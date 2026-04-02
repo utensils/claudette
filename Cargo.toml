@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "claudette"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Claude's missing better half — a companion tool for Claude Code"
 
@@ -25,9 +25,3 @@ rand = "0.8"
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-
-[profile.release]
-strip = true
-lto = "thin"
-codegen-units = 1
-opt-level = "s"
