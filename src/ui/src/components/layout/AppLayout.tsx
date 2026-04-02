@@ -5,6 +5,7 @@ import { DiffViewer } from "../diff/DiffViewer";
 import { TerminalPanel } from "../terminal/TerminalPanel";
 import { RightSidebar } from "../right-sidebar/RightSidebar";
 import { FuzzyFinder } from "../fuzzy-finder/FuzzyFinder";
+import { Dashboard } from "./Dashboard";
 import { StatusBar } from "./StatusBar";
 import { ModalRouter } from "../modals/ModalRouter";
 import { ResizeHandle } from "./ResizeHandle";
@@ -69,9 +70,7 @@ export function AppLayout() {
                 <ChatPanel />
               )
             ) : (
-              <div className={styles.empty}>
-                <p>Select a workspace to get started</p>
-              </div>
+              <Dashboard />
             )}
           </div>
           {terminalPanelVisible && selectedWorkspaceId && (

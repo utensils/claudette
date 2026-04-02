@@ -19,6 +19,7 @@ export interface InitialData {
   workspaces: Workspace[];
   worktree_base_dir: string;
   default_branches: Record<string, string>;
+  last_messages: ChatMessage[];
 }
 
 export function loadInitialData(): Promise<InitialData> {

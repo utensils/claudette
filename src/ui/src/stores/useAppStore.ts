@@ -149,6 +149,8 @@ interface AppState {
   setDefaultBranches: (branches: Record<string, string>) => void;
   terminalFontSize: number;
   setTerminalFontSize: (size: number) => void;
+  lastMessages: Record<string, ChatMessage>;
+  setLastMessages: (msgs: Record<string, ChatMessage>) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -400,4 +402,6 @@ export const useAppStore = create<AppState>((set) => ({
   setDefaultBranches: (branches) => set({ defaultBranches: branches }),
   terminalFontSize: 11,
   setTerminalFontSize: (size) => set({ terminalFontSize: size }),
+  lastMessages: {},
+  setLastMessages: (msgs) => set({ lastMessages: msgs }),
 }));

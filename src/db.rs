@@ -363,6 +363,32 @@ impl Database {
         Ok(())
     }
 
+    /// Get the most recent chat message for each workspace (for dashboard display).
+    pub fn last_message_per_workspace(&self) -> Result<Vec<ChatMessage>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT m.id, m.workspace_id, m.role, m.content, m.cost_usd, m.duration_ms, m.created_at
+             FROM chat_messages m
+             INNER JOIN (
+                 SELECT workspace_id, MAX(created_at) as max_created
+                 FROM chat_messages
+                 GROUP BY workspace_id
+             ) latest ON m.workspace_id = latest.workspace_id AND m.created_at = latest.max_created",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let role_str: String = row.get(2)?;
+            Ok(ChatMessage {
+                id: row.get(0)?,
+                workspace_id: row.get(1)?,
+                role: role_str.parse().unwrap(),
+                content: row.get(3)?,
+                cost_usd: row.get(4)?,
+                duration_ms: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })?;
+        rows.collect()
+    }
+
     #[allow(dead_code)]
     pub fn delete_chat_messages_for_workspace(
         &self,
