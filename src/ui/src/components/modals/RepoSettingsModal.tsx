@@ -3,6 +3,7 @@ import { useAppStore } from "../../stores/useAppStore";
 import { updateRepositorySettings, getRepoConfig } from "../../services/tauri";
 import type { RepoConfigInfo } from "../../types/repository";
 import { Modal } from "./Modal";
+import { IconPicker } from "./IconPicker";
 import shared from "./shared.module.css";
 
 export function RepoSettingsModal() {
@@ -68,13 +69,8 @@ export function RepoSettingsModal() {
         />
       </div>
       <div className={shared.field}>
-        <label className={shared.label}>Icon (emoji or name)</label>
-        <input
-          className={shared.input}
-          value={icon}
-          onChange={(e) => setIcon(e.target.value)}
-          placeholder="e.g. rocket, code, bug"
-        />
+        <label className={shared.label}>Icon</label>
+        <IconPicker value={icon} onChange={setIcon} />
       </div>
 
       <div
