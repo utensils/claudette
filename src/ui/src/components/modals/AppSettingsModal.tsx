@@ -18,17 +18,21 @@ export function AppSettingsModal() {
 
   const handleSave = async () => {
     if (!path.trim()) return;
+
+    const size = parseInt(fontSize, 10);
+    if (isNaN(size) || size < 8 || size > 24) {
+      setError("Terminal font size must be between 8 and 24");
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
       await setAppSetting("worktree_base_dir", path.trim());
       setWorktreeBaseDir(path.trim());
 
-      const size = parseInt(fontSize, 10);
-      if (size >= 8 && size <= 24) {
-        await setAppSetting("terminal_font_size", String(size));
-        setTerminalFontSize(size);
-      }
+      await setAppSetting("terminal_font_size", String(size));
+      setTerminalFontSize(size);
 
       closeModal();
     } catch (e) {

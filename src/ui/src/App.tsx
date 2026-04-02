@@ -18,12 +18,14 @@ function App() {
       setWorktreeBaseDir(data.worktree_base_dir);
       setDefaultBranches(data.default_branches);
     });
-    getAppSetting("terminal_font_size").then((val) => {
-      if (val) {
-        const size = parseInt(val, 10);
-        if (size >= 8 && size <= 24) setTerminalFontSize(size);
-      }
-    });
+    getAppSetting("terminal_font_size")
+      .then((val) => {
+        if (val) {
+          const size = parseInt(val, 10);
+          if (size >= 8 && size <= 24) setTerminalFontSize(size);
+        }
+      })
+      .catch((err) => console.error("Failed to load terminal font size:", err));
   }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize]);
 
   return <AppLayout />;

@@ -142,7 +142,15 @@ export function TerminalPanel() {
         ptyIdRef.current = null;
       }
     };
-  }, [activeTerminalTabId, ws?.worktree_path, terminalFontSize]);
+  }, [activeTerminalTabId, ws?.worktree_path]);
+
+  // Update font size without destroying the terminal/PTY.
+  useEffect(() => {
+    if (xtermRef.current) {
+      xtermRef.current.options.fontSize = terminalFontSize;
+      fitRef.current?.fit();
+    }
+  }, [terminalFontSize]);
 
   const handleCreateTab = useCallback(async () => {
     if (!selectedWorkspaceId) return;
