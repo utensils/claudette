@@ -9,6 +9,9 @@ const CONFIG_FILE_NAME: &str = ".claudette.json";
 pub struct ClaudetteConfig {
     #[serde(default)]
     pub scripts: Option<Scripts>,
+    /// Custom instructions appended to the agent's system prompt.
+    #[serde(default)]
+    pub instructions: Option<String>,
 }
 
 /// Script definitions within `.claudette.json`.

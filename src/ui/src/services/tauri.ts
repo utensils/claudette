@@ -36,9 +36,16 @@ export function updateRepositorySettings(
   id: string,
   name: string,
   icon: string | null,
-  setupScript: string | null
+  setupScript: string | null,
+  customInstructions: string | null
 ): Promise<void> {
-  return invoke("update_repository_settings", { id, name, icon, setupScript });
+  return invoke("update_repository_settings", {
+    id,
+    name,
+    icon,
+    setupScript,
+    customInstructions,
+  });
 }
 
 export function relinkRepository(id: string, path: string): Promise<void> {

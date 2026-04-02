@@ -19,6 +19,9 @@ export function RepoSettingsModal() {
   const [name, setName] = useState(repo?.name ?? "");
   const [icon, setIcon] = useState(repo?.icon ?? "");
   const [setupScript, setSetupScript] = useState(repo?.setup_script ?? "");
+  const [customInstructions, setCustomInstructions] = useState(
+    repo?.custom_instructions ?? ""
+  );
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -43,11 +46,19 @@ export function RepoSettingsModal() {
     try {
       const iconValue = icon.trim() || null;
       const scriptValue = setupScript.trim() || null;
-      await updateRepositorySettings(repoId, name.trim(), iconValue, scriptValue);
+      const instructionsValue = customInstructions.trim() || null;
+      await updateRepositorySettings(
+        repoId,
+        name.trim(),
+        iconValue,
+        scriptValue,
+        instructionsValue
+      );
       updateRepo(repoId, {
         name: name.trim(),
         icon: iconValue,
         setup_script: scriptValue,
+        custom_instructions: instructionsValue,
       });
       closeModal();
     } catch (e) {
@@ -136,6 +147,33 @@ export function RepoSettingsModal() {
         />
         <div className={shared.hint}>
           Runs automatically when a new workspace is created.
+        </div>
+      </div>
+
+      <div
+        style={{
+          borderTop: "1px solid var(--divider)",
+          marginTop: 16,
+          paddingTop: 12,
+        }}
+      >
+        <label className={shared.label}>Custom Instructions</label>
+        <textarea
+          className={shared.input}
+          value={customInstructions}
+          onChange={(e) => setCustomInstructions(e.target.value)}
+          placeholder="e.g. Always use TypeScript. Prefer functional components."
+          rows={4}
+          style={{
+            fontFamily: "monospace",
+            fontSize: 12,
+            resize: "vertical",
+          }}
+        />
+        <div className={shared.hint}>
+          Appended to the agent's system prompt at the start of every chat.
+          Can also be set in <code>.claudette.json</code> (repo-level takes
+          precedence).
         </div>
       </div>
 

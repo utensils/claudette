@@ -14,6 +14,7 @@ use crate::state::AppState;
 pub struct RepoConfigInfo {
     pub has_config_file: bool,
     pub setup_script: Option<String>,
+    pub instructions: Option<String>,
     pub parse_error: Option<String>,
 }
 
@@ -42,6 +43,7 @@ pub async fn add_repository(
         icon: None,
         created_at: now_iso(),
         setup_script: None,
+        custom_instructions: None,
         path_valid: true,
     };
 
@@ -57,6 +59,7 @@ pub async fn update_repository_settings(
     name: String,
     icon: Option<String>,
     setup_script: Option<String>,
+    custom_instructions: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
@@ -65,6 +68,8 @@ pub async fn update_repository_settings(
     db.update_repository_icon(&id, icon.as_deref())
         .map_err(|e| e.to_string())?;
     db.update_repository_setup_script(&id, setup_script.as_deref())
+        .map_err(|e| e.to_string())?;
+    db.update_repository_custom_instructions(&id, custom_instructions.as_deref())
         .map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -141,16 +146,19 @@ pub async fn get_repo_config(
         Ok(Some(cfg)) => Ok(RepoConfigInfo {
             has_config_file: true,
             setup_script: cfg.scripts.and_then(|s| s.setup),
+            instructions: cfg.instructions,
             parse_error: None,
         }),
         Ok(None) => Ok(RepoConfigInfo {
             has_config_file: false,
             setup_script: None,
+            instructions: None,
             parse_error: None,
         }),
         Err(e) => Ok(RepoConfigInfo {
             has_config_file: true,
             setup_script: None,
+            instructions: None,
             parse_error: Some(e),
         }),
     }

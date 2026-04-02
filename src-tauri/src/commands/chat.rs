@@ -99,6 +99,20 @@ pub async fn send_chat_message(
     }
     let allowed_tools = tools_for_level(level);
 
+    // Resolve custom instructions: .claudette.json > repo settings > none.
+    let repos = db.list_repositories().map_err(|e| e.to_string())?;
+    let repo = repos.iter().find(|r| r.id == ws.repository_id);
+    let custom_instructions = {
+        let from_config = repo
+            .and_then(|r| {
+                claudette::config::load_config(std::path::Path::new(&r.path))
+                    .ok()
+                    .flatten()
+            })
+            .and_then(|c| c.instructions);
+        from_config.or_else(|| repo.and_then(|r| r.custom_instructions.clone()))
+    };
+
     // Get or create agent session.
     let mut agents = state.agents.write().await;
     let session = agents
@@ -120,6 +134,7 @@ pub async fn send_chat_message(
         &content,
         is_resume,
         &allowed_tools,
+        custom_instructions.as_deref(),
     )
     .await?;
 

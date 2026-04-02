@@ -6,6 +6,7 @@ export interface Repository {
   icon: string | null;
   created_at: string;
   setup_script: string | null;
+  custom_instructions: string | null;
   path_valid: boolean;
 }
 
