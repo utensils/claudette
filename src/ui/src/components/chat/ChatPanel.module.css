@@ -17,6 +17,29 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+}
+
+.dashboardBtn {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  border-radius: 4px;
+}
+
+.dashboardBtn:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--hover-bg);
+}
+
+.dashboardBtn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
 }
 
 .headerRight {

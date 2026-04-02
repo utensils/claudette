@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { GitBranch } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
+import { RepoIcon } from "../shared/RepoIcon";
 import styles from "./Dashboard.module.css";
 
 /** Strip markdown syntax for a clean one-line preview. */
@@ -71,7 +72,13 @@ export function Dashboard() {
             >
               <div className={styles.cardHeader}>
                 <span className={styles.repoName}>
-                  {repo?.icon && `${repo.icon} `}
+                  {repo?.icon && (
+                    <RepoIcon
+                      icon={repo.icon}
+                      size={14}
+                      className={styles.repoIcon}
+                    />
+                  )}
                   {repo?.name ?? "Unknown"}
                 </span>
                 <span
