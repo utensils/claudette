@@ -1,6 +1,24 @@
+import { useMemo } from "react";
 import { GitBranch } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import styles from "./Dashboard.module.css";
+
+/** Strip markdown syntax for a clean one-line preview. */
+function stripMarkdown(s: string): string {
+  return s
+    .replace(/```[\s\S]*?```/g, "[code]")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/_([^_]+)_/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^\s*[-*+]\s+/gm, "")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/\n+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 export function Dashboard() {
   const repositories = useAppStore((s) => s.repositories);
@@ -8,6 +26,11 @@ export function Dashboard() {
   const lastMessages = useAppStore((s) => s.lastMessages);
   const defaultBranches = useAppStore((s) => s.defaultBranches);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
+
+  const repoMap = useMemo(
+    () => new Map(repositories.map((r) => [r.id, r])),
+    [repositories]
+  );
 
   const activeWorkspaces = workspaces.filter((ws) => ws.status === "Active");
 
@@ -27,13 +50,22 @@ export function Dashboard() {
       <div className={styles.header}>Active Workspaces</div>
       <div className={styles.grid}>
         {activeWorkspaces.map((ws) => {
-          const repo = repositories.find((r) => r.id === ws.repository_id);
+          const repo = repoMap.get(ws.repository_id);
           const lastMsg = lastMessages[ws.id];
           const baseBranch = repo ? defaultBranches[repo.id] : undefined;
+
+          const statusColor =
+            ws.agent_status === "Running"
+              ? "var(--status-running)"
+              : ws.agent_status === "Stopped" ||
+                  typeof ws.agent_status !== "string"
+                ? "var(--status-stopped)"
+                : "var(--status-idle)";
 
           return (
             <button
               key={ws.id}
+              type="button"
               className={styles.card}
               onClick={() => selectWorkspace(ws.id)}
             >
@@ -44,12 +76,7 @@ export function Dashboard() {
                 </span>
                 <span
                   className={styles.statusDot}
-                  style={{
-                    background:
-                      ws.agent_status === "Running"
-                        ? "var(--status-running)"
-                        : "var(--status-idle)",
-                  }}
+                  style={{ background: statusColor }}
                 />
               </div>
               <div className={styles.branchLine}>
@@ -73,7 +100,7 @@ export function Dashboard() {
                     :
                   </span>{" "}
                   <span className={styles.msgContent}>
-                    {lastMsg.content.slice(0, 120)}
+                    {stripMarkdown(lastMsg.content).slice(0, 120)}
                     {lastMsg.content.length > 120 ? "..." : ""}
                   </span>
                 </div>

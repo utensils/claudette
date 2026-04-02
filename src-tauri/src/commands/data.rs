@@ -54,7 +54,7 @@ pub async fn load_initial_data(state: State<'_, AppState>) -> Result<InitialData
     let branch_results = futures::future::join_all(branch_futures).await;
     let default_branches: HashMap<String, String> = branch_results.into_iter().flatten().collect();
 
-    let last_messages = db.last_message_per_workspace().unwrap_or_default();
+    let last_messages = db.last_message_per_workspace().map_err(|e| e.to_string())?;
 
     Ok(InitialData {
         repositories,

@@ -207,6 +207,7 @@ export const useAppStore = create<AppState>((set) => ({
         ...s.chatMessages,
         [wsId]: [...(s.chatMessages[wsId] || []), message],
       },
+      lastMessages: { ...s.lastMessages, [wsId]: message },
     })),
   setChatInput: (input) => set({ chatInput: input }),
   setStreamingContent: (wsId, content) =>
