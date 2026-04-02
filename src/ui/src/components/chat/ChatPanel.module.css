@@ -219,20 +219,24 @@
 }
 
 .processing {
-  color: var(--text-muted);
-  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 8px 12px;
-  animation: pulse 1.5s ease-in-out infinite;
+  font-size: 13px;
 }
 
-@keyframes pulse {
-  0%,
-  100% {
-    opacity: 0.5;
-  }
-  50% {
-    opacity: 1;
-  }
+.spinner {
+  font-size: 16px;
+  color: var(--status-running);
+  width: 16px;
+  text-align: center;
+}
+
+.elapsed {
+  color: var(--text-dim);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 .toolActivities {

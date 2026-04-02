@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { GitBranch } from "lucide-react";
@@ -69,6 +69,36 @@ export function ChatPanel() {
   const isRunning = ws?.agent_status === "Running";
   const pendingQuestion =
     agentQuestion?.workspaceId === selectedWorkspaceId ? agentQuestion : null;
+
+  // Spinner and elapsed timer for running agent.
+  const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  const [spinnerIdx, setSpinnerIdx] = useState(0);
+  const [elapsed, setElapsed] = useState(0);
+  const startTimeRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!isRunning) {
+      startTimeRef.current = null;
+      return;
+    }
+    if (!startTimeRef.current) {
+      startTimeRef.current = Date.now();
+    }
+    const interval = setInterval(() => {
+      setSpinnerIdx((i) => (i + 1) % SPINNER_FRAMES.length);
+      if (startTimeRef.current) {
+        setElapsed(Math.floor((Date.now() - startTimeRef.current) / 1000));
+      }
+    }, 80);
+    return () => clearInterval(interval);
+  }, [isRunning]);
+
+  const formatElapsed = useCallback((secs: number) => {
+    if (secs < 60) return `${secs}s`;
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m}m ${s}s`;
+  }, []);
 
   // Load persisted permission level when workspace changes.
   useEffect(() => {
@@ -399,8 +429,11 @@ export function ChatPanel() {
               </div>
             )}
 
-            {isRunning && !streaming && !pendingQuestion && (
-              <div className={styles.processing}>Processing...</div>
+            {isRunning && !pendingQuestion && (
+              <div className={styles.processing}>
+                <span className={styles.spinner}>{SPINNER_FRAMES[spinnerIdx]}</span>
+                <span className={styles.elapsed}>{formatElapsed(elapsed)}</span>
+              </div>
             )}
 
             {pendingQuestion && (
