@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::model::{ChatMessage, Repository, TerminalTab, Workspace, WorkspaceStatus};
 
@@ -123,6 +123,14 @@ impl Database {
             )?;
         }
 
+        if version < 6 {
+            self.conn.execute_batch(
+                "ALTER TABLE repositories ADD COLUMN custom_instructions TEXT;
+
+                 PRAGMA user_version = 6;",
+            )?;
+        }
+
         Ok(())
     }
 
@@ -138,7 +146,7 @@ impl Database {
 
     pub fn list_repositories(&self) -> Result<Vec<Repository>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, path, name, icon, path_slug, created_at, setup_script
+            "SELECT id, path, name, icon, path_slug, created_at, setup_script, custom_instructions
              FROM repositories ORDER BY name",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -150,10 +158,33 @@ impl Database {
                 path_slug: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
                 created_at: row.get(5)?,
                 setup_script: row.get(6)?,
+                custom_instructions: row.get(7)?,
                 path_valid: true, // validated after load
             })
         })?;
         rows.collect()
+    }
+
+    pub fn get_repository(&self, id: &str) -> Result<Option<Repository>, rusqlite::Error> {
+        self.conn.query_row(
+            "SELECT id, path, name, icon, path_slug, created_at, setup_script, custom_instructions
+             FROM repositories WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok(Repository {
+                    id: row.get(0)?,
+                    path: row.get(1)?,
+                    name: row.get(2)?,
+                    icon: row.get(3)?,
+                    path_slug: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                    created_at: row.get(5)?,
+                    setup_script: row.get(6)?,
+                    custom_instructions: row.get(7)?,
+                    path_valid: true,
+                })
+            },
+        )
+        .optional()
     }
 
     pub fn update_repository_path(&self, id: &str, path: &str) -> Result<(), rusqlite::Error> {
@@ -200,6 +231,18 @@ impl Database {
         self.conn.execute(
             "UPDATE repositories SET setup_script = ?1 WHERE id = ?2",
             params![script, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_repository_custom_instructions(
+        &self,
+        id: &str,
+        instructions: Option<&str>,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE repositories SET custom_instructions = ?1 WHERE id = ?2",
+            params![instructions, id],
         )?;
         Ok(())
     }
@@ -493,6 +536,7 @@ mod tests {
             icon: None,
             created_at: String::new(),
             setup_script: None,
+            custom_instructions: None,
             path_valid: true,
         }
     }
@@ -741,6 +785,7 @@ mod tests {
             icon: None,
             created_at: String::new(),
             setup_script: None,
+            custom_instructions: None,
             path_valid: true,
         };
         db.insert_repository(&repo).unwrap();

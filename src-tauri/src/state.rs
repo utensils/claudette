@@ -11,6 +11,8 @@ pub struct AgentSessionState {
     pub turn_count: u32,
     /// PID of the currently running agent process, if any.
     pub active_pid: Option<u32>,
+    /// Cached custom instructions resolved on first turn.
+    pub custom_instructions: Option<String>,
 }
 
 /// Handle to an active PTY process.

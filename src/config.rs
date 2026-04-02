@@ -9,6 +9,9 @@ const CONFIG_FILE_NAME: &str = ".claudette.json";
 pub struct ClaudetteConfig {
     #[serde(default)]
     pub scripts: Option<Scripts>,
+    /// Custom instructions appended to the agent's system prompt.
+    #[serde(default)]
+    pub instructions: Option<String>,
 }
 
 /// Script definitions within `.claudette.json`.
@@ -87,6 +90,34 @@ mod tests {
 
         let config = load_config(dir.path()).unwrap().unwrap();
         assert_eq!(config.scripts.unwrap().setup.unwrap(), "echo hi");
+    }
+
+    #[test]
+    fn test_valid_config_with_instructions() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join(CONFIG_FILE_NAME),
+            r#"{"instructions": "Always use TypeScript"}"#,
+        )
+        .unwrap();
+
+        let config = load_config(dir.path()).unwrap().unwrap();
+        assert_eq!(config.instructions.unwrap(), "Always use TypeScript");
+        assert!(config.scripts.is_none());
+    }
+
+    #[test]
+    fn test_valid_config_with_instructions_and_scripts() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join(CONFIG_FILE_NAME),
+            r#"{"instructions": "Use Rust", "scripts": {"setup": "cargo build"}}"#,
+        )
+        .unwrap();
+
+        let config = load_config(dir.path()).unwrap().unwrap();
+        assert_eq!(config.instructions.unwrap(), "Use Rust");
+        assert_eq!(config.scripts.unwrap().setup.unwrap(), "cargo build");
     }
 
     #[test]

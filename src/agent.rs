@@ -185,6 +185,7 @@ pub fn build_claude_args(
     prompt: &str,
     is_resume: bool,
     allowed_tools: &[String],
+    custom_instructions: Option<&str>,
 ) -> Vec<String> {
     let mut args = vec![
         "--print".to_string(),
@@ -197,6 +198,16 @@ pub fn build_claude_args(
     if !allowed_tools.is_empty() {
         args.push("--allowedTools".to_string());
         args.push(allowed_tools.join(","));
+    }
+
+    // Only append custom instructions on the first turn — resumed sessions
+    // already have the system prompt set from the initial turn.
+    if !is_resume
+        && let Some(instructions) = custom_instructions
+        && !instructions.trim().is_empty()
+    {
+        args.push("--append-system-prompt".to_string());
+        args.push(instructions.to_string());
     }
 
     if is_resume {
@@ -224,8 +235,15 @@ pub async fn run_turn(
     prompt: &str,
     is_resume: bool,
     allowed_tools: &[String],
+    custom_instructions: Option<&str>,
 ) -> Result<TurnHandle, String> {
-    let args = build_claude_args(session_id, prompt, is_resume, allowed_tools);
+    let args = build_claude_args(
+        session_id,
+        prompt,
+        is_resume,
+        allowed_tools,
+        custom_instructions,
+    );
 
     let mut cmd = Command::new("claude");
     cmd.args(&args)
@@ -651,18 +669,19 @@ mod tests {
 
     #[test]
     fn test_build_args_first_turn_no_tools() {
-        let args = build_claude_args("sess-1", "hello", false, &[]);
+        let args = build_claude_args("sess-1", "hello", false, &[], None);
         assert!(args.contains(&"--print".to_string()));
         assert!(args.contains(&"--session-id".to_string()));
         assert!(args.contains(&"sess-1".to_string()));
         assert!(args.last() == Some(&"hello".to_string()));
         assert!(!args.contains(&"--allowedTools".to_string()));
         assert!(!args.contains(&"--resume".to_string()));
+        assert!(!args.contains(&"--append-system-prompt".to_string()));
     }
 
     #[test]
     fn test_build_args_resume() {
-        let args = build_claude_args("sess-1", "continue", true, &[]);
+        let args = build_claude_args("sess-1", "continue", true, &[], None);
         assert!(args.contains(&"--resume".to_string()));
         assert!(!args.contains(&"--session-id".to_string()));
     }
@@ -670,8 +689,37 @@ mod tests {
     #[test]
     fn test_build_args_with_allowed_tools() {
         let tools = vec!["Bash".to_string(), "Read".to_string(), "Edit".to_string()];
-        let args = build_claude_args("sess-1", "hello", false, &tools);
+        let args = build_claude_args("sess-1", "hello", false, &tools, None);
         let idx = args.iter().position(|a| a == "--allowedTools").unwrap();
         assert_eq!(args[idx + 1], "Bash,Read,Edit");
+    }
+
+    #[test]
+    fn test_build_args_with_custom_instructions() {
+        let args = build_claude_args("sess-1", "hello", false, &[], Some("Always use TypeScript"));
+        let idx = args
+            .iter()
+            .position(|a| a == "--append-system-prompt")
+            .unwrap();
+        assert_eq!(args[idx + 1], "Always use TypeScript");
+    }
+
+    #[test]
+    fn test_build_args_empty_instructions_skipped() {
+        let args = build_claude_args("sess-1", "hello", false, &[], Some(""));
+        assert!(!args.contains(&"--append-system-prompt".to_string()));
+    }
+
+    #[test]
+    fn test_build_args_whitespace_instructions_skipped() {
+        let args = build_claude_args("sess-1", "hello", false, &[], Some("   "));
+        assert!(!args.contains(&"--append-system-prompt".to_string()));
+    }
+
+    #[test]
+    fn test_build_args_resume_skips_instructions() {
+        let args = build_claude_args("sess-1", "hello", true, &[], Some("Always use TypeScript"));
+        assert!(!args.contains(&"--append-system-prompt".to_string()));
+        assert!(args.contains(&"--resume".to_string()));
     }
 }

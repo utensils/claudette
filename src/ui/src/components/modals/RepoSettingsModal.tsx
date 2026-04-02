@@ -19,6 +19,9 @@ export function RepoSettingsModal() {
   const [name, setName] = useState(repo?.name ?? "");
   const [icon, setIcon] = useState(repo?.icon ?? "");
   const [setupScript, setSetupScript] = useState(repo?.setup_script ?? "");
+  const [customInstructions, setCustomInstructions] = useState(
+    repo?.custom_instructions ?? ""
+  );
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -36,6 +39,8 @@ export function RepoSettingsModal() {
 
   const repoScriptOverrides =
     repoConfig?.has_config_file && repoConfig.setup_script != null;
+  const repoInstructionsOverrides =
+    repoConfig?.has_config_file && repoConfig.instructions != null;
 
   const handleSave = async () => {
     setLoading(true);
@@ -43,11 +48,19 @@ export function RepoSettingsModal() {
     try {
       const iconValue = icon.trim() || null;
       const scriptValue = setupScript.trim() || null;
-      await updateRepositorySettings(repoId, name.trim(), iconValue, scriptValue);
+      const instructionsValue = customInstructions.trim() || null;
+      await updateRepositorySettings(
+        repoId,
+        name.trim(),
+        iconValue,
+        scriptValue,
+        instructionsValue
+      );
       updateRepo(repoId, {
         name: name.trim(),
         icon: iconValue,
         setup_script: scriptValue,
+        custom_instructions: instructionsValue,
       });
       closeModal();
     } catch (e) {
@@ -136,6 +149,67 @@ export function RepoSettingsModal() {
         />
         <div className={shared.hint}>
           Runs automatically when a new workspace is created.
+        </div>
+      </div>
+
+      <div
+        style={{
+          borderTop: "1px solid var(--divider)",
+          marginTop: 16,
+          paddingTop: 12,
+        }}
+      >
+        <label className={shared.label}>Custom Instructions</label>
+        {repoInstructionsOverrides && (
+          <div className={shared.hint} style={{ marginBottom: 8 }}>
+            This repo includes a <code>.claudette.json</code> that defines
+            custom instructions. Repo-level instructions take precedence over
+            your personal instructions.
+          </div>
+        )}
+        {repoConfig?.has_config_file && repoConfig.instructions && (
+          <div style={{ marginBottom: 8 }}>
+            <div
+              className={shared.label}
+              style={{ fontSize: 11, marginBottom: 2 }}
+            >
+              From .claudette.json (read-only):
+            </div>
+            <pre
+              style={{
+                background: "var(--chat-input-bg)",
+                border: "1px solid var(--divider)",
+                borderRadius: 4,
+                padding: "6px 8px",
+                fontSize: 12,
+                color: "var(--text-dim)",
+                margin: 0,
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+              }}
+            >
+              {repoConfig.instructions}
+            </pre>
+          </div>
+        )}
+        <div className={shared.label} style={{ fontSize: 11, marginBottom: 2 }}>
+          Personal instructions{repoInstructionsOverrides ? " (overridden)" : ""}:
+        </div>
+        <textarea
+          className={shared.input}
+          value={customInstructions}
+          onChange={(e) => setCustomInstructions(e.target.value)}
+          placeholder="e.g. Always use TypeScript. Prefer functional components."
+          rows={4}
+          style={{
+            fontFamily: "monospace",
+            fontSize: 12,
+            resize: "vertical",
+            opacity: repoInstructionsOverrides ? 0.5 : 1,
+          }}
+        />
+        <div className={shared.hint}>
+          Appended to the agent's system prompt at the start of every chat.
         </div>
       </div>
 
