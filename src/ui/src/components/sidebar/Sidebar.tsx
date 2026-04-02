@@ -6,8 +6,24 @@ import {
   generateWorkspaceName,
   createWorkspace,
 } from "../../services/tauri";
-import { Settings, Link, X } from "lucide-react";
+import { Settings, Link, X, icons } from "lucide-react";
 import styles from "./Sidebar.module.css";
+
+function RepoIcon({ icon }: { icon: string }) {
+  const pascalName = icon
+    .trim()
+    .toLowerCase()
+    .split("-")
+    .filter(Boolean)
+    .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
+    .join("");
+  const LucideIcon = icons[pascalName as keyof typeof icons];
+
+  if (LucideIcon) {
+    return <LucideIcon size={14} className={styles.repoIcon} />;
+  }
+  return <span className={styles.repoIcon}>{icon}</span>;
+}
 
 export function Sidebar() {
   const repositories = useAppStore((s) => s.repositories);
@@ -118,9 +134,7 @@ export function Sidebar() {
                   {collapsed ? "›" : "⌄"}
                 </span>
                 <span className={styles.repoName}>
-                  {repo.icon && (
-                    <span className={styles.repoIcon}>{repo.icon} </span>
-                  )}
+                  {repo.icon && <RepoIcon icon={repo.icon} />}
                   {repo.name}
                 </span>
                 {!repo.path_valid && (
