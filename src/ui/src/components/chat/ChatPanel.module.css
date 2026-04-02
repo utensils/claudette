@@ -32,9 +32,14 @@
   border-radius: 4px;
 }
 
-.dashboardBtn:hover {
+.dashboardBtn:hover:not(:disabled) {
   color: var(--text-primary);
   background: var(--hover-bg);
+}
+
+.dashboardBtn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
 }
 
 .headerRight {

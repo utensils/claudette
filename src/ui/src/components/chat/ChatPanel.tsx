@@ -247,9 +247,11 @@ export function ChatPanel() {
         <div className={styles.headerLeft}>
           <button
             className={styles.dashboardBtn}
-            onClick={() => selectWorkspace(null)}
-            title="Back to dashboard"
+            onClick={() => !isRunning && selectWorkspace(null)}
+            title={isRunning ? "Stop the agent before navigating away" : "Back to dashboard"}
+            aria-label="Back to dashboard"
             type="button"
+            disabled={isRunning}
           >
             <LayoutDashboard size={14} />
           </button>
