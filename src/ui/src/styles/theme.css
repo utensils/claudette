@@ -1,48 +1,71 @@
 :root {
+  /* Brand accent — Claudette teal */
+  --accent-primary: #00e5cc;
+  --accent-primary-rgb: 0, 229, 204;
+  --accent-dim: #00b3a0;
+  --accent-bg: rgba(0, 229, 204, 0.08);
+  --accent-bg-strong: rgba(0, 229, 204, 0.15);
+  --accent-glow: 0 0 12px rgba(0, 229, 204, 0.25);
+
   /* Sidebar */
-  --sidebar-bg: rgb(26, 26, 31);
-  --sidebar-border: rgb(46, 46, 56);
+  --sidebar-bg: rgb(22, 22, 28);
+  --sidebar-border: rgb(40, 40, 50);
   --sidebar-width: 260px;
 
   /* Text */
-  --text-primary: rgb(230, 230, 235);
-  --text-muted: rgb(128, 128, 137);
-  --text-dim: rgb(115, 115, 128);
-  --text-faint: rgb(102, 102, 115);
-  --text-separator: rgb(89, 89, 102);
+  --text-primary: rgb(235, 235, 240);
+  --text-muted: rgb(140, 140, 150);
+  --text-dim: rgb(110, 110, 125);
+  --text-faint: rgb(85, 85, 100);
+  --text-separator: rgb(65, 65, 80);
 
   /* Interactive */
-  --hover-bg: rgba(255, 255, 255, 0.05);
+  --hover-bg: rgba(255, 255, 255, 0.06);
   --hover-bg-subtle: rgba(255, 255, 255, 0.04);
-  --selected-bg: rgba(255, 255, 255, 0.08);
-  --divider: rgb(51, 51, 61);
+  --selected-bg: rgba(0, 229, 204, 0.1);
+  --divider: rgb(42, 42, 54);
 
   /* Agent status */
-  --status-running: rgb(51, 204, 77);
-  --status-idle: rgb(128, 128, 128);
-  --status-stopped: rgb(204, 51, 51);
+  --status-running: #00e5cc;
+  --status-idle: rgb(110, 110, 120);
+  --status-stopped: #f04848;
 
   /* Diff */
-  --diff-added-bg: rgba(0, 128, 0, 0.15);
-  --diff-removed-bg: rgba(128, 0, 0, 0.15);
-  --diff-added-text: rgb(102, 230, 102);
-  --diff-removed-text: rgb(230, 102, 102);
-  --diff-hunk-header: rgb(102, 153, 230);
-  --diff-line-number: rgb(102, 102, 115);
+  --diff-added-bg: rgba(0, 180, 80, 0.12);
+  --diff-removed-bg: rgba(220, 40, 40, 0.12);
+  --diff-added-text: rgb(80, 220, 120);
+  --diff-removed-text: rgb(240, 100, 100);
+  --diff-hunk-header: rgb(100, 160, 240);
+  --diff-line-number: rgb(85, 85, 100);
 
   /* Chat */
-  --chat-user-bg: rgba(255, 255, 255, 0.06);
+  --chat-user-bg: rgba(255, 255, 255, 0.05);
   --chat-system-bg: rgba(230, 179, 51, 0.08);
-  --chat-input-bg: rgb(31, 31, 36);
-  --chat-header-bg: rgb(26, 26, 31);
+  --chat-input-bg: rgb(26, 26, 33);
+  --chat-header-bg: rgb(22, 22, 28);
 
   /* Terminal */
-  --terminal-tab-bg: rgb(31, 31, 36);
-  --terminal-tab-active-bg: rgb(46, 46, 56);
+  --terminal-tab-bg: rgb(26, 26, 33);
+  --terminal-tab-active-bg: rgb(38, 38, 48);
 
   /* General */
-  --app-bg: rgb(18, 18, 22);
+  --app-bg: rgb(14, 14, 18);
   --border-radius: 8px;
+
+  /* Elevation / shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-card-hover: 0 8px 24px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(0, 229, 204, 0.15);
+
+  /* Typography */
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code", monospace;
+
+  /* Transitions */
+  --transition-fast: 0.12s ease;
+  --transition-normal: 0.2s ease;
+  --transition-slow: 0.3s ease;
 }
 
 * {
@@ -59,11 +82,25 @@ body,
   overflow: hidden;
   background: var(--app-bg);
   color: var(--text-primary);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--font-sans);
   font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
+/* Selection */
+::selection {
+  background: rgba(0, 229, 204, 0.3);
+  color: var(--text-primary);
+}
+
+/* Focus ring */
+:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(0, 229, 204, 0.5);
+}
+
+/* Scrollbars */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -74,10 +111,80 @@ body,
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.08);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(0, 229, 204, 0.25);
+}
+
+/* Global keyframes */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 4px rgba(0, 229, 204, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 10px rgba(0, 229, 204, 0.7);
+  }
+}
+
+@keyframes pulse-dot {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.6;
+    transform: scale(1.3);
+  }
+}
+
+@keyframes slideInLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }

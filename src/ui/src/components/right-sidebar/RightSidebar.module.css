@@ -58,7 +58,7 @@
   border-radius: 4px;
   cursor: pointer;
   font-size: 12px;
-  font-family: monospace;
+  font-family: var(--font-mono);
 }
 
 .file:hover {

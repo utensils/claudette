@@ -71,7 +71,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  font-family: monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-muted);
 }

@@ -68,7 +68,7 @@
   font-size: 10px;
   color: var(--text-dim);
   width: 12px;
-  font-family: monospace;
+  font-family: var(--font-mono);
 }
 
 .repoName {

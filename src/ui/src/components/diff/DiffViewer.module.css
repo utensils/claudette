@@ -26,7 +26,7 @@
 }
 
 .fileName {
-  font-family: monospace;
+  font-family: var(--font-mono);
   font-size: 13px;
 }
 
@@ -45,7 +45,7 @@
 }
 
 .diffTable {
-  font-family: monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
 }
