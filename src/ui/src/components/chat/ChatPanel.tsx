@@ -439,7 +439,7 @@ export function ChatPanel() {
                 <div className={styles.roleLabel}>Claude</div>
                 <div className={styles.content}>
                   <Markdown remarkPlugins={[remarkGfm]}>{streaming}</Markdown>
-                  <span className={styles.cursor}>|</span>
+                  <span className={styles.cursor} />
                 </div>
               </div>
             )}
