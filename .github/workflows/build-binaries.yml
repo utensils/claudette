@@ -1,8 +1,6 @@
 name: Build & Publish Binaries
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       tag:
@@ -42,7 +40,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          ref: ${{ inputs.tag }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -86,7 +84,7 @@ jobs:
           # APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
-          tagName: ${{ github.event.release.tag_name || inputs.tag }}
-          releaseName: ${{ github.event.release.name || '' }}
-          releaseId: ${{ github.event.release.id || '' }}
+          tagName: ${{ inputs.tag }}
+          releaseName: ""
+          releaseId: ""
           args: --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundles }}

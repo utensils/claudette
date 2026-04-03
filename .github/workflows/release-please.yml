@@ -8,9 +8,92 @@ permissions:
   contents: write
   pull-requests: write
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   release-please:
     name: Release
     runs-on: ubuntu-latest
+    outputs:
+      releases_created: ${{ steps.release.outputs.releases_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
-      - uses: googleapis/release-please-action@v4
+      - id: release
+        uses: googleapis/release-please-action@v4
+
+  build:
+    needs: release-please
+    if: needs.release-please.outputs.releases_created == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            rust-target: aarch64-apple-darwin
+            bundles: dmg
+            label: macos-aarch64
+          - platform: macos-13
+            rust-target: x86_64-apple-darwin
+            bundles: dmg
+            label: macos-x86_64
+          - platform: ubuntu-22.04
+            rust-target: x86_64-unknown-linux-gnu
+            bundles: appimage,deb
+            label: linux-x86_64
+
+    name: Build (${{ matrix.label }})
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94"
+          targets: ${{ matrix.rust-target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.label }}
+
+      - name: Install Linux system dependencies
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install frontend dependencies
+        run: cd src/ui && bun install --frozen-lockfile
+
+      - name: Build and upload binaries
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS code signing — uncomment and populate secrets when ready:
+          # APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          # APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # APPLE_ID: ${{ secrets.APPLE_ID }}
+          # APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          tagName: ${{ needs.release-please.outputs.tag_name }}
+          releaseName: ${{ needs.release-please.outputs.tag_name }}
+          releaseId: ""
+          args: --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundles }}
