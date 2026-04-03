@@ -20,10 +20,17 @@ pub async fn create_terminal_tab(
         .map_err(|e| e.to_string())?;
     let sort_order = existing.len() as i32;
 
+    // Find the lowest unused terminal number to avoid title collisions.
+    let mut n = 1;
+    let used_titles: Vec<_> = existing.iter().map(|t| t.title.as_str()).collect();
+    while used_titles.contains(&format!("Terminal {n}").as_str()) {
+        n += 1;
+    }
+
     let tab = TerminalTab {
         id: new_id,
         workspace_id,
-        title: format!("Terminal {}", existing.len() + 1),
+        title: format!("Terminal {n}"),
         is_script_output: false,
         sort_order,
         created_at: now_iso(),

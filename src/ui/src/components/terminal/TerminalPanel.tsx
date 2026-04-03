@@ -126,35 +126,55 @@ export function TerminalPanel() {
     const worktreePath = ws.worktree_path!;
 
     (async () => {
-      const ptyId = await spawnPty(worktreePath);
-      const inst = instancesRef.current.get(currentTabId);
-      if (!inst) {
-        closePty(ptyId);
-        return;
-      }
-      inst.ptyId = ptyId;
-
-      const unlistenFn = await listen<PtyOutputPayload>(
-        "pty-output",
-        (event) => {
-          if (event.payload.pty_id === ptyId) {
-            term.write(new Uint8Array(event.payload.data));
-          }
+      try {
+        const ptyId = await spawnPty(worktreePath);
+        // Re-check: instance may have been removed during await.
+        const inst = instancesRef.current.get(currentTabId);
+        if (!inst) {
+          closePty(ptyId);
+          return;
         }
-      );
-      inst.unlisten = unlistenFn;
+        inst.ptyId = ptyId;
 
-      term.onData((data) => {
-        const bytes = Array.from(new TextEncoder().encode(data));
-        writePty(ptyId, bytes);
-      });
+        const unlistenFn = await listen<PtyOutputPayload>(
+          "pty-output",
+          (event) => {
+            if (event.payload.pty_id === ptyId) {
+              term.write(new Uint8Array(event.payload.data));
+            }
+          }
+        );
+        // Re-check again: instance may have been removed during listen await.
+        const stillExists = instancesRef.current.get(currentTabId);
+        if (!stillExists || stillExists !== inst) {
+          unlistenFn();
+          closePty(ptyId);
+          return;
+        }
+        inst.unlisten = unlistenFn;
 
-      term.onResize(({ cols, rows }) => {
-        resizePty(ptyId, cols, rows);
-      });
+        term.onData((data) => {
+          const bytes = Array.from(new TextEncoder().encode(data));
+          writePty(ptyId, bytes);
+        });
 
-      fit.fit();
-      resizePty(ptyId, term.cols, term.rows);
+        term.onResize(({ cols, rows }) => {
+          resizePty(ptyId, cols, rows);
+        });
+
+        fit.fit();
+        resizePty(ptyId, term.cols, term.rows);
+      } catch (e) {
+        // Setup failed — clean up the orphaned instance.
+        console.error("Failed to initialize terminal:", e);
+        const inst = instancesRef.current.get(currentTabId);
+        if (inst) {
+          inst.resizeObserver.disconnect();
+          inst.term.dispose();
+          inst.container.remove();
+          instancesRef.current.delete(currentTabId);
+        }
+      }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTerminalTabId, ws?.worktree_path]);
@@ -187,6 +207,7 @@ export function TerminalPanel() {
         inst.term.dispose();
         if (inst.unlisten) inst.unlisten();
         if (inst.ptyId >= 0) closePty(inst.ptyId);
+        inst.container.remove();
       }
       instancesRef.current.clear();
     };
