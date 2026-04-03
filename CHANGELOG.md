@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.0](https://github.com/utensils/Claudette/compare/v0.3.0...v0.4.0) (2026-04-03)
+
+
+### Features
+
+* **ui:** comprehensive UI/UX overhaul with brand identity and polish ([#75](https://github.com/utensils/Claudette/issues/75)) ([dc35183](https://github.com/utensils/Claudette/commit/dc35183d759ee60f13b5c1cf2de5080e99c7daef))
+
+
+### Bug Fixes
+
+* **ci:** chain build jobs into release-please workflow ([#74](https://github.com/utensils/Claudette/issues/74)) ([d90b09d](https://github.com/utensils/Claudette/commit/d90b09d698e269cc4a363595ef013cbb9c0e11a0))
+* terminal tabs persist across tab switches ([#71](https://github.com/utensils/Claudette/issues/71)) ([#72](https://github.com/utensils/Claudette/issues/72)) ([8239e4e](https://github.com/utensils/Claudette/commit/8239e4e08397df38c1b34b547ee4237fdd47b4e8))
+
 ## [0.3.0](https://github.com/utensils/Claudette/compare/v0.2.0...v0.3.0) (2026-04-02)
 
 

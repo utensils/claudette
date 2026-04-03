@@ -341,7 +341,7 @@ dependencies = [
 
 [[package]]
 name = "claudette"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "dirs",
  "futures",
@@ -357,7 +357,7 @@ dependencies = [
 
 [[package]]
 name = "claudette-tauri"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "claudette",
  "dirs",
