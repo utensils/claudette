@@ -1,16 +1,24 @@
 .dashboard {
   height: 100%;
   overflow-y: auto;
-  padding: 24px;
+  padding: 28px 32px;
 }
 
 .header {
-  font-size: 14px;
+  font-size: 11px;
   font-weight: 600;
-  color: var(--text-muted);
+  color: var(--text-dim);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 16px;
+  letter-spacing: 0.08em;
+  margin-bottom: 20px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.headerCount {
+  color: var(--accent-primary);
+  font-variant-numeric: tabular-nums;
 }
 
 .grid {
@@ -19,9 +27,11 @@
   gap: 12px;
 }
 
+/* Workspace card */
 .card {
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(255, 255, 255, 0.02);
   border: 1px solid var(--divider);
+  border-left: 3px solid var(--status-idle);
   border-radius: 8px;
   padding: 14px 16px;
   cursor: pointer;
@@ -29,16 +39,35 @@
   color: var(--text-primary);
   font-family: inherit;
   font-size: 13px;
-  transition: border-color 0.15s, background 0.15s;
+  transition:
+    transform var(--transition-normal),
+    box-shadow var(--transition-normal),
+    border-color var(--transition-normal),
+    background var(--transition-normal);
   display: flex;
   flex-direction: column;
   gap: 8px;
   width: 100%;
+  position: relative;
 }
 
 .card:hover {
-  background: var(--hover-bg);
-  border-color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.04);
+  border-color: var(--text-faint);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card-hover);
+}
+
+.cardRunning {
+  border-left-color: var(--status-running);
+}
+
+.cardStopped {
+  border-left-color: var(--status-stopped);
+}
+
+.cardIdle {
+  border-left-color: var(--status-idle);
 }
 
 .cardHeader {
@@ -60,11 +89,28 @@
   color: var(--text-muted);
 }
 
+.statusIndicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .statusDot {
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
+}
+
+.statusDotRunning {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+.statusLabel {
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
 }
 
 .branchLine {
@@ -117,6 +163,7 @@
   font-style: italic;
 }
 
+/* Empty state */
 .empty {
   height: 100%;
   display: flex;
@@ -124,11 +171,37 @@
   align-items: center;
   justify-content: center;
   color: var(--text-muted);
-  font-size: 14px;
-  gap: 4px;
+  gap: 12px;
+  animation: fadeIn 0.4s ease;
+}
+
+.emptyIcon {
+  color: var(--accent-primary);
+  opacity: 0.4;
+  margin-bottom: 4px;
+}
+
+.emptyTitle {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
 .hint {
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: 13px;
+  max-width: 320px;
+  text-align: center;
+  line-height: 1.5;
+}
+
+.hintKey {
+  display: inline-block;
+  background: var(--hover-bg);
+  border: 1px solid var(--divider);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
 }

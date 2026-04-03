@@ -1,5 +1,5 @@
-import { useMemo } from "react";
-import { GitBranch } from "lucide-react";
+import { useMemo, useEffect, useState, useCallback } from "react";
+import { GitBranch, Layers } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import { RepoIcon } from "../shared/RepoIcon";
 import styles from "./Dashboard.module.css";
@@ -21,6 +21,127 @@ function stripMarkdown(s: string): string {
     .trim();
 }
 
+function formatElapsed(secs: number): string {
+  if (secs < 60) return `${secs}s`;
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return `${m}m ${s}s`;
+}
+
+function useElapsed(isRunning: boolean): number {
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    if (!isRunning) {
+      setElapsed(0);
+      return;
+    }
+    const start = Date.now();
+    const interval = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - start) / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [isRunning]);
+
+  return elapsed;
+}
+
+function WorkspaceCard({
+  ws,
+  repo,
+  baseBranch,
+  lastMsg,
+  onClick,
+  index,
+}: {
+  ws: { id: string; branch_name: string; agent_status: string | { Error: string } };
+  repo: { name: string; icon: string | null } | undefined;
+  baseBranch: string | undefined;
+  lastMsg: { role: string; content: string } | undefined;
+  onClick: () => void;
+  index: number;
+}) {
+  const isRunning = ws.agent_status === "Running";
+  const elapsed = useElapsed(isRunning);
+
+  const statusColor =
+    isRunning
+      ? "var(--status-running)"
+      : ws.agent_status === "Stopped" || typeof ws.agent_status !== "string"
+        ? "var(--status-stopped)"
+        : "var(--status-idle)";
+
+  const cardClass = [
+    styles.card,
+    isRunning
+      ? styles.cardRunning
+      : ws.agent_status === "Stopped" || typeof ws.agent_status !== "string"
+        ? styles.cardStopped
+        : styles.cardIdle,
+  ].join(" ");
+
+  const statusText = isRunning
+    ? formatElapsed(elapsed)
+    : typeof ws.agent_status === "string"
+      ? ws.agent_status
+      : "Error";
+
+  return (
+    <button
+      type="button"
+      className={cardClass}
+      onClick={onClick}
+      style={{ animationDelay: `${index * 0.04}s` }}
+    >
+      <div className={styles.cardHeader}>
+        <span className={styles.repoName}>
+          {repo?.icon && (
+            <RepoIcon icon={repo.icon} size={14} className={styles.repoIcon} />
+          )}
+          {repo?.name ?? "Unknown"}
+        </span>
+        <span className={styles.statusIndicator}>
+          <span className={styles.statusLabel} style={{ color: statusColor }}>
+            {statusText}
+          </span>
+          <span
+            className={`${styles.statusDot} ${isRunning ? styles.statusDotRunning : ""}`}
+            style={{ background: statusColor }}
+          />
+        </span>
+      </div>
+      <div className={styles.branchLine}>
+        <GitBranch size={11} />
+        <span className={styles.branch}>{ws.branch_name}</span>
+        {baseBranch && (
+          <>
+            <span className={styles.arrow}>{">"}</span>
+            <span className={styles.baseBranch}>{baseBranch}</span>
+          </>
+        )}
+      </div>
+      {lastMsg ? (
+        <div className={styles.lastMessage}>
+          <span className={styles.msgRole}>
+            {lastMsg.role === "User"
+              ? "You"
+              : lastMsg.role === "Assistant"
+                ? "Claude"
+                : "System"}
+            :
+          </span>{" "}
+          <span className={styles.msgContent}>
+            {stripMarkdown(lastMsg.content).slice(0, 120)}
+            {lastMsg.content.length > 120 ? "..." : ""}
+          </span>
+        </div>
+      ) : (
+        <div className={styles.noMessages}>No messages yet</div>
+      )}
+    </button>
+  );
+}
+
 export function Dashboard() {
   const repositories = useAppStore((s) => s.repositories);
   const workspaces = useAppStore((s) => s.workspaces);
@@ -38,83 +159,43 @@ export function Dashboard() {
   if (activeWorkspaces.length === 0) {
     return (
       <div className={styles.empty}>
-        <p>No active workspaces</p>
+        <Layers size={40} className={styles.emptyIcon} />
+        <span className={styles.emptyTitle}>No active workspaces</span>
         <p className={styles.hint}>
-          Create a workspace from a repository in the sidebar
+          Create a workspace from a repository in the sidebar, or press{" "}
+          <kbd className={styles.hintKey}>+</kbd> next to a repo name.
         </p>
       </div>
     );
   }
 
+  const runningCount = activeWorkspaces.filter(
+    (ws) => ws.agent_status === "Running"
+  ).length;
+
   return (
     <div className={styles.dashboard}>
-      <div className={styles.header}>Active Workspaces</div>
+      <div className={styles.header}>
+        Active Workspaces
+        {runningCount > 0 && (
+          <span className={styles.headerCount}>
+            {runningCount} running
+          </span>
+        )}
+      </div>
       <div className={styles.grid}>
-        {activeWorkspaces.map((ws) => {
+        {activeWorkspaces.map((ws, i) => {
           const repo = repoMap.get(ws.repository_id);
-          const lastMsg = lastMessages[ws.id];
-          const baseBranch = repo ? defaultBranches[repo.id] : undefined;
-
-          const statusColor =
-            ws.agent_status === "Running"
-              ? "var(--status-running)"
-              : ws.agent_status === "Stopped" ||
-                  typeof ws.agent_status !== "string"
-                ? "var(--status-stopped)"
-                : "var(--status-idle)";
-
           return (
-            <button
+            <WorkspaceCard
               key={ws.id}
-              type="button"
-              className={styles.card}
+              ws={ws}
+              repo={repo}
+              baseBranch={repo ? defaultBranches[repo.id] : undefined}
+              lastMsg={lastMessages[ws.id]}
               onClick={() => selectWorkspace(ws.id)}
-            >
-              <div className={styles.cardHeader}>
-                <span className={styles.repoName}>
-                  {repo?.icon && (
-                    <RepoIcon
-                      icon={repo.icon}
-                      size={14}
-                      className={styles.repoIcon}
-                    />
-                  )}
-                  {repo?.name ?? "Unknown"}
-                </span>
-                <span
-                  className={styles.statusDot}
-                  style={{ background: statusColor }}
-                />
-              </div>
-              <div className={styles.branchLine}>
-                <GitBranch size={11} />
-                <span className={styles.branch}>{ws.branch_name}</span>
-                {baseBranch && (
-                  <>
-                    <span className={styles.arrow}>{">"}</span>
-                    <span className={styles.baseBranch}>{baseBranch}</span>
-                  </>
-                )}
-              </div>
-              {lastMsg ? (
-                <div className={styles.lastMessage}>
-                  <span className={styles.msgRole}>
-                    {lastMsg.role === "User"
-                      ? "You"
-                      : lastMsg.role === "Assistant"
-                        ? "Claude"
-                        : "System"}
-                    :
-                  </span>{" "}
-                  <span className={styles.msgContent}>
-                    {stripMarkdown(lastMsg.content).slice(0, 120)}
-                    {lastMsg.content.length > 120 ? "..." : ""}
-                  </span>
-                </div>
-              ) : (
-                <div className={styles.noMessages}>No messages yet</div>
-              )}
-            </button>
+              index={i}
+            />
           );
         })}
       </div>
