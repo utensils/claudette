@@ -49,8 +49,8 @@
   --terminal-tab-active-bg: rgb(38, 38, 48);
 
   /* Toolbar */
-  --toolbar-active: rgba(180, 130, 50, 0.25);
-  --toolbar-active-text: rgb(196, 160, 80);
+  --toolbar-active: rgba(0, 229, 204, 0.12);
+  --toolbar-active-text: var(--accent-primary);
 
   /* General */
   --app-bg: rgb(14, 14, 18);

@@ -9,21 +9,23 @@
   bottom: 100%;
   left: 0;
   margin-bottom: 4px;
-  min-width: 200px;
+  min-width: 210px;
   background: var(--sidebar-bg);
-  border: 1px solid var(--divider);
+  border: 1px solid var(--sidebar-border);
   border-radius: 8px;
   padding: 4px;
   z-index: 100;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-lg);
+  animation: scaleIn 0.12s ease;
 }
 
 .groupLabel {
   padding: 6px 8px 2px;
-  font-size: 11px;
+  font-size: 10px;
+  font-weight: 600;
   color: var(--text-dim);
   text-transform: uppercase;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.06em;
 }
 
 .item {
@@ -39,6 +41,7 @@
   font-size: 13px;
   cursor: pointer;
   text-align: left;
+  transition: background var(--transition-fast);
 }
 
 .item:hover {
@@ -46,20 +49,20 @@
 }
 
 .itemSelected {
-  color: var(--toolbar-active-text);
+  color: var(--accent-primary);
 }
 
 .dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--status-running);
+  background: var(--accent-primary);
   flex-shrink: 0;
 }
 
 .check {
   margin-left: auto;
-  color: var(--toolbar-active-text);
+  color: var(--accent-primary);
   font-size: 14px;
 }
 
@@ -67,4 +70,5 @@
   margin-left: auto;
   color: var(--text-dim);
   font-size: 11px;
+  font-family: var(--font-mono);
 }
