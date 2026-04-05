@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import {
   archiveWorkspace,
@@ -8,8 +8,9 @@ import {
   connectRemote,
   disconnectRemote,
   pairWithServer,
+  startLocalServer,
 } from "../../services/tauri";
-import { Settings, Link, X } from "lucide-react";
+import { Settings, Link, X, Share2 } from "lucide-react";
 import { RepoIcon } from "../shared/RepoIcon";
 import styles from "./Sidebar.module.css";
 
@@ -275,6 +276,7 @@ export function Sidebar() {
         >
           + Add remote
         </button>
+        <ShareButton openModal={openModal} />
         <button
           className={styles.settingsBtn}
           onClick={() => openModal("appSettings")}
@@ -390,5 +392,44 @@ function RemoteSections() {
         </div>
       )}
     </>
+  );
+}
+
+function ShareButton({ openModal }: { openModal: (name: string) => void }) {
+  const running = useAppStore((s) => s.localServerRunning);
+  const setRunning = useAppStore((s) => s.setLocalServerRunning);
+  const setConnectionString = useAppStore((s) => s.setLocalServerConnectionString);
+  const [loading, setLoading] = useState(false);
+
+  const handleClick = async () => {
+    if (running) {
+      openModal("share");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const info = await startLocalServer();
+      setRunning(true);
+      setConnectionString(info.connection_string);
+      openModal("share");
+    } catch (e) {
+      console.error("Failed to start server:", e);
+      alert(`Failed to start server: ${e}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <button
+      className={styles.settingsBtn}
+      onClick={handleClick}
+      title={running ? "Sharing — click to view connection string" : "Share this machine"}
+      disabled={loading}
+      style={running ? { color: "var(--status-running)" } : undefined}
+    >
+      <Share2 size={14} />
+    </button>
   );
 }

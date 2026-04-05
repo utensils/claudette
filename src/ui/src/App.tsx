@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useAppStore } from "./stores/useAppStore";
-import { loadInitialData, getAppSetting, listRemoteConnections, listDiscoveredServers } from "./services/tauri";
+import { loadInitialData, getAppSetting, listRemoteConnections, listDiscoveredServers, getLocalServerStatus } from "./services/tauri";
 import { AppLayout } from "./components/layout/AppLayout";
 import "./styles/theme.css";
 
@@ -13,6 +13,8 @@ function App() {
   const setLastMessages = useAppStore((s) => s.setLastMessages);
   const setRemoteConnections = useAppStore((s) => s.setRemoteConnections);
   const setDiscoveredServers = useAppStore((s) => s.setDiscoveredServers);
+  const setLocalServerRunning = useAppStore((s) => s.setLocalServerRunning);
+  const setLocalServerConnectionString = useAppStore((s) => s.setLocalServerConnectionString);
 
   useEffect(() => {
     loadInitialData().then((data) => {
@@ -41,7 +43,13 @@ function App() {
     listDiscoveredServers()
       .then(setDiscoveredServers)
       .catch((err) => console.error("Failed to load discovered servers:", err));
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers]);
+    getLocalServerStatus()
+      .then((info) => {
+        setLocalServerRunning(info.running);
+        setLocalServerConnectionString(info.connection_string);
+      })
+      .catch((err) => console.error("Failed to load local server status:", err));
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString]);
 
   return <AppLayout />;
 }

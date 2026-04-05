@@ -1,10 +1,11 @@
 use serde::Serialize;
 use tauri::{AppHandle, State};
+use tokio::io::{AsyncBufReadExt, BufReader};
 
 use claudette::db::Database;
 
 use crate::remote::{DiscoveredServer, RemoteConnectionInfo, RemoteConnectionManager};
-use crate::state::AppState;
+use crate::state::{AppState, LocalServerState};
 use crate::transport::ws::WebSocketTransport;
 
 #[derive(Serialize)]
@@ -203,4 +204,135 @@ pub async fn add_remote_connection(
     };
 
     pair_with_server(host, port, token.to_string(), app, state, manager).await
+}
+
+// -- Local server (Share this machine) --
+
+#[derive(Serialize)]
+pub struct LocalServerInfo {
+    pub running: bool,
+    pub connection_string: Option<String>,
+}
+
+#[tauri::command]
+pub async fn start_local_server(state: State<'_, AppState>) -> Result<LocalServerInfo, String> {
+    {
+        let server = state.local_server.read().await;
+        if server.is_some() {
+            let conn_str = server.as_ref().unwrap().connection_string.clone();
+            return Ok(LocalServerInfo {
+                running: true,
+                connection_string: Some(conn_str),
+            });
+        }
+    }
+
+    // Find the claudette-server binary. Try:
+    // 1. Next to the current executable
+    // 2. In PATH
+    let server_bin = find_server_binary()?;
+
+    let mut child = tokio::process::Command::new(&server_bin)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to start claudette-server: {e}"))?;
+
+    // Read stdout lines until we find the connection string.
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or("Failed to capture server stdout")?;
+    let mut reader = BufReader::new(stdout).lines();
+
+    let mut connection_string = String::new();
+    let timeout = tokio::time::Duration::from_secs(10);
+    let deadline = tokio::time::Instant::now() + timeout;
+
+    while tokio::time::Instant::now() < deadline {
+        let line = tokio::time::timeout_at(deadline, reader.next_line())
+            .await
+            .map_err(|_| "Timed out waiting for server to start")?
+            .map_err(|e| format!("Error reading server output: {e}"))?;
+
+        if let Some(line) = line {
+            let trimmed = line.trim();
+            if trimmed.starts_with("claudette://") {
+                connection_string = trimmed.to_string();
+                break;
+            }
+        } else {
+            return Err("Server process exited before printing connection string".to_string());
+        }
+    }
+
+    if connection_string.is_empty() {
+        let _ = child.kill().await;
+        return Err("Server started but did not print a connection string".to_string());
+    }
+
+    let info = LocalServerInfo {
+        running: true,
+        connection_string: Some(connection_string.clone()),
+    };
+
+    let mut server = state.local_server.write().await;
+    *server = Some(LocalServerState {
+        child,
+        connection_string,
+    });
+
+    Ok(info)
+}
+
+#[tauri::command]
+pub async fn stop_local_server(state: State<'_, AppState>) -> Result<(), String> {
+    let mut server = state.local_server.write().await;
+    if let Some(mut srv) = server.take() {
+        let _ = srv.child.kill().await;
+        let _ = srv.child.wait().await;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_local_server_status(
+    state: State<'_, AppState>,
+) -> Result<LocalServerInfo, String> {
+    let server = state.local_server.read().await;
+    match server.as_ref() {
+        Some(srv) => Ok(LocalServerInfo {
+            running: true,
+            connection_string: Some(srv.connection_string.clone()),
+        }),
+        None => Ok(LocalServerInfo {
+            running: false,
+            connection_string: None,
+        }),
+    }
+}
+
+fn find_server_binary() -> Result<String, String> {
+    // 1. Next to the current executable.
+    if let Ok(exe) = std::env::current_exe() {
+        let dir = exe.parent().unwrap_or(std::path::Path::new("."));
+        let candidate = dir.join("claudette-server");
+        if candidate.exists() {
+            return Ok(candidate.to_string_lossy().to_string());
+        }
+    }
+
+    // 2. In PATH.
+    if let Ok(output) = std::process::Command::new("which")
+        .arg("claudette-server")
+        .output()
+        && output.status.success()
+    {
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !path.is_empty() {
+            return Ok(path);
+        }
+    }
+
+    Err("claudette-server not found. Install it with: cargo install --path src-server".to_string())
 }

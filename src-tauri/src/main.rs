@@ -111,6 +111,10 @@ fn main() {
             commands::remote::remove_remote_connection,
             commands::remote::list_discovered_servers,
             commands::remote::add_remote_connection,
+            // Local server
+            commands::remote::start_local_server,
+            commands::remote::stop_local_server,
+            commands::remote::get_local_server_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Claudette");

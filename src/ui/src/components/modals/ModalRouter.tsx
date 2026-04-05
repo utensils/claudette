@@ -6,6 +6,7 @@ import { RemoveRepoModal } from "./RemoveRepoModal";
 import { RepoSettingsModal } from "./RepoSettingsModal";
 import { RelinkRepoModal } from "./RelinkRepoModal";
 import { AppSettingsModal } from "./AppSettingsModal";
+import { ShareModal } from "./ShareModal";
 
 export function ModalRouter() {
   const activeModal = useAppStore((s) => s.activeModal);
@@ -25,6 +26,8 @@ export function ModalRouter() {
       return <RelinkRepoModal />;
     case "appSettings":
       return <AppSettingsModal />;
+    case "share":
+      return <ShareModal />;
     default:
       return null;
   }

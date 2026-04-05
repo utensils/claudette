@@ -177,6 +177,12 @@ interface AppState {
   setActiveRemoteIds: (ids: string[]) => void;
   addActiveRemoteId: (id: string) => void;
   removeActiveRemoteId: (id: string) => void;
+
+  // -- Local Server --
+  localServerRunning: boolean;
+  localServerConnectionString: string | null;
+  setLocalServerRunning: (running: boolean) => void;
+  setLocalServerConnectionString: (cs: string | null) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -476,4 +482,11 @@ export const useAppStore = create<AppState>((set) => ({
     set((s) => ({
       activeRemoteIds: s.activeRemoteIds.filter((rid) => rid !== id),
     })),
+
+  // -- Local Server --
+  localServerRunning: false,
+  localServerConnectionString: null,
+  setLocalServerRunning: (running) => set({ localServerRunning: running }),
+  setLocalServerConnectionString: (cs) =>
+    set({ localServerConnectionString: cs }),
 }));

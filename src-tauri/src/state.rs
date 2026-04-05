@@ -28,6 +28,14 @@ pub struct PtyHandle {
     pub child: Mutex<Box<dyn portable_pty::Child + Send>>,
 }
 
+/// State of the embedded claudette-server subprocess.
+pub struct LocalServerState {
+    /// Handle to the running server process.
+    pub child: tokio::process::Child,
+    /// The connection string printed by the server on startup.
+    pub connection_string: String,
+}
+
 /// Application-wide managed state, shared across all Tauri commands.
 pub struct AppState {
     pub db_path: PathBuf,
@@ -40,6 +48,8 @@ pub struct AppState {
     pub next_pty_id: AtomicU64,
     /// mDNS-discovered servers on the local network.
     pub discovered_servers: RwLock<Vec<DiscoveredServer>>,
+    /// Embedded local claudette-server process (when "Share this machine" is active).
+    pub local_server: RwLock<Option<LocalServerState>>,
 }
 
 impl AppState {
@@ -51,6 +61,7 @@ impl AppState {
             ptys: RwLock::new(HashMap::new()),
             next_pty_id: AtomicU64::new(1),
             discovered_servers: RwLock::new(Vec::new()),
+            local_server: RwLock::new(None),
         }
     }
 
