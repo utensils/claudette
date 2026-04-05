@@ -2,8 +2,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod commands;
+mod mdns;
 mod pty;
+mod remote;
 mod state;
+mod transport;
 
 use std::path::PathBuf;
 
@@ -36,13 +39,31 @@ fn main() {
         }
     };
 
+    // Load saved certificate fingerprints for mDNS pairing detection.
+    let saved_fingerprints: Vec<String> = Database::open(&db_path)
+        .ok()
+        .and_then(|db| db.list_remote_connections().ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|c| c.cert_fingerprint)
+        .collect();
+
     let app_state = state::AppState::new(db_path, worktree_base_dir);
+    let remote_manager = remote::RemoteConnectionManager::new();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(app_state)
+        .manage(remote_manager)
+        .setup(move |app| {
+            // Start mDNS browser to discover nearby claudette-server instances.
+            if let Err(e) = mdns::start_mdns_browser(app.handle(), saved_fingerprints) {
+                eprintln!("[mdns] Failed to start browser: {e}");
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             // Data
             commands::data::load_initial_data,
@@ -82,6 +103,14 @@ fn main() {
             // Settings
             commands::settings::get_app_setting,
             commands::settings::set_app_setting,
+            // Remote
+            commands::remote::list_remote_connections,
+            commands::remote::pair_with_server,
+            commands::remote::connect_remote,
+            commands::remote::disconnect_remote,
+            commands::remote::remove_remote_connection,
+            commands::remote::list_discovered_servers,
+            commands::remote::add_remote_connection,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Claudette");

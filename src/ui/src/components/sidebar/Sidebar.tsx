@@ -5,6 +5,9 @@ import {
   restoreWorkspace,
   generateWorkspaceName,
   createWorkspace,
+  connectRemote,
+  disconnectRemote,
+  pairWithServer,
 } from "../../services/tauri";
 import { Settings, Link, X } from "lucide-react";
 import { RepoIcon } from "../shared/RepoIcon";
@@ -256,12 +259,21 @@ export function Sidebar() {
         })}
       </div>
 
+      <RemoteSections />
+
       <div className={styles.footer}>
         <button
           className={styles.addRepoBtn}
           onClick={() => openModal("addRepo")}
         >
           + Add repository
+        </button>
+        <button
+          className={styles.addRepoBtn}
+          onClick={() => openModal("addRemote")}
+          style={{ marginLeft: 4 }}
+        >
+          + Add remote
         </button>
         <button
           className={styles.settingsBtn}
@@ -272,5 +284,111 @@ export function Sidebar() {
         </button>
       </div>
     </div>
+  );
+}
+
+function RemoteSections() {
+  const discoveredServers = useAppStore((s) => s.discoveredServers);
+  const remoteConnections = useAppStore((s) => s.remoteConnections);
+  const activeRemoteIds = useAppStore((s) => s.activeRemoteIds);
+  const addRemote = useAppStore((s) => s.addRemoteConnection);
+  const addActiveId = useAppStore((s) => s.addActiveRemoteId);
+  const removeActiveId = useAppStore((s) => s.removeActiveRemoteId);
+  const unpaired = discoveredServers.filter((s) => !s.is_paired);
+
+  const handleConnect = async (id: string) => {
+    try {
+      await connectRemote(id);
+      addActiveId(id);
+    } catch (e) {
+      console.error("Failed to connect:", e);
+    }
+  };
+
+  const handleDisconnect = async (id: string) => {
+    try {
+      await disconnectRemote(id);
+      removeActiveId(id);
+    } catch (e) {
+      console.error("Failed to disconnect:", e);
+    }
+  };
+
+  const handlePair = async (host: string, port: number) => {
+    const token = prompt("Enter pairing token:");
+    if (!token) return;
+    try {
+      const result = await pairWithServer(host, port, token);
+      addRemote(result.connection);
+      addActiveId(result.connection.id);
+    } catch (e) {
+      console.error("Failed to pair:", e);
+    }
+  };
+
+  if (unpaired.length === 0 && remoteConnections.length === 0) return null;
+
+  return (
+    <>
+      {unpaired.length > 0 && (
+        <div className={styles.list} style={{ borderTop: "1px solid var(--border-subtle)" }}>
+          <div className={styles.repoHeader} style={{ opacity: 0.7, cursor: "default" }}>
+            <span className={styles.repoName} style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.5px" }}>
+              Nearby
+            </span>
+          </div>
+          {unpaired.map((server) => (
+            <div key={`${server.host}:${server.port}`} className={styles.wsItem}>
+              <span className={styles.statusDot} style={{ background: "var(--status-idle)" }} />
+              <div className={styles.wsInfo}>
+                <span className={styles.wsName}>{server.name || server.host}</span>
+                <span className={styles.wsBranch}>{server.host}</span>
+              </div>
+              <button
+                className={styles.iconBtn}
+                onClick={() => handlePair(server.host, server.port)}
+                title="Connect"
+                style={{ fontSize: 11 }}
+              >
+                Connect
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {remoteConnections.length > 0 && (
+        <div className={styles.list} style={{ borderTop: "1px solid var(--border-subtle)" }}>
+          <div className={styles.repoHeader} style={{ opacity: 0.7, cursor: "default" }}>
+            <span className={styles.repoName} style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.5px" }}>
+              Remote
+            </span>
+          </div>
+          {remoteConnections.map((conn) => {
+            const isActive = activeRemoteIds.includes(conn.id);
+            return (
+              <div key={conn.id} className={styles.wsItem}>
+                <span
+                  className={styles.statusDot}
+                  style={{ background: isActive ? "var(--status-running)" : "var(--status-stopped)" }}
+                />
+                <div className={styles.wsInfo}>
+                  <span className={styles.wsName}>{conn.name}</span>
+                  <span className={styles.wsBranch}>{conn.host}:{conn.port}</span>
+                </div>
+                <button
+                  className={styles.iconBtn}
+                  onClick={() => isActive ? handleDisconnect(conn.id) : handleConnect(conn.id)}
+                  title={isActive ? "Disconnect" : "Connect"}
+                  style={{ fontSize: 11 }}
+                >
+                  {isActive ? "×" : "→"}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </>
   );
 }

@@ -2,7 +2,9 @@ use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::model::{ChatMessage, Repository, TerminalTab, Workspace, WorkspaceStatus};
+use crate::model::{
+    ChatMessage, RemoteConnection, Repository, TerminalTab, Workspace, WorkspaceStatus,
+};
 
 pub struct Database {
     conn: Connection,
@@ -128,6 +130,23 @@ impl Database {
                 "ALTER TABLE repositories ADD COLUMN custom_instructions TEXT;
 
                  PRAGMA user_version = 6;",
+            )?;
+        }
+
+        if version < 7 {
+            self.conn.execute_batch(
+                "CREATE TABLE remote_connections (
+                    id                  TEXT PRIMARY KEY,
+                    name                TEXT NOT NULL,
+                    host                TEXT NOT NULL,
+                    port                INTEGER DEFAULT 7683,
+                    session_token       TEXT,
+                    cert_fingerprint    TEXT,
+                    auto_connect        INTEGER DEFAULT 0,
+                    created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+
+                PRAGMA user_version = 7;",
             )?;
         }
 
@@ -518,6 +537,91 @@ impl Database {
             "UPDATE terminal_tabs SET title = ?1 WHERE id = ?2",
             params![title, id],
         )?;
+        Ok(())
+    }
+
+    // --- Remote Connections ---
+
+    pub fn insert_remote_connection(&self, conn: &RemoteConnection) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "INSERT INTO remote_connections (id, name, host, port, session_token, cert_fingerprint, auto_connect)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                conn.id,
+                conn.name,
+                conn.host,
+                conn.port as i32,
+                conn.session_token,
+                conn.cert_fingerprint,
+                conn.auto_connect as i32,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_remote_connections(&self) -> Result<Vec<RemoteConnection>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, host, port, session_token, cert_fingerprint, auto_connect, created_at
+             FROM remote_connections ORDER BY created_at",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let auto_connect_int: i32 = row.get(6)?;
+            Ok(RemoteConnection {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                host: row.get(2)?,
+                port: row.get::<_, i32>(3)? as u16,
+                session_token: row.get(4)?,
+                cert_fingerprint: row.get(5)?,
+                auto_connect: auto_connect_int != 0,
+                created_at: row.get(7)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn get_remote_connection(
+        &self,
+        id: &str,
+    ) -> Result<Option<RemoteConnection>, rusqlite::Error> {
+        self.conn
+            .query_row(
+                "SELECT id, name, host, port, session_token, cert_fingerprint, auto_connect, created_at
+                 FROM remote_connections WHERE id = ?1",
+                params![id],
+                |row| {
+                    let auto_connect_int: i32 = row.get(6)?;
+                    Ok(RemoteConnection {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        host: row.get(2)?,
+                        port: row.get::<_, i32>(3)? as u16,
+                        session_token: row.get(4)?,
+                        cert_fingerprint: row.get(5)?,
+                        auto_connect: auto_connect_int != 0,
+                        created_at: row.get(7)?,
+                    })
+                },
+            )
+            .optional()
+    }
+
+    pub fn update_remote_connection_session(
+        &self,
+        id: &str,
+        session_token: &str,
+        cert_fingerprint: &str,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE remote_connections SET session_token = ?1, cert_fingerprint = ?2 WHERE id = ?3",
+            params![session_token, cert_fingerprint, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_remote_connection(&self, id: &str) -> Result<(), rusqlite::Error> {
+        self.conn
+            .execute("DELETE FROM remote_connections WHERE id = ?1", params![id])?;
         Ok(())
     }
 }

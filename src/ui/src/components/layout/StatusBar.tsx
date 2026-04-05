@@ -10,12 +10,18 @@ export function StatusBar() {
   const toggleRightSidebar = useAppStore((s) => s.toggleRightSidebar);
   const workspaces = useAppStore((s) => s.workspaces);
 
+  const activeRemoteIds = useAppStore((s) => s.activeRemoteIds);
+  const remoteConnections = useAppStore((s) => s.remoteConnections);
+
   const runningCount = workspaces.filter(
     (ws) => ws.agent_status === "Running"
   ).length;
   const activeCount = workspaces.filter(
     (ws) => ws.status === "Active"
   ).length;
+  const connectedRemotes = remoteConnections.filter((c) =>
+    activeRemoteIds.includes(c.id)
+  );
 
   return (
     <div className={styles.bar}>
@@ -29,6 +35,11 @@ export function StatusBar() {
         <span className={styles.statMuted}>
           {activeCount} workspace{activeCount !== 1 ? "s" : ""}
         </span>
+        {connectedRemotes.length > 0 && (
+          <span className={styles.statMuted}>
+            {connectedRemotes.map((c) => c.name).join(", ")}
+          </span>
+        )}
       </div>
       <div className={styles.spacer} />
       <button

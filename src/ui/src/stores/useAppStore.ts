@@ -7,6 +7,8 @@ import type {
   FileDiff,
   DiffViewMode,
   TerminalTab,
+  RemoteConnectionInfo,
+  DiscoveredServer,
 } from "../types";
 
 export type PermissionLevel = "readonly" | "standard" | "full";
@@ -163,6 +165,18 @@ interface AppState {
   setTerminalFontSize: (size: number) => void;
   lastMessages: Record<string, ChatMessage>;
   setLastMessages: (msgs: Record<string, ChatMessage>) => void;
+
+  // -- Remote Connections --
+  remoteConnections: RemoteConnectionInfo[];
+  discoveredServers: DiscoveredServer[];
+  activeRemoteIds: string[];
+  setRemoteConnections: (conns: RemoteConnectionInfo[]) => void;
+  addRemoteConnection: (conn: RemoteConnectionInfo) => void;
+  removeRemoteConnection: (id: string) => void;
+  setDiscoveredServers: (servers: DiscoveredServer[]) => void;
+  setActiveRemoteIds: (ids: string[]) => void;
+  addActiveRemoteId: (id: string) => void;
+  removeActiveRemoteId: (id: string) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -441,4 +455,25 @@ export const useAppStore = create<AppState>((set) => ({
   setTerminalFontSize: (size) => set({ terminalFontSize: size }),
   lastMessages: {},
   setLastMessages: (msgs) => set({ lastMessages: msgs }),
+
+  // -- Remote Connections --
+  remoteConnections: [],
+  discoveredServers: [],
+  activeRemoteIds: [],
+  setRemoteConnections: (conns) => set({ remoteConnections: conns }),
+  addRemoteConnection: (conn) =>
+    set((s) => ({ remoteConnections: [...s.remoteConnections, conn] })),
+  removeRemoteConnection: (id) =>
+    set((s) => ({
+      remoteConnections: s.remoteConnections.filter((c) => c.id !== id),
+      activeRemoteIds: s.activeRemoteIds.filter((rid) => rid !== id),
+    })),
+  setDiscoveredServers: (servers) => set({ discoveredServers: servers }),
+  setActiveRemoteIds: (ids) => set({ activeRemoteIds: ids }),
+  addActiveRemoteId: (id) =>
+    set((s) => ({ activeRemoteIds: [...s.activeRemoteIds, id] })),
+  removeActiveRemoteId: (id) =>
+    set((s) => ({
+      activeRemoteIds: s.activeRemoteIds.filter((rid) => rid !== id),
+    })),
 }));

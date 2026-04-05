@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useAppStore } from "./stores/useAppStore";
-import { loadInitialData, getAppSetting } from "./services/tauri";
+import { loadInitialData, getAppSetting, listRemoteConnections, listDiscoveredServers } from "./services/tauri";
 import { AppLayout } from "./components/layout/AppLayout";
 import "./styles/theme.css";
 
@@ -11,6 +11,8 @@ function App() {
   const setDefaultBranches = useAppStore((s) => s.setDefaultBranches);
   const setTerminalFontSize = useAppStore((s) => s.setTerminalFontSize);
   const setLastMessages = useAppStore((s) => s.setLastMessages);
+  const setRemoteConnections = useAppStore((s) => s.setRemoteConnections);
+  const setDiscoveredServers = useAppStore((s) => s.setDiscoveredServers);
 
   useEffect(() => {
     loadInitialData().then((data) => {
@@ -33,7 +35,13 @@ function App() {
         }
       })
       .catch((err) => console.error("Failed to load terminal font size:", err));
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages]);
+    listRemoteConnections()
+      .then(setRemoteConnections)
+      .catch((err) => console.error("Failed to load remote connections:", err));
+    listDiscoveredServers()
+      .then(setDiscoveredServers)
+      .catch((err) => console.error("Failed to load discovered servers:", err));
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers]);
 
   return <AppLayout />;
 }

@@ -5,6 +5,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::sync::RwLock;
 
+use crate::remote::DiscoveredServer;
+
 /// Per-workspace agent session state managed on the Rust side.
 pub struct AgentSessionState {
     pub session_id: String,
@@ -36,6 +38,8 @@ pub struct AppState {
     pub ptys: RwLock<HashMap<u64, PtyHandle>>,
     /// Counter for generating unique PTY IDs.
     pub next_pty_id: AtomicU64,
+    /// mDNS-discovered servers on the local network.
+    pub discovered_servers: RwLock<Vec<DiscoveredServer>>,
 }
 
 impl AppState {
@@ -46,6 +50,7 @@ impl AppState {
             agents: RwLock::new(HashMap::new()),
             ptys: RwLock::new(HashMap::new()),
             next_pty_id: AtomicU64::new(1),
+            discovered_servers: RwLock::new(Vec::new()),
         }
     }
 

@@ -208,3 +208,45 @@ export function getAppSetting(key: string): Promise<string | null> {
 export function setAppSetting(key: string, value: string): Promise<void> {
   return invoke("set_app_setting", { key, value });
 }
+
+// -- Remote --
+
+import type {
+  RemoteConnectionInfo,
+  DiscoveredServer,
+  PairResult,
+} from "../types/remote";
+
+export function listRemoteConnections(): Promise<RemoteConnectionInfo[]> {
+  return invoke("list_remote_connections");
+}
+
+export function pairWithServer(
+  host: string,
+  port: number,
+  pairingToken: string
+): Promise<PairResult> {
+  return invoke("pair_with_server", { host, port, pairingToken });
+}
+
+export function connectRemote(id: string): Promise<unknown> {
+  return invoke("connect_remote", { id });
+}
+
+export function disconnectRemote(id: string): Promise<void> {
+  return invoke("disconnect_remote", { id });
+}
+
+export function removeRemoteConnection(id: string): Promise<void> {
+  return invoke("remove_remote_connection", { id });
+}
+
+export function listDiscoveredServers(): Promise<DiscoveredServer[]> {
+  return invoke("list_discovered_servers");
+}
+
+export function addRemoteConnection(
+  connectionString: string
+): Promise<PairResult> {
+  return invoke("add_remote_connection", { connectionString });
+}

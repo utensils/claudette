@@ -20,3 +20,8 @@ export type {
   AgentEvent,
   StreamEvent,
 } from "./agent-events";
+export type {
+  RemoteConnectionInfo,
+  DiscoveredServer,
+  PairResult,
+} from "./remote";
