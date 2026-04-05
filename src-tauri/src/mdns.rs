@@ -15,7 +15,7 @@ pub fn start_mdns_browser(app: &AppHandle, saved_fingerprints: Vec<String>) -> R
 
     let app_handle = app.clone();
 
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         // Keep mdns alive for the lifetime of the task.
         let _mdns = mdns;
         let _fingerprints = saved_fingerprints;
