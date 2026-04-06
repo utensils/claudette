@@ -84,6 +84,7 @@ fn main() {
             commands::workspace::open_workspace_in_terminal,
             // Slash commands
             commands::slash_commands::list_slash_commands,
+            commands::slash_commands::record_slash_command_usage,
             // Chat
             commands::chat::load_chat_history,
             commands::chat::send_chat_message,

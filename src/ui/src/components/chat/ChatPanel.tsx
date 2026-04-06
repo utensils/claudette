@@ -6,6 +6,7 @@ import { useAppStore } from "../../stores/useAppStore";
 import {
   loadChatHistory,
   listSlashCommands,
+  recordSlashCommandUsage,
   sendChatMessage,
   sendRemoteCommand,
   stopAgent,
@@ -515,11 +516,15 @@ function ChatInputArea({
   const [slashPickerDismissed, setSlashPickerDismissed] = useState(false);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
 
-  useEffect(() => {
-    listSlashCommands(projectPath)
+  const refreshSlashCommands = useCallback(() => {
+    listSlashCommands(projectPath, selectedWorkspaceId)
       .then(setSlashCommands)
       .catch((e) => console.error("Failed to load slash commands:", e));
-  }, [projectPath]);
+  }, [projectPath, selectedWorkspaceId]);
+
+  useEffect(() => {
+    refreshSlashCommands();
+  }, [refreshSlashCommands]);
 
   const slashQuery = chatInput.startsWith("/") ? chatInput.slice(1) : null;
   const slashResults = useMemo(
@@ -557,6 +562,7 @@ function ChatInputArea({
         if (cmd) {
           onSend("/" + cmd.name);
           setChatInput("");
+          recordSlashCommandUsage(selectedWorkspaceId, cmd.name).then(refreshSlashCommands);
         }
         return;
       }
@@ -617,6 +623,7 @@ function ChatInputArea({
           onSelect={(cmd) => {
             onSend("/" + cmd.name);
             setChatInput("");
+            recordSlashCommandUsage(selectedWorkspaceId, cmd.name).then(refreshSlashCommands);
           }}
           onHover={setSlashPickerIndex}
         />

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use serde::Serialize;
@@ -158,6 +159,15 @@ fn skip_frontmatter(contents: &str) -> &str {
     contents
 }
 
+/// Re-sort commands by usage frequency (descending), with unused commands sorted alphabetically.
+pub fn sort_commands_by_usage(commands: &mut [SlashCommand], usage: &HashMap<String, i64>) {
+    commands.sort_by(|a, b| {
+        let count_a = usage.get(&a.name).copied().unwrap_or(0);
+        let count_b = usage.get(&b.name).copied().unwrap_or(0);
+        count_b.cmp(&count_a).then_with(|| a.name.cmp(&b.name))
+    });
+}
+
 /// Insert or replace a command by name (higher priority sources replace lower).
 fn upsert_command(commands: &mut Vec<SlashCommand>, cmd: SlashCommand) {
     if let Some(existing) = commands.iter_mut().find(|c| c.name == cmd.name) {
@@ -261,6 +271,59 @@ mod tests {
         assert_eq!(commands.len(), 1);
         assert_eq!(commands[0].description, "User commit");
         assert_eq!(commands[0].source, "user");
+    }
+
+    #[test]
+    fn test_sort_commands_by_usage() {
+        let mut commands = vec![
+            SlashCommand {
+                name: "alpha".into(),
+                description: "".into(),
+                source: "user".into(),
+            },
+            SlashCommand {
+                name: "beta".into(),
+                description: "".into(),
+                source: "user".into(),
+            },
+            SlashCommand {
+                name: "gamma".into(),
+                description: "".into(),
+                source: "user".into(),
+            },
+        ];
+
+        let mut usage = HashMap::new();
+        usage.insert("gamma".to_string(), 5);
+        usage.insert("alpha".to_string(), 2);
+
+        sort_commands_by_usage(&mut commands, &usage);
+
+        assert_eq!(commands[0].name, "gamma"); // 5 uses
+        assert_eq!(commands[1].name, "alpha"); // 2 uses
+        assert_eq!(commands[2].name, "beta"); // 0 uses
+    }
+
+    #[test]
+    fn test_sort_commands_by_usage_alphabetical_tiebreaker() {
+        let mut commands = vec![
+            SlashCommand {
+                name: "zebra".into(),
+                description: "".into(),
+                source: "user".into(),
+            },
+            SlashCommand {
+                name: "apple".into(),
+                description: "".into(),
+                source: "user".into(),
+            },
+        ];
+
+        let usage = HashMap::new(); // no usage
+        sort_commands_by_usage(&mut commands, &usage);
+
+        assert_eq!(commands[0].name, "apple");
+        assert_eq!(commands[1].name, "zebra");
     }
 
     #[test]

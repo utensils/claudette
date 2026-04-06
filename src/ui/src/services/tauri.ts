@@ -111,10 +111,22 @@ export interface SlashCommand {
 }
 
 export function listSlashCommands(
-  projectPath?: string
+  projectPath?: string,
+  workspaceId?: string,
 ): Promise<SlashCommand[]> {
   return invoke("list_slash_commands", {
     projectPath: projectPath ?? null,
+    workspaceId: workspaceId ?? null,
+  });
+}
+
+export function recordSlashCommandUsage(
+  workspaceId: string,
+  commandName: string,
+): Promise<void> {
+  return invoke("record_slash_command_usage", {
+    workspaceId,
+    commandName,
   });
 }
 
