@@ -193,6 +193,30 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.notificationBadge {
+  color: var(--accent-primary);
+  font-size: 16px;
+  line-height: 1;
+  animation: pulse-badge 2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+.wsUnread {
+  font-weight: 600;
+}
+
+@keyframes pulse-badge {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
 }
 
 .wsBranch {

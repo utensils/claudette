@@ -29,6 +29,8 @@ export function Sidebar() {
   const addChatMessage = useAppStore((s) => s.addChatMessage);
   const openModal = useAppStore((s) => s.openModal);
   const updateWorkspace = useAppStore((s) => s.updateWorkspace);
+  const unreadCompletions = useAppStore((s) => s.unreadCompletions);
+  const clearUnreadCompletion = useAppStore((s) => s.clearUnreadCompletion);
 
   const creatingRef = useRef(false);
 
@@ -193,11 +195,18 @@ export function Sidebar() {
               </div>
 
               {!collapsed &&
-                repoWorkspaces.map((ws) => (
+                repoWorkspaces.map((ws) => {
+                  const hasUnread = unreadCompletions.has(ws.id);
+                  return (
                   <div
                     key={ws.id}
-                    className={`${styles.wsItem} ${selectedWorkspaceId === ws.id ? styles.wsSelected : ""}`}
-                    onClick={() => selectWorkspace(ws.id)}
+                    className={`${styles.wsItem} ${selectedWorkspaceId === ws.id ? styles.wsSelected : ""} ${hasUnread ? styles.wsUnread : ""}`}
+                    onClick={() => {
+                      selectWorkspace(ws.id);
+                      if (hasUnread) {
+                        clearUnreadCompletion(ws.id);
+                      }
+                    }}
                   >
                     <span
                       className={`${styles.statusDot} ${ws.agent_status === "Running" ? styles.statusDotRunning : ""}`}
@@ -211,7 +220,10 @@ export function Sidebar() {
                       }}
                     />
                     <div className={styles.wsInfo}>
-                      <span className={styles.wsName}>{ws.name}</span>
+                      <span className={styles.wsName}>
+                        {ws.name}
+                        {hasUnread && <span className={styles.notificationBadge}>●</span>}
+                      </span>
                       <span className={styles.wsBranch}>{ws.branch_name}</span>
                     </div>
                     <div className={styles.wsActions}>
@@ -255,7 +267,8 @@ export function Sidebar() {
                       )}
                     </div>
                   </div>
-                ))}
+                  );
+                })}
             </div>
           );
         })}

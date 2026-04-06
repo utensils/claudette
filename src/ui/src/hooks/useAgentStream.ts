@@ -97,6 +97,25 @@ export function useAgentStream() {
         if (currentQuestion?.workspaceId === wsId) {
           setAgentQuestion(null);
         }
+
+        // Notification: mark workspace as unread if not currently selected
+        const { selectedWorkspaceId, markWorkspaceAsUnread } = useAppStore.getState();
+        if (wsId !== selectedWorkspaceId) {
+          markWorkspaceAsUnread(wsId);
+        }
+
+        // Audio notification: play terminal bell sound
+        console.log('[useAgentStream] Agent completed, playing audio notification for workspace:', wsId);
+        try {
+          const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBTGH0fPTgjMGHm7A7+OZSA0PVqzn77BdGAg+ltryxnMkBSp+zPLaizsIGGS57OihUBELTKXh8bllHAU2jdXyz4IzBh1qwO/mnEoPEFWs5++vXRgIPpbZ8sR0IwUpfszy2Ys7CBhkueznolARDEul4fG5ZRwFN43V8s+CMwYcacDv5pxKDxBVrOfvrl0YCD6W2fLEdCMFKX7M8tmLOwgYZLns6KJQEQxLpeHxuWUcBTeN1fLPgjMGHGnA7+acSg8QVazn765dGAg+ltnyw3MkBSl+zPLaizsIGGS57OiiUBEMS6Xh8bllHAU3jdXyz4IzBhxpwO/mnEoPEFWs5++uXRgIPpbZ8sR0IwUpfszy2Ys7CBhkuezooleRDBIp+DwumQcBTOP1PLPgjMGHGnA7+acSg8QVazn765dGAg+ltnyw3MkBSl+zPLZizsIGGS57OmiUBEMSaXh8bhlHAU2jdTyz4IzBhxpwO/mnEoPEFWs5++uXRgIPpbZ8sR0IwUpfszy2Ys7CBhkuezooleRDBIp+DwumQcBTOP1PLPgjMGHGnA7+acSg8QVazn765dGAg+ltnyw3MkBSl+zPLZizsIGGS57OmiUBEMSaXh8bhlHAU2jdTyz4IzBhxpwO/mnEoPEFWs5++uXRgIPpbZ8sR0IwUpfszy2Ys7CBhkuezooleRDBIp+DwumQcBTOP1PLPgjMGHGnA7+acSg8QVazn765dGAg+ltnyw3MkBSl+zPLZizsIGGS57OmiUBEMSaXh8bhlHAU2jdTyz4IzBhxpwO/mnEoPEFWs5++uXRgIPpbZ8sR0IwUpfszy2Ys7CBhkuezooleRDBIp+DwumQcBTOP1PLPgjMGHGnA7+acSg8QVazn765dGAg+ltnyw3MkBSl+zPLZizsIGGS57OmiUBEMSaXh8bhlHAU2jdTyz4IzBhxpwO/mnEoPEA==');
+          audio.volume = 0.5;
+          audio.play().catch((err) => {
+            console.error('[useAgentStream] Failed to play audio notification:', err);
+          });
+        } catch (err) {
+          console.error('[useAgentStream] Error creating audio:', err);
+        }
+
         return;
       }
 
