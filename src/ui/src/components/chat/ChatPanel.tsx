@@ -1,21 +1,24 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { GitBranch, LayoutDashboard } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import {
   loadChatHistory,
+  listSlashCommands,
   sendChatMessage,
   sendRemoteCommand,
   stopAgent,
   getAppSetting,
   setAppSetting,
 } from "../../services/tauri";
+import type { SlashCommand } from "../../services/tauri";
 import type { ChatMessage } from "../../types/chat";
 import { useAgentStream } from "../../hooks/useAgentStream";
 import { AgentQuestionCard } from "./AgentQuestionCard";
 import { ChatToolbar } from "./ChatToolbar";
 import { WorkspaceActions } from "./WorkspaceActions";
+import { SlashCommandPicker, filterSlashCommands } from "./SlashCommandPicker";
 import styles from "./ChatPanel.module.css";
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -480,6 +483,7 @@ export function ChatPanel() {
         onSend={handleSend}
         isRunning={isRunning}
         selectedWorkspaceId={selectedWorkspaceId!}
+        projectPath={repo?.path}
         historyRef={historyRef}
         historyIndexRef={historyIndexRef}
         draftRef={draftRef}
@@ -493,6 +497,7 @@ function ChatInputArea({
   onSend,
   isRunning,
   selectedWorkspaceId,
+  projectPath,
   historyRef,
   historyIndexRef,
   draftRef,
@@ -500,11 +505,31 @@ function ChatInputArea({
   onSend: (content: string) => Promise<void>;
   isRunning: boolean;
   selectedWorkspaceId: string;
+  projectPath: string | undefined;
   historyRef: React.MutableRefObject<Record<string, string[]>>;
   historyIndexRef: React.MutableRefObject<number>;
   draftRef: React.MutableRefObject<string>;
 }) {
   const [chatInput, setChatInput] = useState("");
+  const [slashPickerIndex, setSlashPickerIndex] = useState(0);
+  const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
+
+  useEffect(() => {
+    listSlashCommands(projectPath)
+      .then(setSlashCommands)
+      .catch((e) => console.error("Failed to load slash commands:", e));
+  }, [projectPath]);
+
+  const slashQuery = chatInput.startsWith("/") ? chatInput.slice(1) : null;
+  const slashResults = useMemo(
+    () => (slashQuery === null ? [] : filterSlashCommands(slashCommands, slashQuery)),
+    [slashCommands, slashQuery],
+  );
+  const showSlashPicker = slashQuery !== null && slashResults.length > 0;
+
+  useEffect(() => {
+    setSlashPickerIndex(0);
+  }, [slashQuery]);
 
   const handleSend = () => {
     onSend(chatInput);
@@ -512,6 +537,43 @@ function ChatInputArea({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Slash command picker navigation
+    if (showSlashPicker) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSlashPickerIndex((i) => Math.min(i + 1, slashResults.length - 1));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSlashPickerIndex((i) => Math.max(i - 1, 0));
+        return;
+      }
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        const cmd = slashResults[slashPickerIndex];
+        if (cmd) {
+          onSend("/" + cmd.name);
+          setChatInput("");
+        }
+        return;
+      }
+      if (e.key === "Tab") {
+        e.preventDefault();
+        const cmd = slashResults[slashPickerIndex];
+        if (cmd) {
+          onSend("/" + cmd.name);
+          setChatInput("");
+        }
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setChatInput("");
+        return;
+      }
+    }
+
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -546,6 +608,17 @@ function ChatInputArea({
 
   return (
     <div className={styles.inputArea}>
+      {showSlashPicker && (
+        <SlashCommandPicker
+          commands={slashResults}
+          selectedIndex={slashPickerIndex}
+          onSelect={(cmd) => {
+            onSend("/" + cmd.name);
+            setChatInput("");
+          }}
+          onHover={setSlashPickerIndex}
+        />
+      )}
       <textarea
         className={styles.input}
         value={chatInput}

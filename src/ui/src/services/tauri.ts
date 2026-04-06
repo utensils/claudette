@@ -102,6 +102,22 @@ export function openWorkspaceInTerminal(worktreePath: string): Promise<void> {
   return invoke("open_workspace_in_terminal", { worktreePath });
 }
 
+// -- Slash Commands --
+
+export interface SlashCommand {
+  name: string;
+  description: string;
+  source: string;
+}
+
+export function listSlashCommands(
+  projectPath?: string
+): Promise<SlashCommand[]> {
+  return invoke("list_slash_commands", {
+    projectPath: projectPath ?? null,
+  });
+}
+
 // -- Chat --
 
 export function loadChatHistory(workspaceId: string): Promise<ChatMessage[]> {

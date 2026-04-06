@@ -1,0 +1,59 @@
+.picker {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  margin-bottom: 4px;
+  background: var(--sidebar-bg);
+  border: 1px solid var(--sidebar-border);
+  border-radius: 8px;
+  padding: 4px;
+  z-index: 100;
+  max-height: 300px;
+  overflow-y: auto;
+  box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.4);
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.item:hover {
+  background: var(--hover-bg);
+}
+
+.itemSelected {
+  background: var(--selected-bg);
+}
+
+.itemSelected:hover {
+  background: var(--selected-bg);
+}
+
+.commandSlash {
+  color: var(--text-dim);
+  margin-right: 2px;
+  font-size: 13px;
+}
+
+.commandName {
+  color: var(--accent-primary);
+  font-family: var(--font-mono, monospace);
+  font-weight: 500;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.commandDesc {
+  color: var(--text-dim);
+  font-size: 12px;
+  margin-left: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

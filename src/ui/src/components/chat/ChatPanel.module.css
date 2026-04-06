@@ -434,6 +434,7 @@
 
 /* Input area */
 .inputArea {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 0;
