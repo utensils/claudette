@@ -89,6 +89,11 @@ interface AppState {
   agentQuestion: AgentQuestion | null;
   setAgentQuestion: (q: AgentQuestion | null) => void;
 
+  // -- Notifications --
+  unreadCompletions: Set<string>; // workspace IDs with unread completions
+  markWorkspaceAsUnread: (wsId: string) => void;
+  clearUnreadCompletion: (wsId: string) => void;
+
   // -- Permissions --
   permissionLevel: Record<string, PermissionLevel>;
   setPermissionLevel: (wsId: string, level: PermissionLevel) => void;
@@ -217,11 +222,16 @@ export const useAppStore = create<AppState>((set) => ({
       ),
     })),
   removeWorkspace: (id) =>
-    set((s) => ({
-      workspaces: s.workspaces.filter((w) => w.id !== id),
-      selectedWorkspaceId:
-        s.selectedWorkspaceId === id ? null : s.selectedWorkspaceId,
-    })),
+    set((s) => {
+      const newUnreadCompletions = new Set(s.unreadCompletions);
+      newUnreadCompletions.delete(id);
+      return {
+        workspaces: s.workspaces.filter((w) => w.id !== id),
+        selectedWorkspaceId:
+          s.selectedWorkspaceId === id ? null : s.selectedWorkspaceId,
+        unreadCompletions: newUnreadCompletions,
+      };
+    }),
   selectWorkspace: (id) => set({ selectedWorkspaceId: id }),
 
   // -- Chat --
@@ -330,6 +340,21 @@ export const useAppStore = create<AppState>((set) => ({
   // -- Agent Questions --
   agentQuestion: null,
   setAgentQuestion: (q) => set({ agentQuestion: q }),
+
+  // -- Notifications --
+  unreadCompletions: new Set<string>(),
+  markWorkspaceAsUnread: (wsId) =>
+    set((s) => {
+      const newSet = new Set(s.unreadCompletions);
+      newSet.add(wsId);
+      return { unreadCompletions: newSet };
+    }),
+  clearUnreadCompletion: (wsId) =>
+    set((s) => {
+      const newSet = new Set(s.unreadCompletions);
+      newSet.delete(wsId);
+      return { unreadCompletions: newSet };
+    }),
 
   // -- Permissions --
   permissionLevel: {},
