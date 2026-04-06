@@ -512,6 +512,7 @@ function ChatInputArea({
 }) {
   const [chatInput, setChatInput] = useState("");
   const [slashPickerIndex, setSlashPickerIndex] = useState(0);
+  const [slashPickerDismissed, setSlashPickerDismissed] = useState(false);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
 
   useEffect(() => {
@@ -525,10 +526,11 @@ function ChatInputArea({
     () => (slashQuery === null ? [] : filterSlashCommands(slashCommands, slashQuery)),
     [slashCommands, slashQuery],
   );
-  const showSlashPicker = slashQuery !== null && slashResults.length > 0;
+  const showSlashPicker = slashQuery !== null && slashResults.length > 0 && !slashPickerDismissed;
 
   useEffect(() => {
     setSlashPickerIndex(0);
+    setSlashPickerDismissed(false);
   }, [slashQuery]);
 
   const handleSend = () => {
@@ -562,14 +564,14 @@ function ChatInputArea({
         e.preventDefault();
         const cmd = slashResults[slashPickerIndex];
         if (cmd) {
-          onSend("/" + cmd.name);
-          setChatInput("");
+          setChatInput("/" + cmd.name + " ");
+          setSlashPickerDismissed(true);
         }
         return;
       }
       if (e.key === "Escape") {
         e.preventDefault();
-        setChatInput("");
+        setSlashPickerDismissed(true);
         return;
       }
     }

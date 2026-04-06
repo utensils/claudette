@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::Serialize;
 
@@ -100,7 +100,7 @@ fn collect_skills_from_dir(dir: &Path, source: &str, commands: &mut Vec<SlashCom
 }
 
 /// Parse a `.md` command file into a `SlashCommand`.
-fn parse_command_file(path: &PathBuf, source: &str) -> Option<SlashCommand> {
+fn parse_command_file(path: &Path, source: &str) -> Option<SlashCommand> {
     let name = path.file_stem()?.to_string_lossy().into_owned();
     let contents = std::fs::read_to_string(path).ok()?;
     let description = parse_description(&contents);

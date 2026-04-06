@@ -17,10 +17,12 @@ export function SlashCommandPicker({
   if (commands.length === 0) return null;
 
   return (
-    <div className={styles.picker}>
+    <div className={styles.picker} role="listbox">
       {commands.map((cmd, i) => (
         <div
           key={cmd.name}
+          role="option"
+          aria-selected={i === selectedIndex}
           className={`${styles.item} ${i === selectedIndex ? styles.itemSelected : ""}`}
           onClick={() => onSelect(cmd)}
           onMouseEnter={() => onHover(i)}
@@ -36,5 +38,5 @@ export function SlashCommandPicker({
 
 export function filterSlashCommands(commands: SlashCommand[], query: string): SlashCommand[] {
   const q = query.toLowerCase();
-  return commands.filter((cmd) => cmd.name.includes(q));
+  return commands.filter((cmd) => cmd.name.toLowerCase().includes(q));
 }
