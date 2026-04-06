@@ -20,4 +20,13 @@ export interface DiscoveredServer {
 export interface PairResult {
   connection: RemoteConnectionInfo;
   server_name: string;
+  initial_data: RemoteInitialData | null;
+}
+
+export interface RemoteInitialData {
+  repositories: import("./repository").Repository[];
+  workspaces: import("./workspace").Workspace[];
+  worktree_base_dir: string;
+  default_branches: Record<string, string>;
+  last_messages: import("./chat").ChatMessage[];
 }

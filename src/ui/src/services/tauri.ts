@@ -228,7 +228,9 @@ export function pairWithServer(
   return invoke("pair_with_server", { host, port, pairingToken });
 }
 
-export function connectRemote(id: string): Promise<unknown> {
+import type { RemoteInitialData } from "../types/remote";
+
+export function connectRemote(id: string): Promise<RemoteInitialData | null> {
   return invoke("connect_remote", { id });
 }
 

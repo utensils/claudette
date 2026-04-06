@@ -108,7 +108,7 @@ export function Sidebar() {
       </div>
 
       <div className={styles.list}>
-        {repositories.map((repo) => {
+        {repositories.filter((r) => !r.remote_connection_id).map((repo) => {
           const collapsed = repoCollapsed[repo.id];
           const repoWorkspaces = filteredWorkspaces.filter(
             (ws) => ws.repository_id === repo.id
@@ -296,6 +296,8 @@ function RemoteSections() {
   const addRemote = useAppStore((s) => s.addRemoteConnection);
   const addActiveId = useAppStore((s) => s.addActiveRemoteId);
   const removeActiveId = useAppStore((s) => s.removeActiveRemoteId);
+  const mergeRemoteData = useAppStore((s) => s.mergeRemoteData);
+  const clearRemoteData = useAppStore((s) => s.clearRemoteData);
   const unpaired = discoveredServers.filter((s) => !s.is_paired);
   const [connectingIds, setConnectingIds] = useState<Set<string>>(new Set());
   const [connectError, setConnectError] = useState<string | null>(null);
@@ -304,8 +306,11 @@ function RemoteSections() {
     setConnectError(null);
     setConnectingIds((prev) => new Set(prev).add(id));
     try {
-      await connectRemote(id);
+      const data = await connectRemote(id);
       addActiveId(id);
+      if (data) {
+        mergeRemoteData(id, data);
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setConnectError(msg);
@@ -323,6 +328,7 @@ function RemoteSections() {
     try {
       await disconnectRemote(id);
       removeActiveId(id);
+      clearRemoteData(id);
     } catch (e) {
       console.error("Failed to disconnect:", e);
     }
@@ -335,6 +341,9 @@ function RemoteSections() {
       const result = await pairWithServer(host, port, token);
       addRemote(result.connection);
       addActiveId(result.connection.id);
+      if (result.initial_data) {
+        mergeRemoteData(result.connection.id, result.initial_data);
+      }
     } catch (e) {
       console.error("Failed to pair:", e);
     }
@@ -373,11 +382,6 @@ function RemoteSections() {
 
       {remoteConnections.length > 0 && (
         <div className={styles.list} style={{ borderTop: "1px solid var(--border-subtle)" }}>
-          <div className={styles.repoHeader} style={{ opacity: 0.7, cursor: "default" }}>
-            <span className={styles.repoName} style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.5px" }}>
-              Remote
-            </span>
-          </div>
           {connectError && (
             <div style={{ padding: "4px 12px", fontSize: 11, color: "var(--status-error, #f55)", lineHeight: 1.3 }}>
               {connectError}
@@ -387,30 +391,146 @@ function RemoteSections() {
             const isActive = activeRemoteIds.includes(conn.id);
             const isConnecting = connectingIds.has(conn.id);
             return (
-              <div key={conn.id} className={styles.wsItem}>
-                <span
-                  className={styles.statusDot}
-                  style={{ background: isConnecting ? "var(--status-idle)" : isActive ? "var(--status-running)" : "var(--status-stopped)" }}
-                />
-                <div className={styles.wsInfo}>
-                  <span className={styles.wsName}>{conn.name}</span>
-                  <span className={styles.wsBranch}>{conn.host}:{conn.port}</span>
-                </div>
-                <button
-                  className={styles.iconBtn}
-                  onClick={() => isActive ? handleDisconnect(conn.id) : handleConnect(conn.id)}
-                  disabled={isConnecting}
-                  title={isConnecting ? "Connecting…" : isActive ? "Disconnect" : "Connect"}
-                  style={{ fontSize: 11, opacity: isConnecting ? 0.5 : 1 }}
-                >
-                  {isConnecting ? "…" : isActive ? "×" : "→"}
-                </button>
-              </div>
+              <RemoteConnectionGroup
+                key={conn.id}
+                conn={conn}
+                isActive={isActive}
+                isConnecting={isConnecting}
+                onConnect={() => handleConnect(conn.id)}
+                onDisconnect={() => handleDisconnect(conn.id)}
+              />
             );
           })}
         </div>
       )}
     </>
+  );
+}
+
+function RemoteConnectionGroup({
+  conn,
+  isActive,
+  isConnecting,
+  onConnect,
+  onDisconnect,
+}: {
+  conn: import("../../types/remote").RemoteConnectionInfo;
+  isActive: boolean;
+  isConnecting: boolean;
+  onConnect: () => void;
+  onDisconnect: () => void;
+}) {
+  const repositories = useAppStore((s) => s.repositories);
+  const workspaces = useAppStore((s) => s.workspaces);
+  const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const selectWorkspace = useAppStore((s) => s.selectWorkspace);
+  const repoCollapsed = useAppStore((s) => s.repoCollapsed);
+  const toggleRepoCollapsed = useAppStore((s) => s.toggleRepoCollapsed);
+
+  const remoteRepos = repositories.filter(
+    (r) => r.remote_connection_id === conn.id
+  );
+  const remoteWorkspaces = workspaces.filter(
+    (w) => w.remote_connection_id === conn.id
+  );
+
+  return (
+    <div className={styles.repoGroup}>
+      {/* Connection header */}
+      <div className={styles.repoHeader} style={{ opacity: 0.8 }}>
+        <span
+          className={styles.statusDot}
+          style={{
+            background: isConnecting
+              ? "var(--status-idle)"
+              : isActive
+                ? "var(--status-running)"
+                : "var(--status-stopped)",
+            marginRight: 4,
+          }}
+        />
+        <span className={styles.repoName} style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.5px" }}>
+          {conn.name}
+        </span>
+        <button
+          className={styles.iconBtn}
+          onClick={() => (isActive ? onDisconnect() : onConnect())}
+          disabled={isConnecting}
+          title={isConnecting ? "Connecting…" : isActive ? "Disconnect" : "Connect"}
+          style={{ fontSize: 11, opacity: isConnecting ? 0.5 : 1 }}
+        >
+          {isConnecting ? "…" : isActive ? "×" : "→"}
+        </button>
+      </div>
+
+      {/* Remote repos and their workspaces */}
+      {isActive &&
+        remoteRepos.map((repo) => {
+          const collapsed = repoCollapsed[repo.id];
+          const repoWs = remoteWorkspaces.filter(
+            (ws) => ws.repository_id === repo.id && ws.status === "Active"
+          );
+          const runningCount = repoWs.filter(
+            (ws) => ws.agent_status === "Running"
+          ).length;
+
+          return (
+            <div key={repo.id}>
+              <div
+                className={styles.repoHeader}
+                onClick={() => toggleRepoCollapsed(repo.id)}
+                style={{ paddingLeft: 12 }}
+              >
+                <span className={styles.chevron}>
+                  {collapsed ? "›" : "⌄"}
+                </span>
+                <span className={styles.repoName}>
+                  {repo.icon && (
+                    <RepoIcon icon={repo.icon} className={styles.repoIcon} />
+                  )}
+                  {repo.name}
+                  {runningCount > 0 && (
+                    <span className={styles.runningBadge}>{runningCount}</span>
+                  )}
+                </span>
+              </div>
+              {!collapsed &&
+                repoWs.map((ws) => (
+                  <div
+                    key={ws.id}
+                    className={`${styles.wsItem} ${selectedWorkspaceId === ws.id ? styles.wsSelected : ""}`}
+                    onClick={() => selectWorkspace(ws.id)}
+                  >
+                    <span
+                      className={`${styles.statusDot} ${ws.agent_status === "Running" ? styles.statusDotRunning : ""}`}
+                      style={{
+                        background:
+                          ws.agent_status === "Running"
+                            ? "var(--status-running)"
+                            : ws.agent_status === "Stopped"
+                              ? "var(--status-stopped)"
+                              : "var(--status-idle)",
+                      }}
+                    />
+                    <div className={styles.wsInfo}>
+                      <span className={styles.wsName}>{ws.name}</span>
+                      <span className={styles.wsBranch}>{ws.branch_name}</span>
+                    </div>
+                  </div>
+                ))}
+            </div>
+          );
+        })}
+
+      {/* Show placeholder when connected but no repos */}
+      {isActive && remoteRepos.length === 0 && (
+        <div className={styles.wsItem} style={{ opacity: 0.5 }}>
+          <div className={styles.wsInfo}>
+            <span className={styles.wsName}>No repositories</span>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

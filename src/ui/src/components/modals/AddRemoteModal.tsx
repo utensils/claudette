@@ -8,6 +8,7 @@ export function AddRemoteModal() {
   const closeModal = useAppStore((s) => s.closeModal);
   const addRemote = useAppStore((s) => s.addRemoteConnection);
   const addActiveId = useAppStore((s) => s.addActiveRemoteId);
+  const mergeRemoteData = useAppStore((s) => s.mergeRemoteData);
   const [connectionString, setConnectionString] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -20,6 +21,9 @@ export function AddRemoteModal() {
       const result = await addRemoteConnection(connectionString.trim());
       addRemote(result.connection);
       addActiveId(result.connection.id);
+      if (result.initial_data) {
+        mergeRemoteData(result.connection.id, result.initial_data);
+      }
       closeModal();
     } catch (e) {
       setError(String(e));

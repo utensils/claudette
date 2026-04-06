@@ -10,6 +10,7 @@ import type {
   RemoteConnectionInfo,
   DiscoveredServer,
 } from "../types";
+import type { RemoteInitialData } from "../types/remote";
 
 export type PermissionLevel = "readonly" | "standard" | "full";
 
@@ -177,6 +178,8 @@ interface AppState {
   setActiveRemoteIds: (ids: string[]) => void;
   addActiveRemoteId: (id: string) => void;
   removeActiveRemoteId: (id: string) => void;
+  mergeRemoteData: (connectionId: string, data: RemoteInitialData) => void;
+  clearRemoteData: (connectionId: string) => void;
 
   // -- Local Server --
   localServerRunning: boolean;
@@ -485,6 +488,37 @@ export const useAppStore = create<AppState>((set) => ({
   removeActiveRemoteId: (id) =>
     set((s) => ({
       activeRemoteIds: s.activeRemoteIds.filter((rid) => rid !== id),
+    })),
+  mergeRemoteData: (connectionId, data) =>
+    set((s) => {
+      // Tag remote repos and workspaces with the connection ID, then merge.
+      const taggedRepos = data.repositories.map((r) => ({
+        ...r,
+        remote_connection_id: connectionId,
+      }));
+      const taggedWorkspaces = data.workspaces.map((w) => ({
+        ...w,
+        remote_connection_id: connectionId,
+      }));
+      return {
+        repositories: [
+          ...s.repositories.filter((r) => r.remote_connection_id !== connectionId),
+          ...taggedRepos,
+        ],
+        workspaces: [
+          ...s.workspaces.filter((w) => w.remote_connection_id !== connectionId),
+          ...taggedWorkspaces,
+        ],
+      };
+    }),
+  clearRemoteData: (connectionId) =>
+    set((s) => ({
+      repositories: s.repositories.filter(
+        (r) => r.remote_connection_id !== connectionId
+      ),
+      workspaces: s.workspaces.filter(
+        (w) => w.remote_connection_id !== connectionId
+      ),
     })),
 
   // -- Local Server --

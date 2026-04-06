@@ -12,6 +12,7 @@ use crate::transport::ws::WebSocketTransport;
 pub struct PairResult {
     pub connection: RemoteConnectionInfo,
     pub server_name: String,
+    pub initial_data: Option<serde_json::Value>,
 }
 
 #[tauri::command]
@@ -89,12 +90,24 @@ pub async fn pair_with_server(
         created_at: saved.created_at,
     };
 
+    // Load remote data before handing off the transport.
+    use crate::transport::Transport;
+    let remote_data = transport
+        .send(serde_json::json!({
+            "method": "load_initial_data",
+            "params": {}
+        }))
+        .await
+        .ok()
+        .and_then(|r| r.get("result").cloned());
+
     // Add to active connections.
     manager.add(info.clone(), transport, app).await;
 
     Ok(PairResult {
         connection: info,
         server_name: auth.server_name,
+        initial_data: remote_data,
     })
 }
 

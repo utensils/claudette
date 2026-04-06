@@ -16,4 +16,6 @@ export interface Workspace {
   agent_status: AgentStatus;
   status_line: string;
   created_at: string;
+  /** Non-null when this workspace belongs to a remote connection. */
+  remote_connection_id: string | null;
 }
