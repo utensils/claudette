@@ -223,15 +223,14 @@ pub struct LocalServerInfo {
 
 #[tauri::command]
 pub async fn start_local_server(state: State<'_, AppState>) -> Result<LocalServerInfo, String> {
-    {
-        let server = state.local_server.read().await;
-        if server.is_some() {
-            let conn_str = server.as_ref().unwrap().connection_string.clone();
-            return Ok(LocalServerInfo {
-                running: true,
-                connection_string: Some(conn_str),
-            });
-        }
+    // Hold write lock for the entire operation to prevent concurrent spawns.
+    let mut server = state.local_server.write().await;
+
+    if let Some(ref srv) = *server {
+        return Ok(LocalServerInfo {
+            running: true,
+            connection_string: Some(srv.connection_string.clone()),
+        });
     }
 
     // Find the claudette-server binary. Try:
@@ -241,7 +240,7 @@ pub async fn start_local_server(state: State<'_, AppState>) -> Result<LocalServe
 
     let mut child = tokio::process::Command::new(&server_bin)
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit()) // inherit stderr to avoid pipe deadlock
         .spawn()
         .map_err(|e| format!("Failed to start claudette-server: {e}"))?;
 
@@ -283,7 +282,6 @@ pub async fn start_local_server(state: State<'_, AppState>) -> Result<LocalServe
         connection_string: Some(connection_string.clone()),
     };
 
-    let mut server = state.local_server.write().await;
     *server = Some(LocalServerState {
         child,
         connection_string,

@@ -133,6 +133,13 @@ pub async fn handle_tls_connection(
         if let Some(session_token) = params.get("session_token").and_then(|t| t.as_str())
             && config.validate_session(session_token)
         {
+            // Persist last_seen update.
+            let config_path = dirs::config_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("claudette-server")
+                .join("server.toml");
+            let _ = config.save(&config_path);
+
             let resp = serde_json::json!({
                 "id": id,
                 "result": {"server_name": config.server.name}

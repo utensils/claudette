@@ -93,7 +93,7 @@ impl WebSocketTransport {
                 match msg_result {
                     Ok(Message::Text(text)) => {
                         if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
-                            if value.get("id").is_some() && !value.get("id").unwrap().is_null() {
+                            if value.get("id").is_some_and(|v| !v.is_null()) {
                                 // Response to a request.
                                 if let Some(id) = value.get("id").and_then(|v| v.as_u64()) {
                                     let mut pending = pending_clone.lock().await;
@@ -119,6 +119,14 @@ impl WebSocketTransport {
                 }
             }
             connected_clone.store(false, Ordering::Relaxed);
+
+            // Drain all pending requests so callers get an error instead of hanging.
+            let mut pending = pending_clone.lock().await;
+            for (_, tx) in pending.drain() {
+                let _ = tx.send(serde_json::json!({
+                    "error": {"code": -3, "message": "Connection closed"}
+                }));
+            }
         });
 
         Ok(ConnectionResult {
