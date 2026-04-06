@@ -222,11 +222,16 @@ export const useAppStore = create<AppState>((set) => ({
       ),
     })),
   removeWorkspace: (id) =>
-    set((s) => ({
-      workspaces: s.workspaces.filter((w) => w.id !== id),
-      selectedWorkspaceId:
-        s.selectedWorkspaceId === id ? null : s.selectedWorkspaceId,
-    })),
+    set((s) => {
+      const newUnreadCompletions = new Set(s.unreadCompletions);
+      newUnreadCompletions.delete(id);
+      return {
+        workspaces: s.workspaces.filter((w) => w.id !== id),
+        selectedWorkspaceId:
+          s.selectedWorkspaceId === id ? null : s.selectedWorkspaceId,
+        unreadCompletions: newUnreadCompletions,
+      };
+    }),
   selectWorkspace: (id) => set({ selectedWorkspaceId: id }),
 
   // -- Chat --
