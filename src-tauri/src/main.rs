@@ -82,6 +82,8 @@ fn main() {
             commands::workspace::generate_workspace_name,
             commands::workspace::refresh_branches,
             commands::workspace::open_workspace_in_terminal,
+            // Slash commands
+            commands::slash_commands::list_slash_commands,
             // Chat
             commands::chat::load_chat_history,
             commands::chat::send_chat_message,
