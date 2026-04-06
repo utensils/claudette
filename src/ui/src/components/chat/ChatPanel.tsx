@@ -6,10 +6,12 @@ import { useAppStore } from "../../stores/useAppStore";
 import {
   loadChatHistory,
   sendChatMessage,
+  sendRemoteCommand,
   stopAgent,
   getAppSetting,
   setAppSetting,
 } from "../../services/tauri";
+import type { ChatMessage } from "../../types/chat";
 import { useAgentStream } from "../../hooks/useAgentStream";
 import { AgentQuestionCard } from "./AgentQuestionCard";
 import { ChatToolbar } from "./ChatToolbar";
@@ -131,8 +133,16 @@ export function ChatPanel() {
     setError(null);
     historyIndexRef.current = -1;
     draftRef.current = "";
-    loadChatHistory(selectedWorkspaceId)
-      .then((msgs) => {
+
+    const currentWs = useAppStore.getState().workspaces.find((w) => w.id === selectedWorkspaceId);
+    const loadHistory = currentWs?.remote_connection_id
+      ? sendRemoteCommand(currentWs.remote_connection_id, "load_chat_history", {
+          workspace_id: selectedWorkspaceId,
+        }).then((data) => (data as { messages?: ChatMessage[] })?.messages ?? data as ChatMessage[])
+      : loadChatHistory(selectedWorkspaceId);
+
+    loadHistory
+      .then((msgs: ChatMessage[]) => {
         // Filter out empty assistant messages (legacy data).
         const filtered = msgs.filter(
           (m) => m.role !== "Assistant" || m.content.trim() !== ""
@@ -177,20 +187,34 @@ export function ChatPanel() {
     updateWorkspace(selectedWorkspaceId, { agent_status: "Running" });
 
     try {
-      const state = useAppStore.getState();
-      const model = state.selectedModel[selectedWorkspaceId] || undefined;
-      const fastMode = state.fastMode[selectedWorkspaceId] || false;
-      const thinkingEnabled = state.thinkingEnabled[selectedWorkspaceId] || false;
-      const planMode = state.planMode[selectedWorkspaceId] || false;
-      await sendChatMessage(
-        selectedWorkspaceId,
-        content,
-        permissionLevel,
-        model,
-        fastMode || undefined,
-        thinkingEnabled || undefined,
-        planMode || undefined,
-      );
+      if (ws?.remote_connection_id) {
+        // Route to remote server via WebSocket.
+        const state = useAppStore.getState();
+        await sendRemoteCommand(ws.remote_connection_id, "send_chat_message", {
+          workspace_id: selectedWorkspaceId,
+          content,
+          permission_level: permissionLevel,
+          model: state.selectedModel[selectedWorkspaceId] || null,
+          fast_mode: state.fastMode[selectedWorkspaceId] || false,
+          thinking_enabled: state.thinkingEnabled[selectedWorkspaceId] || false,
+          plan_mode: state.planMode[selectedWorkspaceId] || false,
+        });
+      } else {
+        const state = useAppStore.getState();
+        const model = state.selectedModel[selectedWorkspaceId] || undefined;
+        const fastMode = state.fastMode[selectedWorkspaceId] || false;
+        const thinkingEnabled = state.thinkingEnabled[selectedWorkspaceId] || false;
+        const planMode = state.planMode[selectedWorkspaceId] || false;
+        await sendChatMessage(
+          selectedWorkspaceId,
+          content,
+          permissionLevel,
+          model,
+          fastMode || undefined,
+          thinkingEnabled || undefined,
+          planMode || undefined,
+        );
+      }
     } catch (e) {
       const errMsg = String(e);
       console.error("sendChatMessage failed:", errMsg);
@@ -202,7 +226,13 @@ export function ChatPanel() {
   const handleStop = async () => {
     if (!selectedWorkspaceId) return;
     try {
-      await stopAgent(selectedWorkspaceId);
+      if (ws?.remote_connection_id) {
+        await sendRemoteCommand(ws.remote_connection_id, "stop_agent", {
+          workspace_id: selectedWorkspaceId,
+        });
+      } else {
+        await stopAgent(selectedWorkspaceId);
+      }
       updateWorkspace(selectedWorkspaceId, { agent_status: "Stopped" });
     } catch (e) {
       console.error("stopAgent failed:", e);

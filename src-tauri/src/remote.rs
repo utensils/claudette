@@ -57,17 +57,14 @@ impl RemoteConnectionManager {
         let transport = Arc::new(transport);
         let mut event_rx = transport.event_stream();
 
-        // Forward remote events to the Tauri event bus under a "remote:" namespace
-        // and include the originating connection_id in the payload.
+        // Forward remote events to the Tauri event bus.
+        // Events like "agent-stream" are emitted under their original name with the
+        // original payload so the frontend handles them identically to local events.
+        // Workspace IDs are UUIDs so there's no collision between local and remote.
         let connection_id = info.id.clone();
         let event_task = tokio::spawn(async move {
             while let Ok(event) = event_rx.recv().await {
-                let event_name = format!("remote:{}", event.event);
-                let forwarded_payload = serde_json::json!({
-                    "connection_id": connection_id,
-                    "payload": event.payload,
-                });
-                let _ = app.emit(&event_name, &forwarded_payload);
+                let _ = app.emit(&event.event, &event.payload);
             }
             eprintln!("[remote] Event stream ended for connection {connection_id}");
         });

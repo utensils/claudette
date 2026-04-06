@@ -111,6 +111,7 @@ fn main() {
             commands::remote::remove_remote_connection,
             commands::remote::list_discovered_servers,
             commands::remote::add_remote_connection,
+            commands::remote::send_remote_command,
             // Local server
             commands::remote::start_local_server,
             commands::remote::stop_local_server,

@@ -252,6 +252,14 @@ export function addRemoteConnection(
   return invoke("add_remote_connection", { connectionString });
 }
 
+export function sendRemoteCommand(
+  connectionId: string,
+  method: string,
+  params: Record<string, unknown>
+): Promise<unknown> {
+  return invoke("send_remote_command", { connectionId, method, params });
+}
+
 // -- Local Server --
 
 export interface LocalServerInfo {

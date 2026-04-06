@@ -226,6 +226,25 @@ pub async fn add_remote_connection(
     pair_with_server(host, port, token.to_string(), app, state, manager).await
 }
 
+/// Forward a JSON-RPC command to a remote connection.
+#[tauri::command]
+pub async fn send_remote_command(
+    connection_id: String,
+    method: String,
+    params: serde_json::Value,
+    manager: State<'_, RemoteConnectionManager>,
+) -> Result<serde_json::Value, String> {
+    let request = serde_json::json!({
+        "method": method,
+        "params": params,
+    });
+    let response = manager.send(&connection_id, request).await?;
+    Ok(response
+        .get("result")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null))
+}
+
 // -- Local server (Share this machine) --
 
 #[derive(Serialize)]
