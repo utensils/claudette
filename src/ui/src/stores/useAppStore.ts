@@ -62,13 +62,11 @@ interface AppState {
 
   // -- Chat --
   chatMessages: Record<string, ChatMessage[]>;
-  chatInput: string;
   streamingContent: Record<string, string>;
   toolActivities: Record<string, ToolActivity[]>;
   completedTurns: Record<string, CompletedTurn[]>;
   setChatMessages: (wsId: string, messages: ChatMessage[]) => void;
   addChatMessage: (wsId: string, message: ChatMessage) => void;
-  setChatInput: (input: string) => void;
   setStreamingContent: (wsId: string, content: string) => void;
   appendStreamingContent: (wsId: string, text: string) => void;
   setToolActivities: (wsId: string, activities: ToolActivity[]) => void;
@@ -228,7 +226,6 @@ export const useAppStore = create<AppState>((set) => ({
 
   // -- Chat --
   chatMessages: {},
-  chatInput: "",
   streamingContent: {},
   toolActivities: {},
   completedTurns: {},
@@ -244,7 +241,6 @@ export const useAppStore = create<AppState>((set) => ({
       },
       lastMessages: { ...s.lastMessages, [wsId]: message },
     })),
-  setChatInput: (input) => set({ chatInput: input }),
   setStreamingContent: (wsId, content) =>
     set((s) => ({
       streamingContent: { ...s.streamingContent, [wsId]: content },

@@ -25,8 +25,8 @@ export function ChatPanel() {
   const workspaces = useAppStore((s) => s.workspaces);
   const repositories = useAppStore((s) => s.repositories);
   const chatMessages = useAppStore((s) => s.chatMessages);
-  const chatInput = useAppStore((s) => s.chatInput);
-  const setChatInput = useAppStore((s) => s.setChatInput);
+  // Use local state for input to avoid re-rendering entire component on every keystroke
+  const [chatInput, setChatInput] = useState("");
   const setChatMessages = useAppStore((s) => s.setChatMessages);
   const addChatMessage = useAppStore((s) => s.addChatMessage);
   const streamingContent = useAppStore((s) => s.streamingContent);
