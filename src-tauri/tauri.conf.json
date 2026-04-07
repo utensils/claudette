@@ -40,6 +40,9 @@
     "targets": "all",
     "icon": [
       "../assets/logo.png"
+    ],
+    "externalBin": [
+      "binaries/claudette-server"
     ]
   }
 }

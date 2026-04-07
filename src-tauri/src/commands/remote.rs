@@ -1,6 +1,6 @@
 use serde::Serialize;
-use tauri::{AppHandle, State};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tauri::{AppHandle, Manager, State};
+use tauri_plugin_shell::ShellExt;
 
 use claudette::db::Database;
 
@@ -254,7 +254,10 @@ pub struct LocalServerInfo {
 }
 
 #[tauri::command]
-pub async fn start_local_server(state: State<'_, AppState>) -> Result<LocalServerInfo, String> {
+pub async fn start_local_server(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<LocalServerInfo, String> {
     // Hold write lock for the entire operation to prevent concurrent spawns.
     let mut server = state.local_server.write().await;
 
@@ -265,56 +268,48 @@ pub async fn start_local_server(state: State<'_, AppState>) -> Result<LocalServe
         });
     }
 
-    // Find the claudette-server binary. Try:
-    // 1. Next to the current executable
-    // 2. In PATH
-    let server_bin = find_server_binary().await?;
+    // Use Tauri's sidecar API to spawn the bundled claudette-server binary
+    let sidecar_command = app
+        .shell()
+        .sidecar("claudette-server")
+        .map_err(|e| format!("Failed to resolve claudette-server sidecar: {e}"))?;
 
-    let mut child = tokio::process::Command::new(&server_bin)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::inherit()) // inherit stderr to avoid pipe deadlock
-        .kill_on_drop(true) // Automatically kill server when Child handle is dropped
+    let (mut rx, child) = sidecar_command
         .spawn()
-        .map_err(|e| format!("Failed to start claudette-server: {e}"))?;
+        .map_err(|e| format!("Failed to spawn claudette-server: {e}"))?;
 
-    // Read stdout lines until we find the connection string.
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or("Failed to capture server stdout")?;
-    let mut reader = BufReader::new(stdout).lines();
-
+    // Read from the sidecar output until we find the connection string
     let mut connection_string = String::new();
     let timeout = tokio::time::Duration::from_secs(10);
     let deadline = tokio::time::Instant::now() + timeout;
 
     while tokio::time::Instant::now() < deadline {
-        let line = tokio::time::timeout_at(deadline, reader.next_line())
+        let event = tokio::time::timeout_at(deadline, rx.recv())
             .await
             .map_err(|_| "Timed out waiting for server to start")?
-            .map_err(|e| format!("Error reading server output: {e}"))?;
+            .ok_or("Server process exited before printing connection string")?;
 
-        if let Some(line) = line {
+        use tauri_plugin_shell::process::CommandEvent;
+        if let CommandEvent::Stdout(line_bytes) = event {
+            let line = String::from_utf8_lossy(&line_bytes);
             let trimmed = line.trim();
             if trimmed.starts_with("claudette://") {
                 connection_string = trimmed.to_string();
                 break;
             }
-        } else {
+        } else if let CommandEvent::Terminated(_) = event {
             return Err("Server process exited before printing connection string".to_string());
         }
     }
 
     if connection_string.is_empty() {
-        let _ = child.kill().await;
+        let _ = child.kill();
         return Err("Server started but did not print a connection string".to_string());
     }
 
-    // Spawn a task to continuously drain stdout to prevent broken pipe panics.
-    // The server writes log messages to stdout; if we don't read them, the pipe
-    // buffer fills and the server will panic with "Broken pipe" when we close stdout.
+    // Spawn a task to drain remaining output events
     tokio::spawn(async move {
-        while let Ok(Some(_)) = reader.next_line().await {
+        while let Some(_event) = rx.recv().await {
             // Discard output
         }
     });
@@ -336,8 +331,8 @@ pub async fn start_local_server(state: State<'_, AppState>) -> Result<LocalServe
 pub async fn stop_local_server(state: State<'_, AppState>) -> Result<(), String> {
     let mut server = state.local_server.write().await;
     if let Some(mut srv) = server.take() {
-        let _ = srv.child.kill().await;
-        let _ = srv.child.wait().await;
+        let _ = srv.child.kill();
+        // Note: The sidecar Child's Drop impl handles cleanup, no need to wait
     }
     Ok(())
 }
@@ -359,28 +354,3 @@ pub async fn get_local_server_status(
     }
 }
 
-async fn find_server_binary() -> Result<String, String> {
-    // 1. Next to the current executable.
-    if let Ok(exe) = std::env::current_exe() {
-        let dir = exe.parent().unwrap_or(std::path::Path::new("."));
-        let candidate = dir.join("claudette-server");
-        if candidate.exists() {
-            return Ok(candidate.to_string_lossy().to_string());
-        }
-    }
-
-    // 2. In PATH (use tokio::process to avoid blocking the async runtime).
-    if let Ok(output) = tokio::process::Command::new("which")
-        .arg("claudette-server")
-        .output()
-        .await
-        && output.status.success()
-    {
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !path.is_empty() {
-            return Ok(path);
-        }
-    }
-
-    Err("claudette-server not found. Install it with: cargo install --path src-server".to_string())
-}
