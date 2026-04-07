@@ -90,7 +90,13 @@ export function deleteWorkspace(id: string): Promise<void> {
   return invoke("delete_workspace", { id });
 }
 
-export function generateWorkspaceName(): Promise<string> {
+export interface GeneratedWorkspaceName {
+  slug: string;
+  display: string;
+  message: string | null;
+}
+
+export function generateWorkspaceName(): Promise<GeneratedWorkspaceName> {
   return invoke("generate_workspace_name");
 }
 

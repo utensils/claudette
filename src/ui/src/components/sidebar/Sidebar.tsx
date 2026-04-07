@@ -38,10 +38,21 @@ export function Sidebar() {
     if (creatingRef.current) return;
     creatingRef.current = true;
     try {
-      const name = await generateWorkspaceName();
-      const result = await createWorkspace(repoId, name);
+      const generated = await generateWorkspaceName();
+      const result = await createWorkspace(repoId, generated.slug);
       addWorkspace(result.workspace);
       selectWorkspace(result.workspace.id);
+      if (generated.message) {
+        addChatMessage(result.workspace.id, {
+          id: crypto.randomUUID(),
+          workspace_id: result.workspace.id,
+          role: "System",
+          content: generated.message,
+          cost_usd: null,
+          duration_ms: null,
+          created_at: new Date().toISOString(),
+        });
+      }
       if (result.setup_result) {
         const sr = result.setup_result;
         const label = sr.source === "repo" ? ".claudette.json" : "settings";

@@ -35,9 +35,13 @@ pub async fn create_workspace(
     name: String,
     state: State<'_, AppState>,
 ) -> Result<CreateWorkspaceResult, String> {
-    // Validate workspace name.
-    let forbidden = ['/', '\\', ':', '?', '*', '[', ' ', '~', '.'];
-    if name.is_empty() || name.chars().any(|c| forbidden.contains(&c)) || name.ends_with(".lock") {
+    // Validate workspace name: must be ASCII alphanumeric + hyphens only (branch-safe).
+    if name.is_empty()
+        || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        || name.starts_with('-')
+        || name.ends_with('-')
+        || name.ends_with(".lock")
+    {
         return Err(format!("Invalid workspace name: '{name}'"));
     }
 
@@ -318,9 +322,28 @@ pub async fn delete_workspace(id: String, state: State<'_, AppState>) -> Result<
     Ok(())
 }
 
+#[derive(Serialize)]
+pub struct GeneratedWorkspaceName {
+    /// Safe for branch names and file paths
+    pub slug: String,
+    /// Fun display version (may contain emojis/special chars for easter eggs)
+    pub display: String,
+    /// Optional easter egg message
+    pub message: Option<String>,
+}
+
 #[tauri::command]
-pub fn generate_workspace_name() -> String {
-    NameGenerator::new().generate().display
+pub fn generate_workspace_name() -> GeneratedWorkspaceName {
+    let generated = NameGenerator::new().generate();
+    let message = match &generated.easter_egg {
+        Some(claudette::names::EasterEgg::Message(msg)) => Some(msg.clone()),
+        _ => None,
+    };
+    GeneratedWorkspaceName {
+        slug: generated.slug(),
+        display: generated.display,
+        message,
+    }
 }
 
 #[tauri::command]
