@@ -7,12 +7,12 @@
   <meta name="description" content="A beautiful desktop orchestrator for parallel Claude Code agents. Git worktrees, remote workspaces, integrated terminal, and more.">
   <meta property="og:title" content="Claudette — Claude's Missing Better Half">
   <meta property="og:description" content="A beautiful desktop orchestrator for parallel Claude Code agents.">
-  <meta property="og:image" content="logo.png">
+  <meta property="og:image" content="mascot.png">
   <meta property="og:type" content="website">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="Claudette — Claude's Missing Better Half">
   <meta name="twitter:description" content="A beautiful desktop orchestrator for parallel Claude Code agents.">
-  <link rel="icon" href="logo.png">
+  <link rel="icon" href="mascot.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -83,6 +83,7 @@
     .nav-brand img {
       width: 32px;
       height: 32px;
+      image-rendering: pixelated;
     }
 
     .nav-brand span {
@@ -126,11 +127,12 @@
     }
 
     .hero-logo {
-      width: 120px;
-      height: 120px;
+      width: 160px;
+      height: auto;
       animation: float 4s ease-in-out infinite;
       filter: drop-shadow(0 8px 24px rgba(224, 120, 80, 0.25));
       margin-bottom: 1.5rem;
+      image-rendering: pixelated;
     }
 
     @keyframes float {
@@ -206,22 +208,6 @@
       transform: translateY(-2px);
     }
 
-    .hero-mascot {
-      position: absolute;
-      bottom: -20px;
-      right: 8%;
-      width: 180px;
-      height: auto;
-      animation: peek 3s ease-in-out infinite;
-      filter: drop-shadow(0 4px 12px rgba(0,0,0,0.1));
-      z-index: 2;
-    }
-
-    @keyframes peek {
-      0%, 100% { transform: translateY(0) rotate(0deg); }
-      25% { transform: translateY(-6px) rotate(-2deg); }
-      75% { transform: translateY(-3px) rotate(2deg); }
-    }
 
     /* ========== SECTIONS ========== */
     section {
@@ -485,6 +471,7 @@
       margin-bottom: 1.5rem;
       animation: float 4s ease-in-out infinite;
       filter: drop-shadow(0 4px 12px rgba(0,0,0,0.08));
+      image-rendering: pixelated;
     }
 
     .cta h2 {
@@ -522,6 +509,7 @@
       width: 36px;
       height: 36px;
       filter: brightness(1.2);
+      image-rendering: pixelated;
     }
 
     .footer-brand span {
@@ -561,6 +549,7 @@
       width: 48px;
       opacity: 0.3;
       transition: opacity 0.3s;
+      image-rendering: pixelated;
     }
 
     .footer-mascot:hover {
@@ -591,12 +580,6 @@
 
       .nav-links a:not(:last-child) {
         display: none;
-      }
-
-      .hero-mascot {
-        width: 110px;
-        right: 4%;
-        bottom: -12px;
       }
 
       .stats-grid {
@@ -645,7 +628,7 @@
   <!-- Nav -->
   <nav>
     <a href="#" class="nav-brand">
-      <img src="logo.png" alt="Claudette logo">
+      <img src="mascot.png" alt="Claudette mascot">
       <span>Claudette</span>
     </a>
     <div class="nav-links">
@@ -660,7 +643,7 @@
     <div class="dot-pattern" style="top: 12%; left: 5%;"></div>
     <div class="dot-pattern" style="bottom: 20%; right: 3%; transform: rotate(45deg);"></div>
 
-    <img src="logo.png" alt="Claudette — coral daisy logo" class="hero-logo">
+    <img src="mascot.png" alt="Claudette — a cute pixel art pig with a pink bow" class="hero-logo">
     <h1>Claudette</h1>
     <p class="tagline">Claude's missing better half</p>
     <p class="subtitle">A beautiful desktop orchestrator for running parallel Claude Code agents. Manage workspaces, review diffs, and ship faster.</p>
@@ -675,8 +658,6 @@
         View on GitHub
       </a>
     </div>
-
-    <img src="mascot.png" alt="Claudette mascot — a cute pixel art pig with a pink bow" class="hero-mascot">
   </section>
 
   <!-- Features -->
@@ -827,7 +808,7 @@
   <!-- Footer -->
   <footer>
     <div class="footer-brand">
-      <img src="logo.png" alt="Claudette">
+      <img src="mascot.png" alt="Claudette">
       <span>Claudette</span>
     </div>
     <div class="footer-links">
@@ -835,7 +816,7 @@
       <a href="https://github.com/utensils/Claudette/releases">Releases</a>
       <a href="https://github.com/utensils/Claudette/issues">Issues</a>
     </div>
-    <p class="footer-note">Made with &#x1F33C; by utensils</p>
+    <p class="footer-note">Made with &#x1F496; by utensils</p>
     <img src="mascot.png" alt="" class="footer-mascot" aria-hidden="true">
   </footer>
 
