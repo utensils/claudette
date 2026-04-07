@@ -1,10 +1,11 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import { loadDiffFiles } from "../../services/tauri";
 import styles from "./RightSidebar.module.css";
 
 export function RightSidebar() {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const workspaces = useAppStore((s) => s.workspaces);
   const diffFiles = useAppStore((s) => s.diffFiles);
   const diffSelectedFile = useAppStore((s) => s.diffSelectedFile);
   const diffLoading = useAppStore((s) => s.diffLoading);
@@ -13,6 +14,10 @@ export function RightSidebar() {
   const setDiffLoading = useAppStore((s) => s.setDiffLoading);
   const setDiffViewMode = useAppStore((s) => s.setDiffViewMode);
   const diffViewMode = useAppStore((s) => s.diffViewMode);
+
+  const ws = workspaces.find((w) => w.id === selectedWorkspaceId);
+  const isRunning = ws?.agent_status === "Running";
+  const prevIsRunning = useRef<boolean | undefined>(undefined);
 
   useEffect(() => {
     if (!selectedWorkspaceId) return;
@@ -24,6 +29,26 @@ export function RightSidebar() {
       })
       .catch(() => setDiffLoading(false));
   }, [selectedWorkspaceId, setDiffFiles, setDiffLoading]);
+
+  // Refresh diff files when agent stops running (after making changes)
+  useEffect(() => {
+    const wasRunning = prevIsRunning.current;
+    prevIsRunning.current = isRunning;
+
+    // Only refresh on the Running → stopped transition
+    if (!selectedWorkspaceId || wasRunning !== true || isRunning) return;
+
+    // Debounce: wait a bit after agent stops to let file writes complete
+    const timer = setTimeout(() => {
+      loadDiffFiles(selectedWorkspaceId)
+        .then(({ files, merge_base }) => {
+          setDiffFiles(files, merge_base);
+        })
+        .catch((e) => console.error("Failed to refresh diff files:", e));
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [isRunning, selectedWorkspaceId, setDiffFiles]);
 
   const statusLabel = (status: string | { Renamed: { from: string } }) => {
     if (typeof status === "string") {
@@ -86,6 +111,16 @@ export function RightSidebar() {
                 {statusLabel(file.status)}
               </span>
               <span className={styles.path}>{file.path}</span>
+              {(file.additions !== undefined || file.deletions !== undefined) && (
+                <span className={styles.stats}>
+                  {file.additions !== undefined && (
+                    <span className={styles.additions}>+{file.additions}</span>
+                  )}
+                  {file.deletions !== undefined && (
+                    <span className={styles.deletions}>-{file.deletions}</span>
+                  )}
+                </span>
+              )}
             </div>
           ))
         )}
