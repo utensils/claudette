@@ -40,7 +40,6 @@ pub async fn create_workspace(
         || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
         || name.starts_with('-')
         || name.ends_with('-')
-        || name.ends_with(".lock")
     {
         return Err(format!("Invalid workspace name: '{name}'"));
     }

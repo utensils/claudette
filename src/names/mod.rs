@@ -37,7 +37,8 @@ pub struct GeneratedName {
 }
 
 impl GeneratedName {
-    /// Branch-safe name: always "{adjective}-{plant}", no special characters.
+    /// Branch-safe name: always "{adjective}-{plant}".
+    /// Safe because ADJECTIVES and PLANTS word lists are lowercase ASCII only.
     pub fn slug(&self) -> String {
         format!("{}-{}", self.adjective, self.plant)
     }
