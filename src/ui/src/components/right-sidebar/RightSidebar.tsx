@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import { loadDiffFiles } from "../../services/tauri";
 import styles from "./RightSidebar.module.css";
@@ -17,6 +17,7 @@ export function RightSidebar() {
 
   const ws = workspaces.find((w) => w.id === selectedWorkspaceId);
   const isRunning = ws?.agent_status === "Running";
+  const prevIsRunning = useRef<boolean | undefined>(undefined);
 
   useEffect(() => {
     if (!selectedWorkspaceId) return;
@@ -31,7 +32,11 @@ export function RightSidebar() {
 
   // Refresh diff files when agent stops running (after making changes)
   useEffect(() => {
-    if (!selectedWorkspaceId || isRunning) return;
+    const wasRunning = prevIsRunning.current;
+    prevIsRunning.current = isRunning;
+
+    // Only refresh on the Running → stopped transition
+    if (!selectedWorkspaceId || wasRunning !== true || isRunning) return;
 
     // Debounce: wait a bit after agent stops to let file writes complete
     const timer = setTimeout(() => {
