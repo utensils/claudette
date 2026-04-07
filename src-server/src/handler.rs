@@ -260,6 +260,37 @@ async fn handle_load_initial_data(state: &ServerState) -> Result<serde_json::Val
     let default_branches: std::collections::HashMap<String, String> =
         branch_results.into_iter().flatten().collect();
 
+    // Resolve current branch for each workspace worktree.
+    let workspace_branch_futures: Vec<_> = workspaces
+        .iter()
+        .filter_map(|ws| {
+            ws.worktree_path.as_ref().map(|path| {
+                let id = ws.id.clone();
+                let path = path.clone();
+                async move {
+                    claudette::git::current_branch(&path)
+                        .await
+                        .ok()
+                        .map(|b| (id, b))
+                }
+            })
+        })
+        .collect();
+    let workspace_branch_results = futures_util::future::join_all(workspace_branch_futures).await;
+    let workspace_current_branches: std::collections::HashMap<String, String> =
+        workspace_branch_results.into_iter().flatten().collect();
+
+    // Update workspace branch_name with current branch from worktree.
+    let workspaces: Vec<_> = workspaces
+        .into_iter()
+        .map(|mut ws| {
+            if let Some(current) = workspace_current_branches.get(&ws.id) {
+                ws.branch_name = current.clone();
+            }
+            ws
+        })
+        .collect();
+
     let last_messages = db.last_message_per_workspace().map_err(|e| e.to_string())?;
 
     Ok(json!({
