@@ -422,7 +422,7 @@ export function ChatPanel() {
             ))}
 
             {activities.length > 0 && (
-              <div className={styles.toolActivities}>
+              <div className={styles.toolActivities} aria-live="polite" aria-atomic="true">
                 <div className={styles.turnSummary}>
                   <div
                     className={styles.turnHeader}
