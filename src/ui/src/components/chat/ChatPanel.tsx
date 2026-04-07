@@ -515,6 +515,7 @@ function ChatInputArea({
   const [slashPickerIndex, setSlashPickerIndex] = useState(0);
   const [slashPickerDismissed, setSlashPickerDismissed] = useState(false);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const refreshSlashCommands = useCallback(() => {
     listSlashCommands(projectPath, selectedWorkspaceId)
@@ -545,6 +546,17 @@ function ChatInputArea({
     setSlashPickerIndex(0);
     setSlashPickerDismissed(false);
   }, [slashQuery]);
+
+  // Auto-resize textarea based on content
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    // Reset height to auto to get the correct scrollHeight
+    textarea.style.height = "auto";
+    // Set height to scrollHeight to fit content, respecting max-height in CSS
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 120)}px`;
+  }, [chatInput]);
 
   const handleSend = () => {
     onSend(chatInput);
@@ -641,12 +653,12 @@ function ChatInputArea({
         />
       )}
       <textarea
+        ref={textareaRef}
         className={styles.input}
         value={chatInput}
         onChange={(e) => setChatInput(e.target.value)}
         onKeyDown={handleKeyDown}
         placeholder="Send a message..."
-        rows={1}
         disabled={isRunning}
       />
       <div className={styles.inputControls}>

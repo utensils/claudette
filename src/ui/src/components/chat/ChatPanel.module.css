@@ -183,6 +183,10 @@
   margin-left: 32px;
 }
 
+.role_User .content {
+  white-space: pre-wrap;
+}
+
 .role_Assistant {
   background: transparent;
   border-left: 3px solid var(--accent-primary);
