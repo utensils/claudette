@@ -40,7 +40,19 @@ pub async fn load_diff_files(
         .await
         .map_err(|e| e.to_string())?;
 
-    let merge_base = diff::merge_base(worktree_path, "HEAD", &base_branch)
+    let current_branch = git::current_branch(worktree_path)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // If we're on the base branch, there are no changes to show
+    if current_branch == base_branch {
+        return Ok(DiffFilesResult {
+            files: vec![],
+            merge_base: String::new(),
+        });
+    }
+
+    let merge_base = diff::merge_base(worktree_path, &current_branch, &base_branch)
         .await
         .map_err(|e| e.to_string())?;
 
