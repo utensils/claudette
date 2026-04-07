@@ -160,11 +160,13 @@ export function ChatPanel() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length, streaming]);
 
-  // Collapse current turn when agent starts running (new activities)
+  // Collapse current turn when a new turn starts (activities goes from 0 to non-zero)
+  const prevActivitiesLengthRef = useRef(0);
   useEffect(() => {
-    if (isRunning && activities.length > 0) {
+    if (isRunning && activities.length > 0 && prevActivitiesLengthRef.current === 0) {
       setCurrentTurnCollapsed(true);
     }
+    prevActivitiesLengthRef.current = activities.length;
   }, [isRunning, activities.length]);
 
   if (!ws) return null;
