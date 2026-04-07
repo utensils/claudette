@@ -12,6 +12,8 @@ pub enum FileStatus {
 pub struct DiffFile {
     pub path: String,
     pub status: FileStatus,
+    pub additions: Option<u32>,
+    pub deletions: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]

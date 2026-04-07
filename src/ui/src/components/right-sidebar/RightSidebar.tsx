@@ -106,6 +106,16 @@ export function RightSidebar() {
                 {statusLabel(file.status)}
               </span>
               <span className={styles.path}>{file.path}</span>
+              {(file.additions !== undefined || file.deletions !== undefined) && (
+                <span className={styles.stats}>
+                  {file.additions !== undefined && (
+                    <span className={styles.additions}>+{file.additions}</span>
+                  )}
+                  {file.deletions !== undefined && (
+                    <span className={styles.deletions}>-{file.deletions}</span>
+                  )}
+                </span>
+              )}
             </div>
           ))
         )}

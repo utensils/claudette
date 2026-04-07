@@ -7,6 +7,8 @@ export type FileStatus =
 export interface DiffFile {
   path: string;
   status: FileStatus;
+  additions?: number;
+  deletions?: number;
 }
 
 export type DiffViewMode = "Unified" | "SideBySide";

@@ -68,7 +68,34 @@ pub async fn changed_files(
             files.push(DiffFile {
                 path: path.to_string(),
                 status: FileStatus::Added,
+                additions: None,
+                deletions: None,
             });
+        }
+    }
+
+    // Get diff stats for tracked files
+    let numstat = run_git(worktree_path, &["diff", "--numstat", merge_base]).await?;
+    let stats: std::collections::HashMap<String, (u32, u32)> = numstat
+        .lines()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 3 {
+                let adds = parts[0].parse::<u32>().ok()?;
+                let dels = parts[1].parse::<u32>().ok()?;
+                let path = parts[2..].join(" ");
+                Some((path, (adds, dels)))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Apply stats to files
+    for file in &mut files {
+        if let Some((adds, dels)) = stats.get(&file.path) {
+            file.additions = Some(*adds);
+            file.deletions = Some(*dels);
         }
     }
 
@@ -104,12 +131,19 @@ fn parse_name_status_line(line: &str) -> Option<DiffFile> {
             return Some(DiffFile {
                 status: FileStatus::Renamed { from: path },
                 path: new_path,
+                additions: None,
+                deletions: None,
             });
         }
         _ => return None,
     };
 
-    Some(DiffFile { path, status })
+    Some(DiffFile {
+        path,
+        status,
+        additions: None,
+        deletions: None,
+    })
 }
 
 /// Get the unified diff for a specific file.

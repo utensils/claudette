@@ -83,7 +83,25 @@
 }
 
 .path {
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.stats {
+  display: flex;
+  gap: 6px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.additions {
+  color: var(--diff-added-text);
+}
+
+.deletions {
+  color: var(--diff-removed-text);
 }
