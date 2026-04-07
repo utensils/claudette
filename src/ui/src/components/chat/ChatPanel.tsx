@@ -415,34 +415,50 @@ export function ChatPanel() {
             ))}
 
             {activities.length > 0 && (
-              <div className={styles.toolActivities}>
-                {activities.map((act, i) => (
-                  <div key={act.toolUseId} className={styles.toolActivity}>
-                    <button
-                      className={styles.toolHeader}
-                      onClick={() =>
-                        selectedWorkspaceId &&
-                        toggleToolActivityCollapsed(selectedWorkspaceId, i)
-                      }
-                    >
-                      <span className={styles.toolChevron}>
-                        {act.collapsed ? ">" : "v"}
+              isRunning ? (
+                // During execution: show collapsed summary with count
+                <div className={styles.toolActivities}>
+                  <div className={styles.toolActivity}>
+                    <div className={styles.toolHeader}>
+                      <span className={styles.toolChevron}>›</span>
+                      <span className={styles.toolName}>
+                        {activities.length} tool call{activities.length !== 1 ? "s" : ""}
                       </span>
-                      <span className={styles.toolName}>{act.toolName}</span>
-                      {act.summary && (
-                        <span className={styles.toolSummary}>
-                          {act.summary}
-                        </span>
-                      )}
-                    </button>
-                    {!act.collapsed && (
-                      <pre className={styles.toolContent}>
-                        {act.resultText || act.inputJson || "..."}
-                      </pre>
-                    )}
+                      <span className={styles.toolSummary}>in progress</span>
+                    </div>
                   </div>
-                ))}
-              </div>
+                </div>
+              ) : (
+                // After execution: show individual expandable tool calls
+                <div className={styles.toolActivities}>
+                  {activities.map((act, i) => (
+                    <div key={act.toolUseId} className={styles.toolActivity}>
+                      <button
+                        className={styles.toolHeader}
+                        onClick={() =>
+                          selectedWorkspaceId &&
+                          toggleToolActivityCollapsed(selectedWorkspaceId, i)
+                        }
+                      >
+                        <span className={styles.toolChevron}>
+                          {act.collapsed ? ">" : "v"}
+                        </span>
+                        <span className={styles.toolName}>{act.toolName}</span>
+                        {act.summary && (
+                          <span className={styles.toolSummary}>
+                            {act.summary}
+                          </span>
+                        )}
+                      </button>
+                      {!act.collapsed && (
+                        <pre className={styles.toolContent}>
+                          {act.resultText || act.inputJson || "..."}
+                        </pre>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )
             )}
 
             {streaming && (
