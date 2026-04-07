@@ -1,5 +1,5 @@
 import { useMemo, useEffect, useState } from "react";
-import { GitBranch, Layers } from "lucide-react";
+import { GitBranch, Layers, Globe } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import { RepoIcon } from "../shared/RepoIcon";
 import styles from "./Dashboard.module.css";
@@ -51,6 +51,7 @@ function WorkspaceCard({
   repo,
   baseBranch,
   lastMsg,
+  remoteName,
   onClick,
   index,
 }: {
@@ -58,6 +59,7 @@ function WorkspaceCard({
   repo: { name: string; icon: string | null } | undefined;
   baseBranch: string | undefined;
   lastMsg: { role: string; content: string } | undefined;
+  remoteName: string | undefined;
   onClick: () => void;
   index: number;
 }) {
@@ -99,6 +101,12 @@ function WorkspaceCard({
             <RepoIcon icon={repo.icon} size={14} className={styles.repoIcon} />
           )}
           {repo?.name ?? "Unknown"}
+          {remoteName && (
+            <span className={styles.remoteBadge}>
+              <Globe size={10} />
+              {remoteName}
+            </span>
+          )}
         </span>
         <span className={styles.statusIndicator}>
           <span className={styles.statusLabel} style={{ color: statusColor }}>
@@ -147,11 +155,17 @@ export function Dashboard() {
   const workspaces = useAppStore((s) => s.workspaces);
   const lastMessages = useAppStore((s) => s.lastMessages);
   const defaultBranches = useAppStore((s) => s.defaultBranches);
+  const remoteConnections = useAppStore((s) => s.remoteConnections);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
 
   const repoMap = useMemo(
     () => new Map(repositories.map((r) => [r.id, r])),
     [repositories]
+  );
+
+  const remoteNameMap = useMemo(
+    () => new Map(remoteConnections.map((c) => [c.id, c.name])),
+    [remoteConnections]
   );
 
   const activeWorkspaces = workspaces.filter((ws) => ws.status === "Active");
@@ -193,6 +207,7 @@ export function Dashboard() {
               repo={repo}
               baseBranch={repo ? defaultBranches[repo.id] : undefined}
               lastMsg={lastMessages[ws.id]}
+              remoteName={ws.remote_connection_id ? remoteNameMap.get(ws.remote_connection_id) : undefined}
               onClick={() => selectWorkspace(ws.id)}
               index={i}
             />

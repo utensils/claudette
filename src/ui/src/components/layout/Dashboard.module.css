@@ -89,6 +89,19 @@
   color: var(--text-muted);
 }
 
+.remoteBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--accent-primary);
+  background: rgba(var(--accent-primary-rgb), 0.1);
+  border-radius: 4px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+
 .statusIndicator {
   display: flex;
   align-items: center;
