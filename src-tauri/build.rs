@@ -61,21 +61,21 @@ fn main() {
                 )
             });
 
-            // Ensure the binary is executable on Unix
-            #[cfg(unix)]
-            {
-                let mut perms = fs::metadata(&dest)
-                    .expect("Failed to read binary metadata")
-                    .permissions();
-                perms.set_mode(0o755); // rwxr-xr-x
-                fs::set_permissions(&dest, perms)
-                    .expect("Failed to set executable permissions");
-            }
-
             println!(
                 "cargo:warning=Copied claudette-server from {:?} to {:?}",
                 server_binary, dest
             );
+        }
+
+        // Always ensure the binary is executable on Unix (even if we didn't copy)
+        #[cfg(unix)]
+        {
+            let mut perms = fs::metadata(&dest)
+                .expect("Failed to read binary metadata")
+                .permissions();
+            perms.set_mode(0o755); // rwxr-xr-x
+            fs::set_permissions(&dest, perms)
+                .expect("Failed to set executable permissions");
         }
     } else {
         // Create an empty placeholder file so tauri_build doesn't fail
