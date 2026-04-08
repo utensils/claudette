@@ -170,6 +170,10 @@ interface AppState {
   setTerminalFontSize: (size: number) => void;
   currentThemeId: string;
   setCurrentThemeId: (id: string) => void;
+  soundPackId: string;
+  setSoundPackId: (id: string) => void;
+  soundVolume: number;
+  setSoundVolume: (volume: number) => void;
   lastMessages: Record<string, ChatMessage>;
   setLastMessages: (msgs: Record<string, ChatMessage>) => void;
 
@@ -488,6 +492,10 @@ export const useAppStore = create<AppState>((set) => ({
   setTerminalFontSize: (size) => set({ terminalFontSize: size }),
   currentThemeId: DEFAULT_THEME_ID,
   setCurrentThemeId: (id) => set({ currentThemeId: id }),
+  soundPackId: "default",
+  setSoundPackId: (id) => set({ soundPackId: id }),
+  soundVolume: 0.5,
+  setSoundVolume: (volume) => set({ soundVolume: volume }),
   lastMessages: {},
   setLastMessages: (msgs) => set({ lastMessages: msgs }),
 

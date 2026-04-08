@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 claudette = { path = ".." }
+base64 = "0.22"
 tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"

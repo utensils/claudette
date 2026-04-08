@@ -17,6 +17,8 @@ function App() {
   const setLocalServerRunning = useAppStore((s) => s.setLocalServerRunning);
   const setLocalServerConnectionString = useAppStore((s) => s.setLocalServerConnectionString);
   const setCurrentThemeId = useAppStore((s) => s.setCurrentThemeId);
+  const setSoundPackId = useAppStore((s) => s.setSoundPackId);
+  const setSoundVolume = useAppStore((s) => s.setSoundVolume);
 
   useEffect(() => {
     loadInitialData().then((data) => {
@@ -52,6 +54,19 @@ function App() {
         applyTheme(theme);
       })
       .catch((err) => console.error("Failed to load theme:", err));
+    getAppSetting("sound_pack")
+      .then((val) => {
+        if (val) setSoundPackId(val);
+      })
+      .catch((err) => console.error("Failed to load sound pack setting:", err));
+    getAppSetting("sound_volume")
+      .then((val) => {
+        if (val) {
+          const v = parseFloat(val);
+          if (v >= 0 && v <= 1) setSoundVolume(v);
+        }
+      })
+      .catch((err) => console.error("Failed to load sound volume:", err));
     listRemoteConnections()
       .then(setRemoteConnections)
       .catch((err) => console.error("Failed to load remote connections:", err));
@@ -74,7 +89,7 @@ function App() {
     return () => {
       window.clearInterval(discoveredServersPollId);
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setSoundPackId, setSoundVolume]);
 
   return <AppLayout />;
 }

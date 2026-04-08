@@ -1,0 +1,10 @@
+{
+  "id": "default",
+  "name": "Default",
+  "author": "Claudette",
+  "description": "Simple notification sounds",
+  "sounds": {
+    "task_complete": "task-complete.wav",
+    "input_needed": "input-needed.wav"
+  }
+}

@@ -254,6 +254,28 @@ export function listUserThemes(): Promise<ThemeDefinition[]> {
   return invoke("list_user_themes");
 }
 
+export interface SoundPackInfo {
+  manifest: {
+    id: string;
+    name: string;
+    author?: string;
+    description?: string;
+    sounds: Record<string, string>;
+  };
+  base_path: string;
+}
+
+export function listUserSoundPacks(): Promise<SoundPackInfo[]> {
+  return invoke("list_user_sound_packs");
+}
+
+export function readSoundFile(
+  basePath: string,
+  filename: string
+): Promise<string> {
+  return invoke("read_sound_file", { basePath, filename });
+}
+
 // -- Remote --
 
 export function listRemoteConnections(): Promise<RemoteConnectionInfo[]> {
