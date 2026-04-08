@@ -1,5 +1,5 @@
 use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 use tauri_plugin_shell::ShellExt;
 
 use claudette::db::Database;
@@ -320,7 +320,7 @@ pub async fn start_local_server(
     };
 
     *server = Some(LocalServerState {
-        child,
+        child: Some(child),
         connection_string,
     });
 

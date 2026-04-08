@@ -40,3 +40,4 @@ tags
 
 # Conductor
 .context/
+src-tauri/binaries/
