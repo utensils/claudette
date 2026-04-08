@@ -1,0 +1,341 @@
+# Technical Design: Remote Terminal via WebSocket
+
+**Status**: Draft
+**Date**: 2026-04-07
+**Issue**: [#79](https://github.com/utensils/Claudette/issues/79) (Option 4)
+
+## 1. Overview
+
+Add remote terminal access so that opening a terminal on a remote workspace spawns a PTY on the remote `claudette-server` and streams I/O over the existing WebSocket connection to the local xterm.js instance. The user experience should be identical to a local terminal — the only visual distinction is a label indicating the terminal is remote.
+
+## 2. Current Architecture
+
+### Local Terminal Flow
+
+```
+User opens terminal tab
+  → TerminalPanel calls spawnPty(worktreePath) → Tauri command
+  → Rust spawns PTY via portable_pty, starts background reader thread
+  → Reader emits Tauri "pty-output" events with { pty_id, data: [u8] }
+  → Frontend listens on "pty-output", writes to xterm.js
+  → User types → term.onData() → writePty(ptyId, bytes) → Tauri command
+  → Rust writes to PTY master
+```
+
+### Key Files
+
+| Component | File | Role |
+|-----------|------|------|
+| Frontend component | `src/ui/src/components/terminal/TerminalPanel.tsx` | xterm.js lifecycle, tab management |
+| Frontend services | `src/ui/src/services/tauri.ts` | `spawnPty`, `writePty`, `resizePty`, `closePty` wrappers |
+| Frontend store | `src/ui/src/stores/useAppStore.ts` | Terminal tabs, active tab, panel visibility |
+| Tauri PTY backend | `src-tauri/src/pty.rs` | PTY spawn, read loop, write, resize, close |
+| Tauri state | `src-tauri/src/state.rs` | `PtyHandle`, `AppState.ptys` HashMap |
+| Server handler | `src-server/src/handler.rs` | `spawn_pty`, `write_pty`, `resize_pty`, `close_pty` RPC handlers |
+| Server state | `src-server/src/ws.rs` | `ServerState.ptys` HashMap, `PtyHandle` |
+
+### Server-Side PTY (Already Implemented)
+
+The `claudette-server` already supports PTY operations over its JSON-RPC protocol:
+
+| Method | Params | Returns | Events |
+|--------|--------|---------|--------|
+| `spawn_pty` | `workspace_id`, `cwd`, `rows`, `cols` | `{ pty_id }` | Streams `pty-output` events with `{ pty_id, data }` |
+| `write_pty` | `pty_id`, `data` (byte array) | `null` | — |
+| `resize_pty` | `pty_id`, `rows`, `cols` | `null` | — |
+| `close_pty` | `pty_id` | `null` | — |
+
+Server PTY output is sent as WebSocket events:
+```json
+{ "event": "pty-output", "payload": { "pty_id": 1, "data": [72, 101, 108, 108, 111] } }
+```
+
+These events are already forwarded to the Tauri event bus by `RemoteConnectionManager::add()` under their original event name (`pty-output`), so the existing `TerminalPanel` event listener will receive them.
+
+### Gap Analysis
+
+The server-side PTY infrastructure is complete. The gap is entirely on the client side:
+
+1. `TerminalPanel` always calls local Tauri commands (`spawn_pty`, `write_pty`, etc.) — no remote routing
+2. No way to distinguish local vs remote PTY IDs (both are `u64` counters starting at 1, so they can collide)
+3. Terminal tab creation always goes through the local database, which has a FK constraint against `workspaces(id)` — remote workspaces are not in the local DB
+4. `WorkspaceActions` "Open in Terminal" doesn't work for remote workspaces
+5. Local `spawn_pty` Tauri command hard-codes PTY size to 24x80 and does not accept `rows`/`cols` — the server-side version does accept them. This mismatch is acceptable: the local flow relies on an immediate `resize_pty` call after spawn (triggered by `FitAddon.fit()`), and the same pattern will work for remote. No change needed to the local command for this feature.
+
+## 3. Design
+
+### 3.1 PTY ID Namespacing
+
+Local and remote PTY IDs can collide (both use independent atomic counters). To distinguish them, the frontend will use a composite key:
+
+```typescript
+type PtyKey = {
+  ptyId: number;
+  connectionId: string | null; // null = local
+};
+```
+
+The `pty-output` event listener already receives events from both local Tauri emissions and remote WebSocket forwarding on the same `"pty-output"` channel. To route output to the correct terminal instance, each `TermInstance` stores its `PtyKey` and the listener matches on both `pty_id` and source.
+
+**Event disambiguation**: Remote `pty-output` events arrive via `RemoteConnectionManager` event forwarding, which emits them as Tauri events under the same `"pty-output"` name. Since both local and remote events hit the same listener, we need to add `connection_id` to the payload so the frontend can match events to the correct terminal instance.
+
+### 3.2 Remote PTY Command Routing
+
+Instead of branching in every call site, introduce a thin routing layer in the service module:
+
+```typescript
+// spawnRemotePty must unwrap and validate the server response,
+// which returns { pty_id: number } rather than a bare number.
+export async function spawnRemotePty(
+  connectionId: string,
+  workspaceId: string,
+  cwd: string,
+  rows: number,
+  cols: number,
+): Promise<number> {
+  const result = await sendRemoteCommand(connectionId, "spawn_pty", {
+    workspace_id: workspaceId, cwd, rows, cols,
+  });
+  if (result === null || typeof result !== "object" || !("pty_id" in result)) {
+    throw new Error("Invalid spawn_pty response: expected { pty_id: number }");
+  }
+  return (result as { pty_id: number }).pty_id;
+}
+
+export function writeRemotePty(
+  connectionId: string,
+  ptyId: number,
+  data: number[],
+): Promise<void>
+
+export function resizeRemotePty(
+  connectionId: string,
+  ptyId: number,
+  rows: number,
+  cols: number,
+): Promise<void>
+
+export function closeRemotePty(
+  connectionId: string,
+  ptyId: number,
+): Promise<void>
+```
+
+These call `sendRemoteCommand()` with the appropriate method and params. The existing local `spawnPty`/`writePty`/`resizePty`/`closePty` functions remain unchanged.
+
+### 3.3 TerminalPanel Changes
+
+`TerminalPanel` needs to know whether the current workspace is remote so it can route PTY operations. The component already has access to the workspace via the store.
+
+**Instance tracking** — extend the `TermInstance` type:
+
+```typescript
+interface TermInstance {
+  term: Terminal;
+  fit: FitAddon;
+  ptyId: number;
+  connectionId: string | null; // NEW — null for local
+  unlisten: () => void;
+  container: HTMLDivElement;
+  resizeObserver: ResizeObserver;
+}
+```
+
+**Spawn flow change**:
+
+```
+if workspace.remote_connection_id:
+  ptyId = await spawnRemotePty(connectionId, wsId, worktreePath, rows, cols)
+  // Listen for "pty-output" events, filter by pty_id AND connection_id
+else:
+  ptyId = await spawnPty(worktreePath)
+  // Listen for "pty-output" events, filter by pty_id only (connection_id absent)
+```
+
+**Write/resize/close** — check `instance.connectionId` to decide routing:
+
+```
+if instance.connectionId:
+  writeRemotePty(connectionId, ptyId, data)
+else:
+  writePty(ptyId, data)
+```
+
+### 3.4 Event Forwarding Enhancement
+
+Currently `RemoteConnectionManager::add()` forwards all remote events with their original name and payload:
+
+```rust
+let _ = app.emit(&event.event, &event.payload);
+```
+
+For `pty-output` events, the payload from the server is `{ pty_id, data }`. The frontend needs to know which remote connection the event came from to avoid PTY ID collisions. Two options:
+
+**Option A — Annotate in Rust**: Modify the event forwarding to inject `connection_id` into `pty-output` payloads before emitting.
+
+**Option B — Separate event name**: Emit remote PTY events as `"remote-pty-output"` with `{ connection_id, pty_id, data }`.
+
+**Chosen: Option A** — keeps a single listener and is consistent with how `agent-stream` events already work (workspace_id in the payload disambiguates). The change is small and localized to `RemoteConnectionManager::add()`.
+
+```rust
+// In the event forwarding task:
+while let Ok(event) = event_rx.recv().await {
+    if event.event == "pty-output" {
+        // Inject connection_id so frontend can disambiguate
+        let mut payload = event.payload.clone();
+        if let Some(obj) = payload.as_object_mut() {
+            obj.insert("connection_id".to_string(),
+                serde_json::Value::String(connection_id.clone()));
+        }
+        let _ = app.emit("pty-output", &payload);
+    } else {
+        let _ = app.emit(&event.event, &event.payload);
+    }
+}
+```
+
+### 3.5 Terminal Tab Creation for Remote Workspaces
+
+Local terminal tabs are persisted in the local SQLite database via `create_terminal_tab`. The `terminal_tabs` table has a foreign key on `workspace_id` referencing `workspaces(id)` with `PRAGMA foreign_keys=ON`. Remote workspaces are never inserted into the local `workspaces` table (they exist only in the frontend Zustand store), so calling `create_terminal_tab` with a remote workspace ID would violate the FK constraint.
+
+Therefore:
+
+- **Local workspace terminal tabs** continue to use the existing SQLite-backed `create_terminal_tab` / `list_terminal_tabs` flow.
+- **Remote workspace terminal tabs** are ephemeral client-side state managed purely in the Zustand store. They must not call the DB-backed terminal tab APIs.
+- The tab still carries the remote `workspace_id` in frontend state so the UI can group, focus, and route PTY traffic correctly.
+- On app restart, local terminal tabs are restored from SQLite as they are today; remote terminal tabs are not restored (reconnecting to the server provides a fresh state).
+
+Implementation: `TerminalPanel` checks `workspace.remote_connection_id` before calling `createTerminalTab` / `listTerminalTabs`. For remote workspaces, it generates a tab ID locally (e.g., `Date.now()`) and adds it directly to the Zustand store.
+
+### 3.6 WorkspaceActions Integration
+
+`WorkspaceActions` currently has two actions, both of which need remote-aware behavior:
+
+**"Open in Terminal"** — Currently calls `openWorkspaceInTerminal(worktreePath)`, which opens an **external** terminal application (e.g., Alacritty, Kitty) at the local worktree path. This fundamentally cannot work for remote workspaces since the path doesn't exist on the local machine.
+
+For remote workspaces, the "open-terminal" action should show a modal explaining the situation and offering two choices:
+
+> **Remote Terminal**
+>
+> Remote terminals can only be opened in app. Alternatively you can SSH into the remote per usual.
+>
+> [ Open in App ]  [ Copy Remote Path ]
+
+- **Open in App** — Opens the built-in terminal pane and creates a remote terminal tab with a PTY on the server.
+- **Copy Remote Path** — Copies the remote worktree path to clipboard so the user can `ssh` and `cd` manually.
+
+For local workspaces, behavior is unchanged (opens external terminal directly, no modal).
+
+Implementation:
+
+1. `WorkspaceActions` needs access to `remote_connection_id` (passed as a prop or read from the store)
+2. When `remote_connection_id` is set, the "open-terminal" action opens the `RemoteTerminalModal` instead of calling `openWorkspaceInTerminal`
+3. The modal's "Open in App" button toggles the built-in terminal panel visible and creates a new remote terminal tab
+4. The modal's "Copy Remote Path" button copies `worktreePath` to clipboard and closes the modal
+
+**"Copy Path"** — For local workspaces, behavior is unchanged. For remote workspaces, label changes to "Copy Remote Path" to clarify context.
+
+`WorkspaceActions` props need to be extended:
+
+```typescript
+interface WorkspaceActionsProps {
+  worktreePath: string | null;
+  remoteConnectionId: string | null; // NEW
+  disabled?: boolean;
+}
+```
+
+`ChatPanel` already has access to `ws.remote_connection_id` and passes it through.
+
+### 3.7 Visual Distinction
+
+Remote terminal tabs should be visually distinguishable. Add a subtle indicator (e.g., a globe icon or "remote" label) to the tab title when the terminal is connected to a remote workspace. This reuses the same pattern as the dashboard remote badge.
+
+## 4. Implementation
+
+### 4.1 Backend: Annotate remote pty-output events
+
+**File**: `src-tauri/src/remote.rs`
+
+In the event forwarding task within `RemoteConnectionManager::add()`, inject `connection_id` into `pty-output` event payloads before emitting to the Tauri event bus.
+
+### 4.2 Frontend: Remote PTY service functions
+
+**File**: `src/ui/src/services/tauri.ts`
+
+Add four new functions that route PTY commands to a remote server via `sendRemoteCommand`:
+
+- `spawnRemotePty(connectionId, workspaceId, cwd, rows, cols)` → calls `spawn_pty`
+- `writeRemotePty(connectionId, ptyId, data)` → calls `write_pty`
+- `resizeRemotePty(connectionId, ptyId, rows, cols)` → calls `resize_pty`
+- `closeRemotePty(connectionId, ptyId)` → calls `close_pty`
+
+### 4.3 Frontend: TerminalPanel remote routing
+
+**File**: `src/ui/src/components/terminal/TerminalPanel.tsx`
+
+1. Read `workspace.remote_connection_id` from the store
+2. Extend `TermInstance` with `connectionId: string | null`
+3. On tab creation: skip `createTerminalTab` DB call for remote workspaces; generate a local tab ID and add directly to Zustand store
+4. On spawn: route to `spawnRemotePty` or `spawnPty` based on `remote_connection_id`
+5. On `pty-output` listener: match events by both `pty_id` and `connection_id` (local events have no `connection_id` field)
+6. On write/resize/close: check `instance.connectionId` to choose local or remote function
+7. On cleanup: call correct close function based on `connectionId`
+
+### 4.4 Frontend: WorkspaceActions + RemoteTerminalModal
+
+**Files**: `src/ui/src/components/chat/WorkspaceActions.tsx`, `src/ui/src/components/chat/ChatPanel.tsx`, `src/ui/src/components/modals/RemoteTerminalModal.tsx` (new)
+
+1. Add `remoteConnectionId` prop to `WorkspaceActionsProps`
+2. Pass `ws.remote_connection_id` from `ChatPanel` to `WorkspaceActions`
+3. "Open in Terminal" action: when `remoteConnectionId` is set, open `RemoteTerminalModal` instead of calling `openWorkspaceInTerminal`
+4. `RemoteTerminalModal` displays explanatory text and two buttons:
+   - "Open in App" — toggles built-in terminal panel visible, creates a remote terminal tab, closes modal
+   - "Copy Remote Path" — copies `worktreePath` to clipboard, closes modal
+5. "Copy Path" action: when `remoteConnectionId` is set, relabel to "Copy Remote Path"
+
+### 4.5 Frontend: Remote tab indicator
+
+**File**: `src/ui/src/components/terminal/TerminalPanel.tsx`
+
+When rendering tab titles, check if the workspace is remote and prepend a globe icon or "(remote)" suffix to distinguish from local terminals.
+
+## 5. Files Modified
+
+| File | Change |
+|------|--------|
+| `src-tauri/src/remote.rs` | Inject `connection_id` into `pty-output` event payloads |
+| `src/ui/src/services/tauri.ts` | Add `spawnRemotePty`, `writeRemotePty`, `resizeRemotePty`, `closeRemotePty` |
+| `src/ui/src/components/terminal/TerminalPanel.tsx` | Remote routing in spawn/write/resize/close, event disambiguation, ephemeral tab creation for remote workspaces, tab label |
+| `src/ui/src/components/chat/WorkspaceActions.tsx` | Add `remoteConnectionId` prop, show modal for remote "Open in Terminal", relabel "Copy Path" |
+| `src/ui/src/components/chat/ChatPanel.tsx` | Pass `ws.remote_connection_id` to `WorkspaceActions` |
+| `src/ui/src/components/modals/RemoteTerminalModal.tsx` | **New** — modal with "Open in App" and "Copy Remote Path" options |
+
+## 6. Testing
+
+### Manual verification
+
+- Open a terminal on a local workspace — behavior unchanged
+- Connect to a remote server, open a remote workspace
+- Open terminal on remote workspace — PTY spawns on server, output streams to local xterm.js
+- Type commands in remote terminal — input reaches server PTY
+- Resize terminal panel — remote PTY receives resize
+- Close remote terminal tab — server PTY is cleaned up
+- Open multiple terminals (mix of local and remote) — output routes to correct instances
+- Disconnect from remote server — remote terminal tabs show disconnected state or close gracefully
+- Tab label shows remote indicator for remote terminals
+
+### Edge cases
+
+- Rapid typing in remote terminal (latency tolerance)
+- Large output bursts (e.g., `cat` a large file) — verify no data loss
+- Remote server goes down while terminal is open — verify graceful degradation
+- Multiple remote connections with terminals open simultaneously
+- PTY ID collision between local and remote (same numeric ID) — verify disambiguation works
+
+## 7. Future Considerations
+
+- **Terminal session persistence**: Save/restore terminal scrollback across reconnections
+- **Per-connection PTY limits**: Server-side enforcement of max PTYs per client
+- **Latency indicator**: Show round-trip time in terminal tab for remote connections
+- **Connection-scoped cleanup**: Server already cleans up PTYs when WebSocket closes; verify this works correctly
