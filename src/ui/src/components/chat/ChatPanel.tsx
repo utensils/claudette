@@ -375,6 +375,16 @@ export function ChatPanel() {
               <StreamingMessage workspaceId={selectedWorkspaceId} />
             )}
 
+            {pendingQuestion && (
+              <AgentQuestionCard
+                question={pendingQuestion}
+                onRespond={(response) => {
+                  setAgentQuestion(null);
+                  handleSend(response);
+                }}
+              />
+            )}
+
             {isRunning && !pendingQuestion && (
               <div
                 className={styles.processing}
@@ -384,16 +394,6 @@ export function ChatPanel() {
                 <span className={styles.spinner} aria-hidden="true">{SPINNER_FRAMES[spinnerIdx]}</span>
                 <span className={styles.elapsed}>{formatElapsed(elapsed)}</span>
               </div>
-            )}
-
-            {pendingQuestion && (
-              <AgentQuestionCard
-                question={pendingQuestion}
-                onRespond={(response) => {
-                  setAgentQuestion(null);
-                  handleSend(response);
-                }}
-              />
             )}
           </>
         )}
