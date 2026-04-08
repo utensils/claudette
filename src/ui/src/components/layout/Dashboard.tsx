@@ -1,4 +1,4 @@
-import { useMemo, useEffect, useState } from "react";
+import { memo, useMemo, useEffect, useState } from "react";
 import { GitBranch, Layers, Globe } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import { RepoIcon } from "../shared/RepoIcon";
@@ -46,7 +46,7 @@ function useElapsed(isRunning: boolean): number {
   return elapsed;
 }
 
-function WorkspaceCard({
+const WorkspaceCard = memo(function WorkspaceCard({
   ws,
   repo,
   baseBranch,
@@ -60,7 +60,7 @@ function WorkspaceCard({
   baseBranch: string | undefined;
   lastMsg: { role: string; content: string } | undefined;
   remoteName: string | undefined;
-  onClick: () => void;
+  onClick: (id: string | null) => void;
   index: number;
 }) {
   const isRunning = ws.agent_status === "Running";
@@ -92,7 +92,7 @@ function WorkspaceCard({
     <button
       type="button"
       className={cardClass}
-      onClick={onClick}
+      onClick={() => onClick(ws.id)}
       style={{ animationDelay: `${index * 0.04}s` }}
     >
       <div className={styles.cardHeader}>
@@ -148,7 +148,7 @@ function WorkspaceCard({
       )}
     </button>
   );
-}
+});
 
 export function Dashboard() {
   const repositories = useAppStore((s) => s.repositories);
@@ -208,7 +208,7 @@ export function Dashboard() {
               baseBranch={repo ? defaultBranches[repo.id] : undefined}
               lastMsg={lastMessages[ws.id]}
               remoteName={ws.remote_connection_id ? remoteNameMap.get(ws.remote_connection_id) : undefined}
-              onClick={() => selectWorkspace(ws.id)}
+              onClick={selectWorkspace}
               index={i}
             />
           );
