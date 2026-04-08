@@ -280,6 +280,7 @@ pub async fn start_local_server(
 
     // Read from the sidecar output until we find the connection string
     let mut connection_string = String::new();
+    let mut stderr_output = String::new();
     let timeout = tokio::time::Duration::from_secs(10);
     let deadline = tokio::time::Instant::now() + timeout;
 
@@ -290,15 +291,33 @@ pub async fn start_local_server(
             .ok_or("Server process exited before printing connection string")?;
 
         use tauri_plugin_shell::process::CommandEvent;
-        if let CommandEvent::Stdout(line_bytes) = event {
-            let line = String::from_utf8_lossy(&line_bytes);
-            let trimmed = line.trim();
-            if trimmed.starts_with("claudette://") {
-                connection_string = trimmed.to_string();
-                break;
+        match event {
+            CommandEvent::Stdout(line_bytes) => {
+                let line = String::from_utf8_lossy(&line_bytes);
+                let trimmed = line.trim();
+                if trimmed.starts_with("claudette://") {
+                    connection_string = trimmed.to_string();
+                    break;
+                }
             }
-        } else if let CommandEvent::Terminated(_) = event {
-            return Err("Server process exited before printing connection string".to_string());
+            CommandEvent::Stderr(line_bytes) => {
+                // Capture stderr for error reporting
+                stderr_output.push_str(&String::from_utf8_lossy(&line_bytes));
+            }
+            CommandEvent::Terminated(payload) => {
+                let exit_info = if let Some(code) = payload.code {
+                    format!("exit code {}", code)
+                } else {
+                    "unknown reason".to_string()
+                };
+                let error_msg = if stderr_output.is_empty() {
+                    format!("Server process exited before printing connection string ({})", exit_info)
+                } else {
+                    format!("Server process exited ({}):\n{}", exit_info, stderr_output.trim())
+                };
+                return Err(error_msg);
+            }
+            _ => {}
         }
     }
 
