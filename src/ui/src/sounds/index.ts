@@ -17,8 +17,8 @@ export const BUILTIN_SOUND_PACKS: SoundPackDefinition[] = [
   {
     ...defaultManifest,
     resolvedUrls: {
-      task_complete: defaultTaskComplete,
-      input_needed: defaultInputNeeded,
+      task_complete: [defaultTaskComplete],
+      input_needed: [defaultInputNeeded],
     },
   },
   {

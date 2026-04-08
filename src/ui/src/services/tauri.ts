@@ -260,7 +260,7 @@ export interface SoundPackInfo {
     name: string;
     author?: string;
     description?: string;
-    sounds: Record<string, string>;
+    sounds: Record<string, string | string[]>;
   };
   base_path: string;
 }

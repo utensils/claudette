@@ -111,13 +111,30 @@ pub async fn list_user_themes() -> Result<Vec<ThemeDefinition>, String> {
     .map_err(|e| e.to_string())?
 }
 
+/// A sound entry can be a single filename or an array of filenames.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(untagged)]
+pub enum SoundFileEntry {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl SoundFileEntry {
+    fn filenames(&self) -> Vec<&str> {
+        match self {
+            SoundFileEntry::Single(s) => vec![s.as_str()],
+            SoundFileEntry::Multiple(v) => v.iter().map(String::as_str).collect(),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct SoundPackManifest {
     pub id: String,
     pub name: String,
     pub author: Option<String>,
     pub description: Option<String>,
-    pub sounds: HashMap<String, String>,
+    pub sounds: HashMap<String, SoundFileEntry>,
 }
 
 #[derive(Serialize)]
@@ -196,35 +213,37 @@ pub async fn list_user_sound_packs() -> Result<Vec<SoundPackInfo>, String> {
 
             // Validate that referenced sound files exist and aren't too large.
             let mut valid = true;
-            for (event, filename) in &manifest.sounds {
-                // Reject path traversal.
-                if filename.contains("..") || filename.starts_with('/') {
-                    eprintln!(
-                        "[sounds] Skipping {}: invalid path for event '{event}': {filename}",
-                        pack_dir.display()
-                    );
-                    valid = false;
-                    break;
-                }
-                let sound_path = pack_dir.join(filename);
-                match std::fs::metadata(&sound_path) {
-                    Ok(meta) if meta.len() > MAX_SOUND_FILE_BYTES => {
+            'outer: for (event, entry) in &manifest.sounds {
+                for filename in entry.filenames() {
+                    // Reject path traversal.
+                    if filename.contains("..") || filename.starts_with('/') {
                         eprintln!(
-                            "[sounds] Skipping {}: sound file too large ({} bytes): {filename}",
-                            pack_dir.display(),
-                            meta.len()
-                        );
-                        valid = false;
-                        break;
-                    }
-                    Ok(_) => {}
-                    Err(e) => {
-                        eprintln!(
-                            "[sounds] Skipping {}: missing sound file '{filename}': {e}",
+                            "[sounds] Skipping {}: invalid path for event '{event}': {filename}",
                             pack_dir.display()
                         );
                         valid = false;
-                        break;
+                        break 'outer;
+                    }
+                    let sound_path = pack_dir.join(filename);
+                    match std::fs::metadata(&sound_path) {
+                        Ok(meta) if meta.len() > MAX_SOUND_FILE_BYTES => {
+                            eprintln!(
+                                "[sounds] Skipping {}: sound file too large ({} bytes): {filename}",
+                                pack_dir.display(),
+                                meta.len()
+                            );
+                            valid = false;
+                            break 'outer;
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            eprintln!(
+                                "[sounds] Skipping {}: missing sound file '{filename}': {e}",
+                                pack_dir.display()
+                            );
+                            valid = false;
+                            break 'outer;
+                        }
                     }
                 }
             }

@@ -10,6 +10,10 @@ function getAudioContext(): AudioContext {
   return audioCtx;
 }
 
+function pickRandom<T>(arr: T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
 interface UserSoundPack extends SoundPackDefinition {
   basePath: string;
 }
@@ -55,25 +59,47 @@ export function findSoundPack(
   return { id: "silent", name: "Silent", sounds: {}, resolvedUrls: {} };
 }
 
-async function resolveUrl(
+/** Normalize a sound entry (string or string[]) to a string array. */
+function normalizeFilenames(entry: string | string[]): string[] {
+  return Array.isArray(entry) ? entry : [entry];
+}
+
+/**
+ * Resolve all URLs for a sound event, loading custom pack files lazily.
+ * Returns an array of playable URLs (cached after first resolution).
+ */
+async function resolveUrls(
   pack: SoundPackDefinition,
   event: SoundEvent
-): Promise<string | undefined> {
-  // Built-in packs have pre-resolved URLs.
+): Promise<string[]> {
+  // Already resolved — return cached URLs.
   const existing = pack.resolvedUrls?.[event];
-  if (existing) return existing;
+  if (existing && existing.length > 0) return existing;
 
-  // Custom packs: read the file via Tauri command and cache the data URI.
-  const filename = pack.sounds[event];
-  if (!filename) return undefined;
+  // Get the filenames for this event.
+  const entry = pack.sounds[event];
+  if (!entry) return [];
+
+  const filenames = normalizeFilenames(entry);
+  if (filenames.length === 0) return [];
 
   const userPack = pack as UserSoundPack;
-  if (!userPack.basePath) return undefined;
+  if (!userPack.basePath) return [];
 
-  const dataUri = await readSoundFile(userPack.basePath, filename);
+  // Custom packs: read each file via Tauri command.
+  const urls: string[] = [];
+  for (const filename of filenames) {
+    try {
+      const dataUri = await readSoundFile(userPack.basePath, filename);
+      urls.push(dataUri);
+    } catch (e) {
+      console.error(`[sound] Failed to read ${filename}:`, e);
+    }
+  }
+
   if (!pack.resolvedUrls) pack.resolvedUrls = {};
-  pack.resolvedUrls[event] = dataUri;
-  return dataUri;
+  pack.resolvedUrls[event] = urls;
+  return urls;
 }
 
 export async function playSound(
@@ -81,8 +107,10 @@ export async function playSound(
   event: SoundEvent,
   volume: number
 ): Promise<void> {
-  const url = await resolveUrl(pack, event);
-  if (!url) return;
+  const urls = await resolveUrls(pack, event);
+  if (urls.length === 0) return;
+
+  const url = pickRandom(urls);
 
   const ctx = getAudioContext();
   let buffer = audioBufferCache.get(url);
