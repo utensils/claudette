@@ -256,9 +256,9 @@ pub fn build_claude_args(
     // Add --allowedTools
     if !allowed_tools.is_empty() {
         if bypass_permissions {
-            // For bypass mode, explicitly allow Bash with all commands and all other tools
+            // For bypass mode, explicitly allow Bash and Edit with all patterns, plus all other tools
             args.push("--allowedTools".to_string());
-            args.push("Bash(*) *".to_string());
+            args.push("Bash(*) Edit(*) *".to_string());
         } else {
             args.push("--allowedTools".to_string());
             args.push(allowed_tools.join(","));
@@ -931,12 +931,12 @@ mod tests {
             None,
             &AgentSettings::default(),
         );
-        // Should set permission-mode on first turn
+        // Should set permission-mode to bypassPermissions on first turn
         let pm_idx = args.iter().position(|a| a == "--permission-mode").unwrap();
         assert_eq!(args[pm_idx + 1], "bypassPermissions");
-        // Should use wildcard allowedTools format
+        // Should use wildcard allowedTools format with explicit Bash and Edit patterns
         let at_idx = args.iter().position(|a| a == "--allowedTools").unwrap();
-        assert_eq!(args[at_idx + 1], "Bash(*) *");
+        assert_eq!(args[at_idx + 1], "Bash(*) Edit(*) *");
     }
 
     #[test]
@@ -952,9 +952,9 @@ mod tests {
         );
         // Permission mode is session-level, should not appear on resume
         assert!(!args.contains(&"--permission-mode".to_string()));
-        // But allowedTools should still be passed
+        // But allowedTools should still be passed with Bash and Edit patterns
         let at_idx = args.iter().position(|a| a == "--allowedTools").unwrap();
-        assert_eq!(args[at_idx + 1], "Bash(*) *");
+        assert_eq!(args[at_idx + 1], "Bash(*) Edit(*) *");
     }
 
     #[test]
@@ -968,8 +968,8 @@ mod tests {
         // Plan mode takes precedence over bypass
         let pm_idx = args.iter().position(|a| a == "--permission-mode").unwrap();
         assert_eq!(args[pm_idx + 1], "plan");
-        // Should still use wildcard allowedTools format
+        // Should still use wildcard allowedTools format with Bash and Edit patterns
         let at_idx = args.iter().position(|a| a == "--allowedTools").unwrap();
-        assert_eq!(args[at_idx + 1], "Bash(*) *");
+        assert_eq!(args[at_idx + 1], "Bash(*) Edit(*) *");
     }
 }
