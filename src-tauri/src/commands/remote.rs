@@ -330,9 +330,8 @@ pub async fn start_local_server(
 #[tauri::command]
 pub async fn stop_local_server(state: State<'_, AppState>) -> Result<(), String> {
     let mut server = state.local_server.write().await;
-    if let Some(mut srv) = server.take() {
-        let _ = srv.child.kill();
-        // Note: The sidecar Child's Drop impl handles cleanup, no need to wait
+    if let Some(srv) = server.take() {
+        drop(srv); // Drop impl kills the process
     }
     Ok(())
 }
