@@ -11,7 +11,13 @@ fn main() {
     let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
 
     // Compile the claudette-server binary BEFORE running tauri_build
-    let mut args = vec!["build", "--package", "claudette-server", "--target", &target];
+    let mut args = vec![
+        "build",
+        "--package",
+        "claudette-server",
+        "--target",
+        &target,
+    ];
     if profile == "release" {
         args.push("--release");
     }
