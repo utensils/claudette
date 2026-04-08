@@ -919,4 +919,57 @@ mod tests {
         let args = build_claude_args("sess-1", "hello", true, &[], None, &settings);
         assert!(args.contains(&"--settings".to_string()));
     }
+
+    #[test]
+    fn test_build_args_bypass_permissions_first_turn() {
+        let tools = vec!["*".to_string()];
+        let args = build_claude_args(
+            "sess-1",
+            "hello",
+            false,
+            &tools,
+            None,
+            &AgentSettings::default(),
+        );
+        // Should set permission-mode on first turn
+        let pm_idx = args.iter().position(|a| a == "--permission-mode").unwrap();
+        assert_eq!(args[pm_idx + 1], "bypassPermissions");
+        // Should use wildcard allowedTools format
+        let at_idx = args.iter().position(|a| a == "--allowedTools").unwrap();
+        assert_eq!(args[at_idx + 1], "Bash(*) *");
+    }
+
+    #[test]
+    fn test_build_args_bypass_permissions_resume() {
+        let tools = vec!["*".to_string()];
+        let args = build_claude_args(
+            "sess-1",
+            "hello",
+            true,
+            &tools,
+            None,
+            &AgentSettings::default(),
+        );
+        // Permission mode is session-level, should not appear on resume
+        assert!(!args.contains(&"--permission-mode".to_string()));
+        // But allowedTools should still be passed
+        let at_idx = args.iter().position(|a| a == "--allowedTools").unwrap();
+        assert_eq!(args[at_idx + 1], "Bash(*) *");
+    }
+
+    #[test]
+    fn test_build_args_bypass_permissions_with_plan_mode() {
+        let tools = vec!["*".to_string()];
+        let settings = AgentSettings {
+            plan_mode: true,
+            ..Default::default()
+        };
+        let args = build_claude_args("sess-1", "hello", false, &tools, None, &settings);
+        // Plan mode takes precedence over bypass
+        let pm_idx = args.iter().position(|a| a == "--permission-mode").unwrap();
+        assert_eq!(args[pm_idx + 1], "plan");
+        // Should still use wildcard allowedTools format
+        let at_idx = args.iter().position(|a| a == "--allowedTools").unwrap();
+        assert_eq!(args[at_idx + 1], "Bash(*) *");
+    }
 }
