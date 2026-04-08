@@ -267,6 +267,12 @@
   text-decoration: underline;
 }
 
+.content hr {
+  border: none;
+  border-top: 1px solid var(--divider);
+  margin: 12px 0;
+}
+
 .cursor {
   display: inline-block;
   width: 2px;
