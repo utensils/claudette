@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, useMemo, useCallback } from "react";
+import { memo, useEffect, useRef, useState, useMemo, useCallback } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { GitBranch, LayoutDashboard } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
+import type { ToolActivity, CompletedTurn } from "../../stores/useAppStore";
 import {
   loadChatHistory,
   listSlashCommands,
@@ -24,6 +25,12 @@ import styles from "./ChatPanel.module.css";
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+// Stable empty arrays to avoid Zustand selector re-renders when data is undefined.
+// Without these, `?? []` / `|| []` creates a new reference on every store update,
+// causing Object.is to return false and triggering unnecessary component re-renders.
+const EMPTY_COMPLETED_TURNS: CompletedTurn[] = [];
+const EMPTY_ACTIVITIES: ToolActivity[] = [];
+
 export function ChatPanel() {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const workspaces = useAppStore((s) => s.workspaces);
@@ -31,12 +38,9 @@ export function ChatPanel() {
   const chatMessages = useAppStore((s) => s.chatMessages);
   const setChatMessages = useAppStore((s) => s.setChatMessages);
   const addChatMessage = useAppStore((s) => s.addChatMessage);
-  const streamingContent = useAppStore((s) => s.streamingContent);
-  const toolActivities = useAppStore((s) => s.toolActivities);
   const updateWorkspace = useAppStore((s) => s.updateWorkspace);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
-  const [currentTurnCollapsed, setCurrentTurnCollapsed] = useState(true);
 
   // Prompt history: stores past user inputs per workspace.
   const historyRef = useRef<Record<string, string[]>>({});
@@ -54,17 +58,14 @@ export function ChatPanel() {
   const messages = selectedWorkspaceId
     ? chatMessages[selectedWorkspaceId] || []
     : [];
-  const streaming = selectedWorkspaceId
-    ? streamingContent[selectedWorkspaceId] || ""
-    : "";
-  const completedTurnsMap = useAppStore((s) => s.completedTurns);
-  const toggleCompletedTurn = useAppStore((s) => s.toggleCompletedTurn);
-  const completedTurns = selectedWorkspaceId
-    ? completedTurnsMap[selectedWorkspaceId] ?? []
-    : [];
-  const activities = selectedWorkspaceId
-    ? toolActivities[selectedWorkspaceId] || []
-    : [];
+  // Subscribe only to boolean — avoids re-render on every streaming character
+  const hasStreaming = useAppStore(
+    (s) => !!(selectedWorkspaceId && s.streamingContent[selectedWorkspaceId])
+  );
+  // Subscribe only to count — avoids re-render on tool activity content changes
+  const activitiesCount = useAppStore(
+    (s) => (selectedWorkspaceId ? (s.toolActivities[selectedWorkspaceId] || []).length : 0)
+  );
   const permissionLevelMap = useAppStore((s) => s.permissionLevel);
   const setPermissionLevel = useAppStore((s) => s.setPermissionLevel);
   const permissionLevel = selectedWorkspaceId
@@ -155,19 +156,10 @@ export function ChatPanel() {
       .catch((e) => console.error("Failed to load chat history:", e));
   }, [selectedWorkspaceId, setChatMessages]);
 
-  // Auto-scroll to bottom
+  // Auto-scroll to bottom (on new messages or workspace switch — streaming handles its own scroll)
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length, streaming]);
-
-  // Collapse current turn when a new turn starts (activities goes from 0 to non-zero)
-  const prevActivitiesLengthRef = useRef(0);
-  useEffect(() => {
-    if (isRunning && activities.length > 0 && prevActivitiesLengthRef.current === 0) {
-      setCurrentTurnCollapsed(true);
-    }
-    prevActivitiesLengthRef.current = activities.length;
-  }, [isRunning, activities.length]);
+  }, [messages.length, selectedWorkspaceId]);
 
   if (!ws) return null;
 
@@ -338,7 +330,7 @@ export function ChatPanel() {
       <div className={styles.messages}>
         {error && <div className={styles.errorBanner}>{error}</div>}
 
-        {messages.length === 0 && !streaming ? (
+        {messages.length === 0 && !hasStreaming ? (
           <div className={styles.empty}>
             Send a message to start a conversation
           </div>
@@ -368,110 +360,19 @@ export function ChatPanel() {
               </div>
             ))}
 
-            {completedTurns.map((turn, ti) => (
-              <div
-                key={turn.id}
-                className={styles.turnSummary}
-                role="button"
-                tabIndex={0}
-                onClick={() =>
-                  selectedWorkspaceId &&
-                  toggleCompletedTurn(selectedWorkspaceId, ti)
-                }
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    selectedWorkspaceId &&
-                      toggleCompletedTurn(selectedWorkspaceId, ti);
-                  }
-                }}
-              >
-                <div className={styles.turnHeader}>
-                  <span className={styles.toolChevron}>
-                    {turn.collapsed ? "›" : "⌄"}
-                  </span>
-                  <span className={styles.turnLabel}>
-                    {turn.activities.length} tool call
-                    {turn.activities.length !== 1 ? "s" : ""}
-                    {turn.messageCount > 0 &&
-                      `, ${turn.messageCount} message${turn.messageCount !== 1 ? "s" : ""}`}
-                  </span>
-                </div>
-                {!turn.collapsed && (
-                  <div className={styles.turnActivities}>
-                    {turn.activities.map((act) => (
-                      <div
-                        key={act.toolUseId}
-                        className={styles.toolActivity}
-                      >
-                        <div className={styles.toolHeader}>
-                          <span className={styles.toolName}>
-                            {act.toolName}
-                          </span>
-                          {act.summary && (
-                            <span className={styles.toolSummary}>
-                              {act.summary}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-
-            {activities.length > 0 && (
-              <div className={styles.toolActivities} aria-live="polite" aria-atomic="true">
-                <div className={styles.turnSummary}>
-                  <div
-                    className={styles.turnHeader}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => setCurrentTurnCollapsed(!currentTurnCollapsed)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        setCurrentTurnCollapsed(!currentTurnCollapsed);
-                      }
-                    }}
-                  >
-                    <span className={styles.toolChevron}>
-                      {currentTurnCollapsed ? "›" : "⌄"}
-                    </span>
-                    <span className={styles.turnLabel}>
-                      {activities.length} tool call{activities.length !== 1 ? "s" : ""}
-                      {isRunning && <span style={{ color: "var(--accent-dim)" }}> in progress</span>}
-                    </span>
-                  </div>
-                  {!currentTurnCollapsed && (
-                    <div className={styles.turnActivities}>
-                      {activities.map((act) => (
-                        <div key={act.toolUseId} className={styles.toolActivity}>
-                          <div className={styles.toolHeader}>
-                            <span className={styles.toolName}>{act.toolName}</span>
-                            {act.summary && (
-                              <span className={styles.toolSummary}>
-                                {act.summary}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
+            {selectedWorkspaceId && (
+              <CompletedTurnsSection workspaceId={selectedWorkspaceId} />
             )}
 
-            {streaming && (
-              <div className={`${styles.message} ${styles.role_Assistant}`}>
-                <div className={styles.roleLabel}>Claude</div>
-                <div className={styles.content}>
-                  <Markdown remarkPlugins={[remarkGfm]}>{streaming}</Markdown>
-                  <span className={styles.cursor} />
-                </div>
-              </div>
+            {selectedWorkspaceId && activitiesCount > 0 && (
+              <ToolActivitiesSection
+                workspaceId={selectedWorkspaceId}
+                isRunning={isRunning ?? false}
+              />
+            )}
+
+            {selectedWorkspaceId && hasStreaming && (
+              <StreamingMessage workspaceId={selectedWorkspaceId} />
             )}
 
             {isRunning && !pendingQuestion && (
@@ -511,6 +412,202 @@ export function ChatPanel() {
     </div>
   );
 }
+
+/**
+ * Isolated streaming message component — subscribes to streaming text directly
+ * and throttles Markdown re-parsing to ~10fps via requestAnimationFrame.
+ * This prevents the entire ChatPanel from re-rendering on every character delta.
+ */
+const StreamingMessage = memo(function StreamingMessage({
+  workspaceId,
+}: {
+  workspaceId: string;
+}) {
+  const streaming = useAppStore(
+    (s) => s.streamingContent[workspaceId] || ""
+  );
+
+  // Throttle Markdown rendering: store latest text in ref, update at ~10fps
+  const latestRef = useRef(streaming);
+  latestRef.current = streaming;
+  const [displayed, setDisplayed] = useState(streaming);
+  const rafRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    let lastTime = 0;
+    const THROTTLE_MS = 100; // ~10fps
+    const tick = (time: number) => {
+      if (time - lastTime >= THROTTLE_MS) {
+        lastTime = time;
+        setDisplayed(latestRef.current);
+      }
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    };
+  }, []);
+
+  // Auto-scroll when streaming content grows
+  const elRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    elRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [displayed]);
+
+  if (!displayed) return null;
+
+  return (
+    <div ref={elRef} className={`${styles.message} ${styles.role_Assistant}`}>
+      <div className={styles.roleLabel}>Claude</div>
+      <div className={styles.content}>
+        <Markdown remarkPlugins={[remarkGfm]}>{displayed}</Markdown>
+        <span className={styles.cursor} />
+      </div>
+    </div>
+  );
+});
+
+/**
+ * Completed turns section — subscribes to completedTurns for this workspace only.
+ * Isolated so it doesn't re-render on streaming or tool activity changes.
+ */
+const CompletedTurnsSection = memo(function CompletedTurnsSection({
+  workspaceId,
+}: {
+  workspaceId: string;
+}) {
+  const completedTurns = useAppStore(
+    (s) => s.completedTurns[workspaceId] ?? EMPTY_COMPLETED_TURNS
+  );
+  const toggleCompletedTurn = useAppStore((s) => s.toggleCompletedTurn);
+
+  if (completedTurns.length === 0) return null;
+
+  return (
+    <>
+      {completedTurns.map((turn: CompletedTurn, ti: number) => (
+        <div
+          key={turn.id}
+          className={styles.turnSummary}
+          role="button"
+          tabIndex={0}
+          onClick={() => toggleCompletedTurn(workspaceId, ti)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              toggleCompletedTurn(workspaceId, ti);
+            }
+          }}
+        >
+          <div className={styles.turnHeader}>
+            <span className={styles.toolChevron}>
+              {turn.collapsed ? "›" : "⌄"}
+            </span>
+            <span className={styles.turnLabel}>
+              {turn.activities.length} tool call
+              {turn.activities.length !== 1 ? "s" : ""}
+              {turn.messageCount > 0 &&
+                `, ${turn.messageCount} message${turn.messageCount !== 1 ? "s" : ""}`}
+            </span>
+          </div>
+          {!turn.collapsed && (
+            <div className={styles.turnActivities}>
+              {turn.activities.map((act: ToolActivity) => (
+                <div
+                  key={act.toolUseId}
+                  className={styles.toolActivity}
+                >
+                  <div className={styles.toolHeader}>
+                    <span className={styles.toolName}>
+                      {act.toolName}
+                    </span>
+                    {act.summary && (
+                      <span className={styles.toolSummary}>
+                        {act.summary}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+    </>
+  );
+});
+
+/**
+ * Current tool activities section — subscribes to toolActivities for this workspace.
+ * Isolated so streaming text changes don't cause re-renders here.
+ */
+const ToolActivitiesSection = memo(function ToolActivitiesSection({
+  workspaceId,
+  isRunning,
+}: {
+  workspaceId: string;
+  isRunning: boolean;
+}) {
+  const activities = useAppStore(
+    (s) => s.toolActivities[workspaceId] ?? EMPTY_ACTIVITIES
+  );
+  const [collapsed, setCollapsed] = useState(true);
+
+  // Auto-collapse when a new turn starts (activities goes from 0 to non-zero)
+  const prevLengthRef = useRef(0);
+  useEffect(() => {
+    if (isRunning && activities.length > 0 && prevLengthRef.current === 0) {
+      setCollapsed(true);
+    }
+    prevLengthRef.current = activities.length;
+  }, [isRunning, activities.length]);
+
+  if (activities.length === 0) return null;
+
+  return (
+    <div className={styles.toolActivities} aria-live="polite" aria-atomic="true">
+      <div className={styles.turnSummary}>
+        <div
+          className={styles.turnHeader}
+          role="button"
+          tabIndex={0}
+          onClick={() => setCollapsed(!collapsed)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              setCollapsed(!collapsed);
+            }
+          }}
+        >
+          <span className={styles.toolChevron}>
+            {collapsed ? "›" : "⌄"}
+          </span>
+          <span className={styles.turnLabel}>
+            {activities.length} tool call{activities.length !== 1 ? "s" : ""}
+            {isRunning && <span style={{ color: "var(--accent-dim)" }}> in progress</span>}
+          </span>
+        </div>
+        {!collapsed && (
+          <div className={styles.turnActivities}>
+            {activities.map((act: ToolActivity) => (
+              <div key={act.toolUseId} className={styles.toolActivity}>
+                <div className={styles.toolHeader}>
+                  <span className={styles.toolName}>{act.toolName}</span>
+                  {act.summary && (
+                    <span className={styles.toolSummary}>
+                      {act.summary}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+});
 
 // Separate component for input area to prevent full ChatPanel re-renders on every keystroke
 function ChatInputArea({

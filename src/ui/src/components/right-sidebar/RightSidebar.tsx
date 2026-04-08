@@ -18,20 +18,19 @@ export function RightSidebar() {
 
   const ws = workspaces.find((w) => w.id === selectedWorkspaceId);
   const isRunning = ws?.agent_status === "Running";
-  const isRemote = !!ws?.remote_connection_id;
+  const remoteConnectionId = ws?.remote_connection_id ?? null;
   const prevIsRunning = useRef<boolean | undefined>(undefined);
 
   // Load diff files for either local or remote workspace
   const loadDiff = useCallback(
     async (workspaceId: string) => {
-      if (!ws) return;
+      // Guard: workspace may not be in the list yet during creation/deletion
+      const currentWs = useAppStore.getState().workspaces.find((w) => w.id === workspaceId);
+      if (!currentWs) return;
 
-      if (isRemote) {
-        const connId = ws.remote_connection_id;
-        if (!connId) return;
-
+      if (remoteConnectionId) {
         const result = (await sendRemoteCommand(
-          connId,
+          remoteConnectionId,
           "load_diff_files",
           { workspace_id: workspaceId }
         )) as DiffFilesResult;
@@ -52,7 +51,7 @@ export function RightSidebar() {
         return await loadDiffFiles(workspaceId);
       }
     },
-    [ws, isRemote]
+    [remoteConnectionId]
   );
 
   useEffect(() => {

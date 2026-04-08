@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { memo, useCallback, useEffect, useRef } from "react";
 import styles from "./ResizeHandle.module.css";
 
 interface ResizeHandleProps {
@@ -6,7 +6,7 @@ interface ResizeHandleProps {
   onResize: (delta: number) => void;
 }
 
-export function ResizeHandle({
+export const ResizeHandle = memo(function ResizeHandle({
   direction,
   onResize,
 }: ResizeHandleProps) {
@@ -55,4 +55,4 @@ export function ResizeHandle({
       onMouseDown={handleMouseDown}
     />
   );
-}
+});

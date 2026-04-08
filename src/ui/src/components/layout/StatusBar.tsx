@@ -1,4 +1,5 @@
 import { useAppStore } from "../../stores/useAppStore";
+import { useShallow } from "zustand/react/shallow";
 import styles from "./StatusBar.module.css";
 
 export function StatusBar() {
@@ -8,19 +9,19 @@ export function StatusBar() {
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
   const toggleTerminalPanel = useAppStore((s) => s.toggleTerminalPanel);
   const toggleRightSidebar = useAppStore((s) => s.toggleRightSidebar);
-  const workspaces = useAppStore((s) => s.workspaces);
 
-  const activeRemoteIds = useAppStore((s) => s.activeRemoteIds);
-  const remoteConnections = useAppStore((s) => s.remoteConnections);
-
-  const runningCount = workspaces.filter(
-    (ws) => ws.agent_status === "Running"
-  ).length;
-  const activeCount = workspaces.filter(
-    (ws) => ws.status === "Active"
-  ).length;
-  const connectedRemotes = remoteConnections.filter((c) =>
-    activeRemoteIds.includes(c.id)
+  const runningCount = useAppStore(
+    (s) => s.workspaces.filter((ws) => ws.agent_status === "Running").length
+  );
+  const activeCount = useAppStore(
+    (s) => s.workspaces.filter((ws) => ws.status === "Active").length
+  );
+  const connectedRemoteNames = useAppStore(
+    useShallow((s) =>
+      s.remoteConnections
+        .filter((c) => s.activeRemoteIds.includes(c.id))
+        .map((c) => c.name)
+    )
   );
 
   return (
@@ -35,9 +36,9 @@ export function StatusBar() {
         <span className={styles.statMuted}>
           {activeCount} workspace{activeCount !== 1 ? "s" : ""}
         </span>
-        {connectedRemotes.length > 0 && (
+        {connectedRemoteNames.length > 0 && (
           <span className={styles.statMuted}>
-            {connectedRemotes.map((c) => c.name).join(", ")}
+            {connectedRemoteNames.join(", ")}
           </span>
         )}
       </div>

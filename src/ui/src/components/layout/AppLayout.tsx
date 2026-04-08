@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import { Sidebar } from "../sidebar/Sidebar";
 import { ChatPanel } from "../chat/ChatPanel";
@@ -32,20 +33,20 @@ export function AppLayout() {
 
   const showDiff = diffSelectedFile !== null;
 
-  const handleLeftResize = (delta: number) => {
-    const newWidth = Math.max(150, Math.min(600, sidebarWidth + delta));
-    setSidebarWidth(newWidth);
-  };
+  const handleLeftResize = useCallback((delta: number) => {
+    const current = useAppStore.getState().sidebarWidth;
+    setSidebarWidth(Math.max(150, Math.min(600, current + delta)));
+  }, [setSidebarWidth]);
 
-  const handleRightResize = (delta: number) => {
-    const newWidth = Math.max(150, Math.min(600, rightSidebarWidth - delta));
-    setRightSidebarWidth(newWidth);
-  };
+  const handleRightResize = useCallback((delta: number) => {
+    const current = useAppStore.getState().rightSidebarWidth;
+    setRightSidebarWidth(Math.max(150, Math.min(600, current - delta)));
+  }, [setRightSidebarWidth]);
 
-  const handleTerminalResize = (delta: number) => {
-    const newHeight = Math.max(100, Math.min(800, terminalHeight - delta));
-    setTerminalHeight(newHeight);
-  };
+  const handleTerminalResize = useCallback((delta: number) => {
+    const current = useAppStore.getState().terminalHeight;
+    setTerminalHeight(Math.max(100, Math.min(800, current - delta)));
+  }, [setTerminalHeight]);
 
   return (
     <div className={styles.container}>

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef, useState, useMemo, useCallback } from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import {
   archiveWorkspace,
@@ -35,7 +35,7 @@ export function Sidebar() {
 
   const creatingRef = useRef(false);
 
-  const handleCreateWorkspace = async (repoId: string) => {
+  const handleCreateWorkspace = useCallback(async (repoId: string) => {
     if (creatingRef.current) return;
     creatingRef.current = true;
     try {
@@ -73,15 +73,18 @@ export function Sidebar() {
     } finally {
       creatingRef.current = false;
     }
-  };
+  }, [addWorkspace, selectWorkspace, addChatMessage]);
 
-  const filteredWorkspaces = workspaces.filter((ws) => {
-    if (sidebarFilter === "active") return ws.status === "Active";
-    if (sidebarFilter === "archived") return ws.status === "Archived";
-    return true;
-  });
+  const filteredWorkspaces = useMemo(
+    () => workspaces.filter((ws) => {
+      if (sidebarFilter === "active") return ws.status === "Active";
+      if (sidebarFilter === "archived") return ws.status === "Archived";
+      return true;
+    }),
+    [workspaces, sidebarFilter]
+  );
 
-  const handleArchive = async (wsId: string) => {
+  const handleArchive = useCallback(async (wsId: string) => {
     try {
       await archiveWorkspace(wsId);
       updateWorkspace(wsId, {
@@ -89,20 +92,20 @@ export function Sidebar() {
         worktree_path: null,
         agent_status: "Stopped",
       });
-      if (selectedWorkspaceId === wsId) selectWorkspace(null);
+      if (useAppStore.getState().selectedWorkspaceId === wsId) selectWorkspace(null);
     } catch {
       // ignore
     }
-  };
+  }, [updateWorkspace, selectWorkspace]);
 
-  const handleRestore = async (wsId: string) => {
+  const handleRestore = useCallback(async (wsId: string) => {
     try {
       const path = await restoreWorkspace(wsId);
       updateWorkspace(wsId, { status: "Active", worktree_path: path });
     } catch {
       // ignore
     }
-  };
+  }, [updateWorkspace]);
 
   return (
     <div className={styles.sidebar}>
