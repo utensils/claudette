@@ -320,7 +320,7 @@ export const useAppStore = create<AppState>((set) => ({
           summary: a.summary,
         })),
         messageCount,
-        collapsed: true,
+        collapsed: false,
       };
       return {
         completedTurns: {

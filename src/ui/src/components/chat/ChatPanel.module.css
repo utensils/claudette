@@ -267,6 +267,12 @@
   text-decoration: underline;
 }
 
+.content hr {
+  border: none;
+  border-top: 1px solid var(--divider);
+  margin: 12px 0;
+}
+
 .cursor {
   display: inline-block;
   width: 2px;
@@ -311,13 +317,13 @@
 .toolActivities {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 0;
 }
 
 .turnSummary {
   border: 1px solid var(--divider);
   border-radius: 6px;
-  margin: 4px 0;
+  margin: 2px 0;
   cursor: pointer;
   transition: border-color var(--transition-fast);
   overflow: hidden;

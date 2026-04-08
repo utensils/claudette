@@ -40,6 +40,7 @@ export function ChatPanel() {
   const addChatMessage = useAppStore((s) => s.addChatMessage);
   const updateWorkspace = useAppStore((s) => s.updateWorkspace);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const processingRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Prompt history: stores past user inputs per workspace.
@@ -160,6 +161,13 @@ export function ChatPanel() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length, selectedWorkspaceId]);
+
+  // Auto-scroll processing indicator into view when tool activities change
+  useEffect(() => {
+    if (isRunning && !pendingQuestion && activitiesCount > 0) {
+      processingRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [isRunning, pendingQuestion, activitiesCount]);
 
   if (!ws) return null;
 
@@ -364,26 +372,15 @@ export function ChatPanel() {
               <CompletedTurnsSection workspaceId={selectedWorkspaceId} />
             )}
 
+            {selectedWorkspaceId && hasStreaming && (
+              <StreamingMessage workspaceId={selectedWorkspaceId} />
+            )}
+
             {selectedWorkspaceId && activitiesCount > 0 && (
               <ToolActivitiesSection
                 workspaceId={selectedWorkspaceId}
                 isRunning={isRunning ?? false}
               />
-            )}
-
-            {selectedWorkspaceId && hasStreaming && (
-              <StreamingMessage workspaceId={selectedWorkspaceId} />
-            )}
-
-            {isRunning && !pendingQuestion && (
-              <div
-                className={styles.processing}
-                role="status"
-                aria-label={`Processing, ${formatElapsed(elapsed)} elapsed`}
-              >
-                <span className={styles.spinner} aria-hidden="true">{SPINNER_FRAMES[spinnerIdx]}</span>
-                <span className={styles.elapsed}>{formatElapsed(elapsed)}</span>
-              </div>
             )}
 
             {pendingQuestion && (
@@ -394,6 +391,18 @@ export function ChatPanel() {
                   handleSend(response);
                 }}
               />
+            )}
+
+            {isRunning && !pendingQuestion && (
+              <div
+                ref={processingRef}
+                className={styles.processing}
+                role="status"
+                aria-label={`Processing, ${formatElapsed(elapsed)} elapsed`}
+              >
+                <span className={styles.spinner} aria-hidden="true">{SPINNER_FRAMES[spinnerIdx]}</span>
+                <span className={styles.elapsed}>{formatElapsed(elapsed)}</span>
+              </div>
             )}
           </>
         )}

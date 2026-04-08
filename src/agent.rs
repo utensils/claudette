@@ -215,17 +215,27 @@ pub fn build_claude_args(
         "--include-partial-messages".to_string(),
     ];
 
+    // Check if we should bypass permissions (full access with wildcard)
+    let bypass_permissions = allowed_tools.len() == 1 && allowed_tools[0] == "*";
+
     // Session-level flags — only on first turn.
     if !is_resume {
         if let Some(ref model) = settings.model {
             args.push("--model".to_string());
             args.push(model.clone());
         }
+        // Permission mode is session-level, set on first turn only
         if settings.plan_mode {
             args.push("--permission-mode".to_string());
             args.push("plan".to_string());
+        } else if bypass_permissions {
+            args.push("--permission-mode".to_string());
+            args.push("bypassPermissions".to_string());
         }
     }
+
+    // For resumed sessions, we still need to respect the bypass_permissions flag
+    // by not restricting tools, even though permission-mode was set in the first turn
 
     // Per-turn settings via --settings JSON.
     if settings.fast_mode || settings.thinking_enabled {
@@ -243,7 +253,8 @@ pub fn build_claude_args(
         args.push(serde_json::Value::Object(obj).to_string());
     }
 
-    if !allowed_tools.is_empty() {
+    // Add --allowedTools only if not bypassing permissions
+    if !allowed_tools.is_empty() && !bypass_permissions {
         args.push("--allowedTools".to_string());
         args.push(allowed_tools.join(","));
     }
