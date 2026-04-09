@@ -17,13 +17,30 @@ function makeQuestion(wsId: string = WS_ID): AgentQuestion {
   };
 }
 
+function addToolActivities(wsId: string = WS_ID) {
+  useAppStore.setState({
+    toolActivities: {
+      [wsId]: [
+        {
+          toolUseId: "tool-1",
+          toolName: "AskUserQuestion",
+          inputJson: "{}",
+          resultText: "",
+          collapsed: true,
+          summary: "",
+        },
+      ],
+    },
+  });
+}
+
 describe("agentQuestion lifecycle", () => {
   beforeEach(() => {
-    // Reset store between tests.
     useAppStore.setState({
       agentQuestion: null,
       toolActivities: {},
       completedTurns: {},
+      chatMessages: {},
     });
   });
 
@@ -40,32 +57,14 @@ describe("agentQuestion lifecycle", () => {
   });
 
   it("finalizeTurn does NOT clear agentQuestion", () => {
-    // Set up a pending question and some tool activities.
     const q = makeQuestion();
     useAppStore.getState().setAgentQuestion(q);
-    useAppStore.setState({
-      toolActivities: {
-        [WS_ID]: [
-          {
-            toolUseId: "tool-1",
-            toolName: "AskUserQuestion",
-            inputJson: "{}",
-            resultText: "",
-            collapsed: true,
-            summary: "",
-          },
-        ],
-      },
-    });
+    addToolActivities();
 
-    // Finalize the turn — this is what "result" event triggers.
     useAppStore.getState().finalizeTurn(WS_ID, 1);
 
-    // Tool activities should be cleared and moved to completedTurns.
     expect(useAppStore.getState().toolActivities[WS_ID]).toEqual([]);
     expect(useAppStore.getState().completedTurns[WS_ID]).toHaveLength(1);
-
-    // But the question must survive — it's awaiting user input.
     expect(useAppStore.getState().agentQuestion).toEqual(q);
   });
 
@@ -73,7 +72,6 @@ describe("agentQuestion lifecycle", () => {
     const q = makeQuestion();
     useAppStore.getState().setAgentQuestion(q);
 
-    // Simulate ProcessExited calling finalizeTurn again (idempotent).
     useAppStore.getState().finalizeTurn(WS_ID, 0);
     useAppStore.getState().finalizeTurn(WS_ID, 0);
 
@@ -84,9 +82,72 @@ describe("agentQuestion lifecycle", () => {
     const q = makeQuestion("other-workspace");
     useAppStore.getState().setAgentQuestion(q);
 
-    // Question for a different workspace should not be visible for WS_ID.
     const stored = useAppStore.getState().agentQuestion;
     expect(stored?.workspaceId).toBe("other-workspace");
     expect(stored?.workspaceId).not.toBe(WS_ID);
+  });
+});
+
+describe("finalizeTurn afterMessageIndex", () => {
+  beforeEach(() => {
+    useAppStore.setState({
+      toolActivities: {},
+      completedTurns: {},
+      chatMessages: {},
+    });
+  });
+
+  it("records afterMessageIndex as current chatMessages length", () => {
+    // Simulate 2 messages already in the chat.
+    useAppStore.setState({
+      chatMessages: {
+        [WS_ID]: [
+          { id: "m1", workspace_id: WS_ID, role: "User", content: "hi", cost_usd: null, duration_ms: null, created_at: "" },
+          { id: "m2", workspace_id: WS_ID, role: "Assistant", content: "hello", cost_usd: null, duration_ms: null, created_at: "" },
+        ],
+      },
+    });
+    addToolActivities();
+
+    useAppStore.getState().finalizeTurn(WS_ID, 1);
+
+    const turns = useAppStore.getState().completedTurns[WS_ID];
+    expect(turns).toHaveLength(1);
+    expect(turns[0].afterMessageIndex).toBe(2);
+  });
+
+  it("records 0 when no messages exist", () => {
+    addToolActivities();
+    useAppStore.getState().finalizeTurn(WS_ID, 0);
+
+    const turns = useAppStore.getState().completedTurns[WS_ID];
+    expect(turns[0].afterMessageIndex).toBe(0);
+  });
+
+  it("successive turns get increasing afterMessageIndex", () => {
+    // Turn 1: finalize with 1 message
+    useAppStore.setState({
+      chatMessages: { [WS_ID]: [{ id: "m1", workspace_id: WS_ID, role: "Assistant", content: "a", cost_usd: null, duration_ms: null, created_at: "" }] },
+    });
+    addToolActivities();
+    useAppStore.getState().finalizeTurn(WS_ID, 1);
+
+    // Turn 2: add user + assistant messages, then finalize with new tools
+    useAppStore.setState({
+      chatMessages: {
+        [WS_ID]: [
+          { id: "m1", workspace_id: WS_ID, role: "Assistant", content: "a", cost_usd: null, duration_ms: null, created_at: "" },
+          { id: "m2", workspace_id: WS_ID, role: "User", content: "b", cost_usd: null, duration_ms: null, created_at: "" },
+          { id: "m3", workspace_id: WS_ID, role: "Assistant", content: "c", cost_usd: null, duration_ms: null, created_at: "" },
+        ],
+      },
+    });
+    addToolActivities();
+    useAppStore.getState().finalizeTurn(WS_ID, 1);
+
+    const turns = useAppStore.getState().completedTurns[WS_ID];
+    expect(turns).toHaveLength(2);
+    expect(turns[0].afterMessageIndex).toBe(1);
+    expect(turns[1].afterMessageIndex).toBe(3);
   });
 });

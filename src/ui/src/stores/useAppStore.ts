@@ -29,6 +29,9 @@ export interface CompletedTurn {
   activities: ToolActivity[];
   messageCount: number;
   collapsed: boolean;
+  /** Index into chatMessages at the time of finalization — used to render
+   *  the turn summary at the correct chronological position. */
+  afterMessageIndex: number;
 }
 
 export interface AgentQuestionItem {
@@ -323,6 +326,7 @@ export const useAppStore = create<AppState>((set) => ({
         })),
         messageCount,
         collapsed: false,
+        afterMessageIndex: (s.chatMessages[wsId] || []).length,
       };
       return {
         completedTurns: {
