@@ -4,6 +4,7 @@
   "author": "Claudette",
   "description": "A warm amber-toned dark theme",
   "colors": {
+    "color-scheme": "dark",
     "accent-primary": "#f0a050",
     "accent-primary-rgb": "240, 160, 80",
     "accent-dim": "#cc8840",

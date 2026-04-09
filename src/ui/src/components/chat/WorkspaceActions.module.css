@@ -6,7 +6,6 @@
   border: 1px solid var(--divider);
   border-radius: 4px;
   color: var(--text-muted);
-  color-scheme: dark;
   font-size: 11px;
   padding: 2px 20px 2px 6px;
   cursor: pointer;

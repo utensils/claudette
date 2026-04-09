@@ -4,6 +4,7 @@
   "author": "Claudette",
   "description": "A cool blue-tinted dark theme",
   "colors": {
+    "color-scheme": "dark",
     "accent-primary": "#4a9eff",
     "accent-primary-rgb": "74, 158, 255",
     "accent-dim": "#3a7ecc",

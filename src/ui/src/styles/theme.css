@@ -1,4 +1,8 @@
 :root {
+  /* System color scheme — controls native UI elements (selects, scrollbars) */
+  --color-scheme: dark;
+  color-scheme: var(--color-scheme);
+
   /* Brand accent — Claudette teal */
   --accent-primary: #00e5cc;
   --accent-primary-rgb: 0, 229, 204;

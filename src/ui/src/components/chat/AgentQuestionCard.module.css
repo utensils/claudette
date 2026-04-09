@@ -71,8 +71,8 @@
   flex-direction: column;
   gap: 2px;
   padding: 10px 14px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--hover-bg-subtle);
+  border: 1px solid var(--divider);
   border-radius: 8px;
   cursor: pointer;
   text-align: left;
@@ -139,7 +139,7 @@
   content: "";
   flex: 1;
   height: 1px;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--hover-bg);
 }
 
 .freeformRow {
@@ -149,8 +149,8 @@
 
 .freeformInput {
   flex: 1;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--hover-bg-subtle);
+  border: 1px solid var(--divider);
   border-radius: 8px;
   padding: 10px 14px;
   color: var(--text-primary);

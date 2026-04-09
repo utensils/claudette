@@ -4,6 +4,7 @@
   "author": "nanotech",
   "description": "A softer, desaturated take on the classic Jellybeans Vim theme",
   "colors": {
+    "color-scheme": "dark",
     "accent-primary": "#7088a8",
     "accent-primary-rgb": "112, 136, 168",
     "accent-dim": "#5a7080",

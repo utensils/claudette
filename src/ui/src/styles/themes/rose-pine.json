@@ -4,6 +4,7 @@
   "author": "Rosé Pine",
   "description": "All natural pine, faux fur and a bit of soho vibes for the classy minimalist",
   "colors": {
+    "color-scheme": "dark",
     "accent-primary": "#c4a7e7",
     "accent-primary-rgb": "196, 167, 231",
     "accent-dim": "#a68fd4",

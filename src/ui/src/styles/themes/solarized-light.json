@@ -4,6 +4,7 @@
   "author": "Ethan Schoonover",
   "description": "Precision colors for machines and people — light variant",
   "colors": {
+    "color-scheme": "light",
     "accent-primary": "#2aa198",
     "accent-primary-rgb": "42, 161, 152",
     "accent-dim": "#268bd2",

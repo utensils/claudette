@@ -4,6 +4,7 @@
   "author": "Rosé Pine",
   "description": "Rosé Pine light variant with warm, airy tones",
   "colors": {
+    "color-scheme": "light",
     "accent-primary": "#907aa9",
     "accent-primary-rgb": "144, 122, 169",
     "accent-dim": "#796394",

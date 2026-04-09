@@ -13,10 +13,22 @@ export function useKeyboardShortcuts() {
   const commandPaletteOpen = useAppStore((s) => s.commandPaletteOpen);
   const setDiffSelectedFile = useAppStore((s) => s.setDiffSelectedFile);
   const diffSelectedFile = useAppStore((s) => s.diffSelectedFile);
+  const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const setPlanMode = useAppStore((s) => s.setPlanMode);
+  const planMode = useAppStore(
+    (s) => (selectedWorkspaceId ? s.planMode[selectedWorkspaceId] ?? false : false),
+  );
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
+
+      // Shift+Tab: toggle plan mode for the active workspace
+      if (e.key === "Tab" && e.shiftKey && !mod && selectedWorkspaceId) {
+        e.preventDefault();
+        setPlanMode(selectedWorkspaceId, !planMode);
+        return;
+      }
 
       // Escape: dismiss topmost overlay
       if (e.key === "Escape") {
@@ -72,5 +84,8 @@ export function useKeyboardShortcuts() {
     commandPaletteOpen,
     setDiffSelectedFile,
     diffSelectedFile,
+    selectedWorkspaceId,
+    setPlanMode,
+    planMode,
   ]);
 }

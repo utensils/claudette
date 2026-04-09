@@ -4,6 +4,7 @@
   "author": "Claudette",
   "description": "The default Claudette dark theme with teal accents",
   "colors": {
+    "color-scheme": "dark",
     "accent-primary": "#00e5cc",
     "accent-primary-rgb": "0, 229, 204",
     "accent-dim": "#00b3a0",

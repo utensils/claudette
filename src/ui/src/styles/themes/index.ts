@@ -1,5 +1,6 @@
 import type { ThemeDefinition } from "../../types/theme";
 import defaultDark from "./default-dark.json";
+import defaultLight from "./default-light.json";
 import midnightBlue from "./midnight-blue.json";
 import warmEmber from "./warm-ember.json";
 import highContrast from "./high-contrast.json";
@@ -13,6 +14,7 @@ import jellybeansMuted from "./jellybeans-muted.json";
 
 export const BUILTIN_THEMES: ThemeDefinition[] = [
   defaultDark,
+  defaultLight,
   midnightBlue,
   warmEmber,
   highContrast,

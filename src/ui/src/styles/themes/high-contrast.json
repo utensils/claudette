@@ -4,6 +4,7 @@
   "author": "Claudette",
   "description": "Higher contrast dark theme for improved readability",
   "colors": {
+    "color-scheme": "dark",
     "accent-primary": "#00ffdd",
     "accent-primary-rgb": "0, 255, 221",
     "accent-dim": "#00ccb0",

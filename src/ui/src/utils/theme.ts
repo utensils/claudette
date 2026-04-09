@@ -3,6 +3,7 @@ import { BUILTIN_THEMES, DEFAULT_THEME_ID } from "../styles/themes";
 import { listUserThemes } from "../services/tauri";
 
 const THEMEABLE_VARS = [
+  "color-scheme",
   "accent-primary",
   "accent-primary-rgb",
   "accent-dim",
@@ -53,6 +54,11 @@ export function applyTheme(theme: ThemeDefinition): void {
     } else {
       root.style.removeProperty(`--${varName}`);
     }
+  }
+  // Also set the real color-scheme property so native controls match
+  const scheme = theme.colors["color-scheme"];
+  if (scheme) {
+    root.style.setProperty("color-scheme", scheme);
   }
 }
 

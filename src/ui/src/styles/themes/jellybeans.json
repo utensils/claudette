@@ -4,6 +4,7 @@
   "author": "nanotech",
   "description": "A colorful, dark color scheme inspired by the classic Vim theme",
   "colors": {
+    "color-scheme": "dark",
     "accent-primary": "#8197bf",
     "accent-primary-rgb": "129, 151, 191",
     "accent-dim": "#668799",

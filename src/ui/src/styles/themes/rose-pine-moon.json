@@ -4,6 +4,7 @@
   "author": "Rosé Pine",
   "description": "Rosé Pine variant with a cooler, moonlit base",
   "colors": {
+    "color-scheme": "dark",
     "accent-primary": "#c4a7e7",
     "accent-primary-rgb": "196, 167, 231",
     "accent-dim": "#a68fd4",
