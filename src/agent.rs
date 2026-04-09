@@ -183,8 +183,8 @@ pub struct AgentSettings {
     pub fast_mode: bool,
     /// Enable extended thinking via `--settings`.
     pub thinking_enabled: bool,
-    /// Start session in plan permission mode. Session-level: only applied on
-    /// the first turn.
+    /// Start session in plan permission mode. Applied on every turn (each
+    /// `claude` invocation is an independent process).
     pub plan_mode: bool,
 }
 
@@ -218,7 +218,7 @@ pub fn build_claude_args(
     // Check if we should bypass permissions (full access with wildcard)
     let bypass_permissions = allowed_tools.len() == 1 && allowed_tools[0] == "*";
 
-    // Model and custom instructions are session-level — only on first turn.
+    // Model is session-level — only set on the first turn.
     if !is_resume && let Some(ref model) = settings.model {
         args.push("--model".to_string());
         args.push(model.clone());
