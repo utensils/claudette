@@ -193,6 +193,8 @@ pub async fn branch_delete(repo_path: &str, branch: &str, force: bool) -> Result
 
 /// Create a checkpoint commit in a worktree, staging all changes first.
 /// If there are no changes to commit, returns the current HEAD hash.
+/// On commit failure (hooks, missing config, etc.) unstages changes so
+/// the worktree is not left in a surprising half-staged state.
 pub async fn create_checkpoint_commit(
     worktree_path: &str,
     message: &str,
@@ -204,7 +206,11 @@ pub async fn create_checkpoint_commit(
     let status = run_git(worktree_path, &["status", "--porcelain"]).await?;
     if !status.is_empty() {
         let commit_msg = format!("[checkpoint] {message}");
-        run_git(worktree_path, &["commit", "-m", &commit_msg]).await?;
+        if let Err(e) = run_git(worktree_path, &["commit", "-m", &commit_msg]).await {
+            // Unstage so the worktree isn't left with everything added.
+            let _ = run_git(worktree_path, &["reset"]).await;
+            return Err(e);
+        }
     }
 
     // Return current HEAD hash regardless.

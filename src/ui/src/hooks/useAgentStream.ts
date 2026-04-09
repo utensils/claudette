@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "../stores/useAppStore";
+import { loadChatHistory } from "../services/tauri";
 import type { AgentStreamPayload } from "../types/agent-events";
 import type { ConversationCheckpoint } from "../types/checkpoint";
 import { extractToolSummary } from "./toolSummary";
@@ -310,6 +311,7 @@ export function useAgentStream() {
 
   // Listen for checkpoint-created events from the backend.
   const addCheckpoint = useAppStore((s) => s.addCheckpoint);
+  const setChatMessages = useAppStore((s) => s.setChatMessages);
   useEffect(() => {
     const unlisten = listen<{
       workspace_id: string;
@@ -317,9 +319,20 @@ export function useAgentStream() {
     }>("checkpoint-created", (event) => {
       const { workspace_id: wsId, checkpoint } = event.payload;
       addCheckpoint(wsId, checkpoint);
+      // Reload messages from the backend so that the store has the
+      // persisted message IDs (the frontend assigns its own UUIDs during
+      // streaming, which won't match checkpoint.message_id).
+      loadChatHistory(wsId)
+        .then((msgs) => {
+          const filtered = msgs.filter(
+            (m) => m.role !== "Assistant" || m.content.trim() !== "",
+          );
+          setChatMessages(wsId, filtered);
+        })
+        .catch((e) => console.error("Failed to reload messages after checkpoint:", e));
     });
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [addCheckpoint]);
+  }, [addCheckpoint, setChatMessages]);
 }
