@@ -81,6 +81,7 @@ export interface CommandContext {
   setPlanMode: (wsId: string, enabled: boolean) => void;
   fastMode: boolean;
   setFastMode: (wsId: string, enabled: boolean) => void;
+  persistSetting: (key: string, value: string) => void;
   stopAgent: (wsId: string) => Promise<void>;
   resetAgentSession: (wsId: string) => Promise<void>;
   updateWorkspace: (id: string, updates: Record<string, unknown>) => void;
@@ -147,7 +148,12 @@ export function buildCommands(ctx: CommandContext): Command[] {
       icon: Brain,
       shortcut: `${mod}+T`,
       keywords: ["think", "reasoning", "extended"],
-      execute: () => { ctx.setThinkingEnabled(wsId, !ctx.thinkingEnabled); ctx.close(); },
+      execute: () => {
+        const next = !ctx.thinkingEnabled;
+        ctx.setThinkingEnabled(wsId, next);
+        ctx.persistSetting(`thinking_enabled:${wsId}`, String(next));
+        ctx.close();
+      },
     });
     cmds.push({
       id: "toggle-plan",
@@ -163,7 +169,12 @@ export function buildCommands(ctx: CommandContext): Command[] {
       category: "agent",
       icon: Zap,
       keywords: ["speed", "quick"],
-      execute: () => { ctx.setFastMode(wsId, !ctx.fastMode); ctx.close(); },
+      execute: () => {
+        const next = !ctx.fastMode;
+        ctx.setFastMode(wsId, next);
+        ctx.persistSetting(`fast_mode:${wsId}`, String(next));
+        ctx.close();
+      },
     });
     cmds.push({
       id: "stop-agent",

@@ -144,6 +144,7 @@ export function CommandPalette() {
         setPlanMode,
         fastMode,
         setFastMode,
+        persistSetting: (key: string, value: string) => setAppSetting(key, value).catch(console.error),
         stopAgent: (wsId: string) => stopAgent(wsId),
         resetAgentSession: (wsId: string) => resetAgentSession(wsId),
         updateWorkspace: (id: string, updates: Record<string, unknown>) => updateWorkspace(id, updates),

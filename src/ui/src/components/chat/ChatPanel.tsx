@@ -2,6 +2,7 @@ import { memo, useEffect, useRef, useState, useMemo, useCallback } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import rehypeHighlight from "rehype-highlight";
 import { AnsiUp } from "ansi_up";
 import { GitBranch, LayoutDashboard } from "lucide-react";
@@ -119,8 +120,32 @@ function toolColor(name: string): string {
   return TOOL_COLORS[name] ?? "var(--text-muted)";
 }
 
+// Sanitization schema: allow standard markdown HTML + our callout elements.
+// This prevents assistant replies containing <style>, <script>, or arbitrary
+// HTML from mutating the DOM while still allowing the cc-callout divs we
+// generate in preprocessCallouts().
+const SANITIZE_SCHEMA = {
+  ...defaultSchema,
+  tagNames: [
+    ...(defaultSchema.tagNames ?? []),
+    "div", "span", "hr",
+  ],
+  attributes: {
+    ...defaultSchema.attributes,
+    div: [...(defaultSchema.attributes?.div ?? []), "className"],
+    span: [...(defaultSchema.attributes?.span ?? []), "className", "style"],
+    hr: [...(defaultSchema.attributes?.hr ?? []), "className"],
+    "*": [...(defaultSchema.attributes?.["*"] ?? []), "class"],
+  },
+};
+
 // Shared rehype plugin list (stable reference avoids re-creating on every render)
-const REHYPE_PLUGINS = [rehypeRaw, rehypeHighlight];
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const REHYPE_PLUGINS: any[] = [
+  rehypeRaw,
+  [rehypeSanitize, SANITIZE_SCHEMA],
+  rehypeHighlight,
+];
 const REMARK_PLUGINS = [remarkGfm];
 
 // Stable empty arrays to avoid Zustand selector re-renders when data is undefined.

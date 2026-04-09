@@ -23,8 +23,12 @@ export function useKeyboardShortcuts() {
     const handler = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
 
-      // Shift+Tab: toggle plan mode for the active workspace
-      if (e.key === "Tab" && e.shiftKey && !mod && selectedWorkspaceId) {
+      // Shift+Tab: toggle plan mode — only when no overlay/modal is open
+      // so it doesn't break form tab navigation in modals
+      if (
+        e.key === "Tab" && e.shiftKey && !mod && selectedWorkspaceId &&
+        !activeModal && !commandPaletteOpen && !fuzzyFinderOpen
+      ) {
         e.preventDefault();
         setPlanMode(selectedWorkspaceId, !planMode);
         return;

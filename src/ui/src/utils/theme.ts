@@ -59,11 +59,10 @@ export function applyTheme(theme: ThemeDefinition): void {
       root.style.removeProperty(`--${varName}`);
     }
   }
-  // Set the real color-scheme property so native controls match
-  const scheme = theme.colors["color-scheme"];
-  if (scheme) {
-    root.style.setProperty("color-scheme", scheme);
-  }
+  // Set the real color-scheme property so native controls match.
+  // Default to "dark" if the theme doesn't specify (e.g. older user themes).
+  const scheme = theme.colors["color-scheme"] ?? "dark";
+  root.style.setProperty("color-scheme", scheme);
 
   // Swap highlight.js syntax theme to match light/dark
   const isLight = scheme === "light";
