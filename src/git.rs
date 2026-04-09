@@ -45,18 +45,40 @@ pub async fn validate_repo(path: &str) -> Result<(), GitError> {
 }
 
 pub async fn default_branch(repo_path: &str) -> Result<String, GitError> {
-    // Try symbolic-ref of origin/HEAD first
+    // Try symbolic-ref of origin/HEAD first (returns e.g. "origin/main")
     if let Ok(remote_head) = run_git(
         repo_path,
         &["symbolic-ref", "refs/remotes/origin/HEAD", "--short"],
     )
     .await
-        && let Some(branch) = remote_head.strip_prefix("origin/")
     {
-        return Ok(branch.to_string());
+        let trimmed = remote_head.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
     }
 
-    // Fall back to checking if main or master exists
+    // Fall back to checking if remote-tracking main or master exists
+    if run_git(
+        repo_path,
+        &["rev-parse", "--verify", "refs/remotes/origin/main"],
+    )
+    .await
+    .is_ok()
+    {
+        return Ok("origin/main".into());
+    }
+    if run_git(
+        repo_path,
+        &["rev-parse", "--verify", "refs/remotes/origin/master"],
+    )
+    .await
+    .is_ok()
+    {
+        return Ok("origin/master".into());
+    }
+
+    // Last resort: local branches (no remote configured)
     if run_git(repo_path, &["rev-parse", "--verify", "refs/heads/main"])
         .await
         .is_ok()

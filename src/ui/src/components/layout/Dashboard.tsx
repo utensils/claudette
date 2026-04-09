@@ -124,7 +124,7 @@ const WorkspaceCard = memo(function WorkspaceCard({
         {baseBranch && (
           <>
             <span className={styles.arrow}>{">"}</span>
-            <span className={styles.baseBranch}>{baseBranch}</span>
+            <span className={styles.baseBranch}>{baseBranch.replace(/^origin\//, '')}</span>
           </>
         )}
       </div>

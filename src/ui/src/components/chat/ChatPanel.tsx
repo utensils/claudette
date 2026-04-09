@@ -417,7 +417,7 @@ export function ChatPanel() {
               {defaultBranch && (
                 <>
                   <span className={styles.branchArrow}>{'>'}</span>
-                  <span className={styles.baseBranch}>{defaultBranch}</span>
+                  <span className={styles.baseBranch}>{defaultBranch.replace(/^origin\//, '')}</span>
                 </>
               )}
             </span>
