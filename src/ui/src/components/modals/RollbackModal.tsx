@@ -17,7 +17,7 @@ export function RollbackModal() {
   const workspaceId = modalData.workspaceId as string;
   const checkpointId = modalData.checkpointId as string;
   const messagePreview = modalData.messagePreview as string;
-  const hasCommitHash = modalData.hasCommitHash as boolean;
+  const hasFileChanges = modalData.hasFileChanges as boolean;
 
   const handleRollback = async () => {
     setLoading(true);
@@ -53,19 +53,15 @@ export function RollbackModal() {
           </div>
         )}
       </div>
-      <label className={shared.checkboxRow}>
-        <input
-          type="checkbox"
-          checked={restoreFiles}
-          onChange={(e) => setRestoreFiles(e.target.checked)}
-          disabled={!hasCommitHash}
-        />
-        <span>Also restore files to this checkpoint</span>
-      </label>
-      {!hasCommitHash && (
-        <div className={shared.hint}>
-          No file checkpoint available for this turn.
-        </div>
+      {hasFileChanges && (
+        <label className={shared.checkboxRow}>
+          <input
+            type="checkbox"
+            checked={restoreFiles}
+            onChange={(e) => setRestoreFiles(e.target.checked)}
+          />
+          <span>Also restore files to this checkpoint</span>
+        </label>
       )}
       {error && <div className={shared.error}>{error}</div>}
       <div className={shared.actions}>

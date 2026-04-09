@@ -28,6 +28,7 @@ import { ChatToolbar } from "./ChatToolbar";
 import { WorkspaceActions } from "./WorkspaceActions";
 import { HeaderMenu } from "./HeaderMenu";
 import { SlashCommandPicker, filterSlashCommands } from "./SlashCommandPicker";
+import { checkpointHasFileChanges } from "../../utils/checkpointUtils";
 import styles from "./ChatPanel.module.css";
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -765,7 +766,7 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
                       workspaceId,
                       checkpointId: cp.id,
                       messagePreview: msg.content.slice(0, 100),
-                      hasCommitHash: !!cp.commit_hash,
+                      hasFileChanges: checkpointHasFileChanges(cp, checkpoints),
                     });
                   }}
                 >
