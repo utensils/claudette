@@ -41,10 +41,16 @@ describe("checkpointHasFileChanges", () => {
     expect(checkpointHasFileChanges(target, [])).toBe(false);
   });
 
-  it("returns false when target is the latest checkpoint", () => {
+  it("returns true when target is the latest checkpoint (worktree may have drifted)", () => {
     const target = cp("cp2", "bbb", 1);
     const all = [cp("cp1", "aaa", 0), cp("cp2", "bbb", 1)];
-    expect(checkpointHasFileChanges(target, all)).toBe(false);
+    expect(checkpointHasFileChanges(target, all)).toBe(true);
+  });
+
+  it("returns true when target is the only checkpoint", () => {
+    const target = cp("cp1", "aaa", 0);
+    const all = [cp("cp1", "aaa", 0)];
+    expect(checkpointHasFileChanges(target, all)).toBe(true);
   });
 
   it("returns true across multiple turns with different hashes", () => {
