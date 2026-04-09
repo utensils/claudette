@@ -85,6 +85,7 @@ export interface CommandContext {
   stopAgent: (wsId: string) => Promise<void>;
   resetAgentSession: (wsId: string) => Promise<void>;
   clearAgentQuestion: (wsId: string) => void;
+  clearPlanApproval: (wsId: string) => void;
   updateWorkspace: (id: string, updates: Record<string, unknown>) => void;
 }
 
@@ -198,7 +199,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
       category: "agent",
       icon: RotateCcw,
       keywords: ["restart", "new", "clear"],
-      execute: () => { ctx.resetAgentSession(wsId); ctx.clearAgentQuestion(wsId); ctx.close(); },
+      execute: () => { ctx.resetAgentSession(wsId); ctx.clearAgentQuestion(wsId); ctx.clearPlanApproval(wsId); ctx.close(); },
     });
   }
 

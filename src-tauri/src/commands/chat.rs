@@ -84,6 +84,18 @@ pub async fn send_chat_message(
     // Session state is persisted to SQLite so that `--resume` survives app
     // restarts. The in-memory HashMap acts as a hot cache; on a cache miss we
     // restore from the database before falling back to creating a new session.
+    // Resolve custom instructions once — used for both restored and new sessions.
+    let instructions = {
+        let from_config = repo.as_ref().and_then(|r| {
+            let path = r.path.clone();
+            claudette::config::load_config(std::path::Path::new(&path))
+                .ok()
+                .flatten()
+                .and_then(|c| c.instructions)
+        });
+        from_config.or_else(|| repo.as_ref().and_then(|r| r.custom_instructions.clone()))
+    };
+
     let mut agents = state.agents.write().await;
     let session = agents.entry(workspace_id.clone()).or_insert_with(|| {
         // Try restoring a persisted session from the database first.
@@ -92,21 +104,10 @@ pub async fn send_chat_message(
                 session_id: sid,
                 turn_count: tc,
                 active_pid: None,
-                custom_instructions: None,
+                custom_instructions: instructions.clone(),
             };
         }
 
-        // First turn: resolve instructions from .claudette.json > repo settings.
-        let instructions = {
-            let from_config = repo.as_ref().and_then(|r| {
-                let path = r.path.clone();
-                claudette::config::load_config(std::path::Path::new(&path))
-                    .ok()
-                    .flatten()
-                    .and_then(|c| c.instructions)
-            });
-            from_config.or_else(|| repo.as_ref().and_then(|r| r.custom_instructions.clone()))
-        };
         AgentSessionState {
             session_id: uuid::Uuid::new_v4().to_string(),
             turn_count: 0,
