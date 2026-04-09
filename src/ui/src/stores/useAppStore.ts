@@ -89,9 +89,10 @@ interface AppState {
     partialJson: string
   ) => void;
 
-  // -- Agent Questions --
-  agentQuestion: AgentQuestion | null;
-  setAgentQuestion: (q: AgentQuestion | null) => void;
+  // -- Agent Questions (per-workspace) --
+  agentQuestions: Record<string, AgentQuestion>;
+  setAgentQuestion: (q: AgentQuestion) => void;
+  clearAgentQuestion: (wsId: string) => void;
 
   // -- Notifications --
   unreadCompletions: Set<string>; // workspace IDs with unread completions
@@ -346,9 +347,17 @@ export const useAppStore = create<AppState>((set) => ({
       },
     })),
 
-  // -- Agent Questions --
-  agentQuestion: null,
-  setAgentQuestion: (q) => set({ agentQuestion: q }),
+  // -- Agent Questions (per-workspace) --
+  agentQuestions: {},
+  setAgentQuestion: (q) =>
+    set((s) => ({
+      agentQuestions: { ...s.agentQuestions, [q.workspaceId]: q },
+    })),
+  clearAgentQuestion: (wsId) =>
+    set((s) => {
+      const { [wsId]: _, ...rest } = s.agentQuestions;
+      return { agentQuestions: rest };
+    }),
 
   // -- Notifications --
   unreadCompletions: new Set<string>(),

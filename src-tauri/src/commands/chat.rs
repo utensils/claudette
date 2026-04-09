@@ -120,9 +120,6 @@ pub async fn send_chat_message(
     let custom_instructions = session.custom_instructions.clone();
     session.turn_count += 1;
 
-    // Persist updated session state to the database.
-    let _ = db.save_agent_session(&workspace_id, &session_id, session.turn_count);
-
     // Build agent settings from frontend params.
     let agent_settings = AgentSettings {
         model: if !is_resume { model } else { None },
@@ -142,6 +139,11 @@ pub async fn send_chat_message(
         &agent_settings,
     )
     .await?;
+
+    // Persist session state only after the subprocess spawned successfully.
+    // If run_turn fails (missing binary, spawn error), we avoid persisting a
+    // turn_count > 0 for a session Claude never initialized.
+    let _ = db.save_agent_session(&workspace_id, &session_id, session.turn_count);
 
     session.active_pid = Some(turn_handle.pid);
     drop(agents);

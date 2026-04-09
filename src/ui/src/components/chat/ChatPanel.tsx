@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, useMemo, useCallback } from "react";
+import React, { memo, useEffect, useRef, useState, useMemo, useCallback } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
@@ -195,11 +195,11 @@ export function ChatPanel() {
   const permissionLevel = selectedWorkspaceId
     ? permissionLevelMap[selectedWorkspaceId] ?? "full"
     : "full";
-  const agentQuestion = useAppStore((s) => s.agentQuestion);
-  const setAgentQuestion = useAppStore((s) => s.setAgentQuestion);
+  const pendingQuestion = useAppStore(
+    (s) => (selectedWorkspaceId ? s.agentQuestions[selectedWorkspaceId] ?? null : null)
+  );
+  const clearAgentQuestion = useAppStore((s) => s.clearAgentQuestion);
   const isRunning = ws?.agent_status === "Running";
-  const pendingQuestion =
-    agentQuestion?.workspaceId === selectedWorkspaceId ? agentQuestion : null;
 
   // Spinner and elapsed timer for running agent.
   const [spinnerIdx, setSpinnerIdx] = useState(0);
@@ -300,9 +300,8 @@ export function ChatPanel() {
 
     // Clear any pending agent question — the user is sending a new message
     // (either an answer from the question card or a manual override).
-    const currentQ = useAppStore.getState().agentQuestion;
-    if (currentQ?.workspaceId === selectedWorkspaceId) {
-      setAgentQuestion(null);
+    if (selectedWorkspaceId) {
+      clearAgentQuestion(selectedWorkspaceId);
     }
 
     setError(null);
@@ -474,20 +473,10 @@ export function ChatPanel() {
           </div>
         ) : (
           <>
-            {messages.map((msg, idx) => (
-              <MessageWithTurns
-                key={msg.id}
-                msg={msg}
-                idx={idx}
-                workspaceId={selectedWorkspaceId!}
-              />
-            ))}
-
-            {/* Completed turns that came after all current messages */}
             {selectedWorkspaceId && (
-              <CompletedTurnsAfter
+              <MessagesWithTurns
+                messages={messages}
                 workspaceId={selectedWorkspaceId}
-                afterIndex={messages.length}
               />
             )}
 
@@ -506,7 +495,7 @@ export function ChatPanel() {
               <AgentQuestionCard
                 question={pendingQuestion}
                 onRespond={(response) => {
-                  setAgentQuestion(null);
+                  if (selectedWorkspaceId) clearAgentQuestion(selectedWorkspaceId);
                   handleSend(response);
                 }}
               />
@@ -605,30 +594,31 @@ const StreamingMessage = memo(function StreamingMessage({
  */
 function TurnSummary({
   turn,
-  turnIndex,
-  workspaceId,
+  collapsed,
+  onToggle,
 }: {
   turn: CompletedTurn;
   turnIndex: number;
   workspaceId: string;
+  collapsed: boolean;
+  onToggle: () => void;
 }) {
-  const toggleCompletedTurn = useAppStore((s) => s.toggleCompletedTurn);
   return (
     <div
       className={styles.turnSummary}
       role="button"
       tabIndex={0}
-      onClick={() => toggleCompletedTurn(workspaceId, turnIndex)}
+      onClick={onToggle}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          toggleCompletedTurn(workspaceId, turnIndex);
+          onToggle();
         }
       }}
     >
       <div className={styles.turnHeader}>
         <span className={styles.toolChevron}>
-          {turn.collapsed ? "›" : "⌄"}
+          {collapsed ? "›" : "⌄"}
         </span>
         <span className={styles.turnLabel}>
           {turn.activities.length} tool call
@@ -637,7 +627,7 @@ function TurnSummary({
             `, ${turn.messageCount} message${turn.messageCount !== 1 ? "s" : ""}`}
         </span>
       </div>
-      {!turn.collapsed && (
+      {!collapsed && (
         <div className={styles.turnActivities}>
           {turn.activities.map((act: ToolActivity) => (
             <div key={act.toolUseId} className={styles.toolActivity}>
@@ -658,99 +648,86 @@ function TurnSummary({
 }
 
 /**
- * A chat message preceded by any completed turns that belong at this position.
- * Each completed turn records `afterMessageIndex` — the number of messages that
- * existed when the turn finalized. Turns with afterMessageIndex === idx render
- * just BEFORE message[idx].
+ * Renders all messages interleaved with completed turn summaries at the correct
+ * chronological position. Uses a single store subscription + useMemo to avoid
+ * per-message selectors and redundant re-renders during streaming.
  */
-const MessageWithTurns = memo(function MessageWithTurns({
-  msg,
-  idx,
+const MessagesWithTurns = memo(function MessagesWithTurns({
+  messages,
   workspaceId,
 }: {
-  msg: ChatMessage;
-  idx: number;
+  messages: ChatMessage[];
   workspaceId: string;
 }) {
-  const turnsHere = useAppStore(
-    (s) =>
-      (s.completedTurns[workspaceId] ?? EMPTY_COMPLETED_TURNS).filter(
-        (t) => t.afterMessageIndex === idx
-      )
+  const completedTurns = useAppStore(
+    (s) => s.completedTurns[workspaceId] ?? EMPTY_COMPLETED_TURNS
   );
+  const toggleCompletedTurn = useAppStore((s) => s.toggleCompletedTurn);
+
+  // Build an index: afterMessageIndex → array of (turn, globalIndex) pairs.
+  // Only recomputed when completedTurns changes, not on every streaming update.
+  const turnsByPosition = useMemo(() => {
+    const map: Record<number, Array<{ turn: CompletedTurn; globalIdx: number }>> = {};
+    completedTurns.forEach((turn, globalIdx) => {
+      const key = turn.afterMessageIndex;
+      (map[key] ??= []).push({ turn, globalIdx });
+    });
+    return map;
+  }, [completedTurns]);
+
+  const renderTurns = (position: number) => {
+    const entries = turnsByPosition[position];
+    if (!entries) return null;
+    return entries.map(({ turn, globalIdx }) => (
+      <TurnSummary
+        key={turn.id}
+        turn={turn}
+        turnIndex={globalIdx}
+        workspaceId={workspaceId}
+        collapsed={turn.collapsed}
+        onToggle={() => toggleCompletedTurn(workspaceId, globalIdx)}
+      />
+    ));
+  };
 
   return (
     <>
-      {turnsHere.map((turn) => {
-        const globalIdx = useAppStore
-          .getState()
-          .completedTurns[workspaceId]?.indexOf(turn) ?? 0;
-        return (
+      {messages.map((msg, idx) => (
+        <React.Fragment key={msg.id}>
+          {renderTurns(idx)}
+          <div className={`${styles.message} ${styles[`role_${msg.role}`]}`}>
+            {msg.role === "User" && (
+              <div className={styles.roleLabel}>You</div>
+            )}
+            <div className={styles.content}>
+              {msg.role === "Assistant" ? (
+                <Markdown
+                  remarkPlugins={REMARK_PLUGINS}
+                  rehypePlugins={REHYPE_PLUGINS}
+                >
+                  {preprocessContent(msg.content)}
+                </Markdown>
+              ) : (
+                msg.content
+              )}
+            </div>
+          </div>
+        </React.Fragment>
+      ))}
+      {/* Turns that finalized after or at the last message index */}
+      {completedTurns
+        .map((turn, globalIdx) => ({ turn, globalIdx }))
+        .filter(({ turn }) => turn.afterMessageIndex >= messages.length)
+        .map(({ turn, globalIdx }) => (
           <TurnSummary
             key={turn.id}
             turn={turn}
             turnIndex={globalIdx}
             workspaceId={workspaceId}
+            collapsed={turn.collapsed}
+            onToggle={() => toggleCompletedTurn(workspaceId, globalIdx)}
           />
-        );
-      })}
-      <div className={`${styles.message} ${styles[`role_${msg.role}`]}`}>
-        {msg.role === "User" && (
-          <div className={styles.roleLabel}>You</div>
-        )}
-        <div className={styles.content}>
-          {msg.role === "Assistant" ? (
-            <Markdown
-              remarkPlugins={REMARK_PLUGINS}
-              rehypePlugins={REHYPE_PLUGINS}
-            >
-              {preprocessContent(msg.content)}
-            </Markdown>
-          ) : (
-            msg.content
-          )}
-        </div>
-      </div>
-    </>
-  );
-});
-
-/**
- * Completed turns that arrived after all current messages (e.g., a turn that
- * finalized when no new messages followed it yet). Also catches any turns whose
- * afterMessageIndex >= current message count.
- */
-const CompletedTurnsAfter = memo(function CompletedTurnsAfter({
-  workspaceId,
-  afterIndex,
-}: {
-  workspaceId: string;
-  afterIndex: number;
-}) {
-  const turns = useAppStore(
-    (s) =>
-      (s.completedTurns[workspaceId] ?? EMPTY_COMPLETED_TURNS).filter(
-        (t) => t.afterMessageIndex >= afterIndex
-      )
-  );
-
-  if (turns.length === 0) return null;
-
-  return (
-    <>
-      {turns.map((turn) => {
-        const globalIdx = useAppStore
-          .getState()
-          .completedTurns[workspaceId]?.indexOf(turn) ?? 0;
-        return (
-          <TurnSummary
-            key={turn.id}
-            turn={turn}
-            turnIndex={globalIdx}
-            workspaceId={workspaceId}
-          />
-        );
-      })}
+        ))}
     </>
   );
 });

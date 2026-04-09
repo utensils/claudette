@@ -34,29 +34,31 @@ function addToolActivities(wsId: string = WS_ID) {
   });
 }
 
-describe("agentQuestion lifecycle", () => {
+describe("agentQuestion lifecycle (per-workspace)", () => {
   beforeEach(() => {
     useAppStore.setState({
-      agentQuestion: null,
+      agentQuestions: {},
       toolActivities: {},
       completedTurns: {},
       chatMessages: {},
     });
   });
 
-  it("setAgentQuestion stores and retrieves the question", () => {
+  it("setAgentQuestion stores question keyed by workspace", () => {
     const q = makeQuestion();
     useAppStore.getState().setAgentQuestion(q);
-    expect(useAppStore.getState().agentQuestion).toEqual(q);
+    expect(useAppStore.getState().agentQuestions[WS_ID]).toEqual(q);
   });
 
-  it("setAgentQuestion(null) clears the question", () => {
-    useAppStore.getState().setAgentQuestion(makeQuestion());
-    useAppStore.getState().setAgentQuestion(null);
-    expect(useAppStore.getState().agentQuestion).toBeNull();
+  it("clearAgentQuestion removes question for that workspace only", () => {
+    useAppStore.getState().setAgentQuestion(makeQuestion(WS_ID));
+    useAppStore.getState().setAgentQuestion(makeQuestion("other-ws"));
+    useAppStore.getState().clearAgentQuestion(WS_ID);
+    expect(useAppStore.getState().agentQuestions[WS_ID]).toBeUndefined();
+    expect(useAppStore.getState().agentQuestions["other-ws"]).toBeDefined();
   });
 
-  it("finalizeTurn does NOT clear agentQuestion", () => {
+  it("finalizeTurn does NOT clear agentQuestions", () => {
     const q = makeQuestion();
     useAppStore.getState().setAgentQuestion(q);
     addToolActivities();
@@ -65,7 +67,7 @@ describe("agentQuestion lifecycle", () => {
 
     expect(useAppStore.getState().toolActivities[WS_ID]).toEqual([]);
     expect(useAppStore.getState().completedTurns[WS_ID]).toHaveLength(1);
-    expect(useAppStore.getState().agentQuestion).toEqual(q);
+    expect(useAppStore.getState().agentQuestions[WS_ID]).toEqual(q);
   });
 
   it("agentQuestion persists across multiple finalizeTurn calls", () => {
@@ -75,16 +77,17 @@ describe("agentQuestion lifecycle", () => {
     useAppStore.getState().finalizeTurn(WS_ID, 0);
     useAppStore.getState().finalizeTurn(WS_ID, 0);
 
-    expect(useAppStore.getState().agentQuestion).toEqual(q);
+    expect(useAppStore.getState().agentQuestions[WS_ID]).toEqual(q);
   });
 
-  it("question is scoped to workspace", () => {
-    const q = makeQuestion("other-workspace");
-    useAppStore.getState().setAgentQuestion(q);
+  it("questions are isolated per workspace", () => {
+    const qa = makeQuestion("ws-a");
+    const qb = makeQuestion("ws-b");
+    useAppStore.getState().setAgentQuestion(qa);
+    useAppStore.getState().setAgentQuestion(qb);
 
-    const stored = useAppStore.getState().agentQuestion;
-    expect(stored?.workspaceId).toBe("other-workspace");
-    expect(stored?.workspaceId).not.toBe(WS_ID);
+    expect(useAppStore.getState().agentQuestions["ws-a"]).toEqual(qa);
+    expect(useAppStore.getState().agentQuestions["ws-b"]).toEqual(qb);
   });
 });
 
@@ -98,7 +101,6 @@ describe("finalizeTurn afterMessageIndex", () => {
   });
 
   it("records afterMessageIndex as current chatMessages length", () => {
-    // Simulate 2 messages already in the chat.
     useAppStore.setState({
       chatMessages: {
         [WS_ID]: [
@@ -125,14 +127,12 @@ describe("finalizeTurn afterMessageIndex", () => {
   });
 
   it("successive turns get increasing afterMessageIndex", () => {
-    // Turn 1: finalize with 1 message
     useAppStore.setState({
       chatMessages: { [WS_ID]: [{ id: "m1", workspace_id: WS_ID, role: "Assistant", content: "a", cost_usd: null, duration_ms: null, created_at: "" }] },
     });
     addToolActivities();
     useAppStore.getState().finalizeTurn(WS_ID, 1);
 
-    // Turn 2: add user + assistant messages, then finalize with new tools
     useAppStore.setState({
       chatMessages: {
         [WS_ID]: [
