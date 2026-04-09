@@ -108,7 +108,7 @@ pub async fn restore_worktree(
 }
 
 pub async fn remove_worktree(repo_path: &str, worktree_path: &str) -> Result<(), GitError> {
-    run_git(repo_path, &["worktree", "remove", worktree_path]).await?;
+    run_git(repo_path, &["worktree", "remove", "--force", worktree_path]).await?;
     Ok(())
 }
 
