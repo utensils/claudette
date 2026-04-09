@@ -814,7 +814,19 @@ function ChatInputArea({
     setChatInput("");
   };
 
+  const planMode = useAppStore(
+    (s) => s.planMode[selectedWorkspaceId] ?? false,
+  );
+  const setPlanMode = useAppStore((s) => s.setPlanMode);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Shift+Tab: toggle plan mode
+    if (e.key === "Tab" && e.shiftKey) {
+      e.preventDefault();
+      setPlanMode(selectedWorkspaceId, !planMode);
+      return;
+    }
+
     // Slash command picker navigation
     if (showSlashPicker) {
       if (e.key === "ArrowDown") {
@@ -839,7 +851,7 @@ function ChatInputArea({
         }
         return;
       }
-      if (e.key === "Tab") {
+      if (e.key === "Tab" && !e.shiftKey) {
         e.preventDefault();
         const cmd = slashResults[slashPickerIndex];
         if (cmd) {
