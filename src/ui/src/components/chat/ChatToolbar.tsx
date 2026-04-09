@@ -21,6 +21,7 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
   const setThinkingEnabled = useAppStore((s) => s.setThinkingEnabled);
   const setPlanMode = useAppStore((s) => s.setPlanMode);
   const setModelSelectorOpen = useAppStore((s) => s.setModelSelectorOpen);
+  const setAgentQuestion = useAppStore((s) => s.setAgentQuestion);
 
   const modelChipRef = useRef<HTMLButtonElement>(null);
   const [loaded, setLoaded] = useState(false);
@@ -51,10 +52,11 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
         await setAppSetting(`model:${workspaceId}`, model);
         // Model is session-level — reset session so next turn uses the new model.
         await resetAgentSession(workspaceId);
+        setAgentQuestion(null);
       }
       setModelSelectorOpen(false);
     },
-    [workspaceId, selectedModel, setSelectedModel, setModelSelectorOpen]
+    [workspaceId, selectedModel, setSelectedModel, setModelSelectorOpen, setAgentQuestion]
   );
 
   const toggleFast = useCallback(async () => {

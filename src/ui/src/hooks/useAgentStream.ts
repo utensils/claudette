@@ -1,64 +1,11 @@
 import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "../stores/useAppStore";
-import type { AgentQuestionItem } from "../stores/useAppStore";
 import type { AgentStreamPayload } from "../types/agent-events";
 import { extractToolSummary } from "./toolSummary";
+import { parseAskUserQuestion } from "./parseAgentQuestion";
 
 const ASK_USER_QUESTION_TOOL = "AskUserQuestion";
-
-/**
- * Parse AskUserQuestion tool input JSON into question items.
- * Supports two formats:
- * - Single: { question: "...", options: [...] }
- * - Multi:  { questions: [{ header?, question, options, multiSelect? }] }
- *
- * Options can be strings or objects with label/description fields.
- */
-function parseAskUserQuestion(
-  parsed: Record<string, unknown>
-): AgentQuestionItem[] {
-  // Multi-question format
-  if (Array.isArray(parsed.questions)) {
-    return parsed.questions.map((q: Record<string, unknown>) => ({
-      header: typeof q.header === "string" ? q.header : undefined,
-      question: typeof q.question === "string" ? q.question : "",
-      options: parseOptions(q.options),
-      multiSelect: q.multiSelect === true,
-    }));
-  }
-
-  // Single-question format
-  if (typeof parsed.question === "string") {
-    return [
-      {
-        question: parsed.question,
-        options: parseOptions(parsed.options),
-        multiSelect: false,
-      },
-    ];
-  }
-
-  return [];
-}
-
-function parseOptions(
-  raw: unknown
-): Array<{ label: string; description?: string }> {
-  if (!Array.isArray(raw)) return [];
-  return raw.map((opt: unknown) => {
-    if (typeof opt === "string") return { label: opt };
-    if (typeof opt === "object" && opt !== null) {
-      const o = opt as Record<string, unknown>;
-      return {
-        label: typeof o.label === "string" ? o.label : String(o.label ?? ""),
-        description:
-          typeof o.description === "string" ? o.description : undefined,
-      };
-    }
-    return { label: String(opt) };
-  });
-}
 
 export function useAgentStream() {
   const appendStreamingContent = useAppStore((s) => s.appendStreamingContent);
@@ -92,11 +39,10 @@ export function useAgentStream() {
         updateWorkspace(wsId, { agent_status: "Idle" });
         setStreamingContent(wsId, "");
         blockToolMapRef.current = {};
-        // Clear pending question for this workspace
-        const currentQuestion = useAppStore.getState().agentQuestion;
-        if (currentQuestion?.workspaceId === wsId) {
-          setAgentQuestion(null);
-        }
+        // NOTE: Do NOT clear agentQuestion here. In --print mode the CLI
+        // exits immediately after emitting AskUserQuestion, so ProcessExited
+        // fires before the user has a chance to answer. The question is
+        // cleared when the user responds (onRespond) or sends a new message.
 
         // Notification: mark workspace as unread if not currently selected
         const { selectedWorkspaceId, markWorkspaceAsUnread } = useAppStore.getState();

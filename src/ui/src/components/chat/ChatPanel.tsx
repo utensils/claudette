@@ -298,6 +298,13 @@ export function ChatPanel() {
     const trimmed = content.trim();
     if (!trimmed || !selectedWorkspaceId) return;
 
+    // Clear any pending agent question — the user is sending a new message
+    // (either an answer from the question card or a manual override).
+    const currentQ = useAppStore.getState().agentQuestion;
+    if (currentQ?.workspaceId === selectedWorkspaceId) {
+      setAgentQuestion(null);
+    }
+
     setError(null);
 
     // Push to prompt history.
