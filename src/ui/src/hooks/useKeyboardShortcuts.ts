@@ -6,9 +6,11 @@ export function useKeyboardShortcuts() {
   const toggleRightSidebar = useAppStore((s) => s.toggleRightSidebar);
   const toggleTerminalPanel = useAppStore((s) => s.toggleTerminalPanel);
   const toggleFuzzyFinder = useAppStore((s) => s.toggleFuzzyFinder);
+  const toggleCommandPalette = useAppStore((s) => s.toggleCommandPalette);
   const closeModal = useAppStore((s) => s.closeModal);
   const activeModal = useAppStore((s) => s.activeModal);
   const fuzzyFinderOpen = useAppStore((s) => s.fuzzyFinderOpen);
+  const commandPaletteOpen = useAppStore((s) => s.commandPaletteOpen);
   const setDiffSelectedFile = useAppStore((s) => s.setDiffSelectedFile);
   const diffSelectedFile = useAppStore((s) => s.diffSelectedFile);
 
@@ -18,7 +20,9 @@ export function useKeyboardShortcuts() {
 
       // Escape: dismiss topmost overlay
       if (e.key === "Escape") {
-        if (activeModal) {
+        if (commandPaletteOpen) {
+          toggleCommandPalette();
+        } else if (activeModal) {
           closeModal();
         } else if (fuzzyFinderOpen) {
           toggleFuzzyFinder();
@@ -39,6 +43,10 @@ export function useKeyboardShortcuts() {
           e.preventDefault();
           toggleFuzzyFinder();
           break;
+        case "p":
+          e.preventDefault();
+          toggleCommandPalette();
+          break;
         case "d":
           e.preventDefault();
           toggleRightSidebar();
@@ -57,9 +65,11 @@ export function useKeyboardShortcuts() {
     toggleRightSidebar,
     toggleTerminalPanel,
     toggleFuzzyFinder,
+    toggleCommandPalette,
     closeModal,
     activeModal,
     fuzzyFinderOpen,
+    commandPaletteOpen,
     setDiffSelectedFile,
     diffSelectedFile,
   ]);

@@ -146,6 +146,7 @@ interface AppState {
   sidebarFilter: "all" | "active" | "archived";
   repoCollapsed: Record<string, boolean>;
   fuzzyFinderOpen: boolean;
+  commandPaletteOpen: boolean;
   toggleSidebar: () => void;
   toggleRightSidebar: () => void;
   setSidebarWidth: (w: number) => void;
@@ -154,6 +155,7 @@ interface AppState {
   setSidebarFilter: (f: "all" | "active" | "archived") => void;
   toggleRepoCollapsed: (id: string) => void;
   toggleFuzzyFinder: () => void;
+  toggleCommandPalette: () => void;
 
   // -- Modals --
   activeModal: string | null;
@@ -472,6 +474,9 @@ export const useAppStore = create<AppState>((set) => ({
     })),
   toggleFuzzyFinder: () =>
     set((s) => ({ fuzzyFinderOpen: !s.fuzzyFinderOpen })),
+  commandPaletteOpen: false,
+  toggleCommandPalette: () =>
+    set((s) => ({ commandPaletteOpen: !s.commandPaletteOpen })),
 
   // -- Modals --
   activeModal: null,

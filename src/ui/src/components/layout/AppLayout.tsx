@@ -6,6 +6,7 @@ import { DiffViewer } from "../diff/DiffViewer";
 import { TerminalPanel } from "../terminal/TerminalPanel";
 import { RightSidebar } from "../right-sidebar/RightSidebar";
 import { FuzzyFinder } from "../fuzzy-finder/FuzzyFinder";
+import { CommandPalette } from "../command-palette/CommandPalette";
 import { Dashboard } from "./Dashboard";
 import { StatusBar } from "./StatusBar";
 import { ModalRouter } from "../modals/ModalRouter";
@@ -27,6 +28,7 @@ export function AppLayout() {
   const terminalHeight = useAppStore((s) => s.terminalHeight);
   const setTerminalHeight = useAppStore((s) => s.setTerminalHeight);
   const fuzzyFinderOpen = useAppStore((s) => s.fuzzyFinderOpen);
+  const commandPaletteOpen = useAppStore((s) => s.commandPaletteOpen);
 
   useKeyboardShortcuts();
   useBranchRefresh();
@@ -107,6 +109,7 @@ export function AppLayout() {
       <StatusBar />
       <ModalRouter />
       {fuzzyFinderOpen && <FuzzyFinder />}
+      {commandPaletteOpen && <CommandPalette />}
     </div>
   );
 }

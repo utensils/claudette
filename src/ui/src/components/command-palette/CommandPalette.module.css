@@ -1,0 +1,226 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  display: flex;
+  justify-content: center;
+  padding-top: 72px;
+  z-index: 100;
+  animation: fadeIn 0.1s ease;
+}
+
+.card {
+  background: var(--app-bg);
+  border: 1px solid var(--sidebar-border);
+  border-radius: 12px;
+  width: 580px;
+  max-height: 480px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: var(--shadow-lg), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  animation: scaleIn 0.15s ease;
+}
+
+/* Search input row */
+.inputRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.inputIcon {
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-family: var(--font-sans);
+  outline: none;
+}
+
+.input::placeholder {
+  color: var(--text-faint);
+}
+
+/* Back button (theme sub-menu) */
+.backBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  flex-shrink: 0;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.backBtn:hover {
+  color: var(--accent-primary);
+  border-color: rgba(var(--accent-primary-rgb), 0.3);
+}
+
+/* Mode badge (shows "Theme" when in sub-menu) */
+.modeBadge {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-primary);
+  background: rgba(var(--accent-primary-rgb), 0.1);
+  border: 1px solid rgba(var(--accent-primary-rgb), 0.2);
+  border-radius: 4px;
+  padding: 2px 8px;
+  flex-shrink: 0;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+/* Active theme indicator */
+.activeBadge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent-primary);
+  background: rgba(var(--accent-primary-rgb), 0.1);
+  border-radius: 3px;
+  padding: 1px 5px;
+  margin-left: 8px;
+  vertical-align: middle;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+/* Results list */
+.results {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+/* Category headers */
+.categoryHeader {
+  padding: 10px 14px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Result rows */
+.result {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.result:hover {
+  background: var(--hover-bg);
+}
+
+.resultSelected {
+  background: var(--selected-bg);
+}
+
+.resultIcon {
+  color: var(--text-dim);
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  transition: color var(--transition-fast);
+}
+
+.resultSelected .resultIcon {
+  color: var(--accent-primary);
+}
+
+.resultBody {
+  flex: 1;
+  min-width: 0;
+}
+
+.resultName {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.resultDescription {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Keyboard shortcut badges */
+.shortcut {
+  display: flex;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.kbd {
+  display: inline-block;
+  padding: 2px 6px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--divider);
+  border-radius: 4px;
+  line-height: 1.4;
+}
+
+/* Theme color swatch */
+.themeSwatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Footer hint bar */
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 18px;
+  border-top: 1px solid var(--divider);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.footerHint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
