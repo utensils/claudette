@@ -164,8 +164,10 @@ pub async fn send_chat_message(
 
             // If the process exits without ever initializing, reset the session
             // so the next attempt starts fresh instead of trying --resume.
-            if let AgentEvent::ProcessExited(code) = &event
-                && (!got_init || *code != Some(0))
+            // A non-zero exit AFTER successful init is normal (e.g. user stop,
+            // transient error) — the session is still valid for resumption.
+            if let AgentEvent::ProcessExited(_code) = &event
+                && !got_init
             {
                 let app_state = app.state::<AppState>();
                 let mut agents = app_state.agents.write().await;

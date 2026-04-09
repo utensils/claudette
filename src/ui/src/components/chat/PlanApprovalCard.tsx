@@ -1,16 +1,18 @@
 import { useState } from "react";
 import type { PlanApproval } from "../../stores/useAppStore";
-import { readPlanFile } from "../../services/tauri";
+import { readPlanFile, sendRemoteCommand } from "../../services/tauri";
 import styles from "./PlanApprovalCard.module.css";
 
 interface PlanApprovalCardProps {
   approval: PlanApproval;
   onRespond: (response: string) => void;
+  remoteConnectionId?: string;
 }
 
 export function PlanApprovalCard({
   approval,
   onRespond,
+  remoteConnectionId,
 }: PlanApprovalCardProps) {
   const [planContent, setPlanContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -24,7 +26,14 @@ export function PlanApprovalCard({
     if (!approval.planFilePath) return;
     setLoading(true);
     try {
-      const content = await readPlanFile(approval.planFilePath);
+      let content: string;
+      if (remoteConnectionId) {
+        content = (await sendRemoteCommand(remoteConnectionId, "read_plan_file", {
+          path: approval.planFilePath,
+        })) as string;
+      } else {
+        content = await readPlanFile(approval.planFilePath);
+      }
       setPlanContent(content);
       setExpanded(true);
     } catch (e) {

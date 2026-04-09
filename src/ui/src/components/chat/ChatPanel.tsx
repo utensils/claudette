@@ -510,6 +510,7 @@ export function ChatPanel() {
             {pendingPlan && (
               <PlanApprovalCard
                 approval={pendingPlan}
+                remoteConnectionId={ws?.remote_connection_id ?? undefined}
                 onRespond={(response) => {
                   if (selectedWorkspaceId) clearPlanApproval(selectedWorkspaceId);
                   handleSend(response);
