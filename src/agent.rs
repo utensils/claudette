@@ -218,24 +218,23 @@ pub fn build_claude_args(
     // Check if we should bypass permissions (full access with wildcard)
     let bypass_permissions = allowed_tools.len() == 1 && allowed_tools[0] == "*";
 
-    // Session-level flags — only on first turn.
-    if !is_resume {
-        if let Some(ref model) = settings.model {
-            args.push("--model".to_string());
-            args.push(model.clone());
-        }
-        // Permission mode is session-level, set on first turn only
-        if settings.plan_mode {
-            args.push("--permission-mode".to_string());
-            args.push("plan".to_string());
-        } else if bypass_permissions {
-            args.push("--permission-mode".to_string());
-            args.push("bypassPermissions".to_string());
-        }
+    // Model and custom instructions are session-level — only on first turn.
+    if !is_resume
+        && let Some(ref model) = settings.model
+    {
+        args.push("--model".to_string());
+        args.push(model.clone());
     }
 
-    // For resumed sessions, we still need to respect the bypass_permissions flag
-    // by not restricting tools, even though permission-mode was set in the first turn
+    // Permission mode must be set on every turn — each `claude` invocation is
+    // an independent process that doesn't inherit the previous turn's flags.
+    if settings.plan_mode {
+        args.push("--permission-mode".to_string());
+        args.push("plan".to_string());
+    } else if bypass_permissions {
+        args.push("--permission-mode".to_string());
+        args.push("bypassPermissions".to_string());
+    }
 
     // Per-turn settings via --settings JSON.
     if settings.fast_mode || settings.thinking_enabled {
@@ -253,16 +252,11 @@ pub fn build_claude_args(
         args.push(serde_json::Value::Object(obj).to_string());
     }
 
-    // Add --allowedTools
-    if !allowed_tools.is_empty() {
-        if bypass_permissions {
-            // For bypass mode, explicitly allow Bash and Edit with all patterns, plus all other tools
-            args.push("--allowedTools".to_string());
-            args.push("Bash(*) Edit(*) *".to_string());
-        } else {
-            args.push("--allowedTools".to_string());
-            args.push(allowed_tools.join(","));
-        }
+    // Add --allowedTools (only for non-bypass modes — bypassPermissions already
+    // skips all permission checks, and a redundant --allowedTools can interfere).
+    if !bypass_permissions && !allowed_tools.is_empty() {
+        args.push("--allowedTools".to_string());
+        args.push(allowed_tools.join(","));
     }
 
     // Only append custom instructions on the first turn — resumed sessions
@@ -872,13 +866,15 @@ mod tests {
     }
 
     #[test]
-    fn test_build_args_plan_mode_skipped_on_resume() {
+    fn test_build_args_plan_mode_set_on_resume() {
         let settings = AgentSettings {
             plan_mode: true,
             ..Default::default()
         };
         let args = build_claude_args("sess-1", "hello", true, &[], None, &settings);
-        assert!(!args.contains(&"--permission-mode".to_string()));
+        // Permission mode must be set on every turn (per-process flag)
+        let idx = args.iter().position(|a| a == "--permission-mode").unwrap();
+        assert_eq!(args[idx + 1], "plan");
     }
 
     #[test]
@@ -934,9 +930,8 @@ mod tests {
         // Should set permission-mode to bypassPermissions on first turn
         let pm_idx = args.iter().position(|a| a == "--permission-mode").unwrap();
         assert_eq!(args[pm_idx + 1], "bypassPermissions");
-        // Should use wildcard allowedTools format with explicit Bash and Edit patterns
-        let at_idx = args.iter().position(|a| a == "--allowedTools").unwrap();
-        assert_eq!(args[at_idx + 1], "Bash(*) Edit(*) *");
+        // bypassPermissions should NOT pass --allowedTools (it interferes with the mode)
+        assert!(!args.contains(&"--allowedTools".to_string()));
     }
 
     #[test]
@@ -950,11 +945,11 @@ mod tests {
             None,
             &AgentSettings::default(),
         );
-        // Permission mode is session-level, should not appear on resume
-        assert!(!args.contains(&"--permission-mode".to_string()));
-        // But allowedTools should still be passed with Bash and Edit patterns
-        let at_idx = args.iter().position(|a| a == "--allowedTools").unwrap();
-        assert_eq!(args[at_idx + 1], "Bash(*) Edit(*) *");
+        // Permission mode must be set on every turn (per-process flag)
+        let pm_idx = args.iter().position(|a| a == "--permission-mode").unwrap();
+        assert_eq!(args[pm_idx + 1], "bypassPermissions");
+        // bypassPermissions should NOT pass --allowedTools
+        assert!(!args.contains(&"--allowedTools".to_string()));
     }
 
     #[test]
@@ -968,8 +963,7 @@ mod tests {
         // Plan mode takes precedence over bypass
         let pm_idx = args.iter().position(|a| a == "--permission-mode").unwrap();
         assert_eq!(args[pm_idx + 1], "plan");
-        // Should still use wildcard allowedTools format with Bash and Edit patterns
-        let at_idx = args.iter().position(|a| a == "--allowedTools").unwrap();
-        assert_eq!(args[at_idx + 1], "Bash(*) Edit(*) *");
+        // Even with plan_mode, bypass tools should NOT pass --allowedTools
+        assert!(!args.contains(&"--allowedTools".to_string()));
     }
 }
