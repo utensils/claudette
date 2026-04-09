@@ -196,3 +196,11 @@ body,
     transform: scale(1);
   }
 }
+
+/* Disable ligatures for xterm.js terminals to fix spacing with fonts like FiraCode */
+.xterm-rows,
+.xterm-width-cache-measure-container {
+  font-variant-ligatures: none !important;
+  font-feature-settings: "liga" 0, "calt" 0 !important;
+  letter-spacing: 0 !important;
+}

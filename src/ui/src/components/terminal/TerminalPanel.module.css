@@ -102,8 +102,8 @@
 }
 
 /* Disable ligatures and ensure proper spacing for terminal fonts */
-.termContainer :global(.xterm),
-.termContainer :global(.xterm-screen) {
+.termContainer :global(.xterm-rows),
+.termContainer :global(.xterm-width-cache-measure-container) {
   font-variant-ligatures: none;
   font-feature-settings: "liga" 0, "calt" 0;
   letter-spacing: 0;
