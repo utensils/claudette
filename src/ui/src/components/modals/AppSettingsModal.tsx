@@ -12,11 +12,14 @@ export function AppSettingsModal() {
   const setWorktreeBaseDir = useAppStore((s) => s.setWorktreeBaseDir);
   const terminalFontSize = useAppStore((s) => s.terminalFontSize);
   const setTerminalFontSize = useAppStore((s) => s.setTerminalFontSize);
+  const terminalFontFamily = useAppStore((s) => s.terminalFontFamily);
+  const setTerminalFontFamily = useAppStore((s) => s.setTerminalFontFamily);
   const currentThemeId = useAppStore((s) => s.currentThemeId);
   const setCurrentThemeId = useAppStore((s) => s.setCurrentThemeId);
 
   const [path, setPath] = useState(worktreeBaseDir);
   const [fontSize, setFontSize] = useState(String(terminalFontSize));
+  const [fontFamily, setFontFamily] = useState(terminalFontFamily);
   const [selectedThemeId, setSelectedThemeId] = useState(currentThemeId);
   const [availableThemes, setAvailableThemes] = useState<ThemeDefinition[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -59,6 +62,9 @@ export function AppSettingsModal() {
 
       await setAppSetting("terminal_font_size", String(size));
       setTerminalFontSize(size);
+
+      await setAppSetting("terminal_font_family", fontFamily.trim());
+      setTerminalFontFamily(fontFamily.trim());
 
       await setAppSetting("theme", selectedThemeId);
       setCurrentThemeId(selectedThemeId);
@@ -127,6 +133,19 @@ export function AppSettingsModal() {
             style={{ width: 80 }}
           />
           <div className={shared.hint}>8–24px (default: 11)</div>
+        </div>
+        <div className={shared.field}>
+          <label className={shared.label}>Terminal Font Family</label>
+          <input
+            className={shared.input}
+            type="text"
+            value={fontFamily}
+            onChange={(e) => setFontFamily(e.target.value)}
+            placeholder="monospace"
+          />
+          <div className={shared.hint}>
+            Font name (e.g., "FiraCode Nerfont", "Monaco", "Consolas")
+          </div>
         </div>
       </div>
 

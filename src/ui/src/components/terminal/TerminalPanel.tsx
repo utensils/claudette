@@ -41,6 +41,7 @@ export function TerminalPanel() {
   const setActiveTerminalTab = useAppStore((s) => s.setActiveTerminalTab);
   const toggleTerminalPanel = useAppStore((s) => s.toggleTerminalPanel);
   const terminalFontSize = useAppStore((s) => s.terminalFontSize);
+  const terminalFontFamily = useAppStore((s) => s.terminalFontFamily);
 
   const autoCreatedRef = useRef<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -97,7 +98,7 @@ export function TerminalPanel() {
 
     const term = new Terminal({
       fontSize: terminalFontSize,
-      fontFamily: "monospace",
+      fontFamily: terminalFontFamily,
       theme: {
         background: "#121216",
         foreground: "#e6e6eb",
@@ -191,13 +192,14 @@ export function TerminalPanel() {
     }
   }, [activeTerminalTabId]);
 
-  // Update font size on all instances without destroying them.
+  // Update font settings on all instances without destroying them.
   useEffect(() => {
     for (const inst of instancesRef.current.values()) {
       inst.term.options.fontSize = terminalFontSize;
+      inst.term.options.fontFamily = terminalFontFamily;
       inst.fit.fit();
     }
-  }, [terminalFontSize]);
+  }, [terminalFontSize, terminalFontFamily]);
 
   // Cleanup all instances on workspace change.
   useEffect(() => {

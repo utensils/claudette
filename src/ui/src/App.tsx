@@ -11,6 +11,7 @@ function App() {
   const setWorktreeBaseDir = useAppStore((s) => s.setWorktreeBaseDir);
   const setDefaultBranches = useAppStore((s) => s.setDefaultBranches);
   const setTerminalFontSize = useAppStore((s) => s.setTerminalFontSize);
+  const setTerminalFontFamily = useAppStore((s) => s.setTerminalFontFamily);
   const setLastMessages = useAppStore((s) => s.setLastMessages);
   const setRemoteConnections = useAppStore((s) => s.setRemoteConnections);
   const setDiscoveredServers = useAppStore((s) => s.setDiscoveredServers);
@@ -44,6 +45,11 @@ function App() {
         }
       })
       .catch((err) => console.error("Failed to load terminal font size:", err));
+    getAppSetting("terminal_font_family")
+      .then((val) => {
+        if (val && val.trim()) setTerminalFontFamily(val.trim());
+      })
+      .catch((err) => console.error("Failed to load terminal font family:", err));
     getAppSetting("theme")
       .then(async (savedThemeId) => {
         const allThemes = await loadAllThemes();
