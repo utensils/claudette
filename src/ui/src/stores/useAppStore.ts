@@ -411,8 +411,15 @@ export const useAppStore = create<AppState>((set) => ({
     set((s) => {
       const { [wsId]: _q, ...restQuestions } = s.agentQuestions;
       const { [wsId]: _p, ...restApprovals } = s.planApprovals;
+      // Update lastMessages so workspace preview cards stay in sync.
+      const lastMsg = messages.length > 0 ? messages[messages.length - 1] : undefined;
+      const { [wsId]: _lm, ...restLastMessages } = s.lastMessages;
+      const updatedLastMessages = lastMsg
+        ? { ...s.lastMessages, [wsId]: lastMsg }
+        : restLastMessages;
       return {
         chatMessages: { ...s.chatMessages, [wsId]: messages },
+        lastMessages: updatedLastMessages,
         completedTurns: { ...s.completedTurns, [wsId]: [] },
         toolActivities: { ...s.toolActivities, [wsId]: [] },
         streamingContent: { ...s.streamingContent, [wsId]: "" },
