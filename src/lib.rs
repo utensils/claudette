@@ -5,4 +5,5 @@ pub mod diff;
 pub mod git;
 pub mod model;
 pub mod names;
+pub mod permissions;
 pub mod slash_commands;

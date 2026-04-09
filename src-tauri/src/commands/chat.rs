@@ -13,32 +13,7 @@ struct AgentStreamPayload {
     event: AgentEvent,
 }
 
-const TOOLS_STANDARD: &[&str] = &[
-    "Read",
-    "Write",
-    "Edit",
-    "Glob",
-    "Grep",
-    "WebSearch",
-    "WebFetch",
-];
-
-const TOOLS_READONLY: &[&str] = &["Read", "Glob", "Grep", "WebSearch", "WebFetch"];
-
-/// Map a permission level name to the list of tools to pre-approve.
-/// "full" returns a wildcard pattern to allow all tools including MCP tools.
-///
-/// Note: Permission level is a session-level setting. Changing the permission
-/// level mid-session will not affect the running agent — the user must reset
-/// the agent session for the new permission level to take effect.
-fn tools_for_level(level: &str) -> Vec<String> {
-    let tools: &[&str] = match level {
-        "full" => return vec!["*".to_string()], // Wildcard = allow all tools
-        "standard" => TOOLS_STANDARD,
-        _ => TOOLS_READONLY,
-    };
-    tools.iter().map(|s| (*s).to_string()).collect()
-}
+use claudette::permissions::tools_for_level;
 
 #[tauri::command]
 pub async fn load_chat_history(

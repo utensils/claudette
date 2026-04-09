@@ -8,30 +8,7 @@ use serde_json::json;
 
 use crate::ws::{AgentSessionState, PtyHandle, ServerState, Writer, send_message};
 
-const TOOLS_STANDARD: &[&str] = &[
-    "Read",
-    "Write",
-    "Edit",
-    "Glob",
-    "Grep",
-    "WebSearch",
-    "WebFetch",
-];
-
-const TOOLS_READONLY: &[&str] = &["Read", "Glob", "Grep", "WebSearch", "WebFetch"];
-
-/// Map a permission level name to the tools to pre-approve.
-/// "full" returns the wildcard sentinel `["*"]`, which `build_claude_args`
-/// interprets as `--permission-mode bypassPermissions` (skips all permission
-/// checks, including for MCP tools).
-fn tools_for_level(level: &str) -> Vec<String> {
-    let tools: &[&str] = match level {
-        "full" => return vec!["*".to_string()],
-        "standard" => TOOLS_STANDARD,
-        _ => TOOLS_READONLY,
-    };
-    tools.iter().map(|s| (*s).to_string()).collect()
-}
+use claudette::permissions::tools_for_level;
 
 /// Dispatch a JSON-RPC request and return a JSON-RPC response.
 pub async fn handle_request(
