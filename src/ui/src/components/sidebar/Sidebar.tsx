@@ -39,6 +39,7 @@ export function Sidebar() {
   // Drag-and-drop reorder state
   const [draggedRepoId, setDraggedRepoId] = useState<string | null>(null);
   const [dropTargetIdx, setDropTargetIdx] = useState<number | null>(null);
+  const dragCounterRef = useRef<Record<string, number>>({});
   const clearUnreadCompletion = useAppStore((s) => s.clearUnreadCompletion);
 
   const creatingRef = useRef(false);
@@ -151,17 +152,27 @@ export function Sidebar() {
               onDragStart={(e) => {
                 setDraggedRepoId(repo.id);
                 e.dataTransfer.effectAllowed = "move";
+                dragCounterRef.current = {};
+              }}
+              onDragEnter={() => {
+                if (!draggedRepoId || draggedRepoId === repo.id) return;
+                dragCounterRef.current[repo.id] = (dragCounterRef.current[repo.id] || 0) + 1;
+                setDropTargetIdx(repoIdx);
               }}
               onDragOver={(e) => {
                 e.preventDefault();
                 e.dataTransfer.dropEffect = "move";
-                if (draggedRepoId && draggedRepoId !== repo.id) {
-                  setDropTargetIdx(repoIdx);
+              }}
+              onDragLeave={() => {
+                dragCounterRef.current[repo.id] = (dragCounterRef.current[repo.id] || 0) - 1;
+                if ((dragCounterRef.current[repo.id] || 0) <= 0) {
+                  dragCounterRef.current[repo.id] = 0;
+                  if (dropTargetIdx === repoIdx) setDropTargetIdx(null);
                 }
               }}
-              onDragLeave={() => setDropTargetIdx(null)}
               onDrop={(e) => {
                 e.preventDefault();
+                dragCounterRef.current = {};
                 if (!draggedRepoId || draggedRepoId === repo.id) return;
                 const localRepos = repositories.filter((r) => !r.remote_connection_id);
                 const fromIdx = localRepos.findIndex((r) => r.id === draggedRepoId);
@@ -169,7 +180,6 @@ export function Sidebar() {
                 const reordered = [...localRepos];
                 const [moved] = reordered.splice(fromIdx, 1);
                 reordered.splice(repoIdx, 0, moved);
-                // Optimistic update + persist
                 setRepositories([
                   ...reordered,
                   ...repositories.filter((r) => !!r.remote_connection_id),
@@ -181,6 +191,7 @@ export function Sidebar() {
               onDragEnd={() => {
                 setDraggedRepoId(null);
                 setDropTargetIdx(null);
+                dragCounterRef.current = {};
               }}
             >
               {dropTargetIdx === repoIdx && draggedRepoId !== repo.id && (
