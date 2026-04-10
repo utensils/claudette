@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.2](https://github.com/utensils/Claudette/compare/v0.5.1...v0.5.2) (2026-04-10)
+
+
+### Bug Fixes
+
+* **ui:** add missing "general" to CommandCategory type ([#127](https://github.com/utensils/Claudette/issues/127)) ([5238e5a](https://github.com/utensils/Claudette/commit/5238e5ad3104de8df8a7b65ef4fb29e60391ff3f))
+
 ## [0.5.1](https://github.com/utensils/Claudette/compare/v0.5.0...v0.5.1) (2026-04-10)
 
 
