@@ -45,16 +45,15 @@ export function StatusBar() {
           </span>
         )}
       </div>
-        {updateAvailable && (
-          <button
-            className={styles.statUpdate}
-            onClick={() => setUpdateDismissed(false)}
-            title={`Update available: v${updateVersion}`}
-          >
-            update available
-          </button>
-        )}
-      </div>
+      {updateAvailable && (
+        <button
+          className={styles.statUpdate}
+          onClick={() => setUpdateDismissed(false)}
+          title={`Update available: v${updateVersion}`}
+        >
+          update available
+        </button>
+      )}
       <div className={styles.spacer} />
       <button
         className={`${styles.toggle} ${sidebarVisible ? styles.active : ""}`}
