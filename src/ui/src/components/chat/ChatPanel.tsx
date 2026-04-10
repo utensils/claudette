@@ -213,6 +213,11 @@ export function ChatPanel() {
     (s) => (selectedWorkspaceId ? s.planApprovals[selectedWorkspaceId] ?? null : null)
   );
   const clearPlanApproval = useAppStore((s) => s.clearPlanApproval);
+  const queuedMessage = useAppStore(
+    (s) => (selectedWorkspaceId ? s.queuedMessages[selectedWorkspaceId] ?? null : null)
+  );
+  const setQueuedMessage = useAppStore((s) => s.setQueuedMessage);
+  const clearQueuedMessage = useAppStore((s) => s.clearQueuedMessage);
   const isRunning = ws?.agent_status === "Running";
 
   // Spinner and elapsed timer for running agent.
@@ -419,40 +424,29 @@ export function ChatPanel() {
     hasStreaming,
   ]);
 
+  // Auto-dispatch queued message when agent becomes idle.
+  const handleSendRef = useRef<((content: string) => void) | null>(null);
+  useEffect(() => {
+    if (isRunning || !selectedWorkspaceId || !queuedMessage) return;
+    // Agent just finished — dispatch the queued message.
+    const content = queuedMessage;
+    clearQueuedMessage(selectedWorkspaceId);
+    // Use a microtask to avoid calling handleSend during render.
+    queueMicrotask(() => handleSendRef.current?.(content));
+  }, [isRunning, selectedWorkspaceId, queuedMessage, clearQueuedMessage]);
+
   if (!ws) return null;
 
   const handleSend = async (content: string) => {
     const trimmed = content.trim();
     if (!trimmed || !selectedWorkspaceId) return;
 
-    // If the agent is running, stop it first and wait for it to exit
-    // before sending the new message. The backend also guards against
-    // overlapping processes, but waiting here avoids UI state races.
+    // If the agent is running, queue the message instead of interrupting.
+    // The user can press Escape to stop the agent if they want to interrupt.
+    // Queued messages are auto-sent when the current turn finishes.
     if (isRunning) {
-      try {
-        if (ws?.remote_connection_id) {
-          await sendRemoteCommand(ws.remote_connection_id, "stop_agent", {
-            workspace_id: selectedWorkspaceId,
-          });
-        } else {
-          await stopAgent(selectedWorkspaceId);
-        }
-        // Wait for agent_status to become Idle (up to 3s).
-        const wsId = selectedWorkspaceId;
-        await new Promise<void>((resolve) => {
-          const unsub = useAppStore.subscribe((s) => {
-            const w = s.workspaces.find((w) => w.id === wsId);
-            if (w?.agent_status !== "Running") {
-              unsub();
-              resolve();
-            }
-          });
-          // Safety timeout — don't block forever.
-          setTimeout(() => { unsub(); resolve(); }, 3000);
-        });
-      } catch (e) {
-        console.error("Failed to stop agent before new message:", e);
-      }
+      setQueuedMessage(selectedWorkspaceId, trimmed);
+      return;
     }
 
     // Clear any pending agent question or plan approval — the user is sending
@@ -517,8 +511,12 @@ export function ChatPanel() {
     }
   };
 
+  handleSendRef.current = handleSend;
+
   const handleStop = async () => {
     if (!selectedWorkspaceId) return;
+    // Clear queued message — stopping means the user wants to take control.
+    clearQueuedMessage(selectedWorkspaceId);
     try {
       if (ws?.remote_connection_id) {
         await sendRemoteCommand(ws.remote_connection_id, "stop_agent", {
@@ -680,6 +678,20 @@ export function ChatPanel() {
               >
                 <span className={styles.spinner} aria-hidden="true">{SPINNER_FRAMES[spinnerIdx]}</span>
                 <span className={styles.elapsed}>{formatElapsed(elapsed)}</span>
+              </div>
+            )}
+
+            {queuedMessage && selectedWorkspaceId && (
+              <div className={styles.queuedMessage}>
+                <span className={styles.queuedLabel}>Queued</span>
+                <span className={styles.queuedContent}>{queuedMessage}</span>
+                <button
+                  className={styles.queuedCancel}
+                  onClick={() => clearQueuedMessage(selectedWorkspaceId)}
+                  title="Cancel queued message"
+                >
+                  ×
+                </button>
               </div>
             )}
           </>
