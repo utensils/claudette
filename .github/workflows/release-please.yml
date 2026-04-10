@@ -36,11 +36,16 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
         run: |
+          if [ -z "${DISCORD_WEBHOOK_URL}" ]; then
+            echo "DISCORD_WEBHOOK_URL secret is not set — skipping notification"
+            exit 0
+          fi
+
           # Extract text between first and second ## [ headers
           CHANGELOG=$(sed -n '/^## \[/{n; :loop; /^## \[/q; p; n; b loop}' CHANGELOG.md)
 
           # Strip commit hash links — clutter in Discord
-          CHANGELOG=$(echo "$CHANGELOG" | sed 's/ \[([a-f0-9]\{7,\}\](https:\/\/[^)]*))//g')
+          CHANGELOG=$(echo "$CHANGELOG" | sed 's/ (\[[a-f0-9]\{7,\}\](https:\/\/[^)]*))//g')
 
           # Trim leading/trailing blank lines
           CHANGELOG=$(echo "$CHANGELOG" | sed '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba}')
