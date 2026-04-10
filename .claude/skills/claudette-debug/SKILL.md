@@ -176,15 +176,54 @@ return Object.fromEntries(
 JS
 ```
 
-## Common Debugging Recipes
+## Background Monitoring
 
-### Why are tool call sections vanishing?
+When debugging user interactions (drag-and-drop, scroll, clicks), run polling loops as **background jobs** so the user can interact with the app while you monitor. Use `run_in_background: true` on Bash tool calls.
+
+### Poll a store slice for changes
+
+```bash
+# Run in background — you'll be notified when it completes
+prev=""; for i in $(seq 1 60); do
+  sleep 1
+  result=$(./scripts/debug-eval.sh 'POLL_EXPRESSION' 2>/dev/null)
+  if [ "$result" != "$prev" ]; then echo "[$i] ** CHANGE ** $result"; prev="$result"
+  else echo "[$i] $result"; fi
+done
 ```
-/claudette-debug trace setCompletedTurns
-/claudette-debug trace finalizeTurn
-/claudette-debug watch completedTurns
+
+### Attach DOM event listeners and poll the log
+
+```bash
+# Step 1: Inject listeners (foreground)
+./scripts/debug-eval.sh <<'JS'
+window.__eventLog = [];
+document.querySelectorAll('[class*="TARGET"]').forEach((el, i) => {
+  ['pointerdown', 'pointermove', 'pointerup', 'click'].forEach(evt => {
+    el.addEventListener(evt, () => window.__eventLog.push({ evt, idx: i, t: Date.now() }));
+  });
+});
+return 'Listeners attached';
+JS
+
+# Step 2: Poll the log (background)
+for i in $(seq 1 30); do
+  sleep 1
+  ./scripts/debug-eval.sh 'const log = window.__eventLog || []; return log.length + " events: " + [...new Set(log.map(e=>e.evt))].join(",")' 2>/dev/null
+done
 ```
-Then trigger a turn — the webview console shows every call with stack traces.
+
+### Inspect CSS computed styles on elements
+
+```bash
+./scripts/debug-eval.sh <<'JS'
+const el = document.querySelector('[class*="SELECTOR"]');
+const s = getComputedStyle(el);
+return { height: s.height, overflow: s.overflow, flexShrink: s.flexShrink, display: s.display };
+JS
+```
+
+## Common Debugging Recipes
 
 ### Inspect current workspace state
 ```
@@ -193,12 +232,18 @@ Then trigger a turn — the webview console shows every call with stack traces.
 /claudette-debug state chatMessages
 ```
 
-### Check checkpoint save race condition
+### Trace store mutations with stack traces
 ```
-/claudette-debug trace setChatMessages
 /claudette-debug trace setCompletedTurns
-/claudette-debug watch chatMessages
+/claudette-debug trace finalizeTurn
+/claudette-debug watch completedTurns
 ```
+
+### Debug CSS visibility issues
+Evaluate element dimensions, overflow, and flex properties to find elements that render at 0px height or get clipped.
+
+### Debug drag-and-drop / pointer interactions
+Attach pointer event listeners via eval, then poll the event log in a background job while the user interacts with the UI.
 
 ## Prerequisites
 

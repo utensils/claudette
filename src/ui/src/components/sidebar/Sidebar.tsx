@@ -36,10 +36,12 @@ export function Sidebar() {
   const metaKeyHeld = useAppStore((s) => s.metaKeyHeld);
   const isMac = navigator.platform.startsWith("Mac");
 
-  // Drag-and-drop reorder state
+  // Pointer-based reorder state (HTML5 drag-and-drop doesn't work in WKWebView)
   const [draggedRepoId, setDraggedRepoId] = useState<string | null>(null);
   const [dropTargetIdx, setDropTargetIdx] = useState<number | null>(null);
-  const dragCounterRef = useRef<Record<string, number>>({});
+  const repoGroupRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const dragStartPos = useRef<{ x: number; y: number; id: string; pointerId: number } | null>(null);
+  const DRAG_THRESHOLD = 5; // px before drag activates
   const clearUnreadCompletion = useAppStore((s) => s.clearUnreadCompletion);
 
   const creatingRef = useRef(false);
@@ -147,55 +149,84 @@ export function Sidebar() {
           return (
             <div
               key={repo.id}
-              className={`${styles.repoGroup} ${draggedRepoId === repo.id ? styles.dragging : ""}`}
-              draggable
-              onDragStart={(e) => {
-                setDraggedRepoId(repo.id);
-                e.dataTransfer.effectAllowed = "move";
-                e.dataTransfer.setData("text/plain", repo.id);
-                dragCounterRef.current = {};
+              ref={(el) => {
+                if (el) repoGroupRefs.current.set(repo.id, el);
+                else repoGroupRefs.current.delete(repo.id);
               }}
-              onDragEnter={() => {
-                if (!draggedRepoId || draggedRepoId === repo.id) return;
-                dragCounterRef.current[repo.id] = (dragCounterRef.current[repo.id] || 0) + 1;
-                setDropTargetIdx(repoIdx);
+              className={`${styles.repoGroup} ${draggedRepoId === repo.id ? styles.dragging : ""} ${dropTargetIdx === repoIdx && draggedRepoId && draggedRepoId !== repo.id ? styles.dropTarget : ""}`}
+              onPointerDown={(e) => {
+                if (e.button !== 0) return;
+                const header = (e.target as HTMLElement).closest(`.${styles.repoHeader}`);
+                if (!header) return;
+                // Record start position — don't activate drag until threshold
+                dragStartPos.current = { x: e.clientX, y: e.clientY, id: repo.id, pointerId: e.pointerId };
+                (e.target as HTMLElement).setPointerCapture(e.pointerId);
               }}
-              onDragOver={(e) => {
-                e.preventDefault();
-                e.dataTransfer.dropEffect = "move";
-              }}
-              onDragLeave={() => {
-                dragCounterRef.current[repo.id] = (dragCounterRef.current[repo.id] || 0) - 1;
-                if ((dragCounterRef.current[repo.id] || 0) <= 0) {
-                  dragCounterRef.current[repo.id] = 0;
-                  if (dropTargetIdx === repoIdx) setDropTargetIdx(null);
+              onPointerMove={(e) => {
+                if (!dragStartPos.current) return;
+                if (dragStartPos.current.id !== repo.id) return;
+
+                // Activate drag after threshold
+                if (!draggedRepoId) {
+                  const dx = e.clientX - dragStartPos.current.x;
+                  const dy = e.clientY - dragStartPos.current.y;
+                  if (Math.abs(dx) + Math.abs(dy) < DRAG_THRESHOLD) return;
+                  setDraggedRepoId(repo.id);
+                  // Prevent text selection while dragging
+                  window.getSelection()?.removeAllRanges();
                 }
-              }}
-              onDrop={(e) => {
                 e.preventDefault();
-                dragCounterRef.current = {};
-                if (!draggedRepoId || draggedRepoId === repo.id) return;
+
+                // Hit-test: find which repo the pointer is over using midpoint
                 const localRepos = repositories.filter((r) => !r.remote_connection_id);
-                const fromIdx = localRepos.findIndex((r) => r.id === draggedRepoId);
-                if (fromIdx < 0) return;
-                const reordered = [...localRepos];
-                const [moved] = reordered.splice(fromIdx, 1);
-                reordered.splice(repoIdx, 0, moved);
-                setRepositories([
-                  ...reordered,
-                  ...repositories.filter((r) => !!r.remote_connection_id),
-                ]);
-                reorderRepositories(reordered.map((r) => r.id)).catch(console.error);
+                let targetIdx: number | null = null;
+                for (let i = 0; i < localRepos.length; i++) {
+                  const el = repoGroupRefs.current.get(localRepos[i].id);
+                  if (!el) continue;
+                  const rect = el.getBoundingClientRect();
+                  const mid = rect.top + rect.height / 2;
+                  if (e.clientY < mid) {
+                    targetIdx = i;
+                    break;
+                  }
+                  targetIdx = i + 1;
+                }
+                // Clamp and skip if same position
+                if (targetIdx !== null) {
+                  const fromIdx = localRepos.findIndex((r) => r.id === repo.id);
+                  if (targetIdx === fromIdx || targetIdx === fromIdx + 1) targetIdx = null;
+                }
+                setDropTargetIdx(targetIdx);
+              }}
+              onPointerUp={() => {
+                const wasActive = draggedRepoId === repo.id;
+                if (wasActive && dropTargetIdx !== null) {
+                  const localRepos = repositories.filter((r) => !r.remote_connection_id);
+                  const fromIdx = localRepos.findIndex((r) => r.id === repo.id);
+                  if (fromIdx >= 0) {
+                    const reordered = [...localRepos];
+                    const [moved] = reordered.splice(fromIdx, 1);
+                    // Adjust target index since we removed an item
+                    const insertIdx = dropTargetIdx > fromIdx ? dropTargetIdx - 1 : dropTargetIdx;
+                    reordered.splice(insertIdx, 0, moved);
+                    setRepositories([
+                      ...reordered,
+                      ...repositories.filter((r) => !!r.remote_connection_id),
+                    ]);
+                    reorderRepositories(reordered.map((r) => r.id)).catch(console.error);
+                  }
+                }
+                dragStartPos.current = null;
                 setDraggedRepoId(null);
                 setDropTargetIdx(null);
               }}
-              onDragEnd={() => {
+              onPointerCancel={() => {
+                dragStartPos.current = null;
                 setDraggedRepoId(null);
                 setDropTargetIdx(null);
-                dragCounterRef.current = {};
               }}
             >
-              {dropTargetIdx === repoIdx && draggedRepoId !== repo.id && (
+              {draggedRepoId && dropTargetIdx === repoIdx && draggedRepoId !== repo.id && (
                 <div className={styles.dropIndicator} />
               )}
               <div
@@ -353,6 +384,9 @@ export function Sidebar() {
             </div>
           );
         })}
+        {draggedRepoId && dropTargetIdx === repositories.filter((r) => !r.remote_connection_id).length && (
+          <div className={styles.dropIndicator} />
+        )}
       </div>
 
       <RemoteSections />

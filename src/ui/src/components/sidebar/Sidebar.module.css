@@ -51,18 +51,26 @@
 
 .repoGroup {
   margin-bottom: 4px;
-  cursor: grab;
+  touch-action: none;
+  transition: opacity 0.15s ease;
 }
 
 .repoGroup.dragging {
-  opacity: 0.3;
+  opacity: 0.35;
+  cursor: grabbing;
+  user-select: none;
+}
+
+.repoGroup.dropTarget {
+  /* subtle highlight on the target area */
 }
 
 .dropIndicator {
   height: 2px;
   background: var(--accent-primary);
   border-radius: 1px;
-  margin: 0 8px;
+  margin: 2px 8px;
+  box-shadow: 0 0 4px rgba(var(--accent-primary-rgb), 0.4);
 }
 
 .repoHeader {
@@ -71,9 +79,13 @@
   align-items: center;
   padding: 5px 8px;
   border-radius: 6px;
-  cursor: pointer;
+  cursor: grab;
   gap: 6px;
   transition: background var(--transition-fast);
+}
+
+.dragging .repoHeader {
+  cursor: grabbing;
 }
 
 .repoHeader:hover {
