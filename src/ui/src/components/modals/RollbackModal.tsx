@@ -4,7 +4,9 @@ import {
   rollbackToCheckpoint,
   clearConversation,
   loadDiffFiles,
+  loadCompletedTurns,
 } from "../../services/tauri";
+import { reconstructCompletedTurns } from "../../utils/reconstructTurns";
 import { Modal } from "./Modal";
 import shared from "./shared.module.css";
 
@@ -33,6 +35,13 @@ export function RollbackModal() {
         ? await clearConversation(workspaceId, restoreFiles)
         : await rollbackToCheckpoint(workspaceId, checkpointId, restoreFiles);
       rollbackConversation(workspaceId, checkpointId ?? "__clear__", messages);
+      // Reload surviving completed turns so tool sections persist.
+      loadCompletedTurns(workspaceId)
+        .then((turnData) => {
+          const turns = reconstructCompletedTurns(messages, turnData);
+          useAppStore.getState().setCompletedTurns(workspaceId, turns);
+        })
+        .catch((e) => console.error("Failed to reload turns after rollback:", e));
       // Prefill the input with the rolled-back prompt so the user can re-send
       // or edit it, matching Claude Code's undo behavior.
       if (messageContent) {

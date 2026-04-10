@@ -4,7 +4,9 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use claudette::agent::{self, AgentEvent, AgentSettings, StreamEvent};
 use claudette::db::Database;
 use claudette::git;
-use claudette::model::{ChatMessage, ChatRole, ConversationCheckpoint};
+use claudette::model::{
+    ChatMessage, ChatRole, CompletedTurnData, ConversationCheckpoint, TurnToolActivity,
+};
 
 use crate::state::{AgentSessionState, AppState};
 
@@ -256,6 +258,7 @@ pub async fn send_chat_message(
                     message_id: anchor_msg_id.to_string(),
                     commit_hash,
                     turn_index,
+                    message_count: 0, // Updated by frontend after finalizeTurn
                     created_at: now_iso(),
                 };
                 if db.insert_checkpoint(&checkpoint).is_ok() {
@@ -458,6 +461,31 @@ pub async fn clear_conversation(
 
     // Return empty list.
     db.list_chat_messages(&workspace_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn save_turn_tool_activities(
+    checkpoint_id: String,
+    message_count: i32,
+    activities: Vec<TurnToolActivity>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    db.update_checkpoint_message_count(&checkpoint_id, message_count)
+        .map_err(|e| e.to_string())?;
+    db.insert_turn_tool_activities(&activities)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn load_completed_turns(
+    workspace_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<CompletedTurnData>, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    db.list_completed_turns(&workspace_id)
         .map_err(|e| e.to_string())
 }
 

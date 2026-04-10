@@ -202,6 +202,26 @@ export function clearConversation(
   });
 }
 
+import type { TurnToolActivityData, CompletedTurnData } from "../types/checkpoint";
+
+export function saveTurnToolActivities(
+  checkpointId: string,
+  messageCount: number,
+  activities: TurnToolActivityData[],
+): Promise<void> {
+  return invoke("save_turn_tool_activities", {
+    checkpointId,
+    messageCount,
+    activities,
+  });
+}
+
+export function loadCompletedTurns(
+  workspaceId: string,
+): Promise<CompletedTurnData[]> {
+  return invoke("load_completed_turns", { workspaceId });
+}
+
 // -- Plan --
 
 export function readPlanFile(path: string): Promise<string> {

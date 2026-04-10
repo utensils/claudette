@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "../stores/useAppStore";
-import { loadChatHistory } from "../services/tauri";
+import { loadChatHistory, saveTurnToolActivities } from "../services/tauri";
 import type { AgentStreamPayload } from "../types/agent-events";
 import type { ConversationCheckpoint } from "../types/checkpoint";
 import { extractToolSummary } from "./toolSummary";
@@ -319,6 +319,25 @@ export function useAgentStream() {
     }>("checkpoint-created", (event) => {
       const { workspace_id: wsId, checkpoint } = event.payload;
       addCheckpoint(wsId, checkpoint);
+
+      // Persist tool activities for the just-completed turn.
+      const turns = useAppStore.getState().completedTurns[wsId] || [];
+      const lastTurn = turns[turns.length - 1];
+      if (lastTurn && lastTurn.activities.length > 0) {
+        const activities = lastTurn.activities.map((a, i) => ({
+          id: crypto.randomUUID(),
+          checkpoint_id: checkpoint.id,
+          tool_use_id: a.toolUseId,
+          tool_name: a.toolName,
+          input_json: a.inputJson,
+          result_text: a.resultText,
+          summary: a.summary,
+          sort_order: i,
+        }));
+        saveTurnToolActivities(checkpoint.id, lastTurn.messageCount, activities)
+          .catch((e) => console.error("Failed to save turn tool activities:", e));
+      }
+
       // Reload messages from the backend so that the store has the
       // persisted message IDs (the frontend assigns its own UUIDs during
       // streaming, which won't match checkpoint.message_id).

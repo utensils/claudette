@@ -93,6 +93,8 @@ fn main() {
             commands::chat::list_checkpoints,
             commands::chat::rollback_to_checkpoint,
             commands::chat::clear_conversation,
+            commands::chat::save_turn_tool_activities,
+            commands::chat::load_completed_turns,
             // Plan
             commands::plan::read_plan_file,
             // Diff

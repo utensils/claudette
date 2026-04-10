@@ -90,6 +90,7 @@ interface AppState {
   ) => void;
   toggleToolActivityCollapsed: (wsId: string, index: number) => void;
   finalizeTurn: (wsId: string, messageCount: number) => void;
+  setCompletedTurns: (wsId: string, turns: CompletedTurn[]) => void;
   toggleCompletedTurn: (wsId: string, turnIndex: number) => void;
   appendToolActivityInput: (
     wsId: string,
@@ -364,6 +365,10 @@ export const useAppStore = create<AppState>((set) => ({
         toolActivities: { ...s.toolActivities, [wsId]: [] },
       };
     }),
+  setCompletedTurns: (wsId, turns) =>
+    set((s) => ({
+      completedTurns: { ...s.completedTurns, [wsId]: turns },
+    })),
   toggleCompletedTurn: (wsId, turnIndex) =>
     set((s) => ({
       completedTurns: {

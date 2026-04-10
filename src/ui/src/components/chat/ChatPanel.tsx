@@ -11,6 +11,7 @@ import type { ToolActivity, CompletedTurn } from "../../stores/useAppStore";
 import {
   loadChatHistory,
   listCheckpoints,
+  loadCompletedTurns,
   listSlashCommands,
   recordSlashCommandUsage,
   sendChatMessage,
@@ -19,6 +20,7 @@ import {
   getAppSetting,
   setAppSetting,
 } from "../../services/tauri";
+import { reconstructCompletedTurns } from "../../utils/reconstructTurns";
 import type { SlashCommand } from "../../services/tauri";
 import type { ChatMessage } from "../../types/chat";
 import { useAgentStream } from "../../hooks/useAgentStream";
@@ -273,24 +275,37 @@ export function ChatPanel() {
         }).then((data) => (data as { messages?: ChatMessage[] })?.messages ?? data as ChatMessage[])
       : loadChatHistory(selectedWorkspaceId);
 
+    const wsId = selectedWorkspaceId;
+    const isLocal = !currentWs?.remote_connection_id;
+
     loadHistory
       .then((msgs: ChatMessage[]) => {
         // Filter out empty assistant messages (legacy data).
         const filtered = msgs.filter(
           (m) => m.role !== "Assistant" || m.content.trim() !== ""
         );
-        setChatMessages(selectedWorkspaceId, filtered);
-        historyRef.current[selectedWorkspaceId] = filtered
+        setChatMessages(wsId, filtered);
+        historyRef.current[wsId] = filtered
           .filter((m) => m.role === "User")
           .map((m) => m.content);
+
+        // Load persisted completed turns and reconstruct with correct positions.
+        if (isLocal) {
+          loadCompletedTurns(wsId)
+            .then((turnData) => {
+              const turns = reconstructCompletedTurns(filtered, turnData);
+              useAppStore.getState().setCompletedTurns(wsId, turns);
+            })
+            .catch((e) => console.error("Failed to load completed turns:", e));
+        }
       })
       .catch((e) => console.error("Failed to load chat history:", e));
 
     // Load checkpoints for rollback support.
-    const setCheckpoints = useAppStore.getState().setCheckpoints;
-    if (!currentWs?.remote_connection_id) {
-      listCheckpoints(selectedWorkspaceId)
-        .then((cps) => setCheckpoints(selectedWorkspaceId, cps))
+    if (isLocal) {
+      const setCheckpoints = useAppStore.getState().setCheckpoints;
+      listCheckpoints(wsId)
+        .then((cps) => setCheckpoints(wsId, cps))
         .catch((e) => console.error("Failed to load checkpoints:", e));
     }
   }, [selectedWorkspaceId, setChatMessages]);
