@@ -5,9 +5,9 @@ edition = "2024"
 
 [dependencies]
 claudette = { path = ".." }
-tauri = { version = "2", features = ["devtools"] }
+tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
-tauri-plugin-shell = "2"
+
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
@@ -29,6 +29,9 @@ mdns-sd = "0.12"
 futures-util = "0.3"
 async-trait = "0.1"
 gethostname = "1"
+
+[features]
+devtools = ["tauri/devtools"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

@@ -6,8 +6,6 @@
     "core:default",
     "dialog:default",
     "dialog:allow-open",
-    "shell:default",
-    "shell:allow-open",
     "updater:default",
     "process:default"
   ]

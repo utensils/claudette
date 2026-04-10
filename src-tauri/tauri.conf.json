@@ -18,7 +18,7 @@
       }
     ],
     "security": {
-      "csp": null,
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost https://github.com; img-src 'self' asset: http://asset.localhost data:; font-src 'self' data:",
       "capabilities": [
         {
           "identifier": "main-capability",
@@ -27,7 +27,6 @@
           "permissions": [
             "core:default",
             "dialog:default",
-            "shell:default",
             "clipboard-manager:allow-write-text",
             "clipboard-manager:allow-read-text",
             "updater:default",

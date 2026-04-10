@@ -20,6 +20,27 @@ impl fmt::Display for DiffError {
 
 impl std::error::Error for DiffError {}
 
+/// Validate that a file path is safe for diff operations: no path traversal,
+/// no absolute paths, and no null bytes.
+fn validate_file_path(file_path: &str) -> Result<(), DiffError> {
+    if file_path.contains('\0') {
+        return Err(DiffError::CommandFailed(
+            "Invalid file path: contains null byte".into(),
+        ));
+    }
+    if Path::new(file_path).is_absolute() {
+        return Err(DiffError::CommandFailed(
+            "Invalid file path: absolute paths are not allowed".into(),
+        ));
+    }
+    if file_path.split(['/', '\\']).any(|c| c == "..") {
+        return Err(DiffError::CommandFailed(
+            "Invalid file path: path traversal is not allowed".into(),
+        ));
+    }
+    Ok(())
+}
+
 async fn run_git(path: &str, args: &[&str]) -> Result<String, DiffError> {
     let output = Command::new("git")
         .args(["-C", path])
@@ -152,6 +173,8 @@ pub async fn file_diff(
     merge_base: &str,
     file_path: &str,
 ) -> Result<String, DiffError> {
+    validate_file_path(file_path)?;
+
     // Check if the file is untracked
     let ls_output = run_git(
         worktree_path,
@@ -201,6 +224,8 @@ pub async fn revert_file(
     file_path: &str,
     status: &FileStatus,
 ) -> Result<(), DiffError> {
+    validate_file_path(file_path)?;
+
     match status {
         FileStatus::Added => {
             // Delete the file
@@ -361,6 +386,35 @@ fn parse_hunk_header(line: &str) -> Option<HunkBuilder> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_validate_file_path_rejects_traversal() {
+        assert!(validate_file_path("../etc/passwd").is_err());
+        assert!(validate_file_path("src/../../etc/passwd").is_err());
+        assert!(validate_file_path("..").is_err());
+        assert!(validate_file_path("foo/..").is_err());
+        // Windows-style separators
+        assert!(validate_file_path("src\\..\\..\\etc\\passwd").is_err());
+    }
+
+    #[test]
+    fn test_validate_file_path_rejects_absolute() {
+        assert!(validate_file_path("/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn test_validate_file_path_rejects_null_byte() {
+        assert!(validate_file_path("src/foo\0bar").is_err());
+    }
+
+    #[test]
+    fn test_validate_file_path_accepts_valid() {
+        assert!(validate_file_path("src/app.rs").is_ok());
+        assert!(validate_file_path("deeply/nested/path/file.txt").is_ok());
+        assert!(validate_file_path("file.rs").is_ok());
+        // ".." as part of a filename (not a component) is fine
+        assert!(validate_file_path("src/foo..bar").is_ok());
+    }
 
     #[test]
     fn test_parse_name_status_modified() {
