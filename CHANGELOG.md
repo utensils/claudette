@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.5.0](https://github.com/utensils/Claudette/compare/v0.4.0...v0.5.0) (2026-04-10)
+
+
+### Features
+
+* add Nix flake with devshell and build targets ([#100](https://github.com/utensils/Claudette/issues/100)) ([198d882](https://github.com/utensils/Claudette/commit/198d882c94883aa8da91e224d5a20d1134f6bd20))
+* add theme support with settings UI and community theme directory ([#60](https://github.com/utensils/Claudette/issues/60)) ([e8f3912](https://github.com/utensils/Claudette/commit/e8f3912ebd15acd8504f7e9879a303eda2ea54b1))
+* agent completion notifications with visual badge and audio alert ([#80](https://github.com/utensils/Claudette/issues/80)) ([c835e5b](https://github.com/utensils/Claudette/commit/c835e5bf87b4bb222b683d62c52cab7db23890d4))
+* agent session UX — resume, plan mode, question dialogs ([#113](https://github.com/utensils/Claudette/issues/113)) ([19104db](https://github.com/utensils/Claudette/commit/19104db8efbf366eb40f3f2ddc951d9a6c548cf7))
+* archive remote workspaces from sidebar ([#87](https://github.com/utensils/Claudette/issues/87)) ([aef30cb](https://github.com/utensils/Claudette/commit/aef30cb633fa147fd96f09c048083435cbb8b927))
+* auto-refresh changed files when agent stops ([#95](https://github.com/utensils/Claudette/issues/95)) ([3a7735b](https://github.com/utensils/Claudette/commit/3a7735b808028c78fdb243f0ff016b59ab8963c3))
+* auto-resize chat input and preserve newlines in messages ([#90](https://github.com/utensils/Claudette/issues/90)) ([5330f55](https://github.com/utensils/Claudette/commit/5330f55559c24038b9c6ebd2bd928251df815478))
+* collapse tool calls into summary during execution ([#92](https://github.com/utensils/Claudette/issues/92)) ([3bf44e9](https://github.com/utensils/Claudette/commit/3bf44e9b6f823109e4acafc202e187accb769fe7))
+* conversation checkpoints, tool persistence, and UX polish ([#118](https://github.com/utensils/Claudette/issues/118)) ([ad3b383](https://github.com/utensils/Claudette/commit/ad3b383b9bb8fdf1e6a40fa063395f9a20b7c0b2))
+* create remote workspaces from sidebar ([#84](https://github.com/utensils/Claudette/issues/84)) ([872b23a](https://github.com/utensils/Claudette/commit/872b23acd2ff22de7bb48debd8ec6f72a8a5b1c5))
+* display current branch from worktree for all workspaces ([#89](https://github.com/utensils/Claudette/issues/89)) ([517890c](https://github.com/utensils/Claudette/commit/517890cced93fbd263b1f48dc99665781b28b68e))
+* fix CI build and add auto-updater ([#117](https://github.com/utensils/Claudette/issues/117)) ([795f280](https://github.com/utensils/Claudette/commit/795f2801af4ed0b351c739a23c27794302a2c64a))
+* remote workspace access via claudette-server and WebSocket transport ([#76](https://github.com/utensils/Claudette/issues/76)) ([0e875f7](https://github.com/utensils/Claudette/commit/0e875f733744381aafffbf2f2563d390c7076b4b))
+* slash command autocomplete picker with dynamic discovery ([#81](https://github.com/utensils/Claudette/issues/81)) ([ace1b51](https://github.com/utensils/Claudette/commit/ace1b51e03c30877eaa7522afc9a1fffe7a1337f))
+* sort slash command picker by usage frequency ([#82](https://github.com/utensils/Claudette/issues/82)) ([268721a](https://github.com/utensils/Claudette/commit/268721a48543c5b200c27bbcc9cd5b348859949d))
+* standardize the lower left nav options as icons ([#85](https://github.com/utensils/Claudette/issues/85)) ([23f7aa4](https://github.com/utensils/Claudette/commit/23f7aa4ac7b0c71a2cd1df13bce4c819e5b7b2af))
+* **ui:** chat polish, command palette, light theme, and theme-aware CSS ([#109](https://github.com/utensils/Claudette/issues/109)) ([1aa51ed](https://github.com/utensils/Claudette/commit/1aa51ed0c39dd6a60a19ce2ee69f0ad1fa3305f2))
+* update app icon and favicon with new pig mascot ([#86](https://github.com/utensils/Claudette/issues/86)) ([dd89221](https://github.com/utensils/Claudette/commit/dd892218fffd410fad4bca1e04a44b0d56a570aa))
+
+
+### Bug Fixes
+
+* allow all tool commands with full permission level ([#105](https://github.com/utensils/Claudette/issues/105)) ([483570f](https://github.com/utensils/Claudette/commit/483570f9822dd2934a768f8058b48b4afa0dd877))
+* chat activity and horizontal lines ([#101](https://github.com/utensils/Claudette/issues/101)) ([1e0ced9](https://github.com/utensils/Claudette/commit/1e0ced919fb53b8c8c4c6bfdc431444ce892f80f))
+* eliminate 1-2 second typing lag in remote workspaces ([#78](https://github.com/utensils/Claudette/issues/78)) ([f88e58a](https://github.com/utensils/Claudette/commit/f88e58ad057fa4f7584a6ca48ef4974062af3ff9))
+* ensure workspace deletion removes worktree directory from disk ([#114](https://github.com/utensils/Claudette/issues/114)) ([1afa7ca](https://github.com/utensils/Claudette/commit/1afa7ca7b3f9e7b865cccc074c2a0f66f502ed1e)), closes [#103](https://github.com/utensils/Claudette/issues/103)
+* load diff files for remote workspaces ([#97](https://github.com/utensils/Claudette/issues/97)) ([6e96480](https://github.com/utensils/Claudette/commit/6e96480b045ed7af36217326bcccd1cc38abdffc))
+* pass permission-mode on every agent turn ([#106](https://github.com/utensils/Claudette/issues/106)) ([a4fca26](https://github.com/utensils/Claudette/commit/a4fca26074848acd12c6dd72c45ff4818dcb7ecd))
+* preserve terminal sessions when switching workspaces or tabs ([#112](https://github.com/utensils/Claudette/issues/112)) ([cacaaff](https://github.com/utensils/Claudette/commit/cacaafff5816f44ec3b1676be3b5dc0ac834809f))
+* return branch-safe slug from generate_workspace_name ([#83](https://github.com/utensils/Claudette/issues/83)) ([02c87bf](https://github.com/utensils/Claudette/commit/02c87bf2c29c30d70563eb8d1e0911aec332b7ff))
+* use remote-tracking refs for merge-base diff calculations ([#116](https://github.com/utensils/Claudette/issues/116)) ([59f576a](https://github.com/utensils/Claudette/commit/59f576a79508275eaea2b29c250f56a4c69144d1))
+* use wildcard tool permissions for full level on remote server ([#107](https://github.com/utensils/Claudette/issues/107)) ([182e961](https://github.com/utensils/Claudette/commit/182e961eed53014a9d4debf648b51669cdd36d67))
+
+
+### Performance Improvements
+
+* minimize React re-renders across UI components ([#99](https://github.com/utensils/Claudette/issues/99)) ([ca3a4cf](https://github.com/utensils/Claudette/commit/ca3a4cf38d737a559e4e71e3b874303dda126057))
+
 ## [0.4.0](https://github.com/utensils/Claudette/compare/v0.3.0...v0.4.0) (2026-04-03)
 
 
