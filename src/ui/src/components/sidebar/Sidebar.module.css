@@ -141,7 +141,7 @@
   border: 1px solid var(--divider);
   padding: 1px 4px;
   border-radius: 3px;
-  margin-left: 4px;
+  margin-left: auto;
   animation: fadeIn 0.1s ease;
 }
 
