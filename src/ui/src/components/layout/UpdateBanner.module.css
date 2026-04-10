@@ -1,0 +1,99 @@
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: var(--accent-bg);
+  border-bottom: 1px solid var(--sidebar-border);
+  animation: slideDown 0.2s ease;
+}
+
+.message {
+  font-size: 13px;
+  color: var(--text-primary);
+  flex: 1;
+}
+
+.version {
+  color: var(--accent-primary);
+  font-weight: 600;
+}
+
+.actions {
+  display: flex;
+  gap: 6px;
+}
+
+.btn {
+  background: var(--selected-bg);
+  border: 1px solid var(--divider);
+  color: var(--text-primary);
+  padding: 4px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background var(--transition-fast);
+}
+
+.btn:hover {
+  background: var(--hover-bg);
+}
+
+.btnPrimary {
+  composes: btn;
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: var(--app-bg);
+  font-weight: 500;
+}
+
+.btnPrimary:hover {
+  background: var(--accent-dim);
+}
+
+.progressWrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.progressTrack {
+  flex: 1;
+  height: 4px;
+  background: var(--divider);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progressBar {
+  height: 100%;
+  background: var(--accent-primary);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.progressLabel {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 32px;
+  text-align: right;
+}
+
+.idleMessage {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

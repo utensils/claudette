@@ -9,6 +9,7 @@ import { FuzzyFinder } from "../fuzzy-finder/FuzzyFinder";
 import { CommandPalette } from "../command-palette/CommandPalette";
 import { Dashboard } from "./Dashboard";
 import { StatusBar } from "./StatusBar";
+import { UpdateBanner } from "./UpdateBanner";
 import { ModalRouter } from "../modals/ModalRouter";
 import { ResizeHandle } from "./ResizeHandle";
 import { useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
@@ -52,6 +53,7 @@ export function AppLayout() {
 
   return (
     <div className={styles.container}>
+      <UpdateBanner />
       <div className={styles.main}>
         {sidebarVisible && (
           <>

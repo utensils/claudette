@@ -2,8 +2,8 @@
   "productName": "Claudette",
   "identifier": "com.claudette.app",
   "build": {
-    "beforeDevCommand": "bun run dev",
-    "beforeBuildCommand": "bun run build",
+    "beforeDevCommand": { "script": "bun run dev", "cwd": "../src/ui" },
+    "beforeBuildCommand": { "script": "bun run build", "cwd": "../src/ui" },
     "devUrl": "http://localhost:1420",
     "frontendDist": "../src/ui/dist"
   },
@@ -29,7 +29,9 @@
             "dialog:default",
             "shell:default",
             "clipboard-manager:allow-write-text",
-            "clipboard-manager:allow-read-text"
+            "clipboard-manager:allow-read-text",
+            "updater:default",
+            "process:default"
           ]
         }
       ]
@@ -38,8 +40,17 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "../assets/logo.png"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "REPLACE_WITH_PUBLIC_KEY",
+      "endpoints": [
+        "https://github.com/utensils/Claudette/releases/latest/download/latest.json"
+      ]
+    }
   }
 }
