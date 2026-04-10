@@ -47,9 +47,10 @@ pub fn discover_slash_commands(project_path: Option<&Path>) -> Vec<SlashCommand>
     collect_commands_from_dir(&claude_dir.join("commands"), "user", &mut commands);
     collect_skills_from_dir(&claude_dir.join("skills"), "user", &mut commands);
 
-    // Project-level commands (highest priority).
+    // Project-level commands and skills (highest priority).
     if let Some(project) = project_path {
         collect_commands_from_dir(&project.join(".claude/commands"), "project", &mut commands);
+        collect_skills_from_dir(&project.join(".claude/skills"), "project", &mut commands);
     }
 
     // Sort by name for consistent ordering.
@@ -343,6 +344,26 @@ mod tests {
         assert_eq!(commands.len(), 1);
         assert_eq!(commands[0].name, "deploy");
         assert_eq!(commands[0].description, "Deploy the app to production.");
+        assert_eq!(commands[0].source, "project");
+    }
+
+    #[test]
+    fn test_project_skills() {
+        let project = tempfile::tempdir().unwrap();
+        let skills_dir = project.path().join(".claude/skills/my-project-skill");
+        fs::create_dir_all(&skills_dir).unwrap();
+        fs::write(
+            skills_dir.join("SKILL.md"),
+            "---\ndescription: Project-specific debugging skill\n---\n",
+        )
+        .unwrap();
+
+        let mut commands = Vec::new();
+        collect_skills_from_dir(&project.path().join(".claude/skills"), "project", &mut commands);
+
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].name, "my-project-skill");
+        assert_eq!(commands[0].description, "Project-specific debugging skill");
         assert_eq!(commands[0].source, "project");
     }
 }
