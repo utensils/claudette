@@ -22,6 +22,53 @@ jobs:
       - id: release
         uses: googleapis/release-please-action@v4
 
+  notify-discord:
+    name: Discord Release Notification
+    needs: release-please
+    if: needs.release-please.outputs.releases_created == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract changelog and notify Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          # Extract text between first and second ## [ headers
+          CHANGELOG=$(sed -n '/^## \[/{n; :loop; /^## \[/q; p; n; b loop}' CHANGELOG.md)
+
+          # Strip commit hash links — clutter in Discord
+          CHANGELOG=$(echo "$CHANGELOG" | sed 's/ \[([a-f0-9]\{7,\}\](https:\/\/[^)]*))//g')
+
+          # Trim leading/trailing blank lines
+          CHANGELOG=$(echo "$CHANGELOG" | sed '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba}')
+
+          # Truncate to 1900 chars (leaving room for embed overhead)
+          if [ ${#CHANGELOG} -gt 1900 ]; then
+            CHANGELOG="${CHANGELOG:0:1897}..."
+          fi
+
+          RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/${TAG_NAME}"
+
+          PAYLOAD=$(jq -n \
+            --arg title "Claudette ${TAG_NAME} Released" \
+            --arg url "$RELEASE_URL" \
+            --arg desc "$CHANGELOG" \
+            '{
+              embeds: [{
+                title: $title,
+                url: $url,
+                description: $desc,
+                color: 5763719
+              }]
+            }')
+
+          curl -f -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$DISCORD_WEBHOOK_URL"
+
   build:
     needs: release-please
     if: needs.release-please.outputs.releases_created == 'true'
