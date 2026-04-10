@@ -33,6 +33,7 @@ pub struct CreateWorkspaceResult {
 pub async fn create_workspace(
     repo_id: String,
     name: String,
+    skip_setup: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<CreateWorkspaceResult, String> {
     // Validate workspace name: must be ASCII alphanumeric + hyphens only (branch-safe).
@@ -78,13 +79,17 @@ pub async fn create_workspace(
 
     db.insert_workspace(&ws).map_err(|e| e.to_string())?;
 
-    // Resolve and execute setup script.
-    let setup_result = resolve_and_run_setup(
-        Path::new(&repo_path),
-        Path::new(&actual_path),
-        settings_setup_script.as_deref(),
-    )
-    .await;
+    // Resolve and execute setup script (unless caller requested skip).
+    let setup_result = if skip_setup.unwrap_or(false) {
+        None
+    } else {
+        resolve_and_run_setup(
+            Path::new(&repo_path),
+            Path::new(&actual_path),
+            settings_setup_script.as_deref(),
+        )
+        .await
+    };
 
     Ok(CreateWorkspaceResult {
         workspace: ws,
@@ -231,6 +236,39 @@ async fn resolve_and_run_setup(
             })
         }
     }
+}
+
+#[tauri::command]
+pub async fn run_workspace_setup(
+    workspace_id: String,
+    state: State<'_, AppState>,
+) -> Result<Option<SetupResult>, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+
+    let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
+    let ws = workspaces
+        .iter()
+        .find(|w| w.id == workspace_id)
+        .ok_or("Workspace not found")?;
+    let worktree_path = ws
+        .worktree_path
+        .as_ref()
+        .ok_or("Workspace has no worktree")?;
+
+    let repos = db.list_repositories().map_err(|e| e.to_string())?;
+    let repo = repos
+        .iter()
+        .find(|r| r.id == ws.repository_id)
+        .ok_or("Repository not found")?;
+
+    let result = resolve_and_run_setup(
+        Path::new(&repo.path),
+        Path::new(worktree_path),
+        repo.setup_script.as_deref(),
+    )
+    .await;
+
+    Ok(result)
 }
 
 #[tauri::command]

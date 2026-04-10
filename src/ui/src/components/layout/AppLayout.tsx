@@ -9,10 +9,12 @@ import { FuzzyFinder } from "../fuzzy-finder/FuzzyFinder";
 import { CommandPalette } from "../command-palette/CommandPalette";
 import { Dashboard } from "./Dashboard";
 import { StatusBar } from "./StatusBar";
+import { UpdateBanner } from "./UpdateBanner";
 import { ModalRouter } from "../modals/ModalRouter";
 import { ResizeHandle } from "./ResizeHandle";
 import { useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
 import { useBranchRefresh } from "../../hooks/useBranchRefresh";
+import { useAutoUpdater } from "../../hooks/useAutoUpdater";
 import styles from "./AppLayout.module.css";
 
 export function AppLayout() {
@@ -32,6 +34,7 @@ export function AppLayout() {
 
   useKeyboardShortcuts();
   useBranchRefresh();
+  const { installNow, installWhenIdle, dismiss } = useAutoUpdater();
 
   const showDiff = diffSelectedFile !== null;
 
@@ -52,6 +55,7 @@ export function AppLayout() {
 
   return (
     <div className={styles.container}>
+      <UpdateBanner installNow={installNow} installWhenIdle={installWhenIdle} dismiss={dismiss} />
       <div className={styles.main}>
         {sidebarVisible && (
           <>

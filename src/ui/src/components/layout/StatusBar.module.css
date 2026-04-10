@@ -36,6 +36,20 @@
   color: var(--text-dim);
 }
 
+.statUpdate {
+  background: none;
+  border: none;
+  color: var(--accent-primary);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+  font-weight: 500;
+}
+
+.statUpdate:hover {
+  text-decoration: underline;
+}
+
 .spacer {
   flex: 1;
 }

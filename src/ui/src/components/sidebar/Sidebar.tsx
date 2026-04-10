@@ -6,6 +6,7 @@ import {
   restoreWorkspace,
   generateWorkspaceName,
   createWorkspace,
+  getRepoConfig,
   connectRemote,
   disconnectRemote,
   removeRemoteConnection,
@@ -52,7 +53,8 @@ export function Sidebar() {
     creatingRef.current = true;
     try {
       const generated = await generateWorkspaceName();
-      const result = await createWorkspace(repoId, generated.slug);
+      // Always skip setup initially — we'll prompt for confirmation if needed.
+      const result = await createWorkspace(repoId, generated.slug, true);
       addWorkspace(result.workspace);
       selectWorkspace(result.workspace.id);
       if (generated.message) {
@@ -66,26 +68,28 @@ export function Sidebar() {
           created_at: new Date().toISOString(),
         });
       }
-      if (result.setup_result) {
-        const sr = result.setup_result;
-        const label = sr.source === "repo" ? ".claudette.json" : "settings";
-        const status = sr.success ? "completed" : sr.timed_out ? "timed out" : "failed";
-        addChatMessage(result.workspace.id, {
-          id: crypto.randomUUID(),
-          workspace_id: result.workspace.id,
-          role: "System",
-          content: `Setup script (${label}) ${status}${sr.output ? `:\n${sr.output}` : ""}`,
-          cost_usd: null,
-          duration_ms: null,
-          created_at: new Date().toISOString(),
-        });
+      // Check if a setup script exists and prompt user to review it.
+      try {
+        const config = await getRepoConfig(repoId);
+        const repo = useAppStore.getState().repositories.find((r) => r.id === repoId);
+        const script = config.setup_script ?? repo?.setup_script;
+        const source = config.setup_script ? "repo" : "settings";
+        if (script) {
+          openModal("confirmSetupScript", {
+            workspaceId: result.workspace.id,
+            script,
+            source,
+          });
+        }
+      } catch {
+        // No config or error reading it — no setup script to run.
       }
     } catch (e) {
       console.error("Failed to create workspace:", e);
     } finally {
       creatingRef.current = false;
     }
-  }, [addWorkspace, selectWorkspace, addChatMessage]);
+  }, [addWorkspace, selectWorkspace, addChatMessage, openModal]);
 
   const filteredWorkspaces = useMemo(
     () => workspaces.filter((ws) => {

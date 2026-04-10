@@ -8,6 +8,7 @@ import {
   resetAgentSession,
   generateWorkspaceName,
   createWorkspace as createWorkspaceService,
+  getRepoConfig,
 } from "../../services/tauri";
 import type { ThemeDefinition } from "../../types/theme";
 import { scoreCommand } from "./searchScore";
@@ -90,7 +91,7 @@ export function CommandPalette() {
   const handleCreateWorkspace = useCallback(async (repoId: string) => {
     try {
       const generated = await generateWorkspaceName();
-      const result = await createWorkspaceService(repoId, generated.slug);
+      const result = await createWorkspaceService(repoId, generated.slug, true);
       addWorkspace(result.workspace);
       selectWorkspace(result.workspace.id);
       if (generated.message) {
@@ -104,10 +105,26 @@ export function CommandPalette() {
           created_at: new Date().toISOString(),
         });
       }
+      // Check for setup script and prompt for confirmation.
+      try {
+        const config = await getRepoConfig(repoId);
+        const repo = useAppStore.getState().repositories.find((r) => r.id === repoId);
+        const script = config.setup_script ?? repo?.setup_script;
+        const source = config.setup_script ? "repo" : "settings";
+        if (script) {
+          openModal("confirmSetupScript", {
+            workspaceId: result.workspace.id,
+            script,
+            source,
+          });
+        }
+      } catch {
+        // No config — no setup script to run.
+      }
     } catch (e) {
       console.error("Failed to create workspace:", e);
     }
-  }, [addWorkspace, selectWorkspace, addChatMessage]);
+  }, [addWorkspace, selectWorkspace, addChatMessage, openModal]);
 
   const enterThemeMode = useCallback(() => {
     setMode("theme");

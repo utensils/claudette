@@ -77,9 +77,16 @@ export function reorderRepositories(ids: string[]): Promise<void> {
 
 export function createWorkspace(
   repoId: string,
-  name: string
+  name: string,
+  skipSetup?: boolean
 ): Promise<CreateWorkspaceResult> {
-  return invoke("create_workspace", { repoId, name });
+  return invoke("create_workspace", { repoId, name, skipSetup: skipSetup ?? false });
+}
+
+export function runWorkspaceSetup(
+  workspaceId: string
+): Promise<import("../types/repository").SetupResult | null> {
+  return invoke("run_workspace_setup", { workspaceId });
 }
 
 export function archiveWorkspace(id: string): Promise<void> {

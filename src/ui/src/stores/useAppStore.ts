@@ -237,6 +237,19 @@ interface AppState {
   localServerConnectionString: string | null;
   setLocalServerRunning: (running: boolean) => void;
   setLocalServerConnectionString: (cs: string | null) => void;
+
+  // -- Updater --
+  updateAvailable: boolean;
+  updateVersion: string | null;
+  updateDismissed: boolean;
+  updateInstallWhenIdle: boolean;
+  updateDownloading: boolean;
+  updateProgress: number;
+  setUpdateAvailable: (available: boolean, version: string | null) => void;
+  setUpdateDismissed: (dismissed: boolean) => void;
+  setUpdateInstallWhenIdle: (enabled: boolean) => void;
+  setUpdateDownloading: (downloading: boolean) => void;
+  setUpdateProgress: (progress: number) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -760,6 +773,24 @@ export const useAppStore = create<AppState>((set) => ({
   setLocalServerRunning: (running) => set({ localServerRunning: running }),
   setLocalServerConnectionString: (cs) =>
     set({ localServerConnectionString: cs }),
+
+  // -- Updater --
+  updateAvailable: false,
+  updateVersion: null,
+  updateDismissed: false,
+  updateInstallWhenIdle: false,
+  updateDownloading: false,
+  updateProgress: 0,
+  setUpdateAvailable: (available, version) =>
+    set((state) => ({
+      updateAvailable: available,
+      updateVersion: version,
+      updateDismissed: version === state.updateVersion ? state.updateDismissed : false,
+    })),
+  setUpdateDismissed: (dismissed) => set({ updateDismissed: dismissed }),
+  setUpdateInstallWhenIdle: (enabled) => set({ updateInstallWhenIdle: enabled }),
+  setUpdateDownloading: (downloading) => set({ updateDownloading: downloading }),
+  setUpdateProgress: (progress) => set({ updateProgress: progress }),
 }));
 
 // Expose store on window in dev builds for debug_eval_js access.

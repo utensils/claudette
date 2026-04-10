@@ -16,6 +16,9 @@ export function StatusBar() {
   const activeCount = useAppStore(
     (s) => s.workspaces.filter((ws) => ws.status === "Active").length
   );
+  const updateAvailable = useAppStore((s) => s.updateAvailable);
+  const updateVersion = useAppStore((s) => s.updateVersion);
+  const setUpdateDismissed = useAppStore((s) => s.setUpdateDismissed);
   const connectedRemoteNames = useAppStore(
     useShallow((s) =>
       s.remoteConnections
@@ -42,6 +45,15 @@ export function StatusBar() {
           </span>
         )}
       </div>
+      {updateAvailable && (
+        <button
+          className={styles.statUpdate}
+          onClick={() => setUpdateDismissed(false)}
+          title={`Update available: v${updateVersion}`}
+        >
+          update available
+        </button>
+      )}
       <div className={styles.spacer} />
       <button
         className={`${styles.toggle} ${sidebarVisible ? styles.active : ""}`}

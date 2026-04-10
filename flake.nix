@@ -270,7 +270,7 @@
             commands = [
               {
                 name = "dev";
-                command = "cargo tauri dev";
+                command = "cargo tauri dev --features devtools";
                 help = "Start Tauri dev mode with hot-reload";
                 category = "development";
               }

@@ -53,8 +53,9 @@ fn main() {
 
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(app_state)
         .manage(remote_manager)
         .setup(move |app| {
@@ -82,6 +83,7 @@ fn main() {
             commands::repository::reorder_repositories,
             // Workspace
             commands::workspace::create_workspace,
+            commands::workspace::run_workspace_setup,
             commands::workspace::archive_workspace,
             commands::workspace::restore_workspace,
             commands::workspace::delete_workspace,

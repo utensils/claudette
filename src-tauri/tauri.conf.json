@@ -2,8 +2,8 @@
   "productName": "Claudette",
   "identifier": "com.claudette.app",
   "build": {
-    "beforeDevCommand": "bun run dev",
-    "beforeBuildCommand": "bun run build",
+    "beforeDevCommand": { "script": "bun run dev", "cwd": "../src/ui" },
+    "beforeBuildCommand": { "script": "bun run build", "cwd": "../src/ui" },
     "devUrl": "http://localhost:1420",
     "frontendDist": "../src/ui/dist"
   },
@@ -18,7 +18,7 @@
       }
     ],
     "security": {
-      "csp": null,
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost https://github.com; img-src 'self' asset: http://asset.localhost data:; font-src 'self' data:",
       "capabilities": [
         {
           "identifier": "main-capability",
@@ -27,9 +27,10 @@
           "permissions": [
             "core:default",
             "dialog:default",
-            "shell:default",
             "clipboard-manager:allow-write-text",
-            "clipboard-manager:allow-read-text"
+            "clipboard-manager:allow-read-text",
+            "updater:default",
+            "process:default"
           ]
         }
       ]
@@ -38,8 +39,17 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "../assets/logo.png"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDI1NkQwQUJEQ0REREVDOUIKUldTYjdOM052UXB0SmZMdFNVRnhXQmJMTitTaGtUZjdjcWNQWmFsR0JJUmxVYTV6STVxN0F3TVUK",
+      "endpoints": [
+        "https://github.com/utensils/Claudette/releases/latest/download/latest.json"
+      ]
+    }
   }
 }
