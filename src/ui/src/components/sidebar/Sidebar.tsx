@@ -152,11 +152,6 @@ export function Sidebar() {
                   {runningCount > 0 && (
                     <span className={styles.runningBadge}>{runningCount}</span>
                   )}
-                  {metaKeyHeld && repoIdx < 9 && (
-                    <kbd className={styles.shortcutBadge}>
-                      {isMac ? "⌘" : "Ctrl+"}{repoIdx + 1}
-                    </kbd>
-                  )}
                 </span>
                 {!repo.path_valid && (
                   <span className={styles.invalidBadge}>!</span>
@@ -213,6 +208,11 @@ export function Sidebar() {
                       <X size={12} />
                     </button>
                   </>
+                )}
+                {metaKeyHeld && repoIdx < 9 && (
+                  <kbd className={styles.shortcutBadge}>
+                    {isMac ? "⌘" : "Ctrl+"}{repoIdx + 1}
+                  </kbd>
                 )}
               </div>
 

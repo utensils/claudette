@@ -54,6 +54,7 @@
 }
 
 .repoHeader {
+  position: relative;
   display: flex;
   align-items: center;
   padding: 5px 8px;
@@ -132,16 +133,21 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Keyboard shortcut badge shown on Cmd/Ctrl hold */
+/* Keyboard shortcut badge shown on Cmd/Ctrl hold — absolutely positioned
+   so it doesn't reflow the header when it appears/disappears. */
 .shortcutBadge {
-  font-size: 9px;
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 11px;
   font-family: inherit;
   color: var(--text-dim);
   background: var(--hover-bg);
   border: 1px solid var(--divider);
-  padding: 1px 4px;
-  border-radius: 3px;
-  margin-left: auto;
+  padding: 2px 6px;
+  border-radius: 4px;
+  pointer-events: none;
   animation: fadeIn 0.1s ease;
 }
 
