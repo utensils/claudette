@@ -380,7 +380,7 @@ export function ChatPanel() {
         messageCount: cur,
         prevCount: prev,
       });
-      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+      messagesEndRef.current?.scrollIntoView({ behavior: prev === 0 ? "instant" : "smooth" });
     }
   }, [messages.length, selectedWorkspaceId]);
 
@@ -400,7 +400,7 @@ export function ChatPanel() {
         hasPendingQuestion: !!pendingQuestion,
         hasPendingPlan: !!pendingPlan,
       });
-      processingRef.current?.scrollIntoView({ behavior: "auto" });
+      processingRef.current?.scrollIntoView({ behavior: "smooth" });
     }
     prevActivitiesCountRef.current = activitiesCount;
   }, [isRunning, pendingQuestion, pendingPlan, activitiesCount, selectedWorkspaceId]);
@@ -763,7 +763,7 @@ const StreamingMessage = memo(function StreamingMessage({
       });
       lastLoggedScrollLengthRef.current = displayed.length;
     }
-    elRef.current?.scrollIntoView({ behavior: "auto" });
+    elRef.current?.scrollIntoView({ behavior: "instant" });
   }, [displayed, workspaceId]);
 
   if (!displayed) return null;
