@@ -19,6 +19,7 @@ import {
 import type { ThemeDefinition } from "../../types/theme";
 
 export type CommandCategory =
+  | "general"
   | "ui"
   | "agent"
   | "theme"
@@ -38,6 +39,7 @@ export interface Command {
 }
 
 export const CATEGORY_LABELS: Record<CommandCategory, string> = {
+  general: "General",
   ui: "Interface",
   agent: "Agent",
   theme: "Theme",
@@ -47,6 +49,7 @@ export const CATEGORY_LABELS: Record<CommandCategory, string> = {
 };
 
 export const CATEGORY_ORDER: CommandCategory[] = [
+  "general",
   "ui",
   "agent",
   "theme",
