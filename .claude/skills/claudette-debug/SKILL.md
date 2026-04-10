@@ -37,8 +37,6 @@ Two helper scripts are bundled with this skill:
 | `.claude/skills/claudette-debug/debug-eval.sh` | Single-shot JS eval via TCP |
 | `.claude/skills/claudette-debug/debug-monitor.sh` | Long-running session monitor |
 
-A copy of `debug-eval.sh` also exists at `scripts/debug-eval.sh` in the project root.
-
 **IMPORTANT**: Always call scripts using paths relative to the project root. Never use absolute paths like `/Users/.../scripts/...`.
 
 ## Architecture
@@ -58,14 +56,14 @@ Terminal <──TCP────── debug server <──invoke── webview (
 JS must use `return` to send a value back:
 
 ```bash
-scripts/debug-eval.sh 'return 1 + 1'
-scripts/debug-eval.sh 'return document.title'
-scripts/debug-eval.sh 'return window.__CLAUDETTE_STORE__.getState().workspaces.map(w => w.name)'
+.claude/skills/claudette-debug/debug-eval.sh 'return 1 + 1'
+.claude/skills/claudette-debug/debug-eval.sh 'return document.title'
+.claude/skills/claudette-debug/debug-eval.sh 'return window.__CLAUDETTE_STORE__.getState().workspaces.map(w => w.name)'
 ```
 
 For multiline JS, use heredoc:
 ```bash
-scripts/debug-eval.sh <<'JS'
+.claude/skills/claudette-debug/debug-eval.sh <<'JS'
 const s = window.__CLAUDETTE_STORE__.getState();
 return Object.keys(s.completedTurns);
 JS
@@ -104,7 +102,7 @@ JS
 ### `state` — store overview
 
 ```bash
-scripts/debug-eval.sh <<'JS'
+.claude/skills/claudette-debug/debug-eval.sh <<'JS'
 const s = window.__CLAUDETTE_STORE__.getState();
 return Object.entries(s)
   .filter(([, v]) => typeof v !== 'function')
@@ -120,19 +118,19 @@ JS
 ### `state <slice>` — dump specific slice
 
 ```bash
-scripts/debug-eval.sh 'return window.__CLAUDETTE_STORE__.getState().SLICE_NAME'
+.claude/skills/claudette-debug/debug-eval.sh 'return window.__CLAUDETTE_STORE__.getState().SLICE_NAME'
 ```
 
 ### `eval <js>` — arbitrary JS
 
 ```bash
-scripts/debug-eval.sh 'USER_JS_HERE'
+.claude/skills/claudette-debug/debug-eval.sh 'USER_JS_HERE'
 ```
 
 ### `snapshot` — full store state dump
 
 ```bash
-scripts/debug-eval.sh <<'JS'
+.claude/skills/claudette-debug/debug-eval.sh <<'JS'
 const state = window.__CLAUDETTE_STORE__.getState();
 return Object.fromEntries(
   Object.entries(state).filter(([, v]) => typeof v !== 'function')
@@ -188,7 +186,7 @@ tail -200 /tmp/claudette-debug/monitor.log
 ### `watch <slice>` — subscribe to changes
 
 ```bash
-scripts/debug-eval.sh <<'JS'
+.claude/skills/claudette-debug/debug-eval.sh <<'JS'
 window.__CLAUDETTE_DEBUG_UNSUB__?.();
 window.__CLAUDETTE_DEBUG_UNSUB__ = window.__CLAUDETTE_STORE__.subscribe(
   (state, prev) => {
@@ -205,7 +203,7 @@ JS
 ### `unwatch`
 
 ```bash
-scripts/debug-eval.sh <<'JS'
+.claude/skills/claudette-debug/debug-eval.sh <<'JS'
 window.__CLAUDETTE_DEBUG_UNSUB__?.();
 delete window.__CLAUDETTE_DEBUG_UNSUB__;
 return 'All watchers removed';
@@ -215,7 +213,7 @@ JS
 ### `trace <action>` — monkey-patch store action
 
 ```bash
-scripts/debug-eval.sh <<'JS'
+.claude/skills/claudette-debug/debug-eval.sh <<'JS'
 const store = window.__CLAUDETTE_STORE__;
 const orig = store.getState().ACTION_NAME;
 if (typeof orig !== 'function') return 'ERROR: ACTION_NAME is not a function';
@@ -235,7 +233,7 @@ JS
 ### `untrace`
 
 ```bash
-scripts/debug-eval.sh <<'JS'
+.claude/skills/claudette-debug/debug-eval.sh <<'JS'
 (window.__CLAUDETTE_DEBUG_TRACED__ || []).forEach(({ name, orig }) => {
   window.__CLAUDETTE_STORE__.setState({ [name]: orig });
 });
@@ -251,7 +249,7 @@ JS
 ### Verify tool call summaries after a turn
 
 ```bash
-scripts/debug-eval.sh <<'JS'
+.claude/skills/claudette-debug/debug-eval.sh <<'JS'
 const s = window.__CLAUDETTE_STORE__.getState();
 const wsId = s.selectedWorkspaceId;
 const turns = s.completedTurns[wsId] || [];
@@ -269,7 +267,7 @@ JS
 ### Verify no doubled streaming content
 
 ```bash
-scripts/debug-eval.sh <<'JS'
+.claude/skills/claudette-debug/debug-eval.sh <<'JS'
 const s = window.__CLAUDETTE_STORE__.getState();
 const wsId = s.selectedWorkspaceId;
 const msgs = s.chatMessages[wsId] || [];
@@ -284,7 +282,7 @@ JS
 ### Check scroll position
 
 ```bash
-scripts/debug-eval.sh <<'JS'
+.claude/skills/claudette-debug/debug-eval.sh <<'JS'
 const c = document.querySelector('[class*="messages_"]');
 if (!c) return 'no container';
 return {
@@ -299,7 +297,7 @@ JS
 ```bash
 # Run with run_in_background: true
 for i in $(seq 1 600); do
-  result=$(scripts/debug-eval.sh 'const s=window.__CLAUDETTE_STORE__.getState();const w=s.selectedWorkspaceId;const st=s.workspaces.find(x=>x.id===w)?.agent_status;if(st!=="Running"){const ct=(s.completedTurns[w]||[]).length;if(ct>0){const t=s.completedTurns[w][ct-1];return JSON.stringify({done:true,st,acts:t.activities.length,jsonOk:t.activities.every(a=>{try{JSON.parse(a.inputJson);return true}catch{return false}})})}return JSON.stringify({done:true,st,ct})}' 2>/dev/null)
+  result=$(.claude/skills/claudette-debug/debug-eval.sh 'const s=window.__CLAUDETTE_STORE__.getState();const w=s.selectedWorkspaceId;const st=s.workspaces.find(x=>x.id===w)?.agent_status;if(st!=="Running"){const ct=(s.completedTurns[w]||[]).length;if(ct>0){const t=s.completedTurns[w][ct-1];return JSON.stringify({done:true,st,acts:t.activities.length,jsonOk:t.activities.every(a=>{try{JSON.parse(a.inputJson);return true}catch{return false}})})}return JSON.stringify({done:true,st,ct})}' 2>/dev/null)
   if [ -n "$result" ]; then echo "$result"; break; fi
 done
 ```

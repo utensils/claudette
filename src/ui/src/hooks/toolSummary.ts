@@ -29,13 +29,52 @@ export function extractToolSummary(
         return input.notebook_path ?? "";
       case "Agent":
         return truncate(input.description ?? input.prompt ?? "", 80);
+      case "SendMessage":
+        return input.to
+          ? truncate(`to ${input.to}${input.summary ? `: ${input.summary}` : ""}`, 80)
+          : "";
+      case "ToolSearch":
+        return input.query ?? "";
+      case "TeamCreate":
+        return input.name ?? "";
+      case "TeamDelete":
+        return input.name ?? "";
+      case "TaskCreate":
+        return truncate(input.description ?? "", 80);
+      case "TaskUpdate":
+        return input.status ? `#${input.id ?? "?"} → ${input.status}` : "";
+      case "TaskGet":
+      case "TaskStop":
+      case "TaskOutput":
+        return input.id ? `#${input.id}` : "";
+      case "Skill":
+        return input.skill
+          ? truncate(`${input.skill}${input.args ? ` ${input.args}` : ""}`, 80)
+          : "";
+      case "AskUserQuestion":
+        return truncate(input.question ?? "", 80);
+      case "Monitor":
+        return input.id ? `task #${input.id}` : "";
+      case "CronCreate":
+        return truncate(input.schedule ?? input.name ?? "", 80);
+      case "CronDelete":
+        return input.id ?? input.name ?? "";
+      case "RemoteTrigger":
+        return truncate(input.name ?? input.prompt ?? "", 80);
       case "LSP":
         return input.action ?? "";
       case "TodoWrite":
         return Array.isArray(input.todos)
           ? `${input.todos.length} items`
           : "";
-      default:
+      default: {
+        // MCP tools: strip the mcp__ prefix for readability.
+        if (toolName.startsWith("mcp__")) {
+          return truncate(
+            input.description ?? input.url ?? input.query ?? input.command ?? "",
+            80
+          );
+        }
         // For unknown tools, try common field names.
         return truncate(
           input.command ??
@@ -46,6 +85,7 @@ export function extractToolSummary(
             "",
           80
         );
+      }
     }
   } catch {
     return "";
