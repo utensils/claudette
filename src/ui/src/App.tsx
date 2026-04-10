@@ -11,6 +11,7 @@ function App() {
   const setWorktreeBaseDir = useAppStore((s) => s.setWorktreeBaseDir);
   const setDefaultBranches = useAppStore((s) => s.setDefaultBranches);
   const setTerminalFontSize = useAppStore((s) => s.setTerminalFontSize);
+  const setAudioNotifications = useAppStore((s) => s.setAudioNotifications);
   const setLastMessages = useAppStore((s) => s.setLastMessages);
   const setRemoteConnections = useAppStore((s) => s.setRemoteConnections);
   const setDiscoveredServers = useAppStore((s) => s.setDiscoveredServers);
@@ -44,6 +45,11 @@ function App() {
         }
       })
       .catch((err) => console.error("Failed to load terminal font size:", err));
+    getAppSetting("audio_notifications")
+      .then((val) => {
+        if (val === "true") setAudioNotifications(true);
+      })
+      .catch((err) => console.error("Failed to load audio notifications setting:", err));
     getAppSetting("theme")
       .then(async (savedThemeId) => {
         const allThemes = await loadAllThemes();

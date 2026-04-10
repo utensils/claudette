@@ -14,6 +14,8 @@ export function AppSettingsModal() {
   const setTerminalFontSize = useAppStore((s) => s.setTerminalFontSize);
   const currentThemeId = useAppStore((s) => s.currentThemeId);
   const setCurrentThemeId = useAppStore((s) => s.setCurrentThemeId);
+  const audioNotifications = useAppStore((s) => s.audioNotifications);
+  const setAudioNotifications = useAppStore((s) => s.setAudioNotifications);
 
   const [path, setPath] = useState(worktreeBaseDir);
   const [fontSize, setFontSize] = useState(String(terminalFontSize));
@@ -62,6 +64,8 @@ export function AppSettingsModal() {
 
       await setAppSetting("theme", selectedThemeId);
       setCurrentThemeId(selectedThemeId);
+
+      await setAppSetting("audio_notifications", audioNotifications ? "true" : "false");
 
       closeModal();
     } catch (e) {
@@ -128,6 +132,29 @@ export function AppSettingsModal() {
           />
           <div className={shared.hint}>8–24px (default: 11)</div>
         </div>
+      </div>
+
+      <div
+        style={{
+          borderTop: "1px solid var(--divider)",
+          marginTop: 16,
+          paddingTop: 12,
+        }}
+      >
+        <div
+          className={shared.label}
+          style={{ marginBottom: 8, fontWeight: 600 }}
+        >
+          Notifications
+        </div>
+        <label className={shared.checkboxRow}>
+          <input
+            type="checkbox"
+            checked={audioNotifications}
+            onChange={(e) => setAudioNotifications(e.target.checked)}
+          />
+          <span>Play sound when background agent finishes</span>
+        </label>
       </div>
 
       {error && <div className={shared.error}>{error}</div>}
