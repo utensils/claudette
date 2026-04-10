@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/utensils/Claudette/compare/v0.5.0...v0.5.1) (2026-04-10)
+
+
+### Bug Fixes
+
+* **ci:** pin bun version to prevent lockfile drift ([#124](https://github.com/utensils/Claudette/issues/124)) ([005d940](https://github.com/utensils/Claudette/commit/005d940aaf3f6b4a43a278c9f7e7e9e9e9a8ed56))
+
 ## [0.5.0](https://github.com/utensils/Claudette/compare/v0.4.0...v0.5.0) (2026-04-10)
 
 
