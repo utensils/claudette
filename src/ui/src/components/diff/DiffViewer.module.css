@@ -112,3 +112,32 @@
   overflow-x: auto;
   padding-left: 4px;
 }
+
+/* ---- Side-by-Side Mode ---- */
+
+.sideBySide {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.sbsRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  min-height: 20px;
+}
+
+.sbsCell {
+  display: flex;
+  min-height: 20px;
+  padding: 0 4px;
+  overflow: hidden;
+}
+
+.sbsCell + .sbsCell {
+  border-left: 1px solid var(--divider);
+}
+
+.sbsEmpty {
+  background: rgba(255, 255, 255, 0.02);
+}
