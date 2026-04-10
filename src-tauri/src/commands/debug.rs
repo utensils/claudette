@@ -131,7 +131,8 @@ pub fn start_debug_server(app: AppHandle) {
                 //   - Write result back
                 //   - Close
                 let mut buf = Vec::with_capacity(4096);
-                if let Err(e) = stream.read_to_end(&mut buf).await {
+                // Cap input at 1 MB to prevent accidental runaway allocations.
+                if let Err(e) = (&mut stream).take(1024 * 1024).read_to_end(&mut buf).await {
                     eprintln!("[debug] Read failed: {e}");
                     return;
                 }

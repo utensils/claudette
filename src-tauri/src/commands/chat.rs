@@ -496,9 +496,7 @@ pub async fn save_turn_tool_activities(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    db.update_checkpoint_message_count(&checkpoint_id, message_count)
-        .map_err(|e| e.to_string())?;
-    db.insert_turn_tool_activities(&activities)
+    db.save_turn_tool_activities(&checkpoint_id, message_count, &activities)
         .map_err(|e| e.to_string())?;
     Ok(())
 }

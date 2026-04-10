@@ -215,12 +215,12 @@ impl Database {
         }
 
         if version < 12 {
+            // Single batch so the column add, backfill, and version bump are
+            // atomic — a partial apply won't leave user_version stale.
             self.conn.execute_batch(
-                "ALTER TABLE repositories ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;",
-            )?;
-            // Backfill: assign sequential sort_order based on current name order.
-            self.conn.execute_batch(
-                "UPDATE repositories SET sort_order = (
+                "ALTER TABLE repositories ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+
+                UPDATE repositories SET sort_order = (
                     SELECT COUNT(*) FROM repositories r2 WHERE r2.name < repositories.name
                 );
 
@@ -724,6 +724,40 @@ impl Database {
             "UPDATE conversation_checkpoints SET message_count = ?1 WHERE id = ?2",
             params![message_count, checkpoint_id],
         )?;
+        Ok(())
+    }
+
+    /// Atomically update the checkpoint message count and insert tool activities.
+    pub fn save_turn_tool_activities(
+        &self,
+        checkpoint_id: &str,
+        message_count: i32,
+        activities: &[TurnToolActivity],
+    ) -> Result<(), rusqlite::Error> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE conversation_checkpoints SET message_count = ?1 WHERE id = ?2",
+            params![message_count, checkpoint_id],
+        )?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO turn_tool_activities (id, checkpoint_id, tool_use_id, tool_name, input_json, result_text, summary, sort_order)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            )?;
+            for a in activities {
+                stmt.execute(params![
+                    a.id,
+                    a.checkpoint_id,
+                    a.tool_use_id,
+                    a.tool_name,
+                    a.input_json,
+                    a.result_text,
+                    a.summary,
+                    a.sort_order,
+                ])?;
+            }
+        }
+        tx.commit()?;
         Ok(())
     }
 

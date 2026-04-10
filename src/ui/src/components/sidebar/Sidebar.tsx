@@ -41,6 +41,7 @@ export function Sidebar() {
   const [dropTargetIdx, setDropTargetIdx] = useState<number | null>(null);
   const repoGroupRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const dragStartPos = useRef<{ x: number; y: number; id: string; pointerId: number } | null>(null);
+  const didDragRef = useRef(false);
   const DRAG_THRESHOLD = 5; // px before drag activates
   const clearUnreadCompletion = useAppStore((s) => s.clearUnreadCompletion);
 
@@ -160,7 +161,7 @@ export function Sidebar() {
                 if (!header) return;
                 // Record start position — don't activate drag until threshold
                 dragStartPos.current = { x: e.clientX, y: e.clientY, id: repo.id, pointerId: e.pointerId };
-                (e.target as HTMLElement).setPointerCapture(e.pointerId);
+                e.currentTarget.setPointerCapture(e.pointerId);
               }}
               onPointerMove={(e) => {
                 if (!dragStartPos.current) return;
@@ -172,6 +173,7 @@ export function Sidebar() {
                   const dy = e.clientY - dragStartPos.current.y;
                   if (Math.abs(dx) + Math.abs(dy) < DRAG_THRESHOLD) return;
                   setDraggedRepoId(repo.id);
+                  didDragRef.current = true;
                   // Prevent text selection while dragging
                   window.getSelection()?.removeAllRanges();
                 }
@@ -206,7 +208,6 @@ export function Sidebar() {
                   if (fromIdx >= 0) {
                     const reordered = [...localRepos];
                     const [moved] = reordered.splice(fromIdx, 1);
-                    // Adjust target index since we removed an item
                     const insertIdx = dropTargetIdx > fromIdx ? dropTargetIdx - 1 : dropTargetIdx;
                     reordered.splice(insertIdx, 0, moved);
                     setRepositories([
@@ -219,6 +220,10 @@ export function Sidebar() {
                 dragStartPos.current = null;
                 setDraggedRepoId(null);
                 setDropTargetIdx(null);
+                // Reset didDrag after click fires (click follows pointerup).
+                if (didDragRef.current) {
+                  requestAnimationFrame(() => { didDragRef.current = false; });
+                }
               }}
               onPointerCancel={() => {
                 dragStartPos.current = null;
@@ -231,7 +236,7 @@ export function Sidebar() {
               )}
               <div
                 className={styles.repoHeader}
-                onClick={() => toggleRepoCollapsed(repo.id)}
+                onClick={() => { if (!didDragRef.current) toggleRepoCollapsed(repo.id); }}
               >
                 <span className={styles.chevron}>
                   {collapsed ? "›" : "⌄"}
