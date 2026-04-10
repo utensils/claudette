@@ -47,8 +47,8 @@ jobs:
           # Strip commit hash links — clutter in Discord
           CHANGELOG=$(echo "$CHANGELOG" | sed 's/ (\[[a-f0-9]\{7,\}\](https:\/\/[^)]*))//g')
 
-          # Trim leading/trailing blank lines
-          CHANGELOG=$(echo "$CHANGELOG" | sed '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba}')
+          # Trim leading blank lines
+          CHANGELOG=$(echo "$CHANGELOG" | sed '/./,$!d')
 
           # Truncate to 1900 chars (leaving room for embed overhead)
           if [ ${#CHANGELOG} -gt 1900 ]; then
