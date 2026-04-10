@@ -328,6 +328,23 @@ export function ChatPanel() {
     const trimmed = content.trim();
     if (!trimmed || !selectedWorkspaceId) return;
 
+    // If the agent is running, stop it first before sending the new message.
+    if (isRunning) {
+      try {
+        if (ws?.remote_connection_id) {
+          await sendRemoteCommand(ws.remote_connection_id, "stop_agent", {
+            workspace_id: selectedWorkspaceId,
+          });
+        } else {
+          await stopAgent(selectedWorkspaceId);
+        }
+        // Brief delay to let ProcessExited propagate before starting new turn.
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      } catch (e) {
+        console.error("Failed to stop agent before new message:", e);
+      }
+    }
+
     // Clear any pending agent question or plan approval — the user is sending
     // a new message (answer from a card or manual override).
     if (selectedWorkspaceId) {
@@ -844,16 +861,9 @@ const ToolActivitiesSection = memo(function ToolActivitiesSection({
   const activities = useAppStore(
     (s) => s.toolActivities[workspaceId] ?? EMPTY_ACTIVITIES
   );
-  const [collapsed, setCollapsed] = useState(true);
-
-  // Auto-collapse when a new turn starts (activities goes from 0 to non-zero)
-  const prevLengthRef = useRef(0);
-  useEffect(() => {
-    if (isRunning && activities.length > 0 && prevLengthRef.current === 0) {
-      setCollapsed(true);
-    }
-    prevLengthRef.current = activities.length;
-  }, [isRunning, activities.length]);
+  const toolExpanded = useAppStore((s) => s.toolActivitiesExpanded);
+  const setToolExpanded = useAppStore((s) => s.setToolActivitiesExpanded);
+  const collapsed = !toolExpanded;
 
   if (activities.length === 0) return null;
 
@@ -864,11 +874,11 @@ const ToolActivitiesSection = memo(function ToolActivitiesSection({
           className={styles.turnHeader}
           role="button"
           tabIndex={0}
-          onClick={() => setCollapsed(!collapsed)}
+          onClick={() => setToolExpanded(collapsed)}
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === " ") {
               e.preventDefault();
-              setCollapsed(!collapsed);
+              setToolExpanded(collapsed);
             }
           }}
         >
@@ -1101,8 +1111,7 @@ function ChatInputArea({
         value={chatInput}
         onChange={(e) => setChatInput(e.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder="Send a message..."
-        disabled={isRunning}
+        placeholder={isRunning ? "Type to interrupt and send..." : "Send a message..."}
       />
       <div className={styles.inputControls}>
         <ChatToolbar
@@ -1112,7 +1121,7 @@ function ChatInputArea({
         <button
           className={styles.sendBtn}
           onClick={handleSend}
-          disabled={!chatInput.trim() || isRunning}
+          disabled={!chatInput.trim()}
         >
           Send
         </button>

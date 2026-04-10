@@ -170,12 +170,25 @@ export function CommandPalette() {
   const filteredCommands = useMemo(() => {
     if (!query.trim()) return activeCommands;
     const q = query.toLowerCase();
-    return activeCommands.filter(
-      (cmd) =>
-        cmd.name.toLowerCase().includes(q) ||
-        cmd.description?.toLowerCase().includes(q) ||
-        cmd.keywords?.some((k) => k.includes(q)),
-    );
+
+    // Score each command for relevance and sort by best match.
+    const scored = activeCommands
+      .map((cmd) => {
+        const name = cmd.name.toLowerCase();
+        const desc = cmd.description?.toLowerCase() ?? "";
+        let score = 0;
+        if (name === q) score = 100;
+        else if (name.startsWith(q)) score = 80;
+        else if (name.split(/\s+/).some((w) => w.startsWith(q))) score = 60;
+        else if (name.includes(q)) score = 40;
+        else if (desc.includes(q)) score = 20;
+        else if (cmd.keywords?.some((k) => k.includes(q))) score = 10;
+        return { cmd, score };
+      })
+      .filter(({ score }) => score > 0)
+      .sort((a, b) => b.score - a.score);
+
+    return scored.map(({ cmd }) => cmd);
   }, [activeCommands, query]);
 
   const grouped = useMemo<GroupedCommands[]>(() => {

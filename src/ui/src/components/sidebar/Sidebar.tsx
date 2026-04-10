@@ -31,6 +31,8 @@ export function Sidebar() {
   const openModal = useAppStore((s) => s.openModal);
   const updateWorkspace = useAppStore((s) => s.updateWorkspace);
   const unreadCompletions = useAppStore((s) => s.unreadCompletions);
+  const metaKeyHeld = useAppStore((s) => s.metaKeyHeld);
+  const isMac = navigator.platform.startsWith("Mac");
   const clearUnreadCompletion = useAppStore((s) => s.clearUnreadCompletion);
 
   const creatingRef = useRef(false);
@@ -126,7 +128,7 @@ export function Sidebar() {
       </div>
 
       <div className={styles.list}>
-        {repositories.filter((r) => !r.remote_connection_id).map((repo) => {
+        {repositories.filter((r) => !r.remote_connection_id).map((repo, repoIdx) => {
           const collapsed = repoCollapsed[repo.id];
           const repoWorkspaces = filteredWorkspaces.filter(
             (ws) => ws.repository_id === repo.id
@@ -149,6 +151,11 @@ export function Sidebar() {
                   {repo.name}
                   {runningCount > 0 && (
                     <span className={styles.runningBadge}>{runningCount}</span>
+                  )}
+                  {metaKeyHeld && repoIdx < 9 && (
+                    <kbd className={styles.shortcutBadge}>
+                      {isMac ? "⌘" : "Ctrl+"}{repoIdx + 1}
+                    </kbd>
                   )}
                 </span>
                 {!repo.path_valid && (

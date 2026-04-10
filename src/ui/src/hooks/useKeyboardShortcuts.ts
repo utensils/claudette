@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useAppStore } from "../stores/useAppStore";
+import { stopAgent } from "../services/tauri";
 
 export function useKeyboardShortcuts() {
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
@@ -38,7 +39,7 @@ export function useKeyboardShortcuts() {
         return;
       }
 
-      // Escape: dismiss topmost overlay
+      // Escape: dismiss topmost overlay, or stop running agent
       if (e.key === "Escape") {
         if (commandPaletteOpen) {
           toggleCommandPalette();
@@ -48,11 +49,59 @@ export function useKeyboardShortcuts() {
           toggleFuzzyFinder();
         } else if (diffSelectedFile) {
           setDiffSelectedFile(null);
+        } else if (selectedWorkspaceId) {
+          // Stop agent if running (lowest priority, after all overlays)
+          const ws = useAppStore.getState().workspaces.find(
+            (w) => w.id === selectedWorkspaceId,
+          );
+          if (ws?.agent_status === "Running") {
+            stopAgent(selectedWorkspaceId).catch(console.error);
+            useAppStore.getState().updateWorkspace(selectedWorkspaceId, {
+              agent_status: "Stopped",
+            });
+          }
         }
         return;
       }
 
       if (!mod) return;
+
+      // Cmd/Ctrl+Shift+[ or ]: cycle workspaces in current project
+      if (e.shiftKey && (e.key === "[" || e.key === "]") && selectedWorkspaceId) {
+        e.preventDefault();
+        const state = useAppStore.getState();
+        const currentWs = state.workspaces.find((w) => w.id === selectedWorkspaceId);
+        if (currentWs) {
+          const siblings = state.workspaces.filter(
+            (w) => w.repository_id === currentWs.repository_id && w.status === "Active",
+          );
+          if (siblings.length > 1) {
+            const idx = siblings.findIndex((w) => w.id === selectedWorkspaceId);
+            const next = e.key === "]"
+              ? siblings[(idx + 1) % siblings.length]
+              : siblings[(idx - 1 + siblings.length) % siblings.length];
+            state.selectWorkspace(next.id);
+          }
+        }
+        return;
+      }
+
+      // Cmd/Ctrl+1-9: jump to project by index
+      if (e.key >= "1" && e.key <= "9" && !e.shiftKey) {
+        e.preventDefault();
+        const state = useAppStore.getState();
+        const localRepos = state.repositories.filter((r) => !r.remote_connection_id);
+        const idx = parseInt(e.key, 10) - 1;
+        if (idx < localRepos.length) {
+          const repo = localRepos[idx];
+          // Select first active workspace for this repo
+          const ws = state.workspaces.find(
+            (w) => w.repository_id === repo.id && w.status === "Active",
+          );
+          if (ws) state.selectWorkspace(ws.id);
+        }
+        return;
+      }
 
       switch (e.key) {
         case "b":
@@ -78,8 +127,32 @@ export function useKeyboardShortcuts() {
       }
     };
 
+    // Track Cmd/Ctrl key hold for visual shortcut hints
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === "Meta" || e.key === "Control") {
+        useAppStore.getState().setMetaKeyHeld(false);
+      }
+    };
+    const handleKeyDownMeta = (e: KeyboardEvent) => {
+      if ((e.key === "Meta" || e.key === "Control") && !e.repeat) {
+        useAppStore.getState().setMetaKeyHeld(true);
+      }
+    };
+    // Clear on window blur (e.g. Cmd+Tab away)
+    const handleBlur = () => {
+      useAppStore.getState().setMetaKeyHeld(false);
+    };
+
     window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
+    window.addEventListener("keydown", handleKeyDownMeta);
+    window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", handleBlur);
+    return () => {
+      window.removeEventListener("keydown", handler);
+      window.removeEventListener("keydown", handleKeyDownMeta);
+      window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", handleBlur);
+    };
   }, [
     toggleSidebar,
     toggleRightSidebar,

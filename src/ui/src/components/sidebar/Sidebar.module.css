@@ -132,6 +132,19 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Keyboard shortcut badge shown on Cmd/Ctrl hold */
+.shortcutBadge {
+  font-size: 9px;
+  font-family: inherit;
+  color: var(--text-dim);
+  background: var(--hover-bg);
+  border: 1px solid var(--divider);
+  padding: 1px 4px;
+  border-radius: 3px;
+  margin-left: 4px;
+  animation: fadeIn 0.1s ease;
+}
+
 /* Workspace items */
 .wsItem {
   display: flex;
