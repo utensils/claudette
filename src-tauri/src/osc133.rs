@@ -12,6 +12,7 @@ pub struct Osc133Parser {
     command_buffer: Vec<u8>,
     in_osc: bool,
     tracking_command: bool,
+    in_escape: bool,
 }
 
 impl Osc133Parser {
@@ -21,6 +22,7 @@ impl Osc133Parser {
             command_buffer: Vec::new(),
             in_osc: false,
             tracking_command: false,
+            in_escape: false,
         }
     }
 
@@ -29,6 +31,35 @@ impl Osc133Parser {
         let mut events = Vec::new();
 
         for &byte in data {
+            // Handle escape sequences (don't track command text while in escape)
+            if self.in_escape {
+                self.buffer.push(byte);
+
+                // Check if we're starting an OSC sequence (ESC ])
+                if self.buffer == b"\x1b]" {
+                    self.in_osc = true;
+                    self.buffer.clear();
+                    self.in_escape = false;
+                }
+                // Check for CSI sequences (ESC [)
+                else if self.buffer.len() >= 2 && self.buffer[0] == 0x1b && self.buffer[1] == b'['
+                {
+                    // CSI parameter bytes: 0x30-0x3F (digits, semicolon, etc.)
+                    // CSI final byte: 0x40-0x7E (letters like H, J, K, m, etc.)
+                    // Skip [ itself and wait for the final byte
+                    if self.buffer.len() > 2 && (0x40..=0x7E).contains(&byte) {
+                        self.buffer.clear();
+                        self.in_escape = false;
+                    }
+                }
+                // Check for other escape sequences (ESC followed by single printable char)
+                else if self.buffer.len() == 2 && self.buffer[0] == 0x1b {
+                    self.buffer.clear();
+                    self.in_escape = false;
+                }
+                continue;
+            }
+
             if self.in_osc {
                 // Look for BEL terminator
                 if byte == 0x07 {
@@ -51,20 +82,9 @@ impl Osc133Parser {
                 }
             } else if byte == 0x1b {
                 self.buffer.push(byte);
-            } else if !self.buffer.is_empty() {
-                // Check if we're starting an OSC sequence (ESC ])
-                if self.buffer == b"\x1b" && byte == b']' {
-                    self.in_osc = true;
-                    self.buffer.clear();
-                } else {
-                    // Not an OSC sequence, track as command text if needed
-                    if self.tracking_command && (0x20..0x7F).contains(&byte) {
-                        self.command_buffer.push(byte);
-                    }
-                    self.buffer.clear();
-                }
+                self.in_escape = true;
             } else {
-                // Track printable characters between B and C markers
+                // Track printable characters between B and C markers (not in escape sequences)
                 if self.tracking_command && (0x20..0x7F).contains(&byte) {
                     self.command_buffer.push(byte);
                 }
@@ -243,5 +263,27 @@ mod tests {
         parser.feed(b"echo hello");
         parser.feed(b"\x1b]133;C\x07");
         assert_eq!(parser.extract_command(), Some("echo hello".to_string()));
+    }
+
+    #[test]
+    fn test_escape_sequences_filtered() {
+        let mut parser = Osc133Parser::new();
+
+        parser.feed(b"\x1b]133;B\x07");
+        // Command with ANSI escape sequences should filter them out
+        parser.feed(b"\x1b[K\x1b[?1h\x1b=\x1b[?2004hpnpm dev");
+        parser.feed(b"\x1b]133;C\x07");
+        assert_eq!(parser.extract_command(), Some("pnpm dev".to_string()));
+    }
+
+    #[test]
+    fn test_csi_sequences_filtered() {
+        let mut parser = Osc133Parser::new();
+
+        parser.feed(b"\x1b]133;B\x07");
+        // CSI sequences like cursor movement should be filtered
+        parser.feed(b"\x1b[2Jnpm run \x1b[31mbuild\x1b[0m");
+        parser.feed(b"\x1b]133;C\x07");
+        assert_eq!(parser.extract_command(), Some("npm run build".to_string()));
     }
 }
