@@ -14,6 +14,8 @@ const ASK_USER_QUESTION_TOOL = "AskUserQuestion";
 export function useAgentStream() {
   const appendStreamingContent = useAppStore((s) => s.appendStreamingContent);
   const setStreamingContent = useAppStore((s) => s.setStreamingContent);
+  const appendStreamingThinking = useAppStore((s) => s.appendStreamingThinking);
+  const clearStreamingThinking = useAppStore((s) => s.clearStreamingThinking);
   const addChatMessage = useAppStore((s) => s.addChatMessage);
   const addToolActivity = useAppStore((s) => s.addToolActivity);
   const updateToolActivity = useAppStore((s) => s.updateToolActivity);
@@ -41,6 +43,8 @@ export function useAgentStream() {
   const turnCheckpointIdRef = useRef<Record<string, string | undefined>>({});
   // Plan file path extracted from EnterPlanMode tool results, keyed by wsId.
   const planFilePathRef = useRef<Record<string, string>>({});
+  // Track content block indices that are thinking blocks.
+  const thinkingBlocksRef = useRef<Set<number>>(new Set());
 
   useEffect(() => {
     // Guard against StrictMode double-mount: the async unlisten() promise
@@ -73,7 +77,9 @@ export function useAgentStream() {
         turnCheckpointIdRef.current[wsId] = undefined;
         updateWorkspace(wsId, { agent_status: "Idle" });
         setStreamingContent(wsId, "");
+        clearStreamingThinking(wsId);
         blockToolMapRef.current = {};
+        thinkingBlocksRef.current.clear();
         // NOTE: Do NOT clear agentQuestion here. In --print mode the CLI
         // exits immediately after emitting AskUserQuestion, so ProcessExited
         // fires before the user has a chance to answer. The question is
@@ -143,9 +149,24 @@ export function useAgentStream() {
                       );
                     }
                   }
+                  if (
+                    "type" in delta &&
+                    delta.type === "thinking_delta" &&
+                    "thinking" in delta &&
+                    delta.thinking
+                  ) {
+                    appendStreamingThinking(wsId, delta.thinking);
+                  }
                   break;
                 }
                 case "content_block_start": {
+                  if (
+                    inner.content_block &&
+                    "type" in inner.content_block &&
+                    inner.content_block.type === "thinking"
+                  ) {
+                    thinkingBlocksRef.current.add(inner.index);
+                  }
                   if (
                     inner.content_block &&
                     "type" in inner.content_block &&
@@ -173,6 +194,10 @@ export function useAgentStream() {
                   break;
                 }
                 case "content_block_stop": {
+                  if (thinkingBlocksRef.current.has(inner.index)) {
+                    thinkingBlocksRef.current.delete(inner.index);
+                    break;
+                  }
                   const entry = blockToolMapRef.current[inner.index];
                   if (!entry) break;
 
@@ -296,6 +321,7 @@ export function useAgentStream() {
               });
             }
             setStreamingContent(wsId, "");
+            clearStreamingThinking(wsId);
             break;
           }
           case "result": {
@@ -346,6 +372,8 @@ export function useAgentStream() {
   }, [
     appendStreamingContent,
     setStreamingContent,
+    appendStreamingThinking,
+    clearStreamingThinking,
     addChatMessage,
     addToolActivity,
     updateToolActivity,

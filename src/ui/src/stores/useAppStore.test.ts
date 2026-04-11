@@ -63,6 +63,40 @@ describe("effortLevel (per-workspace)", () => {
   });
 });
 
+describe("streamingThinking (per-workspace)", () => {
+  beforeEach(() => {
+    useAppStore.setState({ streamingThinking: {}, showThinkingBlocks: {} });
+  });
+
+  it("appendStreamingThinking accumulates text", () => {
+    useAppStore.getState().appendStreamingThinking(WS_ID, "Let me ");
+    useAppStore.getState().appendStreamingThinking(WS_ID, "think...");
+    expect(useAppStore.getState().streamingThinking[WS_ID]).toBe("Let me think...");
+  });
+
+  it("clearStreamingThinking resets to empty", () => {
+    useAppStore.getState().appendStreamingThinking(WS_ID, "some thinking");
+    useAppStore.getState().clearStreamingThinking(WS_ID);
+    expect(useAppStore.getState().streamingThinking[WS_ID]).toBe("");
+  });
+
+  it("thinking is isolated per workspace", () => {
+    useAppStore.getState().appendStreamingThinking("ws-a", "alpha");
+    useAppStore.getState().appendStreamingThinking("ws-b", "beta");
+    expect(useAppStore.getState().streamingThinking["ws-a"]).toBe("alpha");
+    expect(useAppStore.getState().streamingThinking["ws-b"]).toBe("beta");
+  });
+
+  it("setShowThinkingBlocks stores preference", () => {
+    useAppStore.getState().setShowThinkingBlocks(WS_ID, false);
+    expect(useAppStore.getState().showThinkingBlocks[WS_ID]).toBe(false);
+  });
+
+  it("showThinkingBlocks defaults to undefined (treated as true)", () => {
+    expect(useAppStore.getState().showThinkingBlocks[WS_ID]).toBeUndefined();
+  });
+});
+
 describe("agentQuestion lifecycle (per-workspace)", () => {
   beforeEach(() => {
     useAppStore.setState({

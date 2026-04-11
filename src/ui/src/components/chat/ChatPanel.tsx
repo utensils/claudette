@@ -32,6 +32,7 @@ import { WorkspaceActions } from "./WorkspaceActions";
 import { HeaderMenu } from "./HeaderMenu";
 import { SlashCommandPicker, filterSlashCommands } from "./SlashCommandPicker";
 import { checkpointHasFileChanges } from "../../utils/checkpointUtils";
+import { ThinkingBlock } from "./ThinkingBlock";
 import { debugChat } from "../../utils/chatDebug";
 import styles from "./ChatPanel.module.css";
 
@@ -193,6 +194,12 @@ export function ChatPanel() {
   // Subscribe only to boolean — avoids re-render on every streaming character
   const hasStreaming = useAppStore(
     (s) => !!(selectedWorkspaceId && s.streamingContent[selectedWorkspaceId])
+  );
+  const hasThinking = useAppStore(
+    (s) => !!(selectedWorkspaceId && s.streamingThinking[selectedWorkspaceId])
+  );
+  const showThinkingBlocks = useAppStore(
+    (s) => selectedWorkspaceId ? s.showThinkingBlocks[selectedWorkspaceId] !== false : true
   );
   // Subscribe only to count — avoids re-render on tool activity content changes
   const activitiesCount = useAppStore(
@@ -656,6 +663,10 @@ export function ChatPanel() {
               />
             )}
 
+            {selectedWorkspaceId && hasThinking && showThinkingBlocks && (
+              <StreamingThinkingBlock workspaceId={selectedWorkspaceId} isStreaming={isRunning ?? false} />
+            )}
+
             {selectedWorkspaceId && hasStreaming && (
               <StreamingMessage workspaceId={selectedWorkspaceId} />
             )}
@@ -730,6 +741,24 @@ export function ChatPanel() {
     </div>
   );
 }
+
+/**
+ * Isolated thinking block — subscribes to streamingThinking to avoid
+ * re-rendering ChatPanel on every thinking delta.
+ */
+const StreamingThinkingBlock = memo(function StreamingThinkingBlock({
+  workspaceId,
+  isStreaming,
+}: {
+  workspaceId: string;
+  isStreaming: boolean;
+}) {
+  const thinking = useAppStore(
+    (s) => s.streamingThinking[workspaceId] || ""
+  );
+  if (!thinking) return null;
+  return <ThinkingBlock content={thinking} isStreaming={isStreaming} />;
+});
 
 /**
  * Isolated streaming message component — subscribes to streaming text directly

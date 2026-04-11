@@ -77,12 +77,17 @@ interface AppState {
   // -- Chat --
   chatMessages: Record<string, ChatMessage[]>;
   streamingContent: Record<string, string>;
+  streamingThinking: Record<string, string>;
+  showThinkingBlocks: Record<string, boolean>;
   toolActivities: Record<string, ToolActivity[]>;
   completedTurns: Record<string, CompletedTurn[]>;
   setChatMessages: (wsId: string, messages: ChatMessage[]) => void;
   addChatMessage: (wsId: string, message: ChatMessage) => void;
   setStreamingContent: (wsId: string, content: string) => void;
   appendStreamingContent: (wsId: string, text: string) => void;
+  appendStreamingThinking: (wsId: string, text: string) => void;
+  clearStreamingThinking: (wsId: string) => void;
+  setShowThinkingBlocks: (wsId: string, show: boolean) => void;
   setToolActivities: (wsId: string, activities: ToolActivity[]) => void;
   addToolActivity: (wsId: string, activity: ToolActivity) => void;
   updateToolActivity: (
@@ -307,6 +312,8 @@ export const useAppStore = create<AppState>((set) => ({
   // -- Chat --
   chatMessages: {},
   streamingContent: {},
+  streamingThinking: {},
+  showThinkingBlocks: {},
   toolActivities: {},
   completedTurns: {},
   setChatMessages: (wsId, messages) =>
@@ -331,6 +338,21 @@ export const useAppStore = create<AppState>((set) => ({
         ...s.streamingContent,
         [wsId]: (s.streamingContent[wsId] || "") + text,
       },
+    })),
+  appendStreamingThinking: (wsId, text) =>
+    set((s) => ({
+      streamingThinking: {
+        ...s.streamingThinking,
+        [wsId]: (s.streamingThinking[wsId] || "") + text,
+      },
+    })),
+  clearStreamingThinking: (wsId) =>
+    set((s) => ({
+      streamingThinking: { ...s.streamingThinking, [wsId]: "" },
+    })),
+  setShowThinkingBlocks: (wsId, show) =>
+    set((s) => ({
+      showThinkingBlocks: { ...s.showThinkingBlocks, [wsId]: show },
     })),
   setToolActivities: (wsId, activities) =>
     set((s) => ({
@@ -547,6 +569,7 @@ export const useAppStore = create<AppState>((set) => ({
         completedTurns: { ...s.completedTurns, [wsId]: [] },
         toolActivities: { ...s.toolActivities, [wsId]: [] },
         streamingContent: { ...s.streamingContent, [wsId]: "" },
+        streamingThinking: { ...s.streamingThinking, [wsId]: "" },
         agentQuestions: restQuestions,
         planApprovals: restApprovals,
         checkpoints: {

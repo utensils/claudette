@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Sparkles, Zap, Brain, BookOpen, Gauge } from "lucide-react";
+import { Sparkles, Zap, Brain, BookOpen, Gauge, Eye, EyeOff } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import { resetAgentSession, setAppSetting, getAppSetting } from "../../services/tauri";
 import { ModelSelector, MODELS } from "./ModelSelector";
@@ -22,7 +22,9 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
   const setFastMode = useAppStore((s) => s.setFastMode);
   const setThinkingEnabled = useAppStore((s) => s.setThinkingEnabled);
   const setPlanMode = useAppStore((s) => s.setPlanMode);
+  const showThinkingBlocks = useAppStore((s) => s.showThinkingBlocks[workspaceId] !== false);
   const setEffortLevel = useAppStore((s) => s.setEffortLevel);
+  const setShowThinkingBlocks = useAppStore((s) => s.setShowThinkingBlocks);
   const setModelSelectorOpen = useAppStore((s) => s.setModelSelectorOpen);
   const clearAgentQuestion = useAppStore((s) => s.clearAgentQuestion);
   const clearPlanApproval = useAppStore((s) => s.clearPlanApproval);
@@ -35,22 +37,24 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      const [model, fast, thinking, effort] = await Promise.all([
+      const [model, fast, thinking, effort, showThinking] = await Promise.all([
         getAppSetting(`model:${workspaceId}`),
         getAppSetting(`fast_mode:${workspaceId}`),
         getAppSetting(`thinking_enabled:${workspaceId}`),
         getAppSetting(`effort_level:${workspaceId}`),
+        getAppSetting(`show_thinking:${workspaceId}`),
       ]);
       if (cancelled) return;
       if (model) setSelectedModel(workspaceId, model);
       if (fast === "true") setFastMode(workspaceId, true);
       if (thinking === "true") setThinkingEnabled(workspaceId, true);
       if (effort) setEffortLevel(workspaceId, effort);
+      if (showThinking === "false") setShowThinkingBlocks(workspaceId, false);
       setLoaded(true);
     }
     load();
     return () => { cancelled = true; };
-  }, [workspaceId, setSelectedModel, setFastMode, setThinkingEnabled, setEffortLevel]);
+  }, [workspaceId, setSelectedModel, setFastMode, setThinkingEnabled, setEffortLevel, setShowThinkingBlocks]);
 
   const handleModelSelect = useCallback(
     async (model: string) => {
@@ -97,6 +101,12 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
     setThinkingEnabled(workspaceId, next);
     await setAppSetting(`thinking_enabled:${workspaceId}`, String(next));
   }, [workspaceId, thinkingEnabled, setThinkingEnabled]);
+
+  const toggleShowThinking = useCallback(async () => {
+    const next = !showThinkingBlocks;
+    setShowThinkingBlocks(workspaceId, next);
+    await setAppSetting(`show_thinking:${workspaceId}`, String(next));
+  }, [workspaceId, showThinkingBlocks, setShowThinkingBlocks]);
 
   const togglePlan = useCallback(() => {
     setPlanMode(workspaceId, !planMode);
@@ -154,6 +164,18 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
         <Brain size={14} />
         <span className={styles.chipLabel}>Thinking</span>
       </button>
+
+      {thinkingEnabled && (
+        <button
+          className={`${styles.chip} ${showThinkingBlocks ? styles.chipActive : ""}`}
+          onClick={toggleShowThinking}
+          disabled={disabled}
+          title={`${showThinkingBlocks ? "Hide" : "Show"} thinking output`}
+          aria-pressed={showThinkingBlocks}
+        >
+          {showThinkingBlocks ? <Eye size={14} /> : <EyeOff size={14} />}
+        </button>
+      )}
 
       {isEffortSupported(selectedModel) && (
         <button

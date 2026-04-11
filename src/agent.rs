@@ -93,6 +93,9 @@ pub enum Delta {
         partial_json: Option<String>,
     },
 
+    #[serde(rename = "thinking_delta")]
+    Thinking { thinking: String },
+
     #[serde(other)]
     Unknown,
 }
@@ -106,6 +109,9 @@ pub enum StartContentBlock {
 
     #[serde(rename = "text")]
     Text {},
+
+    #[serde(rename = "thinking")]
+    Thinking {},
 
     #[serde(other)]
     Unknown,
@@ -654,6 +660,49 @@ mod tests {
                             assert_eq!(partial_json.unwrap(), r#"{"path":"#);
                         }
                         _ => panic!("Expected ToolUseDelta"),
+                    }
+                }
+                _ => panic!("Expected ContentBlockDelta"),
+            },
+            _ => panic!("Expected Stream event"),
+        }
+    }
+
+    #[test]
+    fn test_parse_content_block_start_thinking() {
+        let line = r#"{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"thinking"}}}"#;
+        let event = parse_stream_line(line).unwrap();
+        match event {
+            StreamEvent::Stream { event } => match event {
+                InnerStreamEvent::ContentBlockStart {
+                    index,
+                    content_block,
+                } => {
+                    assert_eq!(index, 0);
+                    assert!(matches!(
+                        content_block,
+                        Some(StartContentBlock::Thinking {})
+                    ));
+                }
+                _ => panic!("Expected ContentBlockStart"),
+            },
+            _ => panic!("Expected Stream event"),
+        }
+    }
+
+    #[test]
+    fn test_parse_content_block_delta_thinking() {
+        let line = r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Let me analyze this..."}}}"#;
+        let event = parse_stream_line(line).unwrap();
+        match event {
+            StreamEvent::Stream { event } => match event {
+                InnerStreamEvent::ContentBlockDelta { index, delta } => {
+                    assert_eq!(index, 0);
+                    match delta {
+                        Delta::Thinking { thinking } => {
+                            assert_eq!(thinking, "Let me analyze this...")
+                        }
+                        _ => panic!("Expected ThinkingDelta"),
                     }
                 }
                 _ => panic!("Expected ContentBlockDelta"),
