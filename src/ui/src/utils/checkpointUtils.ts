@@ -1,4 +1,5 @@
 import type { ConversationCheckpoint } from "../types/checkpoint";
+import type { ChatMessage } from "../types/chat";
 
 /**
  * Determine whether rolling back to a given checkpoint could involve
@@ -19,4 +20,35 @@ export function checkpointHasFileChanges(
   // drifted — conservatively offer restore.
   if (checkpoint.id === latest.id) return true;
   return checkpoint.commit_hash !== latest.commit_hash;
+}
+
+/**
+ * Build a map of message index → checkpoint for rollback buttons.
+ * Each User message gets mapped to the most recent checkpoint at or
+ * before it, so users can always roll back — even past interrupted
+ * turns that didn't produce a checkpoint.
+ *
+ * Index 0 maps to `null` (clear-all) when any checkpoints exist.
+ */
+export function buildRollbackMap(
+  messages: ChatMessage[],
+  checkpoints: ConversationCheckpoint[],
+): Map<number, ConversationCheckpoint | null> {
+  const msgIdToCp = new Map(checkpoints.map((cp) => [cp.message_id, cp]));
+  const result = new Map<number, ConversationCheckpoint | null>();
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i].role === "User") {
+      if (i === 0 && checkpoints.length > 0) {
+        result.set(0, null);
+      } else if (i > 0) {
+        let cp: ConversationCheckpoint | undefined;
+        for (let j = i - 1; j >= 0; j--) {
+          cp = msgIdToCp.get(messages[j].id);
+          if (cp) break;
+        }
+        if (cp) result.set(i, cp);
+      }
+    }
+  }
+  return result;
 }

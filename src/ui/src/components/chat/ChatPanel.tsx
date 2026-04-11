@@ -31,7 +31,7 @@ import { ChatToolbar } from "./ChatToolbar";
 import { WorkspaceActions } from "./WorkspaceActions";
 import { HeaderMenu } from "./HeaderMenu";
 import { SlashCommandPicker, filterSlashCommands } from "./SlashCommandPicker";
-import { checkpointHasFileChanges } from "../../utils/checkpointUtils";
+import { checkpointHasFileChanges, buildRollbackMap } from "../../utils/checkpointUtils";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { debugChat } from "../../utils/chatDebug";
 import styles from "./ChatPanel.module.css";
@@ -938,25 +938,10 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
   // Checks the message immediately before this user message (assistant or
   // user for tool-only turns) for a matching checkpoint. Index 0 always
   // maps to null (clear-all) when any checkpoints exist.
-  const rollbackCheckpointByIdx = useMemo(() => {
-    const msgIdToCp = new Map(checkpoints.map((cp) => [cp.message_id, cp]));
-    const result = new Map<number, typeof checkpoints[number] | null>();
-    for (let i = 0; i < messages.length; i++) {
-      if (messages[i].role === "User") {
-        if (i === 0 && checkpoints.length > 0) {
-          result.set(0, null);
-        } else if (i > 0) {
-          // Check the immediately preceding message for a matching checkpoint.
-          // Do NOT scan backward — if the preceding turn has no checkpoint
-          // (e.g. agent stopped before Result), suppress rollback for this gap.
-          const prev = messages[i - 1];
-          const cp = msgIdToCp.get(prev.id);
-          if (cp) result.set(i, cp);
-        }
-      }
-    }
-    return result;
-  }, [messages, checkpoints]);
+  const rollbackCheckpointByIdx = useMemo(
+    () => buildRollbackMap(messages, checkpoints),
+    [messages, checkpoints],
+  );
 
   useEffect(() => {
     debugChat("MessagesWithTurns", "layout", {
