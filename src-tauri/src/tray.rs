@@ -177,21 +177,16 @@ pub fn notify_attention(app: &AppHandle, workspace_id: &str) {
     // Run user-configured notification command (if set).
     if let Ok(Some(cmd)) = db.get_app_setting("notification_command")
         && !cmd.is_empty()
+        && let Some(mut command) = crate::commands::settings::build_notification_command(
+            &cmd,
+            title,
+            &body,
+            workspace_id,
+            &ws_name,
+        )
     {
-        let title = title.to_string();
-        let body = body.clone();
-        let ws_id = workspace_id.to_string();
-        let ws_name = ws_name.clone();
         std::thread::spawn(move || {
-            if let Ok(mut child) = std::process::Command::new("sh")
-                .arg("-c")
-                .arg(&cmd)
-                .env("CLAUDETTE_NOTIFICATION_TITLE", &title)
-                .env("CLAUDETTE_NOTIFICATION_BODY", &body)
-                .env("CLAUDETTE_WORKSPACE_ID", &ws_id)
-                .env("CLAUDETTE_WORKSPACE_NAME", &ws_name)
-                .spawn()
-            {
+            if let Ok(mut child) = command.spawn() {
                 let _ = child.wait();
             }
         });

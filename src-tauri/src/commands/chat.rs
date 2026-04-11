@@ -297,26 +297,32 @@ pub async fn send_chat_message(
                     if sound != "None" {
                         crate::commands::settings::play_notification_sound(sound);
                     }
-                    // Run notification command if configured.
+                    // Run notification command if configured — uses the same
+                    // tested helper as the settings test button and tray path.
                     if let Ok(Some(cmd)) = db.get_app_setting("notification_command")
                         && !cmd.is_empty()
                     {
-                        let ws_name_for_cmd = ws_id.clone();
-                        std::thread::spawn(move || {
-                            if let Ok(mut child) = std::process::Command::new("sh")
-                                .arg("-c")
-                                .arg(&cmd)
-                                .env("CLAUDETTE_NOTIFICATION_TITLE", "Agent Finished")
-                                .env(
-                                    "CLAUDETTE_NOTIFICATION_BODY",
-                                    format!("{ws_name_for_cmd} has completed"),
-                                )
-                                .env("CLAUDETTE_WORKSPACE_ID", &ws_name_for_cmd)
-                                .spawn()
-                            {
-                                let _ = child.wait();
-                            }
-                        });
+                        let ws_name = db
+                            .list_workspaces()
+                            .ok()
+                            .and_then(|wss| wss.into_iter().find(|w| w.id == ws_id).map(|w| w.name))
+                            .unwrap_or_else(|| ws_id.clone());
+                        let body = format!("{ws_name} has completed");
+                        if let Some(mut command) =
+                            crate::commands::settings::build_notification_command(
+                                &cmd,
+                                "Agent Finished",
+                                &body,
+                                &ws_id,
+                                &ws_name,
+                            )
+                        {
+                            std::thread::spawn(move || {
+                                if let Ok(mut child) = command.spawn() {
+                                    let _ = child.wait();
+                                }
+                            });
+                        }
                     }
                 }
 

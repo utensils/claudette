@@ -139,7 +139,7 @@ pub fn play_notification_sound(sound: String) {
 
 /// Build a Command for the notification shell command with env vars set.
 /// Returns None if the command is empty.
-fn build_notification_command(
+pub(crate) fn build_notification_command(
     cmd: &str,
     title: &str,
     body: &str,
