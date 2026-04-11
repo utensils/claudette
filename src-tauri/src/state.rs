@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
+use parking_lot::Mutex as ParkingMutex;
 use tokio::sync::RwLock;
 
 use crate::remote::DiscoveredServer;
@@ -26,6 +27,14 @@ pub struct PtyHandle {
     /// Master side — kept alive for resize operations.
     pub master: Mutex<Box<dyn portable_pty::MasterPty + Send>>,
     pub child: Mutex<Box<dyn portable_pty::Child + Send>>,
+
+    /// OSC 133 state tracking (kept for potential future use, e.g., PTY status queries)
+    #[allow(dead_code)]
+    pub current_command: Arc<ParkingMutex<Option<String>>>,
+    #[allow(dead_code)]
+    pub command_running: Arc<ParkingMutex<bool>>,
+    #[allow(dead_code)]
+    pub last_exit_code: Arc<ParkingMutex<Option<i32>>>,
 }
 
 /// State of the embedded claudette-server subprocess.

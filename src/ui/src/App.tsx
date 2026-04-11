@@ -1,8 +1,10 @@
 import { useEffect } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "./stores/useAppStore";
 import { loadInitialData, getAppSetting, listRemoteConnections, listDiscoveredServers, getLocalServerStatus } from "./services/tauri";
 import { applyTheme, loadAllThemes, findTheme } from "./utils/theme";
 import { AppLayout } from "./components/layout/AppLayout";
+import type { CommandEvent } from "./types";
 import "./styles/theme.css";
 
 function App() {
@@ -18,6 +20,8 @@ function App() {
   const setLocalServerRunning = useAppStore((s) => s.setLocalServerRunning);
   const setLocalServerConnectionString = useAppStore((s) => s.setLocalServerConnectionString);
   const setCurrentThemeId = useAppStore((s) => s.setCurrentThemeId);
+  const setWorkspaceTerminalCommand = useAppStore((s) => s.setWorkspaceTerminalCommand);
+  const terminalTabs = useAppStore((s) => s.terminalTabs);
 
   useEffect(() => {
     loadInitialData().then((data) => {
@@ -77,8 +81,58 @@ function App() {
       })
       .catch((err) => console.error("Failed to load local server status:", err));
 
+    // Listen for terminal command events
+    const setupCommandListeners = async () => {
+      const unlistenCommandDetected = await listen<CommandEvent>("pty-command-detected", (event) => {
+        const { pty_id, command } = event.payload;
+
+        // Find the workspace that owns this PTY
+        for (const [wsId, tabs] of Object.entries(terminalTabs)) {
+          const tab = tabs.find((t) => t.pty_id === pty_id);
+          if (tab) {
+            setWorkspaceTerminalCommand(wsId, {
+              command: command || null,
+              isRunning: true,
+              exitCode: null,
+            });
+            break;
+          }
+        }
+      });
+
+      const unlistenCommandStopped = await listen<CommandEvent>("pty-command-stopped", (event) => {
+        const { pty_id, command, exit_code } = event.payload;
+
+        // Find the workspace that owns this PTY
+        for (const [wsId, tabs] of Object.entries(terminalTabs)) {
+          const tab = tabs.find((t) => t.pty_id === pty_id);
+          if (tab) {
+            setWorkspaceTerminalCommand(wsId, {
+              command: command || null,
+              isRunning: false,
+              exitCode: exit_code !== null && exit_code !== undefined ? exit_code : null,
+            });
+            break;
+          }
+        }
+      });
+
+      return () => {
+        unlistenCommandDetected();
+        unlistenCommandStopped();
+      };
+    };
+
+    let unlistenCommandEvents: (() => void) | null = null;
+    setupCommandListeners().then((unlisten) => {
+      unlistenCommandEvents = unlisten;
+    });
+
     return () => {
       window.clearInterval(discoveredServersPollId);
+      if (unlistenCommandEvents) {
+        unlistenCommandEvents();
+      }
     };
   }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId]);
 

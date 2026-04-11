@@ -14,7 +14,12 @@ export type {
   DiffLine,
   DiffLineType,
 } from "./diff";
-export type { TerminalTab } from "./terminal";
+export type {
+  TerminalTab,
+  WorkspaceCommandState,
+  CommandEvent,
+  SetupResult,
+} from "./terminal";
 export type {
   AgentStreamPayload,
   AgentEvent,

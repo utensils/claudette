@@ -3,6 +3,7 @@
 
 mod commands;
 mod mdns;
+mod osc133;
 mod pty;
 mod remote;
 mod state;
@@ -118,10 +119,15 @@ fn main() {
             pty::write_pty,
             pty::resize_pty,
             pty::close_pty,
+            pty::detect_shell,
             // Settings
             commands::settings::get_app_setting,
             commands::settings::set_app_setting,
             commands::settings::list_user_themes,
+            // Shell Integration
+            commands::shell::setup_shell_integration,
+            commands::shell::apply_shell_integration,
+            commands::shell::open_in_editor,
             // Remote
             commands::remote::list_remote_connections,
             commands::remote::pair_with_server,

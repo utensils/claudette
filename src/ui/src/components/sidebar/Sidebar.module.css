@@ -271,6 +271,56 @@
   font-family: var(--font-mono);
 }
 
+/* Terminal command display */
+.terminalCommand {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 2px;
+}
+
+.runningIcon {
+  color: var(--status-running);
+  animation: spin 2s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.successIcon {
+  color: var(--status-running);
+  flex-shrink: 0;
+}
+
+.errorIcon {
+  color: var(--status-stopped);
+  flex-shrink: 0;
+}
+
+.commandIcon {
+  opacity: 0.7;
+  flex-shrink: 0;
+}
+
+.commandText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .footer {
   display: flex;
   align-items: center;

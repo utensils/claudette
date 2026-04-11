@@ -45,6 +45,7 @@ export function Sidebar() {
   const didDragRef = useRef(false);
   const DRAG_THRESHOLD = 5; // px before drag activates
   const clearUnreadCompletion = useAppStore((s) => s.clearUnreadCompletion);
+  const workspaceTerminalCommands = useAppStore((s) => s.workspaceTerminalCommands);
 
   const creatingRef = useRef(false);
 
@@ -349,6 +350,32 @@ export function Sidebar() {
                         {hasUnread && <span className={styles.notificationBadge}>●</span>}
                       </span>
                       <span className={styles.wsBranch}>{ws.branch_name}</span>
+                      {(() => {
+                        const commandState = workspaceTerminalCommands[ws.id];
+                        if (!commandState?.command) return null;
+
+                        const truncateCommand = (cmd: string, maxLen: number) => {
+                          if (cmd.length <= maxLen) return cmd;
+                          return cmd.slice(0, maxLen - 3) + "...";
+                        };
+
+                        return (
+                          <div className={styles.terminalCommand}>
+                            {commandState.isRunning ? (
+                              <span className={styles.runningIcon} title="Running">⚙️</span>
+                            ) : commandState.exitCode === 0 ? (
+                              <span className={styles.successIcon} title="Exited successfully">✓</span>
+                            ) : commandState.exitCode !== null ? (
+                              <span className={styles.errorIcon} title={`Exit code: ${commandState.exitCode}`}>✗</span>
+                            ) : (
+                              <span className={styles.commandIcon}>▸</span>
+                            )}
+                            <span className={styles.commandText} title={commandState.command}>
+                              {truncateCommand(commandState.command, 40)}
+                            </span>
+                          </div>
+                        );
+                      })()}
                     </div>
                     <div className={styles.wsActions}>
                       {ws.status === "Active" ? (

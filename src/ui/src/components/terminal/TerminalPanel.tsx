@@ -41,6 +41,7 @@ export function TerminalPanel() {
   const setActiveTerminalTab = useAppStore((s) => s.setActiveTerminalTab);
   const toggleTerminalPanel = useAppStore((s) => s.toggleTerminalPanel);
   const terminalFontSize = useAppStore((s) => s.terminalFontSize);
+  const updateTerminalTabPtyId = useAppStore((s) => s.updateTerminalTabPtyId);
 
   const autoCreatedRef = useRef<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -145,6 +146,9 @@ export function TerminalPanel() {
           return;
         }
         inst.ptyId = ptyId;
+
+        // Store pty_id on the tab so we can map command events back to workspaces
+        updateTerminalTabPtyId(currentTabId, ptyId);
 
         const unlistenFn = await listen<PtyOutputPayload>(
           "pty-output",

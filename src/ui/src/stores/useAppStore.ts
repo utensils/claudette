@@ -9,6 +9,7 @@ import type {
   FileDiff,
   DiffViewMode,
   TerminalTab,
+  WorkspaceCommandState,
   RemoteConnectionInfo,
   DiscoveredServer,
   ConversationCheckpoint,
@@ -166,11 +167,17 @@ interface AppState {
   terminalTabs: Record<string, TerminalTab[]>;
   activeTerminalTabId: number | null;
   terminalPanelVisible: boolean;
+  workspaceTerminalCommands: Record<string, WorkspaceCommandState>;
   setTerminalTabs: (wsId: string, tabs: TerminalTab[]) => void;
   addTerminalTab: (wsId: string, tab: TerminalTab) => void;
   removeTerminalTab: (wsId: string, tabId: number) => void;
   setActiveTerminalTab: (id: number | null) => void;
   toggleTerminalPanel: () => void;
+  setWorkspaceTerminalCommand: (
+    wsId: string,
+    state: WorkspaceCommandState
+  ) => void;
+  updateTerminalTabPtyId: (tabId: number, ptyId: number) => void;
 
   // -- UI --
   metaKeyHeld: boolean;
@@ -627,6 +634,7 @@ export const useAppStore = create<AppState>((set) => ({
   terminalTabs: {},
   activeTerminalTabId: null,
   terminalPanelVisible: false,
+  workspaceTerminalCommands: {},
   setTerminalTabs: (wsId, tabs) =>
     set((s) => ({
       terminalTabs: { ...s.terminalTabs, [wsId]: tabs },
@@ -654,6 +662,23 @@ export const useAppStore = create<AppState>((set) => ({
   setActiveTerminalTab: (id) => set({ activeTerminalTabId: id }),
   toggleTerminalPanel: () =>
     set((s) => ({ terminalPanelVisible: !s.terminalPanelVisible })),
+  setWorkspaceTerminalCommand: (wsId, state) =>
+    set((s) => ({
+      workspaceTerminalCommands: {
+        ...s.workspaceTerminalCommands,
+        [wsId]: state,
+      },
+    })),
+  updateTerminalTabPtyId: (tabId, ptyId) =>
+    set((s) => {
+      const newTabs: Record<string, TerminalTab[]> = {};
+      for (const [wsId, tabs] of Object.entries(s.terminalTabs)) {
+        newTabs[wsId] = tabs.map((tab) =>
+          tab.id === tabId ? { ...tab, pty_id: ptyId } : tab
+        );
+      }
+      return { terminalTabs: newTabs };
+    }),
 
   // -- UI --
   metaKeyHeld: false,
