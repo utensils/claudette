@@ -97,9 +97,11 @@ export function useAgentStream() {
         const store = useAppStore.getState();
         const isAttention = !!store.agentQuestions[wsId] || !!store.planApprovals[wsId];
         if (wsId !== selectedWorkspaceId && !isAttention) {
-          getAppSetting("notification_sound").then((sound) => {
-            if (sound && sound !== "None") {
-              playNotificationSound(sound).catch(() => {});
+          getAppSetting("notification_sound").then(async (sound) => {
+            // Fallback to legacy audio_notifications key for upgrades.
+            const effective = sound ?? (await getAppSetting("audio_notifications") === "true" ? "Default" : "None");
+            if (effective && effective !== "None") {
+              playNotificationSound(effective).catch(() => {});
             }
           }).catch(() => {});
 

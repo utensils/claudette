@@ -33,8 +33,15 @@ export function AppSettingsModal() {
       setTrayEnabled(val !== "false");
     });
     listNotificationSounds().then(setAvailableSounds);
-    getAppSetting("notification_sound").then((val) => {
-      if (val) setNotificationSound(val);
+    getAppSetting("notification_sound").then(async (val) => {
+      if (val) {
+        setNotificationSound(val);
+      } else {
+        // Migrate from legacy audio_notifications boolean.
+        const legacy = await getAppSetting("audio_notifications");
+        if (legacy === "true") setNotificationSound("Default");
+        else setNotificationSound("None");
+      }
     });
     getAppSetting("notification_command").then((val) => {
       if (val) setNotificationCommand(val);

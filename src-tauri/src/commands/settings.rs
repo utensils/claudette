@@ -7,6 +7,13 @@ use claudette::db::Database;
 
 use crate::state::AppState;
 
+/// Spawn a short-lived process and reap it in a background thread to prevent zombies.
+fn spawn_and_reap(mut child: std::process::Child) {
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct ThemeDefinition {
     pub id: String,
@@ -46,11 +53,11 @@ pub async fn set_app_setting(
     if key == "tray_enabled" {
         if value == "true" {
             if let Err(e) = crate::tray::setup_tray(&app) {
-                // Revert the setting so the UI doesn't show an enabled tray
-                // that never actually appeared (e.g., missing appindicator on Linux).
                 let _ = db.set_app_setting("tray_enabled", "false");
                 return Err(format!("Failed to enable tray: {e}"));
             }
+            // Immediately sync icon/tooltip to current agent state.
+            crate::tray::rebuild_tray(&app);
         } else {
             crate::tray::destroy_tray(&app);
         }
@@ -95,7 +102,9 @@ pub fn play_notification_sound(sound: String) {
         } else {
             format!("/System/Library/Sounds/{sound}.aiff")
         };
-        let _ = std::process::Command::new("afplay").arg(&path).spawn();
+        if let Ok(child) = std::process::Command::new("afplay").arg(&path).spawn() {
+            spawn_and_reap(child);
+        }
     }
     #[cfg(target_os = "linux")]
     {
@@ -107,19 +116,20 @@ pub fn play_notification_sound(sound: String) {
         } else {
             sound.to_lowercase()
         };
-        // canberra-gtk-play is widely available on Linux desktops.
-        let _ = std::process::Command::new("canberra-gtk-play")
+        if let Ok(child) = std::process::Command::new("canberra-gtk-play")
             .arg("-i")
             .arg(&sound_name)
             .spawn()
             .or_else(|_| {
-                // Fallback to paplay with the freedesktop theme sound.
                 std::process::Command::new("paplay")
                     .arg(format!(
                         "/usr/share/sounds/freedesktop/stereo/{sound_name}.oga"
                     ))
                     .spawn()
-            });
+            })
+        {
+            spawn_and_reap(child);
+        }
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
@@ -139,15 +149,16 @@ pub fn run_notification_command(
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     if let Ok(Some(cmd)) = db.get_app_setting("notification_command")
         && !cmd.is_empty()
-    {
-        let _ = std::process::Command::new("sh")
+        && let Ok(child) = std::process::Command::new("sh")
             .arg("-c")
             .arg(&cmd)
             .env("CLAUDETTE_NOTIFICATION_TITLE", &title)
             .env("CLAUDETTE_NOTIFICATION_BODY", &body)
             .env("CLAUDETTE_WORKSPACE_ID", &workspace_id)
             .env("CLAUDETTE_WORKSPACE_NAME", &workspace_name)
-            .spawn();
+            .spawn()
+    {
+        spawn_and_reap(child);
     }
     Ok(())
 }

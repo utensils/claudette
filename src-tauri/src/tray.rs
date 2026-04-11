@@ -183,14 +183,17 @@ pub fn notify_attention(app: &AppHandle, workspace_id: &str) {
         let ws_id = workspace_id.to_string();
         let ws_name = ws_name.clone();
         std::thread::spawn(move || {
-            let _ = std::process::Command::new("sh")
+            if let Ok(mut child) = std::process::Command::new("sh")
                 .arg("-c")
                 .arg(&cmd)
                 .env("CLAUDETTE_NOTIFICATION_TITLE", &title)
                 .env("CLAUDETTE_NOTIFICATION_BODY", &body)
                 .env("CLAUDETTE_WORKSPACE_ID", &ws_id)
                 .env("CLAUDETTE_WORKSPACE_NAME", &ws_name)
-                .spawn();
+                .spawn()
+            {
+                let _ = child.wait();
+            }
         });
     }
 }
