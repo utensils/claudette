@@ -578,8 +578,16 @@ async fn try_auto_rename(
             Ok(()) => {
                 // DB updated — now rename the git branch.
                 if let Err(e) = git::rename_branch(repo_path, old_branch, &new_branch).await {
+                    let msg = e.to_string();
                     eprintln!("[rename] Git branch rename failed: {e} — rolling back DB");
                     let _ = db.rename_workspace(ws_id, old_name, old_branch);
+
+                    // If the target branch already exists, fall back to the next
+                    // candidate just like we do for DB unique constraint collisions.
+                    if msg.contains("already exists") {
+                        eprintln!("[rename] Branch {new_branch:?} collides, trying next");
+                        continue;
+                    }
                     return;
                 }
 

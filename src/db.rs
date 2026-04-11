@@ -493,10 +493,13 @@ impl Database {
         new_name: &str,
         new_branch_name: &str,
     ) -> Result<(), rusqlite::Error> {
-        self.conn.execute(
+        let rows_affected = self.conn.execute(
             "UPDATE workspaces SET name = ?1, branch_name = ?2 WHERE id = ?3",
             params![new_name, new_branch_name, id],
         )?;
+        if rows_affected != 1 {
+            return Err(rusqlite::Error::StatementChangedRows(rows_affected));
+        }
         Ok(())
     }
 
@@ -1169,6 +1172,16 @@ mod tests {
             .unwrap();
         // Renaming w1 to "name-b" should fail (unique constraint).
         let result = db.rename_workspace("w1", "name-b", "claudette/name-b");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_rename_workspace_nonexistent_id() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        // Renaming a workspace that doesn't exist should fail.
+        let result = db.rename_workspace("no-such-id", "new-name", "claudette/new-name");
         assert!(result.is_err());
     }
 

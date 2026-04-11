@@ -442,7 +442,7 @@ pub fn sanitize_branch_name(raw: &str, max_len: usize) -> String {
     if trimmed.len() <= max_len {
         return trimmed.to_string();
     }
-    // Truncate at max_len but don't cut mid-word if there's a hyphen nearby.
+    // Truncate at `max_len` and drop any trailing hyphens introduced by the cut.
     let truncated = &trimmed[..max_len];
     truncated.trim_end_matches('-').to_string()
 }
@@ -454,6 +454,7 @@ pub async fn generate_branch_name(prompt_text: &str) -> Result<String, String> {
     let truncated: String = prompt_text.chars().take(200).collect();
 
     let mut cmd = Command::new("claude");
+    cmd.stdin(std::process::Stdio::null());
     cmd.args([
         "--print",
         "--output-format",
