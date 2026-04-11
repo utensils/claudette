@@ -176,7 +176,7 @@ Apps with `"needs_terminal": true` cannot launch standalone — they need a term
    - `gnome-terminal --working-directory {worktree_path} -- nvim .`
    - `konsole --workdir {worktree_path} -e nvim .`
    - `kitty --directory {worktree_path} nvim .`
-3. Only if a terminal provides no argv-safe alternative, fall back to the robust escaping approach already used by `open_workspace_in_terminal` in `src-tauri/src/commands/workspace.rs` (which escapes single quotes and backslashes before interpolation). Never build ad hoc commands like `cd '{path}' && {editor} .`.
+3. Only if a terminal provides no argv-safe alternative, fall back to the existing escaping/quoting approach already used by `open_workspace_in_terminal` in `src-tauri/src/commands/workspace.rs`. Never build ad hoc commands like `cd '{path}' && {editor} .`.
 
 All paths are passed as separate `tokio::process::Command` arguments — not interpolated into shell strings — so no shell quoting or escaping is needed for the common case. This eliminates the shell injection risk.
 
@@ -290,13 +290,13 @@ pub async fn detect_installed_apps(
     .await
     .map_err(|e| e.to_string())?;
     // Cache in AppState for TUI editor terminal wrapping
-    *state.detected_apps.lock().unwrap() = apps.clone();
+    *state.detected_apps.write().await = apps.clone();
     Ok(apps)
 }
 ```
 
 `detect_from_config` implementation:
-1. Parse `$PATH` into a `Vec<PathBuf>` (split on `:`), augment with well-known prefixes, deduplicate
+1. Parse `$PATH` into a `Vec<PathBuf>` using `std::env::var_os("PATH")` with `std::env::split_paths` (handles empty segments and OS-specific separators), augment with well-known prefixes, deduplicate
 2. For each `AppEntry` in the config:
    - Check each `bin_names` entry against each PATH dir via `std::fs::metadata`
    - On Linux: verify executable bit with `PermissionsExt` (`mode & 0o111 != 0`)
@@ -329,7 +329,7 @@ pub async fn open_workspace_in_app(
 ```rust
 pub struct AppState {
     // ... existing fields ...
-    pub detected_apps: Mutex<Vec<DetectedApp>>,
+    pub detected_apps: RwLock<Vec<DetectedApp>>,
 }
 ```
 
@@ -469,7 +469,7 @@ const CATEGORY_ORDER = ["editor", "terminal", "ide"];
 | `src-tauri/src/commands/apps.rs` | **New** — config loading, detection logic, open command |
 | `src-tauri/src/commands/mod.rs` | Add `pub mod apps;` |
 | `src-tauri/src/main.rs` | Register `detect_installed_apps`, `open_workspace_in_app` |
-| `src-tauri/src/state.rs` | Add `detected_apps: Mutex<Vec<DetectedApp>>` to `AppState` |
+| `src-tauri/src/state.rs` | Add `detected_apps: RwLock<Vec<DetectedApp>>` to `AppState` |
 | `src/ui/src/types/apps.ts` | **New** — `DetectedApp`, `AppCategory` types |
 | `src/ui/src/types/index.ts` | Re-export apps types |
 | `src/ui/src/services/tauri.ts` | Add `detectInstalledApps`, `openWorkspaceInApp` |
