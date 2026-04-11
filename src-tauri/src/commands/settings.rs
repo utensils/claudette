@@ -56,8 +56,6 @@ pub async fn set_app_setting(
         }
     }
 
-
-
     Ok(())
 }
 
