@@ -168,7 +168,7 @@ pub async fn send_chat_message(
     drop(agents);
 
     // Capture rename context before the bridge spawn.
-    let rename_repo_path = repo.as_ref().map(|r| r.path.clone());
+    let has_repo = repo.is_some();
     let rename_old_branch = ws.branch_name.clone();
     let rename_old_name = ws.name.clone();
     let rename_prompt = content.clone();
@@ -181,9 +181,8 @@ pub async fn send_chat_message(
     tokio::spawn(async move {
         // On the first turn, spawn a background task to auto-rename the branch
         // using Haiku. This runs concurrently and does not block the event loop.
-        if !is_resume && let Some(ref repo_path) = rename_repo_path {
+        if !is_resume && has_repo {
             let ws_id2 = ws_id.clone();
-            let repo_path2 = repo_path.clone();
             let wt_path2 = wt_path.clone();
             let old_branch2 = rename_old_branch.clone();
             let old_name2 = rename_old_name.clone();
@@ -193,7 +192,6 @@ pub async fn send_chat_message(
             tokio::spawn(async move {
                 try_auto_rename(
                     &ws_id2,
-                    &repo_path2,
                     &wt_path2,
                     &old_name2,
                     &old_branch2,
@@ -545,10 +543,8 @@ pub async fn load_completed_turns(
 
 /// Background task: generate a descriptive branch name via Haiku and rename
 /// the workspace's branch + DB record. All failures are non-fatal.
-#[allow(clippy::too_many_arguments)]
 async fn try_auto_rename(
     ws_id: &str,
-    repo_path: &str,
     worktree_path: &str,
     old_name: &str,
     old_branch: &str,
@@ -581,7 +577,7 @@ async fn try_auto_rename(
         match db.rename_workspace(ws_id, candidate, &new_branch) {
             Ok(()) => {
                 // DB updated — now rename the git branch.
-                if let Err(e) = git::rename_branch(repo_path, old_branch, &new_branch).await {
+                if let Err(e) = git::rename_branch(worktree_path, old_branch, &new_branch).await {
                     let msg = e.to_string();
                     eprintln!("[rename] Git branch rename failed: {e} — rolling back DB");
                     let _ = db.rename_workspace(ws_id, old_name, old_branch);
