@@ -446,7 +446,10 @@ async fn handle_send_chat_message(
 
                 if let Some(t) = event_thinking {
                     pending_thinking = Some(match pending_thinking.take() {
-                        Some(mut existing) => { existing.push_str(&t); existing }
+                        Some(mut existing) => {
+                            existing.push_str(&t);
+                            existing
+                        }
                         None => t,
                     });
                 }

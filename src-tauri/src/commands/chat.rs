@@ -280,7 +280,10 @@ pub async fn send_chat_message(
                 // Accumulate thinking from this event.
                 if let Some(t) = event_thinking {
                     pending_thinking = Some(match pending_thinking.take() {
-                        Some(mut existing) => { existing.push_str(&t); existing }
+                        Some(mut existing) => {
+                            existing.push_str(&t);
+                            existing
+                        }
                         None => t,
                     });
                 }
