@@ -294,9 +294,7 @@
                 # in buildInputs. We hand rustc the full list of -L paths
                 # so rust-lld can resolve them during the final link step.
                 name = "RUSTFLAGS";
-                value = lib.concatStringsSep " " (
-                  map (p: "-L${lib.getLib p}/lib") linuxBuildInputs
-                );
+                value = lib.concatStringsSep " " (map (p: "-L${lib.getLib p}/lib") linuxBuildInputs);
               }
               {
                 # WebKitGTK's DMA-BUF renderer crashes the Wayland session on

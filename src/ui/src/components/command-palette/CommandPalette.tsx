@@ -95,7 +95,6 @@ export function CommandPalette() {
     applyTheme(theme);
     setCurrentThemeId(id);
     setAppSetting("theme", id).catch(console.error);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [themes, setCurrentThemeId]);
 
   const handleCreateWorkspace = useCallback(async (repoId: string) => {
