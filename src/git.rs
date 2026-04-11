@@ -459,6 +459,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_rename_branch_checked_out_in_worktree() {
+        let dir = setup_temp_repo().await;
+        let repo_path = dir.path().to_str().unwrap();
+
+        // Create a worktree which checks out the branch.
+        let wt_dir = tempfile::tempdir().unwrap();
+        let wt_path = wt_dir.path().to_str().unwrap();
+        create_worktree(repo_path, "claudette/feature", wt_path)
+            .await
+            .unwrap();
+
+        // Renaming from the worktree (where the branch is checked out) should work.
+        rename_branch(wt_path, "claudette/feature", "claudette/renamed")
+            .await
+            .unwrap();
+
+        let branches = list_branches(repo_path).await.unwrap();
+        assert!(!branches.contains(&"claudette/feature".to_string()));
+        assert!(branches.contains(&"claudette/renamed".to_string()));
+
+        // Clean up worktree before temp dirs are dropped.
+        remove_worktree(repo_path, wt_path, true).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn test_rename_branch_conflict() {
         let dir = setup_temp_repo().await;
         let path = dir.path().to_str().unwrap();
