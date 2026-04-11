@@ -63,6 +63,84 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         .manage(app_state)
         .manage(remote_manager)
+        // Custom app menu: replace the default Quit item (which on macOS calls
+        // NSApp.terminate() immediately) with a custom one we can intercept
+        // to confirm quit when agents are running.
+        .menu(|app| {
+            use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+            let app_menu = Submenu::with_items(
+                app,
+                "Claudette",
+                true,
+                &[
+                    &PredefinedMenuItem::about(app, None, None)?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::services(app, None)?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::hide(app, None)?,
+                    &PredefinedMenuItem::hide_others(app, None)?,
+                    &PredefinedMenuItem::show_all(app, None)?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &MenuItem::with_id(app, "quit-app", "Quit Claudette", true, Some("CmdOrCtrl+Q"))?,
+                ],
+            )?;
+            let edit_menu = Submenu::with_items(
+                app,
+                "Edit",
+                true,
+                &[
+                    &PredefinedMenuItem::undo(app, None)?,
+                    &PredefinedMenuItem::redo(app, None)?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::cut(app, None)?,
+                    &PredefinedMenuItem::copy(app, None)?,
+                    &PredefinedMenuItem::paste(app, None)?,
+                    &PredefinedMenuItem::select_all(app, None)?,
+                ],
+            )?;
+            let window_menu = Submenu::with_items(
+                app,
+                "Window",
+                true,
+                &[
+                    &PredefinedMenuItem::minimize(app, None)?,
+                    &PredefinedMenuItem::maximize(app, None)?,
+                    &PredefinedMenuItem::close_window(app, None)?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::fullscreen(app, None)?,
+                ],
+            )?;
+            Menu::with_items(app, &[&app_menu, &edit_menu, &window_menu])
+        })
+        .on_menu_event(|app, event| {
+            if event.id().as_ref() == "quit-app" {
+                let state = app.state::<state::AppState>();
+                let running = state
+                    .agents
+                    .try_read()
+                    .is_ok_and(|a| a.values().any(|s| s.active_pid.is_some()));
+                if running {
+                    let handle = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+                        let confirmed = handle
+                            .dialog()
+                            .message("Agents are still running. Quit anyway?")
+                            .title("Quit Claudette")
+                            .buttons(MessageDialogButtons::OkCancelCustom(
+                                "Quit".into(),
+                                "Cancel".into(),
+                            ))
+                            .blocking_show();
+                        if confirmed {
+                            handle.exit(0);
+                        }
+                    });
+                } else {
+                    app.exit(0);
+                }
+            }
+        })
         .setup(move |app| {
             // Start mDNS browser to discover nearby claudette-server instances.
             if let Err(e) = mdns::start_mdns_browser(app.handle(), saved_fingerprints) {
@@ -185,45 +263,15 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error while building Claudette")
         .run(|app, event| {
-            match event {
-                // Show the window when the dock icon is clicked (macOS reopen).
-                tauri::RunEvent::Reopen { .. } => {
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.unminimize();
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
-                    // Navigate to session needing attention, if any.
-                    tray::navigate_to_attention(app);
+            // Show the window when the dock icon is clicked (macOS reopen).
+            if let tauri::RunEvent::Reopen { .. } = event {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.unminimize();
+                    let _ = window.show();
+                    let _ = window.set_focus();
                 }
-                // Guard against quitting while agents are running.
-                tauri::RunEvent::ExitRequested { ref api, .. } => {
-                    let state = app.state::<state::AppState>();
-                    let running = state
-                        .agents
-                        .try_read()
-                        .is_ok_and(|a| a.values().any(|s| s.active_pid.is_some()));
-                    if running {
-                        api.prevent_exit();
-                        let handle = app.clone();
-                        tauri::async_runtime::spawn(async move {
-                            use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
-                            let confirmed = handle
-                                .dialog()
-                                .message("Agents are still running. Quit anyway?")
-                                .title("Quit Claudette")
-                                .buttons(MessageDialogButtons::OkCancelCustom(
-                                    "Quit".into(),
-                                    "Cancel".into(),
-                                ))
-                                .blocking_show();
-                            if confirmed {
-                                handle.exit(0);
-                            }
-                        });
-                    }
-                }
-                _ => {}
+                // Navigate to session needing attention, if any.
+                tray::navigate_to_attention(app);
             }
         });
 }

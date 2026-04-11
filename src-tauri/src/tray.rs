@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
@@ -237,8 +235,9 @@ fn build_tray_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
         Err(_) => &empty,
     };
 
-    // Group active workspaces by repo ID (avoids merging repos with the same name).
-    let mut by_repo: BTreeMap<(String, String), Vec<_>> = BTreeMap::new();
+    // Group active workspaces by repo, preserving the user's repo sort order
+    // (repos are returned from DB ordered by sort_order, name).
+    let mut by_repo: Vec<(String, String, Vec<_>)> = Vec::new();
     for ws in &workspaces {
         if ws.status != WorkspaceStatus::Active {
             continue;
@@ -257,13 +256,18 @@ fn build_tray_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
             .find(|r| r.id == ws.repository_id)
             .map(|r| (r.id.clone(), r.name.clone()))
             .unwrap_or_else(|| (ws.repository_id.clone(), "Unknown".to_string()));
-        by_repo.entry((repo_name, repo_id)).or_default().push(ws);
+        // Append to existing repo group or create a new one (preserves order).
+        if let Some(group) = by_repo.iter_mut().find(|(_, id, _)| *id == repo_id) {
+            group.2.push(ws);
+        } else {
+            by_repo.push((repo_name, repo_id, vec![ws]));
+        }
     }
 
     // Build menu items.
     let mut items: Vec<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> = Vec::new();
 
-    for ((repo_name, repo_id), ws_list) in &by_repo {
+    for (repo_name, repo_id, ws_list) in &by_repo {
         // Repo name as a disabled header.
         let header = MenuItem::with_id(
             app,
