@@ -116,6 +116,7 @@
             pkgs.glib
             pkgs.openssl
             pkgs.glib-networking
+            pkgs.libayatana-appindicator
           ];
 
           commonCraneArgs = {

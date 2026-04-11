@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use claudette::db::Database;
 
@@ -29,6 +29,7 @@ pub async fn get_app_setting(
 pub async fn set_app_setting(
     key: String,
     value: String,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
@@ -39,6 +40,20 @@ pub async fn set_app_setting(
     if key == "worktree_base_dir" {
         let mut dir = state.worktree_base_dir.write().await;
         *dir = std::path::PathBuf::from(&value);
+    }
+
+    // Toggle system tray on/off.
+    if key == "tray_enabled" {
+        if value == "true" {
+            let _ = crate::tray::setup_tray(&app);
+        } else {
+            crate::tray::destroy_tray(&app);
+        }
+    }
+
+    // Rebuild tray when active-only filter changes.
+    if key == "tray_active_only" {
+        crate::tray::rebuild_tray(&app);
     }
 
     Ok(())

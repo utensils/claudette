@@ -183,6 +183,10 @@ export function resetAgentSession(workspaceId: string): Promise<void> {
   return invoke("reset_agent_session", { workspaceId });
 }
 
+export function clearAttention(workspaceId: string): Promise<void> {
+  return invoke("clear_attention", { workspaceId });
+}
+
 // -- Checkpoints --
 
 import type { ConversationCheckpoint } from "../types/checkpoint";

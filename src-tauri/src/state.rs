@@ -8,6 +8,9 @@ use tokio::sync::RwLock;
 
 use crate::remote::DiscoveredServer;
 
+/// Re-export for use in tray module without direct tauri::tray import.
+pub type TrayIcon = tauri::tray::TrayIcon;
+
 /// Per-workspace agent session state managed on the Rust side.
 pub struct AgentSessionState {
     pub session_id: String,
@@ -16,6 +19,8 @@ pub struct AgentSessionState {
     pub active_pid: Option<u32>,
     /// Cached custom instructions resolved on first turn.
     pub custom_instructions: Option<String>,
+    /// True when the agent is waiting for user input (question, plan approval, permissions).
+    pub needs_attention: bool,
 }
 
 /// Handle to an active PTY process.
@@ -71,6 +76,8 @@ pub struct AppState {
     pub discovered_servers: RwLock<Vec<DiscoveredServer>>,
     /// Embedded local claudette-server process (when "Share this machine" is active).
     pub local_server: RwLock<Option<LocalServerState>>,
+    /// System tray icon handle (None when tray is disabled).
+    pub tray_handle: Mutex<Option<TrayIcon>>,
 }
 
 impl AppState {
@@ -83,6 +90,7 @@ impl AppState {
             next_pty_id: AtomicU64::new(1),
             discovered_servers: RwLock::new(Vec::new()),
             local_server: RwLock::new(None),
+            tray_handle: Mutex::new(None),
         }
     }
 

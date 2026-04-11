@@ -8,8 +8,11 @@ mod pty;
 mod remote;
 mod state;
 mod transport;
+mod tray;
 
 use std::path::PathBuf;
+
+use tauri::Manager;
 
 use claudette::db::Database;
 
@@ -57,6 +60,7 @@ fn main() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(app_state)
         .manage(remote_manager)
         .setup(move |app| {
@@ -65,11 +69,42 @@ fn main() {
                 eprintln!("[mdns] Failed to start browser: {e}");
             }
 
+            // Set the notification app identity before any notifications are sent.
+            // mac-notification-sys uses Once — first call wins. We call early so
+            // both our direct calls and the tauri-plugin-notification share the
+            // same identity.
+            #[cfg(target_os = "macos")]
+            {
+                let bundle_id = app.config().identifier.clone();
+                let identity = if cfg!(debug_assertions) {
+                    "com.apple.Terminal".to_string()
+                } else {
+                    bundle_id
+                };
+                let _ = mac_notification_sys::set_application(&identity);
+            }
+
             // Start debug eval TCP server (dev builds only).
             #[cfg(debug_assertions)]
             commands::debug::start_debug_server(app.handle().clone());
 
+            // Set up the system tray icon (respects tray_enabled setting).
+            if let Err(e) = tray::setup_tray(app.handle()) {
+                eprintln!("[tray] Failed to setup tray: {e}");
+            }
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Minimize to tray on close when the tray is active.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let state = window.app_handle().state::<state::AppState>();
+                if let Ok(guard) = state.tray_handle.lock()
+                    && guard.is_some()
+                {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             // Data
@@ -99,6 +134,7 @@ fn main() {
             commands::chat::send_chat_message,
             commands::chat::stop_agent,
             commands::chat::reset_agent_session,
+            commands::chat::clear_attention,
             commands::chat::list_checkpoints,
             commands::chat::rollback_to_checkpoint,
             commands::chat::clear_conversation,
@@ -149,6 +185,18 @@ fn main() {
         ]);
 
     builder
-        .run(tauri::generate_context!())
-        .expect("error while running Claudette");
+        .build(tauri::generate_context!())
+        .expect("error while building Claudette")
+        .run(|app, event| {
+            // Show the window when the dock icon is clicked (macOS reopen).
+            if let tauri::RunEvent::Reopen { .. } = event {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.unminimize();
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+                // Navigate to session needing attention, if any.
+                tray::navigate_to_attention(app);
+            }
+        });
 }

@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "./stores/useAppStore";
-import { loadInitialData, getAppSetting, listRemoteConnections, listDiscoveredServers, getLocalServerStatus } from "./services/tauri";
+import { loadInitialData, getAppSetting, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, clearAttention } from "./services/tauri";
 import { applyTheme, loadAllThemes, findTheme } from "./utils/theme";
 import { AppLayout } from "./components/layout/AppLayout";
 import type { CommandEvent } from "./types";
@@ -133,6 +133,12 @@ function App() {
       }
     });
 
+    // Listen for tray workspace selection events.
+    const unlistenTray = listen<string>("tray-select-workspace", (event) => {
+      useAppStore.getState().selectWorkspace(event.payload);
+      clearAttention(event.payload).catch(() => {});
+    });
+
     return () => {
       isActive = false;
       window.clearInterval(discoveredServersPollId);
@@ -140,6 +146,7 @@ function App() {
       void unlistenCommandEventsPromise.then((unlisten) => {
         unlisten();
       });
+      unlistenTray.then((fn) => fn());
     };
   }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId]);
 

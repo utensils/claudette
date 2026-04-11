@@ -30,7 +30,8 @@
             "clipboard-manager:allow-write-text",
             "clipboard-manager:allow-read-text",
             "updater:default",
-            "process:default"
+            "process:default",
+            "notification:default"
           ]
         }
       ]

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, State};
 use tokio::process::Command as TokioCommand;
 
 use claudette::config;
@@ -34,6 +34,7 @@ pub async fn create_workspace(
     repo_id: String,
     name: String,
     skip_setup: Option<bool>,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<CreateWorkspaceResult, String> {
     // Validate workspace name: must be ASCII alphanumeric + hyphens only (branch-safe).
@@ -90,6 +91,8 @@ pub async fn create_workspace(
         )
         .await
     };
+
+    crate::tray::rebuild_tray(&app);
 
     Ok(CreateWorkspaceResult {
         workspace: ws,
@@ -272,7 +275,11 @@ pub async fn run_workspace_setup(
 }
 
 #[tauri::command]
-pub async fn archive_workspace(id: String, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn archive_workspace(
+    id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
 
     let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
@@ -291,16 +298,32 @@ pub async fn archive_workspace(id: String, state: State<'_, AppState>) -> Result
         let _ = git::remove_worktree(&repo.path, wt_path, false).await;
     }
 
+    // Stop any running agent and clear session so tray state stays consistent.
+    {
+        let mut agents = state.agents.write().await;
+        if let Some(session) = agents.remove(&id)
+            && let Some(pid) = session.active_pid
+        {
+            let _ = claudette::agent::stop_agent(pid).await;
+        }
+    }
+
     db.delete_terminal_tabs_for_workspace(&id)
         .map_err(|e| e.to_string())?;
     db.update_workspace_status(&id, &WorkspaceStatus::Archived, None)
         .map_err(|e| e.to_string())?;
 
+    crate::tray::rebuild_tray(&app);
+
     Ok(())
 }
 
 #[tauri::command]
-pub async fn restore_workspace(id: String, state: State<'_, AppState>) -> Result<String, String> {
+pub async fn restore_workspace(
+    id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
 
     let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
@@ -326,11 +349,17 @@ pub async fn restore_workspace(id: String, state: State<'_, AppState>) -> Result
     db.update_workspace_status(&id, &WorkspaceStatus::Active, Some(&actual_path))
         .map_err(|e| e.to_string())?;
 
+    crate::tray::rebuild_tray(&app);
+
     Ok(actual_path)
 }
 
 #[tauri::command]
-pub async fn delete_workspace(id: String, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn delete_workspace(
+    id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
 
     let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
@@ -345,6 +374,16 @@ pub async fn delete_workspace(id: String, state: State<'_, AppState>) -> Result<
         .find(|r| r.id == ws.repository_id)
         .ok_or("Repository not found")?;
 
+    // Stop any running agent and clear session so tray state stays consistent.
+    {
+        let mut agents = state.agents.write().await;
+        if let Some(session) = agents.remove(&id)
+            && let Some(pid) = session.active_pid
+        {
+            let _ = claudette::agent::stop_agent(pid).await;
+        }
+    }
+
     // Remove worktree if active.
     if let Some(ref wt_path) = ws.worktree_path {
         let _ = git::remove_worktree(&repo.path, wt_path, true).await;
@@ -356,6 +395,8 @@ pub async fn delete_workspace(id: String, state: State<'_, AppState>) -> Result<
 
     // Cascade deletes chat messages and terminal tabs.
     db.delete_workspace(&id).map_err(|e| e.to_string())?;
+
+    crate::tray::rebuild_tray(&app);
 
     Ok(())
 }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useAppStore } from "../../stores/useAppStore";
-import { setAppSetting } from "../../services/tauri";
+import { getAppSetting, setAppSetting } from "../../services/tauri";
 import { applyTheme, loadAllThemes, findTheme } from "../../utils/theme";
 import type { ThemeDefinition } from "../../types/theme";
 import { Modal } from "./Modal";
@@ -21,6 +21,8 @@ export function AppSettingsModal() {
   const [fontSize, setFontSize] = useState(String(terminalFontSize));
   const [selectedThemeId, setSelectedThemeId] = useState(currentThemeId);
   const [availableThemes, setAvailableThemes] = useState<ThemeDefinition[]>([]);
+  const [trayEnabled, setTrayEnabled] = useState(true);
+  const [trayActiveOnly, setTrayActiveOnly] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -28,6 +30,12 @@ export function AppSettingsModal() {
 
   useEffect(() => {
     loadAllThemes().then(setAvailableThemes);
+    getAppSetting("tray_enabled").then((val) => {
+      setTrayEnabled(val !== "false");
+    });
+    getAppSetting("tray_active_only").then((val) => {
+      setTrayActiveOnly(val === "true");
+    });
   }, []);
 
   const handleThemeChange = (id: string) => {
@@ -66,6 +74,9 @@ export function AppSettingsModal() {
       setCurrentThemeId(selectedThemeId);
 
       await setAppSetting("audio_notifications", audioNotifications ? "true" : "false");
+
+      await setAppSetting("tray_enabled", trayEnabled ? "true" : "false");
+      await setAppSetting("tray_active_only", trayActiveOnly ? "true" : "false");
 
       closeModal();
     } catch (e) {
@@ -155,6 +166,67 @@ export function AppSettingsModal() {
           />
           <span>Play sound when background agent finishes</span>
         </label>
+      </div>
+
+      <div
+        style={{
+          borderTop: "1px solid var(--divider)",
+          marginTop: 16,
+          paddingTop: 12,
+        }}
+      >
+        <div
+          className={shared.label}
+          style={{ marginBottom: 8, fontWeight: 600 }}
+        >
+          System Tray
+        </div>
+        <div className={shared.field}>
+          <label
+            className={shared.label}
+            style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+          >
+            <input
+              type="checkbox"
+              checked={trayEnabled}
+              onChange={(e) => setTrayEnabled(e.target.checked)}
+            />
+            Show in system tray / menu bar
+          </label>
+          <div className={shared.hint}>
+            Shows running agent status and allows quick workspace switching.
+            Closing the window will minimize to tray when enabled.
+          </div>
+          <div
+            style={{
+              marginTop: 8,
+              paddingLeft: 28,
+              opacity: trayEnabled ? 1 : 0.4,
+            }}
+          >
+            <label
+              className={shared.label}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                cursor: trayEnabled ? "pointer" : "default",
+                fontSize: "0.9em",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={trayActiveOnly}
+                disabled={!trayEnabled}
+                onChange={(e) => setTrayActiveOnly(e.target.checked)}
+              />
+              Only show active sessions
+            </label>
+            <div className={shared.hint} style={{ paddingLeft: 24 }}>
+              Hide idle workspaces from the tray menu
+            </div>
+          </div>
+        </div>
       </div>
 
       {error && <div className={shared.error}>{error}</div>}

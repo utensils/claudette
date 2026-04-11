@@ -1,7 +1,9 @@
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use claudette::agent::{self, AgentEvent, AgentSettings, StreamEvent};
+use claudette::agent::{
+    self, AgentEvent, AgentSettings, InnerStreamEvent, StartContentBlock, StreamEvent,
+};
 use claudette::db::Database;
 use claudette::git;
 use claudette::model::{
@@ -110,6 +112,7 @@ pub async fn send_chat_message(
                 turn_count: tc,
                 active_pid: None,
                 custom_instructions: instructions.clone(),
+                needs_attention: false,
             };
         }
 
@@ -118,6 +121,7 @@ pub async fn send_chat_message(
             turn_count: 0,
             active_pid: None,
             custom_instructions: instructions,
+            needs_attention: false,
         }
     });
 
@@ -140,6 +144,7 @@ pub async fn send_chat_message(
     let session_id = session.session_id.clone();
     let custom_instructions = session.custom_instructions.clone();
     session.turn_count += 1;
+    session.needs_attention = false;
 
     // Build agent settings from frontend params.
     let agent_settings = AgentSettings {
@@ -167,7 +172,8 @@ pub async fn send_chat_message(
     // turn_count > 0 for a session Claude never initialized.
     let _ = db.save_agent_session(&workspace_id, &session_id, session.turn_count);
 
-    session.active_pid = Some(turn_handle.pid);
+    let spawned_pid = turn_handle.pid;
+    session.active_pid = Some(spawned_pid);
     drop(agents);
 
     // Capture rename context before the bridge spawn.
@@ -175,6 +181,8 @@ pub async fn send_chat_message(
     let rename_old_branch = ws.branch_name.clone();
     let rename_old_name = ws.name.clone();
     let rename_prompt = content.clone();
+
+    crate::tray::rebuild_tray(&app);
 
     // Bridge: read from mpsc receiver, emit Tauri events.
     let ws_id = workspace_id.clone();
@@ -224,6 +232,25 @@ pub async fn send_chat_message(
                 got_init = true;
             }
 
+            // Detect tool calls that require user input (question, plan approval).
+            if let AgentEvent::Stream(StreamEvent::Stream {
+                event:
+                    InnerStreamEvent::ContentBlockStart {
+                        content_block: Some(StartContentBlock::ToolUse { name, .. }),
+                        ..
+                    },
+            }) = &event
+                && matches!(name.as_str(), "AskUserQuestion" | "ExitPlanMode")
+            {
+                let app_state = app.state::<AppState>();
+                let mut agents = app_state.agents.write().await;
+                if let Some(session) = agents.get_mut(&ws_id) {
+                    session.needs_attention = true;
+                }
+                drop(agents);
+                crate::tray::notify_attention(&app, &ws_id);
+            }
+
             if let AgentEvent::ProcessExited(_code) = &event {
                 let app_state = app.state::<AppState>();
                 let mut agents = app_state.agents.write().await;
@@ -234,10 +261,15 @@ pub async fn send_chat_message(
                     if let Ok(db) = Database::open(&db_path) {
                         let _ = db.clear_agent_session(&ws_id);
                     }
-                } else if let Some(session) = agents.get_mut(&ws_id) {
-                    // Normal exit — clear active_pid so rollback isn't blocked.
+                } else if let Some(session) = agents.get_mut(&ws_id)
+                    && session.active_pid == Some(spawned_pid)
+                {
+                    // Only clear active_pid if it still matches the process that
+                    // exited. A new turn may have already replaced it.
                     session.active_pid = None;
                 }
+                drop(agents);
+                crate::tray::rebuild_tray(&app);
             }
             // Persist assistant messages to DB on completion.
             // The CLI may fire multiple assistant events per turn: one with
@@ -379,13 +411,20 @@ pub async fn send_chat_message(
 }
 
 #[tauri::command]
-pub async fn stop_agent(workspace_id: String, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn stop_agent(
+    workspace_id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     let mut agents = state.agents.write().await;
     if let Some(session) = agents.get_mut(&workspace_id)
         && let Some(pid) = session.active_pid.take()
     {
         agent::stop_agent(pid).await?;
     }
+    drop(agents);
+
+    crate::tray::rebuild_tray(&app);
 
     // Log stop message.
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
@@ -407,15 +446,19 @@ pub async fn stop_agent(workspace_id: String, state: State<'_, AppState>) -> Res
 #[tauri::command]
 pub async fn reset_agent_session(
     workspace_id: String,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let mut agents = state.agents.write().await;
     agents.remove(&workspace_id);
+    drop(agents);
 
     // Clear persisted session so the next turn starts fresh.
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     db.clear_agent_session(&workspace_id)
         .map_err(|e| e.to_string())?;
+
+    crate::tray::rebuild_tray(&app);
     Ok(())
 }
 
@@ -660,6 +703,23 @@ async fn try_auto_rename(
     }
 
     eprintln!("[rename] All name candidates exhausted for workspace {ws_id}");
+}
+
+#[tauri::command]
+pub async fn clear_attention(
+    workspace_id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let mut agents = state.agents.write().await;
+    if let Some(session) = agents.get_mut(&workspace_id)
+        && session.needs_attention
+    {
+        session.needs_attention = false;
+        drop(agents);
+        crate::tray::rebuild_tray(&app);
+    }
+    Ok(())
 }
 
 fn now_iso() -> String {

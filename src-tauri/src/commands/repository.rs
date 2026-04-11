@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use claudette::config;
 use claudette::db::Database;
@@ -21,6 +21,7 @@ pub struct RepoConfigInfo {
 #[tauri::command]
 pub async fn add_repository(
     path: String,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Repository, String> {
     git::validate_repo(&path).await.map_err(|e| e.to_string())?;
@@ -51,6 +52,8 @@ pub async fn add_repository(
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     db.insert_repository(&repo).map_err(|e| e.to_string())?;
 
+    crate::tray::rebuild_tray(&app);
+
     Ok(repo)
 }
 
@@ -61,6 +64,7 @@ pub async fn update_repository_settings(
     icon: Option<String>,
     setup_script: Option<String>,
     custom_instructions: Option<String>,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
@@ -72,6 +76,9 @@ pub async fn update_repository_settings(
         .map_err(|e| e.to_string())?;
     db.update_repository_custom_instructions(&id, custom_instructions.as_deref())
         .map_err(|e| e.to_string())?;
+
+    crate::tray::rebuild_tray(&app);
+
     Ok(())
 }
 
@@ -94,7 +101,11 @@ pub async fn relink_repository(
 }
 
 #[tauri::command]
-pub async fn remove_repository(id: String, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn remove_repository(
+    id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
 
     // Find repo and its workspaces to clean up worktrees.
@@ -117,8 +128,19 @@ pub async fn remove_repository(id: String, state: State<'_, AppState>) -> Result
         }
     }
 
+    // Clean up in-memory agent sessions for this repo's workspaces
+    // so the tray doesn't show stale running/attention state.
+    {
+        let mut agents = state.agents.write().await;
+        for ws in &repo_workspaces {
+            agents.remove(&ws.id);
+        }
+    }
+
     // Cascade delete handles workspaces, chat messages, terminal tabs.
     db.delete_repository(&id).map_err(|e| e.to_string())?;
+
+    crate::tray::rebuild_tray(&app);
 
     Ok(())
 }
