@@ -3,6 +3,7 @@ name = "claudette-server"
 version = "0.5.3"
 edition = "2024"
 description = "Headless Claudette backend for remote access"
+license = "MIT"
 
 [[bin]]
 name = "claudette-server"

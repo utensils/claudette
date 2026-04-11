@@ -232,3 +232,7 @@ All traffic is encrypted with TLS. The local app pins the server's certificate f
 - The backend (`src/`) is a library crate consumed by the Tauri binary (`src-tauri/`).
 - See `CLAUDE.md` for detailed architecture and contribution guidelines.
 - See `docs/tauri-migration-tdd.md` for the technical design document.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
