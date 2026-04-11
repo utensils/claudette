@@ -85,8 +85,16 @@ impl Osc133Parser {
                 self.in_escape = true;
             } else {
                 // Track printable characters between B and C markers (not in escape sequences)
-                if self.tracking_command && (0x20..0x7F).contains(&byte) {
-                    self.command_buffer.push(byte);
+                if self.tracking_command {
+                    // Handle backspace/delete - remove last character from buffer
+                    if byte == 0x7F || byte == 0x08 {
+                        self.command_buffer.pop();
+                    }
+                    // Only add printable ASCII characters (space to ~, excluding DEL)
+                    else if (0x20..0x7F).contains(&byte) {
+                        self.command_buffer.push(byte);
+                    }
+                    // Ignore other control characters (newline, carriage return, etc.)
                 }
             }
         }
@@ -307,5 +315,28 @@ mod tests {
         parser.feed(b"\x1b]133;C\x07");
         // Should not extract duplicate command from B-C tracking
         assert_eq!(parser.extract_command(), None);
+    }
+
+    #[test]
+    fn test_backspace_handling() {
+        let mut parser = Osc133Parser::new();
+
+        parser.feed(b"\x1b]133;B\x07");
+        // User types "lss" then backspaces once to get "ls", then types " -l"
+        parser.feed(b"lss\x7F -l");
+        parser.feed(b"\x1b]133;C\x07");
+        assert_eq!(parser.extract_command(), Some("ls -l".to_string()));
+    }
+
+    #[test]
+    fn test_control_characters_ignored() {
+        let mut parser = Osc133Parser::new();
+
+        parser.feed(b"\x1b]133;B\x07");
+        // Command with carriage returns and newlines (from multiline input)
+        parser.feed(b"echo\rhello\n");
+        parser.feed(b"\x1b]133;C\x07");
+        // Should only capture printable characters
+        assert_eq!(parser.extract_command(), Some("echohello".to_string()));
     }
 }
