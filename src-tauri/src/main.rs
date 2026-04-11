@@ -81,7 +81,13 @@ fn main() {
                     &PredefinedMenuItem::hide_others(app, None)?,
                     &PredefinedMenuItem::show_all(app, None)?,
                     &PredefinedMenuItem::separator(app)?,
-                    &MenuItem::with_id(app, "quit-app", "Quit Claudette", true, Some("CmdOrCtrl+Q"))?,
+                    &MenuItem::with_id(
+                        app,
+                        "quit-app",
+                        "Quit Claudette",
+                        true,
+                        Some("CmdOrCtrl+Q"),
+                    )?,
                 ],
             )?;
             let edit_menu = Submenu::with_items(
