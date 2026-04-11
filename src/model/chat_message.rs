@@ -40,4 +40,5 @@ pub struct ChatMessage {
     pub cost_usd: Option<f64>,
     pub duration_ms: Option<i64>,
     pub created_at: String,
+    pub thinking: Option<String>,
 }

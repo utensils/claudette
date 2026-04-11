@@ -14,6 +14,8 @@ const ASK_USER_QUESTION_TOOL = "AskUserQuestion";
 export function useAgentStream() {
   const appendStreamingContent = useAppStore((s) => s.appendStreamingContent);
   const setStreamingContent = useAppStore((s) => s.setStreamingContent);
+  const appendStreamingThinking = useAppStore((s) => s.appendStreamingThinking);
+  const clearStreamingThinking = useAppStore((s) => s.clearStreamingThinking);
   const addChatMessage = useAppStore((s) => s.addChatMessage);
   const addToolActivity = useAppStore((s) => s.addToolActivity);
   const updateToolActivity = useAppStore((s) => s.updateToolActivity);
@@ -41,6 +43,8 @@ export function useAgentStream() {
   const turnCheckpointIdRef = useRef<Record<string, string | undefined>>({});
   // Plan file path extracted from EnterPlanMode tool results, keyed by wsId.
   const planFilePathRef = useRef<Record<string, string>>({});
+  // Track content block indices that are thinking blocks, keyed by workspace.
+  const thinkingBlocksRef = useRef<Record<string, Set<number>>>({});
 
   useEffect(() => {
     // Guard against StrictMode double-mount: the async unlisten() promise
@@ -73,7 +77,9 @@ export function useAgentStream() {
         turnCheckpointIdRef.current[wsId] = undefined;
         updateWorkspace(wsId, { agent_status: "Idle" });
         setStreamingContent(wsId, "");
+        clearStreamingThinking(wsId);
         blockToolMapRef.current = {};
+        delete thinkingBlocksRef.current[wsId];
         // NOTE: Do NOT clear agentQuestion here. In --print mode the CLI
         // exits immediately after emitting AskUserQuestion, so ProcessExited
         // fires before the user has a chance to answer. The question is
@@ -143,9 +149,26 @@ export function useAgentStream() {
                       );
                     }
                   }
+                  if (
+                    "type" in delta &&
+                    delta.type === "thinking_delta" &&
+                    "thinking" in delta &&
+                    delta.thinking
+                  ) {
+                    appendStreamingThinking(wsId, delta.thinking);
+                  }
                   break;
                 }
                 case "content_block_start": {
+                  if (
+                    inner.content_block &&
+                    "type" in inner.content_block &&
+                    inner.content_block.type === "thinking"
+                  ) {
+                    (thinkingBlocksRef.current[wsId] ??= new Set()).add(inner.index);
+                    // Clear previous thinking — new turn's thinking replaces old.
+                    clearStreamingThinking(wsId);
+                  }
                   if (
                     inner.content_block &&
                     "type" in inner.content_block &&
@@ -173,6 +196,10 @@ export function useAgentStream() {
                   break;
                 }
                 case "content_block_stop": {
+                  if (thinkingBlocksRef.current[wsId]?.has(inner.index)) {
+                    thinkingBlocksRef.current[wsId].delete(inner.index);
+                    break;
+                  }
                   const entry = blockToolMapRef.current[inner.index];
                   if (!entry) break;
 
@@ -271,6 +298,9 @@ export function useAgentStream() {
           }
           case "assistant": {
             // Full message received — it's already persisted by the backend.
+            // The CLI may fire multiple assistant events per turn: one with
+            // thinking blocks only (no text), then one with text. We only
+            // add a message and clear thinking when we have actual text.
             const text = streamEvent.message.content
               .filter(
                 (b): b is { type: "text"; text: string } => b.type === "text"
@@ -293,7 +323,10 @@ export function useAgentStream() {
                 cost_usd: null,
                 duration_ms: null,
                 created_at: new Date().toISOString(),
+                thinking: useAppStore.getState().streamingThinking[wsId] || null,
               });
+              // Clear thinking only after attaching it to a text message.
+              clearStreamingThinking(wsId);
             }
             setStreamingContent(wsId, "");
             break;
@@ -346,6 +379,8 @@ export function useAgentStream() {
   }, [
     appendStreamingContent,
     setStreamingContent,
+    appendStreamingThinking,
+    clearStreamingThinking,
     addChatMessage,
     addToolActivity,
     updateToolActivity,
@@ -426,7 +461,7 @@ export function useAgentStream() {
         .then((msgs) => {
           if (!msgs) return;
           const filtered = msgs.filter(
-            (m: ChatMessage) => m.role !== "Assistant" || m.content.trim() !== "",
+            (m: ChatMessage) => m.role !== "Assistant" || m.content.trim() !== "" || !!m.thinking,
           );
           debugChat("stream", "checkpoint-reload-chat-history", {
             wsId,

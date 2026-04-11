@@ -39,11 +39,13 @@ export type Delta =
   | { type: "text_delta"; text: string }
   | { type: "tool_use_delta"; partial_json?: string }
   | { type: "input_json_delta"; partial_json?: string }
+  | { type: "thinking_delta"; thinking: string }
   | { type: "Unknown" };
 
 export type StartContentBlock =
   | { type: "tool_use"; id: string; name: string }
   | { type: "text" }
+  | { type: "thinking" }
   | { type: "Unknown" };
 
 export interface AssistantMessage {

@@ -15,11 +15,14 @@ import { scoreCommand } from "./searchScore";
 import {
   buildCommands,
   buildThemeCommands,
+  buildModelCommands,
+  buildEffortCommands,
   CATEGORY_ORDER,
   CATEGORY_LABELS,
   type Command,
   type CommandCategory,
 } from "./commands";
+import { isEffortSupported, isMaxEffortAllowed } from "../chat/EffortSelector";
 import styles from "./CommandPalette.module.css";
 
 interface GroupedCommands {
@@ -60,16 +63,23 @@ export function CommandPalette() {
   const fastMode = useAppStore(
     (s) => (selectedWorkspaceId ? s.fastMode[selectedWorkspaceId] ?? false : false),
   );
+  const effortLevel = useAppStore(
+    (s) => (selectedWorkspaceId ? s.effortLevel[selectedWorkspaceId] ?? "auto" : "auto"),
+  );
+  const selectedModel = useAppStore(
+    (s) => (selectedWorkspaceId ? s.selectedModel[selectedWorkspaceId] ?? "opus" : "opus"),
+  );
   const setThinkingEnabled = useAppStore((s) => s.setThinkingEnabled);
   const setPlanMode = useAppStore((s) => s.setPlanMode);
   const setFastMode = useAppStore((s) => s.setFastMode);
+  const setEffortLevel = useAppStore((s) => s.setEffortLevel);
   const clearAgentQuestion = useAppStore((s) => s.clearAgentQuestion);
   const clearPlanApproval = useAppStore((s) => s.clearPlanApproval);
 
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [themes, setThemes] = useState<ThemeDefinition[]>([]);
-  const [mode, setMode] = useState<"main" | "theme">("main");
+  const [mode, setMode] = useState<"main" | "theme" | "model" | "effort">("main");
   const originalThemeIdRef = useRef(currentThemeId);
   const resultsRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -103,6 +113,7 @@ export function CommandPalette() {
           cost_usd: null,
           duration_ms: null,
           created_at: new Date().toISOString(),
+          thinking: null,
         });
       }
       // Check for setup script and prompt for confirmation.
@@ -132,7 +143,19 @@ export function CommandPalette() {
     setSelectedIndex(0);
   }, []);
 
-  const exitThemeMode = useCallback(() => {
+  const enterModelMode = useCallback(() => {
+    setMode("model");
+    setQuery("");
+    setSelectedIndex(0);
+  }, []);
+
+  const enterEffortMode = useCallback(() => {
+    setMode("effort");
+    setQuery("");
+    setSelectedIndex(0);
+  }, []);
+
+  const exitSubMenu = useCallback(() => {
     setMode("main");
     setQuery("");
     setSelectedIndex(0);
@@ -155,6 +178,8 @@ export function CommandPalette() {
         themes,
         applyThemeById,
         enterThemeMode,
+        enterModelMode,
+        enterEffortMode,
         selectedWorkspaceId,
         currentRepoId,
         createWorkspace: handleCreateWorkspace,
@@ -164,6 +189,9 @@ export function CommandPalette() {
         setPlanMode,
         fastMode,
         setFastMode,
+        effortLevel,
+        setEffortLevel,
+        selectedModel,
         persistSetting: (key: string, value: string) => setAppSetting(key, value).catch(console.error),
         stopAgent: (wsId: string) => stopAgent(wsId),
         resetAgentSession: (wsId: string) => resetAgentSession(wsId),
@@ -172,18 +200,63 @@ export function CommandPalette() {
         updateWorkspace: (id: string, updates: Record<string, unknown>) => updateWorkspace(id, updates),
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [themes, selectedWorkspaceId, currentRepoId, thinkingEnabled, planMode, fastMode, enterThemeMode, applyThemeById, handleCreateWorkspace],
+    [themes, selectedWorkspaceId, currentRepoId, thinkingEnabled, planMode, fastMode, effortLevel, selectedModel, enterThemeMode, applyThemeById, handleCreateWorkspace],
   );
 
-  // Build theme sub-menu commands
+  // Build sub-menu command lists
   const themeCommands = useMemo(
     () => buildThemeCommands(themes, applyThemeById, close),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [themes, applyThemeById],
   );
 
+  const modelCommands = useMemo(
+    () => buildModelCommands(
+      selectedModel,
+      async (model: string) => {
+        if (!selectedWorkspaceId || model === selectedModel) return;
+        useAppStore.getState().setSelectedModel(selectedWorkspaceId, model);
+        await setAppSetting(`model:${selectedWorkspaceId}`, model);
+        await resetAgentSession(selectedWorkspaceId);
+        clearAgentQuestion(selectedWorkspaceId);
+        clearPlanApproval(selectedWorkspaceId);
+        // Downgrade effort when switching to a model with less support.
+        const currentEffort = useAppStore.getState().effortLevel[selectedWorkspaceId];
+        if (!isEffortSupported(model)) {
+          useAppStore.getState().setEffortLevel(selectedWorkspaceId, "auto");
+          await setAppSetting(`effort_level:${selectedWorkspaceId}`, "auto");
+        } else if (currentEffort === "max" && !isMaxEffortAllowed(model)) {
+          useAppStore.getState().setEffortLevel(selectedWorkspaceId, "high");
+          await setAppSetting(`effort_level:${selectedWorkspaceId}`, "high");
+        }
+      },
+      close,
+    ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selectedModel, selectedWorkspaceId],
+  );
+
+  const effortCommands = useMemo(
+    () => buildEffortCommands(
+      selectedModel,
+      effortLevel,
+      async (level: string) => {
+        if (!selectedWorkspaceId) return;
+        useAppStore.getState().setEffortLevel(selectedWorkspaceId, level);
+        await setAppSetting(`effort_level:${selectedWorkspaceId}`, level);
+      },
+      close,
+    ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selectedModel, effortLevel, selectedWorkspaceId],
+  );
+
   // Active command list based on mode
-  const activeCommands = mode === "theme" ? themeCommands : mainCommands;
+  const activeCommands =
+    mode === "theme" ? themeCommands
+    : mode === "model" ? modelCommands
+    : mode === "effort" ? effortCommands
+    : mainCommands;
 
   const filteredCommands = useMemo(() => {
     if (!query.trim()) return activeCommands;
@@ -266,17 +339,17 @@ export function CommandPalette() {
       // Stop propagation so the global keyboard shortcut handler doesn't
       // also close the palette when we just want to exit theme mode.
       e.nativeEvent.stopImmediatePropagation();
-      if (mode === "theme") {
-        exitThemeMode();
+      if (mode !== "main") {
+        exitSubMenu();
       } else {
         if (themes.length > 0) {
           applyTheme(findTheme(themes, originalThemeIdRef.current));
         }
         close();
       }
-    } else if (e.key === "Backspace" && query === "" && mode === "theme") {
-      // Backspace on empty input in theme mode → go back
-      exitThemeMode();
+    } else if (e.key === "Backspace" && query === "" && mode !== "main") {
+      // Backspace on empty input in sub-menu → go back
+      exitSubMenu();
     }
   };
 
@@ -293,10 +366,10 @@ export function CommandPalette() {
     <div className={styles.backdrop} onClick={handleBackdropClick}>
       <div className={styles.card} onClick={(e) => e.stopPropagation()}>
         <div className={styles.inputRow}>
-          {mode === "theme" ? (
+          {mode !== "main" ? (
             <button
               className={styles.backBtn}
-              onClick={exitThemeMode}
+              onClick={exitSubMenu}
               title="Back to commands"
               type="button"
             >
@@ -314,18 +387,28 @@ export function CommandPalette() {
               setSelectedIndex(0);
             }}
             onKeyDown={handleKeyDown}
-            placeholder={mode === "theme" ? "Search themes..." : "Type a command..."}
+            placeholder={
+              mode === "theme" ? "Search themes..."
+              : mode === "model" ? "Select model..."
+              : mode === "effort" ? "Select effort level..."
+              : "Type a command..."
+            }
             autoFocus
           />
-          {mode === "theme" && (
-            <span className={styles.modeBadge}>Theme</span>
+          {mode !== "main" && (
+            <span className={styles.modeBadge}>
+              {mode === "theme" ? "Theme" : mode === "model" ? "Model" : "Effort"}
+            </span>
           )}
         </div>
 
         <div className={styles.results} ref={resultsRef}>
           {filteredCommands.length === 0 ? (
             <div className={styles.empty}>
-              {mode === "theme" ? "No matching themes" : "No matching commands"}
+              {mode === "theme" ? "No matching themes"
+                : mode === "model" ? "No matching models"
+                : mode === "effort" ? "No matching levels"
+                : "No matching commands"}
             </div>
           ) : (
             grouped.map((group) => {
@@ -403,7 +486,7 @@ export function CommandPalette() {
           </span>
           <span className={styles.footerHint}>
             <span className={styles.kbd}>esc</span>
-            {mode === "theme" ? " back" : " close"}
+            {mode !== "main" ? " back" : " close"}
           </span>
         </div>
       </div>

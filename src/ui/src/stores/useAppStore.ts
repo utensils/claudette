@@ -77,12 +77,17 @@ interface AppState {
   // -- Chat --
   chatMessages: Record<string, ChatMessage[]>;
   streamingContent: Record<string, string>;
+  streamingThinking: Record<string, string>;
+  showThinkingBlocks: Record<string, boolean>;
   toolActivities: Record<string, ToolActivity[]>;
   completedTurns: Record<string, CompletedTurn[]>;
   setChatMessages: (wsId: string, messages: ChatMessage[]) => void;
   addChatMessage: (wsId: string, message: ChatMessage) => void;
   setStreamingContent: (wsId: string, content: string) => void;
   appendStreamingContent: (wsId: string, text: string) => void;
+  appendStreamingThinking: (wsId: string, text: string) => void;
+  clearStreamingThinking: (wsId: string) => void;
+  setShowThinkingBlocks: (wsId: string, show: boolean) => void;
   setToolActivities: (wsId: string, activities: ToolActivity[]) => void;
   addToolActivity: (wsId: string, activity: ToolActivity) => void;
   updateToolActivity: (
@@ -140,11 +145,13 @@ interface AppState {
   fastMode: Record<string, boolean>;
   thinkingEnabled: Record<string, boolean>;
   planMode: Record<string, boolean>;
+  effortLevel: Record<string, string>;
   modelSelectorOpen: boolean;
   setSelectedModel: (wsId: string, model: string) => void;
   setFastMode: (wsId: string, enabled: boolean) => void;
   setThinkingEnabled: (wsId: string, enabled: boolean) => void;
   setPlanMode: (wsId: string, enabled: boolean) => void;
+  setEffortLevel: (wsId: string, level: string) => void;
   setModelSelectorOpen: (open: boolean) => void;
 
   // -- Diff --
@@ -305,6 +312,8 @@ export const useAppStore = create<AppState>((set) => ({
   // -- Chat --
   chatMessages: {},
   streamingContent: {},
+  streamingThinking: {},
+  showThinkingBlocks: {},
   toolActivities: {},
   completedTurns: {},
   setChatMessages: (wsId, messages) =>
@@ -329,6 +338,21 @@ export const useAppStore = create<AppState>((set) => ({
         ...s.streamingContent,
         [wsId]: (s.streamingContent[wsId] || "") + text,
       },
+    })),
+  appendStreamingThinking: (wsId, text) =>
+    set((s) => ({
+      streamingThinking: {
+        ...s.streamingThinking,
+        [wsId]: (s.streamingThinking[wsId] || "") + text,
+      },
+    })),
+  clearStreamingThinking: (wsId) =>
+    set((s) => ({
+      streamingThinking: { ...s.streamingThinking, [wsId]: "" },
+    })),
+  setShowThinkingBlocks: (wsId, show) =>
+    set((s) => ({
+      showThinkingBlocks: { ...s.showThinkingBlocks, [wsId]: show },
     })),
   setToolActivities: (wsId, activities) =>
     set((s) => ({
@@ -545,6 +569,7 @@ export const useAppStore = create<AppState>((set) => ({
         completedTurns: { ...s.completedTurns, [wsId]: [] },
         toolActivities: { ...s.toolActivities, [wsId]: [] },
         streamingContent: { ...s.streamingContent, [wsId]: "" },
+        streamingThinking: { ...s.streamingThinking, [wsId]: "" },
         agentQuestions: restQuestions,
         planApprovals: restApprovals,
         checkpoints: {
@@ -587,6 +612,7 @@ export const useAppStore = create<AppState>((set) => ({
   fastMode: {},
   thinkingEnabled: {},
   planMode: {},
+  effortLevel: {},
   modelSelectorOpen: false,
   setSelectedModel: (wsId, model) =>
     set((s) => ({
@@ -603,6 +629,10 @@ export const useAppStore = create<AppState>((set) => ({
   setPlanMode: (wsId, enabled) =>
     set((s) => ({
       planMode: { ...s.planMode, [wsId]: enabled },
+    })),
+  setEffortLevel: (wsId, level) =>
+    set((s) => ({
+      effortLevel: { ...s.effortLevel, [wsId]: level },
     })),
   setModelSelectorOpen: (open) => set({ modelSelectorOpen: open }),
 

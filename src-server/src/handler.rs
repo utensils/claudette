@@ -43,6 +43,10 @@ pub async fn handle_request(
             let fast_mode = params.get("fast_mode").and_then(|v| v.as_bool());
             let thinking_enabled = params.get("thinking_enabled").and_then(|v| v.as_bool());
             let plan_mode = params.get("plan_mode").and_then(|v| v.as_bool());
+            let effort = params
+                .get("effort")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             handle_send_chat_message(
                 state,
                 writer,
@@ -53,6 +57,7 @@ pub async fn handle_request(
                 fast_mode,
                 thinking_enabled,
                 plan_mode,
+                effort,
             )
             .await
         }
@@ -297,6 +302,7 @@ async fn handle_send_chat_message(
     fast_mode: Option<bool>,
     thinking_enabled: Option<bool>,
     plan_mode: Option<bool>,
+    effort: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let db = open_db(state)?;
 
@@ -320,6 +326,7 @@ async fn handle_send_chat_message(
         cost_usd: None,
         duration_ms: None,
         created_at: now_iso(),
+        thinking: None,
     };
     db.insert_chat_message(&user_msg)
         .map_err(|e| e.to_string())?;
@@ -361,6 +368,7 @@ async fn handle_send_chat_message(
         fast_mode: fast_mode.unwrap_or(false),
         thinking_enabled: thinking_enabled.unwrap_or(false),
         plan_mode: plan_mode.unwrap_or(false),
+        effort,
     };
 
     let turn_handle = agent::run_turn(
@@ -385,6 +393,7 @@ async fn handle_send_chat_message(
     tokio::spawn(async move {
         let mut rx = turn_handle.event_rx;
         let mut got_init = false;
+        let mut pending_thinking: Option<String> = None;
         while let Some(event) = rx.recv().await {
             if let AgentEvent::Stream(StreamEvent::System { ref subtype, .. }) = event
                 && subtype == "init"
@@ -399,7 +408,9 @@ async fn handle_send_chat_message(
                 agents.remove(&ws_id);
             }
 
-            // Persist assistant messages.
+            // Persist assistant messages. The CLI may fire multiple assistant
+            // events per turn (thinking-only, then text). Accumulate thinking
+            // and save only when text content arrives.
             if let AgentEvent::Stream(StreamEvent::Assistant { ref message }) = event {
                 let full_text: String = message
                     .content
@@ -414,6 +425,35 @@ async fn handle_send_chat_message(
                     .collect::<Vec<_>>()
                     .join("");
 
+                let event_thinking: Option<String> = {
+                    let parts: Vec<&str> = message
+                        .content
+                        .iter()
+                        .filter_map(|block| {
+                            if let claudette::agent::ContentBlock::Thinking { thinking } = block {
+                                Some(thinking.as_str())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    if parts.is_empty() {
+                        None
+                    } else {
+                        Some(parts.join(""))
+                    }
+                };
+
+                if let Some(t) = event_thinking {
+                    pending_thinking = Some(match pending_thinking.take() {
+                        Some(mut existing) => {
+                            existing.push_str(&t);
+                            existing
+                        }
+                        None => t,
+                    });
+                }
+
                 if !full_text.trim().is_empty()
                     && let Ok(db) = Database::open(&db_path)
                 {
@@ -425,6 +465,7 @@ async fn handle_send_chat_message(
                         cost_usd: None,
                         duration_ms: None,
                         created_at: now_iso(),
+                        thinking: pending_thinking.take(),
                     };
                     let _ = db.insert_chat_message(&msg);
                 }
@@ -479,6 +520,7 @@ async fn handle_stop_agent(
         cost_usd: None,
         duration_ms: None,
         created_at: now_iso(),
+        thinking: None,
     };
     db.insert_chat_message(&msg).map_err(|e| e.to_string())?;
     Ok(json!(null))

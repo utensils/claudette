@@ -15,8 +15,11 @@ import {
   Wrench,
   FolderPlus,
   Globe,
+  Gauge,
+  Sparkles,
 } from "lucide-react";
 import type { ThemeDefinition } from "../../types/theme";
+import { isEffortSupported, isMaxEffortAllowed } from "../chat/EffortSelector";
 
 export type CommandCategory =
   | "general"
@@ -71,6 +74,8 @@ export interface CommandContext {
   themes: ThemeDefinition[];
   applyThemeById: (id: string) => void;
   enterThemeMode: () => void;
+  enterModelMode: () => void;
+  enterEffortMode: () => void;
 
   // Workspace context
   selectedWorkspaceId: string | null;
@@ -84,6 +89,9 @@ export interface CommandContext {
   setPlanMode: (wsId: string, enabled: boolean) => void;
   fastMode: boolean;
   setFastMode: (wsId: string, enabled: boolean) => void;
+  effortLevel: string;
+  setEffortLevel: (wsId: string, level: string) => void;
+  selectedModel: string;
   persistSetting: (key: string, value: string) => void;
   stopAgent: (wsId: string) => Promise<void>;
   resetAgentSession: (wsId: string) => Promise<void>;
@@ -106,6 +114,58 @@ export function buildThemeCommands(
     icon: Palette,
     keywords: ["theme", "color", "appearance", ...theme.name.toLowerCase().split(/\s+/)],
     execute: () => { applyThemeById(theme.id); close(); },
+  }));
+}
+
+/** Build model sub-menu commands. */
+export function buildModelCommands(
+  selectedModel: string,
+  onSelect: (model: string) => void,
+  close: () => void,
+): Command[] {
+  const models = [
+    { id: "opus", label: "Opus 4.6 1M" },
+    { id: "claude-opus-4-6", label: "Opus 4.6" },
+    { id: "sonnet", label: "Sonnet 4.6" },
+    { id: "haiku", label: "Haiku 4.5" },
+  ];
+  return models.map((m) => ({
+    id: `model:${m.id}`,
+    name: `${m.label}${m.id === selectedModel ? " ✓" : ""}`,
+    category: "agent" as const,
+    icon: Sparkles,
+    keywords: ["model", ...m.label.toLowerCase().split(/\s+/)],
+    execute: () => { onSelect(m.id); close(); },
+  }));
+}
+
+/** Build effort sub-menu commands (filtered by model). */
+export function buildEffortCommands(
+  selectedModel: string,
+  currentEffort: string,
+  onSelect: (level: string) => void,
+  close: () => void,
+): Command[] {
+  const all = [
+    { id: "auto", label: "Auto", description: "Let CLI decide" },
+    { id: "low", label: "Low", description: "Fast, minimal reasoning" },
+    { id: "medium", label: "Medium", description: "Balanced" },
+    { id: "high", label: "High", description: "Deep reasoning" },
+    { id: "max", label: "Max", description: "Full budget (Opus only)" },
+  ];
+  const levels = !isEffortSupported(selectedModel)
+    ? all.filter((l) => l.id === "auto")
+    : isMaxEffortAllowed(selectedModel)
+      ? all
+      : all.filter((l) => l.id !== "max");
+  return levels.map((l) => ({
+    id: `effort:${l.id}`,
+    name: `${l.label}${l.id === currentEffort ? " ✓" : ""}`,
+    description: l.description,
+    category: "agent" as const,
+    icon: Gauge,
+    keywords: ["effort", "reasoning", l.label.toLowerCase()],
+    execute: () => { onSelect(l.id); close(); },
   }));
 }
 
@@ -183,6 +243,26 @@ export function buildCommands(ctx: CommandContext): Command[] {
         ctx.close();
       },
     });
+    cmds.push({
+      id: "change-model",
+      name: "Change Model",
+      description: `Currently: ${ctx.selectedModel}`,
+      category: "agent",
+      icon: Sparkles,
+      keywords: ["model", "opus", "sonnet", "haiku", "switch"],
+      execute: () => { ctx.enterModelMode(); },
+    });
+    if (isEffortSupported(ctx.selectedModel)) {
+      cmds.push({
+        id: "set-effort",
+        name: "Set Effort Level",
+        description: `Currently: ${ctx.effortLevel}`,
+        category: "agent",
+        icon: Gauge,
+        keywords: ["effort", "reasoning", "depth", "budget"],
+        execute: () => { ctx.enterEffortMode(); },
+      });
+    }
     cmds.push({
       id: "stop-agent",
       name: "Stop Agent",

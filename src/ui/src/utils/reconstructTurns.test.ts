@@ -4,7 +4,7 @@ import type { ChatMessage } from "../types/chat";
 import type { CompletedTurnData } from "../types/checkpoint";
 
 function makeMsg(id: string, role: "User" | "Assistant" = "Assistant"): ChatMessage {
-  return { id, workspace_id: "ws", role, content: "", cost_usd: null, duration_ms: null, created_at: "" };
+  return { id, workspace_id: "ws", role, content: "", cost_usd: null, duration_ms: null, created_at: "", thinking: null };
 }
 
 function makeTurnData(

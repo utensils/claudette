@@ -1,0 +1,64 @@
+.container {
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  margin: 4px 0;
+  overflow: hidden;
+  transition: border-color var(--transition-fast);
+}
+
+.container:hover {
+  border-color: var(--text-faint);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  width: 100%;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-dim);
+  text-align: left;
+  transition: background var(--transition-fast);
+}
+
+.header:hover {
+  background: var(--hover-bg-subtle);
+}
+
+.chevron {
+  font-family: var(--font-mono);
+  width: 10px;
+  color: var(--text-faint);
+  transition: transform var(--transition-fast);
+}
+
+.chevronExpanded {
+  transform: rotate(90deg);
+}
+
+.label {
+  font-weight: 500;
+  font-size: 12px;
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.content {
+  padding: 10px 12px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  max-height: 400px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+  border-top: 1px solid var(--divider);
+  background: var(--chat-input-bg);
+  font-style: italic;
+  opacity: 0.85;
+}

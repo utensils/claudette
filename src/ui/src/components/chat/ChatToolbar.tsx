@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Sparkles, Zap, Brain, BookOpen } from "lucide-react";
+import { Sparkles, Zap, Brain, BookOpen, Gauge, Eye, EyeOff } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import { resetAgentSession, setAppSetting, getAppSetting } from "../../services/tauri";
 import { ModelSelector, MODELS } from "./ModelSelector";
+import { EffortSelector, EFFORT_LEVELS, isMaxEffortAllowed, isEffortSupported } from "./EffortSelector";
 import styles from "./ChatToolbar.module.css";
 
 interface ChatToolbarProps {
@@ -15,36 +16,54 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
   const fastMode = useAppStore((s) => s.fastMode[workspaceId] ?? false);
   const thinkingEnabled = useAppStore((s) => s.thinkingEnabled[workspaceId] ?? false);
   const planMode = useAppStore((s) => s.planMode[workspaceId] ?? false);
+  const effortLevel = useAppStore((s) => s.effortLevel[workspaceId] ?? "auto");
   const modelSelectorOpen = useAppStore((s) => s.modelSelectorOpen);
   const setSelectedModel = useAppStore((s) => s.setSelectedModel);
   const setFastMode = useAppStore((s) => s.setFastMode);
   const setThinkingEnabled = useAppStore((s) => s.setThinkingEnabled);
   const setPlanMode = useAppStore((s) => s.setPlanMode);
+  const showThinkingBlocks = useAppStore((s) => s.showThinkingBlocks[workspaceId] === true);
+  const setEffortLevel = useAppStore((s) => s.setEffortLevel);
+  const setShowThinkingBlocks = useAppStore((s) => s.setShowThinkingBlocks);
   const setModelSelectorOpen = useAppStore((s) => s.setModelSelectorOpen);
   const clearAgentQuestion = useAppStore((s) => s.clearAgentQuestion);
   const clearPlanApproval = useAppStore((s) => s.clearPlanApproval);
 
   const modelChipRef = useRef<HTMLButtonElement>(null);
   const [loaded, setLoaded] = useState(false);
+  const [effortSelectorOpen, setEffortSelectorOpen] = useState(false);
 
   // Load persisted settings on mount / workspace change.
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      const [model, fast, thinking] = await Promise.all([
+      const [model, fast, thinking, effort, showThinking] = await Promise.all([
         getAppSetting(`model:${workspaceId}`),
         getAppSetting(`fast_mode:${workspaceId}`),
         getAppSetting(`thinking_enabled:${workspaceId}`),
+        getAppSetting(`effort_level:${workspaceId}`),
+        getAppSetting(`show_thinking:${workspaceId}`),
       ]);
       if (cancelled) return;
+      const loadedModel = model ?? "opus";
       if (model) setSelectedModel(workspaceId, model);
       if (fast === "true") setFastMode(workspaceId, true);
       if (thinking === "true") setThinkingEnabled(workspaceId, true);
+      // Normalize effort against the loaded model to prevent stale values.
+      if (effort) {
+        const normalized = !isEffortSupported(loadedModel)
+          ? "auto"
+          : effort === "max" && !isMaxEffortAllowed(loadedModel)
+            ? "high"
+            : effort;
+        setEffortLevel(workspaceId, normalized);
+      }
+      if (showThinking === "true") setShowThinkingBlocks(workspaceId, true);
       setLoaded(true);
     }
     load();
     return () => { cancelled = true; };
-  }, [workspaceId, setSelectedModel, setFastMode, setThinkingEnabled]);
+  }, [workspaceId, setSelectedModel, setFastMode, setThinkingEnabled, setEffortLevel, setShowThinkingBlocks]);
 
   const handleModelSelect = useCallback(
     async (model: string) => {
@@ -55,10 +74,29 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
         await resetAgentSession(workspaceId);
         clearAgentQuestion(workspaceId);
         clearPlanApproval(workspaceId);
+        // Reset effort when switching to a model with different support.
+        if (!isEffortSupported(model)) {
+          // Model doesn't support effort at all — clear to auto (won't be sent).
+          setEffortLevel(workspaceId, "auto");
+          await setAppSetting(`effort_level:${workspaceId}`, "auto");
+        } else if (effortLevel === "max" && !isMaxEffortAllowed(model)) {
+          // Model supports effort but not "max" — fall back to high.
+          setEffortLevel(workspaceId, "high");
+          await setAppSetting(`effort_level:${workspaceId}`, "high");
+        }
       }
       setModelSelectorOpen(false);
     },
-    [workspaceId, selectedModel, setSelectedModel, setModelSelectorOpen, clearAgentQuestion, clearPlanApproval]
+    [workspaceId, selectedModel, effortLevel, setSelectedModel, setEffortLevel, setModelSelectorOpen, clearAgentQuestion, clearPlanApproval]
+  );
+
+  const handleEffortSelect = useCallback(
+    async (level: string) => {
+      setEffortLevel(workspaceId, level);
+      await setAppSetting(`effort_level:${workspaceId}`, level);
+      setEffortSelectorOpen(false);
+    },
+    [workspaceId, setEffortLevel],
   );
 
   const toggleFast = useCallback(async () => {
@@ -72,6 +110,12 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
     setThinkingEnabled(workspaceId, next);
     await setAppSetting(`thinking_enabled:${workspaceId}`, String(next));
   }, [workspaceId, thinkingEnabled, setThinkingEnabled]);
+
+  const toggleShowThinking = useCallback(async () => {
+    const next = !showThinkingBlocks;
+    setShowThinkingBlocks(workspaceId, next);
+    await setAppSetting(`show_thinking:${workspaceId}`, String(next));
+  }, [workspaceId, showThinkingBlocks, setShowThinkingBlocks]);
 
   const togglePlan = useCallback(() => {
     setPlanMode(workspaceId, !planMode);
@@ -91,6 +135,8 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
 
   const modelLabel =
     MODELS.find((m) => m.id === selectedModel)?.label ?? selectedModel;
+  const effortLabel =
+    EFFORT_LEVELS.find((l) => l.id === effortLevel)?.label ?? effortLevel;
 
   if (!loaded) return null;
 
@@ -111,7 +157,7 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
         className={`${styles.chip} ${fastMode ? styles.chipActive : ""}`}
         onClick={toggleFast}
         disabled={disabled}
-        title="Enable fast mode (uses extra credits)"
+        title={`${fastMode ? "Disable" : "Enable"} fast mode (faster output, same model)`}
         aria-pressed={fastMode}
       >
         <Zap size={14} />
@@ -121,12 +167,33 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
         className={`${styles.chip} ${thinkingEnabled ? styles.chipActive : ""}`}
         onClick={toggleThinking}
         disabled={disabled}
-        title={`${thinkingEnabled ? "Disable" : "Enable"} thinking`}
+        title={`${thinkingEnabled ? "Disable" : "Enable"} extended thinking (forces reasoning on every turn)`}
         aria-pressed={thinkingEnabled}
       >
         <Brain size={14} />
         <span className={styles.chipLabel}>Thinking</span>
       </button>
+
+      <button
+        className={`${styles.chip} ${showThinkingBlocks ? styles.chipActive : ""}`}
+        onClick={toggleShowThinking}
+        title={`${showThinkingBlocks ? "Hide" : "Show"} thinking traces in chat`}
+        aria-pressed={showThinkingBlocks}
+      >
+        {showThinkingBlocks ? <Eye size={14} /> : <EyeOff size={14} />}
+      </button>
+
+      {isEffortSupported(selectedModel) && (
+        <button
+          className={styles.chip}
+          onClick={() => setEffortSelectorOpen(!effortSelectorOpen)}
+          disabled={disabled}
+          title="Set effort level"
+        >
+          <Gauge size={14} />
+          <span className={styles.chipLabel}>{effortLabel}</span>
+        </button>
+      )}
 
       <button
         className={`${styles.chip} ${planMode ? styles.chipActive : ""}`}
@@ -145,6 +212,15 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
           selected={selectedModel}
           onSelect={handleModelSelect}
           onClose={() => setModelSelectorOpen(false)}
+        />
+      )}
+
+      {effortSelectorOpen && isEffortSupported(selectedModel) && (
+        <EffortSelector
+          selected={effortLevel}
+          selectedModel={selectedModel}
+          onSelect={handleEffortSelect}
+          onClose={() => setEffortSelectorOpen(false)}
         />
       )}
     </div>

@@ -31,7 +31,8 @@ import { ChatToolbar } from "./ChatToolbar";
 import { WorkspaceActions } from "./WorkspaceActions";
 import { HeaderMenu } from "./HeaderMenu";
 import { SlashCommandPicker, filterSlashCommands } from "./SlashCommandPicker";
-import { checkpointHasFileChanges } from "../../utils/checkpointUtils";
+import { checkpointHasFileChanges, buildRollbackMap } from "../../utils/checkpointUtils";
+import { ThinkingBlock } from "./ThinkingBlock";
 import { debugChat } from "../../utils/chatDebug";
 import styles from "./ChatPanel.module.css";
 
@@ -194,6 +195,12 @@ export function ChatPanel() {
   const hasStreaming = useAppStore(
     (s) => !!(selectedWorkspaceId && s.streamingContent[selectedWorkspaceId])
   );
+  const hasThinking = useAppStore(
+    (s) => !!(selectedWorkspaceId && s.streamingThinking[selectedWorkspaceId])
+  );
+  const showThinkingBlocks = useAppStore(
+    (s) => selectedWorkspaceId ? s.showThinkingBlocks[selectedWorkspaceId] === true : false
+  );
   // Subscribe only to count — avoids re-render on tool activity content changes
   const activitiesCount = useAppStore(
     (s) => (selectedWorkspaceId ? (s.toolActivities[selectedWorkspaceId] || []).length : 0)
@@ -300,9 +307,10 @@ export function ChatPanel() {
     loadHistory
       .then((msgs: ChatMessage[]) => {
         if (cancelled) return;
-        // Filter out empty assistant messages (legacy data).
+        // Filter out empty assistant messages (legacy data), but keep
+        // those that carry thinking content.
         const filtered = msgs.filter(
-          (m) => m.role !== "Assistant" || m.content.trim() !== ""
+          (m) => m.role !== "Assistant" || m.content.trim() !== "" || !!m.thinking
         );
         debugChat("ChatPanel", "load-history:success", {
           wsId,
@@ -487,6 +495,7 @@ export function ChatPanel() {
       cost_usd: null,
       duration_ms: null,
       created_at: new Date().toISOString(),
+      thinking: null,
     });
     updateWorkspace(selectedWorkspaceId, { agent_status: "Running" });
 
@@ -502,6 +511,7 @@ export function ChatPanel() {
           fast_mode: state.fastMode[selectedWorkspaceId] || false,
           thinking_enabled: state.thinkingEnabled[selectedWorkspaceId] || false,
           plan_mode: state.planMode[selectedWorkspaceId] || false,
+          effort: state.effortLevel[selectedWorkspaceId] || null,
         });
       } else {
         const state = useAppStore.getState();
@@ -509,6 +519,7 @@ export function ChatPanel() {
         const fastMode = state.fastMode[selectedWorkspaceId] || false;
         const thinkingEnabled = state.thinkingEnabled[selectedWorkspaceId] || false;
         const planMode = state.planMode[selectedWorkspaceId] || false;
+        const effort = state.effortLevel[selectedWorkspaceId] || undefined;
         await sendChatMessage(
           selectedWorkspaceId,
           trimmed,
@@ -517,6 +528,7 @@ export function ChatPanel() {
           fastMode || undefined,
           thinkingEnabled || undefined,
           planMode || undefined,
+          effort,
         );
       }
     } catch (e) {
@@ -653,6 +665,10 @@ export function ChatPanel() {
               />
             )}
 
+            {selectedWorkspaceId && hasThinking && showThinkingBlocks && (
+              <StreamingThinkingBlock workspaceId={selectedWorkspaceId} isStreaming={isRunning ?? false} />
+            )}
+
             {selectedWorkspaceId && hasStreaming && (
               <StreamingMessage workspaceId={selectedWorkspaceId} />
             )}
@@ -727,6 +743,24 @@ export function ChatPanel() {
     </div>
   );
 }
+
+/**
+ * Isolated thinking block — subscribes to streamingThinking to avoid
+ * re-rendering ChatPanel on every thinking delta.
+ */
+const StreamingThinkingBlock = memo(function StreamingThinkingBlock({
+  workspaceId,
+  isStreaming,
+}: {
+  workspaceId: string;
+  isStreaming: boolean;
+}) {
+  const thinking = useAppStore(
+    (s) => s.streamingThinking[workspaceId] || ""
+  );
+  if (!thinking) return null;
+  return <ThinkingBlock content={thinking} isStreaming={isStreaming} />;
+});
 
 /**
  * Isolated streaming message component — subscribes to streaming text directly
@@ -886,6 +920,9 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
     (s) => s.checkpoints[workspaceId] ?? EMPTY_CHECKPOINTS
   );
   const openModal = useAppStore((s) => s.openModal);
+  const showThinkingBlocks = useAppStore(
+    (s) => s.showThinkingBlocks[workspaceId] === true
+  );
 
   // Build an index: afterMessageIndex → array of (turn, globalIndex) pairs.
   // Only recomputed when completedTurns changes, not on every streaming update.
@@ -902,25 +939,10 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
   // Checks the message immediately before this user message (assistant or
   // user for tool-only turns) for a matching checkpoint. Index 0 always
   // maps to null (clear-all) when any checkpoints exist.
-  const rollbackCheckpointByIdx = useMemo(() => {
-    const msgIdToCp = new Map(checkpoints.map((cp) => [cp.message_id, cp]));
-    const result = new Map<number, typeof checkpoints[number] | null>();
-    for (let i = 0; i < messages.length; i++) {
-      if (messages[i].role === "User") {
-        if (i === 0 && checkpoints.length > 0) {
-          result.set(0, null);
-        } else if (i > 0) {
-          // Check the immediately preceding message for a matching checkpoint.
-          // Do NOT scan backward — if the preceding turn has no checkpoint
-          // (e.g. agent stopped before Result), suppress rollback for this gap.
-          const prev = messages[i - 1];
-          const cp = msgIdToCp.get(prev.id);
-          if (cp) result.set(i, cp);
-        }
-      }
-    }
-    return result;
-  }, [messages, checkpoints]);
+  const rollbackCheckpointByIdx = useMemo(
+    () => buildRollbackMap(messages, checkpoints),
+    [messages, checkpoints],
+  );
 
   useEffect(() => {
     debugChat("MessagesWithTurns", "layout", {
@@ -980,6 +1002,9 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
                   <RotateCcw size={14} />
                 </button>
               )}
+            {msg.role === "Assistant" && msg.thinking && showThinkingBlocks && (
+              <ThinkingBlock content={msg.thinking} isStreaming={false} />
+            )}
             <div className={styles.content}>
               {msg.role === "Assistant" ? (
                 <Markdown

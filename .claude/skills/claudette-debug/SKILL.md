@@ -163,6 +163,10 @@ return {
   pendingPlanApproval: !!s.planApprovals[wsId],
   planMode: s.planMode[wsId] || false,
   fastMode: s.fastMode[wsId] || false,
+  thinkingEnabled: s.thinkingEnabled[wsId] || false,
+  showThinking: s.showThinkingBlocks[wsId] === true,
+  thinkingLength: (s.streamingThinking[wsId] || '').length,
+  effortLevel: s.effortLevel[wsId] || 'auto',
 };
 JS
 ```
@@ -236,6 +240,10 @@ if (wsId) {
   lines.push('  activeTools: ' + acts.length + (acts.length > 0 ? ' (last: ' + acts[acts.length-1].toolName + ')' : ''));
   lines.push('  completedTurns: ' + turns.length);
   lines.push('  planMode: ' + (s.planMode[wsId] || false));
+  lines.push('  thinkingEnabled: ' + (s.thinkingEnabled[wsId] || false));
+  lines.push('  showThinking: ' + (s.showThinkingBlocks[wsId] === true));
+  lines.push('  thinkingLength: ' + (s.streamingThinking[wsId] || '').length);
+  lines.push('  effortLevel: ' + (s.effortLevel[wsId] || 'auto'));
 } else {
   lines.push('=== No workspace selected ===');
 }
@@ -280,7 +288,7 @@ Run with `run_in_background: true`. Logs state changes with readable keys.
 .claude/skills/claudette-debug/debug-monitor.sh
 ```
 
-Output keys: `toolCount`, `completedTurns`, `agentStatus`, `scrollGap`, `messageCount`, `lastToolSummary`, `inputJsonValid`, `streaming`
+Output keys: `toolCount`, `completedTurns`, `agentStatus`, `scrollGap`, `messageCount`, `lastToolSummary`, `inputJsonValid`, `streaming`, `thinking`, `thinkingEnabled`, `showThinking`, `effortLevel`
 
 Options: `--expr 'JS'`, `--interval N`, `--max N`, `--logfile PATH`
 

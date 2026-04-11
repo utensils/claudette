@@ -160,7 +160,8 @@ export function sendChatMessage(
   model?: string,
   fastMode?: boolean,
   thinkingEnabled?: boolean,
-  planMode?: boolean
+  planMode?: boolean,
+  effort?: string,
 ): Promise<void> {
   return invoke("send_chat_message", {
     workspaceId,
@@ -170,6 +171,7 @@ export function sendChatMessage(
     fastMode: fastMode ?? null,
     thinkingEnabled: thinkingEnabled ?? null,
     planMode: planMode ?? null,
+    effort: effort ?? null,
   });
 }
 

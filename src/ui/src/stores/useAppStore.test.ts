@@ -35,6 +35,68 @@ function addToolActivities(wsId: string = WS_ID) {
   });
 }
 
+describe("effortLevel (per-workspace)", () => {
+  beforeEach(() => {
+    useAppStore.setState({ effortLevel: {} });
+  });
+
+  it("defaults to empty (no explicit effort)", () => {
+    expect(useAppStore.getState().effortLevel[WS_ID]).toBeUndefined();
+  });
+
+  it("setEffortLevel stores level keyed by workspace", () => {
+    useAppStore.getState().setEffortLevel(WS_ID, "high");
+    expect(useAppStore.getState().effortLevel[WS_ID]).toBe("high");
+  });
+
+  it("effort levels are isolated per workspace", () => {
+    useAppStore.getState().setEffortLevel("ws-a", "low");
+    useAppStore.getState().setEffortLevel("ws-b", "max");
+    expect(useAppStore.getState().effortLevel["ws-a"]).toBe("low");
+    expect(useAppStore.getState().effortLevel["ws-b"]).toBe("max");
+  });
+
+  it("overwrites previous level for same workspace", () => {
+    useAppStore.getState().setEffortLevel(WS_ID, "low");
+    useAppStore.getState().setEffortLevel(WS_ID, "high");
+    expect(useAppStore.getState().effortLevel[WS_ID]).toBe("high");
+  });
+});
+
+describe("streamingThinking (per-workspace)", () => {
+  beforeEach(() => {
+    useAppStore.setState({ streamingThinking: {}, showThinkingBlocks: {} });
+  });
+
+  it("appendStreamingThinking accumulates text", () => {
+    useAppStore.getState().appendStreamingThinking(WS_ID, "Let me ");
+    useAppStore.getState().appendStreamingThinking(WS_ID, "think...");
+    expect(useAppStore.getState().streamingThinking[WS_ID]).toBe("Let me think...");
+  });
+
+  it("clearStreamingThinking resets to empty", () => {
+    useAppStore.getState().appendStreamingThinking(WS_ID, "some thinking");
+    useAppStore.getState().clearStreamingThinking(WS_ID);
+    expect(useAppStore.getState().streamingThinking[WS_ID]).toBe("");
+  });
+
+  it("thinking is isolated per workspace", () => {
+    useAppStore.getState().appendStreamingThinking("ws-a", "alpha");
+    useAppStore.getState().appendStreamingThinking("ws-b", "beta");
+    expect(useAppStore.getState().streamingThinking["ws-a"]).toBe("alpha");
+    expect(useAppStore.getState().streamingThinking["ws-b"]).toBe("beta");
+  });
+
+  it("setShowThinkingBlocks stores preference", () => {
+    useAppStore.getState().setShowThinkingBlocks(WS_ID, false);
+    expect(useAppStore.getState().showThinkingBlocks[WS_ID]).toBe(false);
+  });
+
+  it("showThinkingBlocks defaults to undefined (treated as false/off)", () => {
+    expect(useAppStore.getState().showThinkingBlocks[WS_ID]).toBeUndefined();
+  });
+});
+
 describe("agentQuestion lifecycle (per-workspace)", () => {
   beforeEach(() => {
     useAppStore.setState({
@@ -115,8 +177,8 @@ describe("finalizeTurn afterMessageIndex", () => {
     useAppStore.setState({
       chatMessages: {
         [WS_ID]: [
-          { id: "m1", workspace_id: WS_ID, role: "User", content: "hi", cost_usd: null, duration_ms: null, created_at: "" },
-          { id: "m2", workspace_id: WS_ID, role: "Assistant", content: "hello", cost_usd: null, duration_ms: null, created_at: "" },
+          { id: "m1", workspace_id: WS_ID, role: "User", content: "hi", cost_usd: null, duration_ms: null, created_at: "", thinking: null },
+          { id: "m2", workspace_id: WS_ID, role: "Assistant", content: "hello", cost_usd: null, duration_ms: null, created_at: "", thinking: null },
         ],
       },
     });
@@ -139,7 +201,7 @@ describe("finalizeTurn afterMessageIndex", () => {
 
   it("successive turns get increasing afterMessageIndex", () => {
     useAppStore.setState({
-      chatMessages: { [WS_ID]: [{ id: "m1", workspace_id: WS_ID, role: "Assistant", content: "a", cost_usd: null, duration_ms: null, created_at: "" }] },
+      chatMessages: { [WS_ID]: [{ id: "m1", workspace_id: WS_ID, role: "Assistant", content: "a", cost_usd: null, duration_ms: null, created_at: "", thinking: null }] },
     });
     addToolActivities();
     useAppStore.getState().finalizeTurn(WS_ID, 1);
@@ -147,9 +209,9 @@ describe("finalizeTurn afterMessageIndex", () => {
     useAppStore.setState({
       chatMessages: {
         [WS_ID]: [
-          { id: "m1", workspace_id: WS_ID, role: "Assistant", content: "a", cost_usd: null, duration_ms: null, created_at: "" },
-          { id: "m2", workspace_id: WS_ID, role: "User", content: "b", cost_usd: null, duration_ms: null, created_at: "" },
-          { id: "m3", workspace_id: WS_ID, role: "Assistant", content: "c", cost_usd: null, duration_ms: null, created_at: "" },
+          { id: "m1", workspace_id: WS_ID, role: "Assistant", content: "a", cost_usd: null, duration_ms: null, created_at: "", thinking: null },
+          { id: "m2", workspace_id: WS_ID, role: "User", content: "b", cost_usd: null, duration_ms: null, created_at: "", thinking: null },
+          { id: "m3", workspace_id: WS_ID, role: "Assistant", content: "c", cost_usd: null, duration_ms: null, created_at: "", thinking: null },
         ],
       },
     });
@@ -288,8 +350,8 @@ describe("finalizeTurn double-call guard", () => {
     useAppStore.setState({
       chatMessages: {
         [WS_ID]: [
-          { id: "m1", workspace_id: WS_ID, role: "User", content: "hi", cost_usd: null, duration_ms: null, created_at: "" },
-          { id: "m2", workspace_id: WS_ID, role: "Assistant", content: "hello", cost_usd: null, duration_ms: null, created_at: "" },
+          { id: "m1", workspace_id: WS_ID, role: "User", content: "hi", cost_usd: null, duration_ms: null, created_at: "", thinking: null },
+          { id: "m2", workspace_id: WS_ID, role: "Assistant", content: "hello", cost_usd: null, duration_ms: null, created_at: "", thinking: null },
         ],
       },
     });
@@ -375,10 +437,10 @@ describe("rollbackConversation", () => {
     useAppStore.setState({
       chatMessages: {
         [WS_ID]: [
-          { id: "m1", workspace_id: WS_ID, role: "User", content: "q1", cost_usd: null, duration_ms: null, created_at: "" },
-          { id: "m2", workspace_id: WS_ID, role: "Assistant", content: "a1", cost_usd: null, duration_ms: null, created_at: "" },
-          { id: "m3", workspace_id: WS_ID, role: "User", content: "q2", cost_usd: null, duration_ms: null, created_at: "" },
-          { id: "m4", workspace_id: WS_ID, role: "Assistant", content: "a2", cost_usd: null, duration_ms: null, created_at: "" },
+          { id: "m1", workspace_id: WS_ID, role: "User", content: "q1", cost_usd: null, duration_ms: null, created_at: "", thinking: null },
+          { id: "m2", workspace_id: WS_ID, role: "Assistant", content: "a1", cost_usd: null, duration_ms: null, created_at: "", thinking: null },
+          { id: "m3", workspace_id: WS_ID, role: "User", content: "q2", cost_usd: null, duration_ms: null, created_at: "", thinking: null },
+          { id: "m4", workspace_id: WS_ID, role: "Assistant", content: "a2", cost_usd: null, duration_ms: null, created_at: "", thinking: null },
         ],
       },
       checkpoints: {
@@ -391,8 +453,8 @@ describe("rollbackConversation", () => {
 
     // Simulate backend returning truncated messages.
     const truncated = [
-      { id: "m1", workspace_id: WS_ID, role: "User" as const, content: "q1", cost_usd: null, duration_ms: null, created_at: "" },
-      { id: "m2", workspace_id: WS_ID, role: "Assistant" as const, content: "a1", cost_usd: null, duration_ms: null, created_at: "" },
+      { id: "m1", workspace_id: WS_ID, role: "User" as const, content: "q1", cost_usd: null, duration_ms: null, created_at: "", thinking: null },
+      { id: "m2", workspace_id: WS_ID, role: "Assistant" as const, content: "a1", cost_usd: null, duration_ms: null, created_at: "", thinking: null },
     ];
     useAppStore.getState().rollbackConversation(WS_ID, "cp1", truncated);
 
@@ -445,8 +507,8 @@ describe("rollbackConversation", () => {
     const OTHER_WS = "other-ws";
     useAppStore.setState({
       chatMessages: {
-        [WS_ID]: [{ id: "m1", workspace_id: WS_ID, role: "User", content: "q1", cost_usd: null, duration_ms: null, created_at: "" }],
-        [OTHER_WS]: [{ id: "m2", workspace_id: OTHER_WS, role: "User", content: "q2", cost_usd: null, duration_ms: null, created_at: "" }],
+        [WS_ID]: [{ id: "m1", workspace_id: WS_ID, role: "User", content: "q1", cost_usd: null, duration_ms: null, created_at: "", thinking: null }],
+        [OTHER_WS]: [{ id: "m2", workspace_id: OTHER_WS, role: "User", content: "q2", cost_usd: null, duration_ms: null, created_at: "", thinking: null }],
       },
       checkpoints: {
         [WS_ID]: [makeCheckpoint("cp1", WS_ID, "m1", 0)],
