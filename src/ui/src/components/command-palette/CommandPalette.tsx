@@ -22,6 +22,7 @@ import {
   type Command,
   type CommandCategory,
 } from "./commands";
+import { isEffortSupported, isMaxEffortAllowed } from "../chat/EffortSelector";
 import styles from "./CommandPalette.module.css";
 
 interface GroupedCommands {
@@ -219,6 +220,15 @@ export function CommandPalette() {
         await resetAgentSession(selectedWorkspaceId);
         clearAgentQuestion(selectedWorkspaceId);
         clearPlanApproval(selectedWorkspaceId);
+        // Downgrade effort when switching to a model with less support.
+        const currentEffort = useAppStore.getState().effortLevel[selectedWorkspaceId];
+        if (!isEffortSupported(model)) {
+          useAppStore.getState().setEffortLevel(selectedWorkspaceId, "auto");
+          await setAppSetting(`effort_level:${selectedWorkspaceId}`, "auto");
+        } else if (currentEffort === "max" && !isMaxEffortAllowed(model)) {
+          useAppStore.getState().setEffortLevel(selectedWorkspaceId, "high");
+          await setAppSetting(`effort_level:${selectedWorkspaceId}`, "high");
+        }
       },
       close,
     ),
