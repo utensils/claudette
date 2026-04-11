@@ -84,6 +84,100 @@ src-server/
     mdns.rs             # mDNS service advertisement
 ```
 
+## Shell integration (optional)
+
+Claudette can track terminal commands and display them in the sidebar with status indicators (running, success, failure). This requires adding a snippet to your shell's RC file.
+
+### Zsh
+
+Add to `~/.zshrc`:
+
+```bash
+# Claudette shell integration
+if [[ -n "$CLAUDETTE_PTY" ]]; then
+    _claudette_precmd() {
+        local exit_code=$?
+        printf '\033]133;D;%s\007' "$exit_code"
+        printf '\033]133;A\007'
+        return $exit_code
+    }
+
+    _claudette_preexec() {
+        printf '\033]133;B\007'
+        local cmd_encoded=$(printf '%s' "$1" | jq -sRr @uri 2>/dev/null || printf '%s' "$1" | od -An -tx1 | tr ' ' '%' | tr -d '\n')
+        if [[ -n "$cmd_encoded" ]]; then
+            printf '\033]133;E;%s\007' "$cmd_encoded"
+        fi
+        printf '\033]133;C\007'
+    }
+
+    autoload -Uz add-zsh-hook
+    add-zsh-hook precmd _claudette_precmd
+    add-zsh-hook preexec _claudette_preexec
+fi
+```
+
+### Bash
+
+Add to `~/.bashrc`:
+
+```bash
+# Claudette shell integration
+if [[ -n "$CLAUDETTE_PTY" ]]; then
+    _claudette_prompt_start() {
+        printf '\033]133;A\007'
+    }
+
+    _claudette_prompt_cmd() {
+        local exit_code=$?
+        printf '\033]133;D;%s\007' "$exit_code"
+        _claudette_prompt_start
+        return $exit_code
+    }
+
+    _claudette_preexec() {
+        printf '\033]133;B\007'
+        local cmd_encoded=$(printf '%s' "$BASH_COMMAND" | jq -sRr @uri 2>/dev/null || echo "")
+        if [[ -n "$cmd_encoded" ]]; then
+            printf '\033]133;E;%s\007' "$cmd_encoded"
+        fi
+        printf '\033]133;C\007'
+    }
+
+    PROMPT_COMMAND="_claudette_prompt_cmd"
+    trap '_claudette_preexec' DEBUG
+fi
+```
+
+### Fish
+
+Add to `~/.config/fish/config.fish`:
+
+```fish
+# Claudette shell integration
+if test -n "$CLAUDETTE_PTY"
+    function __claudette_prompt_start --on-event fish_prompt
+        printf '\033]133;A\007'
+    end
+
+    function __claudette_preexec --on-event fish_preexec
+        printf '\033]133;B\007'
+        set cmd (string join ' ' $argv)
+        set cmd_encoded (string escape --style=url -- $cmd)
+        if test -n "$cmd_encoded"
+            printf '\033]133;E;%s\007' "$cmd_encoded"
+        end
+        printf '\033]133;C\007'
+    end
+
+    function __claudette_postexec --on-event fish_postexec
+        printf '\033]133;D;%s\007' $status
+    end
+end
+```
+
+After adding the snippet, restart your terminal or run `source ~/.zshrc` (or `~/.bashrc`/`~/.config/fish/config.fish`). Commands will now appear in the sidebar.
+
 ## Remote access
 
 Claudette can connect to workspaces on another machine. The remote machine runs `claudette-server`, a headless backend that communicates over an encrypted WebSocket connection. The local Claudette app discovers or connects to it and displays remote repos, agents, and terminals alongside local ones.
