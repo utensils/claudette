@@ -41,13 +41,14 @@ OSC 133 is an industry-standard terminal escape sequence protocol for "semantic 
 - Ghostty
 - Windows Terminal
 
-### The Four Core Sequences
+### The Core Sequences
 
 ```
-\033]133;A\007    → Prompt starts (PS1 is being displayed)
-\033]133;B\007    → Command starts (user pressed Enter, command text captured)
-\033]133;C\007    → Command output begins (execution started)
-\033]133;D;$?\007 → Command finishes (with exit code $?)
+\033]133;A\007      → Prompt starts (PS1 is being displayed)
+\033]133;B\007      → Command input starts (user can type)
+\033]133;C\007      → Command execution begins
+\033]133;D;$?\007   → Command finishes (with exit code $?)
+\033]133;E;cmd\007  → Explicit command text (Claudette extension)
 ```
 
 Where:
@@ -57,14 +58,21 @@ Where:
 
 ### How It Works
 
+**Standard OSC 133 flow (ideal, used by zsh):**
 1. Shell emits `A` before displaying prompt
-2. User types command and presses Enter
-3. Shell emits `B` (marks command start) and `C` (execution begins)
-4. Terminal captures text between `B` and `C` as the command
-5. Command runs, outputs to terminal
-6. Command exits
-7. Shell emits `D` with exit code
+2. User sees prompt, shell emits `B` to mark input start
+3. User types command text
+4. User presses Enter, shell emits `C` to mark execution
+5. Terminal captures text between `B` and `C` as the command
+6. Command runs, outputs to terminal
+7. Command exits, shell emits `D` with exit code
 8. Cycle repeats
+
+**Bash/Fish workaround (using OSC 133;E extension):**
+- Bash/Fish lack hooks to emit `B` before user input
+- Instead, they emit `B`, then `E` with the command text explicitly, then `C`
+- The `E` sequence contains the command as URL-encoded text
+- Parser extracts command from `E` sequence instead of between `B` and `C`
 
 ### Backward Compatibility
 
@@ -139,14 +147,9 @@ Claudette ships with three scripts (created on first setup):
 # Claudette shell integration for bash
 # This script enables command tracking and exit code reporting.
 
-_claudette_prompt_start() {
-    printf '\033]133;A\007'
-}
-
 _claudette_command_finished() {
     local exit_code=$?
     printf '\033]133;D;%s\007' "$exit_code"
-    printf '\033]133;A\007'  # Next prompt starts
     return $exit_code
 }
 
@@ -157,12 +160,23 @@ else
     PROMPT_COMMAND="${PROMPT_COMMAND%;}; _claudette_command_finished"
 fi
 
-# PS0 is executed after command is read but before execution
-# Emit B (command start) and C (execution start) markers
-PS0='\[\033]133;B\007\033]133;C\007\]'
-
-# Emit A (prompt start) marker before user's PS1
+# Emit A (prompt start) at the beginning of the prompt
 PS1='\[\033]133;A\007\]'"${PS1}"
+
+# PS0 is executed after command line is read, before execution
+# Bash doesn't let us emit B before user input, so we use an extended
+# format: OSC 133;E;command to send the command text explicitly
+# We also emit B and C for compatibility
+_claudette_ps0() {
+    # URL-encode the command to avoid issues with special characters
+    local cmd_encoded=$(printf '%s' "$BASH_COMMAND" | jq -sRr @uri 2>/dev/null || echo "")
+    printf '\033]133;B\007'
+    if [[ -n "$cmd_encoded" ]]; then
+        printf '\033]133;E;%s\007' "$cmd_encoded"
+    fi
+    printf '\033]133;C\007'
+}
+PS0='$(_claudette_ps0)'
 ```
 
 **File: `~/.config/claudette/shell-integration.zsh`**
@@ -187,9 +201,9 @@ autoload -Uz add-zsh-hook
 add-zsh-hook precmd _claudette_precmd
 add-zsh-hook preexec _claudette_preexec
 
-# Embed B marker (command start) in prompt
+# Embed B marker (command start) at the END of the prompt
 # Use %{...%} to mark as non-printing for correct width calculation
-PS1='%{$(printf "\033]133;B\007")%}'"${PS1}"
+PS1="${PS1}"'%{$(printf "\033]133;B\007")%}'
 ```
 
 **File: `~/.config/claudette/shell-integration.fish`**
@@ -202,16 +216,21 @@ function __claudette_prompt_start --on-event fish_prompt
     printf '\033]133;A\007'
 end
 
+# Emit B, explicit command text via E, and C in preexec
+# Fish provides the command in $argv
 function __claudette_preexec --on-event fish_preexec
+    printf '\033]133;B\007'
+    # URL-encode command to handle special characters
+    set cmd_encoded (string join ' ' $argv | jq -sRr @uri 2>/dev/null; or echo "")
+    if test -n "$cmd_encoded"
+        printf '\033]133;E;%s\007' "$cmd_encoded"
+    end
     printf '\033]133;C\007'
 end
 
 function __claudette_postexec --on-event fish_postexec
     printf '\033]133;D;%s\007' $status
 end
-
-# Fish 3.2+ emits B marker automatically via fish_prompt
-# For older versions, we'd need to wrap the prompt function
 ```
 
 ### 3.3 RC File Modifications
@@ -306,6 +325,7 @@ pub enum Osc133Event {
     CommandStart,
     CommandExecuted,
     CommandFinished { exit_code: i32 },
+    CommandText { command: String }, // Extended: explicit command text
 }
 
 pub struct Osc133Parser {
@@ -400,6 +420,13 @@ impl Osc133Parser {
         else if let Some(code_str) = s.strip_prefix("133;D;") {
             let exit_code = code_str.trim().parse().unwrap_or(0);
             Some(Osc133Event::CommandFinished { exit_code })
+        }
+        else if let Some(cmd_encoded) = s.strip_prefix("133;E;") {
+            // Extended: explicit command text (URL-encoded)
+            let command = urlencoding::decode(cmd_encoded.trim())
+                .unwrap_or_default()
+                .to_string();
+            Some(Osc133Event::CommandText { command })
         }
         else {
             None
@@ -581,10 +608,21 @@ pub async fn spawn_pty(
                     for event in parser.feed(data) {
                         match event {
                             Osc133Event::CommandStart => {
-                                // Will extract command after CommandExecuted
+                                // Will extract command from CommandText event or text between B and C
+                            }
+                            Osc133Event::CommandText { command } => {
+                                // Explicit command text (used by bash via OSC 133;E)
+                                *cmd_clone.lock() = Some(command.clone());
+                                *running_clone.lock() = true;
+
+                                let _ = emitter_app.emit("pty-command-detected", &CommandEvent {
+                                    pty_id: reader_pty_id,
+                                    command: Some(command),
+                                    exit_code: None,
+                                });
                             }
                             Osc133Event::CommandExecuted => {
-                                // Extract command text captured between B and C markers
+                                // Extract command text captured between B and C markers (zsh)
                                 if let Some(cmd) = parser.extract_command() {
                                     *cmd_clone.lock() = Some(cmd.clone());
                                     *running_clone.lock() = true;
@@ -781,7 +819,7 @@ fn generate_loader_code(shell_type: ShellType, script_path: &Path) -> String {
 **File: `src/ui/src/components/modals/ShellIntegrationSetupModal.tsx`**
 
 ```typescript
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import { setupShellIntegration, applyShellIntegration } from "../../services/tauri";
 import { invoke } from "@tauri-apps/api/core";
@@ -798,9 +836,9 @@ export function ShellIntegrationSetupModal() {
   } | null>(null);
 
   // Fetch setup details on mount
-  useState(() => {
+  useEffect(() => {
     detectAndFetchSetup();
-  });
+  }, []);
 
   async function detectAndFetchSetup() {
     try {
