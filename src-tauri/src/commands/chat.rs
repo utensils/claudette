@@ -167,12 +167,42 @@ pub async fn send_chat_message(
     session.active_pid = Some(turn_handle.pid);
     drop(agents);
 
+    // Capture rename context before the bridge spawn.
+    let rename_repo_path = repo.as_ref().map(|r| r.path.clone());
+    let rename_old_branch = ws.branch_name.clone();
+    let rename_old_name = ws.name.clone();
+    let rename_prompt = content.clone();
+
     // Bridge: read from mpsc receiver, emit Tauri events.
     let ws_id = workspace_id.clone();
     let db_path = state.db_path.clone();
     let wt_path = worktree_path.clone();
     let user_msg_id = user_msg.id.clone();
     tokio::spawn(async move {
+        // On the first turn, spawn a background task to auto-rename the branch
+        // using Haiku. This runs concurrently and does not block the event loop.
+        if !is_resume && let Some(ref repo_path) = rename_repo_path {
+            let ws_id2 = ws_id.clone();
+            let repo_path2 = repo_path.clone();
+            let old_branch2 = rename_old_branch.clone();
+            let old_name2 = rename_old_name.clone();
+            let prompt2 = rename_prompt.clone();
+            let db_path2 = db_path.clone();
+            let app2 = app.clone();
+            tokio::spawn(async move {
+                try_auto_rename(
+                    &ws_id2,
+                    &repo_path2,
+                    &old_name2,
+                    &old_branch2,
+                    &prompt2,
+                    &db_path2,
+                    &app2,
+                )
+                .await;
+            });
+        }
+
         let mut rx = turn_handle.event_rx;
         let mut got_init = false;
         // Track the last assistant message inserted in THIS turn. Falls back
@@ -509,6 +539,75 @@ pub async fn load_completed_turns(
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     db.list_completed_turns(&workspace_id)
         .map_err(|e| e.to_string())
+}
+
+/// Background task: generate a descriptive branch name via Haiku and rename
+/// the workspace's branch + DB record. All failures are non-fatal.
+async fn try_auto_rename(
+    ws_id: &str,
+    repo_path: &str,
+    old_name: &str,
+    old_branch: &str,
+    prompt: &str,
+    db_path: &std::path::Path,
+    app: &AppHandle,
+) {
+    // Ask Haiku for a branch name slug.
+    let slug = match agent::generate_branch_name(prompt).await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[rename] Haiku branch name generation failed: {e}");
+            return;
+        }
+    };
+
+    // Try the slug, then slug-2, slug-3 on name collision.
+    let candidates = [slug.clone(), format!("{slug}-2"), format!("{slug}-3")];
+    for candidate in &candidates {
+        let new_branch = format!("claudette/{candidate}");
+
+        let db = match Database::open(db_path) {
+            Ok(db) => db,
+            Err(e) => {
+                eprintln!("[rename] Failed to open DB: {e}");
+                return;
+            }
+        };
+
+        match db.rename_workspace(ws_id, candidate, &new_branch) {
+            Ok(()) => {
+                // DB updated — now rename the git branch.
+                if let Err(e) = git::rename_branch(repo_path, old_branch, &new_branch).await {
+                    eprintln!("[rename] Git branch rename failed: {e} — rolling back DB");
+                    let _ = db.rename_workspace(ws_id, old_name, old_branch);
+                    return;
+                }
+
+                // Success — notify the frontend.
+                let payload = serde_json::json!({
+                    "workspace_id": ws_id,
+                    "name": candidate,
+                    "branch_name": new_branch,
+                });
+                let _ = app.emit("workspace-renamed", &payload);
+                eprintln!("[rename] Workspace {ws_id} renamed to {candidate} ({new_branch})");
+                return;
+            }
+            Err(e) => {
+                // Check if this is a unique constraint violation by inspecting
+                // the error message (rusqlite is not a direct dependency here).
+                let msg = e.to_string();
+                if msg.contains("UNIQUE constraint failed") {
+                    eprintln!("[rename] Name {candidate:?} collides, trying next");
+                    continue;
+                }
+                eprintln!("[rename] DB rename failed: {e}");
+                return;
+            }
+        }
+    }
+
+    eprintln!("[rename] All name candidates exhausted for workspace {ws_id}");
 }
 
 fn now_iso() -> String {

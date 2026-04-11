@@ -484,6 +484,22 @@ impl Database {
         Ok(())
     }
 
+    /// Rename a workspace's name and branch. Relies on the
+    /// `UNIQUE(repository_id, name)` constraint — callers should handle
+    /// constraint-violation errors to retry with a suffix.
+    pub fn rename_workspace(
+        &self,
+        id: &str,
+        new_name: &str,
+        new_branch_name: &str,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE workspaces SET name = ?1, branch_name = ?2 WHERE id = ?3",
+            params![new_name, new_branch_name, id],
+        )?;
+        Ok(())
+    }
+
     pub fn delete_workspace(&self, id: &str) -> Result<(), rusqlite::Error> {
         self.conn
             .execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
@@ -1126,6 +1142,34 @@ mod tests {
         let workspaces = db.list_workspaces().unwrap();
         assert_eq!(workspaces[0].status, WorkspaceStatus::Archived);
         assert!(workspaces[0].worktree_path.is_none());
+    }
+
+    #[test]
+    fn test_rename_workspace() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w1", "r1", "old-name"))
+            .unwrap();
+        db.rename_workspace("w1", "new-name", "claudette/new-name")
+            .unwrap();
+        let workspaces = db.list_workspaces().unwrap();
+        assert_eq!(workspaces[0].name, "new-name");
+        assert_eq!(workspaces[0].branch_name, "claudette/new-name");
+    }
+
+    #[test]
+    fn test_rename_workspace_unique_conflict() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w1", "r1", "name-a"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w2", "r1", "name-b"))
+            .unwrap();
+        // Renaming w1 to "name-b" should fail (unique constraint).
+        let result = db.rename_workspace("w1", "name-b", "claudette/name-b");
+        assert!(result.is_err());
     }
 
     #[test]

@@ -443,4 +443,22 @@ export function useAgentStream() {
       unlisten.then((fn) => fn());
     };
   }, [addCheckpoint, setChatMessages]);
+
+  // Listen for workspace-renamed events (auto-rename after first prompt).
+  useEffect(() => {
+    let active = true;
+    const unlisten = listen<{
+      workspace_id: string;
+      name: string;
+      branch_name: string;
+    }>("workspace-renamed", (event) => {
+      if (!active) return;
+      const { workspace_id: wsId, name, branch_name } = event.payload;
+      updateWorkspace(wsId, { name, branch_name });
+    });
+    return () => {
+      active = false;
+      unlisten.then((fn) => fn());
+    };
+  }, [updateWorkspace]);
 }

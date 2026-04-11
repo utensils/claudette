@@ -262,6 +262,16 @@ pub async fn restore_to_commit(worktree_path: &str, commit_hash: &str) -> Result
     Ok(())
 }
 
+/// Rename a branch. The worktree's HEAD follows automatically.
+pub async fn rename_branch(
+    repo_path: &str,
+    old_name: &str,
+    new_name: &str,
+) -> Result<(), GitError> {
+    run_git(repo_path, &["branch", "-m", old_name, new_name]).await?;
+    Ok(())
+}
+
 /// Get the current branch name for a worktree or repository.
 /// Returns an error if in a detached HEAD state.
 pub async fn current_branch(repo_path: &str) -> Result<String, GitError> {
@@ -425,5 +435,45 @@ mod tests {
             .await
             .unwrap();
         assert!(!branches.trim().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_rename_branch() {
+        let dir = setup_temp_repo().await;
+        let path = dir.path().to_str().unwrap();
+
+        // Create a feature branch.
+        run_git(path, &["checkout", "-b", "claudette/old-name"])
+            .await
+            .unwrap();
+        run_git(path, &["checkout", "main"]).await.unwrap();
+
+        rename_branch(path, "claudette/old-name", "claudette/new-name")
+            .await
+            .unwrap();
+
+        // Old branch should be gone, new branch should exist.
+        let branches = list_branches(path).await.unwrap();
+        assert!(!branches.contains(&"claudette/old-name".to_string()));
+        assert!(branches.contains(&"claudette/new-name".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_rename_branch_conflict() {
+        let dir = setup_temp_repo().await;
+        let path = dir.path().to_str().unwrap();
+
+        run_git(path, &["checkout", "-b", "branch-a"])
+            .await
+            .unwrap();
+        run_git(path, &["checkout", "main"]).await.unwrap();
+        run_git(path, &["checkout", "-b", "branch-b"])
+            .await
+            .unwrap();
+        run_git(path, &["checkout", "main"]).await.unwrap();
+
+        // Renaming branch-a to branch-b should fail (already exists).
+        let result = rename_branch(path, "branch-a", "branch-b").await;
+        assert!(result.is_err());
     }
 }
