@@ -2,6 +2,7 @@
 name = "claudette-tauri"
 version = "0.5.3"
 edition = "2024"
+license = "MIT"
 
 [dependencies]
 claudette = { path = ".." }
