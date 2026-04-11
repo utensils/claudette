@@ -113,6 +113,9 @@ impl Osc133Parser {
             Some(Osc133Event::CommandFinished { exit_code })
         } else if let Some(cmd_encoded) = s.strip_prefix("133;E;") {
             // Extended: explicit command text (URL-encoded)
+            // When we receive explicit command text, stop tracking between B and C
+            self.tracking_command = false;
+            self.command_buffer.clear();
             let command = urlencoding::decode(cmd_encoded.trim())
                 .unwrap_or_default()
                 .to_string();
@@ -285,5 +288,24 @@ mod tests {
         parser.feed(b"\x1b[2Jnpm run \x1b[31mbuild\x1b[0m");
         parser.feed(b"\x1b]133;C\x07");
         assert_eq!(parser.extract_command(), Some("npm run build".to_string()));
+    }
+
+    #[test]
+    fn test_explicit_command_stops_tracking() {
+        let mut parser = Osc133Parser::new();
+
+        // Bash/Fish sends B, then some text, then E with explicit command, then C
+        parser.feed(b"\x1b]133;B\x07");
+        parser.feed(b"pnpm dev"); // This should be ignored once we get E
+        let events = parser.feed(b"\x1b]133;E;pnpm%20dev\x07");
+        assert_eq!(
+            events,
+            vec![Osc133Event::CommandText {
+                command: "pnpm dev".to_string()
+            }]
+        );
+        parser.feed(b"\x1b]133;C\x07");
+        // Should not extract duplicate command from B-C tracking
+        assert_eq!(parser.extract_command(), None);
     }
 }
