@@ -53,7 +53,7 @@
         "applicationFolderPosition": { "x": 480, "y": 170 },
         "windowSize": { "width": 660, "height": 400 }
       },
-      "minimumSystemVersion": "10.13"
+      "minimumSystemVersion": "11.0"
     }
   },
   "plugins": {
