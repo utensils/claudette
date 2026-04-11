@@ -326,6 +326,7 @@ async fn handle_send_chat_message(
         cost_usd: None,
         duration_ms: None,
         created_at: now_iso(),
+        thinking: None,
     };
     db.insert_chat_message(&user_msg)
         .map_err(|e| e.to_string())?;
@@ -421,6 +422,25 @@ async fn handle_send_chat_message(
                     .collect::<Vec<_>>()
                     .join("");
 
+                let thinking_text: Option<String> = {
+                    let parts: Vec<&str> = message
+                        .content
+                        .iter()
+                        .filter_map(|block| {
+                            if let claudette::agent::ContentBlock::Thinking { thinking } = block {
+                                Some(thinking.as_str())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    if parts.is_empty() {
+                        None
+                    } else {
+                        Some(parts.join(""))
+                    }
+                };
+
                 if !full_text.trim().is_empty()
                     && let Ok(db) = Database::open(&db_path)
                 {
@@ -432,6 +452,7 @@ async fn handle_send_chat_message(
                         cost_usd: None,
                         duration_ms: None,
                         created_at: now_iso(),
+                        thinking: thinking_text,
                     };
                     let _ = db.insert_chat_message(&msg);
                 }
@@ -486,6 +507,7 @@ async fn handle_stop_agent(
         cost_usd: None,
         duration_ms: None,
         created_at: now_iso(),
+        thinking: None,
     };
     db.insert_chat_message(&msg).map_err(|e| e.to_string())?;
     Ok(json!(null))

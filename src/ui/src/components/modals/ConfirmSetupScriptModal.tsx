@@ -33,6 +33,7 @@ export function ConfirmSetupScriptModal() {
           cost_usd: null,
           duration_ms: null,
           created_at: new Date().toISOString(),
+          thinking: null,
         });
       }
       closeModal();
@@ -45,6 +46,7 @@ export function ConfirmSetupScriptModal() {
         cost_usd: null,
         duration_ms: null,
         created_at: new Date().toISOString(),
+        thinking: null,
       });
       closeModal();
     }

@@ -320,6 +320,7 @@ export function useAgentStream() {
                 cost_usd: null,
                 duration_ms: null,
                 created_at: new Date().toISOString(),
+                thinking: useAppStore.getState().streamingThinking[wsId] || null,
               });
             }
             setStreamingContent(wsId, "");

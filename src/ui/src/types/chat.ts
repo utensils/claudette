@@ -8,4 +8,5 @@ export interface ChatMessage {
   cost_usd: number | null;
   duration_ms: number | null;
   created_at: string;
+  thinking: string | null;
 }

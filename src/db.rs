@@ -228,6 +228,13 @@ impl Database {
             )?;
         }
 
+        if version < 13 {
+            self.conn.execute_batch(
+                "ALTER TABLE chat_messages ADD COLUMN thinking TEXT;
+                 PRAGMA user_version = 13;",
+            )?;
+        }
+
         Ok(())
     }
 
@@ -514,8 +521,8 @@ impl Database {
     #[allow(dead_code)]
     pub fn insert_chat_message(&self, msg: &ChatMessage) -> Result<(), rusqlite::Error> {
         self.conn.execute(
-            "INSERT INTO chat_messages (id, workspace_id, role, content, cost_usd, duration_ms)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO chat_messages (id, workspace_id, role, content, cost_usd, duration_ms, thinking)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 msg.id,
                 msg.workspace_id,
@@ -523,6 +530,7 @@ impl Database {
                 msg.content,
                 msg.cost_usd,
                 msg.duration_ms,
+                msg.thinking,
             ],
         )?;
         Ok(())
@@ -534,7 +542,7 @@ impl Database {
         workspace_id: &str,
     ) -> Result<Vec<ChatMessage>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, workspace_id, role, content, cost_usd, duration_ms, created_at
+            "SELECT id, workspace_id, role, content, cost_usd, duration_ms, created_at, thinking
              FROM chat_messages WHERE workspace_id = ?1 ORDER BY created_at, rowid",
         )?;
         let rows = stmt.query_map(params![workspace_id], |row| {
@@ -547,6 +555,7 @@ impl Database {
                 cost_usd: row.get(4)?,
                 duration_ms: row.get(5)?,
                 created_at: row.get(6)?,
+                thinking: row.get(7)?,
             })
         })?;
         rows.collect()
@@ -584,7 +593,7 @@ impl Database {
     /// one row per workspace even when multiple messages share the same timestamp.
     pub fn last_message_per_workspace(&self) -> Result<Vec<ChatMessage>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
-            "SELECT m.id, m.workspace_id, m.role, m.content, m.cost_usd, m.duration_ms, m.created_at
+            "SELECT m.id, m.workspace_id, m.role, m.content, m.cost_usd, m.duration_ms, m.created_at, m.thinking
              FROM chat_messages m
              WHERE m.rowid = (
                  SELECT rowid FROM chat_messages c2
@@ -603,6 +612,7 @@ impl Database {
                 cost_usd: row.get(4)?,
                 duration_ms: row.get(5)?,
                 created_at: row.get(6)?,
+                thinking: row.get(7)?,
             })
         })?;
         rows.collect()
@@ -1264,6 +1274,7 @@ mod tests {
             cost_usd: None,
             duration_ms: None,
             created_at: String::new(),
+            thinking: None,
         }
     }
 

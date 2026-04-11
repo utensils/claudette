@@ -494,6 +494,7 @@ export function ChatPanel() {
       cost_usd: null,
       duration_ms: null,
       created_at: new Date().toISOString(),
+      thinking: null,
     });
     updateWorkspace(selectedWorkspaceId, { agent_status: "Running" });
 
@@ -918,6 +919,9 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
     (s) => s.checkpoints[workspaceId] ?? EMPTY_CHECKPOINTS
   );
   const openModal = useAppStore((s) => s.openModal);
+  const showThinkingBlocks = useAppStore(
+    (s) => s.showThinkingBlocks[workspaceId] !== false
+  );
 
   // Build an index: afterMessageIndex → array of (turn, globalIndex) pairs.
   // Only recomputed when completedTurns changes, not on every streaming update.
@@ -1012,6 +1016,9 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
                   <RotateCcw size={14} />
                 </button>
               )}
+            {msg.role === "Assistant" && msg.thinking && showThinkingBlocks && (
+              <ThinkingBlock content={msg.thinking} isStreaming={false} />
+            )}
             <div className={styles.content}>
               {msg.role === "Assistant" ? (
                 <Markdown

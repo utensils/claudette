@@ -148,7 +148,7 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
         className={`${styles.chip} ${fastMode ? styles.chipActive : ""}`}
         onClick={toggleFast}
         disabled={disabled}
-        title="Enable fast mode (uses extra credits)"
+        title={`${fastMode ? "Disable" : "Enable"} fast mode (faster output, same model)`}
         aria-pressed={fastMode}
       >
         <Zap size={14} />
@@ -158,24 +158,22 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
         className={`${styles.chip} ${thinkingEnabled ? styles.chipActive : ""}`}
         onClick={toggleThinking}
         disabled={disabled}
-        title={`${thinkingEnabled ? "Disable" : "Enable"} thinking`}
+        title={`${thinkingEnabled ? "Disable" : "Enable"} extended thinking (forces reasoning on every turn)`}
         aria-pressed={thinkingEnabled}
       >
         <Brain size={14} />
         <span className={styles.chipLabel}>Thinking</span>
       </button>
 
-      {thinkingEnabled && (
-        <button
-          className={`${styles.chip} ${showThinkingBlocks ? styles.chipActive : ""}`}
-          onClick={toggleShowThinking}
-          disabled={disabled}
-          title={`${showThinkingBlocks ? "Hide" : "Show"} thinking output`}
-          aria-pressed={showThinkingBlocks}
-        >
-          {showThinkingBlocks ? <Eye size={14} /> : <EyeOff size={14} />}
-        </button>
-      )}
+      <button
+        className={`${styles.chip} ${showThinkingBlocks ? styles.chipActive : ""}`}
+        onClick={toggleShowThinking}
+        disabled={disabled}
+        title={`${showThinkingBlocks ? "Hide" : "Show"} thinking traces in chat`}
+        aria-pressed={showThinkingBlocks}
+      >
+        {showThinkingBlocks ? <Eye size={14} /> : <EyeOff size={14} />}
+      </button>
 
       {isEffortSupported(selectedModel) && (
         <button

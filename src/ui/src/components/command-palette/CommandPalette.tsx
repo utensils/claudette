@@ -107,6 +107,7 @@ export function CommandPalette() {
           cost_usd: null,
           duration_ms: null,
           created_at: new Date().toISOString(),
+          thinking: null,
         });
       }
       // Check for setup script and prompt for confirmation.
