@@ -324,9 +324,9 @@ export function useAgentStream() {
               });
             }
             setStreamingContent(wsId, "");
-            // NOTE: Don't clear thinking here — keep it visible after the
-            // response completes so users can review it. It gets cleared
-            // on ProcessExited or when a new thinking block starts.
+            // Clear streaming thinking now that it's been committed to the
+            // assistant message — the persisted msg.thinking handles display.
+            clearStreamingThinking(wsId);
             break;
           }
           case "result": {

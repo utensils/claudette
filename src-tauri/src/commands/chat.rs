@@ -269,7 +269,7 @@ pub async fn send_chat_message(
                     }
                 };
 
-                if !full_text.trim().is_empty()
+                if (!full_text.trim().is_empty() || thinking_text.is_some())
                     && let Ok(db) = Database::open(&db_path)
                 {
                     let msg_id = uuid::Uuid::new_v4().to_string();

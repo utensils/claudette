@@ -441,7 +441,7 @@ async fn handle_send_chat_message(
                     }
                 };
 
-                if !full_text.trim().is_empty()
+                if (!full_text.trim().is_empty() || thinking_text.is_some())
                     && let Ok(db) = Database::open(&db_path)
                 {
                     let msg = ChatMessage {
