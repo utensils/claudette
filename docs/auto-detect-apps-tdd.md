@@ -34,7 +34,7 @@ User clicks "Actions" dropdown on workspace header
 | Dropdown component | `src/ui/src/components/chat/HeaderMenu.tsx` | Flat list of `{ value, label }` items |
 | Terminal open | `src-tauri/src/commands/workspace.rs:410-486` | Tries 6 terminals in order, no upfront detection |
 | Editor open | `src-tauri/src/commands/shell.rs:179-211` | Uses `xdg-open`/`open` (system default), unused by frontend |
-| Service layer | `src/ui/src/services/tauri.ts` | `openWorkspaceInTerminal()` wrapper, unused `openInEditor()` |
+| Service layer | `src/ui/src/services/tauri.ts` | Exports `openWorkspaceInTerminal()`, which is used by `WorkspaceActions`; no `openInEditor()` wrapper currently exists |
 
 ### Gap Analysis
 
@@ -54,6 +54,19 @@ Use a static registry of ~20 known applications with platform-specific detection
 
 No new crate dependencies. Pure `std::fs::metadata` stat calls (~200 checks) complete in well under 50ms.
 
+**macOS GUI process PATH**: Tauri apps on macOS launch as GUI processes and do not inherit the user's full shell `$PATH`. Common tool locations like `/opt/homebrew/bin`, `/usr/local/bin`, and `~/.local/bin` may be absent. The detection logic must augment `$PATH` with well-known prefixes before scanning:
+
+```rust
+const EXTRA_PATH_DIRS: &[&str] = &[
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    "/usr/local/sbin",
+];
+// + expand ~/.local/bin at runtime
+```
+
+These are prepended to the parsed PATH dirs and deduplicated before scanning.
+
 **Why a static registry?** Dynamic discovery (scanning all installed apps) would be slow and return hundreds of irrelevant apps. A curated list of developer tools gives a focused, useful menu.
 
 **Alternatives considered:**
@@ -71,57 +84,70 @@ struct AppCandidate {
     name: &'static str,
     category: AppCategory,        // Editor, Terminal, Ide
     bin_names: &'static [&'static str],  // Binaries to find in $PATH
-    #[cfg(target_os = "macos")]
-    mac_app_names: &'static [&'static str],  // .app bundles in /Applications
-    open_args: &'static [&'static str],  // Args pattern, {} = path placeholder
+    mac_app_names: &'static [&'static str],  // .app bundles in /Applications (empty on Linux-only apps)
+    open_args: &'static [&'static str],  // Extra args after binary, {} = worktree_path placeholder
     needs_terminal: bool,         // TUI apps (vim, nvim, helix)
 }
 ```
 
+`mac_app_names` is present on all platforms (set to `&[]` for Linux-only apps) rather than using `#[cfg(target_os = "macos")]` on the field. This avoids per-platform struct layout divergence and cfg-gating every registry entry. The detection code skips `.app` scanning on Linux, so an empty slice is a clean no-op.
+
 Initial registry:
 
-| id | name | category | Linux bins | macOS .app | open args | needs_terminal |
+The `open_args` column shows only the **extra arguments** after the binary name. The binary to execute is resolved from `bin_names` (or `open -a` for `.app`-only detections). `{}` is a placeholder for `worktree_path`.
+
+| id | name | category | bin_names | mac_app_names | open_args | needs_terminal |
 |---|---|---|---|---|---|---|
-| `vscode` | VS Code | Editor | `code` | `Visual Studio Code.app` | `code {}` | no |
-| `cursor` | Cursor | Editor | `cursor` | `Cursor.app` | `cursor {}` | no |
-| `zed` | Zed | Editor | `zed` | `Zed.app` | `zed {}` | no |
-| `sublime` | Sublime Text | Editor | `subl` | `Sublime Text.app` | `subl {}` | no |
-| `neovim` | Neovim | Editor | `nvim` | — | `nvim {}` | yes |
-| `vim` | Vim | Editor | `vim` | — | `vim {}` | yes |
-| `helix` | Helix | Editor | `hx` | — | `hx {}` | yes |
-| `emacs` | Emacs | Editor | `emacs` | `Emacs.app` | `emacs {}` | no |
-| `alacritty` | Alacritty | Terminal | `alacritty` | `Alacritty.app` | `alacritty --working-directory {}` | — |
-| `kitty` | Kitty | Terminal | `kitty` | `kitty.app` | `kitty --directory {}` | — |
-| `ghostty` | Ghostty | Terminal | `ghostty` | `Ghostty.app` | `ghostty --working-directory={}` | — |
-| `wezterm` | WezTerm | Terminal | `wezterm` | `WezTerm.app` | `wezterm start --cwd {}` | — |
-| `iterm2` | iTerm2 | Terminal | — | `iTerm.app` | (AppleScript) | — |
-| `macos-terminal` | Terminal | Terminal | — | *(always on macOS)* | (AppleScript) | — |
-| `gnome-terminal` | GNOME Terminal | Terminal | `gnome-terminal` | — | `gnome-terminal --working-directory {}` | — |
-| `konsole` | Konsole | Terminal | `konsole` | — | `konsole --workdir {}` | — |
-| `xfce4-terminal` | Xfce Terminal | Terminal | `xfce4-terminal` | — | `xfce4-terminal --working-directory {}` | — |
-| `foot` | Foot | Terminal | `foot` | — | `foot --working-directory {}` | — |
-| `intellij` | IntelliJ IDEA | IDE | `idea` | `IntelliJ IDEA.app`, `IntelliJ IDEA CE.app` | `idea {}` | no |
-| `xcode` | Xcode | IDE | — | `Xcode.app` | `open -a Xcode {}` | no |
+| `vscode` | VS Code | Editor | `["code"]` | `["Visual Studio Code.app"]` | `["{}"]` | no |
+| `cursor` | Cursor | Editor | `["cursor"]` | `["Cursor.app"]` | `["{}"]` | no |
+| `zed` | Zed | Editor | `["zed"]` | `["Zed.app"]` | `["{}"]` | no |
+| `sublime` | Sublime Text | Editor | `["subl"]` | `["Sublime Text.app"]` | `["{}"]` | no |
+| `neovim` | Neovim | Editor | `["nvim"]` | `[]` | `["{}"]` | yes |
+| `vim` | Vim | Editor | `["vim"]` | `[]` | `["{}"]` | yes |
+| `helix` | Helix | Editor | `["hx"]` | `[]` | `["{}"]` | yes |
+| `emacs` | Emacs | Editor | `["emacs"]` | `["Emacs.app"]` | `["{}"]` | no |
+| `alacritty` | Alacritty | Terminal | `["alacritty"]` | `["Alacritty.app"]` | `["--working-directory", "{}"]` | — |
+| `kitty` | Kitty | Terminal | `["kitty"]` | `["kitty.app"]` | `["--directory", "{}"]` | — |
+| `ghostty` | Ghostty | Terminal | `["ghostty"]` | `["Ghostty.app"]` | `["--working-directory={}"]` | — |
+| `wezterm` | WezTerm | Terminal | `["wezterm"]` | `["WezTerm.app"]` | `["start", "--cwd", "{}"]` | — |
+| `iterm2` | iTerm2 | Terminal | `[]` | `["iTerm.app"]` | (AppleScript) | — |
+| `macos-terminal` | Terminal | Terminal | `[]` | *(always on macOS)* | (AppleScript) | — |
+| `gnome-terminal` | GNOME Terminal | Terminal | `["gnome-terminal"]` | `[]` | `["--working-directory", "{}"]` | — |
+| `konsole` | Konsole | Terminal | `["konsole"]` | `[]` | `["--workdir", "{}"]` | — |
+| `xfce4-terminal` | Xfce Terminal | Terminal | `["xfce4-terminal"]` | `[]` | `["--working-directory", "{}"]` | — |
+| `foot` | Foot | Terminal | `["foot"]` | `[]` | `["--working-directory", "{}"]` | — |
+| `intellij` | IntelliJ IDEA | IDE | `["idea"]` | `["IntelliJ IDEA.app", "IntelliJ IDEA CE.app"]` | `["{}"]` | no |
+| `xcode` | Xcode | IDE | `[]` | `["Xcode.app"]` | (uses `open -a`) | no |
 
 ### 3.3 TUI Editor Handling
 
 Terminal-based editors (vim, nvim, helix) cannot launch standalone — they need a terminal host. When `open_workspace_in_app` is called for an app with `needs_terminal: true`:
 
-1. Look up the first detected terminal from the same detection results
-2. Construct a shell command: `cd '{path}' && {editor} .`
-3. Launch via the terminal's exec flag (e.g., `alacritty -e sh -c "cd '/path' && nvim ."`)
+1. Look up the first detected terminal from `AppState.detected_apps` (see §4.1)
+2. Prefer launching without `sh -c` by passing the workspace path via the terminal's `--working-directory` flag and the editor as separate argv entries:
+   - `alacritty --working-directory {worktree_path} -e nvim .`
+   - `gnome-terminal --working-directory {worktree_path} -- nvim .`
+   - `konsole --workdir {worktree_path} -e nvim .`
+   - `kitty --directory {worktree_path} nvim .`
+3. Only if a terminal provides no argv-safe alternative, fall back to the robust escaping approach already used by `open_workspace_in_terminal` in `src-tauri/src/commands/workspace.rs` (which escapes single quotes and backslashes before interpolation). Never build ad hoc commands like `cd '{path}' && {editor} .`.
+
+All paths are passed as separate `tokio::process::Command` arguments — not interpolated into shell strings — so no shell quoting or escaping is needed for the common case. This eliminates the shell injection risk.
 
 If no terminal is detected (unlikely), return an error.
 
 ### 3.4 macOS AppleScript Terminals
 
-iTerm2 and macOS Terminal.app require AppleScript to open with a working directory. Reuse the existing pattern from `open_workspace_in_terminal`:
+iTerm2 and macOS Terminal.app require AppleScript to open with a working directory. Reuse the existing escaping pattern from `open_workspace_in_terminal` in `src-tauri/src/commands/workspace.rs:459-480`, which escapes both backslashes and single quotes before interpolating into AppleScript strings:
+
+```rust
+let escaped = worktree_path.replace('\\', r"\\").replace('\'', r"'\''");
+```
 
 **Terminal.app:**
 ```applescript
 tell application "Terminal"
     activate
-    do script "cd '{path}'"
+    do script "cd '{escaped_path}'"
 end tell
 ```
 
@@ -129,15 +155,22 @@ end tell
 ```applescript
 tell application "iTerm"
     activate
-    create window with default profile command "cd '{path}' && exec $SHELL"
+    create window with default profile command "cd '{escaped_path}' && exec $SHELL"
 end tell
 ```
 
+The `{escaped_path}` notation indicates the path has been processed through the escaping logic above before interpolation. This is the same strategy the codebase already uses and is safe against paths containing single quotes, backslashes, or shell metacharacters.
+
 ### 3.5 macOS .app Bundle Detection for CLI Tools
 
-Some macOS apps install CLI wrappers only after the user explicitly enables them (VS Code's "Install 'code' command in PATH"). When the `.app` bundle exists in `/Applications` but the CLI binary is not in `$PATH`, use `open -a "{App Name}" {path}` as the open command instead of the CLI binary.
+Some macOS apps install CLI wrappers only after the user explicitly enables them (VS Code's "Install 'code' command in PATH"). When the `.app` bundle exists in `/Applications` but the CLI binary is not in `$PATH`, use `open -a "{App Name}" "{worktree_path}"` as the open command instead of the CLI binary.
 
-The `DetectedApp` struct includes a `path` field that records what was found — either the binary path from `$PATH` or the `.app` bundle path. The `open_workspace_in_app` command checks which was detected and adjusts the launch strategy accordingly.
+To avoid ambiguity between the detected application location and the workspace target path:
+
+- **`DetectedApp.detected_path`**: The location of the app itself — either the resolved binary path from `$PATH` (e.g., `/opt/homebrew/bin/code`) or the `.app` bundle path (e.g., `/Applications/Visual Studio Code.app`). Used by `open_workspace_in_app` to determine the launch strategy.
+- **`worktree_path`**: The workspace directory to open. Always passed as the target argument to the app.
+
+The `open_workspace_in_app` command inspects `detected_path` to decide the launch strategy: if it ends in `.app`, use `open -a`; otherwise, invoke the binary directly with `open_args`.
 
 ## 4. Implementation
 
@@ -159,8 +192,8 @@ pub struct DetectedApp {
     pub id: String,
     pub name: String,
     pub category: AppCategory,
-    /// The binary or .app path that was found
-    pub path: String,
+    /// The location of the app itself — binary path from $PATH or .app bundle path
+    pub detected_path: String,
 }
 ```
 
@@ -168,15 +201,20 @@ Detection command:
 
 ```rust
 #[tauri::command]
-pub async fn detect_installed_apps() -> Result<Vec<DetectedApp>, String> {
-    tokio::task::spawn_blocking(detect_apps_blocking)
+pub async fn detect_installed_apps(
+    state: State<'_, AppState>,
+) -> Result<Vec<DetectedApp>, String> {
+    let apps = tokio::task::spawn_blocking(detect_apps_blocking)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // Cache in AppState so open_workspace_in_app can access detected terminals for TUI wrapping
+    *state.detected_apps.lock().unwrap() = apps.clone();
+    Ok(apps)
 }
 ```
 
 `detect_apps_blocking` implementation:
-1. Parse `$PATH` into a `Vec<PathBuf>` (split on `:`)
+1. Parse `$PATH` into a `Vec<PathBuf>` (split on `:`), then augment with well-known prefixes (`/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`) and deduplicate
 2. For each `AppCandidate` in the registry:
    - Check each `bin_name` against each PATH dir via `std::fs::metadata(dir.join(bin))`
    - On Linux: verify executable bit with `std::os::unix::fs::PermissionsExt` (`mode & 0o111 != 0`)
@@ -184,18 +222,33 @@ pub async fn detect_installed_apps() -> Result<Vec<DetectedApp>, String> {
    - On macOS: always include `macos-terminal` (ships with the OS)
 3. Return `Vec<DetectedApp>` sorted by category then name
 
+**AppState extension** in `src-tauri/src/state.rs`:
+
+```rust
+pub struct AppState {
+    // ... existing fields ...
+    pub detected_apps: Mutex<Vec<DetectedApp>>,
+}
+```
+
+This allows `open_workspace_in_app` to look up detected terminals when wrapping TUI editors, without re-running detection on every call.
+
 Open command:
 
 ```rust
 #[tauri::command]
-pub async fn open_workspace_in_app(app_id: String, worktree_path: String) -> Result<(), String>
+pub async fn open_workspace_in_app(
+    app_id: String,
+    worktree_path: String,
+    state: State<'_, AppState>,
+) -> Result<(), String>
 ```
 
 - Look up `AppCandidate` by id in the static registry
-- Substitute `{}` in args with `worktree_path`
-- For `needs_terminal` apps: wrap in first detected terminal
-- For macOS AppleScript apps: spawn via `osascript -e`
-- For `.app`-only detections (no CLI binary): use `open -a "{name}" "{path}"`
+- Build argv by substituting `{}` in `open_args` with `worktree_path` — all paths passed as separate `Command` args, never interpolated into shell strings
+- For `needs_terminal` apps: read `state.detected_apps` to find the first detected terminal, then launch using argv-style args (see §3.3)
+- For macOS AppleScript apps (iterm2, macos-terminal): spawn via `osascript -e` with escaped path (see §3.4)
+- For `.app`-only detections (no CLI binary in PATH): use `open -a "{app_name}" "{worktree_path}"`
 - Spawn detached via `tokio::process::Command`
 
 Register in `src-tauri/src/commands/mod.rs`: `pub mod apps;`
@@ -218,7 +271,7 @@ export interface DetectedApp {
   id: string;
   name: string;
   category: AppCategory;
-  path: string;
+  detected_path: string;
 }
 ```
 
@@ -331,6 +384,7 @@ const CATEGORY_ORDER = ["editor", "terminal", "ide"];
 | `src-tauri/src/commands/apps.rs` | **New** — app registry, detection logic, open command |
 | `src-tauri/src/commands/mod.rs` | Add `pub mod apps;` |
 | `src-tauri/src/main.rs` | Register `detect_installed_apps`, `open_workspace_in_app` |
+| `src-tauri/src/state.rs` | Add `detected_apps: Mutex<Vec<DetectedApp>>` to `AppState` |
 | `src/ui/src/types/apps.ts` | **New** — `DetectedApp`, `AppCategory` types |
 | `src/ui/src/types/index.ts` | Re-export apps types |
 | `src/ui/src/services/tauri.ts` | Add `detectInstalledApps`, `openWorkspaceInApp` |
