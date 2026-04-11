@@ -449,26 +449,34 @@ pub fn sanitize_branch_name(raw: &str, max_len: usize) -> String {
 
 /// Call Claude Haiku to generate a short branch name slug from the user's
 /// first prompt. Returns a sanitized branch slug (e.g. `fix-login-timeout`).
-pub async fn generate_branch_name(prompt_text: &str) -> Result<String, String> {
+/// `worktree_path` sets the subprocess CWD so the CLI picks up the correct
+/// project context (CLAUDE.md) for the user's workspace — not Claudette's own.
+pub async fn generate_branch_name(
+    prompt_text: &str,
+    worktree_path: &str,
+) -> Result<String, String> {
     // Truncate prompt to keep the Haiku call fast and cheap.
     let truncated: String = prompt_text.chars().take(200).collect();
 
     let mut cmd = Command::new("claude");
     cmd.stdin(std::process::Stdio::null());
+    // Run in the user's worktree so the CLI loads *their* project context.
+    cmd.current_dir(worktree_path);
+    let user_message = format!(
+        "Generate a short git branch name slug for the following task. \
+         Output ONLY the slug — no explanation, no markdown, no quotes. \
+         Lowercase letters, numbers, and hyphens only. Max 30 chars.\n\n\
+         Task: {truncated}"
+    );
     cmd.args([
         "--print",
         "--output-format",
         "text",
         "--model",
         "claude-haiku-4-5",
-        "--max-turns",
-        "1",
         "--append-system-prompt",
-        "You are a git branch name generator. Given the user's task description, \
-         output a single branch-safe slug: lowercase ASCII letters, numbers, and \
-         hyphens only. No spaces, no quotes, no explanation. Max 40 characters. \
-         Output ONLY the slug.",
-        &truncated,
+        "You are a branch name generator. Output ONLY a slug. Never answer the task itself.",
+        &user_message,
     ]);
 
     // Strip env vars that interfere with subprocess auth — same as run_turn.
@@ -491,7 +499,7 @@ pub async fn generate_branch_name(prompt_text: &str) -> Result<String, String> {
     }
 
     let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let slug = sanitize_branch_name(&raw, 40);
+    let slug = sanitize_branch_name(&raw, 30);
     if slug.is_empty() {
         return Err(format!(
             "Haiku returned empty or unsanitizable output: {raw:?}"

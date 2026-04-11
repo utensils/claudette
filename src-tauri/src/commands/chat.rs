@@ -184,6 +184,7 @@ pub async fn send_chat_message(
         if !is_resume && let Some(ref repo_path) = rename_repo_path {
             let ws_id2 = ws_id.clone();
             let repo_path2 = repo_path.clone();
+            let wt_path2 = wt_path.clone();
             let old_branch2 = rename_old_branch.clone();
             let old_name2 = rename_old_name.clone();
             let prompt2 = rename_prompt.clone();
@@ -193,6 +194,7 @@ pub async fn send_chat_message(
                 try_auto_rename(
                     &ws_id2,
                     &repo_path2,
+                    &wt_path2,
                     &old_name2,
                     &old_branch2,
                     &prompt2,
@@ -543,9 +545,11 @@ pub async fn load_completed_turns(
 
 /// Background task: generate a descriptive branch name via Haiku and rename
 /// the workspace's branch + DB record. All failures are non-fatal.
+#[allow(clippy::too_many_arguments)]
 async fn try_auto_rename(
     ws_id: &str,
     repo_path: &str,
+    worktree_path: &str,
     old_name: &str,
     old_branch: &str,
     prompt: &str,
@@ -553,7 +557,7 @@ async fn try_auto_rename(
     app: &AppHandle,
 ) {
     // Ask Haiku for a branch name slug.
-    let slug = match agent::generate_branch_name(prompt).await {
+    let slug = match agent::generate_branch_name(prompt, worktree_path).await {
         Ok(s) => s,
         Err(e) => {
             eprintln!("[rename] Haiku branch name generation failed: {e}");
