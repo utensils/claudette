@@ -254,7 +254,10 @@ pub fn build_claude_args(
     }
 
     // Effort level — standalone flag, not part of --settings JSON.
-    if let Some(ref effort) = settings.effort {
+    // "auto" means let the CLI decide (don't pass --effort at all).
+    if let Some(ref effort) = settings.effort
+        && effort != "auto"
+    {
         args.push("--effort".to_string());
         args.push(effort.clone());
     }
@@ -1162,6 +1165,17 @@ mod tests {
             None,
             &AgentSettings::default(),
         );
+        assert!(!args.contains(&"--effort".to_string()));
+    }
+
+    #[test]
+    fn test_build_args_effort_auto_omitted() {
+        let settings = AgentSettings {
+            effort: Some("auto".to_string()),
+            ..Default::default()
+        };
+        let args = build_claude_args("sess-1", "hello", false, &[], None, &settings);
+        // "auto" means let the CLI use its default — don't pass --effort
         assert!(!args.contains(&"--effort".to_string()));
     }
 
