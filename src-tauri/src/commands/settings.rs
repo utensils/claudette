@@ -45,7 +45,12 @@ pub async fn set_app_setting(
     // Toggle system tray on/off.
     if key == "tray_enabled" {
         if value == "true" {
-            let _ = crate::tray::setup_tray(&app);
+            if let Err(e) = crate::tray::setup_tray(&app) {
+                // Revert the setting so the UI doesn't show an enabled tray
+                // that never actually appeared (e.g., missing appindicator on Linux).
+                let _ = db.set_app_setting("tray_enabled", "false");
+                return Err(format!("Failed to enable tray: {e}"));
+            }
         } else {
             crate::tray::destroy_tray(&app);
         }

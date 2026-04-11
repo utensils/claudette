@@ -95,15 +95,12 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // Minimize to tray on close when the tray is active.
+            // On macOS, Cmd+W hides the window rather than quitting —
+            // standard macOS behavior regardless of tray state.
+            #[cfg(target_os = "macos")]
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let state = window.app_handle().state::<state::AppState>();
-                if let Ok(guard) = state.tray_handle.lock()
-                    && guard.is_some()
-                {
-                    api.prevent_close();
-                    let _ = window.hide();
-                }
+                api.prevent_close();
+                let _ = window.hide();
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -188,15 +185,45 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error while building Claudette")
         .run(|app, event| {
-            // Show the window when the dock icon is clicked (macOS reopen).
-            if let tauri::RunEvent::Reopen { .. } = event {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.unminimize();
-                    let _ = window.show();
-                    let _ = window.set_focus();
+            match event {
+                // Show the window when the dock icon is clicked (macOS reopen).
+                tauri::RunEvent::Reopen { .. } => {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.unminimize();
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                    // Navigate to session needing attention, if any.
+                    tray::navigate_to_attention(app);
                 }
-                // Navigate to session needing attention, if any.
-                tray::navigate_to_attention(app);
+                // Guard against quitting while agents are running.
+                tauri::RunEvent::ExitRequested { ref api, .. } => {
+                    let state = app.state::<state::AppState>();
+                    let running = state
+                        .agents
+                        .try_read()
+                        .is_ok_and(|a| a.values().any(|s| s.active_pid.is_some()));
+                    if running {
+                        api.prevent_exit();
+                        let handle = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+                            let confirmed = handle
+                                .dialog()
+                                .message("Agents are still running. Quit anyway?")
+                                .title("Quit Claudette")
+                                .buttons(MessageDialogButtons::OkCancelCustom(
+                                    "Quit".into(),
+                                    "Cancel".into(),
+                                ))
+                                .blocking_show();
+                            if confirmed {
+                                handle.exit(0);
+                            }
+                        });
+                    }
+                }
+                _ => {}
             }
         });
 }

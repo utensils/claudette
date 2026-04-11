@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
-use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager};
 
 use claudette::db::Database;
@@ -60,18 +60,31 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), String> {
                 show_and_focus(app);
                 navigate_to_attention(app);
             } else if id == "quit" {
-                app.exit(0);
-            }
-        })
-        .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click {
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                ..
-            } = event
-            {
-                show_and_focus(tray.app_handle());
-                navigate_to_attention(tray.app_handle());
+                let state = app.state::<AppState>();
+                let running = state
+                    .agents
+                    .try_read()
+                    .is_ok_and(|a| a.values().any(|s| s.active_pid.is_some()));
+                if running {
+                    let handle = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+                        let confirmed = handle
+                            .dialog()
+                            .message("Agents are still running. Quit anyway?")
+                            .title("Quit Claudette")
+                            .buttons(MessageDialogButtons::OkCancelCustom(
+                                "Quit".into(),
+                                "Cancel".into(),
+                            ))
+                            .blocking_show();
+                        if confirmed {
+                            handle.exit(0);
+                        }
+                    });
+                } else {
+                    app.exit(0);
+                }
             }
         })
         .build(app)
