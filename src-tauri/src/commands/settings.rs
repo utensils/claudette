@@ -137,6 +137,29 @@ pub fn play_notification_sound(sound: String) {
     }
 }
 
+/// Build a Command for the notification shell command with env vars set.
+/// Returns None if the command is empty.
+fn build_notification_command(
+    cmd: &str,
+    title: &str,
+    body: &str,
+    workspace_id: &str,
+    workspace_name: &str,
+) -> Option<std::process::Command> {
+    if cmd.is_empty() {
+        return None;
+    }
+    let mut command = std::process::Command::new("sh");
+    command
+        .arg("-c")
+        .arg(cmd)
+        .env("CLAUDETTE_NOTIFICATION_TITLE", title)
+        .env("CLAUDETTE_NOTIFICATION_BODY", body)
+        .env("CLAUDETTE_WORKSPACE_ID", workspace_id)
+        .env("CLAUDETTE_WORKSPACE_NAME", workspace_name);
+    Some(command)
+}
+
 /// Run the user-configured notification command (if set) with context env vars.
 #[tauri::command]
 pub fn run_notification_command(
@@ -148,15 +171,9 @@ pub fn run_notification_command(
 ) -> Result<(), String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     if let Ok(Some(cmd)) = db.get_app_setting("notification_command")
-        && !cmd.is_empty()
-        && let Ok(child) = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(&cmd)
-            .env("CLAUDETTE_NOTIFICATION_TITLE", &title)
-            .env("CLAUDETTE_NOTIFICATION_BODY", &body)
-            .env("CLAUDETTE_WORKSPACE_ID", &workspace_id)
-            .env("CLAUDETTE_WORKSPACE_NAME", &workspace_name)
-            .spawn()
+        && let Some(mut command) =
+            build_notification_command(&cmd, &title, &body, &workspace_id, &workspace_name)
+        && let Ok(child) = command.spawn()
     {
         spawn_and_reap(child);
     }
@@ -262,5 +279,73 @@ mod tests {
     fn test_play_notification_sound_none_is_noop() {
         // Should not panic or spawn any process.
         play_notification_sound("None".to_string());
+    }
+
+    // --- Notification command tests ---
+
+    #[test]
+    fn test_build_notification_command_empty_returns_none() {
+        assert!(build_notification_command("", "t", "b", "id", "name").is_none());
+    }
+
+    #[test]
+    fn test_build_notification_command_sets_shell_and_args() {
+        let cmd = build_notification_command("echo hello", "t", "b", "id", "name").unwrap();
+        let program = cmd.get_program().to_string_lossy().to_string();
+        assert_eq!(program, "sh");
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(args, vec!["-c", "echo hello"]);
+    }
+
+    #[test]
+    fn test_build_notification_command_sets_env_vars() {
+        let cmd = build_notification_command(
+            "echo test",
+            "My Title",
+            "My Body",
+            "ws-123",
+            "my-workspace",
+        )
+        .unwrap();
+        let envs: std::collections::HashMap<String, String> = cmd
+            .get_envs()
+            .filter_map(|(k, v)| {
+                Some((
+                    k.to_string_lossy().to_string(),
+                    v?.to_string_lossy().to_string(),
+                ))
+            })
+            .collect();
+        assert_eq!(
+            envs.get("CLAUDETTE_NOTIFICATION_TITLE").unwrap(),
+            "My Title"
+        );
+        assert_eq!(envs.get("CLAUDETTE_NOTIFICATION_BODY").unwrap(), "My Body");
+        assert_eq!(envs.get("CLAUDETTE_WORKSPACE_ID").unwrap(), "ws-123");
+        assert_eq!(
+            envs.get("CLAUDETTE_WORKSPACE_NAME").unwrap(),
+            "my-workspace"
+        );
+    }
+
+    #[test]
+    fn test_notification_command_runs_and_receives_env() {
+        // Actually spawn a process and verify env vars are passed through.
+        let tmp = std::env::temp_dir().join("claudette-test-notify-cmd.txt");
+        let cmd_str = format!(
+            "echo $CLAUDETTE_NOTIFICATION_TITLE,$CLAUDETTE_NOTIFICATION_BODY > {}",
+            tmp.display()
+        );
+        let mut command =
+            build_notification_command(&cmd_str, "TestTitle", "TestBody", "ws-1", "ws-name")
+                .unwrap();
+        let mut child = command.spawn().expect("Failed to spawn test command");
+        child.wait().expect("Failed to wait for test command");
+        let output = std::fs::read_to_string(&tmp).expect("Failed to read output file");
+        std::fs::remove_file(&tmp).ok();
+        assert_eq!(output.trim(), "TestTitle,TestBody");
     }
 }

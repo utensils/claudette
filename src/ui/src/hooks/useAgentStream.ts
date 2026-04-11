@@ -91,27 +91,30 @@ export function useAgentStream() {
           markWorkspaceAsUnread(wsId);
         }
 
-        // Audio notification: play configured sound if workspace is in background.
-        // Skip if the agent is waiting for input (AskUserQuestion / ExitPlanMode)
-        // — those are handled by notify_attention on the Rust side.
-        const store = useAppStore.getState();
-        const isAttention = !!store.agentQuestions[wsId] || !!store.planApprovals[wsId];
-        if (wsId !== selectedWorkspaceId && !isAttention) {
-          getAppSetting("notification_sound").then(async (sound) => {
-            // Default to "Default" for fresh installs; fall back to legacy key for upgrades.
-            const effective = sound ?? (await getAppSetting("audio_notifications") === "false" ? "None" : "Default");
-            if (effective && effective !== "None") {
+        // Audio notification: play configured sound on every end-of-turn
+        // if the workspace is in the background.
+        if (wsId !== selectedWorkspaceId) {
+          getAppSetting("notification_sound").then((sound) => {
+            // Default to "Default" (enabled) for fresh installs.
+            const effective = sound ?? "Default";
+            if (effective !== "None") {
               playNotificationSound(effective).catch(() => {});
             }
           }).catch(() => {});
 
-          const ws = store.workspaces.find((w) => w.id === wsId);
-          runNotificationCommand(
-            "Agent Finished",
-            `${ws?.name ?? "An agent"} has completed`,
-            wsId,
-            ws?.name ?? "",
-          ).catch(() => {});
+          // Run notification command — but skip for attention events since
+          // notify_attention on the Rust side already runs it.
+          const store = useAppStore.getState();
+          const isAttention = !!store.agentQuestions[wsId] || !!store.planApprovals[wsId];
+          if (!isAttention) {
+            const ws = store.workspaces.find((w) => w.id === wsId);
+            runNotificationCommand(
+              "Agent Finished",
+              `${ws?.name ?? "An agent"} has completed`,
+              wsId,
+              ws?.name ?? "",
+            ).catch(() => {});
+          }
         }
 
         return;

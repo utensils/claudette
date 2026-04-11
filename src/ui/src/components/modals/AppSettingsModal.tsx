@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useAppStore } from "../../stores/useAppStore";
-import { getAppSetting, setAppSetting, listNotificationSounds, playNotificationSound } from "../../services/tauri";
+import { getAppSetting, setAppSetting, listNotificationSounds, playNotificationSound, runNotificationCommand } from "../../services/tauri";
 import { applyTheme, loadAllThemes, findTheme } from "../../utils/theme";
 import type { ThemeDefinition } from "../../types/theme";
 import { Modal } from "./Modal";
@@ -197,12 +197,35 @@ export function AppSettingsModal() {
         </div>
         <div className={shared.field} style={{ marginTop: 8 }}>
           <label className={shared.label}>Notification Command</label>
-          <input
-            className={shared.input}
-            value={notificationCommand}
-            onChange={(e) => setNotificationCommand(e.target.value)}
-            placeholder={'e.g. say "done"'}
-          />
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input
+              className={shared.input}
+              style={{ flex: 1 }}
+              value={notificationCommand}
+              onChange={(e) => setNotificationCommand(e.target.value)}
+              placeholder={'e.g. say "done"'}
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+            />
+            <button
+              className={shared.btn}
+              style={{ whiteSpace: "nowrap" }}
+              disabled={!notificationCommand.trim()}
+              onClick={async () => {
+                await setAppSetting("notification_command", notificationCommand);
+                runNotificationCommand(
+                  "Test Notification",
+                  "This is a test notification",
+                  "test",
+                  "test-workspace",
+                );
+              }}
+              title="Test command"
+            >
+              &#9654;
+            </button>
+          </div>
           <div className={shared.hint}>
             Run a shell command when a notification arrives.
             $CLAUDETTE_NOTIFICATION_TITLE, $CLAUDETTE_NOTIFICATION_BODY,
