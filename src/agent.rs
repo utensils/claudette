@@ -186,6 +186,9 @@ pub struct AgentSettings {
     /// Start session in plan permission mode. Applied on every turn (each
     /// `claude` invocation is an independent process).
     pub plan_mode: bool,
+    /// Effort level for adaptive reasoning (`low`, `medium`, `high`, `max`).
+    /// `max` is Opus 4.6 only. Applied on every turn via `--effort`.
+    pub effort: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -248,6 +251,12 @@ pub fn build_claude_args(
         }
         args.push("--settings".to_string());
         args.push(serde_json::Value::Object(obj).to_string());
+    }
+
+    // Effort level — standalone flag, not part of --settings JSON.
+    if let Some(ref effort) = settings.effort {
+        args.push("--effort".to_string());
+        args.push(effort.clone());
     }
 
     // Add --allowedTools (only for non-bypass modes — bypassPermissions already
@@ -1130,5 +1139,60 @@ mod tests {
     #[test]
     fn test_sanitize_preserves_numbers() {
         assert_eq!(sanitize_branch_name("fix-issue-42", 40), "fix-issue-42");
+    }
+
+    #[test]
+    fn test_build_args_with_effort() {
+        let settings = AgentSettings {
+            effort: Some("high".to_string()),
+            ..Default::default()
+        };
+        let args = build_claude_args("sess-1", "hello", false, &[], None, &settings);
+        let idx = args.iter().position(|a| a == "--effort").unwrap();
+        assert_eq!(args[idx + 1], "high");
+    }
+
+    #[test]
+    fn test_build_args_effort_none_omitted() {
+        let args = build_claude_args(
+            "sess-1",
+            "hello",
+            false,
+            &[],
+            None,
+            &AgentSettings::default(),
+        );
+        assert!(!args.contains(&"--effort".to_string()));
+    }
+
+    #[test]
+    fn test_build_args_effort_on_resume() {
+        let settings = AgentSettings {
+            effort: Some("low".to_string()),
+            ..Default::default()
+        };
+        let args = build_claude_args("sess-1", "hello", true, &[], None, &settings);
+        let idx = args.iter().position(|a| a == "--effort").unwrap();
+        assert_eq!(args[idx + 1], "low");
+    }
+
+    #[test]
+    fn test_build_args_effort_with_other_settings() {
+        let settings = AgentSettings {
+            fast_mode: true,
+            thinking_enabled: true,
+            effort: Some("max".to_string()),
+            ..Default::default()
+        };
+        let args = build_claude_args("sess-1", "hello", false, &[], None, &settings);
+        // --effort is a standalone flag, separate from --settings JSON
+        let effort_idx = args.iter().position(|a| a == "--effort").unwrap();
+        assert_eq!(args[effort_idx + 1], "max");
+        let settings_idx = args.iter().position(|a| a == "--settings").unwrap();
+        let json: serde_json::Value = serde_json::from_str(&args[settings_idx + 1]).unwrap();
+        assert_eq!(json["fastMode"], true);
+        assert_eq!(json["alwaysThinkingEnabled"], true);
+        // effort should NOT be in the --settings JSON
+        assert!(json.get("effort").is_none());
     }
 }

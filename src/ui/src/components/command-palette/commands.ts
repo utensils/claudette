@@ -15,6 +15,7 @@ import {
   Wrench,
   FolderPlus,
   Globe,
+  Gauge,
 } from "lucide-react";
 import type { ThemeDefinition } from "../../types/theme";
 
@@ -84,6 +85,8 @@ export interface CommandContext {
   setPlanMode: (wsId: string, enabled: boolean) => void;
   fastMode: boolean;
   setFastMode: (wsId: string, enabled: boolean) => void;
+  effortLevel: string;
+  setEffortLevel: (wsId: string, level: string) => void;
   persistSetting: (key: string, value: string) => void;
   stopAgent: (wsId: string) => Promise<void>;
   resetAgentSession: (wsId: string) => Promise<void>;
@@ -180,6 +183,22 @@ export function buildCommands(ctx: CommandContext): Command[] {
         const next = !ctx.fastMode;
         ctx.setFastMode(wsId, next);
         ctx.persistSetting(`fast_mode:${wsId}`, String(next));
+        ctx.close();
+      },
+    });
+    cmds.push({
+      id: "cycle-effort",
+      name: `Effort: ${ctx.effortLevel.charAt(0).toUpperCase() + ctx.effortLevel.slice(1)}`,
+      description: "Cycle through effort levels",
+      category: "agent",
+      icon: Gauge,
+      keywords: ["effort", "reasoning", "depth", "budget"],
+      execute: () => {
+        const levels = ["auto", "low", "medium", "high", "max"];
+        const idx = levels.indexOf(ctx.effortLevel);
+        const next = levels[(idx + 1) % levels.length];
+        ctx.setEffortLevel(wsId, next);
+        ctx.persistSetting(`effort_level:${wsId}`, next);
         ctx.close();
       },
     });

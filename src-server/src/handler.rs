@@ -43,6 +43,10 @@ pub async fn handle_request(
             let fast_mode = params.get("fast_mode").and_then(|v| v.as_bool());
             let thinking_enabled = params.get("thinking_enabled").and_then(|v| v.as_bool());
             let plan_mode = params.get("plan_mode").and_then(|v| v.as_bool());
+            let effort = params
+                .get("effort")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             handle_send_chat_message(
                 state,
                 writer,
@@ -53,6 +57,7 @@ pub async fn handle_request(
                 fast_mode,
                 thinking_enabled,
                 plan_mode,
+                effort,
             )
             .await
         }
@@ -297,6 +302,7 @@ async fn handle_send_chat_message(
     fast_mode: Option<bool>,
     thinking_enabled: Option<bool>,
     plan_mode: Option<bool>,
+    effort: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let db = open_db(state)?;
 
@@ -361,6 +367,7 @@ async fn handle_send_chat_message(
         fast_mode: fast_mode.unwrap_or(false),
         thinking_enabled: thinking_enabled.unwrap_or(false),
         plan_mode: plan_mode.unwrap_or(false),
+        effort,
     };
 
     let turn_handle = agent::run_turn(

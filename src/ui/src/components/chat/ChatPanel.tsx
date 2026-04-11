@@ -502,6 +502,7 @@ export function ChatPanel() {
           fast_mode: state.fastMode[selectedWorkspaceId] || false,
           thinking_enabled: state.thinkingEnabled[selectedWorkspaceId] || false,
           plan_mode: state.planMode[selectedWorkspaceId] || false,
+          effort: state.effortLevel[selectedWorkspaceId] || null,
         });
       } else {
         const state = useAppStore.getState();
@@ -509,6 +510,7 @@ export function ChatPanel() {
         const fastMode = state.fastMode[selectedWorkspaceId] || false;
         const thinkingEnabled = state.thinkingEnabled[selectedWorkspaceId] || false;
         const planMode = state.planMode[selectedWorkspaceId] || false;
+        const effort = state.effortLevel[selectedWorkspaceId] || undefined;
         await sendChatMessage(
           selectedWorkspaceId,
           trimmed,
@@ -517,6 +519,7 @@ export function ChatPanel() {
           fastMode || undefined,
           thinkingEnabled || undefined,
           planMode || undefined,
+          effort,
         );
       }
     } catch (e) {

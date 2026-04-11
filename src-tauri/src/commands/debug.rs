@@ -45,9 +45,7 @@ async fn eval_in_webview(app: &AppHandle, js: &str) -> Result<String, String> {
   }} catch (__e) {{
     await __invoke('debug_eval_result', {{ requestId: '{request_id}', data: 'ERROR: ' + (__e.message || String(__e)) }});
   }}
-}})()"#,
-        js = js,
-        request_id = request_id,
+}})()"#
     );
 
     // Set up a oneshot channel to receive the result.

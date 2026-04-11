@@ -60,9 +60,13 @@ export function CommandPalette() {
   const fastMode = useAppStore(
     (s) => (selectedWorkspaceId ? s.fastMode[selectedWorkspaceId] ?? false : false),
   );
+  const effortLevel = useAppStore(
+    (s) => (selectedWorkspaceId ? s.effortLevel[selectedWorkspaceId] ?? "auto" : "auto"),
+  );
   const setThinkingEnabled = useAppStore((s) => s.setThinkingEnabled);
   const setPlanMode = useAppStore((s) => s.setPlanMode);
   const setFastMode = useAppStore((s) => s.setFastMode);
+  const setEffortLevel = useAppStore((s) => s.setEffortLevel);
   const clearAgentQuestion = useAppStore((s) => s.clearAgentQuestion);
   const clearPlanApproval = useAppStore((s) => s.clearPlanApproval);
 
@@ -164,6 +168,8 @@ export function CommandPalette() {
         setPlanMode,
         fastMode,
         setFastMode,
+        effortLevel,
+        setEffortLevel,
         persistSetting: (key: string, value: string) => setAppSetting(key, value).catch(console.error),
         stopAgent: (wsId: string) => stopAgent(wsId),
         resetAgentSession: (wsId: string) => resetAgentSession(wsId),
@@ -172,7 +178,7 @@ export function CommandPalette() {
         updateWorkspace: (id: string, updates: Record<string, unknown>) => updateWorkspace(id, updates),
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [themes, selectedWorkspaceId, currentRepoId, thinkingEnabled, planMode, fastMode, enterThemeMode, applyThemeById, handleCreateWorkspace],
+    [themes, selectedWorkspaceId, currentRepoId, thinkingEnabled, planMode, fastMode, effortLevel, enterThemeMode, applyThemeById, handleCreateWorkspace],
   );
 
   // Build theme sub-menu commands

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Sparkles, Zap, Brain, BookOpen } from "lucide-react";
+import { Sparkles, Zap, Brain, BookOpen, Gauge } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import { resetAgentSession, setAppSetting, getAppSetting } from "../../services/tauri";
 import { ModelSelector, MODELS } from "./ModelSelector";
+import { EffortSelector, EFFORT_LEVELS, isMaxEffortAllowed, isEffortSupported } from "./EffortSelector";
 import styles from "./ChatToolbar.module.css";
 
 interface ChatToolbarProps {
@@ -15,36 +16,41 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
   const fastMode = useAppStore((s) => s.fastMode[workspaceId] ?? false);
   const thinkingEnabled = useAppStore((s) => s.thinkingEnabled[workspaceId] ?? false);
   const planMode = useAppStore((s) => s.planMode[workspaceId] ?? false);
+  const effortLevel = useAppStore((s) => s.effortLevel[workspaceId] ?? "auto");
   const modelSelectorOpen = useAppStore((s) => s.modelSelectorOpen);
   const setSelectedModel = useAppStore((s) => s.setSelectedModel);
   const setFastMode = useAppStore((s) => s.setFastMode);
   const setThinkingEnabled = useAppStore((s) => s.setThinkingEnabled);
   const setPlanMode = useAppStore((s) => s.setPlanMode);
+  const setEffortLevel = useAppStore((s) => s.setEffortLevel);
   const setModelSelectorOpen = useAppStore((s) => s.setModelSelectorOpen);
   const clearAgentQuestion = useAppStore((s) => s.clearAgentQuestion);
   const clearPlanApproval = useAppStore((s) => s.clearPlanApproval);
 
   const modelChipRef = useRef<HTMLButtonElement>(null);
   const [loaded, setLoaded] = useState(false);
+  const [effortSelectorOpen, setEffortSelectorOpen] = useState(false);
 
   // Load persisted settings on mount / workspace change.
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      const [model, fast, thinking] = await Promise.all([
+      const [model, fast, thinking, effort] = await Promise.all([
         getAppSetting(`model:${workspaceId}`),
         getAppSetting(`fast_mode:${workspaceId}`),
         getAppSetting(`thinking_enabled:${workspaceId}`),
+        getAppSetting(`effort_level:${workspaceId}`),
       ]);
       if (cancelled) return;
       if (model) setSelectedModel(workspaceId, model);
       if (fast === "true") setFastMode(workspaceId, true);
       if (thinking === "true") setThinkingEnabled(workspaceId, true);
+      if (effort) setEffortLevel(workspaceId, effort);
       setLoaded(true);
     }
     load();
     return () => { cancelled = true; };
-  }, [workspaceId, setSelectedModel, setFastMode, setThinkingEnabled]);
+  }, [workspaceId, setSelectedModel, setFastMode, setThinkingEnabled, setEffortLevel]);
 
   const handleModelSelect = useCallback(
     async (model: string) => {
@@ -55,10 +61,29 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
         await resetAgentSession(workspaceId);
         clearAgentQuestion(workspaceId);
         clearPlanApproval(workspaceId);
+        // Reset effort when switching to a model with different support.
+        if (!isEffortSupported(model)) {
+          // Model doesn't support effort at all — clear to auto (won't be sent).
+          setEffortLevel(workspaceId, "auto");
+          await setAppSetting(`effort_level:${workspaceId}`, "auto");
+        } else if (effortLevel === "max" && !isMaxEffortAllowed(model)) {
+          // Model supports effort but not "max" — fall back to high.
+          setEffortLevel(workspaceId, "high");
+          await setAppSetting(`effort_level:${workspaceId}`, "high");
+        }
       }
       setModelSelectorOpen(false);
     },
-    [workspaceId, selectedModel, setSelectedModel, setModelSelectorOpen, clearAgentQuestion, clearPlanApproval]
+    [workspaceId, selectedModel, effortLevel, setSelectedModel, setEffortLevel, setModelSelectorOpen, clearAgentQuestion, clearPlanApproval]
+  );
+
+  const handleEffortSelect = useCallback(
+    async (level: string) => {
+      setEffortLevel(workspaceId, level);
+      await setAppSetting(`effort_level:${workspaceId}`, level);
+      setEffortSelectorOpen(false);
+    },
+    [workspaceId, setEffortLevel],
   );
 
   const toggleFast = useCallback(async () => {
@@ -91,6 +116,8 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
 
   const modelLabel =
     MODELS.find((m) => m.id === selectedModel)?.label ?? selectedModel;
+  const effortLabel =
+    EFFORT_LEVELS.find((l) => l.id === effortLevel)?.label ?? effortLevel;
 
   if (!loaded) return null;
 
@@ -128,6 +155,18 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
         <span className={styles.chipLabel}>Thinking</span>
       </button>
 
+      {isEffortSupported(selectedModel) && (
+        <button
+          className={styles.chip}
+          onClick={() => setEffortSelectorOpen(!effortSelectorOpen)}
+          disabled={disabled}
+          title="Set effort level"
+        >
+          <Gauge size={14} />
+          <span className={styles.chipLabel}>{effortLabel}</span>
+        </button>
+      )}
+
       <button
         className={`${styles.chip} ${planMode ? styles.chipActive : ""}`}
         onClick={togglePlan}
@@ -145,6 +184,15 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
           selected={selectedModel}
           onSelect={handleModelSelect}
           onClose={() => setModelSelectorOpen(false)}
+        />
+      )}
+
+      {effortSelectorOpen && isEffortSupported(selectedModel) && (
+        <EffortSelector
+          selected={effortLevel}
+          selectedModel={selectedModel}
+          onSelect={handleEffortSelect}
+          onClose={() => setEffortSelectorOpen(false)}
         />
       )}
     </div>

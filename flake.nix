@@ -270,7 +270,7 @@
             commands = [
               {
                 name = "dev";
-                command = "cargo tauri dev --features devtools";
+                command = "cd src/ui && bun install && cd ../.. && cargo tauri dev --features devtools";
                 help = "Start Tauri dev mode with hot-reload";
                 category = "development";
               }

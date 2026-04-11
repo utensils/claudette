@@ -38,6 +38,7 @@ pub async fn send_chat_message(
     fast_mode: Option<bool>,
     thinking_enabled: Option<bool>,
     plan_mode: Option<bool>,
+    effort: Option<String>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
@@ -145,6 +146,7 @@ pub async fn send_chat_message(
         fast_mode: fast_mode.unwrap_or(false),
         thinking_enabled: thinking_enabled.unwrap_or(false),
         plan_mode: plan_mode.unwrap_or(false),
+        effort,
     };
 
     // Spawn the agent turn.

@@ -35,6 +35,34 @@ function addToolActivities(wsId: string = WS_ID) {
   });
 }
 
+describe("effortLevel (per-workspace)", () => {
+  beforeEach(() => {
+    useAppStore.setState({ effortLevel: {} });
+  });
+
+  it("defaults to empty (no explicit effort)", () => {
+    expect(useAppStore.getState().effortLevel[WS_ID]).toBeUndefined();
+  });
+
+  it("setEffortLevel stores level keyed by workspace", () => {
+    useAppStore.getState().setEffortLevel(WS_ID, "high");
+    expect(useAppStore.getState().effortLevel[WS_ID]).toBe("high");
+  });
+
+  it("effort levels are isolated per workspace", () => {
+    useAppStore.getState().setEffortLevel("ws-a", "low");
+    useAppStore.getState().setEffortLevel("ws-b", "max");
+    expect(useAppStore.getState().effortLevel["ws-a"]).toBe("low");
+    expect(useAppStore.getState().effortLevel["ws-b"]).toBe("max");
+  });
+
+  it("overwrites previous level for same workspace", () => {
+    useAppStore.getState().setEffortLevel(WS_ID, "low");
+    useAppStore.getState().setEffortLevel(WS_ID, "high");
+    expect(useAppStore.getState().effortLevel[WS_ID]).toBe("high");
+  });
+});
+
 describe("agentQuestion lifecycle (per-workspace)", () => {
   beforeEach(() => {
     useAppStore.setState({

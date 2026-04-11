@@ -140,11 +140,13 @@ interface AppState {
   fastMode: Record<string, boolean>;
   thinkingEnabled: Record<string, boolean>;
   planMode: Record<string, boolean>;
+  effortLevel: Record<string, string>;
   modelSelectorOpen: boolean;
   setSelectedModel: (wsId: string, model: string) => void;
   setFastMode: (wsId: string, enabled: boolean) => void;
   setThinkingEnabled: (wsId: string, enabled: boolean) => void;
   setPlanMode: (wsId: string, enabled: boolean) => void;
+  setEffortLevel: (wsId: string, level: string) => void;
   setModelSelectorOpen: (open: boolean) => void;
 
   // -- Diff --
@@ -587,6 +589,7 @@ export const useAppStore = create<AppState>((set) => ({
   fastMode: {},
   thinkingEnabled: {},
   planMode: {},
+  effortLevel: {},
   modelSelectorOpen: false,
   setSelectedModel: (wsId, model) =>
     set((s) => ({
@@ -603,6 +606,10 @@ export const useAppStore = create<AppState>((set) => ({
   setPlanMode: (wsId, enabled) =>
     set((s) => ({
       planMode: { ...s.planMode, [wsId]: enabled },
+    })),
+  setEffortLevel: (wsId, level) =>
+    set((s) => ({
+      effortLevel: { ...s.effortLevel, [wsId]: level },
     })),
   setModelSelectorOpen: (open) => set({ modelSelectorOpen: open }),
 
