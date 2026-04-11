@@ -271,14 +271,7 @@ pub async fn send_chat_message(
                 // Play notification sound + run command if the window is not focused.
                 // This runs on the Rust side so it works even when the webview
                 // is suspended (window hidden / close-to-tray).
-                let needs_attention_now = {
-                    let agents_r = app_state.agents.try_read();
-                    agents_r
-                        .as_ref()
-                        .ok()
-                        .and_then(|a| a.get(&ws_id))
-                        .is_some_and(|s| s.needs_attention)
-                };
+                let needs_attention_now = agents.get(&ws_id).is_some_and(|s| s.needs_attention);
                 let window_focused = app
                     .get_webview_window("main")
                     .and_then(|w| w.is_focused().ok())
@@ -324,12 +317,9 @@ pub async fn send_chat_message(
                                 &ws_id,
                                 &ws_name,
                             )
+                            && let Ok(child) = command.spawn()
                         {
-                            std::thread::spawn(move || {
-                                if let Ok(mut child) = command.spawn() {
-                                    let _ = child.wait();
-                                }
-                            });
+                            crate::commands::settings::spawn_and_reap(child);
                         }
                     }
                 }

@@ -246,6 +246,15 @@
                 value = "${fenixPkgs.latest.rust-src}/lib/rustlib/src/rust/library";
               }
             ]
+            ++ lib.optionals pkgs.stdenv.isLinux [
+              {
+                # devshell doesn't run pkg-config setup hooks the way mkShell
+                # does, so we must set PKG_CONFIG_PATH explicitly for native
+                # GTK/WebKit/GLib deps to be found by cargo build scripts.
+                name = "PKG_CONFIG_PATH";
+                value = lib.makeSearchPath "lib/pkgconfig" (map lib.getDev linuxBuildInputs);
+              }
+            ]
             ++ lib.optionals pkgs.stdenv.isDarwin [
               {
                 # Use Apple's native clang — Nix's CC wrapper has SDK version

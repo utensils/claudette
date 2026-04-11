@@ -28,25 +28,31 @@ export function AppSettingsModal() {
   const originalThemeIdRef = useRef(currentThemeId);
 
   useEffect(() => {
-    loadAllThemes().then(setAvailableThemes);
-    getAppSetting("tray_enabled").then((val) => {
-      setTrayEnabled(val !== "false");
-    });
-    listNotificationSounds().then(setAvailableSounds);
-    getAppSetting("notification_sound").then(async (val) => {
-      if (val) {
-        setNotificationSound(val);
-      } else {
-        // Default to "Default" for fresh installs.
-        // Only set "None" if legacy audio_notifications was explicitly disabled.
-        const legacy = await getAppSetting("audio_notifications");
-        if (legacy === "false") setNotificationSound("None");
-        else setNotificationSound("Default");
-      }
-    });
-    getAppSetting("notification_command").then((val) => {
-      if (val) setNotificationCommand(val);
-    });
+    loadAllThemes().then(setAvailableThemes).catch(() => {});
+    getAppSetting("tray_enabled")
+      .then((val) => {
+        setTrayEnabled(val !== "false");
+      })
+      .catch(() => {});
+    listNotificationSounds().then(setAvailableSounds).catch(() => {});
+    getAppSetting("notification_sound")
+      .then(async (val) => {
+        if (val) {
+          setNotificationSound(val);
+        } else {
+          // Default to "Default" for fresh installs.
+          // Only set "None" if legacy audio_notifications was explicitly disabled.
+          const legacy = await getAppSetting("audio_notifications");
+          if (legacy === "false") setNotificationSound("None");
+          else setNotificationSound("Default");
+        }
+      })
+      .catch(() => {});
+    getAppSetting("notification_command")
+      .then((val) => {
+        if (val) setNotificationCommand(val);
+      })
+      .catch(() => {});
   }, []);
 
   const handleThemeChange = (id: string) => {
@@ -213,13 +219,17 @@ export function AppSettingsModal() {
               style={{ whiteSpace: "nowrap" }}
               disabled={!notificationCommand.trim()}
               onClick={async () => {
-                await setAppSetting("notification_command", notificationCommand);
-                runNotificationCommand(
-                  "Test Notification",
-                  "This is a test notification",
-                  "test",
-                  "test-workspace",
-                );
+                try {
+                  await setAppSetting("notification_command", notificationCommand);
+                  await runNotificationCommand(
+                    "Test Notification",
+                    "This is a test notification",
+                    "test",
+                    "test-workspace",
+                  );
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : "Command failed");
+                }
               }}
               title="Test command"
             >
@@ -229,7 +239,7 @@ export function AppSettingsModal() {
           <div className={shared.hint}>
             Run a shell command when a notification arrives.
             $CLAUDETTE_NOTIFICATION_TITLE, $CLAUDETTE_NOTIFICATION_BODY,
-            $CLAUDETTE_WORKSPACE_NAME are set.
+            $CLAUDETTE_WORKSPACE_ID, $CLAUDETTE_WORKSPACE_NAME are set.
           </div>
         </div>
       </div>

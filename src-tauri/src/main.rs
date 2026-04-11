@@ -129,9 +129,9 @@ fn main() {
                     .map_or(true, |a| tray::has_running_agents(&a));
                 if running {
                     let handle = app.clone();
-                    tauri::async_runtime::spawn(async move {
+                    {
                         use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
-                        let confirmed = handle
+                        handle
                             .dialog()
                             .message("Agents are still running. Quit anyway?")
                             .title("Quit Claudette")
@@ -139,11 +139,12 @@ fn main() {
                                 "Quit".into(),
                                 "Cancel".into(),
                             ))
-                            .blocking_show();
-                        if confirmed {
-                            handle.exit(0);
-                        }
-                    });
+                            .show(move |confirmed| {
+                                if confirmed {
+                                    handle.exit(0);
+                                }
+                            });
+                    }
                 } else {
                     app.exit(0);
                 }
@@ -286,16 +287,17 @@ fn main() {
     builder
         .build(tauri::generate_context!())
         .expect("error while building Claudette")
-        .run(|app, event| {
+        .run(|_app, _event| {
             // Show the window when the dock icon is clicked (macOS reopen).
-            if let tauri::RunEvent::Reopen { .. } = event {
-                if let Some(window) = app.get_webview_window("main") {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = _event {
+                if let Some(window) = _app.get_webview_window("main") {
                     let _ = window.unminimize();
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
                 // Navigate to session needing attention, if any.
-                tray::navigate_to_attention(app);
+                tray::navigate_to_attention(_app);
             }
         });
 }

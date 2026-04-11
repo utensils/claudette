@@ -8,7 +8,7 @@ use claudette::db::Database;
 use crate::state::AppState;
 
 /// Spawn a short-lived process and reap it in a background thread to prevent zombies.
-fn spawn_and_reap(mut child: std::process::Child) {
+pub(crate) fn spawn_and_reap(mut child: std::process::Child) {
     std::thread::spawn(move || {
         let _ = child.wait();
     });
@@ -69,6 +69,7 @@ pub async fn set_app_setting(
 /// Return available notification sound names for the current platform.
 #[tauri::command]
 pub fn list_notification_sounds() -> Vec<String> {
+    #[allow(unused_mut)]
     let mut sounds = vec!["Default".to_string(), "None".to_string()];
     #[cfg(target_os = "macos")]
     if let Ok(entries) = std::fs::read_dir("/System/Library/Sounds") {
@@ -146,6 +147,7 @@ pub(crate) fn build_notification_command(
     workspace_id: &str,
     workspace_name: &str,
 ) -> Option<std::process::Command> {
+    let cmd = cmd.trim();
     if cmd.is_empty() {
         return None;
     }

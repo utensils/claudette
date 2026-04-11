@@ -191,12 +191,9 @@ pub fn notify_attention(app: &AppHandle, workspace_id: &str) {
             workspace_id,
             &ws_name,
         )
+        && let Ok(child) = command.spawn()
     {
-        std::thread::spawn(move || {
-            if let Ok(mut child) = command.spawn() {
-                let _ = child.wait();
-            }
-        });
+        crate::commands::settings::spawn_and_reap(child);
     }
 }
 

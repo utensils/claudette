@@ -2,8 +2,8 @@
   "productName": "Claudette",
   "identifier": "com.claudette.app",
   "build": {
-    "beforeDevCommand": { "script": "bun run dev", "cwd": "../src/ui" },
-    "beforeBuildCommand": { "script": "bun run build", "cwd": "../src/ui" },
+    "beforeDevCommand": { "script": "bun install && bun run dev", "cwd": "../src/ui" },
+    "beforeBuildCommand": { "script": "bun install && bun run build", "cwd": "../src/ui" },
     "devUrl": "http://localhost:1420",
     "frontendDist": "../src/ui/dist"
   },
