@@ -84,9 +84,14 @@ describe("buildRollbackMap", () => {
   it("maps first user message to null (clear-all) when checkpoints exist", () => {
     const messages = [msg("m1", "User"), msg("m2", "Assistant")];
     const cps = [cp("cp1", "aaa", 0)];
-    // Fix cp message_id to match
     cps[0].message_id = "m2";
     const result = buildRollbackMap(messages, cps);
+    expect(result.get(0)).toBeNull();
+  });
+
+  it("maps first user message to null (clear-all) even with no checkpoints", () => {
+    const messages = [msg("m1", "User"), msg("m2", "Assistant")];
+    const result = buildRollbackMap(messages, []);
     expect(result.get(0)).toBeNull();
   });
 
@@ -113,10 +118,12 @@ describe("buildRollbackMap", () => {
     expect(result.get(4)?.id).toBe("cp1");
   });
 
-  it("returns empty map when no checkpoints exist", () => {
+  it("returns only clear-all when no checkpoints exist", () => {
     const messages = [msg("m1", "User"), msg("m2", "Assistant")];
     const result = buildRollbackMap(messages, []);
-    expect(result.size).toBe(0);
+    // First user message gets clear-all, but no other rollback points
+    expect(result.size).toBe(1);
+    expect(result.get(0)).toBeNull();
   });
 
   it("skips assistant messages (only user messages get rollback)", () => {

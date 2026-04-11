@@ -28,7 +28,8 @@ export function checkpointHasFileChanges(
  * before it, so users can always roll back — even past interrupted
  * turns that didn't produce a checkpoint.
  *
- * Index 0 maps to `null` (clear-all) when any checkpoints exist.
+ * Index 0 always maps to `null` (clear-all) — clearing the conversation
+ * doesn't require a checkpoint.
  */
 export function buildRollbackMap(
   messages: ChatMessage[],
@@ -38,7 +39,8 @@ export function buildRollbackMap(
   const result = new Map<number, ConversationCheckpoint | null>();
   for (let i = 0; i < messages.length; i++) {
     if (messages[i].role === "User") {
-      if (i === 0 && checkpoints.length > 0) {
+      if (i === 0) {
+        // First user message always gets clear-all (no checkpoint needed).
         result.set(0, null);
       } else if (i > 0) {
         let cp: ConversationCheckpoint | undefined;
