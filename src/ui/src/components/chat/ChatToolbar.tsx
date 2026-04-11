@@ -168,7 +168,6 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
       <button
         className={`${styles.chip} ${showThinkingBlocks ? styles.chipActive : ""}`}
         onClick={toggleShowThinking}
-        disabled={disabled}
         title={`${showThinkingBlocks ? "Hide" : "Show"} thinking traces in chat`}
         aria-pressed={showThinkingBlocks}
       >
