@@ -22,7 +22,6 @@ export function AppSettingsModal() {
   const [selectedThemeId, setSelectedThemeId] = useState(currentThemeId);
   const [availableThemes, setAvailableThemes] = useState<ThemeDefinition[]>([]);
   const [trayEnabled, setTrayEnabled] = useState(true);
-  const [trayActiveOnly, setTrayActiveOnly] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -32,9 +31,6 @@ export function AppSettingsModal() {
     loadAllThemes().then(setAvailableThemes);
     getAppSetting("tray_enabled").then((val) => {
       setTrayEnabled(val !== "false");
-    });
-    getAppSetting("tray_active_only").then((val) => {
-      setTrayActiveOnly(val === "true");
     });
   }, []);
 
@@ -76,7 +72,6 @@ export function AppSettingsModal() {
       await setAppSetting("audio_notifications", audioNotifications ? "true" : "false");
 
       await setAppSetting("tray_enabled", trayEnabled ? "true" : "false");
-      await setAppSetting("tray_active_only", trayActiveOnly ? "true" : "false");
 
       closeModal();
     } catch (e) {
@@ -196,35 +191,6 @@ export function AppSettingsModal() {
           <div className={shared.hint}>
             Shows running agent status and allows quick workspace switching.
             Closing the window will minimize to tray when enabled.
-          </div>
-          <div
-            style={{
-              marginTop: 8,
-              paddingLeft: 28,
-              opacity: trayEnabled ? 1 : 0.4,
-            }}
-          >
-            <label
-              className={shared.label}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                cursor: trayEnabled ? "pointer" : "default",
-                fontSize: "0.9em",
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={trayActiveOnly}
-                disabled={!trayEnabled}
-                onChange={(e) => setTrayActiveOnly(e.target.checked)}
-              />
-              Only show active sessions
-            </label>
-            <div className={shared.hint} style={{ paddingLeft: 24 }}>
-              Hide idle workspaces from the tray menu
-            </div>
           </div>
         </div>
       </div>

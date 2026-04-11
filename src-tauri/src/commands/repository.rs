@@ -209,10 +209,12 @@ pub async fn get_default_branch(
 #[tauri::command]
 pub async fn reorder_repositories(
     ids: Vec<String>,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     db.reorder_repositories(&ids).map_err(|e| e.to_string())?;
+    crate::tray::rebuild_tray(&app);
     Ok(())
 }
 

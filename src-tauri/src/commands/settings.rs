@@ -56,10 +56,7 @@ pub async fn set_app_setting(
         }
     }
 
-    // Rebuild tray when active-only filter changes.
-    if key == "tray_active_only" {
-        crate::tray::rebuild_tray(&app);
-    }
+
 
     Ok(())
 }

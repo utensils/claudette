@@ -227,13 +227,6 @@ fn build_tray_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
     let repos = db.list_repositories().map_err(|e| e.to_string())?;
     let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
 
-    // Check if user only wants to see active (running) sessions.
-    let active_only = db
-        .get_app_setting("tray_active_only")
-        .ok()
-        .flatten()
-        .is_some_and(|v| v == "true");
-
     // Use try_read() to avoid panicking inside the tokio runtime.
     // If the lock is contended, all agents show as idle (harmless — next rebuild corrects it).
     let empty = std::collections::HashMap::new();
@@ -243,32 +236,17 @@ fn build_tray_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
         Err(_) => &empty,
     };
 
-    // Group active workspaces by repo, preserving the user's repo sort order
-    // (repos are returned from DB ordered by sort_order, name).
+    // Group active workspaces by repo, preserving the user's repo sort order.
+    // Iterate repos first (sorted by sort_order, name from DB), then attach
+    // matching workspaces — this guarantees the tray matches the sidebar.
     let mut by_repo: Vec<(String, String, Vec<_>)> = Vec::new();
-    for ws in &workspaces {
-        if ws.status != WorkspaceStatus::Active {
-            continue;
-        }
-        // If active_only, skip idle workspaces — but always show sessions
-        // needing input (the user needs to see them to respond).
-        if active_only
-            && agents
-                .get(&ws.id)
-                .is_none_or(|s| s.active_pid.is_none() && !s.needs_attention)
-        {
-            continue;
-        }
-        let (repo_id, repo_name) = repos
+    for repo in &repos {
+        let repo_ws: Vec<_> = workspaces
             .iter()
-            .find(|r| r.id == ws.repository_id)
-            .map(|r| (r.id.clone(), r.name.clone()))
-            .unwrap_or_else(|| (ws.repository_id.clone(), "Unknown".to_string()));
-        // Append to existing repo group or create a new one (preserves order).
-        if let Some(group) = by_repo.iter_mut().find(|(_, id, _)| *id == repo_id) {
-            group.2.push(ws);
-        } else {
-            by_repo.push((repo_name, repo_id, vec![ws]));
+            .filter(|ws| ws.repository_id == repo.id && ws.status == WorkspaceStatus::Active)
+            .collect();
+        if !repo_ws.is_empty() {
+            by_repo.push((repo.name.clone(), repo.id.clone(), repo_ws));
         }
     }
 
