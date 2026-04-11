@@ -263,12 +263,10 @@ pub async fn restore_to_commit(worktree_path: &str, commit_hash: &str) -> Result
 }
 
 /// Rename a branch. The worktree's HEAD follows automatically.
-pub async fn rename_branch(
-    repo_path: &str,
-    old_name: &str,
-    new_name: &str,
-) -> Result<(), GitError> {
-    run_git(repo_path, &["branch", "-m", old_name, new_name]).await?;
+/// `path` can be a repo root or a worktree — when the branch is checked
+/// out in a linked worktree, pass the worktree path to avoid errors.
+pub async fn rename_branch(path: &str, old_name: &str, new_name: &str) -> Result<(), GitError> {
+    run_git(path, &["branch", "-m", old_name, new_name]).await?;
     Ok(())
 }
 

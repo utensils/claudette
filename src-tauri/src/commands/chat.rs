@@ -168,7 +168,7 @@ pub async fn send_chat_message(
     drop(agents);
 
     // Capture rename context before the bridge spawn.
-    let rename_repo_path = repo.as_ref().map(|r| r.path.clone());
+    let has_repo = repo.is_some();
     let rename_old_branch = ws.branch_name.clone();
     let rename_old_name = ws.name.clone();
     let rename_prompt = content.clone();
@@ -181,7 +181,7 @@ pub async fn send_chat_message(
     tokio::spawn(async move {
         // On the first turn, spawn a background task to auto-rename the branch
         // using Haiku. This runs concurrently and does not block the event loop.
-        if !is_resume && rename_repo_path.is_some() {
+        if !is_resume && has_repo {
             let ws_id2 = ws_id.clone();
             let wt_path2 = wt_path.clone();
             let old_branch2 = rename_old_branch.clone();
