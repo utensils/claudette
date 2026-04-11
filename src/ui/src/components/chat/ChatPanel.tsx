@@ -1091,7 +1091,7 @@ const ToolActivitiesSection = memo(function ToolActivitiesSection({
             {activities.map((act: ToolActivity) => (
               <div key={act.toolUseId} className={styles.toolActivity}>
                 <div className={styles.toolHeader}>
-                  <span className={styles.toolName}>{act.toolName}</span>
+                  <span className={styles.toolName} style={{ color: toolColor(act.toolName) }}>{act.toolName}</span>
                   {act.summary && (
                     <span className={styles.toolSummary}>
                       {act.summary}
