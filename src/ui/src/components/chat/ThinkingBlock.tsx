@@ -18,6 +18,7 @@ export function ThinkingBlock({ content, isStreaming }: ThinkingBlockProps) {
       <button
         className={styles.header}
         onClick={() => setExpanded(!expanded)}
+        aria-expanded={expanded}
       >
         <span className={`${styles.chevron} ${expanded ? styles.chevronExpanded : ""}`}>
           ›

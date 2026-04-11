@@ -18,6 +18,7 @@ import {
   Gauge,
 } from "lucide-react";
 import type { ThemeDefinition } from "../../types/theme";
+import { isEffortSupported, isMaxEffortAllowed } from "../chat/EffortSelector";
 
 export type CommandCategory =
   | "general"
@@ -87,6 +88,7 @@ export interface CommandContext {
   setFastMode: (wsId: string, enabled: boolean) => void;
   effortLevel: string;
   setEffortLevel: (wsId: string, level: string) => void;
+  selectedModel: string;
   persistSetting: (key: string, value: string) => void;
   stopAgent: (wsId: string) => Promise<void>;
   resetAgentSession: (wsId: string) => Promise<void>;
@@ -194,7 +196,11 @@ export function buildCommands(ctx: CommandContext): Command[] {
       icon: Gauge,
       keywords: ["effort", "reasoning", "depth", "budget"],
       execute: () => {
-        const levels = ["auto", "low", "medium", "high", "max"];
+        const levels = !isEffortSupported(ctx.selectedModel)
+          ? ["auto"]
+          : isMaxEffortAllowed(ctx.selectedModel)
+            ? ["auto", "low", "medium", "high", "max"]
+            : ["auto", "low", "medium", "high"];
         const idx = levels.indexOf(ctx.effortLevel);
         const next = levels[(idx + 1) % levels.length];
         ctx.setEffortLevel(wsId, next);
