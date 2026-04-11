@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.6.0](https://github.com/utensils/Claudette/compare/v0.5.3...v0.6.0) (2026-04-11)
+
+
+### Features
+
+* add terminal command display via OSC 133 shell integration ([#132](https://github.com/utensils/Claudette/issues/132)) ([11948a1](https://github.com/utensils/Claudette/commit/11948a1193fea6f12d03c16873733b35f95b054d))
+* auto-rename git branch after first user prompt using Haiku ([#135](https://github.com/utensils/Claudette/issues/135)) ([ec7e739](https://github.com/utensils/Claudette/commit/ec7e739f11c6447817cc26cb85b299fdc3f46bdd))
+* effort level control + thinking block display ([#140](https://github.com/utensils/Claudette/issues/140)) ([37bd006](https://github.com/utensils/Claudette/commit/37bd006a4ac638fc83a05238f4eddbd75a70035e))
+
+
+### Bug Fixes
+
+* apply tool colors during streaming in ToolActivitiesSection ([#142](https://github.com/utensils/Claudette/issues/142)) ([f147ce5](https://github.com/utensils/Claudette/commit/f147ce5b4d2518bdff44f20a01dc08b90d91f053)), closes [#134](https://github.com/utensils/Claudette/issues/134)
+* **build:** add macOS DMG bundle config for volume icon ([#141](https://github.com/utensils/Claudette/issues/141)) ([c17c385](https://github.com/utensils/Claudette/commit/c17c3859aa1bd77048611915c2bb0635fa9b21d5))
+* rename branch from worktree path to avoid checked-out error ([#138](https://github.com/utensils/Claudette/issues/138)) ([c3e4a42](https://github.com/utensils/Claudette/commit/c3e4a4291db69fb37aca1e7c1a3a262b1943d20d))
+
 ## [0.5.3](https://github.com/utensils/Claudette/compare/v0.5.2...v0.5.3) (2026-04-11)
 
 
