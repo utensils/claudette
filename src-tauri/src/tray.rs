@@ -62,7 +62,7 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), String> {
                 let running = state
                     .agents
                     .try_read()
-                    .is_ok_and(|a| a.values().any(|s| s.active_pid.is_some()));
+                    .is_ok_and(|a| has_running_agents(&a));
                 if running {
                     let handle = app.clone();
                     tauri::async_runtime::spawn(async move {
@@ -190,6 +190,14 @@ fn compute_tray_state(state: &AppState) -> TrayState {
         Err(_) => return TrayState::Idle,
     };
     compute_tray_state_from_agents(&agents)
+}
+
+/// Check whether any agent is actively running (has a PID).
+/// Used by the quit confirmation guard — testable without AppState.
+pub fn has_running_agents(
+    agents: &std::collections::HashMap<String, crate::state::AgentSessionState>,
+) -> bool {
+    agents.values().any(|s| s.active_pid.is_some())
 }
 
 /// Pure logic for tray state — testable without AppState.
@@ -465,5 +473,39 @@ mod tests {
             compute_tray_state_from_agents(&agents),
             TrayState::NeedsAttention(3)
         ));
+    }
+
+    // --- Quit guard tests (has_running_agents) ---
+    // These validate the logic used by both the macOS Cmd+Q custom menu
+    // handler and the tray "Quit" menu item on all platforms.
+
+    #[test]
+    fn test_has_running_agents_empty() {
+        let agents = HashMap::new();
+        assert!(!has_running_agents(&agents));
+    }
+
+    #[test]
+    fn test_has_running_agents_all_idle() {
+        let mut agents = HashMap::new();
+        agents.insert("ws1".to_string(), session(None, false));
+        agents.insert("ws2".to_string(), session(None, true)); // attention but no pid
+        assert!(!has_running_agents(&agents));
+    }
+
+    #[test]
+    fn test_has_running_agents_one_running() {
+        let mut agents = HashMap::new();
+        agents.insert("ws1".to_string(), session(Some(1234), false));
+        agents.insert("ws2".to_string(), session(None, false));
+        assert!(has_running_agents(&agents));
+    }
+
+    #[test]
+    fn test_has_running_agents_multiple_running() {
+        let mut agents = HashMap::new();
+        agents.insert("ws1".to_string(), session(Some(1234), false));
+        agents.insert("ws2".to_string(), session(Some(5678), true));
+        assert!(has_running_agents(&agents));
     }
 }

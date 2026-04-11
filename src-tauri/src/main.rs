@@ -124,7 +124,7 @@ fn main() {
                 let running = state
                     .agents
                     .try_read()
-                    .is_ok_and(|a| a.values().any(|s| s.active_pid.is_some()));
+                    .is_ok_and(|a| tray::has_running_agents(&a));
                 if running {
                     let handle = app.clone();
                     tauri::async_runtime::spawn(async move {
@@ -179,12 +179,25 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // On macOS, Cmd+W hides the window rather than quitting —
-            // standard macOS behavior regardless of tray state.
-            #[cfg(target_os = "macos")]
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
+                // On macOS, Cmd+W always hides (standard behavior).
+                #[cfg(target_os = "macos")]
+                {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+                // On Linux, hide to tray when the tray is active;
+                // otherwise let the close proceed normally.
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let state = window.app_handle().state::<state::AppState>();
+                    if let Ok(guard) = state.tray_handle.lock()
+                        && guard.is_some()
+                    {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
