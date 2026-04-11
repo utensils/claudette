@@ -7,6 +7,8 @@ pub enum Osc133Event {
     CommandText { command: String }, // Extended: explicit command text
 }
 
+const MAX_OSC_PAYLOAD: usize = 4096; // Maximum OSC sequence payload length
+
 pub struct Osc133Parser {
     buffer: Vec<u8>,
     command_buffer: Vec<u8>,
@@ -79,6 +81,11 @@ impl Osc133Parser {
                     self.buffer.clear();
                 } else {
                     self.buffer.push(byte);
+                    // Prevent unbounded buffer growth from malformed OSC sequences
+                    if self.buffer.len() > MAX_OSC_PAYLOAD {
+                        self.in_osc = false;
+                        self.buffer.clear();
+                    }
                 }
             } else if byte == 0x1b {
                 self.buffer.push(byte);
@@ -117,8 +124,10 @@ impl Osc133Parser {
             self.tracking_command = false;
             Some(Osc133Event::CommandExecuted)
         } else if let Some(code_str) = s.strip_prefix("133;D;") {
-            let exit_code = code_str.trim().parse().unwrap_or(0);
-            Some(Osc133Event::CommandFinished { exit_code })
+            match code_str.trim().parse() {
+                Ok(exit_code) => Some(Osc133Event::CommandFinished { exit_code }),
+                Err(_) => None, // Ignore malformed exit codes
+            }
         } else if let Some(cmd_encoded) = s.strip_prefix("133;E;") {
             // Extended: explicit command text (URL-encoded)
             // When we receive explicit command text, stop tracking between B and C

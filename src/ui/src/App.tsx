@@ -123,16 +123,23 @@ function App() {
       };
     };
 
-    let unlistenCommandEvents: (() => void) | null = null;
-    setupCommandListeners().then((unlisten) => {
-      unlistenCommandEvents = unlisten;
+    let isActive = true;
+    const unlistenCommandEventsPromise = setupCommandListeners();
+
+    // If the promise resolves after cleanup, call unlisten immediately
+    unlistenCommandEventsPromise.then((unlisten) => {
+      if (!isActive) {
+        unlisten();
+      }
     });
 
     return () => {
+      isActive = false;
       window.clearInterval(discoveredServersPollId);
-      if (unlistenCommandEvents) {
-        unlistenCommandEvents();
-      }
+      // Clean up listeners when they're ready
+      void unlistenCommandEventsPromise.then((unlisten) => {
+        unlisten();
+      });
     };
   }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId]);
 

@@ -53,7 +53,7 @@ fn generate_loader_code(shell_type: ShellType, script_path: &Path) -> String {
              # Auto-generated on {date}\n\
              # To disable, comment out or remove these lines\n\
              if [[ -n \"$CLAUDETTE_PTY\" ]]; then\n    \
-                 source {script_str}\n\
+                 source \"{script_str}\"\n\
              fi"
         ),
         ShellType::Fish => format!(
@@ -61,7 +61,7 @@ fn generate_loader_code(shell_type: ShellType, script_path: &Path) -> String {
              # Auto-generated on {date}\n\
              # To disable, comment out or remove these lines\n\
              if test -n \"$CLAUDETTE_PTY\"\n    \
-                 source {script_str}\n\
+                 source \"{script_str}\"\n\
              end"
         ),
         ShellType::Unknown => String::new(),
@@ -136,6 +136,27 @@ pub async fn setup_shell_integration() -> Result<SetupResult, String> {
 #[tauri::command]
 pub async fn apply_shell_integration(rc_path: String, loader_code: String) -> Result<(), String> {
     let path = PathBuf::from(&rc_path);
+
+    // Security: validate that the path is within home/config directory
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let config_dir = dirs::config_dir().ok_or("Could not find config directory")?;
+
+    let canonical_path = path.canonicalize().unwrap_or_else(|_| {
+        // If file doesn't exist yet, canonicalize the parent and append filename
+        path.parent()
+            .and_then(|p| p.canonicalize().ok())
+            .map(|p| p.join(path.file_name().unwrap_or_default()))
+            .unwrap_or_else(|| path.clone())
+    });
+
+    // Only allow writing to files under home or config directories
+    if !canonical_path.starts_with(&home_dir) && !canonical_path.starts_with(&config_dir) {
+        return Err(format!(
+            "Invalid RC path: must be within home ({}) or config ({}) directory",
+            home_dir.display(),
+            config_dir.display()
+        ));
+    }
 
     // Ensure parent directory exists (for fish config)
     if let Some(parent) = path.parent() {

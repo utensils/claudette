@@ -9,8 +9,9 @@ end
 # Fish provides the command in $argv
 function __claudette_preexec --on-event fish_preexec
     printf '\033]133;B\007'
-    # URL-encode command to handle special characters
-    set cmd_encoded (string join ' ' $argv | jq -sRr @uri 2>/dev/null; or echo "")
+    # URL-encode command to handle special characters using fish built-in
+    set cmd (string join ' ' $argv)
+    set cmd_encoded (string escape --style=url -- $cmd)
     if test -n "$cmd_encoded"
         printf '\033]133;E;%s\007' "$cmd_encoded"
     end

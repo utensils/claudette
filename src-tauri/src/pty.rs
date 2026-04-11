@@ -152,8 +152,9 @@ pub async fn spawn_pty(
                             }
                             Osc133Event::PromptStart => {
                                 // Prompt appeared - reset running state if still set
-                                if *running_clone.lock() {
-                                    *running_clone.lock() = false;
+                                let mut running = running_clone.lock();
+                                if *running {
+                                    *running = false;
                                 }
                             }
                         }
