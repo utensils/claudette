@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.8.0](https://github.com/utensils/Claudette/compare/v0.7.0...v0.8.0) (2026-04-12)
+
+
+### Features
+
+* @-mention file references in chat input ([#153](https://github.com/utensils/Claudette/issues/153)) ([5de4edd](https://github.com/utensils/Claudette/commit/5de4edd59294cacadf7a48f1dca40d5b00b41136))
+* add Astro Starlight documentation site ([#158](https://github.com/utensils/Claudette/issues/158)) ([df10113](https://github.com/utensils/Claudette/commit/df10113a094acf07bd00230daf1e003b45b858cb))
+* **settings:** full-page settings view with new configuration options ([#155](https://github.com/utensils/Claudette/issues/155)) ([4ded233](https://github.com/utensils/Claudette/commit/4ded2335d74bb1a3cbedcfc059948ae5c57f21ad))
+* **ui:** overlay titlebar and header panel toggle icons ([#157](https://github.com/utensils/Claudette/issues/157)) ([8e814bb](https://github.com/utensils/Claudette/commit/8e814bb98b64db172ce1a368453f542a5ab51885))
+
+
+### Bug Fixes
+
+* **ui:** replace ambiguous X icons with Archive and Trash2 in sidebar ([#156](https://github.com/utensils/Claudette/issues/156)) ([a3129b7](https://github.com/utensils/Claudette/commit/a3129b7bb8bbbd8147ea426f8f4721b0cd36d7f6))
+
 ## [0.7.0](https://github.com/utensils/Claudette/compare/v0.6.0...v0.7.0) (2026-04-12)
 
 
