@@ -1,10 +1,11 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, Fragment } from "react";
 import { ChevronDown } from "lucide-react";
 import styles from "./HeaderMenu.module.css";
 
 interface MenuItem {
   value: string;
   label: string;
+  group?: string;
 }
 
 interface HeaderMenuProps {
@@ -66,19 +67,27 @@ export function HeaderMenu({
       </button>
       {open && (
         <div className={styles.menu}>
-          {items.map((item) => (
-            <button
-              key={item.value}
-              className={`${styles.item} ${item.value === value ? styles.itemActive : ""}`}
-              onClick={() => {
-                onSelect(item.value);
-                setOpen(false);
-              }}
-              type="button"
-            >
-              {item.label}
-            </button>
-          ))}
+          {items.map((item, i) => {
+            const showGroupHeader =
+              item.group && (i === 0 || items[i - 1].group !== item.group);
+            return (
+              <Fragment key={item.value}>
+                {showGroupHeader && (
+                  <div className={styles.groupHeader}>{item.group}</div>
+                )}
+                <button
+                  className={`${styles.item} ${item.value === value ? styles.itemActive : ""}`}
+                  onClick={() => {
+                    onSelect(item.value);
+                    setOpen(false);
+                  }}
+                  type="button"
+                >
+                  {item.label}
+                </button>
+              </Fragment>
+            );
+          })}
         </div>
       )}
     </div>

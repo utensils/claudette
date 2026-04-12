@@ -15,6 +15,7 @@ import type {
   ConversationCheckpoint,
 } from "../types";
 import type { RemoteInitialData } from "../types/remote";
+import type { DetectedApp } from "../types/apps";
 
 export type PermissionLevel = "readonly" | "standard" | "full";
 
@@ -258,6 +259,10 @@ interface AppState {
   localServerConnectionString: string | null;
   setLocalServerRunning: (running: boolean) => void;
   setLocalServerConnectionString: (cs: string | null) => void;
+
+  // -- Detected Apps --
+  detectedApps: DetectedApp[];
+  setDetectedApps: (apps: DetectedApp[]) => void;
 
   // -- Updater --
   updateAvailable: boolean;
@@ -843,6 +848,10 @@ export const useAppStore = create<AppState>((set) => ({
   setLocalServerRunning: (running) => set({ localServerRunning: running }),
   setLocalServerConnectionString: (cs) =>
     set({ localServerConnectionString: cs }),
+
+  // -- Detected Apps --
+  detectedApps: [],
+  setDetectedApps: (apps) => set({ detectedApps: apps }),
 
   // -- Updater --
   updateAvailable: false,

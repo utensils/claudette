@@ -41,5 +41,8 @@ mac-notification-sys = "0.6"
 [features]
 devtools = ["tauri/devtools"]
 
+[dev-dependencies]
+tempfile = "3"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

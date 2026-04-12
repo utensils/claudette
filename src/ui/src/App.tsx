@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "./stores/useAppStore";
-import { loadInitialData, getAppSetting, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, clearAttention } from "./services/tauri";
+import { loadInitialData, getAppSetting, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, clearAttention, detectInstalledApps } from "./services/tauri";
 import { applyTheme, loadAllThemes, findTheme } from "./utils/theme";
 import { AppLayout } from "./components/layout/AppLayout";
 import type { CommandEvent } from "./types";
@@ -19,6 +19,7 @@ function App() {
   const setLocalServerRunning = useAppStore((s) => s.setLocalServerRunning);
   const setLocalServerConnectionString = useAppStore((s) => s.setLocalServerConnectionString);
   const setCurrentThemeId = useAppStore((s) => s.setCurrentThemeId);
+  const setDetectedApps = useAppStore((s) => s.setDetectedApps);
 
   useEffect(() => {
     loadInitialData().then((data) => {
@@ -72,6 +73,10 @@ function App() {
         setLocalServerConnectionString(info.connection_string);
       })
       .catch((err) => console.error("Failed to load local server status:", err));
+
+    detectInstalledApps()
+      .then(setDetectedApps)
+      .catch((err) => console.error("Failed to detect installed apps:", err));
 
     // Listen for terminal command events
     const setupCommandListeners = async () => {
@@ -148,7 +153,7 @@ function App() {
       unlistenTray.then((fn) => fn());
       unlistenSettings.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setDetectedApps]);
 
   return <AppLayout />;
 }

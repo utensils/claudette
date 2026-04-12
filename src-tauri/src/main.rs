@@ -12,7 +12,9 @@ mod tray;
 
 use std::path::PathBuf;
 
-use tauri::{Emitter, Manager};
+#[cfg(target_os = "macos")]
+use tauri::Emitter;
+use tauri::Manager;
 
 use claudette::db::Database;
 
@@ -290,6 +292,9 @@ fn main() {
             commands::shell::setup_shell_integration,
             commands::shell::apply_shell_integration,
             commands::shell::open_in_editor,
+            // Apps
+            commands::apps::detect_installed_apps,
+            commands::apps::open_workspace_in_app,
             // Remote
             commands::remote::list_remote_connections,
             commands::remote::pair_with_server,

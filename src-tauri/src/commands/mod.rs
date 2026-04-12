@@ -1,3 +1,4 @@
+pub mod apps;
 pub mod chat;
 pub mod data;
 #[cfg(debug_assertions)]

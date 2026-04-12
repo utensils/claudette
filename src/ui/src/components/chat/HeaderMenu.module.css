@@ -84,3 +84,12 @@
   color: var(--accent-primary);
   font-weight: 600;
 }
+
+.groupHeader {
+  font-size: 10px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 6px 10px 2px;
+  pointer-events: none;
+}

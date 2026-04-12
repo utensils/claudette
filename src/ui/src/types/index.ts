@@ -31,3 +31,4 @@ export type {
   PairResult,
 } from "./remote";
 export type { ConversationCheckpoint } from "./checkpoint";
+export type { DetectedApp, AppCategory } from "./apps";

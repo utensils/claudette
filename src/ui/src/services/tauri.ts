@@ -16,6 +16,7 @@ import type {
   DiscoveredServer,
   PairResult,
 } from "../types/remote";
+import type { DetectedApp } from "../types/apps";
 
 // -- Data --
 
@@ -435,6 +436,16 @@ export function stopLocalServer(): Promise<void> {
 
 export function getLocalServerStatus(): Promise<LocalServerInfo> {
   return invoke("get_local_server_status");
+}
+
+// -- Apps --
+
+export function detectInstalledApps(): Promise<DetectedApp[]> {
+  return invoke("detect_installed_apps");
+}
+
+export function openWorkspaceInApp(appId: string, worktreePath: string): Promise<void> {
+  return invoke("open_workspace_in_app", { appId, worktreePath });
 }
 
 // -- Debug (dev builds only) --

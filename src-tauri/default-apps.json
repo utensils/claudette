@@ -1,0 +1,157 @@
+{
+  "apps": [
+    {
+      "id": "vscode",
+      "name": "VS Code",
+      "category": "editor",
+      "bin_names": ["code"],
+      "mac_app_names": ["Visual Studio Code.app"],
+      "open_args": ["{}"]
+    },
+    {
+      "id": "cursor",
+      "name": "Cursor",
+      "category": "editor",
+      "bin_names": ["cursor"],
+      "mac_app_names": ["Cursor.app"],
+      "open_args": ["{}"]
+    },
+    {
+      "id": "zed",
+      "name": "Zed",
+      "category": "editor",
+      "bin_names": ["zed"],
+      "mac_app_names": ["Zed.app"],
+      "open_args": ["{}"]
+    },
+    {
+      "id": "sublime",
+      "name": "Sublime Text",
+      "category": "editor",
+      "bin_names": ["subl"],
+      "mac_app_names": ["Sublime Text.app"],
+      "open_args": ["{}"]
+    },
+    {
+      "id": "neovim",
+      "name": "Neovim",
+      "category": "editor",
+      "bin_names": ["nvim"],
+      "open_args": ["{}"],
+      "needs_terminal": true
+    },
+    {
+      "id": "vim",
+      "name": "Vim",
+      "category": "editor",
+      "bin_names": ["vim"],
+      "open_args": ["{}"],
+      "needs_terminal": true
+    },
+    {
+      "id": "helix",
+      "name": "Helix",
+      "category": "editor",
+      "bin_names": ["hx"],
+      "open_args": ["{}"],
+      "needs_terminal": true
+    },
+    {
+      "id": "emacs",
+      "name": "Emacs",
+      "category": "editor",
+      "bin_names": ["emacs"],
+      "mac_app_names": ["Emacs.app"],
+      "open_args": ["{}"]
+    },
+    {
+      "id": "alacritty",
+      "name": "Alacritty",
+      "category": "terminal",
+      "bin_names": ["alacritty"],
+      "mac_app_names": ["Alacritty.app"],
+      "open_args": ["--working-directory", "{}"]
+    },
+    {
+      "id": "kitty",
+      "name": "Kitty",
+      "category": "terminal",
+      "bin_names": ["kitty"],
+      "mac_app_names": ["kitty.app"],
+      "open_args": ["--directory", "{}"]
+    },
+    {
+      "id": "ghostty",
+      "name": "Ghostty",
+      "category": "terminal",
+      "bin_names": ["ghostty"],
+      "mac_app_names": ["Ghostty.app"],
+      "open_args": ["--working-directory={}"]
+    },
+    {
+      "id": "wezterm",
+      "name": "WezTerm",
+      "category": "terminal",
+      "bin_names": ["wezterm"],
+      "mac_app_names": ["WezTerm.app"],
+      "open_args": ["start", "--cwd", "{}"]
+    },
+    {
+      "id": "iterm2",
+      "name": "iTerm2",
+      "category": "terminal",
+      "mac_app_names": ["iTerm.app"],
+      "open_args": ["__applescript__"]
+    },
+    {
+      "id": "macos-terminal",
+      "name": "Terminal",
+      "category": "terminal",
+      "mac_app_names": ["__always__"],
+      "open_args": ["__applescript__"]
+    },
+    {
+      "id": "gnome-terminal",
+      "name": "GNOME Terminal",
+      "category": "terminal",
+      "bin_names": ["gnome-terminal"],
+      "open_args": ["--working-directory", "{}"]
+    },
+    {
+      "id": "konsole",
+      "name": "Konsole",
+      "category": "terminal",
+      "bin_names": ["konsole"],
+      "open_args": ["--workdir", "{}"]
+    },
+    {
+      "id": "xfce4-terminal",
+      "name": "Xfce Terminal",
+      "category": "terminal",
+      "bin_names": ["xfce4-terminal"],
+      "open_args": ["--working-directory", "{}"]
+    },
+    {
+      "id": "foot",
+      "name": "Foot",
+      "category": "terminal",
+      "bin_names": ["foot"],
+      "open_args": ["--working-directory", "{}"]
+    },
+    {
+      "id": "intellij",
+      "name": "IntelliJ IDEA",
+      "category": "ide",
+      "bin_names": ["idea"],
+      "mac_app_names": ["IntelliJ IDEA.app", "IntelliJ IDEA CE.app"],
+      "open_args": ["{}"]
+    },
+    {
+      "id": "xcode",
+      "name": "Xcode",
+      "category": "ide",
+      "mac_app_names": ["Xcode.app"],
+      "open_args": ["__open_a__"]
+    }
+  ]
+}

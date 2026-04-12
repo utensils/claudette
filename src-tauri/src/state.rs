@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use parking_lot::Mutex as ParkingMutex;
 use tokio::sync::RwLock;
 
+use crate::commands::apps::DetectedApp;
 use crate::remote::DiscoveredServer;
 
 /// Re-export for use in tray module without direct tauri::tray import.
@@ -76,6 +77,8 @@ pub struct AppState {
     pub discovered_servers: RwLock<Vec<DiscoveredServer>>,
     /// Embedded local claudette-server process (when "Share this machine" is active).
     pub local_server: RwLock<Option<LocalServerState>>,
+    /// Detected apps cache (populated on startup, read by open_workspace_in_app for TUI wrapping).
+    pub detected_apps: RwLock<Vec<DetectedApp>>,
     /// System tray icon handle (None when tray is disabled).
     pub tray_handle: Mutex<Option<TrayIcon>>,
 }
@@ -90,6 +93,7 @@ impl AppState {
             next_pty_id: AtomicU64::new(1),
             discovered_servers: RwLock::new(Vec::new()),
             local_server: RwLock::new(None),
+            detected_apps: RwLock::new(Vec::new()),
             tray_handle: Mutex::new(None),
         }
     }
