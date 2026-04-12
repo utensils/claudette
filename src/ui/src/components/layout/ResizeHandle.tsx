@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef } from "react";
+import { memo, useCallback, useEffect, useRef, type RefObject, type MouseEvent } from "react";
 import styles from "./ResizeHandle.module.css";
 
 interface ResizeHandleProps {
@@ -6,7 +6,7 @@ interface ResizeHandleProps {
   /** Legacy per-pixel callback (used when cssVar is not provided). */
   onResize?: (delta: number) => void;
   /** DOM element whose CSS variable to mutate during drag. */
-  targetRef?: React.RefObject<HTMLElement | null>;
+  targetRef?: RefObject<HTMLElement | null>;
   /** CSS custom property name to write (e.g. "--sidebar-w"). */
   cssVar?: string;
   min?: number;
@@ -29,18 +29,25 @@ export const ResizeHandle = memo(function ResizeHandle({
 }: ResizeHandleProps) {
   const isDraggingRef = useRef(false);
   const startPosRef = useRef(0);
+  const currentValueRef = useRef(0);
 
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+  const handleMouseDown = useCallback((e: MouseEvent<HTMLDivElement>) => {
     e.preventDefault();
     isDraggingRef.current = true;
     startPosRef.current = direction === "horizontal" ? e.clientX : e.clientY;
+    // Cache the CSS variable value once on mousedown to avoid getComputedStyle per pixel.
+    if (targetRef?.current && cssVar) {
+      currentValueRef.current = parseFloat(
+        getComputedStyle(targetRef.current).getPropertyValue(cssVar),
+      ) || 0;
+    }
     document.body.style.cursor =
       direction === "horizontal" ? "col-resize" : "row-resize";
     document.body.style.userSelect = "none";
-  }, [direction]);
+  }, [direction, targetRef, cssVar]);
 
   useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
+    const handleMouseMove = (e: globalThis.MouseEvent) => {
       if (!isDraggingRef.current) return;
 
       const currentPos = direction === "horizontal" ? e.clientX : e.clientY;
@@ -49,12 +56,9 @@ export const ResizeHandle = memo(function ResizeHandle({
 
       // CSS variable fast-path: write directly to the DOM, no React state.
       if (targetRef?.current && cssVar) {
-        const el = targetRef.current;
-        const raw = parseFloat(
-          getComputedStyle(el).getPropertyValue(cssVar),
-        ) || 0;
-        const next = Math.max(min, Math.min(max, raw + (invert ? -delta : delta)));
-        el.style.setProperty(cssVar, `${next}px`);
+        const next = Math.max(min, Math.min(max, currentValueRef.current + (invert ? -delta : delta)));
+        currentValueRef.current = next;
+        targetRef.current.style.setProperty(cssVar, `${next}px`);
         return;
       }
 
@@ -70,10 +74,7 @@ export const ResizeHandle = memo(function ResizeHandle({
 
       // Sync final value to React state once.
       if (targetRef?.current && cssVar && onResizeEnd) {
-        const final = parseFloat(
-          getComputedStyle(targetRef.current).getPropertyValue(cssVar),
-        ) || 0;
-        onResizeEnd(final);
+        onResizeEnd(currentValueRef.current);
       }
     };
 

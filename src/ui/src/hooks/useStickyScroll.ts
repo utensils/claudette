@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 
 /**
  * Sticky-scroll hook: auto-scrolls to bottom when user is at the bottom of a
@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * `scrollToBottom` and `handleContentChanged` helpers.
  */
 export function useStickyScroll(
-  containerRef: React.RefObject<HTMLElement | null>,
+  containerRef: RefObject<HTMLElement | null>,
   threshold = 60,
 ) {
   const isAtBottomRef = useRef(true);

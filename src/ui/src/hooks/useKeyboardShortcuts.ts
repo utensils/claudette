@@ -149,7 +149,7 @@ export function useKeyboardShortcuts() {
     };
 
     // Track Cmd/Ctrl key hold for visual shortcut hints.
-    // Uses a 400ms delay so quick taps (Cmd+C, Cmd+Tab) never flash hints —
+    // Uses a 500ms delay so quick taps (Cmd+C, Cmd+Tab) never flash hints —
     // only a deliberate hold shows them.
     let metaHoldTimer: ReturnType<typeof setTimeout> | null = null;
 

@@ -28,6 +28,7 @@ interface TermInstance {
   unlisten: (() => void) | null;
   container: HTMLDivElement;
   resizeObserver: ResizeObserver;
+  fitTimer: ReturnType<typeof setTimeout> | null;
 }
 
 export const TerminalPanel = memo(function TerminalPanel() {
@@ -122,16 +123,16 @@ export const TerminalPanel = memo(function TerminalPanel() {
     term.open(tabContainer);
     fit.fit();
 
-    let fitTimer: ReturnType<typeof setTimeout>;
     const instance: TermInstance = {
       term,
       fit,
       ptyId: -1,
       unlisten: null,
       container: tabContainer,
+      fitTimer: null,
       resizeObserver: new ResizeObserver(() => {
-        clearTimeout(fitTimer);
-        fitTimer = setTimeout(() => fit.fit(), 150);
+        if (instance.fitTimer) clearTimeout(instance.fitTimer);
+        instance.fitTimer = setTimeout(() => fit.fit(), 150);
       }),
     };
     instance.resizeObserver.observe(tabContainer);
@@ -187,6 +188,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
         console.error("Failed to initialize terminal:", e);
         const inst = instancesRef.current.get(currentTabId);
         if (inst) {
+          if (inst.fitTimer) clearTimeout(inst.fitTimer);
           inst.resizeObserver.disconnect();
           inst.term.dispose();
           inst.container.remove();

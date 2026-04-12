@@ -188,7 +188,7 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
       >
         <Brain size={14} />
         <span className={styles.chipLabel}>Thinking</span>
-        <kbd className={`shortcut-badge ${metaKeyHeld ? "shortcut-badge-visible" : ""}`}>{mod}T</kbd>
+        <kbd className={`shortcut-badge ${metaKeyHeld ? "shortcut-badge-visible" : ""}`} aria-hidden="true">{mod}T</kbd>
       </button>
 
       <button
@@ -221,7 +221,7 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
       >
         <BookOpen size={14} />
         <span className={styles.chipLabel}>Plan</span>
-        <kbd className={`shortcut-badge ${metaKeyHeld ? "shortcut-badge-visible" : ""}`}>⇧Tab</kbd>
+        <kbd className={`shortcut-badge ${metaKeyHeld ? "shortcut-badge-visible" : ""}`} aria-hidden="true">⇧Tab</kbd>
       </button>
 
       {modelSelectorOpen && (
