@@ -46,6 +46,7 @@ pub async fn add_repository(
         setup_script: None,
         custom_instructions: None,
         sort_order: 0,
+        branch_rename_preferences: None,
         path_valid: true,
     };
 
@@ -57,6 +58,7 @@ pub async fn add_repository(
     Ok(repo)
 }
 
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn update_repository_settings(
     id: String,
@@ -64,6 +66,7 @@ pub async fn update_repository_settings(
     icon: Option<String>,
     setup_script: Option<String>,
     custom_instructions: Option<String>,
+    branch_rename_preferences: Option<String>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
@@ -75,6 +78,8 @@ pub async fn update_repository_settings(
     db.update_repository_setup_script(&id, setup_script.as_deref())
         .map_err(|e| e.to_string())?;
     db.update_repository_custom_instructions(&id, custom_instructions.as_deref())
+        .map_err(|e| e.to_string())?;
+    db.update_repository_branch_rename_preferences(&id, branch_rename_preferences.as_deref())
         .map_err(|e| e.to_string())?;
 
     crate::tray::rebuild_tray(&app);

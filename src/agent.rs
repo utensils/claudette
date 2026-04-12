@@ -475,6 +475,7 @@ pub fn sanitize_branch_name(raw: &str, max_len: usize) -> String {
 pub async fn generate_branch_name(
     prompt_text: &str,
     worktree_path: &str,
+    branch_rename_preferences: Option<&str>,
 ) -> Result<String, String> {
     // Truncate prompt to keep the Haiku call fast and cheap.
     let truncated: String = prompt_text.chars().take(200).collect();
@@ -489,6 +490,16 @@ pub async fn generate_branch_name(
          Lowercase letters, numbers, and hyphens only. Max 30 chars.\n\n\
          Task: {truncated}"
     );
+    let mut system_prompt =
+        "You are a branch name generator. Output ONLY a slug. Never answer the task itself."
+            .to_string();
+    if let Some(prefs) = branch_rename_preferences {
+        let prefs_truncated: String = prefs.chars().take(500).collect();
+        system_prompt.push_str(&format!(
+            "\n\nThe user has provided the following branch naming preferences. \
+             Prioritize these over your default behavior:\n{prefs_truncated}"
+        ));
+    }
     cmd.args([
         "--print",
         "--output-format",
@@ -496,7 +507,7 @@ pub async fn generate_branch_name(
         "--model",
         "claude-haiku-4-5",
         "--append-system-prompt",
-        "You are a branch name generator. Output ONLY a slug. Never answer the task itself.",
+        &system_prompt,
         &user_message,
     ]);
 

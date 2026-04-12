@@ -8,6 +8,7 @@ export interface Repository {
   setup_script: string | null;
   custom_instructions: string | null;
   sort_order: number;
+  branch_rename_preferences: string | null;
   path_valid: boolean;
   /** Non-null when this repo belongs to a remote connection. */
   remote_connection_id: string | null;

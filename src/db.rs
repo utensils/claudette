@@ -235,6 +235,13 @@ impl Database {
             )?;
         }
 
+        if version < 14 {
+            self.conn.execute_batch(
+                "ALTER TABLE repositories ADD COLUMN branch_rename_preferences TEXT;
+                 PRAGMA user_version = 14;",
+            )?;
+        }
+
         Ok(())
     }
 
@@ -269,13 +276,14 @@ impl Database {
             setup_script: row.get(6)?,
             custom_instructions: row.get(7)?,
             sort_order: row.get(8)?,
+            branch_rename_preferences: row.get(9)?,
             path_valid: true, // validated after load
         })
     }
 
     pub fn list_repositories(&self) -> Result<Vec<Repository>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, path, name, icon, path_slug, created_at, setup_script, custom_instructions, sort_order
+            "SELECT id, path, name, icon, path_slug, created_at, setup_script, custom_instructions, sort_order, branch_rename_preferences
              FROM repositories ORDER BY sort_order, name",
         )?;
         let rows = stmt.query_map([], Self::parse_repo_row)?;
@@ -285,7 +293,7 @@ impl Database {
     pub fn get_repository(&self, id: &str) -> Result<Option<Repository>, rusqlite::Error> {
         self.conn
             .query_row(
-                "SELECT id, path, name, icon, path_slug, created_at, setup_script, custom_instructions, sort_order
+                "SELECT id, path, name, icon, path_slug, created_at, setup_script, custom_instructions, sort_order, branch_rename_preferences
                  FROM repositories WHERE id = ?1",
                 params![id],
                 Self::parse_repo_row,
@@ -362,6 +370,18 @@ impl Database {
         self.conn.execute(
             "UPDATE repositories SET custom_instructions = ?1 WHERE id = ?2",
             params![instructions, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_repository_branch_rename_preferences(
+        &self,
+        id: &str,
+        preferences: Option<&str>,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE repositories SET branch_rename_preferences = ?1 WHERE id = ?2",
+            params![preferences, id],
         )?;
         Ok(())
     }
@@ -1088,6 +1108,7 @@ mod tests {
             setup_script: None,
             custom_instructions: None,
             sort_order: 0,
+            branch_rename_preferences: None,
             path_valid: true,
         }
     }
@@ -1419,6 +1440,7 @@ mod tests {
             setup_script: None,
             custom_instructions: None,
             sort_order: 0,
+            branch_rename_preferences: None,
             path_valid: true,
         };
         db.insert_repository(&repo).unwrap();

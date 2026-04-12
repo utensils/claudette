@@ -18,6 +18,8 @@ pub struct Repository {
     pub custom_instructions: Option<String>,
     /// Display order in the sidebar. Lower values appear first.
     pub sort_order: i32,
+    /// Custom instructions for how branch names should be generated during auto-rename.
+    pub branch_rename_preferences: Option<String>,
     /// Runtime-only: whether the repo path still exists on disk. Not persisted.
     pub path_valid: bool,
 }

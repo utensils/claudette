@@ -190,6 +190,9 @@ pub async fn send_chat_message(
     let rename_old_branch = ws.branch_name.clone();
     let rename_old_name = ws.name.clone();
     let rename_prompt = content.clone();
+    let rename_prefs = repo
+        .as_ref()
+        .and_then(|r| r.branch_rename_preferences.clone());
 
     crate::tray::rebuild_tray(&app);
 
@@ -209,6 +212,7 @@ pub async fn send_chat_message(
             let prompt2 = rename_prompt.clone();
             let db_path2 = db_path.clone();
             let app2 = app.clone();
+            let prefs2 = rename_prefs.clone();
             tokio::spawn(async move {
                 try_auto_rename(
                     &ws_id2,
@@ -216,6 +220,7 @@ pub async fn send_chat_message(
                     &old_name2,
                     &old_branch2,
                     &prompt2,
+                    prefs2.as_deref(),
                     &db_path2,
                     &app2,
                 )
@@ -695,23 +700,26 @@ pub async fn load_completed_turns(
 
 /// Background task: generate a descriptive branch name via Haiku and rename
 /// the workspace's branch + DB record. All failures are non-fatal.
+#[allow(clippy::too_many_arguments)]
 async fn try_auto_rename(
     ws_id: &str,
     worktree_path: &str,
     old_name: &str,
     old_branch: &str,
     prompt: &str,
+    branch_rename_preferences: Option<&str>,
     db_path: &std::path::Path,
     app: &AppHandle,
 ) {
     // Ask Haiku for a branch name slug.
-    let slug = match agent::generate_branch_name(prompt, worktree_path).await {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("[rename] Haiku branch name generation failed: {e}");
-            return;
-        }
-    };
+    let slug =
+        match agent::generate_branch_name(prompt, worktree_path, branch_rename_preferences).await {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("[rename] Haiku branch name generation failed: {e}");
+                return;
+            }
+        };
 
     // Try the slug, then slug-2, slug-3 on name collision.
     let candidates = [slug.clone(), format!("{slug}-2"), format!("{slug}-3")];

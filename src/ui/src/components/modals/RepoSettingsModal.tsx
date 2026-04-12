@@ -22,6 +22,12 @@ export function RepoSettingsModal() {
   const [customInstructions, setCustomInstructions] = useState(
     repo?.custom_instructions ?? ""
   );
+  const [branchRenamePreferences, setBranchRenamePreferences] = useState(
+    repo?.branch_rename_preferences ?? ""
+  );
+  const [branchPrefsOpen, setBranchPrefsOpen] = useState(
+    !!repo?.branch_rename_preferences
+  );
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -49,18 +55,21 @@ export function RepoSettingsModal() {
       const iconValue = icon.trim() || null;
       const scriptValue = setupScript.trim() || null;
       const instructionsValue = customInstructions.trim() || null;
+      const branchPrefsValue = branchRenamePreferences.trim() || null;
       await updateRepositorySettings(
         repoId,
         name.trim(),
         iconValue,
         scriptValue,
-        instructionsValue
+        instructionsValue,
+        branchPrefsValue
       );
       updateRepo(repoId, {
         name: name.trim(),
         icon: iconValue,
         setup_script: scriptValue,
         custom_instructions: instructionsValue,
+        branch_rename_preferences: branchPrefsValue,
       });
       closeModal();
     } catch (e) {
@@ -211,6 +220,60 @@ export function RepoSettingsModal() {
         <div className={shared.hint}>
           Appended to the agent's system prompt at the start of every chat.
         </div>
+      </div>
+
+      <div
+        style={{
+          borderTop: "1px solid var(--divider)",
+          marginTop: 16,
+          paddingTop: 12,
+        }}
+      >
+        <div
+          onClick={() => setBranchPrefsOpen(!branchPrefsOpen)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            cursor: "pointer",
+            userSelect: "none",
+          }}
+        >
+          <label className={shared.label} style={{ cursor: "pointer", marginBottom: 0 }}>
+            Branch rename preferences
+          </label>
+          <span
+            style={{
+              color: "var(--text-dim)",
+              fontSize: 12,
+              transform: branchPrefsOpen ? "rotate(0deg)" : "rotate(-90deg)",
+              transition: "transform 0.15s ease",
+            }}
+          >
+            ▾
+          </span>
+        </div>
+        {branchPrefsOpen && (
+          <div style={{ marginTop: 8 }}>
+            <div className={shared.hint} style={{ marginBottom: 8 }}>
+              Add custom instructions sent to the agent along with your first
+              message in a workspace where the branch hasn't already been
+              renamed.
+            </div>
+            <textarea
+              className={shared.input}
+              value={branchRenamePreferences}
+              onChange={(e) => setBranchRenamePreferences(e.target.value)}
+              placeholder="Add your preferences here. The agent will be told to prioritize these instructions over its default instructions."
+              rows={3}
+              style={{
+                fontFamily: "monospace",
+                fontSize: 12,
+                resize: "vertical",
+              }}
+            />
+          </div>
+        )}
       </div>
 
       <div
