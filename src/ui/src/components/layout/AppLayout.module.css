@@ -9,13 +9,18 @@
   display: flex;
   flex: 1;
   overflow: hidden;
+  --sidebar-w: 260px;
+  --right-sidebar-w: 250px;
+  --terminal-h: 300px;
 }
 
 .sidebar {
   flex-shrink: 0;
+  width: var(--sidebar-w);
   background: var(--sidebar-bg);
   border-right: 1px solid var(--sidebar-border);
   overflow-y: auto;
+  contain: layout style paint;
 }
 
 .center {
@@ -23,6 +28,7 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  contain: layout style;
 }
 
 .content {
@@ -30,19 +36,24 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  contain: layout style;
 }
 
 .terminal {
   flex-shrink: 0;
+  height: var(--terminal-h);
   border-top: 1px solid var(--sidebar-border);
   overflow: hidden;
+  contain: layout style paint;
 }
 
 .rightSidebar {
   flex-shrink: 0;
+  width: var(--right-sidebar-w);
   background: var(--sidebar-bg);
   border-left: 1px solid var(--sidebar-border);
   overflow-y: auto;
+  contain: layout style paint;
 }
 
 .empty {

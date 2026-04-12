@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { memo, useCallback, useEffect, useRef } from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import { useTaskTracker } from "../../hooks/useTaskTracker";
 import { loadDiffFiles, sendRemoteCommand } from "../../services/tauri";
@@ -6,7 +6,7 @@ import type { DiffFilesResult } from "../../services/tauri";
 import { TaskList } from "./TaskList";
 import styles from "./RightSidebar.module.css";
 
-export function RightSidebar() {
+export const RightSidebar = memo(function RightSidebar() {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const workspaces = useAppStore((s) => s.workspaces);
   const diffFiles = useAppStore((s) => s.diffFiles);
@@ -223,4 +223,4 @@ export function RightSidebar() {
       )}
     </div>
   );
-}
+});

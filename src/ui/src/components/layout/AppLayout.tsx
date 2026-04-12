@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import { Sidebar } from "../sidebar/Sidebar";
 import { ChatPanel } from "../chat/ChatPanel";
@@ -39,19 +39,30 @@ export function AppLayout() {
 
   const showDiff = diffSelectedFile !== null;
 
-  const handleLeftResize = useCallback((delta: number) => {
-    const current = useAppStore.getState().sidebarWidth;
-    setSidebarWidth(Math.max(150, Math.min(600, current + delta)));
+  // Ref for the .main flex container — CSS variables are set here.
+  const mainRef = useRef<HTMLDivElement>(null);
+
+  // Sync Zustand dimensions → CSS variables on mount, visibility toggles,
+  // and workspace switches. During drag, ResizeHandle writes CSS vars
+  // directly; this effect only runs for non-drag state changes.
+  useEffect(() => {
+    const el = mainRef.current;
+    if (!el) return;
+    el.style.setProperty("--sidebar-w", `${sidebarWidth}px`);
+    el.style.setProperty("--right-sidebar-w", `${rightSidebarWidth}px`);
+    el.style.setProperty("--terminal-h", `${terminalHeight}px`);
+  }, [sidebarWidth, rightSidebarWidth, terminalHeight, sidebarVisible, rightSidebarVisible, terminalPanelVisible]);
+
+  const handleLeftResizeEnd = useCallback((finalWidth: number) => {
+    setSidebarWidth(finalWidth);
   }, [setSidebarWidth]);
 
-  const handleRightResize = useCallback((delta: number) => {
-    const current = useAppStore.getState().rightSidebarWidth;
-    setRightSidebarWidth(Math.max(150, Math.min(600, current - delta)));
+  const handleRightResizeEnd = useCallback((finalWidth: number) => {
+    setRightSidebarWidth(finalWidth);
   }, [setRightSidebarWidth]);
 
-  const handleTerminalResize = useCallback((delta: number) => {
-    const current = useAppStore.getState().terminalHeight;
-    setTerminalHeight(Math.max(100, Math.min(800, current - delta)));
+  const handleTerminalResizeEnd = useCallback((finalHeight: number) => {
+    setTerminalHeight(finalHeight);
   }, [setTerminalHeight]);
 
   const isMac = typeof navigator !== "undefined" && navigator.platform.startsWith("Mac");
@@ -59,19 +70,23 @@ export function AppLayout() {
   return (
     <div className={styles.container} {...(isMac ? { "data-platform": "mac" } : {})}>
       <UpdateBanner installNow={installNow} installWhenIdle={installWhenIdle} dismiss={dismiss} />
-      <div className={styles.main}>
+      <div className={styles.main} ref={mainRef}>
         {settingsOpen ? (
           <SettingsPage />
         ) : (
           <>
             {sidebarVisible && (
               <>
-                <div className={styles.sidebar} style={{ width: sidebarWidth }}>
+                <div className={styles.sidebar}>
                   <Sidebar />
                 </div>
                 <ResizeHandle
                   direction="horizontal"
-                  onResize={handleLeftResize}
+                  targetRef={mainRef}
+                  cssVar="--sidebar-w"
+                  min={150}
+                  max={600}
+                  onResizeEnd={handleLeftResizeEnd}
                 />
               </>
             )}
@@ -91,12 +106,14 @@ export function AppLayout() {
                 <>
                   <ResizeHandle
                     direction="vertical"
-                    onResize={handleTerminalResize}
+                    targetRef={mainRef}
+                    cssVar="--terminal-h"
+                    min={100}
+                    max={800}
+                    invert
+                    onResizeEnd={handleTerminalResizeEnd}
                   />
-                  <div
-                    className={styles.terminal}
-                    style={{ height: terminalHeight }}
-                  >
+                  <div className={styles.terminal}>
                     <TerminalPanel />
                   </div>
                 </>
@@ -106,12 +123,14 @@ export function AppLayout() {
               <>
                 <ResizeHandle
                   direction="horizontal"
-                  onResize={handleRightResize}
+                  targetRef={mainRef}
+                  cssVar="--right-sidebar-w"
+                  min={150}
+                  max={600}
+                  invert
+                  onResizeEnd={handleRightResizeEnd}
                 />
-                <div
-                  className={styles.rightSidebar}
-                  style={{ width: rightSidebarWidth }}
-                >
+                <div className={styles.rightSidebar}>
                   <RightSidebar />
                 </div>
               </>

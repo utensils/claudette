@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -30,7 +30,7 @@ interface TermInstance {
   resizeObserver: ResizeObserver;
 }
 
-export function TerminalPanel() {
+export const TerminalPanel = memo(function TerminalPanel() {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const workspaces = useAppStore((s) => s.workspaces);
   const terminalTabs = useAppStore((s) => s.terminalTabs);
@@ -122,13 +122,17 @@ export function TerminalPanel() {
     term.open(tabContainer);
     fit.fit();
 
+    let fitTimer: ReturnType<typeof setTimeout>;
     const instance: TermInstance = {
       term,
       fit,
       ptyId: -1,
       unlisten: null,
       container: tabContainer,
-      resizeObserver: new ResizeObserver(() => fit.fit()),
+      resizeObserver: new ResizeObserver(() => {
+        clearTimeout(fitTimer);
+        fitTimer = setTimeout(() => fit.fit(), 150);
+      }),
     };
     instance.resizeObserver.observe(tabContainer);
     instancesRef.current.set(activeTerminalTabId, instance);
@@ -311,4 +315,4 @@ export function TerminalPanel() {
       <div className={styles.termContainer} ref={containerRef} />
     </div>
   );
-}
+});

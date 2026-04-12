@@ -1,4 +1,4 @@
-import { useRef, useState, useMemo, useCallback } from "react";
+import { memo, useRef, useState, useMemo, useCallback } from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import {
   archiveWorkspace,
@@ -19,7 +19,7 @@ import { RepoIcon } from "../shared/RepoIcon";
 import styles from "./Sidebar.module.css";
 
 
-export function Sidebar() {
+export const Sidebar = memo(function Sidebar() {
   const repositories = useAppStore((s) => s.repositories);
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
@@ -458,7 +458,7 @@ export function Sidebar() {
       </div>
     </div>
   );
-}
+});
 
 function RemoteSections() {
   const discoveredServers = useAppStore((s) => s.discoveredServers);

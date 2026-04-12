@@ -1,0 +1,26 @@
+.pill {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  background: var(--chat-input-bg);
+  border: 1px solid var(--divider);
+  border-radius: 20px;
+  color: var(--accent-primary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: var(--shadow-md);
+  animation: fadeInUp 0.15s ease both;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.pill:hover {
+  background: var(--hover-bg);
+  border-color: var(--accent-primary);
+}

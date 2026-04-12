@@ -1,4 +1,4 @@
-import React, { memo, useEffect, useRef, useState, useMemo, useCallback } from "react";
+import React, { createContext, memo, useContext, useEffect, useRef, useState, useMemo, useCallback } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
@@ -38,6 +38,8 @@ import { ThinkingBlock } from "./ThinkingBlock";
 import { PanelToggles } from "../shared/PanelToggles";
 import { deriveTasks, processActivities, turnHasTaskActivity, hasTaskActivity } from "../../hooks/useTaskTracker";
 import type { TaskTrackerResult, TrackedTask } from "../../hooks/useTaskTracker";
+import { ScrollToBottomPill } from "./ScrollToBottomPill";
+import { useStickyScroll } from "../../hooks/useStickyScroll";
 import { debugChat } from "../../utils/chatDebug";
 import styles from "./ChatPanel.module.css";
 
@@ -161,6 +163,19 @@ const REHYPE_PLUGINS: any[] = [
 ];
 const REMARK_PLUGINS = [remarkGfm];
 
+// Streaming-optimized rehype plugins: omit syntax highlighting during streaming
+// for performance. Finalized messages use REHYPE_PLUGINS (with highlight).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const REHYPE_PLUGINS_STREAMING: any[] = [
+  rehypeRaw,
+  [rehypeSanitize, SANITIZE_SCHEMA],
+];
+
+/** Context to pass sticky-scroll handler into streaming sub-components. */
+const ScrollContext = createContext<{
+  handleContentChanged: () => void;
+}>({ handleContentChanged: () => {} });
+
 // Stable empty arrays to avoid Zustand selector re-renders when data is undefined.
 // Without these, `?? []` / `|| []` creates a new reference on every store update,
 // causing Object.is to return false and triggering unnecessary component re-renders.
@@ -176,7 +191,7 @@ export function ChatPanel() {
   const hydrateCompletedTurns = useAppStore((s) => s.hydrateCompletedTurns);
   const addChatMessage = useAppStore((s) => s.addChatMessage);
   const updateWorkspace = useAppStore((s) => s.updateWorkspace);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const processingRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -232,6 +247,10 @@ export function ChatPanel() {
   const setQueuedMessage = useAppStore((s) => s.setQueuedMessage);
   const clearQueuedMessage = useAppStore((s) => s.clearQueuedMessage);
   const isRunning = ws?.agent_status === "Running";
+
+  // Sticky scroll: auto-follow when at bottom, stop when user scrolls up.
+  const { isAtBottom, scrollToBottom, handleContentChanged } =
+    useStickyScroll(messagesContainerRef);
 
   // Spinner and elapsed timer for running agent.
   const [spinnerIdx, setSpinnerIdx] = useState(0);
@@ -375,10 +394,13 @@ export function ChatPanel() {
     };
   }, [selectedWorkspaceId, setChatMessages, hydrateCompletedTurns]);
 
-  // Auto-scroll to bottom only when a genuinely new message is added or the
-  // workspace changes. Do NOT scroll when messages are merely replaced with
-  // DB-persisted versions (same count, different IDs) — that causes a visible
-  // scroll bounce and makes completed-turn summaries appear to vanish.
+  // Scroll to bottom unconditionally on workspace switch.
+  useEffect(() => {
+    if (selectedWorkspaceId) scrollToBottom();
+  }, [selectedWorkspaceId, scrollToBottom]);
+
+  // Auto-scroll when new content arrives — respects user intent via useStickyScroll.
+  // Only scrolls if the user is already at/near the bottom.
   const prevMsgCountRef = useRef<Record<string, number>>({});
   useEffect(() => {
     const wsId = selectedWorkspaceId;
@@ -386,53 +408,16 @@ export function ChatPanel() {
     const prev = prevMsgCountRef.current[wsId] ?? 0;
     const cur = messages.length;
     prevMsgCountRef.current[wsId] = cur;
+    // Only trigger on genuinely new messages (count increase), not DB rehydration.
+    if (cur > prev) handleContentChanged();
+  }, [messages.length, selectedWorkspaceId, handleContentChanged]);
 
-    // Scroll on workspace switch (prev === 0) or when count increases.
-    if (prev === 0 || cur > prev) {
-      debugChat("ChatPanel", "scroll:messages-end", {
-        wsId,
-        messageCount: cur,
-        prevCount: prev,
-      });
-      messagesEndRef.current?.scrollIntoView({ behavior: prev === 0 ? "instant" : "smooth" });
-    }
-  }, [messages.length, selectedWorkspaceId]);
-
-  // Scroll to bottom when a turn finalizes (completedTurns count increases),
-  // since the TurnSummary adds height below the last message.
   useEffect(() => {
-    if (completedTurnsCount > 0) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [completedTurnsCount]);
-
-  // Auto-scroll processing indicator into view when tool activity first appears.
-  useEffect(() => {
-    const shouldScroll =
-      isRunning &&
-      !pendingQuestion &&
-      !pendingPlan &&
-      prevActivitiesCountRef.current === 0 &&
-      activitiesCount > 0;
-
-    if (shouldScroll) {
-      debugChat("ChatPanel", "scroll:processing", {
-        wsId: selectedWorkspaceId ?? null,
-        activitiesCount,
-        hasPendingQuestion: !!pendingQuestion,
-        hasPendingPlan: !!pendingPlan,
-      });
-      processingRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (completedTurnsCount > 0 || activitiesCount > 0 || pendingQuestion || pendingPlan) {
+      handleContentChanged();
     }
     prevActivitiesCountRef.current = activitiesCount;
-  }, [isRunning, pendingQuestion, pendingPlan, activitiesCount, selectedWorkspaceId]);
-
-  // Scroll interactive cards (agent question, plan approval) into view when they appear.
-  useEffect(() => {
-    if (pendingQuestion || pendingPlan) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [pendingQuestion, pendingPlan]);
+  }, [completedTurnsCount, activitiesCount, pendingQuestion, pendingPlan, handleContentChanged]);
 
   useEffect(() => {
     if (!selectedWorkspaceId) return;
@@ -662,92 +647,97 @@ export function ChatPanel() {
         </div>
       </div>
 
-      <div className={styles.messages}>
-        {error && <div className={styles.errorBanner}>{error}</div>}
+      <ScrollContext.Provider value={{ handleContentChanged }}>
+        <div className={styles.messages} ref={messagesContainerRef}>
+          {error && <div className={styles.errorBanner}>{error}</div>}
 
-        {messages.length === 0 && !hasStreaming ? (
-          <div className={styles.empty}>
-            Send a message to start a conversation
-          </div>
-        ) : (
-          <>
-            {selectedWorkspaceId && (
-              <MessagesWithTurns
-                messages={messages}
-                workspaceId={selectedWorkspaceId}
-                isRunning={isRunning}
-              />
-            )}
+          {messages.length === 0 && !hasStreaming ? (
+            <div className={styles.empty}>
+              Send a message to start a conversation
+            </div>
+          ) : (
+            <>
+              {selectedWorkspaceId && (
+                <MessagesWithTurns
+                  messages={messages}
+                  workspaceId={selectedWorkspaceId}
+                  isRunning={isRunning}
+                />
+              )}
 
-            {selectedWorkspaceId && hasThinking && showThinkingBlocks && (
-              <StreamingThinkingBlock workspaceId={selectedWorkspaceId} isStreaming={isRunning ?? false} />
-            )}
+              {selectedWorkspaceId && hasThinking && showThinkingBlocks && (
+                <StreamingThinkingBlock workspaceId={selectedWorkspaceId} isStreaming={isRunning ?? false} />
+              )}
 
-            {selectedWorkspaceId && hasStreaming && (
-              <StreamingMessage workspaceId={selectedWorkspaceId} />
-            )}
+              {selectedWorkspaceId && hasStreaming && (
+                <StreamingMessage workspaceId={selectedWorkspaceId} />
+              )}
 
-            {selectedWorkspaceId && activitiesCount > 0 && (
-              <ToolActivitiesSection
-                workspaceId={selectedWorkspaceId}
-                isRunning={isRunning ?? false}
-              />
-            )}
+              {selectedWorkspaceId && activitiesCount > 0 && (
+                <ToolActivitiesSection
+                  workspaceId={selectedWorkspaceId}
+                  isRunning={isRunning ?? false}
+                />
+              )}
 
-            {selectedWorkspaceId && (
-              <CurrentTurnTaskProgress workspaceId={selectedWorkspaceId} />
-            )}
+              {selectedWorkspaceId && (
+                <CurrentTurnTaskProgress workspaceId={selectedWorkspaceId} />
+              )}
 
-            {pendingQuestion && (
-              <AgentQuestionCard
-                question={pendingQuestion}
-                onRespond={(response) => {
-                  if (selectedWorkspaceId) clearAgentQuestion(selectedWorkspaceId);
-                  handleSend(response);
-                }}
-              />
-            )}
+              {pendingQuestion && (
+                <AgentQuestionCard
+                  question={pendingQuestion}
+                  onRespond={(response) => {
+                    if (selectedWorkspaceId) clearAgentQuestion(selectedWorkspaceId);
+                    handleSend(response);
+                  }}
+                />
+              )}
 
-            {pendingPlan && (
-              <PlanApprovalCard
-                approval={pendingPlan}
-                remoteConnectionId={ws?.remote_connection_id ?? undefined}
-                onRespond={(response) => {
-                  if (selectedWorkspaceId) clearPlanApproval(selectedWorkspaceId);
-                  handleSend(response);
-                }}
-              />
-            )}
+              {pendingPlan && (
+                <PlanApprovalCard
+                  approval={pendingPlan}
+                  remoteConnectionId={ws?.remote_connection_id ?? undefined}
+                  onRespond={(response) => {
+                    if (selectedWorkspaceId) clearPlanApproval(selectedWorkspaceId);
+                    handleSend(response);
+                  }}
+                />
+              )}
 
-            {isRunning && !pendingQuestion && !pendingPlan && (
-              <div
-                ref={processingRef}
-                className={styles.processing}
-                role="status"
-                aria-label={`Processing, ${formatElapsed(elapsed)} elapsed`}
-              >
-                <span className={styles.spinner} aria-hidden="true">{SPINNER_FRAMES[spinnerIdx]}</span>
-                <span className={styles.elapsed}>{formatElapsed(elapsed)}</span>
-              </div>
-            )}
-
-            {queuedMessage && selectedWorkspaceId && (
-              <div className={styles.queuedMessage}>
-                <span className={styles.queuedLabel}>Queued</span>
-                <span className={styles.queuedContent}>{queuedMessage.content}</span>
-                <button
-                  className={styles.queuedCancel}
-                  onClick={() => clearQueuedMessage(selectedWorkspaceId)}
-                  title="Cancel queued message"
+              {isRunning && !pendingQuestion && !pendingPlan && (
+                <div
+                  ref={processingRef}
+                  className={styles.processing}
+                  role="status"
+                  aria-label={`Processing, ${formatElapsed(elapsed)} elapsed`}
                 >
-                  ×
-                </button>
-              </div>
-            )}
-          </>
-        )}
-        <div ref={messagesEndRef} />
-      </div>
+                  <span className={styles.spinner} aria-hidden="true">{SPINNER_FRAMES[spinnerIdx]}</span>
+                  <span className={styles.elapsed}>{formatElapsed(elapsed)}</span>
+                </div>
+              )}
+
+              {queuedMessage && selectedWorkspaceId && (
+                <div className={styles.queuedMessage}>
+                  <span className={styles.queuedLabel}>Queued</span>
+                  <span className={styles.queuedContent}>{queuedMessage.content}</span>
+                  <button
+                    className={styles.queuedCancel}
+                    onClick={() => clearQueuedMessage(selectedWorkspaceId)}
+                    title="Cancel queued message"
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+        <ScrollToBottomPill
+          visible={!isAtBottom && messages.length > 0}
+          onClick={scrollToBottom}
+        />
+      </ScrollContext.Provider>
 
       <ChatInputArea
         onSend={handleSend}
@@ -782,8 +772,10 @@ const StreamingThinkingBlock = memo(function StreamingThinkingBlock({
 
 /**
  * Isolated streaming message component — subscribes to streaming text directly
- * and throttles Markdown re-parsing to ~10fps via requestAnimationFrame.
+ * and throttles Markdown re-parsing to ~16fps via requestAnimationFrame.
  * This prevents the entire ChatPanel from re-rendering on every character delta.
+ * Uses REHYPE_PLUGINS_STREAMING (no syntax highlighting) for performance;
+ * highlight is applied when the message is finalized into MessagesWithTurns.
  */
 const StreamingMessage = memo(function StreamingMessage({
   workspaceId,
@@ -793,17 +785,17 @@ const StreamingMessage = memo(function StreamingMessage({
   const streaming = useAppStore(
     (s) => s.streamingContent[workspaceId] || ""
   );
+  const { handleContentChanged } = useContext(ScrollContext);
 
-  // Throttle Markdown rendering: store latest text in ref, update at ~10fps
+  // Throttle Markdown rendering: store latest text in ref, update at ~16fps
   const latestRef = useRef(streaming);
   latestRef.current = streaming;
   const [displayed, setDisplayed] = useState(streaming);
   const rafRef = useRef<number | null>(null);
-  const lastLoggedScrollLengthRef = useRef(0);
 
   useEffect(() => {
     let lastTime = 0;
-    const THROTTLE_MS = 100; // ~10fps
+    const THROTTLE_MS = 60; // ~16fps
     const tick = (time: number) => {
       if (time - lastTime >= THROTTLE_MS) {
         lastTime = time;
@@ -817,36 +809,19 @@ const StreamingMessage = memo(function StreamingMessage({
     };
   }, []);
 
-  // Auto-scroll when streaming content grows
-  const elRef = useRef<HTMLDivElement>(null);
+  // Auto-scroll when streaming content grows — respects user scroll intent.
   useEffect(() => {
-    if (
-      displayed.length > 0 &&
-      (lastLoggedScrollLengthRef.current === 0 ||
-        displayed.length - lastLoggedScrollLengthRef.current >= 250)
-    ) {
-      debugChat("StreamingMessage", "scroll", {
-        wsId: workspaceId,
-        displayedLength: displayed.length,
-      });
-      lastLoggedScrollLengthRef.current = displayed.length;
-    }
-    // Scroll the messages container to the bottom. Using scrollIntoView on the
-    // element itself scrolls to its top, which falls behind as the element grows.
-    const container = elRef.current?.closest('[class*="messages"]');
-    if (container) {
-      container.scrollTop = container.scrollHeight;
-    }
-  }, [displayed, workspaceId]);
+    handleContentChanged();
+  }, [displayed, handleContentChanged]);
 
   if (!displayed) return null;
 
   return (
-    <div ref={elRef} className={`${styles.message} ${styles.role_Assistant}`}>
+    <div className={`${styles.message} ${styles.role_Assistant}`}>
       <div className={styles.content}>
         <Markdown
           remarkPlugins={REMARK_PLUGINS}
-          rehypePlugins={REHYPE_PLUGINS}
+          rehypePlugins={REHYPE_PLUGINS_STREAMING}
         >
           {preprocessContent(displayed)}
         </Markdown>
