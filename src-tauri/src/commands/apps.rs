@@ -248,28 +248,39 @@ async fn open_macos_app(app_name: &str, worktree_path: &str) -> Result<(), Strin
 }
 
 /// Launch a terminal app via AppleScript (iTerm2, Terminal.app).
+/// Uses `on run argv` + `quoted form of` to pass the path as an argument,
+/// avoiding string interpolation and AppleScript injection risks.
 #[cfg(target_os = "macos")]
 async fn open_applescript(app_id: &str, worktree_path: &str) -> Result<(), String> {
-    let escaped = worktree_path.replace('\\', r"\\").replace('\'', r"'\''");
     let script = match app_id {
-        "iterm2" => format!(
-            r#"tell application "iTerm"
-    activate
-    create window with default profile command "cd '{escaped}' && exec $SHELL"
-end tell"#
-        ),
-        "macos-terminal" => format!(
-            r#"tell application "Terminal"
-    activate
-    do script "cd '{escaped}'"
-end tell"#
-        ),
+        "iterm2" => {
+            r#"on run argv
+    set p to item 1 of argv
+    set cmd to "cd " & quoted form of p & " && exec $SHELL"
+    tell application "iTerm"
+        activate
+        create window with default profile command cmd
+    end tell
+end run"#
+        }
+        "macos-terminal" => {
+            r#"on run argv
+    set p to item 1 of argv
+    set cmd to "cd " & quoted form of p
+    tell application "Terminal"
+        activate
+        do script cmd
+    end tell
+end run"#
+        }
         other => return Err(format!("No AppleScript handler for app '{other}'")),
     };
 
     tokio::process::Command::new("osascript")
         .arg("-e")
-        .arg(&script)
+        .arg(script)
+        .arg("--")
+        .arg(worktree_path)
         .spawn()
         .map_err(|e| format!("Failed to run AppleScript for {app_id}: {e}"))?;
     Ok(())
@@ -285,45 +296,124 @@ fn terminal_exec_args(terminal_id: &str) -> &'static [&'static str] {
     }
 }
 
-/// Launch a TUI editor (needs_terminal=true) inside the first detected terminal.
+/// Launch a TUI editor via AppleScript when only .app-bundle terminals are available (macOS).
+#[cfg(target_os = "macos")]
+async fn open_tui_via_applescript(
+    editor_entry: &AppEntry,
+    editor_detected: &DetectedApp,
+    worktree_path: &str,
+    terminal: &DetectedApp,
+) -> Result<(), String> {
+    // Build the shell command: cd '<path>' && <editor> <args>
+    // The editor's open_args may include flags; substitute {} with ".".
+    let mut editor_argv = vec![editor_detected.detected_path.clone()];
+    for arg in &editor_entry.open_args {
+        editor_argv.push(arg.replace("{}", "."));
+    }
+    let editor_cmd = editor_argv.join(" ");
+
+    let (app_name, script) = if terminal.id == "iterm2" {
+        (
+            "iTerm",
+            r#"on run argv
+    set p to item 1 of argv
+    set e to item 2 of argv
+    set cmd to "cd " & quoted form of p & " && " & e
+    tell application "iTerm"
+        activate
+        create window with default profile command cmd
+    end tell
+end run"#,
+        )
+    } else {
+        (
+            "Terminal",
+            r#"on run argv
+    set p to item 1 of argv
+    set e to item 2 of argv
+    set cmd to "cd " & quoted form of p & " && " & e
+    tell application "Terminal"
+        activate
+        do script cmd
+    end tell
+end run"#,
+        )
+    };
+
+    tokio::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .arg("--")
+        .arg(worktree_path)
+        .arg(&editor_cmd)
+        .spawn()
+        .map_err(|e| {
+            format!(
+                "Failed to launch {} in {app_name} via AppleScript: {e}",
+                editor_entry.name
+            )
+        })?;
+    Ok(())
+}
+
+/// Launch a TUI editor (needs_terminal=true) inside the best detected terminal.
+/// Prefers terminals detected via binary path; falls back to AppleScript on macOS
+/// when only .app-bundle terminals are available.
 async fn open_in_terminal(
     editor_entry: &AppEntry,
     editor_detected: &DetectedApp,
     worktree_path: &str,
     state: &State<'_, AppState>,
 ) -> Result<(), String> {
+    let config = load_apps_config();
+
     let detected_apps = state.detected_apps.read().await;
+
+    // Prefer a terminal detected via a real binary (not a .app bundle),
+    // because .app paths can't be passed to Command::new directly.
     let terminal = detected_apps
         .iter()
-        .find(|a| a.category == AppCategory::Terminal)
+        .filter(|a| a.category == AppCategory::Terminal)
+        .find(|a| !a.detected_path.ends_with(".app"))
+        .or_else(|| {
+            detected_apps
+                .iter()
+                .find(|a| a.category == AppCategory::Terminal)
+        })
         .ok_or("No terminal emulator detected — cannot launch TUI editor")?
         .clone();
     drop(detected_apps);
 
-    // Reload config to get the terminal's open_args.
-    let config = load_apps_config();
+    // If the terminal was detected via .app bundle, use AppleScript on macOS.
+    #[cfg(target_os = "macos")]
+    if terminal.detected_path.ends_with(".app") {
+        return open_tui_via_applescript(editor_entry, editor_detected, worktree_path, &terminal)
+            .await;
+    }
+
     let terminal_entry = config
         .apps
         .iter()
         .find(|a| a.id == terminal.id)
         .ok_or_else(|| format!("Terminal '{}' not found in config", terminal.id))?;
 
-    // Build: terminal_binary [terminal_open_args with {} -> path] [exec_separator] editor_binary .
+    // Build: terminal_binary [terminal_open_args with {} -> path] [exec_separator] editor_binary [editor_open_args]
     let mut cmd = tokio::process::Command::new(&terminal.detected_path);
 
-    // Add terminal's open_args with path substitution.
     for arg in &terminal_entry.open_args {
         cmd.arg(arg.replace("{}", worktree_path));
     }
 
-    // Add exec separator for this terminal.
     for arg in terminal_exec_args(&terminal.id) {
         cmd.arg(arg);
     }
 
-    // Add the editor binary and "." (cwd is set by terminal's --working-directory).
+    // Use the editor's configured open_args, substituting {} with "."
+    // (cwd is already set by the terminal's --working-directory flag).
     cmd.arg(&editor_detected.detected_path);
-    cmd.arg(".");
+    for arg in &editor_entry.open_args {
+        cmd.arg(arg.replace("{}", "."));
+    }
 
     cmd.spawn().map_err(|e| {
         format!(
@@ -359,10 +449,17 @@ pub async fn open_workspace_in_app(
         return open_applescript(&app_id, &worktree_path).await;
     }
 
-    // Handle __open_a__ sentinel (Xcode).
+    // Handle __open_a__ sentinel (Xcode) — look up detected_path to get the .app bundle.
     #[cfg(target_os = "macos")]
     if entry.open_args.first().is_some_and(|a| a == "__open_a__") {
-        return open_macos_app(&entry.name, &worktree_path).await;
+        let detected_apps = state.detected_apps.read().await;
+        let detected = detected_apps
+            .iter()
+            .find(|a| a.id == app_id)
+            .ok_or_else(|| format!("App '{app_id}' not detected on this system"))?;
+        let app_path = detected.detected_path.clone();
+        drop(detected_apps);
+        return open_macos_app(&app_path, &worktree_path).await;
     }
 
     // Look up the detected path for this app.
@@ -382,7 +479,7 @@ pub async fn open_workspace_in_app(
     // Handle .app-only detection on macOS (CLI not in PATH).
     #[cfg(target_os = "macos")]
     if detected.detected_path.ends_with(".app") {
-        return open_macos_app(&entry.name, &worktree_path).await;
+        return open_macos_app(&detected.detected_path, &worktree_path).await;
     }
 
     // Normal binary launch: substitute {} in open_args with the worktree path.
