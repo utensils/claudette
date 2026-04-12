@@ -155,7 +155,8 @@ fn main() {
             });
     }
 
-    let builder = builder.setup(move |app| {
+    let builder = builder
+        .setup(move |app| {
             // Start mDNS browser to discover nearby claudette-server instances.
             if let Err(e) = mdns::start_mdns_browser(app.handle(), saved_fingerprints) {
                 eprintln!("[mdns] Failed to start browser: {e}");
@@ -199,10 +200,7 @@ fn main() {
                 #[cfg(not(target_os = "macos"))]
                 {
                     let state = window.app_handle().state::<state::AppState>();
-                    let has_tray = state
-                        .tray_handle
-                        .lock()
-                        .is_ok_and(|g| g.is_some());
+                    let has_tray = state.tray_handle.lock().is_ok_and(|g| g.is_some());
                     // Fail closed: if the lock is contended, assume agents
                     // are running so we don't accidentally quit mid-task.
                     let running = state
