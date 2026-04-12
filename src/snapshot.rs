@@ -72,7 +72,9 @@ async fn list_worktree_files(worktree_path: &str) -> Result<Vec<String>, Snapsho
 }
 
 /// Collect all files from a worktree for snapshotting.
-/// Skips files larger than `MAX_SNAPSHOT_FILE_SIZE`.
+/// Skips symlinks, files larger than `MAX_SNAPSHOT_FILE_SIZE`, and
+/// anything that isn't a regular file. Uses `symlink_metadata` to
+/// avoid following symlinks.
 pub async fn collect_worktree_files(
     worktree_path: &str,
 ) -> Result<Vec<(String, Vec<u8>, u32)>, SnapshotError> {
@@ -83,13 +85,15 @@ pub async fn collect_worktree_files(
     for rel_path in paths {
         let full_path = base.join(&rel_path);
 
-        let metadata = match tokio::fs::metadata(&full_path).await {
+        // Use symlink_metadata to avoid following symlinks — we skip
+        // symlinks entirely rather than snapshotting their targets.
+        let metadata = match tokio::fs::symlink_metadata(&full_path).await {
             Ok(m) => m,
             Err(_) => continue, // file may have been deleted between ls-files and read
         };
 
         if !metadata.is_file() {
-            continue;
+            continue; // skip symlinks, directories, and other non-regular files
         }
 
         if metadata.len() > MAX_SNAPSHOT_FILE_SIZE {
@@ -162,7 +166,7 @@ pub async fn restore_snapshot(
     // Write snapshot files to disk.
     for f in &snapshot_files {
         // Guard against path traversal from corrupted DB rows.
-        if f.file_path.contains("..") {
+        if f.file_path.contains("..") || Path::new(&f.file_path).is_absolute() {
             continue;
         }
         let full_path = base.join(&f.file_path);
@@ -187,13 +191,23 @@ pub async fn restore_snapshot(
         }
     }
 
-    // Delete files on disk that aren't in the snapshot.
+    // Delete files on disk that aren't in the snapshot — but preserve
+    // files that were skipped during save (large files, symlinks) so
+    // restore doesn't cause data loss for content we never captured.
     let current_files = list_worktree_files(worktree_path).await?;
     for rel_path in &current_files {
-        if !snapshot_paths.contains(rel_path.as_str()) {
-            let full_path = base.join(rel_path);
-            let _ = tokio::fs::remove_file(&full_path).await;
+        if snapshot_paths.contains(rel_path.as_str()) {
+            continue;
         }
+        let full_path = base.join(rel_path);
+        // Preserve files that would have been skipped during save
+        // (symlinks and large files) so restore doesn't cause data loss.
+        if let Ok(meta) = tokio::fs::symlink_metadata(&full_path).await
+            && (!meta.is_file() || meta.len() > MAX_SNAPSHOT_FILE_SIZE)
+        {
+            continue;
+        }
+        let _ = tokio::fs::remove_file(&full_path).await;
     }
 
     // Clean up empty directories (best-effort, bottom-up).

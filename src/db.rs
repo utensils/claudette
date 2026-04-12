@@ -37,7 +37,7 @@ impl Database {
     }
 
     /// Execute raw SQL. Intended for test setup only.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn execute_batch(&self, sql: &str) -> Result<(), rusqlite::Error> {
         self.conn.execute_batch(sql)
     }
