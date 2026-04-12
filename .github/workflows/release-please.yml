@@ -130,7 +130,7 @@ jobs:
       - name: Install bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.0.29"
+          bun-version: "latest"
 
       - name: Install frontend dependencies
         run: cd src/ui && bun install --frozen-lockfile
