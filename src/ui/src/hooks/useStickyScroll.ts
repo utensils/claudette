@@ -13,29 +13,24 @@ export function useStickyScroll(
 ) {
   const isAtBottomRef = useRef(true);
   const [isAtBottom, setIsAtBottom] = useState(true);
-  const prevScrollHeightRef = useRef(0);
+  // Flag to distinguish programmatic scrolls (our auto-scroll) from user scrolls.
+  // Prevents the feedback loop: programmatic scroll → scroll event → re-enable
+  // follow → programmatic scroll again.
+  const programmaticScrollRef = useRef(false);
 
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
 
-    prevScrollHeightRef.current = el.scrollHeight;
-
     const onScroll = () => {
-      const atBottom =
-        el.scrollTop + el.clientHeight >= el.scrollHeight - threshold;
-
-      // If content height changed (content added/removed during streaming or
-      // turn finalization) while we were following, stay in follow mode.
-      // Without this, unmounting the StreamingMessage shrinks scrollHeight,
-      // the browser fires a scroll event, and we'd incorrectly flip to
-      // "not at bottom" right before the new message renders.
-      const scrollHeightChanged = el.scrollHeight !== prevScrollHeightRef.current;
-      prevScrollHeightRef.current = el.scrollHeight;
-
-      if (scrollHeightChanged && isAtBottomRef.current && !atBottom) {
+      // Ignore scroll events caused by our own programmatic scrolling.
+      if (programmaticScrollRef.current) {
+        programmaticScrollRef.current = false;
         return;
       }
+
+      const atBottom =
+        el.scrollTop + el.clientHeight >= el.scrollHeight - threshold;
 
       if (atBottom !== isAtBottomRef.current) {
         isAtBottomRef.current = atBottom;
@@ -51,6 +46,7 @@ export function useStickyScroll(
   const scrollToBottom = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
+    programmaticScrollRef.current = true;
     el.scrollTop = el.scrollHeight;
     isAtBottomRef.current = true;
     setIsAtBottom(true);
@@ -64,7 +60,10 @@ export function useStickyScroll(
     if (!isAtBottomRef.current) return;
     requestAnimationFrame(() => {
       const el = containerRef.current;
-      if (el) el.scrollTop = el.scrollHeight;
+      if (el) {
+        programmaticScrollRef.current = true;
+        el.scrollTop = el.scrollHeight;
+      }
     });
   }, [containerRef]);
 

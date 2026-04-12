@@ -163,14 +163,6 @@ const REHYPE_PLUGINS: any[] = [
 ];
 const REMARK_PLUGINS = [remarkGfm];
 
-// Streaming-optimized rehype plugins: omit syntax highlighting during streaming
-// for performance. Finalized messages use REHYPE_PLUGINS (with highlight).
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const REHYPE_PLUGINS_STREAMING: any[] = [
-  rehypeRaw,
-  [rehypeSanitize, SANITIZE_SCHEMA],
-];
-
 /** Context to pass sticky-scroll handler into streaming sub-components. */
 const ScrollContext = createContext<{
   handleContentChanged: () => void;
@@ -774,8 +766,6 @@ const StreamingThinkingBlock = memo(function StreamingThinkingBlock({
  * Isolated streaming message component — subscribes to streaming text directly
  * and throttles Markdown re-parsing to ~16fps via requestAnimationFrame.
  * This prevents the entire ChatPanel from re-rendering on every character delta.
- * Uses REHYPE_PLUGINS_STREAMING (no syntax highlighting) for performance;
- * highlight is applied when the message is finalized into MessagesWithTurns.
  */
 const StreamingMessage = memo(function StreamingMessage({
   workspaceId,
@@ -821,7 +811,7 @@ const StreamingMessage = memo(function StreamingMessage({
       <div className={styles.content}>
         <Markdown
           remarkPlugins={REMARK_PLUGINS}
-          rehypePlugins={REHYPE_PLUGINS_STREAMING}
+          rehypePlugins={REHYPE_PLUGINS}
         >
           {preprocessContent(displayed)}
         </Markdown>
