@@ -41,7 +41,7 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      const [model, fast, thinking, effort, showThinking, defModel, defFast, defThinking, defPlan] = await Promise.all([
+      const [model, fast, thinking, effort, showThinking, defModel, defFast, defThinking, defPlan, defEffort, defShowThinking] = await Promise.all([
         getAppSetting(`model:${workspaceId}`),
         getAppSetting(`fast_mode:${workspaceId}`),
         getAppSetting(`thinking_enabled:${workspaceId}`),
@@ -51,6 +51,8 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
         getAppSetting("default_fast_mode"),
         getAppSetting("default_thinking"),
         getAppSetting("default_plan_mode"),
+        getAppSetting("default_effort"),
+        getAppSetting("default_show_thinking"),
       ]);
       if (cancelled) return;
       const loadedModel = model ?? defModel ?? "opus";
@@ -59,15 +61,16 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
       if (thinking === "true" || (!thinking && defThinking === "true")) setThinkingEnabled(workspaceId, true);
       if (!fast && !thinking && defPlan === "true") setPlanMode(workspaceId, true);
       // Normalize effort against the loaded model to prevent stale values.
-      if (effort) {
+      const effectiveEffort = effort ?? defEffort;
+      if (effectiveEffort) {
         const normalized = !isEffortSupported(loadedModel)
           ? "auto"
-          : effort === "max" && !isMaxEffortAllowed(loadedModel)
+          : effectiveEffort === "max" && !isMaxEffortAllowed(loadedModel)
             ? "high"
-            : effort;
+            : effectiveEffort;
         setEffortLevel(workspaceId, normalized);
       }
-      if (showThinking === "true") setShowThinkingBlocks(workspaceId, true);
+      if (showThinking === "true" || (!showThinking && defShowThinking === "true")) setShowThinkingBlocks(workspaceId, true);
       setLoaded(true);
     }
     load();
