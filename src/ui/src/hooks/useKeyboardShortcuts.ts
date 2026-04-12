@@ -185,6 +185,7 @@ export function useKeyboardShortcuts() {
     window.addEventListener("keyup", handleKeyUp);
     window.addEventListener("blur", handleBlur);
     return () => {
+      clearMetaHold();
       window.removeEventListener("keydown", handler);
       window.removeEventListener("keydown", handleKeyDownMeta);
       window.removeEventListener("keyup", handleKeyUp);

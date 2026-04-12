@@ -254,8 +254,6 @@ export function ChatPanel() {
   const [spinnerIdx, setSpinnerIdx] = useState(0);
   const [elapsed, setElapsed] = useState(0);
   const startTimeRef = useRef<number | null>(null);
-  const prevActivitiesCountRef = useRef(activitiesCount);
-
   useEffect(() => {
     if (!isRunning) {
       startTimeRef.current = null;
@@ -414,7 +412,6 @@ export function ChatPanel() {
     if (completedTurnsCount > 0 || activitiesCount > 0 || pendingQuestion || pendingPlan) {
       handleContentChanged();
     }
-    prevActivitiesCountRef.current = activitiesCount;
   }, [completedTurnsCount, activitiesCount, pendingQuestion, pendingPlan, handleContentChanged]);
 
   useEffect(() => {
