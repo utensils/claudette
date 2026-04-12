@@ -44,34 +44,9 @@
   cursor: pointer;
   padding: 0;
   font-weight: 500;
+  margin-left: auto;
 }
 
 .statUpdate:hover {
   text-decoration: underline;
-}
-
-.spacer {
-  flex: 1;
-}
-
-.toggle {
-  background: none;
-  border: 1px solid transparent;
-  color: var(--text-dim);
-  font-size: 11px;
-  padding: 1px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: color var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast);
-}
-
-.toggle:hover {
-  background: var(--hover-bg);
-  color: var(--text-muted);
-}
-
-.toggle.active {
-  color: var(--accent-primary);
-  background: var(--accent-bg);
-  border-color: rgba(var(--accent-primary-rgb), 0.1);
 }

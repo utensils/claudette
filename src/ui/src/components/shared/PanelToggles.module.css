@@ -1,0 +1,31 @@
+.toggles {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.toggle {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  padding: 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.toggle:hover {
+  color: var(--text-muted);
+  background: var(--hover-bg);
+}
+
+.toggle.active {
+  color: var(--accent-primary);
+}
+
+.toggle.active svg rect {
+  fill: currentColor;
+  fill-opacity: 0.2;
+}

@@ -2,19 +2,7 @@ import { useAppStore } from "../../stores/useAppStore";
 import { useShallow } from "zustand/react/shallow";
 import styles from "./StatusBar.module.css";
 
-const isMac = typeof navigator !== "undefined" && navigator.platform.startsWith("Mac");
-const mod = isMac ? "⌘" : "Ctrl+";
-
 export function StatusBar() {
-  const sidebarVisible = useAppStore((s) => s.sidebarVisible);
-  const terminalPanelVisible = useAppStore((s) => s.terminalPanelVisible);
-  const rightSidebarVisible = useAppStore((s) => s.rightSidebarVisible);
-  const toggleSidebar = useAppStore((s) => s.toggleSidebar);
-  const toggleTerminalPanel = useAppStore((s) => s.toggleTerminalPanel);
-  const toggleRightSidebar = useAppStore((s) => s.toggleRightSidebar);
-  const metaKeyHeld = useAppStore((s) => s.metaKeyHeld);
-  const hasWorkspace = useAppStore((s) => s.selectedWorkspaceId !== null);
-
   const runningCount = useAppStore(
     (s) => s.workspaces.filter((ws) => ws.agent_status === "Running").length
   );
@@ -59,31 +47,6 @@ export function StatusBar() {
           update available
         </button>
       )}
-      <div className={styles.spacer} />
-      <button
-        className={`${styles.toggle} ${sidebarVisible ? styles.active : ""}`}
-        onClick={toggleSidebar}
-        title={`Toggle sidebar (${mod}B)`}
-      >
-        sidebar
-        {metaKeyHeld && <kbd className="shortcut-badge">{mod}B</kbd>}
-      </button>
-      <button
-        className={`${styles.toggle} ${terminalPanelVisible ? styles.active : ""}`}
-        onClick={toggleTerminalPanel}
-        title={`Toggle terminal (${mod}\`)`}
-      >
-        terminal
-        {metaKeyHeld && hasWorkspace && <kbd className="shortcut-badge">{mod}`</kbd>}
-      </button>
-      <button
-        className={`${styles.toggle} ${rightSidebarVisible ? styles.active : ""}`}
-        onClick={toggleRightSidebar}
-        title={`Toggle changes (${mod}D)`}
-      >
-        changes
-        {metaKeyHeld && hasWorkspace && <kbd className="shortcut-badge">{mod}D</kbd>}
-      </button>
     </div>
   );
 }

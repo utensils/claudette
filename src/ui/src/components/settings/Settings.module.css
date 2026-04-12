@@ -3,6 +3,17 @@
   flex: 1;
   height: 100%;
   background: var(--sidebar-bg);
+  position: relative;
+}
+
+.dragRegion {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 38px;
+  z-index: 1;
+  -webkit-app-region: drag;
 }
 
 /* ── Settings sidebar ── */
@@ -15,6 +26,10 @@
   display: flex;
   flex-direction: column;
   overflow-y: auto;
+}
+
+[data-platform="mac"] .sidebar {
+  padding-top: 38px;
 }
 
 .backLink {

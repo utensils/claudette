@@ -35,6 +35,7 @@ import { SlashCommandPicker, filterSlashCommands } from "./SlashCommandPicker";
 import { FileMentionPicker, matchFiles } from "./FileMentionPicker";
 import { checkpointHasFileChanges, clearAllHasFileChanges, buildRollbackMap } from "../../utils/checkpointUtils";
 import { ThinkingBlock } from "./ThinkingBlock";
+import { PanelToggles } from "../shared/PanelToggles";
 import { debugChat } from "../../utils/chatDebug";
 import styles from "./ChatPanel.module.css";
 
@@ -584,7 +585,7 @@ export function ChatPanel() {
 
   return (
     <div className={styles.panel}>
-      <div className={styles.header}>
+      <div className={styles.header} data-tauri-drag-region>
         <div className={styles.headerLeft}>
           <button
             className={styles.dashboardBtn}
@@ -655,6 +656,7 @@ export function ChatPanel() {
               Stop
             </button>
           ) : null}
+          <PanelToggles />
         </div>
       </div>
 

@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import { loadFileDiff } from "../../services/tauri";
+import { PanelToggles } from "../shared/PanelToggles";
 import type { DiffLine } from "../../types/diff";
 import styles from "./DiffViewer.module.css";
 
@@ -89,14 +90,17 @@ export function DiffViewer() {
 
   return (
     <div className={styles.viewer}>
-      <div className={styles.header}>
-        <button
-          className={styles.backBtn}
-          onClick={() => setDiffSelectedFile(null)}
-        >
-          ← Back
-        </button>
-        <span className={styles.fileName}>{diffSelectedFile}</span>
+      <div className={styles.header} data-tauri-drag-region>
+        <div className={styles.headerLeft}>
+          <button
+            className={styles.backBtn}
+            onClick={() => setDiffSelectedFile(null)}
+          >
+            ← Back
+          </button>
+          <span className={styles.fileName}>{diffSelectedFile}</span>
+        </div>
+        <PanelToggles />
       </div>
       <div className={styles.content}>
         {diffLoading ? (

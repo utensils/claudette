@@ -8,10 +8,21 @@
 .header {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 8px 16px;
+  justify-content: space-between;
+  padding: 10px 16px;
   border-bottom: 1px solid var(--sidebar-border);
   background: var(--chat-header-bg);
+}
+
+[data-platform="mac"] .header {
+  padding-left: 78px;
+}
+
+.headerLeft {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
 }
 
 .backBtn {

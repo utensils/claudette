@@ -2,6 +2,7 @@ import { memo, useMemo, useEffect, useState } from "react";
 import { GitBranch, Layers, Globe } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import { RepoIcon } from "../shared/RepoIcon";
+import { PanelToggles } from "../shared/PanelToggles";
 import styles from "./Dashboard.module.css";
 
 /** Strip markdown syntax for a clean one-line preview. */
@@ -172,13 +173,19 @@ export function Dashboard() {
 
   if (activeWorkspaces.length === 0) {
     return (
-      <div className={styles.empty}>
-        <Layers size={40} className={styles.emptyIcon} />
-        <span className={styles.emptyTitle}>No active workspaces</span>
-        <p className={styles.hint}>
-          Create a workspace from a repository in the sidebar, or press{" "}
-          <kbd className={styles.hintKey}>+</kbd> next to a repo name.
-        </p>
+      <div className={styles.dashboard}>
+        <div className={styles.toolbar} data-tauri-drag-region>
+          <div className={styles.header}>Active Workspaces</div>
+          <PanelToggles />
+        </div>
+        <div className={styles.empty}>
+          <Layers size={40} className={styles.emptyIcon} />
+          <span className={styles.emptyTitle}>No active workspaces</span>
+          <p className={styles.hint}>
+            Create a workspace from a repository in the sidebar, or press{" "}
+            <kbd className={styles.hintKey}>+</kbd> next to a repo name.
+          </p>
+        </div>
       </div>
     );
   }
@@ -189,13 +196,16 @@ export function Dashboard() {
 
   return (
     <div className={styles.dashboard}>
-      <div className={styles.header}>
-        Active Workspaces
-        {runningCount > 0 && (
-          <span className={styles.headerCount}>
-            {runningCount} running
-          </span>
-        )}
+      <div className={styles.toolbar} data-tauri-drag-region>
+        <div className={styles.header}>
+          Active Workspaces
+          {runningCount > 0 && (
+            <span className={styles.headerCount}>
+              {runningCount} running
+            </span>
+          )}
+        </div>
+        <PanelToggles />
       </div>
       <div className={styles.grid}>
         {activeWorkspaces.map((ws, i) => {

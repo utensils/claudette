@@ -8,6 +8,10 @@
   padding: 14px 16px 8px;
 }
 
+[data-platform="mac"] .header {
+  padding-top: 38px;
+}
+
 .title {
   font-size: 11px;
   font-weight: 600;

@@ -27,6 +27,7 @@ export function SettingsPage() {
 
   return (
     <div className={styles.container}>
+      <div className={styles.dragRegion} data-tauri-drag-region />
       <SettingsSidebar />
       <div className={styles.content}>
         <SectionContent section={settingsSection} />

@@ -8,7 +8,6 @@ import { RightSidebar } from "../right-sidebar/RightSidebar";
 import { FuzzyFinder } from "../fuzzy-finder/FuzzyFinder";
 import { CommandPalette } from "../command-palette/CommandPalette";
 import { Dashboard } from "./Dashboard";
-import { StatusBar } from "./StatusBar";
 import { UpdateBanner } from "./UpdateBanner";
 import { ModalRouter } from "../modals/ModalRouter";
 import { SettingsPage } from "../settings/SettingsPage";
@@ -55,8 +54,10 @@ export function AppLayout() {
     setTerminalHeight(Math.max(100, Math.min(800, current - delta)));
   }, [setTerminalHeight]);
 
+  const isMac = typeof navigator !== "undefined" && navigator.platform.startsWith("Mac");
+
   return (
-    <div className={styles.container}>
+    <div className={styles.container} {...(isMac ? { "data-platform": "mac" } : {})}>
       <UpdateBanner installNow={installNow} installWhenIdle={installWhenIdle} dismiss={dismiss} />
       <div className={styles.main}>
         {settingsOpen ? (
@@ -118,7 +119,6 @@ export function AppLayout() {
           </>
         )}
       </div>
-      <StatusBar />
       <ModalRouter />
       {fuzzyFinderOpen && <FuzzyFinder />}
       {commandPaletteOpen && <CommandPalette />}
