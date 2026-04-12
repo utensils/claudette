@@ -13,7 +13,7 @@ Three attention states, displayed as lucide-react icons next to the workspace na
 | State | Trigger | Icon | Color Var | Meaning |
 |-------|---------|------|-----------|---------|
 | **Done** | `unreadCompletions.has(wsId)` AND agent not Running | `BadgeCheck` | `--badge-done` | Agent finished, changes to review |
-| **Plan** | `planApprovals[wsId]` exists | `BadgeCheck` | `--badge-plan` | Plan awaiting approval |
+| **Plan** | `planApprovals[wsId]` exists | `BadgeInfo` | `--badge-plan` | Plan awaiting approval |
 | **Ask** | `agentQuestions[wsId]` exists | `BadgeQuestionMark` | `--badge-ask` | Agent has a question |
 
 **Priority** (when multiple states overlap): Ask > Plan > Done. Only one badge shows at a time.
@@ -74,7 +74,7 @@ The current `clearUnreadCompletion(ws.id)` call in the sidebar click handler is 
    - Add `.badgeDone`, `.badgePlan`, `.badgeAsk` classes (shared base with `flex-shrink: 0` and `pulse-badge` animation, each colored by its CSS var)
 
 5. **`src/ui/src/components/sidebar/Sidebar.tsx`**:
-   - Import `BadgeCheck`, `BadgeQuestionMark` from lucide-react
+   - Import `BadgeCheck`, `BadgeInfo`, `BadgeQuestionMark` from lucide-react
    - Subscribe to `agentQuestions` and `planApprovals` from store
    - Derive badge state per workspace: `ask | plan | done | null`
    - Replace `{hasUnread && <span className={styles.notificationBadge}>●</span>}` with conditional icon rendering
