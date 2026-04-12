@@ -41,18 +41,23 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      const [model, fast, thinking, effort, showThinking] = await Promise.all([
+      const [model, fast, thinking, effort, showThinking, defModel, defFast, defThinking, defPlan] = await Promise.all([
         getAppSetting(`model:${workspaceId}`),
         getAppSetting(`fast_mode:${workspaceId}`),
         getAppSetting(`thinking_enabled:${workspaceId}`),
         getAppSetting(`effort_level:${workspaceId}`),
         getAppSetting(`show_thinking:${workspaceId}`),
+        getAppSetting("default_model"),
+        getAppSetting("default_fast_mode"),
+        getAppSetting("default_thinking"),
+        getAppSetting("default_plan_mode"),
       ]);
       if (cancelled) return;
-      const loadedModel = model ?? "opus";
-      if (model) setSelectedModel(workspaceId, model);
-      if (fast === "true") setFastMode(workspaceId, true);
-      if (thinking === "true") setThinkingEnabled(workspaceId, true);
+      const loadedModel = model ?? defModel ?? "opus";
+      setSelectedModel(workspaceId, loadedModel);
+      if (fast === "true" || (!fast && defFast === "true")) setFastMode(workspaceId, true);
+      if (thinking === "true" || (!thinking && defThinking === "true")) setThinkingEnabled(workspaceId, true);
+      if (!fast && !thinking && defPlan === "true") setPlanMode(workspaceId, true);
       // Normalize effort against the loaded model to prevent stale values.
       if (effort) {
         const normalized = !isEffortSupported(loadedModel)

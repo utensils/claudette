@@ -4,6 +4,7 @@ import styles from "./Settings.module.css";
 
 const APP_SECTIONS = [
   { id: "general", label: "General" },
+  { id: "models", label: "Models" },
   { id: "appearance", label: "Appearance" },
   { id: "notifications", label: "Notifications" },
   { id: "git", label: "Git" },
