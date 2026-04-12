@@ -189,14 +189,20 @@ fn main() {
                     api.prevent_close();
                     let _ = window.hide();
                 }
-                // On Linux, hide to tray when the tray is active;
-                // otherwise let the close proceed normally.
+                // On Linux, hide to tray only when agents are running;
+                // otherwise let the close proceed normally (quits the app).
                 #[cfg(not(target_os = "macos"))]
                 {
                     let state = window.app_handle().state::<state::AppState>();
-                    if let Ok(guard) = state.tray_handle.lock()
-                        && guard.is_some()
-                    {
+                    let has_tray = state
+                        .tray_handle
+                        .lock()
+                        .is_ok_and(|g| g.is_some());
+                    let running = state
+                        .agents
+                        .try_read()
+                        .is_ok_and(|a| tray::has_running_agents(&a));
+                    if has_tray && running {
                         api.prevent_close();
                         let _ = window.hide();
                     }
