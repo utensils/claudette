@@ -14,7 +14,7 @@ import {
   pairWithServer,
   startLocalServer,
 } from "../../services/tauri";
-import { Settings, Link, X, Share2, Plus, Globe } from "lucide-react";
+import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2 } from "lucide-react";
 import { RepoIcon } from "../shared/RepoIcon";
 import styles from "./Sidebar.module.css";
 
@@ -389,7 +389,7 @@ export function Sidebar() {
                           }}
                           title="Archive"
                         >
-                          <X size={12} />
+                          <Archive size={12} />
                         </button>
                       ) : (
                         <>
@@ -404,7 +404,7 @@ export function Sidebar() {
                             ↺
                           </button>
                           <button
-                            className={styles.iconBtn}
+                            className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
                             onClick={(e) => {
                               e.stopPropagation();
                               openModal("deleteWorkspace", {
@@ -414,7 +414,7 @@ export function Sidebar() {
                             }}
                             title="Delete"
                           >
-                            <X size={12} />
+                            <Trash2 size={12} />
                           </button>
                         </>
                       )}
@@ -779,7 +779,7 @@ function RemoteConnectionGroup({
                         }}
                         title="Archive"
                       >
-                        <X size={12} />
+                        <Archive size={12} />
                       </button>
                     </div>
                   </div>

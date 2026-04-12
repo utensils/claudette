@@ -133,6 +133,15 @@
   background: var(--accent-bg);
 }
 
+.iconBtnDanger {
+  color: var(--status-stopped);
+}
+
+.iconBtnDanger:hover {
+  color: var(--status-stopped);
+  background: rgba(255, 80, 80, 0.15);
+}
+
 .invalidBadge {
   color: var(--status-stopped);
   font-weight: bold;
