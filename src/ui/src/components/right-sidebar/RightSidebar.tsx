@@ -216,13 +216,10 @@ export function RightSidebar() {
         </>
       )}
 
-      {activeTab === "tasks" && selectedWorkspaceId && (
-        <TaskList workspaceId={selectedWorkspaceId} />
-      )}
-      {activeTab === "tasks" && !selectedWorkspaceId && (
-        <div className={styles.list}>
-          <div className={styles.empty}>No workspace selected</div>
-        </div>
+      {activeTab === "tasks" && (
+        selectedWorkspaceId
+          ? <TaskList workspaceId={selectedWorkspaceId} />
+          : <div className={styles.list}><div className={styles.empty}>No workspace selected</div></div>
       )}
     </div>
   );

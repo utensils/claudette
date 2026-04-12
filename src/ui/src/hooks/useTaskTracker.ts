@@ -43,7 +43,7 @@ function normalizeStatus(raw: string | undefined): TaskStatus {
 }
 
 /** Try to extract a numeric task ID from a TaskCreate result string. */
-function extractTaskId(resultText: string): string | null {
+export function extractTaskId(resultText: string): string | null {
   if (!resultText) return null;
   try {
     const parsed = JSON.parse(resultText);
@@ -99,6 +99,14 @@ function processActivities(
         if (existing) {
           if (input.status) existing.status = normalizeStatus(input.status as string);
           if (input.description) existing.description = String(input.description);
+        } else if (id) {
+          // Orphaned update (TaskCreate result not yet available) — create a stub
+          taskMap.set(id, {
+            id,
+            description: String(input.description ?? `Task #${id}`),
+            status: normalizeStatus(input.status as string | undefined),
+            source: "task",
+          });
         }
         break;
       }
@@ -146,6 +154,30 @@ function normalizePriority(
 }
 
 /**
+ * Pure derivation: compute task list from completed turns + current activities.
+ * Exported for unit testing; the hook version below wraps this with Zustand selectors.
+ */
+export function deriveTasks(
+  completedTurns: CompletedTurn[],
+  toolActivities: ToolActivity[]
+): TaskTrackerResult {
+  const taskMap = new Map<string, TrackedTask>();
+  const todoMap = new Map<string, TrackedTask>();
+  const nextSyntheticId = { value: 1 };
+
+  for (const turn of completedTurns) {
+    processActivities(turn.activities, taskMap, todoMap, nextSyntheticId);
+  }
+  processActivities(toolActivities, taskMap, todoMap, nextSyntheticId);
+
+  const tasks = [...taskMap.values(), ...todoMap.values()];
+  if (tasks.length === 0) return EMPTY_RESULT;
+
+  const completedCount = tasks.filter((t) => t.status === "completed").length;
+  return { tasks, completedCount, totalCount: tasks.length };
+}
+
+/**
  * Reactively derive a task list from existing tool activities.
  * Scans both completed turns and current-turn activities for
  * TaskCreate, TaskUpdate, TaskStop, and TodoWrite tool calls.
@@ -158,30 +190,8 @@ export function useTaskTracker(wsId: string | null): TaskTrackerResult {
     (s) => (wsId ? s.toolActivities[wsId] : null) ?? EMPTY_ACTIVITIES
   );
 
-  return useMemo(() => {
-    if (!wsId) return EMPTY_RESULT;
-
-    const taskMap = new Map<string, TrackedTask>();
-    const todoMap = new Map<string, TrackedTask>();
-    const nextSyntheticId = { value: 1 };
-
-    // Process historical turns first (in order)
-    for (const turn of completedTurns) {
-      processActivities(turn.activities, taskMap, todoMap, nextSyntheticId);
-    }
-
-    // Then current-turn activities
-    processActivities(toolActivities, taskMap, todoMap, nextSyntheticId);
-
-    // Merge: task items first, then todo items (todo IDs won't collide with task IDs)
-    const tasks = [...taskMap.values(), ...todoMap.values()];
-
-    if (tasks.length === 0) return EMPTY_RESULT;
-
-    const completedCount = tasks.filter(
-      (t) => t.status === "completed"
-    ).length;
-
-    return { tasks, completedCount, totalCount: tasks.length };
-  }, [wsId, completedTurns, toolActivities]);
+  return useMemo(
+    () => (wsId ? deriveTasks(completedTurns, toolActivities) : EMPTY_RESULT),
+    [wsId, completedTurns, toolActivities]
+  );
 }

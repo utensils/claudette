@@ -314,7 +314,7 @@ export const useAppStore = create<AppState>((set) => ({
         unreadCompletions: newUnreadCompletions,
       };
     }),
-  selectWorkspace: (id) => set({ selectedWorkspaceId: id }),
+  selectWorkspace: (id) => set({ selectedWorkspaceId: id, rightSidebarTab: "changes" }),
 
   // -- Chat --
   chatMessages: {},
