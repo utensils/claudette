@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.7.0](https://github.com/utensils/Claudette/compare/v0.6.0...v0.7.0) (2026-04-12)
+
+
+### Features
+
+* system tray, notifications, keyboard hints, macOS window behavior, and UX polish ([#119](https://github.com/utensils/Claudette/issues/119)) ([e5fef65](https://github.com/utensils/Claudette/commit/e5fef6526417dee67d93d54022e85aa44bf86f8e))
+
+
+### Bug Fixes
+
+* skip updater checks in dev mode ([#151](https://github.com/utensils/Claudette/issues/151)) ([764904b](https://github.com/utensils/Claudette/commit/764904b2ec771f8a5ab8796dace72b2b2ca97135)), closes [#147](https://github.com/utensils/Claudette/issues/147)
+
 ## [0.6.0](https://github.com/utensils/Claudette/compare/v0.5.3...v0.6.0) (2026-04-11)
 
 
