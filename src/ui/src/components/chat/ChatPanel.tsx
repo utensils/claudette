@@ -725,11 +725,12 @@ export function ChatPanel() {
             </>
           )}
         </div>
-        <ScrollToBottomPill
-          visible={!isAtBottom && messages.length > 0}
-          onClick={scrollToBottom}
-        />
       </ScrollContext.Provider>
+
+      <ScrollToBottomPill
+        visible={!isAtBottom && messages.length > 0}
+        onClick={scrollToBottom}
+      />
 
       <ChatInputArea
         onSend={handleSend}
