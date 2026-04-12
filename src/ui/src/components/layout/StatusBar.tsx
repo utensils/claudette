@@ -65,7 +65,7 @@ export function StatusBar() {
         onClick={toggleSidebar}
         title={`Toggle sidebar (${mod}B)`}
       >
-        sidebar
+        <span className={styles.toggleLabel}>sidebar</span>
         <kbd aria-hidden="true" className={`shortcut-badge ${metaKeyHeld ? "shortcut-badge-visible" : ""}`}>{mod}B</kbd>
       </button>
       <button
@@ -73,7 +73,7 @@ export function StatusBar() {
         onClick={toggleTerminalPanel}
         title={`Toggle terminal (${mod}\`)`}
       >
-        terminal
+        <span className={styles.toggleLabel}>terminal</span>
         <kbd aria-hidden="true" className={`shortcut-badge ${metaKeyHeld && hasWorkspace ? "shortcut-badge-visible" : ""}`}>{mod}`</kbd>
       </button>
       <button
@@ -81,7 +81,7 @@ export function StatusBar() {
         onClick={toggleRightSidebar}
         title={`Toggle changes (${mod}D)`}
       >
-        changes
+        <span className={styles.toggleLabel}>changes</span>
         <kbd aria-hidden="true" className={`shortcut-badge ${metaKeyHeld && hasWorkspace ? "shortcut-badge-visible" : ""}`}>{mod}D</kbd>
       </button>
     </div>

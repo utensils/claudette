@@ -57,15 +57,32 @@
 .toggle {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  justify-content: center;
   background: none;
   border: 1px solid transparent;
   color: var(--text-dim);
   font-size: 11px;
-  padding: 1px 0 1px 8px;
+  min-width: 100px;
+  padding: 1px 8px;
   border-radius: 4px;
   cursor: pointer;
-  transition: color var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast);
+  position: relative;
+  transition: color var(--transition-fast), background var(--transition-fast),
+    border-color var(--transition-fast), padding var(--transition-normal);
+}
+
+/* Badge sits on the right, out of flow, doesn't affect centering */
+.toggle :global(.shortcut-badge) {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  margin: 0;
+}
+
+/* When badge is visible, add right padding to push the centered label left */
+.toggle:has(:global(.shortcut-badge-visible)) {
+  padding-right: 38px;
 }
 
 .toggle:hover {
