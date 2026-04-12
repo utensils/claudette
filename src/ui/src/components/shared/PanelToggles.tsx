@@ -13,6 +13,7 @@ export function PanelToggles() {
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
   const toggleTerminalPanel = useAppStore((s) => s.toggleTerminalPanel);
   const toggleRightSidebar = useAppStore((s) => s.toggleRightSidebar);
+  const metaKeyHeld = useAppStore((s) => s.metaKeyHeld);
 
   return (
     <div className={styles.toggles}>
@@ -25,6 +26,7 @@ export function PanelToggles() {
         aria-pressed={sidebarVisible}
       >
         <PanelLeft size={16} />
+        <kbd aria-hidden="true" className={`shortcut-badge ${metaKeyHeld ? "shortcut-badge-visible" : ""}`}>{mod}B</kbd>
       </button>
       <button
         type="button"
@@ -35,6 +37,7 @@ export function PanelToggles() {
         aria-pressed={terminalPanelVisible}
       >
         <PanelBottom size={16} />
+        <kbd aria-hidden="true" className={`shortcut-badge ${metaKeyHeld ? "shortcut-badge-visible" : ""}`}>{mod}`</kbd>
       </button>
       <button
         type="button"
@@ -45,6 +48,7 @@ export function PanelToggles() {
         aria-pressed={rightSidebarVisible}
       >
         <PanelRight size={16} />
+        <kbd aria-hidden="true" className={`shortcut-badge ${metaKeyHeld ? "shortcut-badge-visible" : ""}`}>{mod}D</kbd>
       </button>
     </div>
   );

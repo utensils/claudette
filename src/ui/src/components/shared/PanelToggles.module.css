@@ -13,7 +13,32 @@
   cursor: pointer;
   display: flex;
   align-items: center;
+  position: relative;
+  overflow: hidden;
   transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+/* Badge overlays the icon — same pattern as ChatToolbar chips */
+.toggle :global(.shortcut-badge) {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  border-radius: inherit;
+  font-size: 10px;
+  z-index: 1;
+}
+
+/* Crossfade icon out as badge fades in */
+.toggle > svg {
+  transition: opacity 0.5s ease;
+}
+.toggle:has(:global(.shortcut-badge-visible)) > svg {
+  opacity: 0;
+  transition: opacity 0.3s ease;
 }
 
 .toggle:hover {
