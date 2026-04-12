@@ -160,6 +160,11 @@ pub(crate) fn build_notification_command(
     if cmd.is_empty() {
         return None;
     }
+    // Reject bare shell reserved keywords that will always fail with `sh -c`.
+    // Users sometimes enter "done" instead of `say "done"`.
+    if is_bare_shell_keyword(cmd) {
+        return None;
+    }
     let mut command = std::process::Command::new("sh");
     command
         .arg("-c")
@@ -169,6 +174,15 @@ pub(crate) fn build_notification_command(
         .env("CLAUDETTE_WORKSPACE_ID", workspace_id)
         .env("CLAUDETTE_WORKSPACE_NAME", workspace_name);
     Some(command)
+}
+
+/// Returns true if `cmd` is a single shell reserved keyword that cannot
+/// be executed standalone (e.g. `done`, `then`, `fi`, `esac`).
+fn is_bare_shell_keyword(cmd: &str) -> bool {
+    matches!(
+        cmd,
+        "done" | "then" | "else" | "elif" | "fi" | "esac" | "do" | "in"
+    )
 }
 
 /// Run the user-configured notification command (if set) with context env vars.
