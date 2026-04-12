@@ -197,7 +197,9 @@ body,
   }
 }
 
-/* Keyboard shortcut badge — shown when Cmd/Ctrl is held alone */
+/* Keyboard shortcut badge — shown when Cmd/Ctrl is held alone.
+   Always rendered; visibility toggled via .shortcut-badge-visible.
+   Fade-in is a 0.5s CSS transition; fade-out is instant. */
 .shortcut-badge {
   font-size: 11px;
   font-family: inherit;
@@ -207,6 +209,11 @@ body,
   padding: 2px 6px;
   border-radius: 4px;
   pointer-events: none;
-  animation: fadeIn 0.1s ease;
   margin-left: 4px;
+  opacity: 0;
+  transition: opacity 0s;
+}
+.shortcut-badge-visible {
+  opacity: 1;
+  transition: opacity 0.5s ease;
 }

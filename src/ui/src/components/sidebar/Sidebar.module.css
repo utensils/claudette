@@ -132,6 +132,12 @@
   opacity: 1;
 }
 
+/* Hide action buttons when shortcut badges are visible to prevent overlap */
+.repoHeader:has(.shortcutBadgeVisible) .iconBtn {
+  opacity: 0;
+  pointer-events: none;
+}
+
 .iconBtn:hover {
   color: var(--accent-primary);
   background: var(--accent-bg);
@@ -185,7 +191,13 @@
   padding: 2px 6px;
   border-radius: 4px;
   pointer-events: none;
-  animation: fadeIn 0.1s ease;
+  opacity: 0;
+  transition: opacity 0s;
+}
+
+.shortcutBadgeVisible {
+  opacity: 1;
+  transition: opacity 0.5s ease;
 }
 
 /* Workspace items */

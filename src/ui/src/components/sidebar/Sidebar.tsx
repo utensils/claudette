@@ -314,8 +314,8 @@ export const Sidebar = memo(function Sidebar() {
                     </button>
                   </>
                 )}
-                {metaKeyHeld && repoIdx < 9 && (
-                  <kbd className={styles.shortcutBadge}>
+                {repoIdx < 9 && (
+                  <kbd className={`${styles.shortcutBadge} ${metaKeyHeld ? styles.shortcutBadgeVisible : ""}`}>
                     {isMac ? "⌘" : "Ctrl+"}{repoIdx + 1}
                   </kbd>
                 )}

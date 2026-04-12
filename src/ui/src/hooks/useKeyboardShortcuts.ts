@@ -148,28 +148,37 @@ export function useKeyboardShortcuts() {
       }
     };
 
-    // Track Cmd/Ctrl key hold for visual shortcut hints
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.key === "Meta" || e.key === "Control") {
-        useAppStore.getState().setMetaKeyHeld(false);
+    // Track Cmd/Ctrl key hold for visual shortcut hints.
+    // Uses a 400ms delay so quick taps (Cmd+C, Cmd+Tab) never flash hints —
+    // only a deliberate hold shows them.
+    let metaHoldTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const clearMetaHold = () => {
+      if (metaHoldTimer !== null) {
+        clearTimeout(metaHoldTimer);
+        metaHoldTimer = null;
       }
+      useAppStore.getState().setMetaKeyHeld(false);
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === "Meta" || e.key === "Control") clearMetaHold();
     };
     const handleKeyDownMeta = (e: KeyboardEvent) => {
       if ((e.key === "Meta" || e.key === "Control") && !e.repeat) {
-        // Show badges only when Cmd/Ctrl is pressed alone.
-        if (!e.shiftKey && !e.altKey) {
-          useAppStore.getState().setMetaKeyHeld(true);
+        // Start delayed reveal only when Cmd/Ctrl is pressed alone.
+        if (!e.shiftKey && !e.altKey && metaHoldTimer === null) {
+          metaHoldTimer = setTimeout(() => {
+            metaHoldTimer = null;
+            useAppStore.getState().setMetaKeyHeld(true);
+          }, 500);
         }
       } else {
-        // Any other key pressed — hide badges immediately.
-        // Catches combos (Cmd+Shift+4, Cmd+C) and standalone keys.
-        useAppStore.getState().setMetaKeyHeld(false);
+        // Any other key pressed — cancel pending reveal and hide badges.
+        clearMetaHold();
       }
     };
-    // Clear on window blur (e.g. Cmd+Tab away)
-    const handleBlur = () => {
-      useAppStore.getState().setMetaKeyHeld(false);
-    };
+    const handleBlur = () => clearMetaHold();
 
     window.addEventListener("keydown", handler);
     window.addEventListener("keydown", handleKeyDownMeta);

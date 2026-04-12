@@ -1,7 +1,7 @@
 .bar {
   display: flex;
   align-items: center;
-  height: 26px;
+  height: 32px;
   padding: 0 10px;
   background: var(--sidebar-bg);
   border-top: 1px solid var(--sidebar-border);
@@ -44,9 +44,56 @@
   cursor: pointer;
   padding: 0;
   font-weight: 500;
-  margin-left: auto;
 }
 
 .statUpdate:hover {
   text-decoration: underline;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 1px 0 1px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.shortcutBadge {
+  font-size: 11px;
+  font-family: inherit;
+  color: var(--text-dim);
+  background: var(--hover-bg);
+  border: 1px solid var(--divider);
+  padding: 2px 6px;
+  border-radius: 4px;
+  pointer-events: none;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0s;
+}
+
+.shortcutBadgeVisible {
+  opacity: 1;
+  transition: opacity 0.5s ease;
+}
+
+.toggle:hover {
+  background: var(--hover-bg);
+  color: var(--text-muted);
+}
+
+.toggle.active {
+  color: var(--accent-primary);
+  background: var(--accent-bg);
+  border-color: rgba(var(--accent-primary-rgb), 0.1);
 }

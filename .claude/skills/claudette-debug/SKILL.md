@@ -355,6 +355,35 @@ return 'All traces removed';
 JS
 ```
 
+### `hotkeys on` — lock hotkey badges visible for layout inspection
+
+Overrides `setMetaKeyHeld` to ignore `false` — badges stay on through Cmd+Tab, blur, keypresses.
+
+```bash
+.claude/skills/claudette-debug/debug-eval.sh <<'JS'
+const store = window.__CLAUDETTE_STORE__;
+const orig = store.getState().setMetaKeyHeld;
+window.__META_ORIG__ = orig;
+store.setState({ setMetaKeyHeld: (held) => { if (held) orig(held); } });
+orig(true);
+return 'Hotkey badges LOCKED on';
+JS
+```
+
+### `hotkeys off` — unlock and hide hotkey badges
+
+```bash
+.claude/skills/claudette-debug/debug-eval.sh <<'JS'
+const store = window.__CLAUDETTE_STORE__;
+if (window.__META_ORIG__) {
+  store.setState({ setMetaKeyHeld: window.__META_ORIG__ });
+  window.__META_ORIG__(false);
+  delete window.__META_ORIG__;
+}
+return 'Hotkey badges unlocked';
+JS
+```
+
 ### `maximize` — toggle window maximize for resize testing
 
 Programmatically maximize the window, wait, then restore. Useful for testing resize flash behavior.
