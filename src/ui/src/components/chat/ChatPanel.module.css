@@ -863,6 +863,16 @@
   color: var(--text-faint);
 }
 
+.inputPlanMode {
+  border: 2px dashed rgba(var(--accent-primary-rgb), 0.5);
+  background: rgba(var(--accent-primary-rgb), 0.04);
+}
+
+.inputPlanMode:focus {
+  border-color: rgba(var(--accent-primary-rgb), 0.6);
+  box-shadow: 0 0 0 3px rgba(var(--accent-primary-rgb), 0.12);
+}
+
 .sendBtn {
   background: transparent;
   border: 1px solid rgba(var(--accent-primary-rgb), 0.2);
