@@ -1469,7 +1469,7 @@ function ChatInputArea({
       )}
       <textarea
         ref={textareaRef}
-        className={`${styles.input} ${planMode ? styles.inputPlanMode : ""}`}
+        className={`${styles.input}${planMode ? ` ${styles.inputPlanMode}` : ""}`}
         value={chatInput}
         onChange={(e) => {
           setChatInput(e.target.value);
