@@ -46,19 +46,26 @@ export function useStickyScroll(
   const scrollToBottom = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
-    programmaticScrollRef.current = true;
+    const prevScrollTop = el.scrollTop;
     el.scrollTop = el.scrollHeight;
+    // Only set the programmatic flag if the scroll position actually changed,
+    // otherwise no scroll event fires and the flag would stick, eating the
+    // next genuine user scroll.
+    if (el.scrollTop !== prevScrollTop) {
+      programmaticScrollRef.current = true;
+    }
     isAtBottomRef.current = true;
     setIsAtBottom(true);
   }, [containerRef]);
 
   /**
    * Call when new content is added. Auto-scrolls only if the user is already
-   * at the bottom (reads the ref to avoid stale closures).
+   * at the bottom. The check is inside the RAF callback so a user scroll that
+   * fires between scheduling and execution correctly cancels the auto-scroll.
    */
   const handleContentChanged = useCallback(() => {
-    if (!isAtBottomRef.current) return;
     requestAnimationFrame(() => {
+      if (!isAtBottomRef.current) return;
       const el = containerRef.current;
       if (el) {
         programmaticScrollRef.current = true;
