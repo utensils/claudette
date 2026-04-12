@@ -14,7 +14,7 @@ import {
   pairWithServer,
   startLocalServer,
 } from "../../services/tauri";
-import { Settings, Link, Share2, Plus, Globe, Archive, Trash2 } from "lucide-react";
+import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2 } from "lucide-react";
 import { RepoIcon } from "../shared/RepoIcon";
 import styles from "./Sidebar.module.css";
 
