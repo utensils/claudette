@@ -20,7 +20,6 @@ import {
   getAppSetting,
   setAppSetting,
   listWorkspaceFiles,
-  readWorkspaceFile,
 } from "../../services/tauri";
 import { reconstructCompletedTurns } from "../../utils/reconstructTurns";
 import type { SlashCommand, FileEntry } from "../../services/tauri";
@@ -485,12 +484,10 @@ export function ChatPanel() {
 
     setError(null);
 
-    // Expand @-file references into inline file content blocks.
-    const expandedContent = await expandFileMentions(
-      trimmed,
-      selectedWorkspaceId,
-      mentionedFiles,
-    );
+    // Convert mentioned files set to array for the backend.
+    const mentionedFilesArray = mentionedFiles?.size
+      ? [...mentionedFiles]
+      : undefined;
 
     // Push to prompt history.
     const history = (historyRef.current[selectedWorkspaceId] ??= []);
@@ -515,7 +512,8 @@ export function ChatPanel() {
         const state = useAppStore.getState();
         await sendRemoteCommand(ws.remote_connection_id, "send_chat_message", {
           workspace_id: selectedWorkspaceId,
-          content: expandedContent,
+          content: trimmed,
+          mentioned_files: mentionedFilesArray,
           permission_level: permissionLevel,
           model: state.selectedModel[selectedWorkspaceId] || null,
           fast_mode: state.fastMode[selectedWorkspaceId] || false,
@@ -532,7 +530,8 @@ export function ChatPanel() {
         const effort = state.effortLevel[selectedWorkspaceId] || undefined;
         await sendChatMessage(
           selectedWorkspaceId,
-          expandedContent,
+          trimmed,
+          mentionedFilesArray,
           permissionLevel,
           model,
           fastMode || undefined,
@@ -1128,36 +1127,6 @@ function extractMentionQuery(text: string, cursorPos: number): string | null {
   // If query contains whitespace, the mention is "closed".
   if (/\s/.test(query)) return null;
   return query;
-}
-
-/** Expand @-file references into <referenced-file> blocks prepended to the prompt. */
-async function expandFileMentions(
-  content: string,
-  workspaceId: string,
-  mentionedFiles?: Set<string>,
-): Promise<string> {
-  if (!mentionedFiles || mentionedFiles.size === 0) return content;
-
-  const paths = [...mentionedFiles];
-  const results = await Promise.allSettled(
-    paths.map((p) => readWorkspaceFile(workspaceId, p)),
-  );
-
-  const blocks: string[] = [];
-  for (let i = 0; i < paths.length; i++) {
-    const result = results[i];
-    if (result.status === "fulfilled" && result.value.content) {
-      const fc = result.value;
-      let block = `<referenced-file path="${paths[i]}">\n${fc.content}\n</referenced-file>`;
-      if (fc.truncated) {
-        block += `\n(Note: file truncated at 100KB, total size ${fc.size_bytes} bytes)`;
-      }
-      blocks.push(block);
-    }
-  }
-
-  if (blocks.length === 0) return content;
-  return blocks.join("\n\n") + "\n\n" + content;
 }
 
 // Separate component for input area to prevent full ChatPanel re-renders on every keystroke

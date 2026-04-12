@@ -35,6 +35,7 @@ pub async fn load_chat_history(
 pub async fn send_chat_message(
     workspace_id: String,
     content: String,
+    mentioned_files: Option<Vec<String>>,
     permission_level: Option<String>,
     model: Option<String>,
     fast_mode: Option<bool>,
@@ -155,11 +156,19 @@ pub async fn send_chat_message(
         effort,
     };
 
+    // Expand @-file mentions into inline file content for the agent prompt.
+    let prompt = claudette::file_expand::expand_file_mentions(
+        std::path::Path::new(&worktree_path),
+        &content,
+        mentioned_files.as_deref().unwrap_or(&[]),
+    )
+    .await;
+
     // Spawn the agent turn.
     let turn_handle = agent::run_turn(
         std::path::Path::new(&worktree_path),
         &session_id,
-        &content,
+        &prompt,
         is_resume,
         &allowed_tools,
         custom_instructions.as_deref(),

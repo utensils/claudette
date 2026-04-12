@@ -47,6 +47,9 @@ pub async fn handle_request(
                 .get("effort")
                 .and_then(|v| v.as_str())
                 .map(String::from);
+            let mentioned_files: Option<Vec<String>> = params
+                .get("mentioned_files")
+                .and_then(|v| serde_json::from_value(v.clone()).ok());
             handle_send_chat_message(
                 state,
                 writer,
@@ -58,6 +61,7 @@ pub async fn handle_request(
                 thinking_enabled,
                 plan_mode,
                 effort,
+                mentioned_files,
             )
             .await
         }
@@ -303,6 +307,7 @@ async fn handle_send_chat_message(
     thinking_enabled: Option<bool>,
     plan_mode: Option<bool>,
     effort: Option<String>,
+    mentioned_files: Option<Vec<String>>,
 ) -> Result<serde_json::Value, String> {
     let db = open_db(state)?;
 
@@ -371,10 +376,18 @@ async fn handle_send_chat_message(
         effort,
     };
 
+    // Expand @-file mentions into inline file content for the agent prompt.
+    let prompt = claudette::file_expand::expand_file_mentions(
+        std::path::Path::new(&worktree_path),
+        content,
+        mentioned_files.as_deref().unwrap_or(&[]),
+    )
+    .await;
+
     let turn_handle = agent::run_turn(
         std::path::Path::new(&worktree_path),
         &session_id,
-        content,
+        &prompt,
         is_resume,
         &allowed_tools,
         custom_instructions.as_deref(),

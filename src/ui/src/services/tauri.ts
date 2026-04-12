@@ -184,6 +184,7 @@ export function loadChatHistory(workspaceId: string): Promise<ChatMessage[]> {
 export function sendChatMessage(
   workspaceId: string,
   content: string,
+  mentionedFiles?: string[],
   permissionLevel?: string,
   model?: string,
   fastMode?: boolean,
@@ -194,6 +195,7 @@ export function sendChatMessage(
   return invoke("send_chat_message", {
     workspaceId,
     content,
+    mentionedFiles: mentionedFiles ?? null,
     permissionLevel: permissionLevel ?? null,
     model: model ?? null,
     fastMode: fastMode ?? null,
