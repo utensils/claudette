@@ -1,0 +1,65 @@
+.picker {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  margin-bottom: 4px;
+  background: var(--sidebar-bg);
+  border: 1px solid var(--sidebar-border);
+  border-radius: 8px;
+  padding: 4px;
+  z-index: 100;
+  max-height: 400px;
+  overflow-y: auto;
+  box-shadow: var(--shadow-lg);
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.1s;
+  font-family: var(--font-mono, monospace);
+  font-size: 13px;
+}
+
+.item:hover {
+  background: var(--hover-bg);
+}
+
+.itemSelected {
+  background: var(--selected-bg);
+}
+
+.itemSelected:hover {
+  background: var(--selected-bg);
+}
+
+.atSign {
+  color: var(--text-dim);
+  margin-right: 2px;
+  flex-shrink: 0;
+}
+
+.pathText {
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.highlight {
+  color: var(--accent-primary);
+  font-weight: 600;
+}
+
+.dirBadge {
+  margin-left: auto;
+  padding-left: 8px;
+  color: var(--text-dim);
+  font-size: 11px;
+  opacity: 0.7;
+  flex-shrink: 0;
+}

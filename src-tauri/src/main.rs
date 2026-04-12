@@ -237,6 +237,9 @@ fn main() {
             // Slash commands
             commands::slash_commands::list_slash_commands,
             commands::slash_commands::record_slash_command_usage,
+            // Files
+            commands::files::list_workspace_files,
+            commands::files::read_workspace_file,
             // Chat
             commands::chat::load_chat_history,
             commands::chat::send_chat_message,

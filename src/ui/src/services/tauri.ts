@@ -147,6 +147,34 @@ export function recordSlashCommandUsage(
   });
 }
 
+// -- File Mentions --
+
+export interface FileEntry {
+  path: string;
+  is_directory: boolean;
+}
+
+export interface FileContent {
+  path: string;
+  content: string | null;
+  is_binary: boolean;
+  size_bytes: number;
+  truncated: boolean;
+}
+
+export function listWorkspaceFiles(
+  workspaceId: string,
+): Promise<FileEntry[]> {
+  return invoke("list_workspace_files", { workspaceId });
+}
+
+export function readWorkspaceFile(
+  workspaceId: string,
+  relativePath: string,
+): Promise<FileContent> {
+  return invoke("read_workspace_file", { workspaceId, relativePath });
+}
+
 // -- Chat --
 
 export function loadChatHistory(workspaceId: string): Promise<ChatMessage[]> {
