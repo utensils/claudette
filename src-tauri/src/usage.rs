@@ -100,8 +100,12 @@ pub struct UsageCacheEntry {
     pub last_usage_fetched_at: u64,
 }
 
-/// Minimum interval between usage API calls (60 seconds).
-const USAGE_CACHE_TTL_MS: u64 = 60_000;
+/// Minimum interval between usage API calls (30 minutes).
+/// The /api/oauth/usage endpoint has aggressive rate limiting — once a 429
+/// is triggered, it persists for 30+ minutes with no Retry-After header.
+/// Claude Code itself only calls this on-demand (no polling). We cache
+/// aggressively to avoid triggering rate limits.
+const USAGE_CACHE_TTL_MS: u64 = 30 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -124,6 +128,11 @@ fn now_millis() -> u64 {
 // Credential reading (platform-specific)
 // ---------------------------------------------------------------------------
 
+/// Sentinel error prefix returned when Claude Code is using env-var auth
+/// (CLAUDE_CODE_OAUTH_TOKEN) instead of keychain. The usage API requires
+/// full OAuth scopes that env-var tokens don't have.
+const ENV_AUTH_ERROR: &str = "ENV_AUTH:";
+
 #[cfg(target_os = "macos")]
 async fn read_credentials_platform() -> Result<CredentialFile, String> {
     // Claude Code stores credentials under $USER, not a fixed account name.
@@ -142,9 +151,14 @@ async fn read_credentials_platform() -> Result<CredentialFile, String> {
         .map_err(|e| format!("Failed to run security command: {e}"))?;
 
     if !output.status.success() {
-        return Err(
-            "Claude Code credentials not found in Keychain. Sign in to Claude Code first.".into(),
-        );
+        // No keychain entry — check if they're using env-var auth instead.
+        if std::env::var("CLAUDE_CODE_OAUTH_TOKEN").is_ok() {
+            return Err(format!(
+                "{ENV_AUTH_ERROR}Claude Code is using environment variable authentication. \
+                 Usage tracking requires a standard login. Run 'claude auth login' to enable."
+            ));
+        }
+        return Err("Claude Code credentials not found. Sign in with 'claude auth login'.".into());
     }
 
     let json = String::from_utf8(output.stdout)
@@ -161,6 +175,12 @@ async fn read_credentials_platform() -> Result<CredentialFile, String> {
         .join(".credentials.json");
 
     let content = tokio::fs::read_to_string(&path).await.map_err(|e| {
+        if std::env::var("CLAUDE_CODE_OAUTH_TOKEN").is_ok() {
+            return format!(
+                "{ENV_AUTH_ERROR}Claude Code is using environment variable authentication. \
+                 Usage tracking requires a standard login. Run 'claude auth login' to enable."
+            );
+        }
         format!(
             "Failed to read Claude Code credentials at {}: {e}",
             path.display()
@@ -344,20 +364,24 @@ async fn resolve_token(
 // Public API
 // ---------------------------------------------------------------------------
 
-pub async fn get_usage(
-    cache: &RwLock<Option<UsageCacheEntry>>,
-    force: bool,
-) -> Result<ClaudeCodeUsage, String> {
+pub async fn get_usage(cache: &RwLock<Option<UsageCacheEntry>>) -> Result<ClaudeCodeUsage, String> {
     let now = now_millis();
 
-    // Return cached usage if it's fresh enough (< 60s old), unless forced.
-    if !force {
+    // Return cached usage if within TTL (30 minutes).
+    // Also respect the TTL when we have NO cached data — this prevents
+    // hammering the API after a 429 when there's no stale data to return.
+    {
         let cached = cache.read().await;
         if let Some(entry) = cached.as_ref()
-            && let Some(ref usage) = entry.last_usage
+            && entry.last_usage_fetched_at > 0
             && now - entry.last_usage_fetched_at < USAGE_CACHE_TTL_MS
         {
-            return Ok(usage.clone());
+            if let Some(ref usage) = entry.last_usage {
+                return Ok(usage.clone());
+            }
+            // We attempted a fetch recently but got no data (e.g. 429).
+            // Don't retry yet — respect the backoff.
+            return Err("Usage data temporarily unavailable. Try again later.".into());
         }
     }
 
@@ -371,7 +395,6 @@ pub async fn get_usage(
                 usage: usage_data,
                 fetched_at: now,
             };
-            // Cache the result.
             let mut w = cache.write().await;
             if let Some(entry) = w.as_mut() {
                 entry.last_usage = Some(result.clone());
@@ -380,6 +403,17 @@ pub async fn get_usage(
             Ok(result)
         }
         Err(e) => {
+            // On 429 (rate limited), return stale cached data if available.
+            // Either way, stamp the fetch time so we don't retry for 30 min.
+            if e.contains("429") {
+                let mut w = cache.write().await;
+                if let Some(entry) = w.as_mut() {
+                    entry.last_usage_fetched_at = now;
+                    if let Some(ref usage) = entry.last_usage {
+                        return Ok(usage.clone());
+                    }
+                }
+            }
             // On 401, invalidate cache so next call re-resolves the token.
             if e.contains("401") {
                 let mut w = cache.write().await;
@@ -597,32 +631,39 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let cache = make_cache_with_usage(now_millis());
 
-        let result = rt.block_on(get_usage(&cache, false)).unwrap();
+        let result = rt.block_on(get_usage(&cache)).unwrap();
         assert_eq!(result.subscription_type.as_deref(), Some("max"));
     }
 
     #[test]
-    fn cache_expires_after_ttl() {
+    fn stale_cache_triggers_refetch_but_falls_back() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        // Fetched > 60s ago.
+        // Fetched > TTL ago — cache is stale.
         let cache = make_cache_with_usage(now_millis() - USAGE_CACHE_TTL_MS - 1);
 
-        // Cache is stale — get_usage will try to fetch from the API.
-        // Without a real server it will fail, but the point is it doesn't
-        // return the stale cached data.
-        let result = rt.block_on(get_usage(&cache, false));
-        assert!(result.is_err());
+        // Cache is stale, so get_usage tries the API. Without a real server
+        // the fetch fails, but the error handler returns the stale cached
+        // data as a fallback (better than showing nothing).
+        let result = rt.block_on(get_usage(&cache));
+        assert!(result.is_ok());
     }
 
     #[test]
-    fn force_refresh_bypasses_cache() {
+    fn empty_cache_returns_error_on_failure() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        // Cache is fresh — but force=true should bypass it and hit the API.
-        let cache = make_cache_with_usage(now_millis());
+        // Cache with token but no usage data at all.
+        let cache = RwLock::new(Some(UsageCacheEntry {
+            access_token: "tok".into(),
+            refresh_token: "ref".into(),
+            token_expires_at: now_millis() + 3_600_000,
+            subscription_type: Some("max".into()),
+            rate_limit_tier: None,
+            last_usage: None,
+            last_usage_fetched_at: 0,
+        }));
 
-        // With force=true, it skips cache and tries to fetch from the API.
-        // Without a real server it will fail, proving it bypassed the cache.
-        let result = rt.block_on(get_usage(&cache, true));
+        // No stale data to fall back to — should return an error.
+        let result = rt.block_on(get_usage(&cache));
         assert!(result.is_err());
     }
 }

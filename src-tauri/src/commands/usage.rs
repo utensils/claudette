@@ -4,11 +4,8 @@ use crate::state::AppState;
 use crate::usage::{self, ClaudeCodeUsage};
 
 #[tauri::command]
-pub async fn get_claude_code_usage(
-    state: State<'_, AppState>,
-    force: Option<bool>,
-) -> Result<ClaudeCodeUsage, String> {
-    usage::get_usage(&state.usage_cache, force.unwrap_or(false)).await
+pub async fn get_claude_code_usage(state: State<'_, AppState>) -> Result<ClaudeCodeUsage, String> {
+    usage::get_usage(&state.usage_cache).await
 }
 
 #[tauri::command]

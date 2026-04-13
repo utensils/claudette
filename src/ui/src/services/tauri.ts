@@ -451,8 +451,8 @@ export function openWorkspaceInApp(appId: string, worktreePath: string): Promise
 
 // -- Usage --
 
-export function getClaudeCodeUsage(force?: boolean): Promise<ClaudeCodeUsage> {
-  return invoke("get_claude_code_usage", { force: force ?? null });
+export function getClaudeCodeUsage(): Promise<ClaudeCodeUsage> {
+  return invoke("get_claude_code_usage");
 }
 
 export function openUsageSettings(): Promise<void> {

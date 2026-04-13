@@ -341,11 +341,6 @@ pub async fn run_turn(
     {
         cmd.env_remove("ANTHROPIC_API_KEY");
     }
-    // Strip OAuth token env vars so the subprocess uses its own keychain
-    // auth rather than inheriting tokens from the parent environment.
-    cmd.env_remove("CLAUDE_CODE_OAUTH_TOKEN");
-    cmd.env_remove("CLAUDE_CODE_OAUTH_TOKEN_PRIMARY");
-    cmd.env_remove("CLAUDE_CODE_OAUTH_TOKEN_SECONDARY");
     cmd.env_remove("CLAUDECODE");
     cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
 
@@ -522,9 +517,6 @@ pub async fn generate_branch_name(
     {
         cmd.env_remove("ANTHROPIC_API_KEY");
     }
-    cmd.env_remove("CLAUDE_CODE_OAUTH_TOKEN");
-    cmd.env_remove("CLAUDE_CODE_OAUTH_TOKEN_PRIMARY");
-    cmd.env_remove("CLAUDE_CODE_OAUTH_TOKEN_SECONDARY");
     cmd.env_remove("CLAUDECODE");
     cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
 
