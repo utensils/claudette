@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
-use std::path::Path;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -308,6 +310,83 @@ pub fn build_claude_args(
     args
 }
 
+// ---------------------------------------------------------------------------
+// Claude CLI path resolution
+// ---------------------------------------------------------------------------
+
+/// Resolve the full path to the `claude` CLI binary.
+///
+/// GUI apps on macOS (and some Linux desktop environments) don't inherit the
+/// user's shell PATH, so a bare `Command::new("claude")` fails with ENOENT.
+/// We check well-known install locations first, then fall back to asking the
+/// user's login shell for its PATH (cached for the lifetime of the process).
+fn resolve_claude_path() -> OsString {
+    static RESOLVED: OnceLock<OsString> = OnceLock::new();
+    RESOLVED
+        .get_or_init(|| {
+            // 1. Well-known install locations.
+            if let Some(home) = dirs::home_dir() {
+                let candidates = [
+                    home.join(".local/bin/claude"),
+                    home.join(".claude/local/claude"),
+                ];
+                for p in &candidates {
+                    if p.is_file() {
+                        return p.clone().into_os_string();
+                    }
+                }
+            }
+
+            // System-wide locations (macOS + Linux).
+            let system_candidates = [
+                PathBuf::from("/usr/local/bin/claude"),
+                PathBuf::from("/opt/homebrew/bin/claude"), // macOS Homebrew
+            ];
+            for p in &system_candidates {
+                if p.is_file() {
+                    return p.clone().into_os_string();
+                }
+            }
+
+            // 2. Ask the login shell for its PATH and search there.
+            if let Some(shell_path) = login_shell_path() {
+                for dir in std::env::split_paths(&shell_path) {
+                    let candidate = dir.join("claude");
+                    if candidate.is_file() {
+                        return candidate.into_os_string();
+                    }
+                }
+            }
+
+            // 3. Last resort — bare name, will rely on the process PATH.
+            OsString::from("claude")
+        })
+        .clone()
+}
+
+/// Get the PATH as seen by the user's login shell.
+///
+/// Runs `$SHELL -l -c 'echo $PATH'` to pick up profile/rc files that
+/// desktop-launched apps don't source. Returns `None` on platforms where
+/// `$SHELL` isn't set (shouldn't happen on macOS/Linux in practice).
+fn login_shell_path() -> Option<OsString> {
+    let shell = std::env::var("SHELL").ok()?;
+    let output = std::process::Command::new(&shell)
+        .args(["-l", "-c", "echo $PATH"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if output.status.success() {
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !path.is_empty() {
+            return Some(OsString::from(path));
+        }
+    }
+    None
+}
+
 /// Run a single agent turn by spawning `claude -p` with the given prompt.
 ///
 /// For the first turn, uses `--session-id` to establish the session.
@@ -333,7 +412,7 @@ pub async fn run_turn(
         settings,
     );
 
-    let mut cmd = Command::new("claude");
+    let mut cmd = Command::new(resolve_claude_path());
     cmd.args(&args)
         .current_dir(working_dir)
         .stdin(std::process::Stdio::null())
@@ -488,7 +567,7 @@ pub async fn generate_branch_name(
     // Truncate prompt to keep the Haiku call fast and cheap.
     let truncated: String = prompt_text.chars().take(200).collect();
 
-    let mut cmd = Command::new("claude");
+    let mut cmd = Command::new(resolve_claude_path());
     cmd.stdin(std::process::Stdio::null());
     // Run in the user's worktree so the CLI loads *their* project context.
     cmd.current_dir(worktree_path);
