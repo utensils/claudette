@@ -1,4 +1,4 @@
-import { SlidersHorizontal, Cpu, Palette, Bell, GitBranch, FlaskConical } from "lucide-react";
+import { SlidersHorizontal, Cpu, Palette, Bell, GitBranch, FlaskConical, BarChart3 } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import { RepoIcon } from "../shared/RepoIcon";
 import styles from "./Settings.module.css";
@@ -20,6 +20,7 @@ export function SettingsSidebar() {
   const setSettingsSection = useAppStore((s) => s.setSettingsSection);
   const closeSettings = useAppStore((s) => s.closeSettings);
   const repositories = useAppStore((s) => s.repositories);
+  const usageInsightsEnabled = useAppStore((s) => s.usageInsightsEnabled);
 
   return (
     <div className={styles.sidebar}>
@@ -39,6 +40,18 @@ export function SettingsSidebar() {
           {s.label}
         </button>
       ))}
+
+      {usageInsightsEnabled && (
+        <button
+          className={
+            settingsSection === "usage" ? styles.navItemActive : styles.navItem
+          }
+          onClick={() => setSettingsSection("usage")}
+        >
+          <BarChart3 size={14} />
+          Usage
+        </button>
+      )}
 
       <div className={styles.groupLabel}>More</div>
       {MORE_SECTIONS.map((s) => (

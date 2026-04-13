@@ -266,16 +266,28 @@
   gap: 6px;
 }
 
-.notificationBadge {
-  color: var(--accent-primary);
-  font-size: 16px;
-  line-height: 1;
-  animation: pulse-badge 2s ease-in-out infinite;
+.badgeDone,
+.badgePlan,
+.badgeAsk {
   flex-shrink: 0;
+  display: inline-flex;
+  animation: pulse-badge 2s ease-in-out infinite;
 }
 
-.wsUnread {
-  font-weight: 600;
+.badgeDone {
+  color: var(--badge-done);
+}
+
+.badgePlan {
+  color: var(--badge-plan);
+}
+
+.badgeAsk {
+  color: var(--badge-ask);
+}
+
+.wsUnread .wsName {
+  font-weight: 700;
 }
 
 @keyframes pulse-badge {

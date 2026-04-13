@@ -8,9 +8,19 @@ use tokio::sync::RwLock;
 
 use crate::commands::apps::DetectedApp;
 use crate::remote::DiscoveredServer;
+use crate::usage::UsageCacheEntry;
 
 /// Re-export for use in tray module without direct tauri::tray import.
 pub type TrayIcon = tauri::tray::TrayIcon;
+
+/// What kind of attention the agent needs from the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttentionKind {
+    /// Agent asked a question (AskUserQuestion).
+    Ask,
+    /// Agent wants plan approval (ExitPlanMode).
+    Plan,
+}
 
 /// Per-workspace agent session state managed on the Rust side.
 pub struct AgentSessionState {
@@ -22,6 +32,8 @@ pub struct AgentSessionState {
     pub custom_instructions: Option<String>,
     /// True when the agent is waiting for user input (question, plan approval, permissions).
     pub needs_attention: bool,
+    /// What kind of input the agent needs, if any.
+    pub attention_kind: Option<AttentionKind>,
 }
 
 /// Handle to an active PTY process.
@@ -81,6 +93,8 @@ pub struct AppState {
     pub detected_apps: RwLock<Vec<DetectedApp>>,
     /// System tray icon handle (None when tray is disabled).
     pub tray_handle: Mutex<Option<TrayIcon>>,
+    /// Cached Claude Code OAuth token and usage data.
+    pub usage_cache: RwLock<Option<UsageCacheEntry>>,
 }
 
 impl AppState {
@@ -95,6 +109,7 @@ impl AppState {
             local_server: RwLock::new(None),
             detected_apps: RwLock::new(Vec::new()),
             tray_handle: Mutex::new(None),
+            usage_cache: RwLock::new(None),
         }
     }
 

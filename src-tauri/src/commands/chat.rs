@@ -115,6 +115,7 @@ pub async fn send_chat_message(
                 active_pid: None,
                 custom_instructions: instructions.clone(),
                 needs_attention: false,
+                attention_kind: None,
             };
         }
 
@@ -124,6 +125,7 @@ pub async fn send_chat_message(
             active_pid: None,
             custom_instructions: instructions,
             needs_attention: false,
+            attention_kind: None,
         }
     });
 
@@ -147,6 +149,7 @@ pub async fn send_chat_message(
     let custom_instructions = session.custom_instructions.clone();
     session.turn_count += 1;
     session.needs_attention = false;
+    session.attention_kind = None;
 
     // Build agent settings from frontend params.
     let agent_settings = AgentSettings {
@@ -240,7 +243,9 @@ pub async fn send_chat_message(
         // be attached to the next text-bearing assistant message. The CLI
         // may fire a thinking-only event followed by a text-only event.
         let mut pending_thinking: Option<String> = None;
+        let mut pending_attention_notify: bool;
         while let Some(event) = rx.recv().await {
+            pending_attention_notify = false;
             // Track whether the CLI initialized successfully.
             if let AgentEvent::Stream(StreamEvent::System { subtype, .. }) = &event
                 && subtype == "init"
@@ -249,6 +254,9 @@ pub async fn send_chat_message(
             }
 
             // Detect tool calls that require user input (question, plan approval).
+            // Capture whether we need to notify — the actual notification is
+            // deferred until after the event is emitted to the frontend so the
+            // UI updates before the system notification appears.
             if let AgentEvent::Stream(StreamEvent::Stream {
                 event:
                     InnerStreamEvent::ContentBlockStart {
@@ -258,13 +266,24 @@ pub async fn send_chat_message(
             }) = &event
                 && matches!(name.as_str(), "AskUserQuestion" | "ExitPlanMode")
             {
+                let kind = if name == "AskUserQuestion" {
+                    crate::state::AttentionKind::Ask
+                } else {
+                    crate::state::AttentionKind::Plan
+                };
                 let app_state = app.state::<AppState>();
                 let mut agents = app_state.agents.write().await;
+                let already_notified = agents.get(&ws_id).is_some_and(|s| s.needs_attention);
                 if let Some(session) = agents.get_mut(&ws_id) {
                     session.needs_attention = true;
+                    session.attention_kind = Some(kind);
                 }
                 drop(agents);
-                crate::tray::notify_attention(&app, &ws_id);
+                // Only send notification once per attention cycle — skip if
+                // we already notified the user about this workspace.
+                if !already_notified {
+                    pending_attention_notify = true;
+                }
             }
 
             if let AgentEvent::ProcessExited(_code) = &event {
@@ -476,6 +495,14 @@ pub async fn send_chat_message(
                 event,
             };
             let _ = app.emit("agent-stream", &payload);
+
+            // Send attention notification AFTER emitting the event to the
+            // frontend — this gives the UI time to update before the system
+            // notification / sound fires, so the badge is already visible
+            // when the user sees the notification.
+            if pending_attention_notify {
+                crate::tray::notify_attention(&app, &ws_id);
+            }
         }
     });
 

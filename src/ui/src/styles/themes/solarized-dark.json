@@ -43,6 +43,9 @@
     "shadow-sm": "0 1px 2px rgba(0, 0, 0, 0.3)",
     "shadow-md": "0 4px 12px rgba(0, 0, 0, 0.4)",
     "shadow-lg": "0 8px 24px rgba(0, 0, 0, 0.5)",
-    "shadow-card-hover": "0 8px 24px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(42, 161, 152, 0.2)"
+    "shadow-card-hover": "0 8px 24px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(42, 161, 152, 0.2)",
+    "badge-done": "#2aa198",
+    "badge-plan": "#268bd2",
+    "badge-ask": "#b58900"
   }
 }

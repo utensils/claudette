@@ -17,6 +17,7 @@ import type {
   PairResult,
 } from "../types/remote";
 import type { DetectedApp } from "../types/apps";
+import type { ClaudeCodeUsage } from "../types/usage";
 
 // -- Data --
 
@@ -448,6 +449,16 @@ export function detectInstalledApps(): Promise<DetectedApp[]> {
 
 export function openWorkspaceInApp(appId: string, worktreePath: string): Promise<void> {
   return invoke("open_workspace_in_app", { appId, worktreePath });
+}
+
+// -- Usage --
+
+export function getClaudeCodeUsage(): Promise<ClaudeCodeUsage> {
+  return invoke("get_claude_code_usage");
+}
+
+export function openUsageSettings(): Promise<void> {
+  return invoke("open_usage_settings");
 }
 
 // -- Debug (dev builds only) --

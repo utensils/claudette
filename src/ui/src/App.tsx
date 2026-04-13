@@ -20,6 +20,7 @@ function App() {
   const setLocalServerConnectionString = useAppStore((s) => s.setLocalServerConnectionString);
   const setCurrentThemeId = useAppStore((s) => s.setCurrentThemeId);
   const setDetectedApps = useAppStore((s) => s.setDetectedApps);
+  const setUsageInsightsEnabled = useAppStore((s) => s.setUsageInsightsEnabled);
 
   useEffect(() => {
     loadInitialData().then((data) => {
@@ -77,6 +78,10 @@ function App() {
     detectInstalledApps()
       .then(setDetectedApps)
       .catch((err) => console.error("Failed to detect installed apps:", err));
+
+    getAppSetting("usage_insights_enabled")
+      .then((val) => { if (val === "true") setUsageInsightsEnabled(true); })
+      .catch(() => {});
 
     // Listen for terminal command events
     const setupCommandListeners = async () => {
@@ -153,7 +158,7 @@ function App() {
       unlistenTray.then((fn) => fn());
       unlistenSettings.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setDetectedApps]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setDetectedApps, setUsageInsightsEnabled]);
 
   return <AppLayout />;
 }

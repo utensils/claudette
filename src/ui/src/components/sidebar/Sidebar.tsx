@@ -14,7 +14,7 @@ import {
   pairWithServer,
   startLocalServer,
 } from "../../services/tauri";
-import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2 } from "lucide-react";
+import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, BadgeCheck, BadgeInfo, BadgeQuestionMark, Cog } from "lucide-react";
 import { RepoIcon } from "../shared/RepoIcon";
 import styles from "./Sidebar.module.css";
 
@@ -34,6 +34,8 @@ export const Sidebar = memo(function Sidebar() {
   const openSettings = useAppStore((s) => s.openSettings);
   const updateWorkspace = useAppStore((s) => s.updateWorkspace);
   const unreadCompletions = useAppStore((s) => s.unreadCompletions);
+  const agentQuestions = useAppStore((s) => s.agentQuestions);
+  const planApprovals = useAppStore((s) => s.planApprovals);
   const setRepositories = useAppStore((s) => s.setRepositories);
   const metaKeyHeld = useAppStore((s) => s.metaKeyHeld);
   const isMac = navigator.platform.startsWith("Mac");
@@ -45,7 +47,6 @@ export const Sidebar = memo(function Sidebar() {
   const dragStartPos = useRef<{ x: number; y: number; id: string; pointerId: number } | null>(null);
   const didDragRef = useRef(false);
   const DRAG_THRESHOLD = 5; // px before drag activates
-  const clearUnreadCompletion = useAppStore((s) => s.clearUnreadCompletion);
   const workspaceTerminalCommands = useAppStore((s) => s.workspaceTerminalCommands);
 
   const creatingRef = useRef(false);
@@ -330,33 +331,47 @@ export const Sidebar = memo(function Sidebar() {
 
               {!collapsed &&
                 repoWorkspaces.map((ws) => {
-                  const hasUnread = unreadCompletions.has(ws.id);
+                  const badge: "ask" | "plan" | "done" | null =
+                    agentQuestions[ws.id] ? "ask" :
+                    planApprovals[ws.id] ? "plan" :
+                    unreadCompletions.has(ws.id) && ws.agent_status !== "Running" ? "done" :
+                    null;
                   return (
                   <div
                     key={ws.id}
-                    className={`${styles.wsItem} ${selectedWorkspaceId === ws.id ? styles.wsSelected : ""} ${hasUnread ? styles.wsUnread : ""}`}
+                    className={`${styles.wsItem} ${selectedWorkspaceId === ws.id ? styles.wsSelected : ""} ${badge ? styles.wsUnread : ""}`}
                     onClick={() => {
                       selectWorkspace(ws.id);
-                      if (hasUnread) {
-                        clearUnreadCompletion(ws.id);
-                      }
                     }}
                   >
-                    <span
-                      className={`${styles.statusDot} ${ws.agent_status === "Running" ? styles.statusDotRunning : ""}`}
-                      style={{
-                        background:
-                          ws.agent_status === "Running"
-                            ? "var(--status-running)"
-                            : ws.agent_status === "Stopped"
-                              ? "var(--status-stopped)"
-                              : "var(--status-idle)",
-                      }}
-                    />
+                    {badge === "done" ? (
+                      <span className={styles.badgeDone} title="Completed" aria-label="Completed" role="img">
+                        <BadgeCheck size={14} />
+                      </span>
+                    ) : badge === "plan" ? (
+                      <span className={styles.badgePlan} title="Plan approval needed" aria-label="Plan approval needed" role="img">
+                        <BadgeInfo size={14} />
+                      </span>
+                    ) : badge === "ask" ? (
+                      <span className={styles.badgeAsk} title="Question requires attention" aria-label="Question requires attention" role="img">
+                        <BadgeQuestionMark size={14} />
+                      </span>
+                    ) : (
+                      <span
+                        className={`${styles.statusDot} ${ws.agent_status === "Running" ? styles.statusDotRunning : ""}`}
+                        style={{
+                          background:
+                            ws.agent_status === "Running"
+                              ? "var(--status-running)"
+                              : ws.agent_status === "Stopped"
+                                ? "var(--status-stopped)"
+                                : "var(--status-idle)",
+                        }}
+                      />
+                    )}
                     <div className={styles.wsInfo}>
                       <span className={styles.wsName}>
                         {ws.name}
-                        {hasUnread && <span className={styles.notificationBadge}>●</span>}
                       </span>
                       <span className={styles.wsBranch}>{ws.branch_name}</span>
                       {(() => {
@@ -371,7 +386,9 @@ export const Sidebar = memo(function Sidebar() {
                         return (
                           <div className={styles.terminalCommand}>
                             {commandState.isRunning ? (
-                              <span className={styles.runningIcon} title="Running">⚙️</span>
+                              <span title="Running" aria-label="Running">
+                                <Cog size={12} className={styles.runningIcon} />
+                              </span>
                             ) : commandState.exitCode === 0 ? (
                               <span className={styles.successIcon} title="Exited successfully">✓</span>
                             ) : commandState.exitCode !== null ? (

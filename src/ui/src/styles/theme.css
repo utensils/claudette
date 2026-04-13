@@ -34,6 +34,11 @@
   --status-idle: rgb(110, 110, 120);
   --status-stopped: #f04848;
 
+  /* Attention badges */
+  --badge-done: #00e5cc;
+  --badge-plan: rgb(100, 160, 240);
+  --badge-ask: #f0a050;
+
   /* Diff */
   --diff-added-bg: rgba(0, 180, 80, 0.12);
   --diff-removed-bg: rgba(220, 40, 40, 0.12);

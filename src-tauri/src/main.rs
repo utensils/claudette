@@ -9,6 +9,7 @@ mod remote;
 mod state;
 mod transport;
 mod tray;
+mod usage;
 
 use std::path::PathBuf;
 
@@ -194,6 +195,10 @@ fn main() {
             #[cfg(debug_assertions)]
             commands::debug::start_debug_server(app.handle().clone());
 
+            // Pre-warm the Claude Code User-Agent cache on a std thread
+            // (tokio runtime may not be available during setup).
+            std::thread::spawn(usage::warm_user_agent_cache_sync);
+
             // Set up the system tray icon (respects tray_enabled setting).
             if let Err(e) = tray::setup_tray(app.handle()) {
                 eprintln!("[tray] Failed to setup tray: {e}");
@@ -304,6 +309,9 @@ fn main() {
             commands::remote::list_discovered_servers,
             commands::remote::add_remote_connection,
             commands::remote::send_remote_command,
+            // Usage
+            commands::usage::get_claude_code_usage,
+            commands::usage::open_usage_settings,
             // Local server
             commands::remote::start_local_server,
             commands::remote::stop_local_server,
