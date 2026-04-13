@@ -100,8 +100,8 @@ pub struct UsageCacheEntry {
     pub last_usage_fetched_at: u64,
 }
 
-/// Cache TTL for successful usage data (30 minutes).
-const USAGE_CACHE_TTL_MS: u64 = 30 * 60 * 1000;
+/// Cache TTL for successful usage data (5 minutes).
+const USAGE_CACHE_TTL_MS: u64 = 5 * 60 * 1000;
 
 /// Backoff after a failed fetch (2 minutes). Short enough to recover
 /// quickly once a rate limit clears, long enough to avoid hammering.
@@ -124,27 +124,34 @@ fn now_millis() -> u64 {
         .as_millis() as u64
 }
 
-/// Detect the installed Claude Code version by running `claude --version`.
-/// Returns a User-Agent string like `claude-code/2.1.104`.
-/// Cached after first call via `std::sync::OnceLock`.
+/// Cached Claude Code User-Agent string (e.g. `claude-code/2.1.104`).
+/// Pre-warmed at app startup via `warm_user_agent_cache()` so the first
+/// usage API call doesn't block the async runtime with a sync subprocess.
+static USER_AGENT_CACHE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Pre-warm the User-Agent cache at startup. Call from `setup()` via
+/// `tokio::spawn` so it runs off the main thread.
+pub async fn warm_user_agent_cache() {
+    let output = tokio::process::Command::new("claude")
+        .arg("--version")
+        .output()
+        .await;
+    let ua = match output {
+        Ok(o) if o.status.success() => {
+            let raw = String::from_utf8_lossy(&o.stdout);
+            let version = raw.split_whitespace().next().unwrap_or("0.0.0");
+            format!("claude-code/{version}")
+        }
+        _ => "claude-code/0.0.0".to_string(),
+    };
+    let _ = USER_AGENT_CACHE.set(ua);
+}
+
 fn claude_code_user_agent() -> String {
-    static CACHED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    CACHED
-        .get_or_init(|| {
-            let output = std::process::Command::new("claude")
-                .arg("--version")
-                .output();
-            match output {
-                Ok(o) if o.status.success() => {
-                    let raw = String::from_utf8_lossy(&o.stdout);
-                    // Output is like "2.1.104 (Claude Code)"
-                    let version = raw.split_whitespace().next().unwrap_or("0.0.0");
-                    format!("claude-code/{version}")
-                }
-                _ => "claude-code/0.0.0".to_string(),
-            }
-        })
-        .clone()
+    USER_AGENT_CACHE
+        .get()
+        .cloned()
+        .unwrap_or_else(|| "claude-code/0.0.0".to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -429,21 +436,22 @@ pub async fn get_usage(cache: &RwLock<Option<UsageCacheEntry>>) -> Result<Claude
             Ok(result)
         }
         Err(e) => {
-            // On 429 (rate limited), return stale cached data if available.
-            // Either way, stamp the fetch time so we don't retry for 30 min.
-            if e.contains("429") {
-                let mut w = cache.write().await;
-                if let Some(entry) = w.as_mut() {
-                    entry.last_usage_fetched_at = now;
-                    if let Some(ref usage) = entry.last_usage {
-                        return Ok(usage.clone());
-                    }
-                }
-            }
-            // On 401, invalidate cache so next call re-resolves the token.
+            // On 401, invalidate token cache so next call re-resolves.
             if e.contains("401") {
                 let mut w = cache.write().await;
                 *w = None;
+                return Err(e);
+            }
+
+            // For all other errors (429, 5xx, timeout, network):
+            // 1. Stamp fetch time so error backoff prevents hammering
+            // 2. Return stale cached data if available (better than blank)
+            let mut w = cache.write().await;
+            if let Some(entry) = w.as_mut() {
+                entry.last_usage_fetched_at = now;
+                if let Some(ref usage) = entry.last_usage {
+                    return Ok(usage.clone());
+                }
             }
             Err(e)
         }
@@ -704,7 +712,7 @@ mod tests {
             subscription_type: Some("max".into()),
             rate_limit_tier: None,
             last_usage: None,
-            // Fetched 3 minutes ago — past error backoff (2min) but within success TTL (30min).
+            // Fetched 3 minutes ago — past error backoff (2min) but within success TTL (5min).
             last_usage_fetched_at: now_millis() - 3 * 60 * 1000,
         }));
 

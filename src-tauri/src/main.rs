@@ -195,6 +195,9 @@ fn main() {
             #[cfg(debug_assertions)]
             commands::debug::start_debug_server(app.handle().clone());
 
+            // Pre-warm the Claude Code User-Agent cache (async, non-blocking).
+            tokio::spawn(usage::warm_user_agent_cache());
+
             // Set up the system tray icon (respects tray_enabled setting).
             if let Err(e) = tray::setup_tray(app.handle()) {
                 eprintln!("[tray] Failed to setup tray: {e}");
