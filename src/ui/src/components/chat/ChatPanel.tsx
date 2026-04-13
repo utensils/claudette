@@ -489,6 +489,7 @@ export function ChatPanel() {
       thinking: null,
     });
     updateWorkspace(selectedWorkspaceId, { agent_status: "Running" });
+    useAppStore.getState().clearUnreadCompletion(selectedWorkspaceId);
 
     try {
       if (ws?.remote_connection_id) {
