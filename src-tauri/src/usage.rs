@@ -221,11 +221,20 @@ async fn read_credentials_platform() -> Result<CredentialFile, String> {
 }
 
 // ---------------------------------------------------------------------------
+// Shared HTTP client (reuse connections across requests)
+// ---------------------------------------------------------------------------
+
+fn http_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(reqwest::Client::new)
+}
+
+// ---------------------------------------------------------------------------
 // Token refresh
 // ---------------------------------------------------------------------------
 
 async fn refresh_token(refresh_token: &str) -> Result<TokenRefreshResponse, String> {
-    let client = reqwest::Client::new();
+    let client = http_client();
     let resp = client
         .post(TOKEN_URL)
         .json(&serde_json::json!({
@@ -255,7 +264,7 @@ async fn refresh_token(refresh_token: &str) -> Result<TokenRefreshResponse, Stri
 // ---------------------------------------------------------------------------
 
 async fn fetch_usage(access_token: &str) -> Result<UsageData, String> {
-    let client = reqwest::Client::new();
+    let client = http_client();
     let resp = client
         .get(USAGE_URL)
         .header("Authorization", format!("Bearer {access_token}"))
@@ -413,7 +422,7 @@ pub async fn get_usage(cache: &RwLock<Option<UsageCacheEntry>>) -> Result<Claude
         if let Some(entry) = cached.as_ref()
             && entry.last_usage_fetched_at > 0
         {
-            let age = now - entry.last_usage_fetched_at;
+            let age = now.saturating_sub(entry.last_usage_fetched_at);
             if let Some(ref usage) = entry.last_usage {
                 // Have data — use success TTL (5 minutes).
                 if age < USAGE_CACHE_TTL_MS {
