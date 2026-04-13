@@ -59,7 +59,7 @@ async fn run_git(path: &str, args: &[&str]) -> Result<String, DiffError> {
 
 /// Get the merge base between two refs.
 pub async fn merge_base(repo_path: &str, branch: &str, base: &str) -> Result<String, DiffError> {
-    run_git(repo_path, &["merge-base", base, branch]).await
+    run_git(repo_path, &["merge-base", "--", base, branch]).await
 }
 
 /// List all changed files between merge base and current working tree.

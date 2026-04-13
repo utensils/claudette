@@ -161,7 +161,11 @@ pub async fn restore_worktree(
     branch_name: &str,
     worktree_path: &str,
 ) -> Result<String, GitError> {
-    run_git(repo_path, &["worktree", "add", worktree_path, branch_name]).await?;
+    run_git(
+        repo_path,
+        &["worktree", "add", worktree_path, "--", branch_name],
+    )
+    .await?;
     let abs_path = std::path::Path::new(worktree_path)
         .canonicalize()
         .map_err(|e| GitError::CommandFailed(e.to_string()))?;
@@ -206,10 +210,13 @@ pub async fn has_unmerged_commits(
 /// Delete a branch. Tries safe `-d` first; falls back to force `-D`
 /// if `-d` fails.
 pub async fn branch_delete(repo_path: &str, branch: &str) -> Result<(), GitError> {
-    if run_git(repo_path, &["branch", "-d", branch]).await.is_ok() {
+    if run_git(repo_path, &["branch", "-d", "--", branch])
+        .await
+        .is_ok()
+    {
         return Ok(());
     }
-    run_git(repo_path, &["branch", "-D", branch]).await?;
+    run_git(repo_path, &["branch", "-D", "--", branch]).await?;
     Ok(())
 }
 
@@ -250,7 +257,7 @@ pub async fn restore_to_commit(worktree_path: &str, commit_hash: &str) -> Result
 /// `path` can be a repo root or a worktree — when the branch is checked
 /// out in a linked worktree, pass the worktree path to avoid errors.
 pub async fn rename_branch(path: &str, old_name: &str, new_name: &str) -> Result<(), GitError> {
-    run_git(path, &["branch", "-m", old_name, new_name]).await?;
+    run_git(path, &["branch", "-m", "--", old_name, new_name]).await?;
     Ok(())
 }
 
