@@ -179,7 +179,7 @@ async fn parse_claude_code_project_mcps(
     config_path: &Path,
     repo_path: &Path,
 ) -> Result<Vec<McpServer>, String> {
-    if !config_path.exists() {
+    if !tokio::fs::try_exists(config_path).await.unwrap_or(false) {
         return Ok(Vec::new());
     }
 
@@ -234,9 +234,12 @@ async fn parse_claude_code_project_mcps(
 }
 
 /// Parse a single .claude.json or .mcp.json file
-async fn parse_mcp_config(path: &Path, scope: McpScope) -> Result<Vec<McpServer>, String> {
+///
+/// This is a public function that can be used by other modules to read MCP
+/// configurations from .claude.json files.
+pub async fn parse_mcp_config(path: &Path, scope: McpScope) -> Result<Vec<McpServer>, String> {
     // Missing files are not errors
-    if !path.exists() {
+    if !tokio::fs::try_exists(path).await.unwrap_or(false) {
         return Ok(Vec::new());
     }
 
@@ -286,7 +289,7 @@ pub async fn write_workspace_mcp_config(
     let config_path = worktree_path.join(".claude.json");
 
     // Read existing config or create new one
-    let mut config: ClaudeConfig = if config_path.exists() {
+    let mut config: ClaudeConfig = if tokio::fs::try_exists(&config_path).await.unwrap_or(false) {
         let content = fs::read_to_string(&config_path)
             .await
             .map_err(|e| format!("Failed to read existing .claude.json: {}", e))?;
