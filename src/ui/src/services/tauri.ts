@@ -180,6 +180,7 @@ export function sendChatMessage(
   thinkingEnabled?: boolean,
   planMode?: boolean,
   effort?: string,
+  chromeEnabled?: boolean,
 ): Promise<void> {
   return invoke("send_chat_message", {
     workspaceId,
@@ -191,6 +192,7 @@ export function sendChatMessage(
     thinkingEnabled: thinkingEnabled ?? null,
     planMode: planMode ?? null,
     effort: effort ?? null,
+    chromeEnabled: chromeEnabled ?? null,
   });
 }
 

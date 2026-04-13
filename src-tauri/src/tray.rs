@@ -301,8 +301,12 @@ fn build_tray_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
             let session = agents.get(&ws.id);
             let is_running = session.is_some_and(|s| s.active_pid.is_some());
             let needs_input = session.is_some_and(|s| s.needs_attention);
+            let attention_kind = session.and_then(|s| s.attention_kind);
             let status = if needs_input {
-                "⚠ Needs Input"
+                match attention_kind {
+                    Some(crate::state::AttentionKind::Plan) => "ℹ️ Needs Input",
+                    _ => "❓ Needs Input",
+                }
             } else if is_running {
                 "● Running"
             } else {
@@ -423,6 +427,11 @@ mod tests {
             active_pid: pid,
             custom_instructions: None,
             needs_attention: attention,
+            attention_kind: if attention {
+                Some(crate::state::AttentionKind::Ask)
+            } else {
+                None
+            },
         }
     }
 

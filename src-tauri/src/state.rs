@@ -13,6 +13,15 @@ use crate::usage::UsageCacheEntry;
 /// Re-export for use in tray module without direct tauri::tray import.
 pub type TrayIcon = tauri::tray::TrayIcon;
 
+/// What kind of attention the agent needs from the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttentionKind {
+    /// Agent asked a question (AskUserQuestion).
+    Ask,
+    /// Agent wants plan approval (ExitPlanMode).
+    Plan,
+}
+
 /// Per-workspace agent session state managed on the Rust side.
 pub struct AgentSessionState {
     pub session_id: String,
@@ -23,6 +32,8 @@ pub struct AgentSessionState {
     pub custom_instructions: Option<String>,
     /// True when the agent is waiting for user input (question, plan approval, permissions).
     pub needs_attention: bool,
+    /// What kind of input the agent needs, if any.
+    pub attention_kind: Option<AttentionKind>,
 }
 
 /// Handle to an active PTY process.
