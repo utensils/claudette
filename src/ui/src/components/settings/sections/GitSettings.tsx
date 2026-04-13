@@ -139,8 +139,7 @@ export function GitSettings() {
               className={styles.settingDescription}
               style={{ color: "var(--status-stopped)", marginTop: 4 }}
             >
-              The branch will be permanently deleted, including any unmerged
-              commits
+              The branch will be permanently deleted, including any unmerged commits.
             </div>
           )}
         </div>
