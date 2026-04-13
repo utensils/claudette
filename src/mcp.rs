@@ -187,9 +187,8 @@ async fn parse_claude_code_project_mcps(
         .await
         .map_err(|e| format!("Failed to read {}: {}", config_path.display(), e))?;
 
-    let config: ClaudeCodeConfig = serde_json::from_str(&content).map_err(|e| {
-        format!("Malformed JSON in {}: {}", config_path.display(), e)
-    })?;
+    let config: ClaudeCodeConfig = serde_json::from_str(&content)
+        .map_err(|e| format!("Malformed JSON in {}: {}", config_path.display(), e))?;
 
     // Look for project-specific MCPs using the repo path as key
     let repo_path_str = repo_path.to_string_lossy().to_string();
@@ -247,13 +246,8 @@ pub async fn parse_mcp_config(path: &Path, scope: McpScope) -> Result<Vec<McpSer
         .await
         .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
 
-    let config: ClaudeConfig = serde_json::from_str(&content).map_err(|e| {
-        format!(
-            "Malformed JSON in {}: {}",
-            path.display(),
-            e
-        )
-    })?;
+    let config: ClaudeConfig = serde_json::from_str(&content)
+        .map_err(|e| format!("Malformed JSON in {}: {}", path.display(), e))?;
 
     let Some(mcp_servers) = config.mcp_servers else {
         // No mcpServers section is valid
@@ -294,9 +288,8 @@ pub async fn write_workspace_mcp_config(
             .await
             .map_err(|e| format!("Failed to read existing .claude.json: {}", e))?;
 
-        serde_json::from_str(&content).map_err(|e| {
-            format!("Existing .claude.json is malformed: {}", e)
-        })?
+        serde_json::from_str(&content)
+            .map_err(|e| format!("Existing .claude.json is malformed: {}", e))?
     } else {
         ClaudeConfig {
             mcp_servers: None,
@@ -420,9 +413,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join(".claude.json");
 
-        fs::write(&config_path, "{ invalid json }")
-            .await
-            .unwrap();
+        fs::write(&config_path, "{ invalid json }").await.unwrap();
 
         let result = parse_mcp_config(&config_path, McpScope::User).await;
         assert!(result.is_err());
@@ -494,10 +485,7 @@ mod tests {
         let content = fs::read_to_string(&config_path).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
 
-        assert_eq!(
-            parsed["customInstructions"],
-            "Always use TypeScript"
-        );
+        assert_eq!(parsed["customInstructions"], "Always use TypeScript");
         assert!(parsed["mcpServers"]["new-server"].is_object());
         assert!(parsed["mcpServers"]["old-server"].is_null());
     }

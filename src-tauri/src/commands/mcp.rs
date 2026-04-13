@@ -2,8 +2,8 @@
 
 use claudette::db::Database;
 use claudette::mcp::{
-    detect_mcp_servers as detect_mcp, parse_mcp_config, write_workspace_mcp_config, McpScope,
-    McpServer,
+    McpScope, McpServer, detect_mcp_servers as detect_mcp, parse_mcp_config,
+    write_workspace_mcp_config,
 };
 use std::path::PathBuf;
 use tauri::State;
