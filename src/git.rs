@@ -203,51 +203,14 @@ pub async fn has_unmerged_commits(
     Ok(count > 0)
 }
 
-/// Delete a branch. Tries safe `-d` first. If that fails (unmerged commits),
-/// checks whether all unmerged commits are synthetic `[checkpoint]` commits.
-/// Force-deletes only in that case; otherwise preserves real user work.
+/// Delete a branch. Tries safe `-d` first; falls back to force `-D`
+/// if `-d` fails.
 pub async fn branch_delete(repo_path: &str, branch: &str) -> Result<(), GitError> {
-    // Try safe delete first.
     if run_git(repo_path, &["branch", "-d", branch]).await.is_ok() {
         return Ok(());
     }
-
-    // Safe delete failed — check if only checkpoint commits are unmerged.
-    if has_only_checkpoint_commits(repo_path, branch).await {
-        run_git(repo_path, &["branch", "-D", branch]).await?;
-        return Ok(());
-    }
-
-    // Real unmerged work exists — leave the branch intact.
-    Err(GitError::CommandFailed(
-        "Branch has unmerged commits".into(),
-    ))
-}
-
-/// Returns true if every commit on `branch` that is not reachable from the
-/// default branch has a message starting with `[checkpoint]`.
-async fn has_only_checkpoint_commits(repo_path: &str, branch: &str) -> bool {
-    // Determine the default branch to compare against.
-    let base = match default_branch(repo_path).await {
-        Ok(b) => b,
-        Err(_) => return false,
-    };
-
-    let log = match run_git(
-        repo_path,
-        &["log", "--format=%s", &format!("{base}..{branch}")],
-    )
-    .await
-    {
-        Ok(output) => output,
-        Err(_) => return false,
-    };
-
-    if log.trim().is_empty() {
-        return true; // no ahead commits at all
-    }
-
-    log.lines().all(|line| line.starts_with("[checkpoint]"))
+    run_git(repo_path, &["branch", "-D", branch]).await?;
+    Ok(())
 }
 
 /// Create a checkpoint commit in a worktree, staging all changes first.
@@ -425,7 +388,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_branch_delete_preserves_branch_with_real_commits() {
+    async fn test_branch_delete_force_deletes_branch_with_real_commits() {
         let dir = setup_temp_repo().await;
         let path = dir.path().to_str().unwrap();
 
@@ -445,15 +408,14 @@ mod tests {
             .unwrap();
         run_git(path, &["checkout", "main"]).await.unwrap();
 
-        // Branch has a real commit — should NOT force-delete.
-        let result = branch_delete(path, "ws-branch").await;
-        assert!(result.is_err());
+        // Branch has real commits — should still force-delete.
+        branch_delete(path, "ws-branch").await.unwrap();
 
-        // Confirm branch still exists.
+        // Confirm branch is gone.
         let branches = run_git(path, &["branch", "--list", "ws-branch"])
             .await
             .unwrap();
-        assert!(!branches.trim().is_empty());
+        assert!(branches.trim().is_empty());
     }
 
     #[tokio::test]

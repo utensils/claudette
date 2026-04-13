@@ -30,7 +30,7 @@ export function DeleteWorkspaceModal() {
     <Modal title="Delete Workspace" onClose={closeModal}>
       <div className={shared.warning}>
         Are you sure you want to delete <strong>{wsName}</strong>? The branch
-        will be kept if it has unmerged commits.
+        and any unmerged commits will be permanently deleted.
       </div>
       {error && <div className={shared.error}>{error}</div>}
       <div className={shared.actions}>
