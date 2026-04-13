@@ -70,6 +70,36 @@ struct ClaudeConfig {
     other: HashMap<String, serde_json::Value>,
 }
 
+/// Structure for parsing Claude Code's ~/.claude.json with nested project configs
+#[derive(Debug, Deserialize)]
+struct ClaudeCodeConfig {
+    #[serde(default)]
+    projects: HashMap<String, ProjectConfig>,
+
+    #[serde(flatten)]
+    _other: HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProjectConfig {
+    #[serde(default, rename = "mcpServers")]
+    mcp_servers: Option<HashMap<String, McpServerConfigNested>>,
+
+    #[serde(flatten)]
+    _other: HashMap<String, serde_json::Value>,
+}
+
+/// Nested MCP config format (used in Claude Code's project-specific configs)
+/// This is slightly different from the standard format - it doesn't have a "type" field
+#[derive(Debug, Deserialize)]
+struct McpServerConfigNested {
+    command: Option<String>,
+    args: Option<Vec<String>>,
+    env: Option<HashMap<String, String>>,
+    url: Option<String>,
+    headers: Option<HashMap<String, String>>,
+}
+
 /// Detect all MCP servers from user, project, and local scopes.
 ///
 /// Precedence order (highest to lowest):
@@ -88,12 +118,22 @@ pub async fn detect_mcp_servers(repo_path: &Path) -> Result<Vec<McpServer>, Stri
     let mut seen_names = HashMap::new();
 
     // 1. Read user scope (~/.claude.json)
+    // First try to read project-specific MCP servers from Claude Code's nested format
     if let Some(home_dir) = dirs::home_dir() {
         let user_config_path = home_dir.join(".claude.json");
-        if let Ok(servers) = parse_mcp_config(&user_config_path, McpScope::User).await {
+        if let Ok(servers) = parse_claude_code_project_mcps(&user_config_path, repo_path).await {
             for server in servers {
                 seen_names.insert(server.name.clone(), server.scope);
                 all_servers.push(server);
+            }
+        }
+        // Also try to read from top-level mcpServers (standard format)
+        if let Ok(servers) = parse_mcp_config(&user_config_path, McpScope::User).await {
+            for server in servers {
+                if !seen_names.contains_key(&server.name) {
+                    seen_names.insert(server.name.clone(), server.scope);
+                    all_servers.push(server);
+                }
             }
         }
     }
@@ -131,6 +171,66 @@ pub async fn detect_mcp_servers(repo_path: &Path) -> Result<Vec<McpServer>, Stri
     }
 
     Ok(all_servers)
+}
+
+/// Parse Claude Code's project-specific MCP servers from ~/.claude.json
+/// Claude Code stores per-project MCPs in: .projects["/path/to/repo"].mcpServers
+async fn parse_claude_code_project_mcps(
+    config_path: &Path,
+    repo_path: &Path,
+) -> Result<Vec<McpServer>, String> {
+    if !config_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = fs::read_to_string(config_path)
+        .await
+        .map_err(|e| format!("Failed to read {}: {}", config_path.display(), e))?;
+
+    let config: ClaudeCodeConfig = serde_json::from_str(&content).map_err(|e| {
+        format!("Malformed JSON in {}: {}", config_path.display(), e)
+    })?;
+
+    // Look for project-specific MCPs using the repo path as key
+    let repo_path_str = repo_path.to_string_lossy().to_string();
+    let Some(project_config) = config.projects.get(&repo_path_str) else {
+        return Ok(Vec::new());
+    };
+
+    let Some(mcp_servers) = &project_config.mcp_servers else {
+        return Ok(Vec::new());
+    };
+
+    let mut servers = Vec::new();
+    for (name, nested_config) in mcp_servers {
+        // Convert nested format to standard McpServerConfig
+        let config = if let Some(command) = &nested_config.command {
+            // Stdio server
+            McpServerConfig::Stdio {
+                command: command.clone(),
+                args: nested_config.args.clone().unwrap_or_default(),
+                env: nested_config.env.clone().unwrap_or_default(),
+            }
+        } else if let Some(url) = &nested_config.url {
+            // HTTP server
+            McpServerConfig::Http {
+                url: url.clone(),
+                headers: nested_config.headers.clone().unwrap_or_default(),
+                oauth: None,
+            }
+        } else {
+            // Invalid config - skip
+            continue;
+        };
+
+        servers.push(McpServer {
+            name: name.clone(),
+            config,
+            scope: McpScope::Project, // Claude Code project-specific = Project scope
+        });
+    }
+
+    Ok(servers)
 }
 
 /// Parse a single .claude.json or .mcp.json file
