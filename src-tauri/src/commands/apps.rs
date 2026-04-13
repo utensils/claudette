@@ -259,7 +259,16 @@ async fn open_applescript(app_id: &str, worktree_path: &str) -> Result<(), Strin
     set cmd to "cd " & quoted form of p & " && exec $SHELL"
     tell application "iTerm"
         activate
-        create window with default profile command cmd
+        if (count of windows) = 0 then
+            create window with default profile command cmd
+        else
+            tell current window
+                set newTab to (create tab with default profile)
+                tell current session of newTab
+                    write text cmd
+                end tell
+            end tell
+        end if
     end tell
 end run"#
         }
@@ -276,13 +285,30 @@ end run"#
         other => return Err(format!("No AppleScript handler for app '{other}'")),
     };
 
-    tokio::process::Command::new("osascript")
+    let mut child = tokio::process::Command::new("osascript")
         .arg("-e")
         .arg(script)
         .arg("--")
         .arg(worktree_path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| format!("Failed to run AppleScript for {app_id}: {e}"))?;
+
+    // Wait and capture output for debugging
+    let output = child.wait_with_output().await
+        .map_err(|e| format!("Failed to wait for osascript: {e}"))?;
+
+    if !output.status.success() {
+        eprintln!("[iTerm2 Debug] osascript failed with status: {:?}", output.status);
+        eprintln!("[iTerm2 Debug] stdout: {}", String::from_utf8_lossy(&output.stdout));
+        eprintln!("[iTerm2 Debug] stderr: {}", String::from_utf8_lossy(&output.stderr));
+        return Err(format!("AppleScript failed: {}", String::from_utf8_lossy(&output.stderr)));
+    } else {
+        eprintln!("[iTerm2 Debug] osascript succeeded");
+        eprintln!("[iTerm2 Debug] stdout: {}", String::from_utf8_lossy(&output.stdout));
+    }
+
     Ok(())
 }
 
@@ -331,7 +357,16 @@ async fn open_tui_via_applescript(
     set cmd to item 1 of argv
     tell application "iTerm"
         activate
-        create window with default profile command cmd
+        if (count of windows) = 0 then
+            create window with default profile command cmd
+        else
+            tell current window
+                set newTab to (create tab with default profile)
+                tell current session of newTab
+                    write text cmd
+                end tell
+            end tell
+        end if
     end tell
 end run"#,
         )
@@ -353,6 +388,8 @@ end run"#,
         .arg(script)
         .arg("--")
         .arg(&full_cmd)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .spawn()
         .map_err(|e| {
             format!(
