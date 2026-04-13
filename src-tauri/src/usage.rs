@@ -340,14 +340,20 @@ async fn resolve_token(
         let new_expires = now + refreshed.expires_in.unwrap_or(3600) * 1000;
         let new_refresh = refreshed.refresh_token.unwrap_or(rt);
         let mut w = cache.write().await;
+        // Preserve cached usage data across token refreshes so stale-data
+        // fallback still works if the subsequent API call fails.
+        let (prev_usage, prev_fetched) = w
+            .as_ref()
+            .map(|e| (e.last_usage.clone(), e.last_usage_fetched_at))
+            .unwrap_or((None, 0));
         *w = Some(UsageCacheEntry {
             access_token: refreshed.access_token.clone(),
             refresh_token: new_refresh,
             token_expires_at: new_expires,
             subscription_type: sub_type.clone(),
             rate_limit_tier: tier.clone(),
-            last_usage: None,
-            last_usage_fetched_at: 0,
+            last_usage: prev_usage,
+            last_usage_fetched_at: prev_fetched,
         });
         return Ok((refreshed.access_token, sub_type, tier));
     }
@@ -377,14 +383,18 @@ async fn resolve_token(
     let tier = oauth.rate_limit_tier.clone();
 
     let mut w = cache.write().await;
+    let (prev_usage, prev_fetched) = w
+        .as_ref()
+        .map(|e| (e.last_usage.clone(), e.last_usage_fetched_at))
+        .unwrap_or((None, 0));
     *w = Some(UsageCacheEntry {
         access_token: token.clone(),
         refresh_token: rt,
         token_expires_at: expires,
         subscription_type: sub_type.clone(),
         rate_limit_tier: tier.clone(),
-        last_usage: None,
-        last_usage_fetched_at: 0,
+        last_usage: prev_usage,
+        last_usage_fetched_at: prev_fetched,
     });
 
     Ok((token, sub_type, tier))
