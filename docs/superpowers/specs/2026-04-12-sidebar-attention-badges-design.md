@@ -20,8 +20,8 @@ Three attention states, displayed as lucide-react icons next to the workspace na
 
 ### Visual Treatment
 
-- **Bold**: Workspace name gets `font-weight: 600` when any badge is active (reuses existing `.wsUnread` class)
-- **Icon**: 14px lucide icon rendered inline after the workspace name text
+- **Bold**: Workspace name gets `font-weight: 700` when any badge is active (reuses existing `.wsUnread` class)
+- **Icon**: 14px lucide icon rendered in the existing status-dot position before `.wsInfo`
 - **Color**: Each badge uses its own CSS variable, themed per-palette
 - **Animation**: All badges pulse using existing `pulse-badge` keyframes (2s ease-in-out infinite)
 

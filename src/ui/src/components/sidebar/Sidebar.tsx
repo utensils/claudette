@@ -345,11 +345,17 @@ export const Sidebar = memo(function Sidebar() {
                     }}
                   >
                     {badge === "done" ? (
-                      <BadgeCheck size={14} className={styles.badgeDone} />
+                      <span title="Completed" aria-label="Completed">
+                        <BadgeCheck size={14} className={styles.badgeDone} />
+                      </span>
                     ) : badge === "plan" ? (
-                      <BadgeInfo size={14} className={styles.badgePlan} />
+                      <span title="Plan approval needed" aria-label="Plan approval needed">
+                        <BadgeInfo size={14} className={styles.badgePlan} />
+                      </span>
                     ) : badge === "ask" ? (
-                      <BadgeQuestionMark size={14} className={styles.badgeAsk} />
+                      <span title="Question requires attention" aria-label="Question requires attention">
+                        <BadgeQuestionMark size={14} className={styles.badgeAsk} />
+                      </span>
                     ) : (
                       <span
                         className={`${styles.statusDot} ${ws.agent_status === "Running" ? styles.statusDotRunning : ""}`}
@@ -380,7 +386,9 @@ export const Sidebar = memo(function Sidebar() {
                         return (
                           <div className={styles.terminalCommand}>
                             {commandState.isRunning ? (
-                              <Cog size={12} className={styles.runningIcon} />
+                              <span title="Running" aria-label="Running">
+                                <Cog size={12} className={styles.runningIcon} />
+                              </span>
                             ) : commandState.exitCode === 0 ? (
                               <span className={styles.successIcon} title="Exited successfully">✓</span>
                             ) : commandState.exitCode !== null ? (
