@@ -166,8 +166,10 @@ export function UsageSettings() {
   }, [setUsage, setLoading, setError]);
 
   useEffect(() => {
+    // Always fetch on mount — the Rust 60s cache prevents API flooding.
+    // This ensures reopening settings shows fresh data.
     fetchUsage();
-  }, [fetchUsage]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const limits: { title: string; limit: UsageLimit }[] = [];
   if (usage?.usage.five_hour) {

@@ -254,7 +254,7 @@ async fn resolve_token(
 ) -> Result<(String, Option<String>, Option<String>), String> {
     let now = now_millis();
 
-    // 1. Check cache.
+    // 1. Check cache — return if token is still valid.
     {
         let cached = cache.read().await;
         if let Some(entry) = cached.as_ref()
@@ -268,7 +268,42 @@ async fn resolve_token(
         }
     }
 
-    // 2. Read from platform keychain / credentials file.
+    // 2. If we have a cached refresh token (possibly rotated), try it first
+    //    before falling back to re-reading from keychain.
+    let cached_refresh = {
+        let cached = cache.read().await;
+        cached
+            .as_ref()
+            .filter(|e| !e.refresh_token.is_empty())
+            .map(|e| {
+                (
+                    e.refresh_token.clone(),
+                    e.subscription_type.clone(),
+                    e.rate_limit_tier.clone(),
+                )
+            })
+    };
+
+    if let Some((rt, sub_type, tier)) = cached_refresh
+        && let Ok(refreshed) = refresh_token(&rt).await
+    {
+        let new_expires = now + refreshed.expires_in.unwrap_or(3600) * 1000;
+        let new_refresh = refreshed.refresh_token.unwrap_or(rt);
+        let mut w = cache.write().await;
+        *w = Some(UsageCacheEntry {
+            access_token: refreshed.access_token.clone(),
+            refresh_token: new_refresh,
+            token_expires_at: new_expires,
+            subscription_type: sub_type.clone(),
+            rate_limit_tier: tier.clone(),
+            last_usage: None,
+            last_usage_fetched_at: 0,
+        });
+        return Ok((refreshed.access_token, sub_type, tier));
+    }
+    // Cached refresh token failed or absent — fall through to keychain.
+
+    // 3. Read from platform keychain / credentials file.
     let creds = read_credentials_platform().await?;
     let oauth = &creds.claude_ai_oauth;
 
