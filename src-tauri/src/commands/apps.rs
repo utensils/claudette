@@ -285,47 +285,15 @@ end run"#
         other => return Err(format!("No AppleScript handler for app '{other}'")),
     };
 
-    let mut child = tokio::process::Command::new("osascript")
+    tokio::process::Command::new("osascript")
         .arg("-e")
         .arg(script)
         .arg("--")
         .arg(worktree_path)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .spawn()
         .map_err(|e| format!("Failed to run AppleScript for {app_id}: {e}"))?;
-
-    // Wait and capture output for debugging
-    let output = child
-        .wait_with_output()
-        .await
-        .map_err(|e| format!("Failed to wait for osascript: {e}"))?;
-
-    if !output.status.success() {
-        eprintln!(
-            "[iTerm2 Debug] osascript failed with status: {:?}",
-            output.status
-        );
-        eprintln!(
-            "[iTerm2 Debug] stdout: {}",
-            String::from_utf8_lossy(&output.stdout)
-        );
-        eprintln!(
-            "[iTerm2 Debug] stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        return Err(format!(
-            "AppleScript failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    } else {
-        eprintln!("[iTerm2 Debug] osascript succeeded");
-        eprintln!(
-            "[iTerm2 Debug] stdout: {}",
-            String::from_utf8_lossy(&output.stdout)
-        );
-    }
-
     Ok(())
 }
 
