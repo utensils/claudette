@@ -9,6 +9,7 @@ export function ModelSettings() {
   const [defaultThinking, setDefaultThinking] = useState(false);
   const [defaultPlanMode, setDefaultPlanMode] = useState(false);
   const [defaultFastMode, setDefaultFastMode] = useState(false);
+  const [defaultChrome, setDefaultChrome] = useState(false);
   const [defaultEffort, setDefaultEffort] = useState("auto");
   const [defaultShowThinking, setDefaultShowThinking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,6 +26,9 @@ export function ModelSettings() {
       .catch(() => {});
     getAppSetting("default_fast_mode")
       .then((val) => setDefaultFastMode(val === "true"))
+      .catch(() => {});
+    getAppSetting("default_chrome")
+      .then((val) => setDefaultChrome(val === "true"))
       .catch(() => {});
     getAppSetting("default_effort")
       .then((val) => { if (val) setDefaultEffort(val); })
@@ -210,6 +214,27 @@ export function ModelSettings() {
             aria-label="Default to fast mode"
             data-checked={defaultFastMode}
             onClick={handleToggle(defaultFastMode, setDefaultFastMode, "default_fast_mode")}
+          >
+            <div className={styles.toggleKnob} />
+          </button>
+        </div>
+      </div>
+
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>Use Claude Code with Chrome</div>
+          <div className={styles.settingDescription}>
+            Allow Claude Code to control your Chrome browser. To use this feature, first install the Claude Code Chrome extension.
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          <button
+            className={styles.toggle}
+            role="switch"
+            aria-checked={defaultChrome}
+            aria-label="Use Claude Code with Chrome"
+            data-checked={defaultChrome}
+            onClick={handleToggle(defaultChrome, setDefaultChrome, "default_chrome")}
           >
             <div className={styles.toggleKnob} />
           </button>

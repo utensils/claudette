@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Sparkles, Zap, Brain, BookOpen, Gauge, Eye, EyeOff } from "lucide-react";
+import { Sparkles, Zap, Brain, BookOpen, Gauge, Eye, EyeOff, Globe } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import { resetAgentSession, setAppSetting, getAppSetting } from "../../services/tauri";
 import { ModelSelector, MODELS } from "./ModelSelector";
@@ -20,6 +20,7 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
   const thinkingEnabled = useAppStore((s) => s.thinkingEnabled[workspaceId] ?? false);
   const planMode = useAppStore((s) => s.planMode[workspaceId] ?? false);
   const effortLevel = useAppStore((s) => s.effortLevel[workspaceId] ?? "auto");
+  const chromeEnabled = useAppStore((s) => s.chromeEnabled[workspaceId] ?? false);
   const modelSelectorOpen = useAppStore((s) => s.modelSelectorOpen);
   const setSelectedModel = useAppStore((s) => s.setSelectedModel);
   const setFastMode = useAppStore((s) => s.setFastMode);
@@ -27,6 +28,7 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
   const setPlanMode = useAppStore((s) => s.setPlanMode);
   const showThinkingBlocks = useAppStore((s) => s.showThinkingBlocks[workspaceId] === true);
   const setEffortLevel = useAppStore((s) => s.setEffortLevel);
+  const setChromeEnabled = useAppStore((s) => s.setChromeEnabled);
   const setShowThinkingBlocks = useAppStore((s) => s.setShowThinkingBlocks);
   const setModelSelectorOpen = useAppStore((s) => s.setModelSelectorOpen);
   const clearAgentQuestion = useAppStore((s) => s.clearAgentQuestion);
@@ -41,18 +43,20 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      const [model, fast, thinking, effort, showThinking, defModel, defFast, defThinking, defPlan, defEffort, defShowThinking] = await Promise.all([
+      const [model, fast, thinking, effort, showThinking, chrome, defModel, defFast, defThinking, defPlan, defEffort, defShowThinking, defChrome] = await Promise.all([
         getAppSetting(`model:${workspaceId}`),
         getAppSetting(`fast_mode:${workspaceId}`),
         getAppSetting(`thinking_enabled:${workspaceId}`),
         getAppSetting(`effort_level:${workspaceId}`),
         getAppSetting(`show_thinking:${workspaceId}`),
+        getAppSetting(`chrome_enabled:${workspaceId}`),
         getAppSetting("default_model"),
         getAppSetting("default_fast_mode"),
         getAppSetting("default_thinking"),
         getAppSetting("default_plan_mode"),
         getAppSetting("default_effort"),
         getAppSetting("default_show_thinking"),
+        getAppSetting("default_chrome"),
       ]);
       if (cancelled) return;
       const loadedModel = model ?? defModel ?? "opus";
@@ -75,11 +79,12 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
         setEffortLevel(workspaceId, normalized);
       }
       setShowThinkingBlocks(workspaceId, showThinking === "true" || (!showThinking && defShowThinking === "true"));
+      setChromeEnabled(workspaceId, chrome === "true" || (!chrome && defChrome === "true"));
       setLoaded(true);
     }
     load();
     return () => { cancelled = true; };
-  }, [workspaceId, setSelectedModel, setFastMode, setThinkingEnabled, setPlanMode, setEffortLevel, setShowThinkingBlocks]);
+  }, [workspaceId, setSelectedModel, setFastMode, setThinkingEnabled, setPlanMode, setEffortLevel, setShowThinkingBlocks, setChromeEnabled]);
 
   const handleModelSelect = useCallback(
     async (model: string) => {
@@ -136,6 +141,16 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
   const togglePlan = useCallback(() => {
     setPlanMode(workspaceId, !planMode);
   }, [workspaceId, planMode, setPlanMode]);
+
+  const toggleChrome = useCallback(async () => {
+    const next = !chromeEnabled;
+    setChromeEnabled(workspaceId, next);
+    await setAppSetting(`chrome_enabled:${workspaceId}`, String(next));
+    // Chrome is session-level — reset session so the next turn picks up the change.
+    await resetAgentSession(workspaceId);
+    clearAgentQuestion(workspaceId);
+    clearPlanApproval(workspaceId);
+  }, [workspaceId, chromeEnabled, setChromeEnabled, clearAgentQuestion, clearPlanApproval]);
 
   // Keyboard shortcuts.
   useEffect(() => {
@@ -222,6 +237,17 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
         <BookOpen size={14} />
         <span className={styles.chipLabel}>Plan</span>
         <kbd className={`shortcut-badge ${metaKeyHeld ? "shortcut-badge-visible" : ""}`} aria-hidden="true">⇧Tab</kbd>
+      </button>
+
+      <button
+        className={`${styles.chip} ${chromeEnabled ? styles.chipActive : ""}`}
+        onClick={toggleChrome}
+        disabled={disabled}
+        title={`${chromeEnabled ? "Disable" : "Enable"} Chrome browser mode`}
+        aria-pressed={chromeEnabled}
+      >
+        <Globe size={14} />
+        <span className={styles.chipLabel}>Chrome</span>
       </button>
 
       {modelSelectorOpen && (

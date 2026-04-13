@@ -47,6 +47,7 @@ pub async fn handle_request(
                 .get("effort")
                 .and_then(|v| v.as_str())
                 .map(String::from);
+            let chrome_enabled = params.get("chrome_enabled").and_then(|v| v.as_bool());
             let mentioned_files: Option<Vec<String>> = params
                 .get("mentioned_files")
                 .and_then(|v| serde_json::from_value(v.clone()).ok());
@@ -61,6 +62,7 @@ pub async fn handle_request(
                 thinking_enabled,
                 plan_mode,
                 effort,
+                chrome_enabled,
                 mentioned_files,
             )
             .await
@@ -307,6 +309,7 @@ async fn handle_send_chat_message(
     thinking_enabled: Option<bool>,
     plan_mode: Option<bool>,
     effort: Option<String>,
+    chrome_enabled: Option<bool>,
     mentioned_files: Option<Vec<String>>,
 ) -> Result<serde_json::Value, String> {
     let db = open_db(state)?;
@@ -374,6 +377,7 @@ async fn handle_send_chat_message(
         thinking_enabled: thinking_enabled.unwrap_or(false),
         plan_mode: plan_mode.unwrap_or(false),
         effort,
+        chrome_enabled: chrome_enabled.unwrap_or(false),
     };
 
     // Expand @-file mentions into inline file content for the agent prompt.

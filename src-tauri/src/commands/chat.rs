@@ -42,6 +42,7 @@ pub async fn send_chat_message(
     thinking_enabled: Option<bool>,
     plan_mode: Option<bool>,
     effort: Option<String>,
+    chrome_enabled: Option<bool>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
@@ -154,6 +155,7 @@ pub async fn send_chat_message(
         thinking_enabled: thinking_enabled.unwrap_or(false),
         plan_mode: plan_mode.unwrap_or(false),
         effort,
+        chrome_enabled: chrome_enabled.unwrap_or(false),
     };
 
     // Expand @-file mentions into inline file content for the agent prompt.

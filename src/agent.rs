@@ -198,6 +198,9 @@ pub struct AgentSettings {
     /// Effort level for adaptive reasoning (`low`, `medium`, `high`, `max`).
     /// `max` is Opus 4.6 only. Applied on every turn via `--effort`.
     pub effort: Option<String>,
+    /// Enable Chrome browser mode via `--chrome`. Session-level: only applied
+    /// on the first turn.
+    pub chrome_enabled: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -234,6 +237,11 @@ pub fn build_claude_args(
     if !is_resume && let Some(ref model) = settings.model {
         args.push("--model".to_string());
         args.push(model.clone());
+    }
+
+    // Chrome is session-level — only set on the first turn.
+    if !is_resume && settings.chrome_enabled {
+        args.push("--chrome".to_string());
     }
 
     // Permission mode must be set on every turn — each `claude` invocation is
@@ -1271,5 +1279,25 @@ mod tests {
         assert_eq!(json["alwaysThinkingEnabled"], true);
         // effort should NOT be in the --settings JSON
         assert!(json.get("effort").is_none());
+    }
+
+    #[test]
+    fn test_build_args_with_chrome() {
+        let settings = AgentSettings {
+            chrome_enabled: true,
+            ..Default::default()
+        };
+        let args = build_claude_args("sess-1", "hello", false, &[], None, &settings);
+        assert!(args.contains(&"--chrome".to_string()));
+    }
+
+    #[test]
+    fn test_build_args_chrome_skipped_on_resume() {
+        let settings = AgentSettings {
+            chrome_enabled: true,
+            ..Default::default()
+        };
+        let args = build_claude_args("sess-1", "hello", true, &[], None, &settings);
+        assert!(!args.contains(&"--chrome".to_string()));
     }
 }
