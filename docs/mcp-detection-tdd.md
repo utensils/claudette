@@ -1,9 +1,9 @@
-# TDD: MCP Configuration Detection and Workspace Integration
+# Technical Design: MCP Configuration Detection and Workspace Integration
 
-**Issue**: [#170](https://github.com/utensils/Claudette/issues/170)
 **Status**: Draft
-**Author**: Claude Code
 **Date**: 2026-04-13
+**Issue**: [#170](https://github.com/utensils/Claudette/issues/170)
+**Author**: Claude Code
 
 ## Problem Statement
 
@@ -169,6 +169,7 @@ claude mcp get <name>        # Details for specific server
 2. **Read-Only for Global Configs**: Never modify `~/.claude.json` or `.mcp.json` (respect user's global settings)
 3. **Workspace Isolation**: Each workspace can have its own `.claude.json` in its worktree
 4. **No Database Storage**: MCP configurations live in `.claude.json` files, not in SQLite (follows existing pattern)
+5. **TOCTOU Prevention**: Pass resolved MCP server configs directly from frontend to backend to avoid re-detection race conditions
 
 ### Data Flow
 
@@ -203,19 +204,20 @@ claude mcp get <name>        # Details for specific server
     ▼               ▼
  Skip MCP      Select MCPs
     │               │
-    │               ▼
-    │        ┌──────────────────┐
-    │        │ Write .claude.json│
-    │        │ to worktree root  │
-    │        └──────────────────┘
-    │               │
     └───────┬───────┘
             │
             ▼
    ┌────────────────┐
    │ Create Workspace│
    │ (existing flow) │
-   └─────────────────┘
+   └────────┬────────┘
+            │
+            ▼
+   ┌──────────────────┐
+   │ If MCPs selected,│
+   │ write .claude.json│
+   │ to worktree root  │
+   └──────────────────┘
 ```
 
 ### Component Design
@@ -258,7 +260,7 @@ pub enum McpServerConfig {
 pub enum McpScope {
     User,     // ~/.claude.json (global)
     Project,  // .mcp.json (project root)
-    Local,    // .claude.json (project root)
+    Local,    // .claude.json (worktree root, workspace-local config)
 }
 
 /// Main detection function
@@ -312,12 +314,12 @@ pub async fn detect_mcp_servers(
 #[tauri::command]
 pub async fn configure_workspace_mcps(
     workspace_id: String,
-    server_names: Vec<String>,
+    servers: Vec<McpServer>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     // 1. Get workspace worktree path from database
-    // 2. Get selected server configs from detect_mcp_servers
-    // 3. Call mcp::write_workspace_mcp_config
+    // 2. Call mcp::write_workspace_mcp_config with the already-resolved servers
+    // Note: Accepts Vec<McpServer> directly to avoid TOCTOU risk from re-detection
 }
 
 /// Read workspace .claude.json MCP configuration
@@ -344,7 +346,7 @@ interface McpSelectionModalProps {
   isOpen: boolean;
   onClose: () => void;
   repoId: string;
-  workspaceId: string | null; // null if called before workspace creation
+  workspaceId: string; // Modal opens after workspace creation succeeds
   onConfirm: (selectedServerNames: string[]) => Promise<void>;
 }
 ```
@@ -371,12 +373,14 @@ interface McpSelectionModalProps {
 ```
 
 **Behavior**:
+- Opens after the workspace has been created, so `workspaceId` is available for any config writes
 - Calls `detect_mcp_servers(repoId)` on mount
 - Displays loading state while detecting
 - Shows error if detection fails
 - Allows multiple selection (checkboxes)
 - "Skip" button closes modal without writing config
-- "Configure" button calls `configure_workspace_mcps()` then `onConfirm()`
+- "Configure Selected Servers" button calls `configure_workspace_mcps(workspaceId, selectedServers)` then `onConfirm()`
+- No pre-create write mode: detection can inform creation UX, but `.claude.json` is only written after workspace creation succeeds
 
 ##### 2. Workspace Settings MCP Tab (Future Enhancement)
 
@@ -620,16 +624,19 @@ interface McpSelectionModalProps {
 - Pretty-print with 2-space indentation (match Claude CLI format)
 
 **Example**:
+
+Before:
 ```json
-// Before
 {
   "customInstructions": "Always use TypeScript",
   "mcpServers": {
     "old-server": { "type": "stdio", "command": "old" }
   }
 }
+```
 
-// After (user selects "new-server", removes "old-server")
+After (user selects "new-server", removes "old-server"):
+```json
 {
   "customInstructions": "Always use TypeScript",
   "mcpServers": {
@@ -706,8 +713,8 @@ env:
 
 **Mitigation**:
 - Use battle-tested JSON parser (`serde_json` in Rust)
-- Validate JSON schema against expected structure
-- Reject files with unknown/unexpected fields at root level
+- Validate the expected MCP schema, especially the shape of `mcpServers` and nested server definitions
+- For `.claude.json`, allow and preserve unknown/non-MCP root-level fields (for example `customInstructions`); only reject invalid or unexpected structure within the MCP-specific sections being read or written
 - Sanitize error messages (don't include file content in user-facing errors)
 
 ### S3: Path Traversal
@@ -913,7 +920,7 @@ Only add MCP servers from trusted sources.
 - Local config (`.claude.json`): `github` → `https://api.github.com`
 
 **Effective Configuration**:
-- `filesystem` server: Uses **local** scope → `/project/root` (highest precedence)
+- `filesystem` server: Uses **project** scope → `/project/root` (local scope has highest precedence but does not define `filesystem`)
 - `github` server: Uses **local** scope → `https://api.github.com` (only defined here)
 
 ### A3: References
