@@ -17,13 +17,18 @@ export function McpSelectionModal() {
   const workspaceId = modalData.workspaceId as string;
   const repoId = modalData.repoId as string;
 
+  console.log('[MCP Modal] Component rendered! workspaceId:', workspaceId, 'repoId:', repoId);
+
   useEffect(() => {
+    console.log('[MCP Modal] Mounted, detecting servers for repo:', repoId);
     detectMcpServers(repoId)
       .then((detected) => {
+        console.log('[MCP Modal] Detected servers:', detected);
         setServers(detected);
         setLoading(false);
       })
       .catch((err) => {
+        console.error('[MCP Modal] Detection error:', err);
         setError(`Failed to detect MCP servers: ${err}`);
         setLoading(false);
       });

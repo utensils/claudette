@@ -52,12 +52,15 @@ export const Sidebar = memo(function Sidebar() {
   const creatingRef = useRef(false);
 
   const handleCreateWorkspace = useCallback(async (repoId: string) => {
+    console.log('[Workspace] Creating workspace for repo:', repoId);
     if (creatingRef.current) return;
     creatingRef.current = true;
     try {
       const generated = await generateWorkspaceName();
+      console.log('[Workspace] Generated name:', generated);
       // Always skip setup initially — we'll prompt for confirmation if needed.
       const result = await createWorkspace(repoId, generated.slug, true);
+      console.log('[Workspace] Workspace created:', result);
       addWorkspace(result.workspace);
       selectWorkspace(result.workspace.id);
       if (generated.message) {
@@ -72,31 +75,37 @@ export const Sidebar = memo(function Sidebar() {
           thinking: null,
         });
       }
-      // Check for MCP servers and prompt user to configure them.
-      try {
-        openModal("mcpSelection", {
-          workspaceId: result.workspace.id,
-          repoId,
-        });
-      } catch {
-        // Error opening MCP modal - continue with setup script check.
-      }
 
       // Check if a setup script exists and prompt user to review it.
+      let hasSetupScript = false;
       try {
         const config = await getRepoConfig(repoId);
         const repo = useAppStore.getState().repositories.find((r) => r.id === repoId);
         const script = config.setup_script ?? repo?.setup_script;
         const source = config.setup_script ? "repo" : "settings";
         if (script) {
+          hasSetupScript = true;
           openModal("confirmSetupScript", {
             workspaceId: result.workspace.id,
+            repoId,
             script,
             source,
           });
         }
       } catch {
         // No config or error reading it — no setup script to run.
+      }
+
+      // If there's no setup script, show MCP configuration modal.
+      // TODO: Chain modals properly so MCP shows after setup script completes.
+      if (!hasSetupScript) {
+        console.log('[MCP] Opening MCP selection modal for workspace:', result.workspace.id, 'repo:', repoId);
+        openModal("mcpSelection", {
+          workspaceId: result.workspace.id,
+          repoId,
+        });
+      } else {
+        console.log('[MCP] Skipping MCP modal due to setup script');
       }
     } catch (e) {
       console.error("Failed to create workspace:", e);

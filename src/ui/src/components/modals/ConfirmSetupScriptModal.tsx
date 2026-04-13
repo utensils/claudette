@@ -6,6 +6,7 @@ import shared from "./shared.module.css";
 
 export function ConfirmSetupScriptModal() {
   const closeModal = useAppStore((s) => s.closeModal);
+  const openModal = useAppStore((s) => s.openModal);
   const modalData = useAppStore((s) => s.modalData);
   const addChatMessage = useAppStore((s) => s.addChatMessage);
   const [loading, setLoading] = useState(false);
@@ -13,6 +14,7 @@ export function ConfirmSetupScriptModal() {
   const workspaceId = modalData.workspaceId as string;
   const script = modalData.script as string;
   const source = modalData.source as string;
+  const repoId = modalData.repoId as string | undefined;
 
   const handleRun = async () => {
     setLoading(true);
@@ -37,6 +39,10 @@ export function ConfirmSetupScriptModal() {
         });
       }
       closeModal();
+      // Open MCP modal after setup script completes
+      if (repoId) {
+        openModal("mcpSelection", { workspaceId, repoId });
+      }
     } catch (e) {
       addChatMessage(workspaceId, {
         id: crypto.randomUUID(),
@@ -49,6 +55,18 @@ export function ConfirmSetupScriptModal() {
         thinking: null,
       });
       closeModal();
+      // Open MCP modal even if setup script fails
+      if (repoId) {
+        openModal("mcpSelection", { workspaceId, repoId });
+      }
+    }
+  };
+
+  const handleSkip = () => {
+    closeModal();
+    // Open MCP modal when user skips setup script
+    if (repoId) {
+      openModal("mcpSelection", { workspaceId, repoId });
     }
   };
 
@@ -81,7 +99,7 @@ export function ConfirmSetupScriptModal() {
         </pre>
       </div>
       <div className={shared.actions}>
-        <button className={shared.btn} onClick={closeModal}>
+        <button className={shared.btn} onClick={handleSkip}>
           Skip
         </button>
         <button
