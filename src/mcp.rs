@@ -371,7 +371,10 @@ mod tests {
 
         assert_eq!(normalized["type"], "stdio");
         assert_eq!(normalized["command"], "npx");
-        assert_eq!(normalized["args"], serde_json::json!(["-y", "@example/mcp-server"]));
+        assert_eq!(
+            normalized["args"],
+            serde_json::json!(["-y", "@example/mcp-server"])
+        );
     }
 
     #[test]
