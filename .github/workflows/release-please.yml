@@ -121,7 +121,7 @@ jobs:
         run: cd src/ui && bun install --frozen-lockfile
 
       - name: Generate icons
-        run: bunx @tauri-apps/cli icon assets/logo.png
+        run: npx @tauri-apps/cli icon assets/logo.png
 
       - name: Build and upload desktop app
         uses: tauri-apps/tauri-action@v0
