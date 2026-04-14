@@ -3,6 +3,12 @@ name: Release Please
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing git tag to build and publish (e.g. v0.9.0)"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -10,10 +16,13 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Resolved tag: from release-please on push, from manual input on dispatch.
+  RELEASE_TAG: ${{ inputs.tag || '' }}
 
 jobs:
   release-please:
     name: Release
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     outputs:
       releases_created: ${{ steps.release.outputs.releases_created }}
@@ -30,9 +39,29 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release edit "${{ steps.release.outputs.tag_name }}" --draft --repo "${{ github.repository }}"
 
-  build:
+  # Resolve the tag into a single output that downstream jobs can reference.
+  resolve-tag:
+    name: Resolve Tag
+    runs-on: ubuntu-latest
     needs: release-please
-    if: needs.release-please.outputs.releases_created == 'true'
+    if: >-
+      always() && (
+        (github.event_name == 'push' && needs.release-please.outputs.releases_created == 'true') ||
+        github.event_name == 'workflow_dispatch'
+      )
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - id: resolve
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ needs.release-please.outputs.tag_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: resolve-tag
     strategy:
       fail-fast: false
       matrix:
@@ -57,7 +86,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.release-please.outputs.tag_name }}
+          ref: ${{ needs.resolve-tag.outputs.tag }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -107,8 +136,8 @@ jobs:
           APPLE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_PASSWORD || '' }}
           APPLE_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
         with:
-          tagName: ${{ needs.release-please.outputs.tag_name }}
-          releaseName: ${{ needs.release-please.outputs.tag_name }}
+          tagName: ${{ needs.resolve-tag.outputs.tag }}
+          releaseName: ${{ needs.resolve-tag.outputs.tag }}
           releaseDraft: true
           args: --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundles }}
 
@@ -122,23 +151,21 @@ jobs:
           BIN="target/${{ matrix.rust-target }}/release/claudette-server"
           ASSET="claudette-server-${{ matrix.label }}"
           cp "$BIN" "$ASSET"
-          gh release upload "${{ needs.release-please.outputs.tag_name }}" "$ASSET" --clobber
+          gh release upload "${{ needs.resolve-tag.outputs.tag }}" "$ASSET" --clobber
 
   publish:
     name: Publish Release
-    needs: [release-please, build]
-    if: needs.release-please.outputs.releases_created == 'true'
+    needs: [resolve-tag, build]
     runs-on: ubuntu-latest
     steps:
       - name: Un-draft the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release edit "${{ needs.release-please.outputs.tag_name }}" --draft=false --repo "${{ github.repository }}"
+        run: gh release edit "${{ needs.resolve-tag.outputs.tag }}" --draft=false --repo "${{ github.repository }}"
 
   notify-discord:
     name: Discord Release Notification
-    needs: [release-please, publish]
-    if: needs.release-please.outputs.releases_created == 'true'
+    needs: [resolve-tag, publish]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -147,7 +174,7 @@ jobs:
       - name: Extract changelog and notify Discord
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+          TAG_NAME: ${{ needs.resolve-tag.outputs.tag }}
         run: |
           if [ -z "${DISCORD_WEBHOOK_URL}" ]; then
             echo "DISCORD_WEBHOOK_URL secret is not set — skipping notification"
