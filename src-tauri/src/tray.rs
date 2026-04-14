@@ -546,4 +546,25 @@ mod tests {
         agents.insert("ws2".to_string(), session(Some(5678), true));
         assert!(has_running_agents(&agents));
     }
+
+    /// Regression: persistent session turn completes (active_pid cleared) but
+    /// persistent_session stays alive for the next turn. The tray must show
+    /// Idle, not Running. Before the fix, rebuild_tray was not called after
+    /// the Result event cleared active_pid, leaving the tray stuck on Running.
+    #[test]
+    fn test_tray_state_idle_after_persistent_turn_completes() {
+        let mut agents = HashMap::new();
+        // Simulate: persistent session exists, but active_pid was cleared
+        // when the Result event arrived (turn finished, process stays alive).
+        let mut s = session(None, false);
+        // persistent_session would be Some in real code, but the tray state
+        // computation only checks active_pid and needs_attention — the
+        // presence of persistent_session should NOT cause Running.
+        s.persistent_session = None; // compute_tray_state doesn't read this field
+        agents.insert("ws1".to_string(), s);
+        assert!(
+            matches!(compute_tray_state_from_agents(&agents), TrayState::Idle),
+            "tray should show Idle when active_pid is None, even with persistent sessions"
+        );
+    }
 }

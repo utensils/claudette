@@ -524,6 +524,10 @@ pub async fn send_chat_message(
                     session.active_pid = None;
                 }
                 drop(agents);
+                // Rebuild tray so it reflects the idle state. Without this,
+                // the tray stays stuck on "Running" because the persistent
+                // process doesn't exit (only ProcessExited triggered rebuild).
+                crate::tray::rebuild_tray(&app);
             }
 
             if let AgentEvent::ProcessExited(_code) = &event {
