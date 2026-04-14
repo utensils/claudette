@@ -78,25 +78,9 @@ pub async fn run(options: ServerOptions) -> Result<(), Box<dyn std::error::Error
     let tls_config = tls::load_or_generate_tls(&config_dir())?;
     let fingerprint = tls::cert_fingerprint(&config_dir())?;
 
-    let host = gethostname::gethostname().to_string_lossy().to_string();
-    println!(
-        "claudette-server v{} listening on wss://{}:{}",
-        env!("CARGO_PKG_VERSION"),
-        options.bind,
-        options.port,
-    );
-    println!("Name: {}", config.server.name);
-    println!();
-    println!("Connection string (paste into Claudette):");
-    println!(
-        "  claudette://{}:{}/{}",
-        host, options.port, config.auth.pairing_token
-    );
-    println!();
-    println!("Certificate fingerprint: {fingerprint}");
-    println!();
-
     // Wrap config in shared state so all connections see session mutations.
+    let pairing_token = config.auth.pairing_token.clone();
+    let server_name = config.server.name.clone();
     let config = Arc::new(tokio::sync::Mutex::new(config));
     let config_path = Arc::new(config_path);
 
@@ -122,12 +106,15 @@ pub async fn run(options: ServerOptions) -> Result<(), Box<dyn std::error::Error
 
     let state = Arc::new(ws::ServerState::new(db_path, worktree_base_dir));
 
+    // Bind TCP listener before printing the connection string so the parent
+    // process never sees `claudette://` unless we're actually listening.
+    let addr: std::net::SocketAddr = format!("{}:{}", options.bind, options.port).parse()?;
+    let listener = TcpListener::bind(addr).await?;
+    let acceptor = tokio_rustls::TlsAcceptor::from(tls_config);
+
     // Start mDNS advertisement.
     if !options.no_mdns {
         let short_fp = &fingerprint[..fingerprint.len().min(16)];
-        let config_guard = config.lock().await;
-        let server_name = config_guard.server.name.clone();
-        drop(config_guard);
         let _mdns = mdns::advertise(&server_name, options.port, short_fp)?;
         println!(
             "mDNS: advertising as _claudette._tcp on port {}",
@@ -135,11 +122,20 @@ pub async fn run(options: ServerOptions) -> Result<(), Box<dyn std::error::Error
         );
     }
 
-    // Bind TCP listener.
-    let addr: std::net::SocketAddr = format!("{}:{}", options.bind, options.port).parse()?;
-    let listener = TcpListener::bind(addr).await?;
-    let acceptor = tokio_rustls::TlsAcceptor::from(tls_config);
-
+    let host = gethostname::gethostname().to_string_lossy().to_string();
+    println!(
+        "claudette-server v{} listening on wss://{}:{}",
+        env!("CARGO_PKG_VERSION"),
+        options.bind,
+        options.port,
+    );
+    println!("Name: {server_name}");
+    println!();
+    println!("Connection string (paste into Claudette):");
+    println!("  claudette://{}:{}/{}", host, options.port, pairing_token);
+    println!();
+    println!("Certificate fingerprint: {fingerprint}");
+    println!();
     println!("Ready for connections.\n");
 
     loop {

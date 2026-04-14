@@ -326,7 +326,14 @@ pub async fn start_local_server(state: State<'_, AppState>) -> Result<LocalServe
                     }
                     None => String::new(),
                 };
-                return Err(format!("Server exited before ready{detail}"));
+                // Reap the child so it doesn't become a zombie.
+                let status = child.wait().await.ok();
+                let code = status.and_then(|s| s.code());
+                let exit_info = match code {
+                    Some(c) => format!(" (exit code {c})"),
+                    None => String::new(),
+                };
+                return Err(format!("Server exited before ready{exit_info}{detail}"));
             }
         }
 
