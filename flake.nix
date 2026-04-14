@@ -43,6 +43,7 @@
           rustToolchain = fenixPkgs.combine [
             fenixPkgs.latest.cargo
             fenixPkgs.latest.clippy
+            fenixPkgs.latest.llvm-tools-preview
             fenixPkgs.latest.rust-src
             fenixPkgs.latest.rustc
             fenixPkgs.latest.rustfmt
@@ -289,6 +290,7 @@
               pkgs.pkg-config
               pkgs.cmake
               pkgs.perl
+              pkgs.cargo-llvm-cov
             ]
             ++ darwinBuildInputs
             ++ linuxBuildInputs
@@ -443,9 +445,24 @@
                 category = "quality";
               }
               {
-                name = "test";
+                name = "run-tests";
                 command = "cargo test --workspace --all-features";
                 help = "Run all Rust tests";
+                category = "quality";
+              }
+              {
+                name = "coverage";
+                command = ''
+                  mkdir -p src/ui/dist
+                  [ -f src/ui/dist/index.html ] || echo '<html></html>' > src/ui/dist/index.html
+                  cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+                  cargo llvm-cov report --html
+                  cargo llvm-cov report
+                  echo ""
+                  echo "lcov:  lcov.info"
+                  echo "html:  target/llvm-cov/html/index.html"
+                '';
+                help = "Run tests with coverage (terminal summary + lcov + HTML report)";
                 category = "quality";
               }
             ];

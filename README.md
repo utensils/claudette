@@ -6,6 +6,10 @@
 
 <p align="center">Claude's missing better half — a companion tool for Claude Code usage.</p>
 
+<p align="center">
+  <a href="https://codecov.io/gh/utensils/claudette"><img src="https://codecov.io/gh/utensils/claudette/graph/badge.svg" alt="codecov"/></a>
+</p>
+
 Claudette is a cross-platform desktop application built with [Tauri 2](https://tauri.app) (Rust backend) and React/TypeScript (frontend). It provides a lightweight interface for managing and orchestrating Claude Code sessions, similar in spirit to [Conductor.build](https://conductor.build) but with a focused feature set.
 
 ## Prerequisites

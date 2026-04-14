@@ -6,6 +6,11 @@ debug/
 *.pdb
 **/mutants.out*/
 
+# Coverage
+lcov.info
+*.profraw
+*.profdata
+
 # Node / Frontend
 node_modules/
 src/ui/dist/
