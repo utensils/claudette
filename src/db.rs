@@ -1370,12 +1370,13 @@ impl Database {
         repository_id: &str,
         servers: &[RepositoryMcpServer],
     ) -> Result<(), rusqlite::Error> {
-        self.conn.execute(
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
             "DELETE FROM repository_mcp_servers WHERE repository_id = ?1",
             params![repository_id],
         )?;
         for server in servers {
-            self.conn.execute(
+            tx.execute(
                 "INSERT INTO repository_mcp_servers (id, repository_id, name, config_json, source)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![
@@ -1387,7 +1388,7 @@ impl Database {
                 ],
             )?;
         }
-        Ok(())
+        tx.commit()
     }
 
     /// Delete a single MCP server by ID.

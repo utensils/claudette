@@ -1636,6 +1636,34 @@ mod tests {
         assert!(!args.contains(&"--chrome".to_string()));
     }
 
+    #[test]
+    fn test_build_args_with_mcp_config() {
+        let settings = AgentSettings {
+            mcp_config: Some(r#"{"mcpServers":{"s":{"type":"stdio","command":"x"}}}"#.to_string()),
+            ..Default::default()
+        };
+        let args = build_claude_args("sess-1", "hello", false, &[], None, &settings, false);
+        let idx = args.iter().position(|a| a == "--mcp-config").unwrap();
+        assert!(args[idx + 1].contains("mcpServers"));
+    }
+
+    #[test]
+    fn test_build_args_mcp_config_skipped_on_resume() {
+        let settings = AgentSettings {
+            mcp_config: Some(r#"{"mcpServers":{}}"#.to_string()),
+            ..Default::default()
+        };
+        let args = build_claude_args("sess-1", "hello", true, &[], None, &settings, false);
+        assert!(!args.contains(&"--mcp-config".to_string()));
+    }
+
+    #[test]
+    fn test_build_args_mcp_config_none_omitted() {
+        let settings = AgentSettings::default();
+        let args = build_claude_args("sess-1", "hello", false, &[], None, &settings, false);
+        assert!(!args.contains(&"--mcp-config".to_string()));
+    }
+
     // -----------------------------------------------------------------------
     // resolve_claude_path_inner tests
     // -----------------------------------------------------------------------

@@ -341,9 +341,14 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
                   <button
                     className={styles.mcpRemoveBtn}
                     title="Remove this MCP server"
+                    aria-label={`Remove MCP server ${server.name}`}
                     onClick={async () => {
-                      await deleteRepositoryMcp(server.id);
-                      refreshMcpServers();
+                      try {
+                        await deleteRepositoryMcp(server.id);
+                        refreshMcpServers();
+                      } catch (e) {
+                        setError(String(e));
+                      }
                     }}
                   >
                     ×

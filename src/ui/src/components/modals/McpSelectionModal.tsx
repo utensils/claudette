@@ -184,7 +184,7 @@ export function McpSelectionModal() {
         <button
           className={shared.btnPrimary}
           onClick={handleSave}
-          disabled={saving || selected.size === 0}
+          disabled={saving}
         >
           {saving ? "Saving..." : "Save Selections"}
         </button>

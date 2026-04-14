@@ -252,10 +252,13 @@ pub async fn send_chat_message(
                 .iter()
                 .filter_map(|row| {
                     let config: serde_json::Value = serde_json::from_str(&row.config_json).ok()?;
+                    let source: claudette::mcp::McpSource =
+                        serde_json::from_str(&format!("\"{}\"", row.source))
+                            .unwrap_or(claudette::mcp::McpSource::UserProjectConfig);
                     Some(claudette::mcp::McpServer {
                         name: row.name.clone(),
                         config,
-                        source: claudette::mcp::McpSource::UserProjectConfig,
+                        source,
                     })
                 })
                 .collect();
