@@ -338,9 +338,7 @@ pub async fn start_local_server(state: State<'_, AppState>) -> Result<LocalServe
         // Spawn tasks to continuously drain stdout and stderr to prevent broken
         // pipe panics. If we don't read them, the pipe buffer fills and the server
         // will die with "Broken pipe" on its next write.
-        tokio::spawn(async move {
-            while let Ok(Some(_)) = reader.next_line().await {}
-        });
+        tokio::spawn(async move { while let Ok(Some(_)) = reader.next_line().await {} });
         if let Some(se) = stderr_handle {
             tokio::spawn(async move {
                 let mut stderr_reader = BufReader::new(se).lines();
