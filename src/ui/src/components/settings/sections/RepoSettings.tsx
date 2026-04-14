@@ -1,7 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useAppStore } from "../../../stores/useAppStore";
 import { updateRepositorySettings, getRepoConfig } from "../../../services/tauri";
+import {
+  loadRepositoryMcps,
+  deleteRepositoryMcp,
+} from "../../../services/mcp";
 import type { RepoConfigInfo } from "../../../types/repository";
+import type { SavedMcpServer } from "../../../types/mcp";
 import { RepoIcon } from "../../shared/RepoIcon";
 import { IconPicker } from "../../modals/IconPicker";
 import styles from "../Settings.module.css";
@@ -12,6 +17,7 @@ interface RepoSettingsProps {
 
 export function RepoSettings({ repoId }: RepoSettingsProps) {
   const openModal = useAppStore((s) => s.openModal);
+  const activeModal = useAppStore((s) => s.activeModal);
   const updateRepo = useAppStore((s) => s.updateRepository);
   const repositories = useAppStore((s) => s.repositories);
 
@@ -29,6 +35,7 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
   const [iconPickerOpen, setIconPickerOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [repoConfig, setRepoConfig] = useState<RepoConfigInfo | null>(null);
+  const [mcpServers, setMcpServers] = useState<SavedMcpServer[]>([]);
   const iconPopoverRef = useRef<HTMLDivElement>(null);
 
   // Reset local state only when switching to a different repo
@@ -48,6 +55,25 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
       .then(setRepoConfig)
       .catch(() => setRepoConfig(null));
   }, [repoId]);
+
+  const refreshMcpServers = useCallback(() => {
+    loadRepositoryMcps(repoId)
+      .then(setMcpServers)
+      .catch(() => setMcpServers([]));
+  }, [repoId]);
+
+  useEffect(() => {
+    refreshMcpServers();
+  }, [refreshMcpServers]);
+
+  // Refresh MCP list when the selection modal closes (user may have saved new MCPs).
+  const prevModal = useRef(activeModal);
+  useEffect(() => {
+    if (prevModal.current === "mcpSelection" && activeModal === null) {
+      refreshMcpServers();
+    }
+    prevModal.current = activeModal;
+  }, [activeModal, refreshMcpServers]);
 
   // Close icon picker on click outside
   useEffect(() => {
@@ -273,6 +299,73 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
           placeholder="Add your preferences here. The agent will be told to prioritize these instructions over its default instructions."
           rows={3}
         />
+      </div>
+
+      <div className={styles.fieldGroup}>
+        <div className={styles.fieldLabel}>MCP servers</div>
+        <div className={styles.fieldHint} style={{ marginBottom: 12 }}>
+          Non-portable MCP servers injected into agent sessions via{" "}
+          <code>--mcp-config</code>. These are servers from your user config or
+          gitignored repo config that aren't automatically available in
+          worktrees.
+        </div>
+        {mcpServers.length === 0 ? (
+          <div className={styles.fieldHint}>
+            No MCP servers configured for this repository.
+          </div>
+        ) : (
+          <div className={styles.mcpList}>
+            {mcpServers.map((server) => {
+              let transport = "unknown";
+              try {
+                const cfg = JSON.parse(server.config_json);
+                if (cfg.command) transport = "stdio";
+                else if (cfg.url) transport = "http";
+                if (cfg.type) transport = cfg.type;
+              } catch {
+                /* ignore parse errors */
+              }
+              const sourceLabel =
+                server.source === "user_project_config"
+                  ? "~/.claude.json"
+                  : server.source === "repo_local_config"
+                    ? ".claude.json"
+                    : server.source;
+              return (
+                <div key={server.id} className={styles.mcpRow}>
+                  <div className={styles.mcpInfo}>
+                    <span className={styles.mcpName}>{server.name}</span>
+                    <span className={styles.mcpBadge}>{transport}</span>
+                    <span className={styles.mcpSource}>{sourceLabel}</span>
+                  </div>
+                  <button
+                    className={styles.mcpRemoveBtn}
+                    title="Remove this MCP server"
+                    aria-label={`Remove MCP server ${server.name}`}
+                    onClick={async () => {
+                      try {
+                        await deleteRepositoryMcp(server.id);
+                        refreshMcpServers();
+                      } catch (e) {
+                        setError(String(e));
+                      }
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <div style={{ marginTop: 8 }}>
+          <button
+            className={styles.iconBtn}
+            onClick={() => openModal("mcpSelection", { repoId })}
+          >
+            Re-detect &amp; add servers
+          </button>
+        </div>
       </div>
 
       <div className={styles.dangerZone}>

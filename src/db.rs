@@ -2,6 +2,8 @@ use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, params};
 
+use serde::{Deserialize, Serialize};
+
 use crate::model::{
     Attachment, ChatMessage, CheckpointFile, CompletedTurnData, ConversationCheckpoint,
     RemoteConnection, Repository, TerminalTab, TurnToolActivity, Workspace, WorkspaceStatus,
@@ -20,6 +22,17 @@ fn row_to_attachment(row: &rusqlite::Row) -> rusqlite::Result<Attachment> {
         height: row.get(6)?,
         created_at: row.get(8)?,
     })
+}
+
+/// A saved MCP server configuration for a repository.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepositoryMcpServer {
+    pub id: String,
+    pub repository_id: String,
+    pub name: String,
+    pub config_json: String,
+    pub source: String,
+    pub created_at: String,
 }
 
 pub struct Database {
@@ -299,6 +312,22 @@ impl Database {
                     ON attachments(message_id);
 
                 PRAGMA user_version = 16;",
+            )?;
+        }
+
+        if version < 17 {
+            self.conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS repository_mcp_servers (
+                    id              TEXT PRIMARY KEY,
+                    repository_id   TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+                    name            TEXT NOT NULL,
+                    config_json     TEXT NOT NULL,
+                    source          TEXT NOT NULL,
+                    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                    UNIQUE(repository_id, name)
+                );
+
+                PRAGMA user_version = 17;",
             )?;
         }
 
@@ -1307,6 +1336,68 @@ impl Database {
             map.insert(name, count);
         }
         Ok(map)
+    }
+
+    // --- Repository MCP Servers ---
+
+    /// List all saved MCP servers for a repository.
+    pub fn list_repository_mcp_servers(
+        &self,
+        repository_id: &str,
+    ) -> Result<Vec<RepositoryMcpServer>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, repository_id, name, config_json, source, created_at
+             FROM repository_mcp_servers
+             WHERE repository_id = ?1
+             ORDER BY name",
+        )?;
+        let rows = stmt.query_map(params![repository_id], |row| {
+            Ok(RepositoryMcpServer {
+                id: row.get(0)?,
+                repository_id: row.get(1)?,
+                name: row.get(2)?,
+                config_json: row.get(3)?,
+                source: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Replace all MCP servers for a repository atomically (delete + re-insert).
+    pub fn replace_repository_mcp_servers(
+        &self,
+        repository_id: &str,
+        servers: &[RepositoryMcpServer],
+    ) -> Result<(), rusqlite::Error> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "DELETE FROM repository_mcp_servers WHERE repository_id = ?1",
+            params![repository_id],
+        )?;
+        for server in servers {
+            tx.execute(
+                "INSERT INTO repository_mcp_servers (id, repository_id, name, config_json, source)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    server.id,
+                    server.repository_id,
+                    server.name,
+                    server.config_json,
+                    server.source,
+                ],
+            )?;
+        }
+        tx.commit()
+    }
+
+    /// Delete a single MCP server by ID.
+    pub fn delete_repository_mcp_server(&self, id: &str) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "DELETE FROM repository_mcp_servers WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
     }
 }
 

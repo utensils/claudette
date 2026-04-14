@@ -240,6 +240,38 @@ pub async fn send_chat_message(
     session.needs_attention = false;
     session.attention_kind = None;
 
+    // Load repository MCP configs for injection on first turn.
+    let mcp_config = if !is_resume {
+        let db_rows = db
+            .list_repository_mcp_servers(&ws.repository_id)
+            .unwrap_or_default();
+        if db_rows.is_empty() {
+            None
+        } else {
+            let mcp_servers: Vec<claudette::mcp::McpServer> = db_rows
+                .iter()
+                .filter_map(|row| {
+                    let config: serde_json::Value = serde_json::from_str(&row.config_json).ok()?;
+                    let source: claudette::mcp::McpSource =
+                        serde_json::from_str(&format!("\"{}\"", row.source))
+                            .unwrap_or(claudette::mcp::McpSource::UserProjectConfig);
+                    Some(claudette::mcp::McpServer {
+                        name: row.name.clone(),
+                        config,
+                        source,
+                    })
+                })
+                .collect();
+            if mcp_servers.is_empty() {
+                None
+            } else {
+                Some(claudette::mcp::serialize_for_cli(&mcp_servers))
+            }
+        }
+    } else {
+        None
+    };
+
     // Build agent settings from frontend params.
     let agent_settings = AgentSettings {
         model: if !is_resume { model } else { None },
@@ -248,6 +280,7 @@ pub async fn send_chat_message(
         plan_mode: plan_mode.unwrap_or(false),
         effort,
         chrome_enabled: chrome_enabled.unwrap_or(false),
+        mcp_config,
     };
 
     // Expand @-file mentions into inline file content for the agent prompt.

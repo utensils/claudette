@@ -321,6 +321,11 @@ fn main() {
             commands::shell::setup_shell_integration,
             commands::shell::apply_shell_integration,
             commands::shell::open_in_editor,
+            // MCP
+            commands::mcp::detect_mcp_servers,
+            commands::mcp::save_repository_mcps,
+            commands::mcp::load_repository_mcps,
+            commands::mcp::delete_repository_mcp,
             // Apps
             commands::apps::detect_installed_apps,
             commands::apps::open_workspace_in_app,

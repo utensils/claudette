@@ -213,6 +213,9 @@ pub struct AgentSettings {
     /// Enable Chrome browser mode via `--chrome`. Session-level: only applied
     /// on the first turn.
     pub chrome_enabled: bool,
+    /// MCP config JSON string for `--mcp-config`. Session-level: only applied
+    /// on the first turn.
+    pub mcp_config: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -259,6 +262,13 @@ pub fn build_claude_args(
     // Chrome is session-level — only set on the first turn.
     if !is_resume && settings.chrome_enabled {
         args.push("--chrome".to_string());
+    }
+
+    // MCP config is session-level — only inject on the first turn.
+    // Resumed sessions inherit MCP servers from the initial turn.
+    if !is_resume && let Some(ref mcp_json) = settings.mcp_config {
+        args.push("--mcp-config".to_string());
+        args.push(mcp_json.clone());
     }
 
     // Permission mode must be set on every turn — each `claude` invocation is
@@ -1624,6 +1634,34 @@ mod tests {
         };
         let args = build_claude_args("sess-1", "hello", true, &[], None, &settings, false);
         assert!(!args.contains(&"--chrome".to_string()));
+    }
+
+    #[test]
+    fn test_build_args_with_mcp_config() {
+        let settings = AgentSettings {
+            mcp_config: Some(r#"{"mcpServers":{"s":{"type":"stdio","command":"x"}}}"#.to_string()),
+            ..Default::default()
+        };
+        let args = build_claude_args("sess-1", "hello", false, &[], None, &settings, false);
+        let idx = args.iter().position(|a| a == "--mcp-config").unwrap();
+        assert!(args[idx + 1].contains("mcpServers"));
+    }
+
+    #[test]
+    fn test_build_args_mcp_config_skipped_on_resume() {
+        let settings = AgentSettings {
+            mcp_config: Some(r#"{"mcpServers":{}}"#.to_string()),
+            ..Default::default()
+        };
+        let args = build_claude_args("sess-1", "hello", true, &[], None, &settings, false);
+        assert!(!args.contains(&"--mcp-config".to_string()));
+    }
+
+    #[test]
+    fn test_build_args_mcp_config_none_omitted() {
+        let settings = AgentSettings::default();
+        let args = build_claude_args("sess-1", "hello", false, &[], None, &settings, false);
+        assert!(!args.contains(&"--mcp-config".to_string()));
     }
 
     // -----------------------------------------------------------------------
