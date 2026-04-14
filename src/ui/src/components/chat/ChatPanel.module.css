@@ -877,7 +877,6 @@
 .inputControls {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
   padding-top: 6px;
 }
@@ -928,7 +927,7 @@
   cursor: pointer;
   font-size: 13px;
   font-weight: 500;
-  align-self: flex-end;
+  margin-left: auto;
   transition: background var(--transition-fast), color var(--transition-fast),
               border-color var(--transition-fast);
 }
@@ -946,4 +945,110 @@
 .sendBtn:disabled {
   opacity: 0.25;
   cursor: not-allowed;
+}
+
+/* -- Attachment UI -- */
+
+.inputDragActive {
+  outline: 2px dashed var(--accent-primary);
+  outline-offset: -2px;
+  background: rgba(var(--accent-primary-rgb), 0.04);
+}
+
+.attachmentStrip {
+  display: flex;
+  gap: 8px;
+  padding: 4px 0 8px;
+  overflow-x: auto;
+}
+
+.attachmentThumb {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--divider);
+  flex-shrink: 0;
+}
+
+.attachmentThumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.attachmentRemove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  background: rgba(0, 0, 0, 0.6);
+  color: white;
+  border: none;
+  border-radius: 50%;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+
+.attachmentRemove:hover {
+  background: rgba(0, 0, 0, 0.8);
+}
+
+.attachBtn {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--divider);
+  color: var(--text-muted);
+  cursor: pointer;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  margin-right: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  flex-shrink: 0;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.attachBtn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+  border-color: var(--text-dim);
+}
+
+/* -- Inline message images -- */
+
+.messageImages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.messageImage {
+  max-width: 300px;
+  max-height: 300px;
+  border-radius: 8px;
+  border: 1px solid var(--divider);
+  object-fit: contain;
+  cursor: pointer;
+}
+
+.messagePdf {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--divider);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
+  font-size: 13px;
 }

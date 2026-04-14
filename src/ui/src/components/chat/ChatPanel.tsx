@@ -1,11 +1,13 @@
 import React, { createContext, memo, useContext, useEffect, useRef, useState, useMemo, useCallback } from "react";
 import Markdown from "react-markdown";
 import { preprocessContent, REHYPE_PLUGINS, REMARK_PLUGINS } from "../../utils/markdown";
-import { GitBranch, LayoutDashboard, RotateCcw } from "lucide-react";
+import { FileText, GitBranch, LayoutDashboard, Plus, RotateCcw, X } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import type { ToolActivity, CompletedTurn } from "../../stores/useAppStore";
 import {
   loadChatHistory,
+  loadAttachmentsForWorkspace,
+  readFileAsBase64,
   listCheckpoints,
   loadCompletedTurns,
   listSlashCommands,
@@ -17,9 +19,17 @@ import {
   setAppSetting,
   listWorkspaceFiles,
 } from "../../services/tauri";
+import { open } from "@tauri-apps/plugin-dialog";
 import { reconstructCompletedTurns } from "../../utils/reconstructTurns";
 import type { SlashCommand, FileEntry } from "../../services/tauri";
-import type { ChatMessage } from "../../types/chat";
+import type { ChatMessage, ChatAttachment, AttachmentInput, PendingAttachment } from "../../types/chat";
+import { base64ToBytes } from "../../utils/base64";
+import {
+  SUPPORTED_DOCUMENT_TYPES,
+  SUPPORTED_ATTACHMENT_TYPES,
+  MAX_ATTACHMENTS,
+  maxSizeFor,
+} from "../../utils/attachmentValidation";
 import { useAgentStream } from "../../hooks/useAgentStream";
 import { extractToolSummary } from "../../hooks/toolSummary";
 import { AgentQuestionCard } from "./AgentQuestionCard";
@@ -40,6 +50,51 @@ import { debugChat } from "../../utils/chatDebug";
 import styles from "./ChatPanel.module.css";
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/**
+ * Lazily renders a PDF first-page thumbnail.
+ *
+ * Accepts either `dataBase64` (optimistic/pre-loaded data) or `attachmentId`
+ * (fetches the body from the backend on demand). Shows a loading pill with
+ * the filename while the thumbnail generates.
+ */
+function PdfThumbnail({ dataBase64, attachmentId, filename, className }: {
+  dataBase64?: string;
+  attachmentId?: string;
+  filename: string;
+  className?: string;
+}) {
+  const [src, setSrc] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      let b64 = dataBase64;
+      // If no inline data, fetch on demand from the backend.
+      if (!b64 && attachmentId) {
+        const { loadAttachmentData } = await import("../../services/tauri");
+        b64 = await loadAttachmentData(attachmentId);
+      }
+      if (!b64 || cancelled) return;
+      const bytes = base64ToBytes(b64);
+      const { generatePdfThumbnail } = await import("../../utils/pdfThumbnail");
+      const url = await generatePdfThumbnail(bytes.buffer as ArrayBuffer, 300, attachmentId);
+      if (!cancelled) setSrc(url);
+    })().catch(() => {});
+
+    return () => { cancelled = true; };
+  }, [dataBase64, attachmentId]);
+
+  if (!src) {
+    return (
+      <div className={styles.messagePdf}>
+        <FileText size={16} />
+        <span>{filename}</span>
+      </div>
+    );
+  }
+  return <img src={src} alt={filename} className={className} />;
+}
 
 /** Semantic colors for tool names — makes tool activity scannable at a glance. */
 const TOOL_COLORS: Record<string, string> = {
@@ -69,6 +124,7 @@ const ScrollContext = createContext<{
 // causing Object.is to return false and triggering unnecessary component re-renders.
 const EMPTY_COMPLETED_TURNS: CompletedTurn[] = [];
 const EMPTY_ACTIVITIES: ToolActivity[] = [];
+const EMPTY_ATTACHMENTS: ChatAttachment[] = [];
 
 export function ChatPanel() {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
@@ -239,6 +295,16 @@ export function ChatPanel() {
           .filter((m) => m.role === "User")
           .map((m) => m.content);
 
+        // Load attachments for this workspace's messages.
+        if (isLocal) {
+          loadAttachmentsForWorkspace(wsId)
+            .then((atts) => {
+              if (cancelled) return;
+              useAppStore.getState().setChatAttachments(wsId, atts);
+            })
+            .catch((e) => console.error("Failed to load attachments:", e));
+        }
+
         // Load persisted completed turns and reconstruct with correct positions.
         // Skip if the agent is currently running — the in-memory state from
         // finalizeTurn() is more current than the DB and must not be overwritten.
@@ -330,22 +396,30 @@ export function ChatPanel() {
   ]);
 
   // Auto-dispatch queued message when agent becomes idle.
-  const handleSendRef = useRef<((content: string, mentionedFiles?: Set<string>) => void) | null>(null);
+  const handleSendRef = useRef<((
+    content: string,
+    mentionedFiles?: Set<string>,
+    attachments?: AttachmentInput[],
+  ) => void) | null>(null);
   useEffect(() => {
     if (isRunning || !selectedWorkspaceId || !queuedMessage) return;
     // Agent just finished — dispatch the queued message.
-    const { content, mentionedFiles } = queuedMessage;
+    const { content, mentionedFiles, attachments } = queuedMessage;
     clearQueuedMessage(selectedWorkspaceId);
     const filesSet = mentionedFiles?.length ? new Set(mentionedFiles) : undefined;
     // Use a microtask to avoid calling handleSend during render.
-    queueMicrotask(() => handleSendRef.current?.(content, filesSet));
+    queueMicrotask(() => handleSendRef.current?.(content, filesSet, attachments));
   }, [isRunning, selectedWorkspaceId, queuedMessage, clearQueuedMessage]);
 
   if (!ws) return null;
 
-  const handleSend = async (content: string, mentionedFiles?: Set<string>) => {
+  const handleSend = async (
+    content: string,
+    mentionedFiles?: Set<string>,
+    attachments?: AttachmentInput[],
+  ) => {
     const trimmed = content.trim();
-    if (!trimmed || !selectedWorkspaceId) return;
+    if ((!trimmed && !attachments?.length) || !selectedWorkspaceId) return;
 
     // Convert mentioned files set to array for the backend.
     const mentionedFilesArray = mentionedFiles?.size
@@ -356,7 +430,12 @@ export function ChatPanel() {
     // The user can press Escape to stop the agent if they want to interrupt.
     // Queued messages are auto-sent when the current turn finishes.
     if (isRunning) {
-      setQueuedMessage(selectedWorkspaceId, trimmed, mentionedFilesArray);
+      setQueuedMessage(
+        selectedWorkspaceId,
+        trimmed,
+        mentionedFilesArray,
+        attachments,
+      );
       return;
     }
 
@@ -374,8 +453,9 @@ export function ChatPanel() {
     history.push(trimmed);
     historyIndexRef.current = -1;
     draftRef.current = "";
+    const optimisticMsgId = crypto.randomUUID();
     addChatMessage(selectedWorkspaceId, {
-      id: crypto.randomUUID(),
+      id: optimisticMsgId,
       workspace_id: selectedWorkspaceId,
       role: "User",
       content: trimmed,
@@ -384,6 +464,20 @@ export function ChatPanel() {
       created_at: new Date().toISOString(),
       thinking: null,
     });
+    // Add optimistic attachment data so images display immediately.
+    if (attachments?.length) {
+      const optimisticAtts = attachments.map((a) => ({
+        id: crypto.randomUUID(),
+        message_id: optimisticMsgId,
+        filename: a.filename,
+        media_type: a.media_type,
+        data_base64: a.data_base64,
+        width: null,
+        height: null,
+        size_bytes: Math.ceil(a.data_base64.length * 0.75),
+      }));
+      useAppStore.getState().addChatAttachments(selectedWorkspaceId, optimisticAtts);
+    }
     updateWorkspace(selectedWorkspaceId, { agent_status: "Running" });
     useAppStore.getState().clearUnreadCompletion(selectedWorkspaceId);
 
@@ -422,6 +516,8 @@ export function ChatPanel() {
           planMode || undefined,
           effort,
           chromeEnabled || undefined,
+          attachments,
+          optimisticMsgId,
         );
       }
     } catch (e) {
@@ -638,6 +734,7 @@ export function ChatPanel() {
       <ChatInputArea
         onSend={handleSend}
         isRunning={isRunning}
+        isRemote={!!ws?.remote_connection_id}
         selectedWorkspaceId={selectedWorkspaceId!}
         projectPath={repo?.path}
         historyRef={historyRef}
@@ -846,6 +943,20 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
   const showThinkingBlocks = useAppStore(
     (s) => s.showThinkingBlocks[workspaceId] === true
   );
+  const chatAttachments = useAppStore(
+    (s) => s.chatAttachments[workspaceId] ?? EMPTY_ATTACHMENTS
+  );
+
+  // Pre-build a Map keyed by message_id for O(1) lookup in the render loop.
+  const attachmentsByMessage = useMemo(() => {
+    const map = new Map<string, ChatAttachment[]>();
+    for (const att of chatAttachments) {
+      const list = map.get(att.message_id);
+      if (list) list.push(att);
+      else map.set(att.message_id, [att]);
+    }
+    return map;
+  }, [chatAttachments]);
 
   // Build an index: afterMessageIndex → array of (turn, globalIndex) pairs.
   // Only recomputed when completedTurns changes, not on every streaming update.
@@ -938,6 +1049,7 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
                     openModal("rollback", {
                       workspaceId,
                       checkpointId: cp ? cp.id : null,
+                      messageId: msg.id,
                       messagePreview: msg.content.slice(0, 100),
                       messageContent: msg.content,
                       hasFileChanges: cp
@@ -953,6 +1065,28 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
               <ThinkingBlock content={msg.thinking} isStreaming={false} />
             )}
             <div className={styles.content}>
+              {msg.role === "User" && attachmentsByMessage.has(msg.id) && (
+                <div className={styles.messageImages}>
+                  {attachmentsByMessage.get(msg.id)!.map((att) =>
+                    att.media_type === "application/pdf" ? (
+                      <PdfThumbnail
+                        key={att.id}
+                        dataBase64={att.data_base64 || undefined}
+                        attachmentId={att.id}
+                        filename={att.filename}
+                        className={styles.messageImage}
+                      />
+                    ) : (
+                      <img
+                        key={att.id}
+                        src={`data:${att.media_type};base64,${att.data_base64}`}
+                        alt={att.filename}
+                        className={styles.messageImage}
+                      />
+                    ),
+                  )}
+                </div>
+              )}
               {msg.role === "Assistant" ? (
                 <Markdown
                   remarkPlugins={REMARK_PLUGINS}
@@ -1099,17 +1233,37 @@ function extractMentionQuery(text: string, cursorPos: number): string | null {
 }
 
 // Separate component for input area to prevent full ChatPanel re-renders on every keystroke
+/** Convert a File/Blob to a base64 string (without the data: prefix). */
+function fileToBase64(file: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      const base64 = result.split(",")[1] ?? "";
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
 function ChatInputArea({
   onSend,
   isRunning,
+  isRemote,
   selectedWorkspaceId,
   projectPath,
   historyRef,
   historyIndexRef,
   draftRef,
 }: {
-  onSend: (content: string, mentionedFiles?: Set<string>) => Promise<void>;
+  onSend: (
+    content: string,
+    mentionedFiles?: Set<string>,
+    attachments?: AttachmentInput[],
+  ) => Promise<void>;
   isRunning: boolean;
+  isRemote: boolean;
   selectedWorkspaceId: string;
   projectPath: string | undefined;
   historyRef: React.MutableRefObject<Record<string, string[]>>;
@@ -1128,6 +1282,8 @@ function ChatInputArea({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const filesCache = useRef<Record<string, FileEntry[]>>({});
   const mentionedFilesRef = useRef<Set<string>>(new Set());
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  const [dragActive, setDragActive] = useState(false);
 
   // Per-workspace draft storage: save input when switching away,
   // restore when switching back.
@@ -1141,10 +1297,17 @@ function ChatInputArea({
       // Restore draft for the workspace we're entering.
       setChatInput(draftsRef.current[selectedWorkspaceId] ?? "");
       prevWorkspaceRef.current = selectedWorkspaceId;
-      // Reset file picker state for new workspace.
+      // Reset file picker and attachment state for new workspace.
       setFilesLoaded(false);
       setWorkspaceFiles([]);
       mentionedFilesRef.current = new Set();
+      // Clear staged attachments so they don't leak across workspaces.
+      setPendingAttachments((prev) => {
+        for (const a of prev) {
+          if (a.preview_url.startsWith("blob:")) URL.revokeObjectURL(a.preview_url);
+        }
+        return [];
+      });
     }
   }, [selectedWorkspaceId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1278,6 +1441,192 @@ function ChatInputArea({
     textarea.style.height = `${textarea.scrollHeight}px`;
   }, [chatInput]);
 
+  // -- Attachment helpers --
+
+  const addAttachment = useCallback(async (file: Blob, filename: string) => {
+    if (isRemote) return; // Attachments not supported over remote transport
+    if (!SUPPORTED_ATTACHMENT_TYPES.has(file.type)) {
+      console.warn(`Unsupported file type: ${file.type}`);
+      return;
+    }
+    const isPdf = SUPPORTED_DOCUMENT_TYPES.has(file.type);
+    const sizeLimit = maxSizeFor(file.type);
+    if (file.size > sizeLimit) {
+      console.warn(
+        `File too large: ${(file.size / 1024 / 1024).toFixed(1)} MB (max ${(sizeLimit / 1024 / 1024).toFixed(1)} MB)`,
+      );
+      return;
+    }
+    const data_base64 = await fileToBase64(file);
+    // PDFs get a rendered first-page thumbnail; images use a blob URL.
+    let preview_url: string;
+    if (isPdf) {
+      const { generatePdfThumbnail } = await import("../../utils/pdfThumbnail");
+      preview_url = await generatePdfThumbnail(await file.arrayBuffer()).catch(() => "");
+    } else {
+      preview_url = URL.createObjectURL(file);
+    }
+    if (!preview_url) return; // PDF thumbnail generation failed
+    const att: PendingAttachment = {
+      id: crypto.randomUUID(),
+      filename,
+      media_type: file.type,
+      data_base64,
+      preview_url,
+      size_bytes: file.size,
+    };
+    setPendingAttachments((prev) => {
+      if (prev.length >= MAX_ATTACHMENTS) {
+        if (preview_url.startsWith("blob:")) URL.revokeObjectURL(preview_url);
+        return prev;
+      }
+      return [...prev, att];
+    });
+  }, [isRemote]);
+
+  const removeAttachment = useCallback((id: string) => {
+    setPendingAttachments((prev) => {
+      const att = prev.find((a) => a.id === id);
+      if (att?.preview_url.startsWith("blob:")) URL.revokeObjectURL(att.preview_url);
+      return prev.filter((a) => a.id !== id);
+    });
+  }, []);
+
+  // Track current attachments in a ref so the unmount cleanup always
+  // revokes the latest blob URLs (not the stale initial-render snapshot).
+  const pendingAttachmentsRef = useRef(pendingAttachments);
+  pendingAttachmentsRef.current = pendingAttachments;
+  useEffect(() => {
+    return () => {
+      for (const a of pendingAttachmentsRef.current) {
+        if (a.preview_url.startsWith("blob:")) URL.revokeObjectURL(a.preview_url);
+      }
+    };
+  }, []);
+
+  // Consume attachment prefill (e.g. from rollback) — convert the raw
+  // base64 data back into PendingAttachment objects with preview URLs.
+  const attachmentsPrefill = useAppStore((s) => s.pendingAttachmentsPrefill);
+  const setAttachmentsPrefill = useAppStore((s) => s.setPendingAttachmentsPrefill);
+  useEffect(() => {
+    if (!attachmentsPrefill || attachmentsPrefill.length === 0) return;
+    setAttachmentsPrefill(null);
+
+    (async () => {
+      for (const a of attachmentsPrefill) {
+        const bytes = base64ToBytes(a.data_base64);
+        const blob = new Blob([bytes], { type: a.media_type });
+        await addAttachment(blob, a.filename);
+      }
+    })().catch((e) => console.error("Failed to restore attachment prefill:", e));
+  }, [attachmentsPrefill, setAttachmentsPrefill, addAttachment]);
+
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      for (const item of items) {
+        if (SUPPORTED_ATTACHMENT_TYPES.has(item.type)) {
+          e.preventDefault();
+          const file = item.getAsFile();
+          if (file) {
+            const defaultName = item.type === "application/pdf"
+              ? "pasted-document.pdf"
+              : "pasted-image.png";
+            addAttachment(file, file.name || defaultName);
+          }
+          return; // Only handle first attachment
+        }
+      }
+      // If no supported items, let the default text paste proceed.
+    },
+    [addAttachment],
+  );
+
+  // Tauri intercepts native file drops before they reach the webview's HTML5
+  // drag events. Use Tauri's onDragDropEvent to handle file drops, and fall
+  // through to readFileAsBase64 (which validates type + size on the Rust side).
+  //
+  // The handler references addAttachment via a ref to avoid re-registering the
+  // listener when the callback identity changes — re-registration causes a race
+  // where the old listener's async cleanup hasn't fired yet and the same drop
+  // event is processed by both the old and new listeners, duplicating files.
+  const addAttachmentRef = useRef(addAttachment);
+  addAttachmentRef.current = addAttachment;
+
+  useEffect(() => {
+    if (isRemote) return;
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+
+    import("@tauri-apps/api/webview").then(({ getCurrentWebview }) => {
+      if (cancelled) return;
+      getCurrentWebview()
+        .onDragDropEvent((event) => {
+          if (cancelled) return;
+          if (event.payload.type === "enter" || event.payload.type === "over") {
+            setDragActive(true);
+          } else if (event.payload.type === "leave") {
+            setDragActive(false);
+          } else if (event.payload.type === "drop") {
+            setDragActive(false);
+            for (const filePath of event.payload.paths) {
+              readFileAsBase64(filePath)
+                .then((result) => {
+                  if (cancelled) return;
+                  const bytes = base64ToBytes(result.data_base64);
+                  const blob = new Blob([bytes], { type: result.media_type });
+                  addAttachmentRef.current(blob, result.filename);
+                })
+                .catch((err) =>
+                  console.warn("Skipped dropped file:", err),
+                );
+            }
+          }
+        })
+        .then((fn) => {
+          if (cancelled) {
+            fn(); // Already cleaned up — unlisten immediately
+          } else {
+            unlisten = fn;
+          }
+        });
+    }).catch((err) => {
+      console.warn("Failed to register drag-drop listener:", err);
+      setDragActive(false);
+    });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [isRemote]); // Stable dep — no re-registration on callback changes
+
+  const handleAttachClick = useCallback(async () => {
+    const selected = await open({
+      multiple: true,
+      filters: [
+        {
+          name: "Images & Documents",
+          extensions: ["png", "jpg", "jpeg", "gif", "webp", "pdf"],
+        },
+      ],
+    });
+    if (!selected) return;
+    const paths = Array.isArray(selected) ? selected : [selected];
+    for (const filePath of paths) {
+      try {
+        const result = await readFileAsBase64(filePath);
+        const bytes = base64ToBytes(result.data_base64);
+        const blob = new Blob([bytes], { type: result.media_type });
+        await addAttachment(blob, result.filename);
+      } catch (err) {
+        console.error("Failed to read file:", err);
+      }
+    }
+  }, [addAttachment]);
+
   const handleSend = () => {
     // Only include files whose @path tokens are still in the text, so that
     // removed references don't get expanded.
@@ -1288,8 +1637,21 @@ function ChatInputArea({
       }
     }
     const files = activeFiles.size > 0 ? activeFiles : undefined;
-    onSend(chatInput, files);
+    const attachmentPayload =
+      pendingAttachments.length > 0
+        ? pendingAttachments.map((a) => ({
+            filename: a.filename,
+            media_type: a.media_type,
+            data_base64: a.data_base64,
+          }))
+        : undefined;
+    onSend(chatInput, files, attachmentPayload);
     setChatInput("");
+    // Revoke blob URLs to free memory (data: URLs don't need cleanup).
+    for (const a of pendingAttachments) {
+      if (a.preview_url.startsWith("blob:")) URL.revokeObjectURL(a.preview_url);
+    }
+    setPendingAttachments([]);
     mentionedFilesRef.current = new Set();
   };
 
@@ -1410,7 +1772,9 @@ function ChatInputArea({
   };
 
   return (
-    <div className={styles.inputArea}>
+    <div
+      className={`${styles.inputArea}${dragActive ? ` ${styles.inputDragActive}` : ""}`}
+    >
       {showFilePicker && (
         <FileMentionPicker
           results={mentionResults}
@@ -1433,6 +1797,22 @@ function ChatInputArea({
           onHover={setSlashPickerIndex}
         />
       )}
+      {pendingAttachments.length > 0 && (
+        <div className={styles.attachmentStrip}>
+          {pendingAttachments.map((att) => (
+            <div key={att.id} className={styles.attachmentThumb} title={att.filename}>
+              <img src={att.preview_url} alt={att.filename} />
+              <button
+                className={styles.attachmentRemove}
+                onClick={() => removeAttachment(att.id)}
+                title="Remove"
+              >
+                <X size={10} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       <textarea
         ref={textareaRef}
         className={`${styles.input}${planMode ? ` ${styles.inputPlanMode}` : ""}`}
@@ -1445,9 +1825,18 @@ function ChatInputArea({
           setCursorPos((e.target as HTMLTextAreaElement).selectionStart ?? 0);
         }}
         onKeyDown={handleKeyDown}
+        onPaste={handlePaste}
         placeholder={isRunning ? "Type to queue a message..." : "Send a message..."}
       />
       <div className={styles.inputControls}>
+        <button
+          className={styles.attachBtn}
+          onClick={handleAttachClick}
+          disabled={isRemote}
+          title={isRemote ? "Attachments not supported for remote workspaces" : "Add files or images"}
+        >
+          <Plus size={16} />
+        </button>
         <ChatToolbar
           workspaceId={selectedWorkspaceId}
           disabled={isRunning}
@@ -1455,7 +1844,7 @@ function ChatInputArea({
         <button
           className={styles.sendBtn}
           onClick={handleSend}
-          disabled={!chatInput.trim()}
+          disabled={!chatInput.trim() && pendingAttachments.length === 0}
         >
           Send
         </button>

@@ -396,6 +396,7 @@ async fn handle_send_chat_message(
         &allowed_tools,
         custom_instructions.as_deref(),
         &agent_settings,
+        &[], // Attachments not yet supported over remote transport
     )
     .await?;
 

@@ -184,6 +184,16 @@ pub enum AgentEvent {
 // Per-turn agent settings
 // ---------------------------------------------------------------------------
 
+/// An attachment (image or document) to send alongside the prompt via stream-json stdin.
+///
+/// Images use `"type": "image"` content blocks; PDFs use `"type": "document"`.
+/// The block type is determined by [`media_type`] in [`build_stdin_message`].
+#[derive(Debug, Clone)]
+pub struct ImageAttachment {
+    pub media_type: String,
+    pub data_base64: String,
+}
+
 /// Per-turn settings that control CLI flags for the agent subprocess.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AgentSettings {
@@ -216,6 +226,10 @@ pub struct TurnHandle {
 }
 
 /// Build the CLI arguments for a `claude -p` invocation.
+///
+/// When `has_attachments` is true, the prompt is omitted from the args and
+/// `--input-format stream-json` is added — the prompt + images are instead
+/// piped to stdin as an `SDKUserMessage` JSON line (see [`build_stdin_message`]).
 pub fn build_claude_args(
     session_id: &str,
     prompt: &str,
@@ -223,6 +237,7 @@ pub fn build_claude_args(
     allowed_tools: &[String],
     custom_instructions: Option<&str>,
     settings: &AgentSettings,
+    has_attachments: bool,
 ) -> Vec<String> {
     let mut args = vec![
         "--print".to_string(),
@@ -306,8 +321,58 @@ pub fn build_claude_args(
         args.push(session_id.to_string());
     }
 
-    args.push(prompt.to_string());
+    if has_attachments {
+        // When images are present, the prompt is sent via stdin as a structured
+        // SDKUserMessage (with content blocks). We add --input-format stream-json
+        // so the CLI reads from stdin instead of the positional arg.
+        args.push("--input-format".to_string());
+        args.push("stream-json".to_string());
+    } else {
+        args.push(prompt.to_string());
+    }
+
     args
+}
+
+/// Build a single-line JSON payload for stdin when using `--input-format stream-json`.
+///
+/// Produces an `SDKUserMessage` with content blocks: one text block for the
+/// prompt, then one `image` or `document` block per attachment (PDFs use the
+/// `document` block type; all other supported formats use `image`).
+pub fn build_stdin_message(prompt: &str, attachments: &[ImageAttachment]) -> String {
+    let mut content_blocks = Vec::new();
+
+    // Only add a text block if the prompt is non-empty — the API rejects
+    // empty text content blocks with "text content blocks must be non-empty".
+    if !prompt.trim().is_empty() {
+        content_blocks.push(serde_json::json!({"type": "text", "text": prompt}));
+    }
+
+    for att in attachments {
+        let block_type = if att.media_type == "application/pdf" {
+            "document"
+        } else {
+            "image"
+        };
+        content_blocks.push(serde_json::json!({
+            "type": block_type,
+            "source": {
+                "type": "base64",
+                "media_type": att.media_type,
+                "data": att.data_base64,
+            }
+        }));
+    }
+
+    serde_json::json!({
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": content_blocks,
+        },
+        "parent_tool_use_id": null,
+    })
+    .to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -535,6 +600,7 @@ fn login_shell_path() -> Option<OsString> {
 ///
 /// `allowed_tools` pre-approves tools so they run without interactive
 /// permission prompts (e.g. `["Bash", "Read", "Edit"]`).
+#[allow(clippy::too_many_arguments)]
 pub async fn run_turn(
     working_dir: &Path,
     session_id: &str,
@@ -543,7 +609,9 @@ pub async fn run_turn(
     allowed_tools: &[String],
     custom_instructions: Option<&str>,
     settings: &AgentSettings,
+    attachments: &[ImageAttachment],
 ) -> Result<TurnHandle, String> {
+    let has_attachments = !attachments.is_empty();
     let args = build_claude_args(
         session_id,
         prompt,
@@ -551,15 +619,21 @@ pub async fn run_turn(
         allowed_tools,
         custom_instructions,
         settings,
+        has_attachments,
     );
 
     let claude_path = resolve_claude_path().await;
     let mut cmd = Command::new(&claude_path);
     cmd.args(&args)
         .current_dir(working_dir)
-        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+
+    if has_attachments {
+        cmd.stdin(std::process::Stdio::piped());
+    } else {
+        cmd.stdin(std::process::Stdio::null());
+    }
 
     // Strip OAuth tokens inherited from a parent Claude Code session — these
     // use the sk-ant-oat* prefix and are not valid for subprocess API calls.
@@ -580,6 +654,23 @@ pub async fn run_turn(
     let pid = child
         .id()
         .ok_or_else(|| "Process exited immediately".to_string())?;
+
+    // When images are present, pipe the prompt + image content blocks to stdin
+    // as a stream-json SDKUserMessage, then close stdin to signal EOF.
+    if has_attachments && let Some(mut stdin) = child.stdin.take() {
+        use tokio::io::AsyncWriteExt;
+        let payload = build_stdin_message(prompt, attachments);
+        stdin
+            .write_all(payload.as_bytes())
+            .await
+            .map_err(|e| format!("Failed to write image data to stdin: {e}"))?;
+        stdin
+            .write_all(b"\n")
+            .await
+            .map_err(|e| format!("Failed to write stdin newline: {e}"))?;
+        // Drop closes the pipe, signalling EOF to the child.
+        drop(stdin);
+    }
 
     let stdout = child
         .stdout
@@ -1147,6 +1238,7 @@ mod tests {
             &[],
             None,
             &AgentSettings::default(),
+            false,
         );
         assert!(args.contains(&"--print".to_string()));
         assert!(args.contains(&"--session-id".to_string()));
@@ -1166,6 +1258,7 @@ mod tests {
             &[],
             None,
             &AgentSettings::default(),
+            false,
         );
         assert!(args.contains(&"--resume".to_string()));
         assert!(!args.contains(&"--session-id".to_string()));
@@ -1181,6 +1274,7 @@ mod tests {
             &tools,
             None,
             &AgentSettings::default(),
+            false,
         );
         let idx = args.iter().position(|a| a == "--allowedTools").unwrap();
         assert_eq!(args[idx + 1], "Bash,Read,Edit");
@@ -1195,6 +1289,7 @@ mod tests {
             &[],
             Some("Always use TypeScript"),
             &AgentSettings::default(),
+            false,
         );
         let idx = args
             .iter()
@@ -1212,6 +1307,7 @@ mod tests {
             &[],
             Some(""),
             &AgentSettings::default(),
+            false,
         );
         assert!(!args.contains(&"--append-system-prompt".to_string()));
     }
@@ -1225,6 +1321,7 @@ mod tests {
             &[],
             Some("   "),
             &AgentSettings::default(),
+            false,
         );
         assert!(!args.contains(&"--append-system-prompt".to_string()));
     }
@@ -1238,6 +1335,7 @@ mod tests {
             &[],
             Some("Always use TypeScript"),
             &AgentSettings::default(),
+            false,
         );
         assert!(!args.contains(&"--append-system-prompt".to_string()));
         assert!(args.contains(&"--resume".to_string()));
@@ -1249,7 +1347,7 @@ mod tests {
             model: Some("opus".to_string()),
             ..Default::default()
         };
-        let args = build_claude_args("sess-1", "hello", false, &[], None, &settings);
+        let args = build_claude_args("sess-1", "hello", false, &[], None, &settings, false);
         let idx = args.iter().position(|a| a == "--model").unwrap();
         assert_eq!(args[idx + 1], "opus");
     }
@@ -1260,7 +1358,7 @@ mod tests {
             model: Some("opus".to_string()),
             ..Default::default()
         };
-        let args = build_claude_args("sess-1", "hello", true, &[], None, &settings);
+        let args = build_claude_args("sess-1", "hello", true, &[], None, &settings, false);
         assert!(!args.contains(&"--model".to_string()));
     }
 
@@ -1270,7 +1368,7 @@ mod tests {
             plan_mode: true,
             ..Default::default()
         };
-        let args = build_claude_args("sess-1", "hello", false, &[], None, &settings);
+        let args = build_claude_args("sess-1", "hello", false, &[], None, &settings, false);
         let idx = args.iter().position(|a| a == "--permission-mode").unwrap();
         assert_eq!(args[idx + 1], "plan");
     }
@@ -1281,7 +1379,7 @@ mod tests {
             plan_mode: true,
             ..Default::default()
         };
-        let args = build_claude_args("sess-1", "hello", true, &[], None, &settings);
+        let args = build_claude_args("sess-1", "hello", true, &[], None, &settings, false);
         // Permission mode must be set on every turn (per-process flag)
         let idx = args.iter().position(|a| a == "--permission-mode").unwrap();
         assert_eq!(args[idx + 1], "plan");
@@ -1294,7 +1392,7 @@ mod tests {
             thinking_enabled: true,
             ..Default::default()
         };
-        let args = build_claude_args("sess-1", "hello", false, &[], None, &settings);
+        let args = build_claude_args("sess-1", "hello", false, &[], None, &settings, false);
         let idx = args.iter().position(|a| a == "--settings").unwrap();
         let json: serde_json::Value = serde_json::from_str(&args[idx + 1]).unwrap();
         assert_eq!(json["fastMode"], true);
@@ -1307,7 +1405,7 @@ mod tests {
             fast_mode: true,
             ..Default::default()
         };
-        let args = build_claude_args("sess-1", "hello", false, &[], None, &settings);
+        let args = build_claude_args("sess-1", "hello", false, &[], None, &settings, false);
         let idx = args.iter().position(|a| a == "--settings").unwrap();
         let json: serde_json::Value = serde_json::from_str(&args[idx + 1]).unwrap();
         assert_eq!(json["fastMode"], true);
@@ -1322,7 +1420,7 @@ mod tests {
             ..Default::default()
         };
         // --settings should still be passed on resume (per-turn flag)
-        let args = build_claude_args("sess-1", "hello", true, &[], None, &settings);
+        let args = build_claude_args("sess-1", "hello", true, &[], None, &settings, false);
         assert!(args.contains(&"--settings".to_string()));
     }
 
@@ -1336,6 +1434,7 @@ mod tests {
             &tools,
             None,
             &AgentSettings::default(),
+            false,
         );
         // Should set permission-mode to bypassPermissions on first turn
         let pm_idx = args.iter().position(|a| a == "--permission-mode").unwrap();
@@ -1354,6 +1453,7 @@ mod tests {
             &tools,
             None,
             &AgentSettings::default(),
+            false,
         );
         // Permission mode must be set on every turn (per-process flag)
         let pm_idx = args.iter().position(|a| a == "--permission-mode").unwrap();
@@ -1369,7 +1469,7 @@ mod tests {
             plan_mode: true,
             ..Default::default()
         };
-        let args = build_claude_args("sess-1", "hello", false, &tools, None, &settings);
+        let args = build_claude_args("sess-1", "hello", false, &tools, None, &settings, false);
         // Plan mode takes precedence over bypass
         let pm_idx = args.iter().position(|a| a == "--permission-mode").unwrap();
         assert_eq!(args[pm_idx + 1], "plan");
@@ -1445,7 +1545,7 @@ mod tests {
             effort: Some("high".to_string()),
             ..Default::default()
         };
-        let args = build_claude_args("sess-1", "hello", false, &[], None, &settings);
+        let args = build_claude_args("sess-1", "hello", false, &[], None, &settings, false);
         let idx = args.iter().position(|a| a == "--effort").unwrap();
         assert_eq!(args[idx + 1], "high");
     }
@@ -1459,6 +1559,7 @@ mod tests {
             &[],
             None,
             &AgentSettings::default(),
+            false,
         );
         assert!(!args.contains(&"--effort".to_string()));
     }
@@ -1469,7 +1570,7 @@ mod tests {
             effort: Some("auto".to_string()),
             ..Default::default()
         };
-        let args = build_claude_args("sess-1", "hello", false, &[], None, &settings);
+        let args = build_claude_args("sess-1", "hello", false, &[], None, &settings, false);
         // "auto" means let the CLI use its default — don't pass --effort
         assert!(!args.contains(&"--effort".to_string()));
     }
@@ -1480,7 +1581,7 @@ mod tests {
             effort: Some("low".to_string()),
             ..Default::default()
         };
-        let args = build_claude_args("sess-1", "hello", true, &[], None, &settings);
+        let args = build_claude_args("sess-1", "hello", true, &[], None, &settings, false);
         let idx = args.iter().position(|a| a == "--effort").unwrap();
         assert_eq!(args[idx + 1], "low");
     }
@@ -1493,7 +1594,7 @@ mod tests {
             effort: Some("max".to_string()),
             ..Default::default()
         };
-        let args = build_claude_args("sess-1", "hello", false, &[], None, &settings);
+        let args = build_claude_args("sess-1", "hello", false, &[], None, &settings, false);
         // --effort is a standalone flag, separate from --settings JSON
         let effort_idx = args.iter().position(|a| a == "--effort").unwrap();
         assert_eq!(args[effort_idx + 1], "max");
@@ -1511,7 +1612,7 @@ mod tests {
             chrome_enabled: true,
             ..Default::default()
         };
-        let args = build_claude_args("sess-1", "hello", false, &[], None, &settings);
+        let args = build_claude_args("sess-1", "hello", false, &[], None, &settings, false);
         assert!(args.contains(&"--chrome".to_string()));
     }
 
@@ -1521,7 +1622,7 @@ mod tests {
             chrome_enabled: true,
             ..Default::default()
         };
-        let args = build_claude_args("sess-1", "hello", true, &[], None, &settings);
+        let args = build_claude_args("sess-1", "hello", true, &[], None, &settings, false);
         assert!(!args.contains(&"--chrome".to_string()));
     }
 
@@ -1695,5 +1796,169 @@ mod tests {
         let path = OsString::from(".:relative:./bin");
         let result = search_path_dirs(path.as_os_str(), &|_| true);
         assert_eq!(result, None);
+    }
+
+    // --- build_claude_args attachment tests ---
+
+    fn default_settings() -> AgentSettings {
+        AgentSettings::default()
+    }
+
+    #[test]
+    fn test_build_args_without_attachments_unchanged() {
+        let args = build_claude_args(
+            "sess-1",
+            "hello world",
+            false,
+            &["Bash".into(), "Read".into()],
+            None,
+            &default_settings(),
+            false,
+        );
+        // Prompt should be the last positional arg.
+        assert_eq!(args.last().unwrap(), "hello world");
+        // Should NOT have --input-format stream-json.
+        assert!(!args.contains(&"--input-format".to_string()));
+    }
+
+    #[test]
+    fn test_build_args_with_attachments_uses_stream_json() {
+        let args = build_claude_args(
+            "sess-1",
+            "describe this image",
+            false,
+            &["Bash".into()],
+            None,
+            &default_settings(),
+            true,
+        );
+        // Should have --input-format stream-json.
+        let idx = args
+            .iter()
+            .position(|a| a == "--input-format")
+            .expect("missing --input-format");
+        assert_eq!(args[idx + 1], "stream-json");
+        // Prompt should NOT be a positional arg.
+        assert_ne!(args.last().unwrap(), "describe this image");
+    }
+
+    #[test]
+    fn test_build_stdin_message_text_only() {
+        let msg = build_stdin_message("hello", &[]);
+        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+        assert_eq!(parsed["type"], "user");
+        assert_eq!(parsed["parent_tool_use_id"], serde_json::Value::Null);
+        let content = parsed["message"]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "hello");
+    }
+
+    #[test]
+    fn test_build_stdin_message_empty_prompt_omits_text_block() {
+        let attachments = vec![ImageAttachment {
+            media_type: "image/png".into(),
+            data_base64: "data".into(),
+        }];
+        let msg = build_stdin_message("", &attachments);
+        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+        let content = parsed["message"]["content"].as_array().unwrap();
+        // Should only have the image block, no empty text block.
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0]["type"], "image");
+    }
+
+    #[test]
+    fn test_build_stdin_message_whitespace_prompt_omits_text_block() {
+        let attachments = vec![ImageAttachment {
+            media_type: "image/png".into(),
+            data_base64: "data".into(),
+        }];
+        let msg = build_stdin_message("   ", &attachments);
+        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+        let content = parsed["message"]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0]["type"], "image");
+    }
+
+    #[test]
+    fn test_build_stdin_message_with_image() {
+        let attachments = vec![ImageAttachment {
+            media_type: "image/png".into(),
+            data_base64: "iVBORw0KGgo=".into(),
+        }];
+        let msg = build_stdin_message("describe this", &attachments);
+        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+        let content = parsed["message"]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "describe this");
+        assert_eq!(content[1]["type"], "image");
+        assert_eq!(content[1]["source"]["type"], "base64");
+        assert_eq!(content[1]["source"]["media_type"], "image/png");
+        assert_eq!(content[1]["source"]["data"], "iVBORw0KGgo=");
+    }
+
+    #[test]
+    fn test_build_stdin_message_multiple_images() {
+        let attachments = vec![
+            ImageAttachment {
+                media_type: "image/png".into(),
+                data_base64: "png_data".into(),
+            },
+            ImageAttachment {
+                media_type: "image/jpeg".into(),
+                data_base64: "jpg_data".into(),
+            },
+            ImageAttachment {
+                media_type: "image/webp".into(),
+                data_base64: "webp_data".into(),
+            },
+        ];
+        let msg = build_stdin_message("compare these", &attachments);
+        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+        let content = parsed["message"]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 4); // 1 text + 3 images
+        assert_eq!(content[1]["source"]["media_type"], "image/png");
+        assert_eq!(content[2]["source"]["media_type"], "image/jpeg");
+        assert_eq!(content[3]["source"]["media_type"], "image/webp");
+    }
+
+    #[test]
+    fn test_build_stdin_message_pdf_uses_document_block() {
+        let attachments = vec![ImageAttachment {
+            media_type: "application/pdf".into(),
+            data_base64: "JVBERi0xLjQ=".into(),
+        }];
+        let msg = build_stdin_message("review this doc", &attachments);
+        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+        let content = parsed["message"]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["type"], "text");
+        // PDFs must use "document" type, not "image".
+        assert_eq!(content[1]["type"], "document");
+        assert_eq!(content[1]["source"]["type"], "base64");
+        assert_eq!(content[1]["source"]["media_type"], "application/pdf");
+        assert_eq!(content[1]["source"]["data"], "JVBERi0xLjQ=");
+    }
+
+    #[test]
+    fn test_build_stdin_message_mixed_images_and_pdf() {
+        let attachments = vec![
+            ImageAttachment {
+                media_type: "image/png".into(),
+                data_base64: "png_data".into(),
+            },
+            ImageAttachment {
+                media_type: "application/pdf".into(),
+                data_base64: "pdf_data".into(),
+            },
+        ];
+        let msg = build_stdin_message("here are files", &attachments);
+        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+        let content = parsed["message"]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 3); // 1 text + 1 image + 1 document
+        assert_eq!(content[1]["type"], "image");
+        assert_eq!(content[2]["type"], "document");
     }
 }

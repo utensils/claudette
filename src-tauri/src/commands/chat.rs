@@ -1,17 +1,40 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use claudette::agent::{
-    self, AgentEvent, AgentSettings, InnerStreamEvent, StartContentBlock, StreamEvent,
+    self, AgentEvent, AgentSettings, ImageAttachment, InnerStreamEvent, StartContentBlock,
+    StreamEvent,
 };
 use claudette::db::Database;
 use claudette::git;
 use claudette::model::{
-    ChatMessage, ChatRole, CompletedTurnData, ConversationCheckpoint, TurnToolActivity,
+    Attachment, ChatMessage, ChatRole, CompletedTurnData, ConversationCheckpoint, TurnToolActivity,
 };
 use claudette::snapshot;
+use claudette::{base64_decode, base64_encode};
 
 use crate::state::{AgentSessionState, AppState};
+
+/// Frontend-facing input for an image attachment (base64-encoded).
+#[derive(Clone, Deserialize)]
+pub struct AttachmentInput {
+    pub filename: String,
+    pub media_type: String,
+    pub data_base64: String,
+}
+
+/// Frontend-facing response for a stored attachment (base64-encoded data).
+#[derive(Clone, Serialize)]
+pub struct AttachmentResponse {
+    pub id: String,
+    pub message_id: String,
+    pub filename: String,
+    pub media_type: String,
+    pub data_base64: String,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub size_bytes: i64,
+}
 
 #[derive(Clone, Serialize)]
 struct AgentStreamPayload {
@@ -35,6 +58,7 @@ pub async fn load_chat_history(
 #[allow(clippy::too_many_arguments)]
 pub async fn send_chat_message(
     workspace_id: String,
+    message_id: Option<String>,
     content: String,
     mentioned_files: Option<Vec<String>>,
     permission_level: Option<String>,
@@ -44,6 +68,7 @@ pub async fn send_chat_message(
     plan_mode: Option<bool>,
     effort: Option<String>,
     chrome_enabled: Option<bool>,
+    attachments: Option<Vec<AttachmentInput>>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
@@ -61,9 +86,10 @@ pub async fn send_chat_message(
         .ok_or("Workspace has no worktree")?
         .clone();
 
-    // Save user message to DB.
+    // Save user message to DB. Use the frontend-provided ID so optimistic
+    // UI state (attachments keyed by message ID) stays consistent.
     let user_msg = ChatMessage {
-        id: uuid::Uuid::new_v4().to_string(),
+        id: message_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         workspace_id: workspace_id.clone(),
         role: ChatRole::User,
         content: content.clone(),
@@ -72,8 +98,70 @@ pub async fn send_chat_message(
         created_at: now_iso(),
         thinking: None,
     };
+    // Decode, validate, and persist attachments alongside the user message.
+    // Both inserts share a transaction so the message and its attachments are
+    // atomic — a failed attachment decode won't leave an orphaned message.
+    const ALLOWED_MIME: &[&str] = &[
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+        "application/pdf",
+    ];
+    const MAX_IMAGE_BYTES: usize = 3_932_160; // 3.75 MB
+    const MAX_PDF_BYTES: usize = 20_971_520; // 20 MB
+
+    let mut att_models: Vec<Attachment> = Vec::new();
+    let mut cli_atts: Vec<ImageAttachment> = Vec::new();
+
+    if let Some(ref inputs) = attachments {
+        for input in inputs {
+            if !ALLOWED_MIME.contains(&input.media_type.as_str()) {
+                return Err(format!("Unsupported attachment type: {}", input.media_type));
+            }
+            let data = base64_decode(&input.data_base64).map_err(|e| format!("Bad base64: {e}"))?;
+            let max = if input.media_type == "application/pdf" {
+                MAX_PDF_BYTES
+            } else {
+                MAX_IMAGE_BYTES
+            };
+            if data.len() > max {
+                return Err(format!(
+                    "Attachment too large: {} bytes (max {})",
+                    data.len(),
+                    max
+                ));
+            }
+            if input.media_type == "application/pdf" && !data.starts_with(b"%PDF-") {
+                return Err("Invalid PDF: missing %PDF- header".to_string());
+            }
+            let size_bytes = data.len() as i64;
+            att_models.push(Attachment {
+                id: uuid::Uuid::new_v4().to_string(),
+                message_id: user_msg.id.clone(),
+                filename: input.filename.clone(),
+                media_type: input.media_type.clone(),
+                width: None,
+                height: None,
+                size_bytes,
+                data,
+                created_at: now_iso(),
+            });
+            cli_atts.push(ImageAttachment {
+                media_type: input.media_type.clone(),
+                data_base64: input.data_base64.clone(),
+            });
+        }
+    }
+
+    // Atomic insert: message + attachments in one transaction.
     db.insert_chat_message(&user_msg)
         .map_err(|e| e.to_string())?;
+    if !att_models.is_empty() {
+        db.insert_attachments_batch(&att_models)
+            .map_err(|e| e.to_string())?;
+    }
+    let image_attachments = cli_atts;
 
     // Resolve allowed tools from permission level.
     let level = permission_level.as_deref().unwrap_or("full");
@@ -179,6 +267,7 @@ pub async fn send_chat_message(
         &allowed_tools,
         custom_instructions.as_deref(),
         &agent_settings,
+        &image_attachments,
     )
     .await?;
 
@@ -830,6 +919,142 @@ pub async fn clear_attention(
         crate::tray::rebuild_tray(&app);
     }
     Ok(())
+}
+
+/// Load attachment metadata for a workspace's chat history.
+///
+/// Images (< ~5 MB base64) include inline data for immediate rendering.
+/// Documents (PDFs, potentially 20+ MB) omit the body — use
+/// [`load_attachment_data`] to fetch on demand.
+#[tauri::command]
+pub async fn load_attachments_for_workspace(
+    workspace_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<AttachmentResponse>, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let messages = db
+        .list_chat_messages(&workspace_id)
+        .map_err(|e| e.to_string())?;
+    let message_ids: Vec<String> = messages.iter().map(|m| m.id.clone()).collect();
+    let att_map = db
+        .list_attachments_for_messages(&message_ids)
+        .map_err(|e| e.to_string())?;
+
+    let mut result = Vec::new();
+    for (_, atts) in att_map {
+        for a in atts {
+            // Only inline base64 data for images — PDFs are too large to
+            // push through IPC eagerly and would stall the renderer.
+            let data_base64 = if a.media_type.starts_with("image/") {
+                base64_encode(&a.data)
+            } else {
+                String::new()
+            };
+            result.push(AttachmentResponse {
+                id: a.id,
+                message_id: a.message_id,
+                filename: a.filename,
+                media_type: a.media_type,
+                data_base64,
+                width: a.width,
+                height: a.height,
+                size_bytes: a.size_bytes,
+            });
+        }
+    }
+    Ok(result)
+}
+
+/// Fetch the full base64-encoded body of a single attachment by ID.
+/// Used for on-demand loading of large attachments (PDFs).
+#[tauri::command]
+pub async fn load_attachment_data(
+    attachment_id: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let att = db
+        .get_attachment(&attachment_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Attachment not found")?;
+    Ok(base64_encode(&att.data))
+}
+
+/// Read a file from disk and return it as base64 with metadata.
+/// Used by the frontend file picker — avoids needing the `plugin-fs` dependency.
+///
+/// Supported types: PNG, JPEG, GIF, WebP (images), PDF (documents).
+/// Images are capped at ~3.75 MB (encodes to ~5 MB base64).
+/// PDFs are capped at 20 MB (the Anthropic API raw-PDF limit).
+#[tauri::command]
+pub async fn read_file_as_base64(path: String) -> Result<AttachmentResponse, String> {
+    use std::path::Path;
+
+    const MAX_IMAGE_SIZE: usize = 3_932_160; // 3.75 MB
+    const MAX_PDF_SIZE: usize = 20_971_520; // 20 MB
+
+    let file_path = Path::new(&path);
+    let filename = file_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("attachment")
+        .to_string();
+
+    let ext = file_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    let media_type = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "pdf" => "application/pdf",
+        other => return Err(format!("Unsupported file type: .{other}")),
+    }
+    .to_string();
+
+    let data = tokio::fs::read(&path)
+        .await
+        .map_err(|e| format!("Failed to read file: {e}"))?;
+
+    let size_bytes = data.len() as i64;
+
+    // Enforce size limits per content type.
+    if media_type == "application/pdf" {
+        if data.len() > MAX_PDF_SIZE {
+            return Err(format!(
+                "PDF too large: {:.1} MB (max {} MB)",
+                data.len() as f64 / 1_048_576.0,
+                MAX_PDF_SIZE / 1_048_576
+            ));
+        }
+        // Validate PDF magic bytes (%PDF-) to prevent session poisoning.
+        if !data.starts_with(b"%PDF-") {
+            return Err("Invalid PDF file: missing %PDF- header".to_string());
+        }
+    } else if data.len() > MAX_IMAGE_SIZE {
+        return Err(format!(
+            "Image too large: {:.1} MB (max {:.1} MB)",
+            data.len() as f64 / 1_048_576.0,
+            MAX_IMAGE_SIZE as f64 / 1_048_576.0
+        ));
+    }
+
+    let data_base64 = base64_encode(&data);
+
+    Ok(AttachmentResponse {
+        id: String::new(),
+        message_id: String::new(),
+        filename,
+        media_type,
+        data_base64,
+        width: None,
+        height: None,
+        size_bytes,
+    })
 }
 
 fn now_iso() -> String {

@@ -13,6 +13,7 @@ license = "MIT"
 path = "src/lib.rs"
 
 [dependencies]
+base64 = "0.22"
 futures = "0.3"
 rusqlite = { version = "0.34", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

@@ -5,6 +5,8 @@ import {
   clearConversation,
   loadDiffFiles,
   loadCompletedTurns,
+  loadAttachmentsForWorkspace,
+  loadAttachmentData,
 } from "../../services/tauri";
 import { reconstructCompletedTurns } from "../../utils/reconstructTurns";
 import { Modal } from "./Modal";
@@ -23,6 +25,7 @@ export function RollbackModal() {
 
   const workspaceId = modalData.workspaceId as string;
   const checkpointId = (modalData.checkpointId as string) ?? null;
+  const messageId = (modalData.messageId as string) ?? null;
   const messagePreview = modalData.messagePreview as string;
   const messageContent = (modalData.messageContent as string) ?? "";
   const hasFileChanges = modalData.hasFileChanges as boolean;
@@ -31,6 +34,15 @@ export function RollbackModal() {
   const handleRollback = async () => {
     setLoading(true);
     try {
+      // Capture the rolled-back message's attachments BEFORE the rollback
+      // deletes them from the DB (FK cascade). We'll prefill them into the
+      // input so the user can re-send with the same files.
+      const rolledBackAtts = messageId
+        ? (useAppStore.getState().chatAttachments[workspaceId] ?? []).filter(
+            (a) => a.message_id === messageId,
+          )
+        : [];
+
       const messages = isClearAll
         ? await clearConversation(workspaceId, restoreFiles)
         : await rollbackToCheckpoint(workspaceId, checkpointId, restoreFiles);
@@ -47,6 +59,32 @@ export function RollbackModal() {
       if (messageContent) {
         setChatInputPrefill(messageContent);
       }
+      // Prefill attachments from the rolled-back message so the user can
+      // re-send with the same files. For images the data is already in the
+      // store; for PDFs we need to fetch the body on demand.
+      if (rolledBackAtts.length > 0) {
+        const prefillAtts = await Promise.all(
+          rolledBackAtts.map(async (a) => {
+            let data = a.data_base64;
+            if (!data && a.id) {
+              data = await loadAttachmentData(a.id).catch(() => "");
+            }
+            return {
+              filename: a.filename,
+              media_type: a.media_type,
+              data_base64: data,
+            };
+          }),
+        );
+        useAppStore
+          .getState()
+          .setPendingAttachmentsPrefill(prefillAtts.filter((a) => a.data_base64));
+      }
+      // Reload attachments to reflect the rolled-back state (FK cascade
+      // deletes attachments for removed messages).
+      loadAttachmentsForWorkspace(workspaceId)
+        .then((atts) => useAppStore.getState().setChatAttachments(workspaceId, atts))
+        .catch((e) => console.error("Failed to reload attachments after rollback:", e));
       // Refresh the changed files view to reflect the rolled-back file state.
       clearDiff();
       loadDiffFiles(workspaceId)

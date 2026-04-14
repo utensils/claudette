@@ -3,9 +3,24 @@ use std::path::Path;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::model::{
-    ChatMessage, CheckpointFile, CompletedTurnData, ConversationCheckpoint, RemoteConnection,
-    Repository, TerminalTab, TurnToolActivity, Workspace, WorkspaceStatus,
+    Attachment, ChatMessage, CheckpointFile, CompletedTurnData, ConversationCheckpoint,
+    RemoteConnection, Repository, TerminalTab, TurnToolActivity, Workspace, WorkspaceStatus,
 };
+
+fn row_to_attachment(row: &rusqlite::Row) -> rusqlite::Result<Attachment> {
+    let data: Vec<u8> = row.get(4)?;
+    Ok(Attachment {
+        id: row.get(0)?,
+        message_id: row.get(1)?,
+        filename: row.get(2)?,
+        media_type: row.get(3)?,
+        size_bytes: row.get(7)?,
+        data,
+        width: row.get(5)?,
+        height: row.get(6)?,
+        created_at: row.get(8)?,
+    })
+}
 
 pub struct Database {
     conn: Connection,
@@ -263,6 +278,27 @@ impl Database {
                     ON checkpoint_files(checkpoint_id);
 
                 PRAGMA user_version = 15;",
+            )?;
+        }
+
+        if version < 16 {
+            self.conn.execute_batch(
+                "CREATE TABLE attachments (
+                    id           TEXT PRIMARY KEY,
+                    message_id   TEXT NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+                    filename     TEXT NOT NULL,
+                    media_type   TEXT NOT NULL,
+                    data         BLOB NOT NULL,
+                    width        INTEGER,
+                    height       INTEGER,
+                    size_bytes   INTEGER NOT NULL,
+                    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+
+                CREATE INDEX idx_attachments_message
+                    ON attachments(message_id);
+
+                PRAGMA user_version = 16;",
             )?;
         }
 
@@ -672,6 +708,110 @@ impl Database {
             params![workspace_id],
         )?;
         Ok(())
+    }
+
+    // --- Attachments ---
+
+    pub fn insert_attachment(&self, att: &Attachment) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "INSERT INTO attachments (id, message_id, filename, media_type, data, width, height, size_bytes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                att.id,
+                att.message_id,
+                att.filename,
+                att.media_type,
+                att.data,
+                att.width,
+                att.height,
+                att.size_bytes,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn insert_attachments_batch(
+        &self,
+        attachments: &[Attachment],
+    ) -> Result<(), rusqlite::Error> {
+        if attachments.is_empty() {
+            return Ok(());
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        for att in attachments {
+            tx.execute(
+                "INSERT INTO attachments (id, message_id, filename, media_type, data, width, height, size_bytes)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    att.id,
+                    att.message_id,
+                    att.filename,
+                    att.media_type,
+                    att.data,
+                    att.width,
+                    att.height,
+                    att.size_bytes,
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn get_attachment(&self, id: &str) -> Result<Option<Attachment>, rusqlite::Error> {
+        self.conn
+            .query_row(
+                "SELECT id, message_id, filename, media_type, data, width, height, size_bytes, created_at
+                 FROM attachments WHERE id = ?1",
+                params![id],
+                row_to_attachment,
+            )
+            .optional()
+    }
+
+    pub fn list_attachments_for_message(
+        &self,
+        message_id: &str,
+    ) -> Result<Vec<Attachment>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, message_id, filename, media_type, data, width, height, size_bytes, created_at
+             FROM attachments WHERE message_id = ?1 ORDER BY created_at",
+        )?;
+        let rows = stmt.query_map(params![message_id], row_to_attachment)?;
+        rows.collect()
+    }
+
+    pub fn list_attachments_for_messages(
+        &self,
+        message_ids: &[String],
+    ) -> Result<std::collections::HashMap<String, Vec<Attachment>>, rusqlite::Error> {
+        use std::collections::HashMap;
+
+        let mut result: HashMap<String, Vec<Attachment>> = HashMap::new();
+        if message_ids.is_empty() {
+            return Ok(result);
+        }
+
+        // Build a parameterised IN clause.
+        let placeholders: Vec<String> = (1..=message_ids.len()).map(|i| format!("?{i}")).collect();
+        let sql = format!(
+            "SELECT id, message_id, filename, media_type, data, width, height, size_bytes, created_at
+             FROM attachments WHERE message_id IN ({}) ORDER BY created_at",
+            placeholders.join(", ")
+        );
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::types::ToSql> = message_ids
+            .iter()
+            .map(|id| id as &dyn rusqlite::types::ToSql)
+            .collect();
+        let rows = stmt.query_map(&*params, row_to_attachment)?;
+
+        for att in rows {
+            let att = att?;
+            result.entry(att.message_id.clone()).or_default().push(att);
+        }
+        Ok(result)
     }
 
     // --- Conversation Checkpoints ---
@@ -1173,7 +1313,7 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{AgentStatus, ChatRole, WorkspaceStatus};
+    use crate::model::{AgentStatus, Attachment, ChatRole, WorkspaceStatus};
 
     fn make_repo(id: &str, path: &str, name: &str) -> Repository {
         Repository {
@@ -1472,6 +1612,151 @@ mod tests {
         assert_eq!(msgs[0].role, ChatRole::User);
         assert_eq!(msgs[1].role, ChatRole::Assistant);
         assert_eq!(msgs[2].role, ChatRole::System);
+    }
+
+    // --- Attachment tests ---
+
+    fn make_attachment(id: &str, message_id: &str, filename: &str) -> Attachment {
+        Attachment {
+            id: id.into(),
+            message_id: message_id.into(),
+            filename: filename.into(),
+            media_type: "image/png".into(),
+            data: vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A], // PNG header
+            width: Some(100),
+            height: Some(200),
+            size_bytes: 8,
+            created_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn test_insert_and_list_attachments() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "look at this"))
+            .unwrap();
+        db.insert_attachment(&make_attachment("a1", "m1", "screenshot.png"))
+            .unwrap();
+
+        let atts = db.list_attachments_for_message("m1").unwrap();
+        assert_eq!(atts.len(), 1);
+        assert_eq!(atts[0].id, "a1");
+        assert_eq!(atts[0].filename, "screenshot.png");
+        assert_eq!(atts[0].media_type, "image/png");
+        assert_eq!(
+            atts[0].data,
+            vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+        );
+        assert_eq!(atts[0].width, Some(100));
+        assert_eq!(atts[0].height, Some(200));
+        assert_eq!(atts[0].size_bytes, 8);
+    }
+
+    #[test]
+    fn test_attachment_cascade_on_message_delete() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "img"))
+            .unwrap();
+        db.insert_attachment(&make_attachment("a1", "m1", "pic.png"))
+            .unwrap();
+
+        // Deleting all messages for the workspace should cascade to attachments.
+        db.delete_chat_messages_for_workspace("w1").unwrap();
+        let atts = db.list_attachments_for_message("m1").unwrap();
+        assert!(atts.is_empty());
+    }
+
+    #[test]
+    fn test_attachment_cascade_on_delete_messages_after() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "first"))
+            .unwrap();
+        db.insert_attachment(&make_attachment("a1", "m1", "first.png"))
+            .unwrap();
+        db.insert_chat_message(&make_chat_msg("m2", "w1", ChatRole::User, "second"))
+            .unwrap();
+        db.insert_attachment(&make_attachment("a2", "m2", "second.png"))
+            .unwrap();
+
+        // Delete messages after m1 — m2 and its attachment should be gone.
+        db.delete_messages_after("w1", "m1").unwrap();
+
+        let atts_m1 = db.list_attachments_for_message("m1").unwrap();
+        assert_eq!(atts_m1.len(), 1, "first message attachment should survive");
+        let atts_m2 = db.list_attachments_for_message("m2").unwrap();
+        assert!(
+            atts_m2.is_empty(),
+            "second message attachment should be deleted"
+        );
+    }
+
+    #[test]
+    fn test_insert_attachments_batch() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "images"))
+            .unwrap();
+
+        let attachments = vec![
+            make_attachment("a1", "m1", "one.png"),
+            make_attachment("a2", "m1", "two.jpg"),
+            make_attachment("a3", "m1", "three.gif"),
+        ];
+        db.insert_attachments_batch(&attachments).unwrap();
+
+        let atts = db.list_attachments_for_message("m1").unwrap();
+        assert_eq!(atts.len(), 3);
+    }
+
+    #[test]
+    fn test_insert_attachments_batch_empty() {
+        let db = setup_db_with_workspace();
+        // Should be a no-op, not an error.
+        db.insert_attachments_batch(&[]).unwrap();
+    }
+
+    #[test]
+    fn test_get_attachment_by_id() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "hello"))
+            .unwrap();
+        db.insert_attachment(&make_attachment("a1", "m1", "doc.pdf"))
+            .unwrap();
+
+        let att = db.get_attachment("a1").unwrap().unwrap();
+        assert_eq!(att.filename, "doc.pdf");
+        assert_eq!(att.data.len(), 8); // PNG header bytes from make_attachment
+    }
+
+    #[test]
+    fn test_get_attachment_not_found() {
+        let db = setup_db_with_workspace();
+        let result = db.get_attachment("nonexistent").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_list_attachments_for_messages_batch() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "msg1"))
+            .unwrap();
+        db.insert_chat_message(&make_chat_msg("m2", "w1", ChatRole::User, "msg2"))
+            .unwrap();
+        db.insert_chat_message(&make_chat_msg("m3", "w1", ChatRole::User, "msg3"))
+            .unwrap();
+        db.insert_attachment(&make_attachment("a1", "m1", "pic1.png"))
+            .unwrap();
+        db.insert_attachment(&make_attachment("a2", "m1", "pic2.png"))
+            .unwrap();
+        db.insert_attachment(&make_attachment("a3", "m2", "pic3.jpg"))
+            .unwrap();
+        // m3 has no attachments.
+
+        let ids = vec!["m1".into(), "m2".into(), "m3".into()];
+        let map = db.list_attachments_for_messages(&ids).unwrap();
+
+        assert_eq!(map.get("m1").map(|v| v.len()), Some(2));
+        assert_eq!(map.get("m2").map(|v| v.len()), Some(1));
+        assert!(!map.contains_key("m3"), "m3 should have no entry");
     }
 
     // --- Repository settings tests ---

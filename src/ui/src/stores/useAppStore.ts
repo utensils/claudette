@@ -5,6 +5,8 @@ import type {
   Repository,
   Workspace,
   ChatMessage,
+  ChatAttachment,
+  AttachmentInput,
   DiffFile,
   FileDiff,
   DiffViewMode,
@@ -78,6 +80,9 @@ interface AppState {
 
   // -- Chat --
   chatMessages: Record<string, ChatMessage[]>;
+  chatAttachments: Record<string, ChatAttachment[]>;
+  setChatAttachments: (wsId: string, attachments: ChatAttachment[]) => void;
+  addChatAttachments: (wsId: string, attachments: ChatAttachment[]) => void;
   streamingContent: Record<string, string>;
   streamingThinking: Record<string, string>;
   showThinkingBlocks: Record<string, boolean>;
@@ -119,8 +124,20 @@ interface AppState {
   clearPlanApproval: (wsId: string) => void;
 
   // -- Queued Messages (sent while agent is running, dispatched when idle) --
-  queuedMessages: Record<string, { content: string; mentionedFiles?: string[] }>;
-  setQueuedMessage: (wsId: string, content: string, mentionedFiles?: string[]) => void;
+  queuedMessages: Record<
+    string,
+    {
+      content: string;
+      mentionedFiles?: string[];
+      attachments?: AttachmentInput[];
+    }
+  >;
+  setQueuedMessage: (
+    wsId: string,
+    content: string,
+    mentionedFiles?: string[],
+    attachments?: AttachmentInput[],
+  ) => void;
   clearQueuedMessage: (wsId: string) => void;
 
   // -- Checkpoints --
@@ -230,6 +247,8 @@ interface AppState {
   // -- Chat input prefill (e.g. after rollback) --
   chatInputPrefill: string | null;
   setChatInputPrefill: (text: string | null) => void;
+  pendingAttachmentsPrefill: AttachmentInput[] | null;
+  setPendingAttachmentsPrefill: (atts: AttachmentInput[] | null) => void;
 
   // -- Settings --
   worktreeBaseDir: string;
@@ -338,6 +357,18 @@ export const useAppStore = create<AppState>((set) => ({
 
   // -- Chat --
   chatMessages: {},
+  chatAttachments: {},
+  setChatAttachments: (wsId, attachments) =>
+    set((s) => ({
+      chatAttachments: { ...s.chatAttachments, [wsId]: attachments },
+    })),
+  addChatAttachments: (wsId, attachments) =>
+    set((s) => ({
+      chatAttachments: {
+        ...s.chatAttachments,
+        [wsId]: [...(s.chatAttachments[wsId] ?? []), ...attachments],
+      },
+    })),
   streamingContent: {},
   streamingThinking: {},
   showThinkingBlocks: {},
@@ -557,9 +588,12 @@ export const useAppStore = create<AppState>((set) => ({
 
   // -- Queued Messages --
   queuedMessages: {},
-  setQueuedMessage: (wsId, content, mentionedFiles) =>
+  setQueuedMessage: (wsId, content, mentionedFiles, attachments) =>
     set((s) => ({
-      queuedMessages: { ...s.queuedMessages, [wsId]: { content, mentionedFiles } },
+      queuedMessages: {
+        ...s.queuedMessages,
+        [wsId]: { content, mentionedFiles, attachments },
+      },
     })),
   clearQueuedMessage: (wsId) =>
     set((s) => {
@@ -793,6 +827,8 @@ export const useAppStore = create<AppState>((set) => ({
   // -- Chat input prefill (e.g. after rollback) --
   chatInputPrefill: null,
   setChatInputPrefill: (text) => set({ chatInputPrefill: text }),
+  pendingAttachmentsPrefill: null,
+  setPendingAttachmentsPrefill: (atts) => set({ pendingAttachmentsPrefill: atts }),
 
   // -- Settings --
   worktreeBaseDir: "",

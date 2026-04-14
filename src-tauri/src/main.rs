@@ -281,6 +281,9 @@ fn main() {
             commands::files::read_workspace_file,
             // Chat
             commands::chat::load_chat_history,
+            commands::chat::load_attachments_for_workspace,
+            commands::chat::load_attachment_data,
+            commands::chat::read_file_as_base64,
             commands::chat::send_chat_message,
             commands::chat::stop_agent,
             commands::chat::reset_agent_session,

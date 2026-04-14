@@ -3,6 +3,8 @@ import type {
   Repository,
   Workspace,
   ChatMessage,
+  ChatAttachment,
+  AttachmentInput,
   DiffFile,
   FileDiff,
   TerminalTab,
@@ -181,9 +183,12 @@ export function sendChatMessage(
   planMode?: boolean,
   effort?: string,
   chromeEnabled?: boolean,
+  attachments?: AttachmentInput[],
+  messageId?: string,
 ): Promise<void> {
   return invoke("send_chat_message", {
     workspaceId,
+    messageId: messageId ?? null,
     content,
     mentionedFiles: mentionedFiles ?? null,
     permissionLevel: permissionLevel ?? null,
@@ -193,7 +198,24 @@ export function sendChatMessage(
     planMode: planMode ?? null,
     effort: effort ?? null,
     chromeEnabled: chromeEnabled ?? null,
+    attachments: attachments ?? null,
   });
+}
+
+export function loadAttachmentsForWorkspace(
+  workspaceId: string,
+): Promise<ChatAttachment[]> {
+  return invoke("load_attachments_for_workspace", { workspaceId });
+}
+
+export function loadAttachmentData(
+  attachmentId: string,
+): Promise<string> {
+  return invoke("load_attachment_data", { attachmentId });
+}
+
+export function readFileAsBase64(path: string): Promise<ChatAttachment> {
+  return invoke("read_file_as_base64", { path });
 }
 
 export function stopAgent(workspaceId: string): Promise<void> {
