@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useState } from "react";
 import {
-  GitPullRequest,
+  GitPullRequestArrow,
   GitPullRequestDraft,
   GitMerge,
   GitPullRequestClosed,
@@ -201,7 +201,7 @@ function getPrIcon(pr: PullRequest) {
     case "draft":
       return GitPullRequestDraft;
     default:
-      return GitPullRequest;
+      return GitPullRequestArrow;
   }
 }
 

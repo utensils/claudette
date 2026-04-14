@@ -15,7 +15,7 @@ import {
   pairWithServer,
   startLocalServer,
 } from "../../services/tauri";
-import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, BadgeCheck, BadgeInfo, BadgeQuestionMark, Cog, Filter, Check, LayoutDashboard, GitPullRequest, GitPullRequestDraft, GitMerge, GitPullRequestClosed } from "lucide-react";
+import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, BadgeCheck, BadgeInfo, BadgeQuestionMark, Cog, Filter, Check, LayoutDashboard, GitPullRequestArrow, GitPullRequestDraft, GitMerge, GitPullRequestClosed } from "lucide-react";
 import { RepoIcon } from "../shared/RepoIcon";
 import { useSpinnerFrame } from "../../hooks/useSpinnerFrame";
 import styles from "./Sidebar.module.css";
@@ -524,7 +524,7 @@ export const Sidebar = memo(function Sidebar() {
                           const Icon = prState === "merged" ? GitMerge
                             : prState === "closed" ? GitPullRequestClosed
                             : prState === "draft" ? GitPullRequestDraft
-                            : GitPullRequest;
+                            : GitPullRequestArrow;
                           const color = prState === "merged" ? "var(--purple, #a855f7)"
                             : prState === "closed" ? "var(--red, #ef4444)"
                             : prState === "draft" ? "var(--text-dim)"
