@@ -24,7 +24,9 @@ uuid = { version = "1", features = ["v4"] }
 which = "7"
 dirs = "6"
 open = "5"
+mlua = { version = "0.10", features = ["luau", "serialize", "async", "send"] }
 rand = "0.8"
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"

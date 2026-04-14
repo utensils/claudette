@@ -215,6 +215,14 @@ interface AppState {
   ) => void;
   updateTerminalTabPtyId: (tabId: number, ptyId: number) => void;
 
+  // -- SCM --
+  scmSummary: Record<string, import("../types/plugin").ScmSummary>;
+  scmDetail: import("../types/plugin").ScmDetail | null;
+  scmDetailLoading: boolean;
+  setScmSummary: (wsId: string, summary: import("../types/plugin").ScmSummary) => void;
+  setScmDetail: (detail: import("../types/plugin").ScmDetail | null) => void;
+  setScmDetailLoading: (loading: boolean) => void;
+
   // -- UI --
   metaKeyHeld: boolean;
   setMetaKeyHeld: (held: boolean) => void;
@@ -223,14 +231,14 @@ interface AppState {
   sidebarWidth: number;
   rightSidebarWidth: number;
   terminalHeight: number;
-  rightSidebarTab: "changes" | "tasks";
+  rightSidebarTab: "changes" | "tasks" | "scm";
   sidebarFilter: "all" | "active" | "archived" | "remote";
   repoCollapsed: Record<string, boolean>;
   fuzzyFinderOpen: boolean;
   commandPaletteOpen: boolean;
   toggleSidebar: () => void;
   toggleRightSidebar: () => void;
-  setRightSidebarTab: (tab: "changes" | "tasks") => void;
+  setRightSidebarTab: (tab: "changes" | "tasks" | "scm") => void;
   setSidebarWidth: (w: number) => void;
   setRightSidebarWidth: (w: number) => void;
   setTerminalHeight: (h: number) => void;
@@ -812,6 +820,17 @@ export const useAppStore = create<AppState>((set) => ({
       diffContent: null,
       diffError: null,
     }),
+
+  // -- SCM --
+  scmSummary: {},
+  scmDetail: null,
+  scmDetailLoading: false,
+  setScmSummary: (wsId, summary) =>
+    set((s) => ({
+      scmSummary: { ...s.scmSummary, [wsId]: summary },
+    })),
+  setScmDetail: (detail) => set({ scmDetail: detail }),
+  setScmDetailLoading: (loading) => set({ scmDetailLoading: loading }),
 
   // -- Terminal --
   terminalTabs: {},

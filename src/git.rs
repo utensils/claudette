@@ -282,6 +282,18 @@ pub async fn rename_branch(path: &str, old_name: &str, new_name: &str) -> Result
     Ok(())
 }
 
+/// Get the remote URL for a repository (typically `origin`).
+pub async fn get_remote_url(repo_path: &str) -> Result<String, GitError> {
+    // Resolve the primary remote name (same approach as default_branch)
+    let remote = run_git(repo_path, &["remote"])
+        .await
+        .ok()
+        .and_then(|out| out.lines().next().map(|l| l.to_string()))
+        .unwrap_or_else(|| "origin".to_string());
+
+    run_git(repo_path, &["remote", "get-url", &remote]).await
+}
+
 /// Get the current branch name for a worktree or repository.
 /// Returns an error if in a detached HEAD state.
 pub async fn current_branch(repo_path: &str) -> Result<String, GitError> {

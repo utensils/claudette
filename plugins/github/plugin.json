@@ -1,0 +1,16 @@
+{
+  "name": "github",
+  "display_name": "GitHub",
+  "version": "1.0.0",
+  "description": "GitHub PR and CI status via gh CLI",
+  "required_clis": ["gh"],
+  "remote_patterns": ["github.com"],
+  "operations": [
+    "list_pull_requests",
+    "get_pull_request",
+    "create_pull_request",
+    "merge_pull_request",
+    "ci_status"
+  ],
+  "config_schema": {}
+}

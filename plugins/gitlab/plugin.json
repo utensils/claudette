@@ -1,0 +1,16 @@
+{
+  "name": "gitlab",
+  "display_name": "GitLab",
+  "version": "1.0.0",
+  "description": "GitLab MR and CI status via glab CLI",
+  "required_clis": ["glab"],
+  "remote_patterns": ["gitlab.com", "gitlab."],
+  "operations": [
+    "list_pull_requests",
+    "get_pull_request",
+    "create_pull_request",
+    "merge_pull_request",
+    "ci_status"
+  ],
+  "config_schema": {}
+}

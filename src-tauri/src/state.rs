@@ -2,10 +2,14 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use claudette::agent::PersistentSession;
 use parking_lot::Mutex as ParkingMutex;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, Semaphore};
+
+use claudette::plugin::scm::{CiCheck, PullRequest};
+use claudette::plugin::{PluginRegistry, ScmError};
 
 use crate::commands::apps::DetectedApp;
 use crate::remote::DiscoveredServer;
@@ -191,6 +195,27 @@ pub fn kill_process_sync(pid: u32) {
     );
 }
 
+/// Cached SCM data for a specific (repo_id, branch) pair.
+pub struct ScmCacheEntry {
+    pub pull_request: Option<PullRequest>,
+    pub ci_checks: Vec<CiCheck>,
+    pub last_fetched: Instant,
+    pub error: Option<ScmError>,
+}
+
+/// In-memory cache for SCM data, keyed by (repo_id, branch_name).
+pub struct ScmCache {
+    pub entries: RwLock<HashMap<(String, String), ScmCacheEntry>>,
+}
+
+impl ScmCache {
+    pub fn new() -> Self {
+        Self {
+            entries: RwLock::new(HashMap::new()),
+        }
+    }
+}
+
 /// Application-wide managed state, shared across all Tauri commands.
 pub struct AppState {
     pub db_path: PathBuf,
@@ -217,10 +242,16 @@ pub struct AppState {
     pub next_tray_seq: AtomicU64,
     /// Cached Claude Code OAuth token and usage data.
     pub usage_cache: RwLock<Option<UsageCacheEntry>>,
+    /// SCM provider plugin registry.
+    pub plugins: RwLock<PluginRegistry>,
+    /// Cached PR/CI status data keyed by (repo_id, branch_name).
+    pub scm_cache: ScmCache,
+    /// Limits concurrent SCM CLI invocations.
+    pub scm_semaphore: Arc<Semaphore>,
 }
 
 impl AppState {
-    pub fn new(db_path: PathBuf, worktree_base_dir: PathBuf) -> Self {
+    pub fn new(db_path: PathBuf, worktree_base_dir: PathBuf, plugins: PluginRegistry) -> Self {
         Self {
             db_path,
             worktree_base_dir: RwLock::new(worktree_base_dir),
@@ -233,6 +264,9 @@ impl AppState {
             tray_handle: Mutex::new(None),
             next_tray_seq: AtomicU64::new(1),
             usage_cache: RwLock::new(None),
+            plugins: RwLock::new(plugins),
+            scm_cache: ScmCache::new(),
+            scm_semaphore: Arc::new(Semaphore::new(4)),
         }
     }
 

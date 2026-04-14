@@ -10,6 +10,7 @@ pub mod plan;
 pub mod plugin;
 pub mod remote;
 pub mod repository;
+pub mod scm;
 pub mod settings;
 pub mod shell;
 pub mod slash_commands;

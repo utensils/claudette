@@ -76,7 +76,29 @@ fn main() {
         .filter_map(|c| c.cert_fingerprint)
         .collect();
 
-    let app_state = state::AppState::new(db_path, worktree_base_dir);
+    // Initialize plugin registry: seed bundled plugins, then discover.
+    let plugin_dir = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".claudette")
+        .join("plugins");
+    let _ = std::fs::create_dir_all(&plugin_dir);
+    let seed_warnings = claudette::plugin::seed::seed_bundled_plugins(&plugin_dir);
+    for warning in &seed_warnings {
+        eprintln!("[plugin] {warning}");
+    }
+    let plugins = claudette::plugin::PluginRegistry::discover(&plugin_dir);
+    eprintln!(
+        "[plugin] Discovered {} plugin(s): {}",
+        plugins.plugins.len(),
+        plugins
+            .plugins
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    let app_state = state::AppState::new(db_path, worktree_base_dir, plugins);
     let remote_manager = remote::RemoteConnectionManager::new();
     let mcp_supervisor = std::sync::Arc::new(claudette::mcp_supervisor::McpSupervisor::new());
 
@@ -405,6 +427,14 @@ fn main() {
             commands::usage::get_claude_code_usage,
             commands::usage::open_usage_settings,
             commands::usage::open_release_notes,
+            // SCM Plugins
+            commands::scm::list_scm_providers,
+            commands::scm::get_scm_provider,
+            commands::scm::set_scm_provider,
+            commands::scm::load_scm_detail,
+            commands::scm::scm_create_pr,
+            commands::scm::scm_merge_pr,
+            commands::scm::scm_refresh,
             // Local server
             commands::remote::start_local_server,
             commands::remote::stop_local_server,

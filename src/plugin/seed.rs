@@ -1,0 +1,241 @@
+use std::path::Path;
+
+use sha2::{Digest, Sha256};
+
+/// Embedded plugin files. Each tuple is (name, plugin_json, init_lua).
+const BUNDLED_PLUGINS: &[(&str, &str, &str)] = &[
+    (
+        "github",
+        include_str!("../../plugins/github/plugin.json"),
+        include_str!("../../plugins/github/init.lua"),
+    ),
+    (
+        "gitlab",
+        include_str!("../../plugins/gitlab/plugin.json"),
+        include_str!("../../plugins/gitlab/init.lua"),
+    ),
+];
+
+/// The current app version, used for the .version sentinel file.
+const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Seed bundled plugins into the plugin directory.
+///
+/// For each built-in plugin:
+/// - If not present: write all files + `.version`
+/// - If present but outdated: overwrite only if user hasn't modified `init.lua`
+/// - If present and current: do nothing
+pub fn seed_bundled_plugins(plugin_dir: &Path) -> Vec<String> {
+    let mut warnings = Vec::new();
+
+    for (name, plugin_json, init_lua) in BUNDLED_PLUGINS {
+        let dir = plugin_dir.join(name);
+        let version_file = dir.join(".version");
+        let init_file = dir.join("init.lua");
+        let manifest_file = dir.join("plugin.json");
+
+        if !version_file.exists() {
+            // First run: seed everything
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                warnings.push(format!(
+                    "Failed to create plugin dir {}: {e}",
+                    dir.display()
+                ));
+                continue;
+            }
+            if let Err(e) = write_plugin_files(
+                &manifest_file,
+                plugin_json,
+                &init_file,
+                init_lua,
+                &version_file,
+            ) {
+                warnings.push(format!("Failed to seed plugin '{name}': {e}"));
+            }
+            continue;
+        }
+
+        // Check if the plugin needs updating
+        let existing_version = std::fs::read_to_string(&version_file).unwrap_or_default();
+        let existing_version = existing_version.trim();
+
+        if !version_is_older(existing_version, APP_VERSION) {
+            // Plugin is current or newer — skip
+            continue;
+        }
+
+        // Version is older — check if user has modified init.lua
+        if init_file.exists() {
+            let on_disk = std::fs::read_to_string(&init_file).unwrap_or_default();
+            let embedded_hash = sha256_hex(init_lua);
+            let disk_hash = sha256_hex(&on_disk);
+
+            if embedded_hash != disk_hash {
+                warnings.push(format!(
+                    "Plugin '{name}' has user modifications — skipping update. \
+                     Delete {} to force update.",
+                    version_file.display()
+                ));
+                continue;
+            }
+        }
+
+        // Unmodified — safe to overwrite
+        if let Err(e) = write_plugin_files(
+            &manifest_file,
+            plugin_json,
+            &init_file,
+            init_lua,
+            &version_file,
+        ) {
+            warnings.push(format!("Failed to update plugin '{name}': {e}"));
+        }
+    }
+
+    warnings
+}
+
+fn write_plugin_files(
+    manifest_path: &Path,
+    manifest_content: &str,
+    init_path: &Path,
+    init_content: &str,
+    version_path: &Path,
+) -> std::io::Result<()> {
+    std::fs::write(manifest_path, manifest_content)?;
+    std::fs::write(init_path, init_content)?;
+    std::fs::write(version_path, APP_VERSION)?;
+    Ok(())
+}
+
+fn sha256_hex(content: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(content.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+/// Simple semver comparison: returns true if `existing` < `target`.
+/// Only compares major.minor.patch numeric components.
+fn version_is_older(existing: &str, target: &str) -> bool {
+    let parse = |v: &str| -> (u32, u32, u32) {
+        let parts: Vec<&str> = v.split('.').collect();
+        let major = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let minor = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+        let patch = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+        (major, minor, patch)
+    };
+    parse(existing) < parse(target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_version_comparison() {
+        assert!(version_is_older("0.8.0", "0.9.0"));
+        assert!(version_is_older("0.9.0", "0.10.0"));
+        assert!(version_is_older("0.9.0", "1.0.0"));
+        assert!(!version_is_older("0.9.0", "0.9.0"));
+        assert!(!version_is_older("1.0.0", "0.9.0"));
+        assert!(!version_is_older("0.10.0", "0.9.0"));
+    }
+
+    #[test]
+    fn test_sha256_hex() {
+        let hash1 = sha256_hex("hello");
+        let hash2 = sha256_hex("hello");
+        let hash3 = sha256_hex("world");
+        assert_eq!(hash1, hash2);
+        assert_ne!(hash1, hash3);
+        assert_eq!(hash1.len(), 64); // SHA-256 hex is 64 chars
+    }
+
+    #[test]
+    fn test_seed_creates_plugins_on_first_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugin_dir = dir.path();
+
+        let warnings = seed_bundled_plugins(plugin_dir);
+        assert!(warnings.is_empty(), "Unexpected warnings: {warnings:?}");
+
+        // GitHub plugin should exist
+        assert!(plugin_dir.join("github/plugin.json").exists());
+        assert!(plugin_dir.join("github/init.lua").exists());
+        assert!(plugin_dir.join("github/.version").exists());
+
+        // GitLab plugin should exist
+        assert!(plugin_dir.join("gitlab/plugin.json").exists());
+        assert!(plugin_dir.join("gitlab/init.lua").exists());
+        assert!(plugin_dir.join("gitlab/.version").exists());
+
+        // Version file should contain the app version
+        let version = std::fs::read_to_string(plugin_dir.join("github/.version")).unwrap();
+        assert_eq!(version, APP_VERSION);
+    }
+
+    #[test]
+    fn test_seed_skips_current_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugin_dir = dir.path();
+
+        // Seed once
+        seed_bundled_plugins(plugin_dir);
+
+        // Modify init.lua
+        let init_path = plugin_dir.join("github/init.lua");
+        std::fs::write(&init_path, "-- user modified").unwrap();
+
+        // Seed again — should skip because version matches
+        let warnings = seed_bundled_plugins(plugin_dir);
+        assert!(warnings.is_empty());
+
+        // User modifications should be preserved
+        let content = std::fs::read_to_string(&init_path).unwrap();
+        assert_eq!(content, "-- user modified");
+    }
+
+    #[test]
+    fn test_seed_preserves_user_modifications_on_upgrade() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugin_dir = dir.path();
+
+        // Seed once
+        seed_bundled_plugins(plugin_dir);
+
+        // Simulate an older version and user modification
+        std::fs::write(plugin_dir.join("github/.version"), "0.0.1").unwrap();
+        std::fs::write(plugin_dir.join("github/init.lua"), "-- user modified").unwrap();
+
+        // Seed again — should warn about user modifications
+        let warnings = seed_bundled_plugins(plugin_dir);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("user modifications"));
+
+        // User modifications should be preserved
+        let content = std::fs::read_to_string(plugin_dir.join("github/init.lua")).unwrap();
+        assert_eq!(content, "-- user modified");
+    }
+
+    #[test]
+    fn test_seed_overwrites_unmodified_on_upgrade() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugin_dir = dir.path();
+
+        // Seed once
+        seed_bundled_plugins(plugin_dir);
+
+        // Simulate an older version but keep init.lua unmodified
+        std::fs::write(plugin_dir.join("github/.version"), "0.0.1").unwrap();
+
+        // Seed again — should update silently
+        let warnings = seed_bundled_plugins(plugin_dir);
+        // Only GitLab might warn if it's also modified, but github should update fine
+        let github_warnings: Vec<_> = warnings.iter().filter(|w| w.contains("github")).collect();
+        assert!(github_warnings.is_empty());
+
+        // Version should be updated
+        let version = std::fs::read_to_string(plugin_dir.join("github/.version")).unwrap();
+        assert_eq!(version, APP_VERSION);
+    }
+}

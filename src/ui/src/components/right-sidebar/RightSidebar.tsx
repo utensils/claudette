@@ -4,6 +4,7 @@ import { useTaskTracker } from "../../hooks/useTaskTracker";
 import { loadDiffFiles, sendRemoteCommand } from "../../services/tauri";
 import type { DiffFilesResult } from "../../services/tauri";
 import { TaskList } from "./TaskList";
+import { ScmPanel } from "./ScmPanel";
 import styles from "./RightSidebar.module.css";
 
 export const RightSidebar = memo(function RightSidebar() {
@@ -158,6 +159,12 @@ export const RightSidebar = memo(function RightSidebar() {
             <span className={styles.tabBadge}>{taskCount}</span>
           )}
         </button>
+        <button
+          className={`${styles.tab} ${activeTab === "scm" ? styles.tabActive : ""}`}
+          onClick={() => setActiveTab("scm")}
+        >
+          SCM
+        </button>
       </div>
 
       {activeTab === "changes" && (
@@ -221,6 +228,8 @@ export const RightSidebar = memo(function RightSidebar() {
           ? <TaskList workspaceId={selectedWorkspaceId} />
           : <div className={styles.list}><div className={styles.empty}>No workspace selected</div></div>
       )}
+
+      {activeTab === "scm" && <ScmPanel />}
     </div>
   );
 });
