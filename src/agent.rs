@@ -318,35 +318,38 @@ pub fn build_claude_args(
 ///
 /// GUI apps on macOS (and some Linux desktop environments) don't inherit the
 /// user's shell PATH, so a bare `Command::new("claude")` fails with ENOENT.
-/// We check well-known install locations first, then fall back to asking the
-/// user's login shell for its PATH (cached for the lifetime of the process).
+/// We first check the current process PATH, then ask the user's login shell
+/// for its PATH, then try well-known install locations, and finally fall back
+/// to a bare `claude` command.
 ///
-/// The login-shell probe uses `std::process::Command` (blocking), so we run
-/// the entire resolution inside `spawn_blocking` on first call and cache the
-/// result in a `OnceLock` for subsequent calls. A 5-second timeout guards
-/// against broken or hanging shell init scripts.
+/// Successful absolute-path resolutions are cached in a `OnceLock` for the
+/// lifetime of the process. The bare `"claude"` fallback is NOT cached, so
+/// subsequent calls can retry resolution if the environment improves (e.g.,
+/// a slow shell probe that timed out on first call).
+///
+/// The login-shell probe uses `std::process::Command` (blocking) with a
+/// 5-second timeout that kills the subprocess on expiry. We run the entire
+/// resolution inside `spawn_blocking` to avoid stalling async workers.
 async fn resolve_claude_path() -> OsString {
     static RESOLVED: OnceLock<OsString> = OnceLock::new();
     if let Some(cached) = RESOLVED.get() {
         return cached.clone();
     }
-    let resolved = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        tokio::task::spawn_blocking(|| {
-            resolve_claude_path_inner(
-                dirs::home_dir(),
-                std::env::var_os("PATH"),
-                login_shell_path,
-                is_executable_file,
-            )
-        }),
-    )
+    let resolved = tokio::task::spawn_blocking(|| {
+        resolve_claude_path_inner(
+            dirs::home_dir(),
+            std::env::var_os("PATH"),
+            login_shell_path,
+            is_executable_file,
+        )
+    })
     .await
-    .ok() // timeout elapsed → None
-    .and_then(|r| r.ok()) // spawn_blocking JoinError → None
-    .unwrap_or_else(|| OsString::from("claude"));
-    // Another task may have raced us — that's fine, OnceLock deduplicates.
-    let _ = RESOLVED.set(resolved.clone());
+    .unwrap_or_else(|_| OsString::from("claude"));
+    // Only cache absolute paths — the bare "claude" fallback should allow
+    // retries on subsequent calls in case the environment improves.
+    if Path::new(&resolved).is_absolute() {
+        let _ = RESOLVED.set(resolved.clone());
+    }
     resolved
 }
 
@@ -455,6 +458,9 @@ fn search_path_dirs(path: &std::ffi::OsStr, exists: &impl Fn(&Path) -> bool) -> 
 /// If the shell prints startup output (motd, banner, etc.), only the last
 /// non-empty line is used as the PATH value.
 ///
+/// A 5-second timeout kills the subprocess if the shell init hangs (nvm,
+/// pyenv, etc.), preventing leaked processes.
+///
 /// Returns `None` if `$SHELL` is unset or not an absolute path.
 fn login_shell_path() -> Option<OsString> {
     let shell = std::env::var("SHELL").ok()?;
@@ -473,27 +479,53 @@ fn login_shell_path() -> Option<OsString> {
         r#"printf '%s\n' "$PATH""#
     };
 
-    let output = std::process::Command::new(&shell)
+    let mut child = std::process::Command::new(&shell)
         .args(["-l", "-c", cmd_arg])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .output()
+        .spawn()
         .ok()?;
 
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        // Take the last non-empty line to skip any startup banner output.
-        let path = stdout
-            .lines()
-            .rev()
-            .find(|line| !line.trim().is_empty())
-            .map(|line| line.trim().to_string())?;
-        if !path.is_empty() {
-            return Some(OsString::from(path));
+    // Wait up to 5 seconds. If the shell init hangs (nvm, pyenv, etc.),
+    // kill the subprocess to avoid leaking a stuck process.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(_) => break None,
         }
+    };
+
+    let status = status?;
+    if !status.success() {
+        return None;
     }
-    None
+
+    let mut stdout = String::new();
+    if let Some(mut out) = child.stdout.take() {
+        use std::io::Read;
+        let _ = out.read_to_string(&mut stdout);
+    }
+    // Take the last non-empty line to skip any startup banner output.
+    let path = stdout
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .map(|line| line.trim().to_string())?;
+    if path.is_empty() {
+        None
+    } else {
+        Some(OsString::from(path))
+    }
 }
 
 /// Run a single agent turn by spawning `claude -p` with the given prompt.
