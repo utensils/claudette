@@ -22,14 +22,127 @@ jobs:
       - id: release
         uses: googleapis/release-please-action@v4
 
+      # Immediately mark the release as draft so it's not visible until
+      # all build artifacts have been uploaded successfully.
+      - name: Mark release as draft
+        if: steps.release.outputs.releases_created == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${{ steps.release.outputs.tag_name }}" --draft --repo "${{ github.repository }}"
+
+  build:
+    needs: release-please
+    if: needs.release-please.outputs.releases_created == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            rust-target: aarch64-apple-darwin
+            bundles: dmg
+            label: macos-aarch64
+          - platform: macos-15-intel
+            rust-target: x86_64-apple-darwin
+            bundles: dmg
+            label: macos-x86_64
+          - platform: ubuntu-22.04
+            rust-target: x86_64-unknown-linux-gnu
+            bundles: appimage,deb
+            label: linux-x86_64
+
+    name: Build (${{ matrix.label }})
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94"
+          targets: ${{ matrix.rust-target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.label }}
+
+      - name: Install Linux system dependencies
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "latest"
+
+      - name: Install frontend dependencies
+        run: cd src/ui && bun install --frozen-lockfile
+
+      - name: Generate icons
+        run: bunx @tauri-apps/cli icon assets/logo.png
+
+      - name: Build and upload desktop app
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_ID: ${{ runner.os == 'macOS' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
+        with:
+          tagName: ${{ needs.release-please.outputs.tag_name }}
+          releaseName: ${{ needs.release-please.outputs.tag_name }}
+          releaseDraft: true
+          args: --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundles }}
+
+      - name: Build headless server
+        run: cargo build --release -p claudette-server --target ${{ matrix.rust-target }}
+
+      - name: Upload headless server binary
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BIN="target/${{ matrix.rust-target }}/release/claudette-server"
+          ASSET="claudette-server-${{ matrix.label }}"
+          cp "$BIN" "$ASSET"
+          gh release upload "${{ needs.release-please.outputs.tag_name }}" "$ASSET" --clobber
+
+  publish:
+    name: Publish Release
+    needs: [release-please, build]
+    if: needs.release-please.outputs.releases_created == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Un-draft the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${{ needs.release-please.outputs.tag_name }}" --draft=false --repo "${{ github.repository }}"
+
   notify-discord:
     name: Discord Release Notification
-    needs: release-please
+    needs: [release-please, publish]
     if: needs.release-please.outputs.releases_created == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Extract changelog and notify Discord
         env:
@@ -73,93 +186,3 @@ jobs:
           curl -f -H "Content-Type: application/json" \
             -d "$PAYLOAD" \
             "$DISCORD_WEBHOOK_URL"
-
-  build:
-    needs: release-please
-    if: needs.release-please.outputs.releases_created == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: macos-latest
-            rust-target: aarch64-apple-darwin
-            bundles: dmg
-            label: macos-aarch64
-          - platform: macos-15-intel
-            rust-target: x86_64-apple-darwin
-            bundles: dmg
-            label: macos-x86_64
-          - platform: ubuntu-22.04
-            rust-target: x86_64-unknown-linux-gnu
-            bundles: appimage,deb
-            label: linux-x86_64
-
-    name: Build (${{ matrix.label }})
-    runs-on: ${{ matrix.platform }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.release-please.outputs.tag_name }}
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.94"
-          targets: ${{ matrix.rust-target }}
-
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.label }}
-
-      - name: Install Linux system dependencies
-        if: startsWith(matrix.platform, 'ubuntu')
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libgtk-3-dev \
-            libsoup-3.0-dev \
-            libjavascriptcoregtk-4.1-dev
-
-      - name: Install bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "latest"
-
-      - name: Install frontend dependencies
-        run: cd src/ui && bun install --frozen-lockfile
-
-      - name: Build and upload desktop app
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_CERTIFICATE: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE || '' }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
-          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
-          APPLE_ID: ${{ runner.os == 'macOS' && secrets.APPLE_ID || '' }}
-          APPLE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
-        with:
-          tagName: ${{ needs.release-please.outputs.tag_name }}
-          releaseName: ${{ needs.release-please.outputs.tag_name }}
-          args: --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundles }}
-
-      - name: Build headless server
-        run: cargo build --release -p claudette-server --target ${{ matrix.rust-target }}
-
-      - name: Upload headless server binary
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          BIN="target/${{ matrix.rust-target }}/release/claudette-server"
-          ASSET="claudette-server-${{ matrix.label }}"
-          cp "$BIN" "$ASSET"
-          gh release upload "${{ needs.release-please.outputs.tag_name }}" "$ASSET" --clobber
