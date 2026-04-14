@@ -68,6 +68,23 @@ pub fn serialize_for_cli(servers: &[McpServer]) -> String {
     wrapper.to_string()
 }
 
+/// Normalize an MCP config by ensuring it has a "type" field.
+///
+/// Claude Code's project-scoped configs don't include "type", but the
+/// Claude CLI `--mcp-config` flag requires it. This function adds
+/// `"type": "stdio"` if the field is missing.
+fn normalize_mcp_config(mut config: serde_json::Value) -> serde_json::Value {
+    if let Some(obj) = config.as_object_mut()
+        && !obj.contains_key("type")
+    {
+        obj.insert(
+            "type".to_string(),
+            serde_json::Value::String("stdio".to_string()),
+        );
+    }
+    config
+}
+
 /// Parse project-scoped MCPs from `~/.claude.json`.
 ///
 /// Claude Code stores per-project configs at:
@@ -89,7 +106,7 @@ fn detect_user_project_mcps(repo_path: &Path) -> Option<Vec<McpServer>> {
         .iter()
         .map(|(name, config)| McpServer {
             name: name.clone(),
-            config: config.clone(),
+            config: normalize_mcp_config(config.clone()),
             source: McpSource::UserProjectConfig,
         })
         .collect();
@@ -119,7 +136,7 @@ fn detect_repo_local_mcps(repo_path: &Path) -> Option<Vec<McpServer>> {
         .iter()
         .map(|(name, config)| McpServer {
             name: name.clone(),
-            config: config.clone(),
+            config: normalize_mcp_config(config.clone()),
             source: McpSource::RepoLocalConfig,
         })
         .collect();
@@ -341,5 +358,35 @@ mod tests {
             .status()
             .unwrap();
         assert!(!is_gitignored(dir.path(), ".claude.json"));
+    }
+
+    #[test]
+    fn test_normalize_mcp_config_adds_type_field() {
+        let config_without_type = serde_json::json!({
+            "command": "npx",
+            "args": ["-y", "@example/mcp-server"]
+        });
+
+        let normalized = normalize_mcp_config(config_without_type);
+
+        assert_eq!(normalized["type"], "stdio");
+        assert_eq!(normalized["command"], "npx");
+        assert_eq!(
+            normalized["args"],
+            serde_json::json!(["-y", "@example/mcp-server"])
+        );
+    }
+
+    #[test]
+    fn test_normalize_mcp_config_preserves_existing_type() {
+        let config_with_type = serde_json::json!({
+            "type": "http",
+            "url": "https://example.com"
+        });
+
+        let normalized = normalize_mcp_config(config_with_type.clone());
+
+        assert_eq!(normalized["type"], "http");
+        assert_eq!(normalized["url"], "https://example.com");
     }
 }
