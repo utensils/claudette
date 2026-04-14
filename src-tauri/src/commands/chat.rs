@@ -182,7 +182,10 @@ pub async fn send_chat_message(
     let db_rows = db
         .list_repository_mcp_servers(&ws.repository_id)
         .map_err(|e| {
-            eprintln!("[chat] Failed to load MCP servers for {}: {e}", ws.repository_id);
+            eprintln!(
+                "[chat] Failed to load MCP servers for {}: {e}",
+                ws.repository_id
+            );
             e.to_string()
         })?;
     let mcp_config = if db_rows.is_empty() {
