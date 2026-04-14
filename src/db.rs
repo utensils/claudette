@@ -3,8 +3,8 @@ use std::path::Path;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::model::{
-    ChatMessage, CompletedTurnData, ConversationCheckpoint, RemoteConnection, Repository,
-    TerminalTab, TurnToolActivity, Workspace, WorkspaceStatus,
+    ChatMessage, CheckpointFile, CompletedTurnData, ConversationCheckpoint, RemoteConnection,
+    Repository, TerminalTab, TurnToolActivity, Workspace, WorkspaceStatus,
 };
 
 pub struct Database {
@@ -34,6 +34,12 @@ impl Database {
         let db = Self { conn };
         db.migrate()?;
         Ok(db)
+    }
+
+    /// Execute raw SQL. Intended for test setup only.
+    #[cfg(test)]
+    pub fn execute_batch(&self, sql: &str) -> Result<(), rusqlite::Error> {
+        self.conn.execute_batch(sql)
     }
 
     fn migrate(&self) -> Result<(), rusqlite::Error> {
@@ -239,6 +245,24 @@ impl Database {
             self.conn.execute_batch(
                 "ALTER TABLE repositories ADD COLUMN branch_rename_preferences TEXT;
                  PRAGMA user_version = 14;",
+            )?;
+        }
+
+        if version < 15 {
+            self.conn.execute_batch(
+                "CREATE TABLE checkpoint_files (
+                    id              TEXT PRIMARY KEY,
+                    checkpoint_id   TEXT NOT NULL REFERENCES conversation_checkpoints(id) ON DELETE CASCADE,
+                    file_path       TEXT NOT NULL,
+                    content         BLOB,
+                    file_mode       INTEGER NOT NULL DEFAULT 33188,
+                    UNIQUE(checkpoint_id, file_path)
+                );
+
+                CREATE INDEX idx_checkpoint_files_checkpoint
+                    ON checkpoint_files(checkpoint_id);
+
+                PRAGMA user_version = 15;",
             )?;
         }
 
@@ -674,20 +698,27 @@ impl Database {
             workspace_id: row.get(1)?,
             message_id: row.get(2)?,
             commit_hash: row.get(3)?,
-            turn_index: row.get(4)?,
-            message_count: row.get(5)?,
-            created_at: row.get(6)?,
+            has_file_state: row.get(4)?,
+            turn_index: row.get(5)?,
+            message_count: row.get(6)?,
+            created_at: row.get(7)?,
         })
     }
+
+    /// SQL column list for checkpoint queries, including a subquery for has_file_state.
+    const CHECKPOINT_COLS: &str = "id, workspace_id, message_id, commit_hash, \
+         EXISTS(SELECT 1 FROM checkpoint_files WHERE checkpoint_id = conversation_checkpoints.id) AS has_file_state, \
+         turn_index, message_count, created_at";
 
     pub fn list_checkpoints(
         &self,
         workspace_id: &str,
     ) -> Result<Vec<ConversationCheckpoint>, rusqlite::Error> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, workspace_id, message_id, commit_hash, turn_index, message_count, created_at
-             FROM conversation_checkpoints WHERE workspace_id = ?1 ORDER BY turn_index",
-        )?;
+        let sql = format!(
+            "SELECT {} FROM conversation_checkpoints WHERE workspace_id = ?1 ORDER BY turn_index",
+            Self::CHECKPOINT_COLS
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params![workspace_id], Self::parse_checkpoint_row)?;
         rows.collect()
     }
@@ -696,13 +727,12 @@ impl Database {
         &self,
         id: &str,
     ) -> Result<Option<ConversationCheckpoint>, rusqlite::Error> {
+        let sql = format!(
+            "SELECT {} FROM conversation_checkpoints WHERE id = ?1",
+            Self::CHECKPOINT_COLS
+        );
         self.conn
-            .query_row(
-                "SELECT id, workspace_id, message_id, commit_hash, turn_index, message_count, created_at
-                 FROM conversation_checkpoints WHERE id = ?1",
-                params![id],
-                Self::parse_checkpoint_row,
-            )
+            .query_row(&sql, params![id], Self::parse_checkpoint_row)
             .optional()
     }
 
@@ -710,16 +740,13 @@ impl Database {
         &self,
         workspace_id: &str,
     ) -> Result<Option<ConversationCheckpoint>, rusqlite::Error> {
+        let sql = format!(
+            "SELECT {} FROM conversation_checkpoints \
+             WHERE workspace_id = ?1 ORDER BY turn_index DESC LIMIT 1",
+            Self::CHECKPOINT_COLS
+        );
         self.conn
-            .query_row(
-                "SELECT id, workspace_id, message_id, commit_hash, turn_index, message_count, created_at
-                 FROM conversation_checkpoints
-                 WHERE workspace_id = ?1
-                 ORDER BY turn_index DESC
-                 LIMIT 1",
-                params![workspace_id],
-                Self::parse_checkpoint_row,
-            )
+            .query_row(&sql, params![workspace_id], Self::parse_checkpoint_row)
             .optional()
     }
 
@@ -733,6 +760,57 @@ impl Database {
             params![workspace_id, turn_index],
         )?;
         Ok(deleted)
+    }
+
+    // --- Checkpoint Files ---
+
+    pub fn insert_checkpoint_files(&self, files: &[CheckpointFile]) -> Result<(), rusqlite::Error> {
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO checkpoint_files (id, checkpoint_id, file_path, content, file_mode)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            )?;
+            for f in files {
+                stmt.execute(params![
+                    f.id,
+                    f.checkpoint_id,
+                    f.file_path,
+                    f.content,
+                    f.file_mode,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn get_checkpoint_files(
+        &self,
+        checkpoint_id: &str,
+    ) -> Result<Vec<CheckpointFile>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, checkpoint_id, file_path, content, file_mode
+             FROM checkpoint_files WHERE checkpoint_id = ?1",
+        )?;
+        let rows = stmt.query_map(params![checkpoint_id], |row| {
+            Ok(CheckpointFile {
+                id: row.get(0)?,
+                checkpoint_id: row.get(1)?,
+                file_path: row.get(2)?,
+                content: row.get(3)?,
+                file_mode: row.get(4)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn has_checkpoint_files(&self, checkpoint_id: &str) -> Result<bool, rusqlite::Error> {
+        self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM checkpoint_files WHERE checkpoint_id = ?1)",
+            params![checkpoint_id],
+            |row| row.get(0),
+        )
     }
 
     // --- Turn Tool Activities ---
@@ -1763,6 +1841,7 @@ mod tests {
             workspace_id: ws_id.into(),
             message_id: msg_id.into(),
             commit_hash: Some(format!("abc{turn}")),
+            has_file_state: false,
             turn_index: turn,
             message_count: 1,
             created_at: String::new(),

@@ -3,36 +3,34 @@ import type { ChatMessage } from "../types/chat";
 
 /**
  * Determine whether rolling back to a given checkpoint could involve
- * restoring file changes. Returns false only when the checkpoint has no
- * commit hash, or when a later checkpoint confirms the same hash (meaning
- * no files changed between the two). When the target is the latest
- * checkpoint we conservatively return true since the worktree may have
- * drifted after that checkpoint was created.
+ * restoring file changes. New checkpoints use `has_file_state` (SQLite
+ * snapshots). Legacy checkpoints fall back to comparing `commit_hash`
+ * values.
  */
 export function checkpointHasFileChanges(
   checkpoint: ConversationCheckpoint,
   allCheckpoints: ConversationCheckpoint[],
 ): boolean {
+  // New snapshots: has_file_state is authoritative.
+  if (checkpoint.has_file_state) return true;
+  // Legacy: fall back to commit_hash comparison.
   if (!checkpoint.commit_hash) return false;
   if (allCheckpoints.length === 0) return false;
   const latest = allCheckpoints[allCheckpoints.length - 1];
-  // If this IS the latest checkpoint we can't be sure files haven't
-  // drifted — conservatively offer restore.
   if (checkpoint.id === latest.id) return true;
   return checkpoint.commit_hash !== latest.commit_hash;
 }
 
 /**
  * Determine whether clearing the entire conversation could involve
- * restoring file changes. Returns true when any checkpoint has a non-null
- * commit hash — meaning the agent edited files at some point. A clear-all
- * rolls back to before the first turn, so even a single file-editing turn
- * needs the restore checkbox.
+ * restoring file changes. Returns true when any checkpoint has file state
+ * (snapshot or legacy commit hash) — meaning the agent edited files at
+ * some point.
  */
 export function clearAllHasFileChanges(
   checkpoints: ConversationCheckpoint[],
 ): boolean {
-  return checkpoints.some((c) => c.commit_hash !== null);
+  return checkpoints.some((c) => c.has_file_state || c.commit_hash !== null);
 }
 
 /**

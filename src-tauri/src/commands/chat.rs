@@ -9,6 +9,7 @@ use claudette::git;
 use claudette::model::{
     ChatMessage, ChatRole, CompletedTurnData, ConversationCheckpoint, TurnToolActivity,
 };
+use claudette::snapshot;
 
 use crate::state::{AgentSessionState, AppState};
 
@@ -458,33 +459,36 @@ pub async fn send_chat_message(
                     .map(|cp| cp.turn_index + 1)
                     .unwrap_or(0);
 
-                let commit_hash =
-                    match git::create_checkpoint_commit(&wt_path, &format!("Turn {turn_index}"))
-                        .await
-                    {
-                        Ok(hash) => Some(hash),
-                        Err(e) => {
-                            eprintln!(
-                                "[chat] Checkpoint commit failed for {ws_id}: {e} \
-                             — checkpoint will be recorded without file restore capability"
-                            );
-                            None
-                        }
-                    };
-
                 let checkpoint = ConversationCheckpoint {
                     id: uuid::Uuid::new_v4().to_string(),
                     workspace_id: ws_id.clone(),
                     message_id: anchor_msg_id.to_string(),
-                    commit_hash,
+                    commit_hash: None,
+                    has_file_state: false, // Updated after snapshot succeeds
                     turn_index,
                     message_count: 0, // Updated by frontend after finalizeTurn
                     created_at: now_iso(),
                 };
                 if db.insert_checkpoint(&checkpoint).is_ok() {
+                    // Snapshot worktree files into SQLite.
+                    let has_files =
+                        match snapshot::save_snapshot(&db_path, &checkpoint.id, &wt_path).await {
+                            Ok(()) => true,
+                            Err(e) => {
+                                eprintln!(
+                                    "[chat] Snapshot failed for {ws_id}: {e} \
+                                 — checkpoint recorded without file restore capability"
+                                );
+                                false
+                            }
+                        };
+
+                    // Emit with up-to-date has_file_state so frontend knows.
+                    let mut cp_payload = checkpoint.clone();
+                    cp_payload.has_file_state = has_files;
                     let payload = serde_json::json!({
                         "workspace_id": &ws_id,
-                        "checkpoint": &checkpoint,
+                        "checkpoint": &cp_payload,
                     });
                     let _ = app.emit("checkpoint-created", &payload);
                 }
@@ -599,10 +603,10 @@ pub async fn rollback_to_checkpoint(
         return Err("Checkpoint does not belong to this workspace".into());
     }
 
-    // Attempt file restore BEFORE any destructive DB writes so that a git
+    // Attempt file restore BEFORE any destructive DB writes so that a
     // failure does not leave the DB truncated while the frontend still shows
     // the full conversation.
-    if restore_files && let Some(ref commit_hash) = checkpoint.commit_hash {
+    if restore_files {
         let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
         let ws = workspaces
             .iter()
@@ -612,9 +616,18 @@ pub async fn rollback_to_checkpoint(
             .worktree_path
             .as_ref()
             .ok_or("Workspace has no worktree")?;
-        git::restore_to_commit(wt, commit_hash)
-            .await
-            .map_err(|e| e.to_string())?;
+
+        if checkpoint.has_file_state {
+            // New path: restore from SQLite snapshot.
+            snapshot::restore_snapshot(&state.db_path, &checkpoint_id, wt)
+                .await
+                .map_err(|e| e.to_string())?;
+        } else if let Some(ref commit_hash) = checkpoint.commit_hash {
+            // Legacy path: restore from git commit.
+            git::restore_to_commit(wt, commit_hash)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
     }
 
     // Now perform the destructive DB writes — safe because the risky git

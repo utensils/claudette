@@ -7,12 +7,14 @@ function cp(
   id: string,
   commitHash: string | null,
   turnIndex: number,
+  hasFileState = false,
 ): ConversationCheckpoint {
   return {
     id,
     workspace_id: "ws",
     message_id: `m-${id}`,
     commit_hash: commitHash,
+    has_file_state: hasFileState,
     turn_index: turnIndex,
     message_count: 1,
     created_at: "",
@@ -74,6 +76,24 @@ describe("checkpointHasFileChanges", () => {
     ];
     expect(checkpointHasFileChanges(target, all)).toBe(false);
   });
+
+  it("returns true when has_file_state is true (SQLite snapshot)", () => {
+    const target = cp("cp1", null, 0, true);
+    const all = [cp("cp1", null, 0, true), cp("cp2", null, 1, true)];
+    expect(checkpointHasFileChanges(target, all)).toBe(true);
+  });
+
+  it("returns true when has_file_state is true even with no commit_hash", () => {
+    const target = cp("cp1", null, 0, true);
+    const all = [cp("cp1", null, 0, true)];
+    expect(checkpointHasFileChanges(target, all)).toBe(true);
+  });
+
+  it("returns false when neither has_file_state nor commit_hash", () => {
+    const target = cp("cp1", null, 0, false);
+    const all = [cp("cp1", null, 0, false)];
+    expect(checkpointHasFileChanges(target, all)).toBe(false);
+  });
 });
 
 describe("clearAllHasFileChanges", () => {
@@ -118,6 +138,27 @@ describe("clearAllHasFileChanges", () => {
       cp("cp2", "aaa", 1),
       cp("cp3", "aaa", 2),
     ])).toBe(true);
+  });
+
+  it("returns true when checkpoints have has_file_state (SQLite snapshots)", () => {
+    expect(clearAllHasFileChanges([
+      cp("cp1", null, 0, true),
+      cp("cp2", null, 1, true),
+    ])).toBe(true);
+  });
+
+  it("returns true with mix of snapshot and legacy checkpoints", () => {
+    expect(clearAllHasFileChanges([
+      cp("cp1", "aaa", 0, false),
+      cp("cp2", null, 1, true),
+    ])).toBe(true);
+  });
+
+  it("returns false when no checkpoints have file state or commit hash", () => {
+    expect(clearAllHasFileChanges([
+      cp("cp1", null, 0, false),
+      cp("cp2", null, 1, false),
+    ])).toBe(false);
   });
 });
 

@@ -3,6 +3,7 @@ export interface ConversationCheckpoint {
   workspace_id: string;
   message_id: string;
   commit_hash: string | null;
+  has_file_state: boolean;
   turn_index: number;
   message_count: number;
   created_at: string;

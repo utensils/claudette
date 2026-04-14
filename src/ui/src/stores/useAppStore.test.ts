@@ -382,6 +382,7 @@ function makeCheckpoint(
     workspace_id: wsId,
     message_id: messageId,
     commit_hash: `hash-${turnIndex}`,
+    has_file_state: false,
     turn_index: turnIndex,
     message_count: 1,
     created_at: "",

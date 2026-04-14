@@ -6,9 +6,22 @@ pub struct ConversationCheckpoint {
     pub workspace_id: String,
     pub message_id: String,
     pub commit_hash: Option<String>,
+    /// Whether this checkpoint has file snapshot data in the `checkpoint_files`
+    /// table. When true, rollback restores files from SQLite instead of git.
+    pub has_file_state: bool,
     pub turn_index: i32,
     pub message_count: i32,
     pub created_at: String,
+}
+
+/// A single file captured in a checkpoint snapshot.
+#[derive(Debug, Clone)]
+pub struct CheckpointFile {
+    pub id: String,
+    pub checkpoint_id: String,
+    pub file_path: String,
+    pub content: Option<Vec<u8>>,
+    pub file_mode: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
