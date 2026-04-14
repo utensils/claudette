@@ -378,6 +378,7 @@ async fn handle_send_chat_message(
         plan_mode: plan_mode.unwrap_or(false),
         effort,
         chrome_enabled: chrome_enabled.unwrap_or(false),
+        mcp_config: None,
     };
 
     // Expand @-file mentions into inline file content for the agent prompt.

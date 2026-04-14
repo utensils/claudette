@@ -2,11 +2,13 @@ import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useAppStore } from "../../stores/useAppStore";
 import { addRepository, getDefaultBranch } from "../../services/tauri";
+import { detectMcpServers } from "../../services/mcp";
 import { Modal } from "./Modal";
 import shared from "./shared.module.css";
 
 export function AddRepoModal() {
   const closeModal = useAppStore((s) => s.closeModal);
+  const openModal = useAppStore((s) => s.openModal);
   const addRepo = useAppStore((s) => s.addRepository);
   const setDefaultBranches = useAppStore((s) => s.setDefaultBranches);
   const defaultBranches = useAppStore((s) => s.defaultBranches);
@@ -39,6 +41,17 @@ export function AddRepoModal() {
           setDefaultBranches({ ...defaultBranches, [repo.id]: branch });
         }
       });
+      // Detect non-portable MCP servers. If found, open selection modal;
+      // otherwise just close.
+      try {
+        const mcps = await detectMcpServers(repo.id);
+        if (mcps.length > 0) {
+          openModal("mcpSelection", { repoId: repo.id });
+          return;
+        }
+      } catch {
+        // MCP detection is best-effort — don't block repo addition.
+      }
       closeModal();
     } catch (e) {
       setError(String(e));

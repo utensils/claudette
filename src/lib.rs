@@ -4,6 +4,7 @@ pub mod db;
 pub mod diff;
 pub mod file_expand;
 pub mod git;
+pub mod mcp;
 pub mod model;
 pub mod names;
 pub mod permissions;

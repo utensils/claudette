@@ -213,6 +213,9 @@ pub struct AgentSettings {
     /// Enable Chrome browser mode via `--chrome`. Session-level: only applied
     /// on the first turn.
     pub chrome_enabled: bool,
+    /// MCP config JSON string for `--mcp-config`. Session-level: only applied
+    /// on the first turn.
+    pub mcp_config: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -259,6 +262,13 @@ pub fn build_claude_args(
     // Chrome is session-level — only set on the first turn.
     if !is_resume && settings.chrome_enabled {
         args.push("--chrome".to_string());
+    }
+
+    // MCP config is session-level — only inject on the first turn.
+    // Resumed sessions inherit MCP servers from the initial turn.
+    if !is_resume && let Some(ref mcp_json) = settings.mcp_config {
+        args.push("--mcp-config".to_string());
+        args.push(mcp_json.clone());
     }
 
     // Permission mode must be set on every turn — each `claude` invocation is
