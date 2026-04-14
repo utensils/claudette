@@ -323,17 +323,28 @@ pub fn build_claude_args(
 ///
 /// The login-shell probe uses `std::process::Command` (blocking), so we run
 /// the entire resolution inside `spawn_blocking` on first call and cache the
-/// result in a `OnceLock` for subsequent calls.
+/// result in a `OnceLock` for subsequent calls. A 5-second timeout guards
+/// against broken or hanging shell init scripts.
 async fn resolve_claude_path() -> OsString {
     static RESOLVED: OnceLock<OsString> = OnceLock::new();
     if let Some(cached) = RESOLVED.get() {
         return cached.clone();
     }
-    let resolved = tokio::task::spawn_blocking(|| {
-        resolve_claude_path_inner(dirs::home_dir(), login_shell_path(), is_executable_file)
-    })
+    let resolved = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::task::spawn_blocking(|| {
+            resolve_claude_path_inner(
+                dirs::home_dir(),
+                std::env::var_os("PATH"),
+                login_shell_path,
+                is_executable_file,
+            )
+        }),
+    )
     .await
-    .unwrap_or_else(|_| OsString::from("claude"));
+    .ok() // timeout elapsed → None
+    .and_then(|r| r.ok()) // spawn_blocking JoinError → None
+    .unwrap_or_else(|| OsString::from("claude"));
     // Another task may have raced us — that's fine, OnceLock deduplicates.
     let _ = RESOLVED.set(resolved.clone());
     resolved
@@ -358,56 +369,81 @@ fn is_executable_file(path: &Path) -> bool {
 
 /// Pure, testable search logic — no filesystem or process side effects.
 ///
-/// `home` is the user's home directory (if available), `shell_path` is the
-/// colon-separated PATH obtained from the login shell (if available), and
-/// `exists` is a predicate that returns true if the given path points to an
-/// existing file.
+/// Resolution order respects the user's configured PATH first, then falls
+/// back to progressively more expensive probes:
+///
+/// 1. Process PATH (cheap — honours shims, asdf, mise, Nix profiles, etc.)
+/// 2. Login shell PATH (deferred — only runs if #1 missed, handles GUI launch)
+/// 3. Well-known install locations (static fallback paths)
+/// 4. Bare `"claude"` (absolute last resort)
+///
+/// All PATH searches skip non-absolute entries to prevent repo-local execution.
+/// The `shell_path_probe` closure is called lazily so we don't pay the
+/// shell-spawn cost when the process PATH already found claude.
 fn resolve_claude_path_inner(
     home: Option<PathBuf>,
-    shell_path: Option<OsString>,
+    process_path: Option<OsString>,
+    shell_path_probe: impl FnOnce() -> Option<OsString>,
     exists: impl Fn(&Path) -> bool,
 ) -> OsString {
-    // 1. Well-known install locations under $HOME.
-    if let Some(home) = home {
-        let candidates = [
-            home.join(".local/bin/claude"),
-            home.join(".claude/local/claude"),
-        ];
-        for p in &candidates {
-            if exists(p) {
-                return p.clone().into_os_string();
-            }
-        }
+    // 1. Search the process PATH first. This respects the user's configured
+    //    environment, including shims (asdf, mise, Nix, pnpm, etc.).
+    //    Skip non-absolute entries (e.g. "." or "") to avoid resolving a
+    //    repo-local `claude` binary relative to the working directory.
+    if let Some(process_path) = process_path
+        && let Some(found) = search_path_dirs(&process_path, &exists)
+    {
+        return found;
     }
 
-    // System-wide locations (macOS + Linux).
-    let system_candidates = [
+    // 2. Probe the login shell's PATH. GUI-launched apps on macOS don't
+    //    inherit the user's shell PATH, so this catches the common case
+    //    where process PATH is empty/minimal. Deferred to here so we don't
+    //    pay the shell-spawn cost when process PATH already found claude.
+    if let Some(shell_path) = shell_path_probe()
+        && let Some(found) = search_path_dirs(&shell_path, &exists)
+    {
+        return found;
+    }
+
+    // 3. Well-known install locations as static fallbacks.
+    let mut fallback_candidates: Vec<PathBuf> = Vec::new();
+    if let Some(ref home) = home {
+        fallback_candidates.extend([
+            home.join(".local/bin/claude"),
+            home.join(".claude/local/claude"),
+            home.join(".nix-profile/bin/claude"), // Nix single-user
+        ]);
+    }
+    fallback_candidates.extend([
         PathBuf::from("/usr/local/bin/claude"),
         PathBuf::from("/opt/homebrew/bin/claude"), // macOS Homebrew
-    ];
-    for p in &system_candidates {
+        PathBuf::from("/run/current-system/sw/bin/claude"), // NixOS system
+        PathBuf::from("/nix/var/nix/profiles/default/bin/claude"), // Nix multi-user
+    ]);
+    for p in &fallback_candidates {
         if exists(p) {
             return p.clone().into_os_string();
         }
     }
 
-    // 2. Search directories from the login shell's PATH.
-    //    Skip non-absolute entries (e.g. "." or "") to avoid resolving a
-    //    repo-local `claude` binary relative to the working directory.
-    if let Some(shell_path) = shell_path {
-        for dir in std::env::split_paths(&shell_path) {
-            if !dir.is_absolute() {
-                continue;
-            }
-            let candidate = dir.join("claude");
-            if exists(&candidate) {
-                return candidate.into_os_string();
-            }
+    // 4. Nothing found — bare name as absolute last resort.
+    OsString::from("claude")
+}
+
+/// Search colon-separated PATH directories for a `claude` binary.
+/// Skips non-absolute entries to prevent repo-local execution.
+fn search_path_dirs(path: &std::ffi::OsStr, exists: &impl Fn(&Path) -> bool) -> Option<OsString> {
+    for dir in std::env::split_paths(path) {
+        if !dir.is_absolute() {
+            continue;
+        }
+        let candidate = dir.join("claude");
+        if exists(&candidate) {
+            return Some(candidate.into_os_string());
         }
     }
-
-    // 3. Last resort — bare name, will rely on the process PATH.
-    OsString::from("claude")
+    None
 }
 
 /// Get the PATH as seen by the user's login shell.
@@ -1461,36 +1497,77 @@ mod tests {
     // resolve_claude_path_inner tests
     // -----------------------------------------------------------------------
 
+    // Helper: no shell probe (returns None).
+    fn no_shell() -> Option<OsString> {
+        None
+    }
+
     #[test]
-    fn test_resolve_prefers_home_local_bin() {
+    fn test_resolve_process_path_wins() {
+        // Process PATH is checked first and should win over everything.
+        let home = PathBuf::from("/home/user");
+        let result = resolve_claude_path_inner(
+            Some(home.clone()),
+            Some(OsString::from("/custom/bin")),
+            no_shell,
+            |p| {
+                p == Path::new("/custom/bin/claude")
+                    || p == home.join(".local/bin/claude")
+                    || p == Path::new("/usr/local/bin/claude")
+            },
+        );
+        assert_eq!(result, OsString::from("/custom/bin/claude"));
+    }
+
+    #[test]
+    fn test_resolve_shell_path_before_well_known() {
+        // When process PATH misses, shell probe runs before well-known paths.
+        let shell_path = OsString::from("/shell/bin");
+        let result = resolve_claude_path_inner(
+            None,
+            None, // empty process PATH
+            || Some(shell_path),
+            |p| p == Path::new("/shell/bin/claude") || p == Path::new("/usr/local/bin/claude"),
+        );
+        assert_eq!(result, OsString::from("/shell/bin/claude"));
+    }
+
+    #[test]
+    fn test_resolve_shell_probe_deferred() {
+        // Shell probe should NOT run if process PATH already found claude.
+        let probed = std::sync::atomic::AtomicBool::new(false);
+        let result = resolve_claude_path_inner(
+            None,
+            Some(OsString::from("/good/bin")),
+            || {
+                probed.store(true, std::sync::atomic::Ordering::SeqCst);
+                Some(OsString::from("/shell/bin"))
+            },
+            |p| p == Path::new("/good/bin/claude") || p == Path::new("/shell/bin/claude"),
+        );
+        assert_eq!(result, OsString::from("/good/bin/claude"));
+        assert!(!probed.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_resolve_falls_back_to_well_known_home() {
         let home = PathBuf::from("/home/user");
         let expected = home.join(".local/bin/claude");
-        let result = resolve_claude_path_inner(Some(home.clone()), None, |p| p == expected);
+        let result = resolve_claude_path_inner(Some(home), None, no_shell, |p| p == expected);
         assert_eq!(result, expected.into_os_string());
     }
 
     #[test]
-    fn test_resolve_prefers_home_claude_local() {
+    fn test_resolve_falls_back_to_claude_local() {
         let home = PathBuf::from("/home/user");
         let expected = home.join(".claude/local/claude");
-        let result = resolve_claude_path_inner(Some(home.clone()), None, |p| p == expected);
+        let result = resolve_claude_path_inner(Some(home), None, no_shell, |p| p == expected);
         assert_eq!(result, expected.into_os_string());
-    }
-
-    #[test]
-    fn test_resolve_prefers_home_over_system() {
-        let home = PathBuf::from("/home/user");
-        let home_path = home.join(".local/bin/claude");
-        let result = resolve_claude_path_inner(Some(home), None, |p| {
-            p == home_path || p == Path::new("/usr/local/bin/claude")
-        });
-        assert_eq!(result, home_path.into_os_string());
     }
 
     #[test]
     fn test_resolve_falls_back_to_system() {
-        let home = PathBuf::from("/home/user");
-        let result = resolve_claude_path_inner(Some(home), None, |p| {
+        let result = resolve_claude_path_inner(None, None, no_shell, |p| {
             p == Path::new("/usr/local/bin/claude")
         });
         assert_eq!(result, OsString::from("/usr/local/bin/claude"));
@@ -1498,76 +1575,93 @@ mod tests {
 
     #[test]
     fn test_resolve_falls_back_to_homebrew() {
-        let result =
-            resolve_claude_path_inner(None, None, |p| p == Path::new("/opt/homebrew/bin/claude"));
+        let result = resolve_claude_path_inner(None, None, no_shell, |p| {
+            p == Path::new("/opt/homebrew/bin/claude")
+        });
         assert_eq!(result, OsString::from("/opt/homebrew/bin/claude"));
     }
 
     #[test]
-    fn test_resolve_searches_shell_path() {
-        let shell_path = OsString::from("/custom/bin:/another/bin");
-        let result = resolve_claude_path_inner(None, Some(shell_path), |p| {
-            p == Path::new("/another/bin/claude")
-        });
-        assert_eq!(result, OsString::from("/another/bin/claude"));
+    fn test_resolve_finds_nix_profile() {
+        let home = PathBuf::from("/home/user");
+        let expected = home.join(".nix-profile/bin/claude");
+        let result = resolve_claude_path_inner(Some(home), None, no_shell, |p| p == expected);
+        assert_eq!(result, expected.into_os_string());
     }
 
     #[test]
-    fn test_resolve_prefers_system_over_shell_path() {
-        let shell_path = OsString::from("/custom/bin");
-        let result = resolve_claude_path_inner(None, Some(shell_path), |p| {
-            p == Path::new("/usr/local/bin/claude") || p == Path::new("/custom/bin/claude")
+    fn test_resolve_finds_nixos_system() {
+        let result = resolve_claude_path_inner(None, None, no_shell, |p| {
+            p == Path::new("/run/current-system/sw/bin/claude")
         });
-        assert_eq!(result, OsString::from("/usr/local/bin/claude"));
+        assert_eq!(result, OsString::from("/run/current-system/sw/bin/claude"));
+    }
+
+    #[test]
+    fn test_resolve_home_before_system_in_fallbacks() {
+        // Within the well-known fallbacks, home paths are checked before system.
+        let home = PathBuf::from("/home/user");
+        let home_path = home.join(".local/bin/claude");
+        let result = resolve_claude_path_inner(Some(home), None, no_shell, |p| {
+            p == home_path || p == Path::new("/usr/local/bin/claude")
+        });
+        assert_eq!(result, home_path.into_os_string());
     }
 
     #[test]
     fn test_resolve_bare_fallback() {
-        let result = resolve_claude_path_inner(None, None, |_| false);
+        let result = resolve_claude_path_inner(None, None, no_shell, |_| false);
         assert_eq!(result, OsString::from("claude"));
     }
 
     #[test]
-    fn test_resolve_no_home_still_checks_system() {
-        let result =
-            resolve_claude_path_inner(None, None, |p| p == Path::new("/usr/local/bin/claude"));
-        assert_eq!(result, OsString::from("/usr/local/bin/claude"));
-    }
-
-    #[test]
-    fn test_resolve_skips_relative_path_entries() {
-        // A PATH containing "." or relative dirs should not match — prevents
-        // executing a repo-local `claude` binary.
-        let shell_path = OsString::from(".:/relative/bin:/abs/bin");
-        let result = resolve_claude_path_inner(None, Some(shell_path), |p| {
-            // Everything "exists" — only absolute entries should be checked.
-            p == Path::new("./claude")
-                || p == Path::new("relative/bin/claude")
-                || p == Path::new("/abs/bin/claude")
-        });
+    fn test_resolve_skips_relative_in_process_path() {
+        let result = resolve_claude_path_inner(
+            None,
+            Some(OsString::from(".:/relative/bin:/abs/bin")),
+            no_shell,
+            |p| {
+                p == Path::new("./claude")
+                    || p == Path::new("relative/bin/claude")
+                    || p == Path::new("/abs/bin/claude")
+            },
+        );
         assert_eq!(result, OsString::from("/abs/bin/claude"));
     }
 
     #[test]
     fn test_resolve_skips_empty_path_entry() {
-        // Empty segments in PATH (e.g. "/good/bin::") resolve to "." — must be
-        // skipped because they are not absolute.
-        let shell_path = OsString::from(":/good/bin:");
-        let result = resolve_claude_path_inner(None, Some(shell_path), |p| {
-            p == Path::new("/good/bin/claude")
-        });
+        let result =
+            resolve_claude_path_inner(None, Some(OsString::from(":/good/bin:")), no_shell, |p| {
+                p == Path::new("/good/bin/claude")
+            });
         assert_eq!(result, OsString::from("/good/bin/claude"));
     }
 
     #[test]
     fn test_resolve_all_relative_falls_through_to_bare() {
-        // If the shell PATH contains only relative entries and no well-known
-        // locations exist, fall through to the bare "claude" fallback.
-        let shell_path = OsString::from(".:./bin:relative");
-        let result = resolve_claude_path_inner(None, Some(shell_path), |p| {
-            // Only "exists" for relative candidates — system paths don't exist.
-            !p.is_absolute()
-        });
+        let result = resolve_claude_path_inner(
+            None,
+            Some(OsString::from(".:./bin:relative")),
+            no_shell,
+            |p| !p.is_absolute(),
+        );
         assert_eq!(result, OsString::from("claude"));
+    }
+
+    #[test]
+    fn test_search_path_dirs_skips_relative() {
+        let path = OsString::from(".:/tmp/evil:/good/bin");
+        let result = search_path_dirs(path.as_os_str(), &|p| {
+            p == Path::new("/tmp/evil/claude") || p == Path::new("/good/bin/claude")
+        });
+        assert_eq!(result, Some(OsString::from("/tmp/evil/claude")));
+    }
+
+    #[test]
+    fn test_search_path_dirs_returns_none_for_all_relative() {
+        let path = OsString::from(".:relative:./bin");
+        let result = search_path_dirs(path.as_os_str(), &|_| true);
+        assert_eq!(result, None);
     }
 }
