@@ -64,15 +64,148 @@
   background: var(--hover-bg-subtle);
   border: 1px solid var(--divider);
   border-radius: 8px;
-  padding: 14px;
+  padding: 14px 18px;
   margin-bottom: 14px;
-  max-height: 300px;
+  max-height: 400px;
   overflow-y: auto;
   font-size: 13px;
   line-height: 1.6;
   color: var(--text-primary);
-  white-space: pre-wrap;
+}
+
+/* Prose styles for rendered markdown inside the plan card */
+.planContent h1,
+.planContent h2,
+.planContent h3,
+.planContent h4 {
+  margin: 1em 0 0.5em;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.planContent h1 { font-size: 1.3em; }
+.planContent h2 { font-size: 1.15em; }
+.planContent h3 { font-size: 1.05em; }
+.planContent h4 { font-size: 0.95em; }
+
+.planContent h1:first-child,
+.planContent h2:first-child,
+.planContent h3:first-child,
+.planContent h4:first-child {
+  margin-top: 0;
+}
+
+.planContent p {
+  margin: 0.6em 0;
+}
+
+.planContent ul,
+.planContent ol {
+  margin: 0.5em 0;
+  padding-left: 1.5em;
+}
+
+.planContent li {
+  margin: 0.25em 0;
+}
+
+.planContent code {
   font-family: var(--font-mono, monospace);
+  font-size: 0.9em;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+}
+
+.planContent pre {
+  margin: 0.6em 0;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 6px;
+  overflow-x: auto;
+}
+
+.planContent pre code {
+  background: none;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.planContent hr {
+  border: none;
+  border-top: 1px solid var(--divider);
+  margin: 1em 0;
+}
+
+.planContent strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.planContent a {
+  color: var(--accent-primary);
+  text-decoration: none;
+}
+
+.planContent a:hover {
+  text-decoration: underline;
+}
+
+/* Callout blocks use global class names injected by preprocessCallouts */
+.planContent :global(.cc-callout) {
+  background: linear-gradient(
+    135deg,
+    rgba(var(--accent-primary-rgb), 0.07) 0%,
+    rgba(var(--accent-primary-rgb), 0.03) 100%
+  );
+  border: 1px solid rgba(var(--accent-primary-rgb), 0.12);
+  border-left: 3px solid var(--accent-primary);
+  border-radius: 0 8px 8px 0;
+  padding: 14px 18px;
+  margin: 12px 0;
+}
+
+.planContent :global(.cc-callout) p {
+  margin: 4px 0;
+  color: var(--text-primary);
+}
+
+.planContent :global(.cc-callout) code {
+  background: rgba(var(--accent-primary-rgb), 0.1);
+  color: var(--accent-primary);
+}
+
+.planContent :global(.cc-callout-header) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent-primary);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding-bottom: 8px;
+  margin: 0 0 10px;
+  border-bottom: 1px solid rgba(var(--accent-primary-rgb), 0.2);
+}
+
+.planContent :global(.cc-callout-icon) {
+  font-size: 15px;
+  filter: drop-shadow(0 0 4px rgba(var(--accent-primary-rgb), 0.5));
+}
+
+.planContent > :global(.cc-callout-header) {
+  color: var(--accent-primary);
+  margin: 12px 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(var(--accent-primary-rgb), 0.2);
+}
+
+.planContent :global(hr.cc-callout-rule) {
+  border: none;
+  border-top: 1px solid rgba(var(--accent-primary-rgb), 0.15);
+  margin: 8px 0 12px;
 }
 
 .permissions {
