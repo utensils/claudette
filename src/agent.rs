@@ -264,9 +264,9 @@ pub fn build_claude_args(
         args.push("--chrome".to_string());
     }
 
-    // MCP config is session-level — only inject on the first turn.
-    // Resumed sessions inherit MCP servers from the initial turn.
-    if !is_resume && let Some(ref mcp_json) = settings.mcp_config {
+    // MCP config must be set on every turn — each `claude` invocation is a fresh
+    // process that doesn't inherit MCP connections from previous turns.
+    if let Some(ref mcp_json) = settings.mcp_config {
         args.push("--mcp-config".to_string());
         args.push(mcp_json.clone());
     }
@@ -1648,13 +1648,15 @@ mod tests {
     }
 
     #[test]
-    fn test_build_args_mcp_config_skipped_on_resume() {
+    fn test_build_args_mcp_config_on_resume() {
         let settings = AgentSettings {
-            mcp_config: Some(r#"{"mcpServers":{}}"#.to_string()),
+            mcp_config: Some(r#"{"mcpServers":{"s":{"type":"stdio","command":"x"}}}"#.to_string()),
             ..Default::default()
         };
         let args = build_claude_args("sess-1", "hello", true, &[], None, &settings, false);
-        assert!(!args.contains(&"--mcp-config".to_string()));
+        // MCP config must be passed on every turn (including resume)
+        let idx = args.iter().position(|a| a == "--mcp-config").unwrap();
+        assert!(args[idx + 1].contains("mcpServers"));
     }
 
     #[test]
