@@ -16,8 +16,6 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # Resolved tag: from release-please on push, from manual input on dispatch.
-  RELEASE_TAG: ${{ inputs.tag || '' }}
 
 jobs:
   release-please:
@@ -40,6 +38,7 @@ jobs:
         run: gh release edit "${{ steps.release.outputs.tag_name }}" --draft --repo "${{ github.repository }}"
 
   # Resolve the tag into a single output that downstream jobs can reference.
+  # Uses `always()` so it runs even when release-please is skipped (dispatch).
   resolve-tag:
     name: Resolve Tag
     runs-on: ubuntu-latest
@@ -62,6 +61,7 @@ jobs:
 
   build:
     needs: resolve-tag
+    if: always() && needs.resolve-tag.result == 'success'
     strategy:
       fail-fast: false
       matrix:
@@ -156,6 +156,7 @@ jobs:
   publish:
     name: Publish Release
     needs: [resolve-tag, build]
+    if: always() && needs.build.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Un-draft the release
@@ -166,6 +167,7 @@ jobs:
   notify-discord:
     name: Discord Release Notification
     needs: [resolve-tag, publish]
+    if: always() && needs.publish.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
