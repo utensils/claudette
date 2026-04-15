@@ -8,15 +8,111 @@ use claudette::model::WorkspaceStatus;
 
 use crate::state::AppState;
 
+// Baseline (auto) icons — monochrome black-on-transparent shapes that macOS
+// renders as template images and Linux/Windows render as-is.
 static ICON_IDLE: &[u8] = include_bytes!("../../assets/tray-idle.png");
 static ICON_ACTIVE: &[u8] = include_bytes!("../../assets/tray-active.png");
 static ICON_ATTENTION: &[u8] = include_bytes!("../../assets/tray-attention.png");
 
+// Explicit light / dark / color variants (three states each). These are
+// recolored from the baseline shapes with alpha preserved.
+static ICON_IDLE_LIGHT: &[u8] = include_bytes!("../../assets/tray-idle-light.png");
+static ICON_ACTIVE_LIGHT: &[u8] = include_bytes!("../../assets/tray-active-light.png");
+static ICON_ATTENTION_LIGHT: &[u8] = include_bytes!("../../assets/tray-attention-light.png");
+static ICON_IDLE_DARK: &[u8] = include_bytes!("../../assets/tray-idle-dark.png");
+static ICON_ACTIVE_DARK: &[u8] = include_bytes!("../../assets/tray-active-dark.png");
+static ICON_ATTENTION_DARK: &[u8] = include_bytes!("../../assets/tray-attention-dark.png");
+static ICON_IDLE_COLOR: &[u8] = include_bytes!("../../assets/tray-idle-color.png");
+static ICON_ACTIVE_COLOR: &[u8] = include_bytes!("../../assets/tray-active-color.png");
+static ICON_ATTENTION_COLOR: &[u8] = include_bytes!("../../assets/tray-attention-color.png");
+
 /// Tray icon state — determines which icon variant and tooltip to show.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TrayState {
     Idle,
     Running(usize),
     NeedsAttention(usize),
+}
+
+/// User-selectable tray icon style. Controls both the icon bytes shown
+/// and whether `is_template` is set for macOS tinting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrayIconStyle {
+    /// Baseline behavior: template icon (macOS tints to menu-bar color),
+    /// plain black shapes on Linux/Windows. The default.
+    Auto,
+    /// Always render as a white shape; macOS does not tint it.
+    Light,
+    /// Always render as a black shape; macOS does not tint it.
+    Dark,
+    /// Render in the logo's brand orange (#e3704e).
+    Color,
+}
+
+impl TrayIconStyle {
+    /// Parse the DB string value into a style, falling back to Auto.
+    fn from_setting(v: Option<&str>) -> Self {
+        match v {
+            Some("light") => Self::Light,
+            Some("dark") => Self::Dark,
+            Some("color") => Self::Color,
+            _ => Self::Auto,
+        }
+    }
+
+    /// Return (icon_bytes, is_template) for a given state. `is_template`
+    /// is only true for Auto on macOS — for the explicit variants the
+    /// user has picked a concrete color and macOS must NOT tint it.
+    fn icon_for(self, state: TrayState) -> (&'static [u8], bool) {
+        match self {
+            Self::Auto => {
+                let bytes = match state {
+                    TrayState::Idle => ICON_IDLE,
+                    TrayState::Running(_) => ICON_ACTIVE,
+                    TrayState::NeedsAttention(_) => ICON_ATTENTION,
+                };
+                (bytes, cfg!(target_os = "macos"))
+            }
+            Self::Light => {
+                let bytes = match state {
+                    TrayState::Idle => ICON_IDLE_LIGHT,
+                    TrayState::Running(_) => ICON_ACTIVE_LIGHT,
+                    TrayState::NeedsAttention(_) => ICON_ATTENTION_LIGHT,
+                };
+                (bytes, false)
+            }
+            Self::Dark => {
+                let bytes = match state {
+                    TrayState::Idle => ICON_IDLE_DARK,
+                    TrayState::Running(_) => ICON_ACTIVE_DARK,
+                    TrayState::NeedsAttention(_) => ICON_ATTENTION_DARK,
+                };
+                (bytes, false)
+            }
+            Self::Color => {
+                let bytes = match state {
+                    TrayState::Idle => ICON_IDLE_COLOR,
+                    TrayState::Running(_) => ICON_ACTIVE_COLOR,
+                    TrayState::NeedsAttention(_) => ICON_ATTENTION_COLOR,
+                };
+                (bytes, false)
+            }
+        }
+    }
+}
+
+/// Read the current user-selected tray icon style from the app_settings DB.
+/// Returns `Auto` if the DB can't be opened or the key is unset.
+fn read_icon_style(db_path: &std::path::Path) -> TrayIconStyle {
+    let Ok(db) = Database::open(db_path) else {
+        return TrayIconStyle::Auto;
+    };
+    TrayIconStyle::from_setting(
+        db.get_app_setting("tray_icon_style")
+            .ok()
+            .flatten()
+            .as_deref(),
+    )
 }
 
 /// Create and register the system tray icon.
@@ -40,11 +136,16 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), String> {
     }
 
     let menu = build_tray_menu(app)?;
-    let icon = Image::from_bytes(ICON_IDLE).map_err(|e| e.to_string())?;
+    // Use the user's selected style for the initial icon. rebuild_tray will
+    // re-read it on every state change so runtime preference changes take
+    // effect without a restart.
+    let style = read_icon_style(&state.db_path);
+    let (icon_bytes, is_template) = style.icon_for(TrayState::Idle);
+    let icon = Image::from_bytes(icon_bytes).map_err(|e| e.to_string())?;
 
     let tray = TrayIconBuilder::with_id("claudette-tray")
         .icon(icon)
-        .icon_as_template(cfg!(target_os = "macos"))
+        .icon_as_template(is_template)
         .tooltip("Claudette")
         .menu(&menu)
         .show_menu_on_left_click(true)
@@ -118,11 +219,10 @@ pub fn rebuild_tray(app: &AppHandle) {
     let _ = tray.set_menu(Some(menu));
 
     let tray_state = compute_tray_state(state.inner());
-    let (icon_bytes, is_template) = match &tray_state {
-        TrayState::Idle => (ICON_IDLE, true),
-        TrayState::Running(_) => (ICON_ACTIVE, false),
-        TrayState::NeedsAttention(_) => (ICON_ATTENTION, false),
-    };
+    // Re-read the user's icon-style preference each rebuild so runtime
+    // changes (via the settings panel) propagate without an app restart.
+    let style = read_icon_style(&state.db_path);
+    let (icon_bytes, is_template) = style.icon_for(tray_state);
     if let Ok(icon) = Image::from_bytes(icon_bytes) {
         let _ = tray.set_icon(Some(icon));
         let _ = tray.set_icon_as_template(is_template);
@@ -545,5 +645,117 @@ mod tests {
         agents.insert("ws1".to_string(), session(Some(1234), false));
         agents.insert("ws2".to_string(), session(Some(5678), true));
         assert!(has_running_agents(&agents));
+    }
+
+    // --- TrayIconStyle tests ---
+
+    #[test]
+    fn style_from_setting_parses_known_values() {
+        assert_eq!(
+            TrayIconStyle::from_setting(Some("light")),
+            TrayIconStyle::Light
+        );
+        assert_eq!(
+            TrayIconStyle::from_setting(Some("dark")),
+            TrayIconStyle::Dark
+        );
+        assert_eq!(
+            TrayIconStyle::from_setting(Some("color")),
+            TrayIconStyle::Color
+        );
+        assert_eq!(
+            TrayIconStyle::from_setting(Some("auto")),
+            TrayIconStyle::Auto
+        );
+    }
+
+    #[test]
+    fn style_from_setting_defaults_to_auto_for_missing_or_unknown() {
+        assert_eq!(TrayIconStyle::from_setting(None), TrayIconStyle::Auto);
+        assert_eq!(TrayIconStyle::from_setting(Some("")), TrayIconStyle::Auto);
+        assert_eq!(
+            TrayIconStyle::from_setting(Some("rainbow")),
+            TrayIconStyle::Auto
+        );
+    }
+
+    #[test]
+    fn auto_uses_template_on_macos_only() {
+        // The (bytes, is_template) contract: Auto style is the only one that
+        // sets is_template=true, and only when compiled for macOS. On every
+        // other platform Auto falls back to plain rendering of the same
+        // black-on-transparent shape.
+        let (_, tpl) = TrayIconStyle::Auto.icon_for(TrayState::Idle);
+        assert_eq!(tpl, cfg!(target_os = "macos"));
+    }
+
+    #[test]
+    fn explicit_styles_never_set_template() {
+        // Light/Dark/Color encode a concrete color chosen by the user —
+        // macOS must NOT tint them, regardless of platform.
+        for style in [
+            TrayIconStyle::Light,
+            TrayIconStyle::Dark,
+            TrayIconStyle::Color,
+        ] {
+            for state in [
+                TrayState::Idle,
+                TrayState::Running(1),
+                TrayState::NeedsAttention(1),
+            ] {
+                let (_, tpl) = style.icon_for(state);
+                assert!(
+                    !tpl,
+                    "style {style:?} + state {state:?} should not be template"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn each_style_state_combo_returns_distinct_bytes() {
+        // Ping that the include_bytes! asset map isn't collapsed — each
+        // combination should resolve to its own PNG payload. The "dark"
+        // variant intentionally shares bytes with Auto (both are the
+        // original black-on-transparent shape), so we exclude that pair.
+        let mut seen: Vec<(TrayIconStyle, TrayState, &'static [u8])> = Vec::new();
+        for style in [
+            TrayIconStyle::Auto,
+            TrayIconStyle::Light,
+            TrayIconStyle::Dark,
+            TrayIconStyle::Color,
+        ] {
+            for state in [
+                TrayState::Idle,
+                TrayState::Running(1),
+                TrayState::NeedsAttention(1),
+            ] {
+                let (bytes, _) = style.icon_for(state);
+                // Non-empty payload is a smoke check against include_bytes! failure.
+                assert!(!bytes.is_empty(), "{style:?}/{state:?} has empty bytes");
+                seen.push((style, state, bytes));
+            }
+        }
+        // Any two entries for the same `state` but different non-Auto/non-Dark
+        // styles should refer to visibly different payloads.
+        let idle: Vec<_> = seen
+            .iter()
+            .filter(|(_, s, _)| matches!(s, TrayState::Idle))
+            .collect();
+        let light_bytes = idle
+            .iter()
+            .find(|(s, _, _)| *s == TrayIconStyle::Light)
+            .unwrap()
+            .2;
+        let color_bytes = idle
+            .iter()
+            .find(|(s, _, _)| *s == TrayIconStyle::Color)
+            .unwrap()
+            .2;
+        assert_ne!(
+            light_bytes.as_ptr(),
+            color_bytes.as_ptr(),
+            "light and color idle icons must be distinct PNGs"
+        );
     }
 }

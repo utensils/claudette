@@ -14,6 +14,9 @@ export function GeneralSettings() {
 
   const [path, setPath] = useState(worktreeBaseDir);
   const [trayEnabled, setTrayEnabled] = useState(true);
+  const [trayIconStyle, setTrayIconStyle] = useState<
+    "auto" | "light" | "dark" | "color"
+  >("auto");
   const [error, setError] = useState<string | null>(null);
   const [appVersion, setAppVersion] = useState("");
   const [checkState, setCheckState] = useState<"idle" | "checking" | "up-to-date">("idle");
@@ -25,6 +28,15 @@ export function GeneralSettings() {
   useEffect(() => {
     getAppSetting("tray_enabled")
       .then((val) => setTrayEnabled(val !== "false"))
+      .catch(() => {});
+    getAppSetting("tray_icon_style")
+      .then((val) => {
+        if (val === "light" || val === "dark" || val === "color") {
+          setTrayIconStyle(val);
+        } else {
+          setTrayIconStyle("auto");
+        }
+      })
       .catch(() => {});
   }, []);
 
@@ -77,6 +89,20 @@ export function GeneralSettings() {
       await setAppSetting("tray_enabled", next ? "true" : "false");
     } catch (e) {
       setTrayEnabled(!next);
+      setError(String(e));
+    }
+  };
+
+  const handleTrayIconStyleChange = async (
+    next: "auto" | "light" | "dark" | "color",
+  ) => {
+    const previous = trayIconStyle;
+    setTrayIconStyle(next);
+    try {
+      setError(null);
+      await setAppSetting("tray_icon_style", next);
+    } catch (e) {
+      setTrayIconStyle(previous);
       setError(String(e));
     }
   };
@@ -167,6 +193,36 @@ export function GeneralSettings() {
           >
             <div className={styles.toggleKnob} />
           </button>
+        </div>
+      </div>
+
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>Tray icon style</div>
+          <div className={styles.settingDescription}>
+            Auto uses macOS template tinting (black or white depending on the
+            menu bar) and plain black on Linux. Pick Light for a white icon on
+            dark panels, Dark for a black icon on light panels, or Color for
+            the logo's orange.
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          <select
+            className={styles.select}
+            value={trayIconStyle}
+            aria-label="Tray icon style"
+            disabled={!trayEnabled}
+            onChange={(e) =>
+              handleTrayIconStyleChange(
+                e.target.value as "auto" | "light" | "dark" | "color",
+              )
+            }
+          >
+            <option value="auto">Auto</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+            <option value="color">Color</option>
+          </select>
         </div>
       </div>
     </div>
