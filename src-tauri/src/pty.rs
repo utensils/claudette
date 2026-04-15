@@ -29,6 +29,17 @@ pub async fn detect_shell() -> Result<String, String> {
     Ok(shell)
 }
 
+/// Configure the standard environment variables for a Claudette PTY session.
+///
+/// xterm.js implements xterm-compatible escape sequences, so we set `TERM`
+/// accordingly. Without this, release builds launched from Dock/Finder
+/// inherit a minimal launchd environment with no `TERM`, causing doubled
+/// input and broken `clear`/`tput`.
+fn configure_pty_env(cmd: &mut CommandBuilder) {
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("CLAUDETTE_PTY", "1");
+}
+
 #[tauri::command]
 pub async fn spawn_pty(
     working_dir: String,
@@ -47,16 +58,7 @@ pub async fn spawn_pty(
 
     let mut cmd = CommandBuilder::new_default_prog();
     cmd.cwd(&working_dir);
-
-    // xterm.js implements xterm-compatible escape sequences. Set TERM so
-    // the shell configures termios correctly (echo, line editing, etc.).
-    // Without this, release builds launched from Dock/Finder inherit a
-    // minimal launchd environment with no TERM, causing doubled input and
-    // broken `clear`/`tput`.
-    cmd.env("TERM", "xterm-256color");
-
-    // Set CLAUDETTE_PTY environment variable to enable shell integration
-    cmd.env("CLAUDETTE_PTY", "1");
+    configure_pty_env(&mut cmd);
 
     let child = pair
         .slave
@@ -260,7 +262,12 @@ mod tests {
     use std::io::Read;
     use std::time::{Duration, Instant};
 
-    fn open_sh() -> (
+    /// Spawn a short-lived `sh -c <script>` in a PTY, using the same
+    /// `configure_pty_env` helper as production code. Returns the master,
+    /// child, and a reader for the PTY output.
+    fn open_sh(
+        script: &str,
+    ) -> (
         Box<dyn portable_pty::MasterPty + Send>,
         Box<dyn portable_pty::Child + Send>,
         Box<dyn Read + Send>,
@@ -275,13 +282,9 @@ mod tests {
             })
             .expect("openpty should succeed");
 
-        // A short-lived `sh` command that prints a known string and exits. We
-        // avoid an interactive shell so the test can't hang on a missing rc
-        // file or waiting for a prompt.
         let mut cmd = CommandBuilder::new("/bin/sh");
-        cmd.args(["-c", "printf claudette-pty-ok"]);
-        cmd.env("TERM", "xterm-256color");
-        cmd.env("CLAUDETTE_PTY", "1");
+        cmd.args(["-c", script]);
+        super::configure_pty_env(&mut cmd);
 
         let child = pair
             .slave
@@ -316,7 +319,7 @@ mod tests {
 
     #[test]
     fn pty_spawn_emits_expected_output() {
-        let (master, mut child, reader) = open_sh();
+        let (master, mut child, reader) = open_sh("printf claudette-pty-ok");
 
         // Read until the child prints its payload and closes the PTY.
         let bytes = read_with_deadline(reader, Duration::from_secs(5));
@@ -374,38 +377,15 @@ mod tests {
         assert!(!alive_after, "child should be dead after kill");
     }
 
+    /// Verifies that `configure_pty_env` (the shared helper used by
+    /// `spawn_pty`) sets `TERM=xterm-256color` in the child environment.
     #[test]
     fn pty_sets_term_env_variable() {
-        let pty_system = native_pty_system();
-        let pair = pty_system
-            .openpty(PtySize {
-                rows: 24,
-                cols: 80,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .expect("openpty should succeed");
-
-        let mut cmd = CommandBuilder::new("/bin/sh");
-        cmd.args(["-c", "printf \"TERM=%s\" \"$TERM\""]);
-        cmd.env("TERM", "xterm-256color");
-        cmd.env("CLAUDETTE_PTY", "1");
-
-        let child = pair
-            .slave
-            .spawn_command(cmd)
-            .expect("spawn_command should succeed");
-        drop(pair.slave);
-
-        let reader = pair
-            .master
-            .try_clone_reader()
-            .expect("try_clone_reader should succeed");
+        let (master, mut child, reader) = open_sh("printf \"TERM=%s\" \"$TERM\"");
 
         let bytes = read_with_deadline(reader, Duration::from_secs(5));
-        let mut child = child;
         let _ = child.wait();
-        drop(pair.master);
+        drop(master);
 
         let s = String::from_utf8_lossy(&bytes);
         assert!(
