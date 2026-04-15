@@ -35,23 +35,21 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: ${{ github.event_name == 'push' && 45 || 20 }}
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: llvm-tools-preview
+          components: ${{ github.event_name == 'push' && 'llvm-tools-preview' || '' }}
       - uses: taiki-e/install-action@cargo-llvm-cov
+        if: github.event_name == 'push'
       - uses: Swatinem/rust-cache@v2
+      - name: Run tests
+        if: github.event_name != 'push'
+        run: cargo test -p claudette -p claudette-server --all-features
       - name: Run tests with coverage
-        # Use cargo llvm-cov on main (warm cache), plain cargo test on PRs
-        # to avoid 45+ min LLVM instrumented rebuild on cache miss.
-        run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            cargo llvm-cov -p claudette -p claudette-server --all-features --lcov --output-path lcov.info
-          else
-            cargo test -p claudette -p claudette-server --all-features
-          fi
+        if: github.event_name == 'push'
+        run: cargo llvm-cov -p claudette -p claudette-server --all-features --lcov --output-path lcov.info
       - name: Upload coverage to Codecov
         if: github.event_name == 'push'
         uses: codecov/codecov-action@v5
