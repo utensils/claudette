@@ -97,9 +97,9 @@
             #   nix build .#frontend 2>&1 | grep 'got:' | awk '{print $2}'
             outputHash =
               if pkgs.stdenv.isDarwin then
-                "sha256-zWkgb4NolskyaIAXAUZvNPNhFS6C5S7QyBYCosjoIIY="
+                "sha256-8mzIFZmj81jhsIoEEM3EWhUAxtFRHaHGJ2eyH8SKmqA="
               else
-                "sha256-fS1v4fnUkN8jSlNTHIWMtyLbGeMSZrothbHjsRh2ldU=";
+                "sha256-t2gsLd6eaCmfSUtMazLGU3YVm485k8/yY6NYSwuWUKs=";
 
             buildPhase = ''
               export HOME=$TMPDIR
