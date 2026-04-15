@@ -198,14 +198,19 @@ pub async fn validate_remote_server(config: &serde_json::Value) -> Result<(), St
     let url: url::Url = url_str.parse().map_err(|e| format!("invalid URL: {e}"))?;
     let host = url.host_str().ok_or("URL missing host")?;
     let port = url.port_or_known_default().unwrap_or(443);
-    let addr = format!("{host}:{port}");
+    let display_addr = if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    };
 
     // TCP connect with 5-second timeout.
+    // Use (host, port) tuple so tokio resolves IPv6 addresses correctly.
     let timeout = Duration::from_secs(5);
-    match tokio::time::timeout(timeout, tokio::net::TcpStream::connect(&addr)).await {
+    match tokio::time::timeout(timeout, tokio::net::TcpStream::connect((host, port))).await {
         Ok(Ok(_)) => Ok(()),
-        Ok(Err(e)) => Err(format!("TCP connect to {addr} failed: {e}")),
-        Err(_) => Err(format!("TCP connect to {addr} timed out after 5s")),
+        Ok(Err(e)) => Err(format!("TCP connect to {display_addr} failed: {e}")),
+        Err(_) => Err(format!("TCP connect to {display_addr} timed out after 5s")),
     }
 }
 
@@ -434,6 +439,10 @@ impl McpSupervisor {
 
         for (name, result) in results {
             if let Some(server) = repo.servers.get_mut(&name) {
+                // Server may have been disabled while validation was in flight.
+                if !server.enabled {
+                    continue;
+                }
                 match result {
                     Ok(()) => {
                         server.state = McpConnectionState::Connected;
@@ -517,6 +526,19 @@ impl McpSupervisor {
             .servers
             .get_mut(server_name)
             .ok_or("server not found")?;
+
+        // Server may have been disabled while validation was in flight.
+        if !server.enabled {
+            let status = McpServerStatus {
+                name: server.name.clone(),
+                transport: server.transport,
+                state: server.state,
+                enabled: server.enabled,
+                last_error: server.last_error.clone(),
+                failure_count: server.failure_count,
+            };
+            return Ok(status);
+        }
 
         match result {
             Ok(()) => {

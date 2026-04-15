@@ -423,6 +423,7 @@ pub async fn send_chat_message(
     {
         let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
         session.active_pid = Some(spawned_pid);
+        let _ = db.save_agent_session(&workspace_id, &session.session_id, session.turn_count);
     }
     drop(agents);
 

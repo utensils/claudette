@@ -110,8 +110,14 @@ pub fn rows_to_servers(rows: &[crate::db::RepositoryMcpServer]) -> Vec<(McpServe
     rows.iter()
         .filter_map(|row| {
             let config: serde_json::Value = serde_json::from_str(&row.config_json).ok()?;
-            let source: McpSource = serde_json::from_str(&format!("\"{}\"", row.source))
-                .unwrap_or(McpSource::UserProjectConfig);
+            let source = match row.source.as_str() {
+                "user_global_config" => McpSource::UserGlobalConfig,
+                "user_project_config" => McpSource::UserProjectConfig,
+                "project_mcp_json" => McpSource::ProjectMcpJson,
+                "repo_local_config" => McpSource::RepoLocalConfig,
+                "plugin" => McpSource::Plugin,
+                _ => McpSource::UserProjectConfig,
+            };
             Some((
                 McpServer {
                     name: row.name.clone(),
