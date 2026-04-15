@@ -342,8 +342,22 @@ export function listTerminalTabs(
 
 // -- PTY --
 
-export function spawnPty(workingDir: string): Promise<number> {
-  return invoke("spawn_pty", { workingDir });
+export function spawnPty(
+  workingDir: string,
+  workspaceName: string,
+  workspaceId: string,
+  rootPath: string,
+  defaultBranch: string,
+  branchName: string,
+): Promise<number> {
+  return invoke("spawn_pty", {
+    workingDir,
+    workspaceName,
+    workspaceId,
+    rootPath,
+    defaultBranch,
+    branchName,
+  });
 }
 
 export function writePty(ptyId: number, data: number[]): Promise<void> {
@@ -399,16 +413,20 @@ export function playNotificationSound(sound: string): Promise<void> {
 }
 
 export function runNotificationCommand(
-  title: string,
-  body: string,
-  workspaceId: string,
   workspaceName: string,
+  workspaceId: string,
+  workspacePath: string,
+  rootPath: string,
+  defaultBranch: string,
+  branchName: string,
 ): Promise<void> {
   return invoke("run_notification_command", {
-    title,
-    body,
-    workspaceId,
     workspaceName,
+    workspaceId,
+    workspacePath,
+    rootPath,
+    defaultBranch,
+    branchName,
   });
 }
 

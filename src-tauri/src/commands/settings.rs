@@ -221,14 +221,11 @@ pub fn play_notification_sound(sound: String) {
     }
 }
 
-/// Build a Command for the notification shell command with env vars set.
+/// Build a Command for the notification shell command with workspace env vars.
 /// Returns None if the command is empty.
 pub(crate) fn build_notification_command(
     cmd: &str,
-    title: &str,
-    body: &str,
-    workspace_id: &str,
-    workspace_name: &str,
+    ws_env: &claudette::env::WorkspaceEnv,
 ) -> Option<std::process::Command> {
     let cmd = cmd.trim();
     if cmd.is_empty() {
@@ -240,13 +237,8 @@ pub(crate) fn build_notification_command(
         return None;
     }
     let mut command = std::process::Command::new("sh");
-    command
-        .arg("-c")
-        .arg(cmd)
-        .env("CLAUDETTE_NOTIFICATION_TITLE", title)
-        .env("CLAUDETTE_NOTIFICATION_BODY", body)
-        .env("CLAUDETTE_WORKSPACE_ID", workspace_id)
-        .env("CLAUDETTE_WORKSPACE_NAME", workspace_name);
+    command.arg("-c").arg(cmd);
+    ws_env.apply_std(&mut command);
     Some(command)
 }
 
@@ -259,19 +251,28 @@ fn is_bare_shell_keyword(cmd: &str) -> bool {
     )
 }
 
-/// Run the user-configured notification command (if set) with context env vars.
+/// Run the user-configured notification command (if set) with workspace env vars.
 #[tauri::command]
 pub fn run_notification_command(
-    title: String,
-    body: String,
-    workspace_id: String,
     workspace_name: String,
+    workspace_id: String,
+    workspace_path: String,
+    root_path: String,
+    default_branch: String,
+    branch_name: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let ws_env = claudette::env::WorkspaceEnv {
+        workspace_name,
+        workspace_id,
+        workspace_path,
+        root_path,
+        default_branch,
+        branch_name,
+    };
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     if let Ok(Some(cmd)) = db.get_app_setting("notification_command")
-        && let Some(mut command) =
-            build_notification_command(&cmd, &title, &body, &workspace_id, &workspace_name)
+        && let Some(mut command) = build_notification_command(&cmd, &ws_env)
         && let Ok(child) = command.spawn()
     {
         spawn_and_reap(child);
@@ -382,14 +383,25 @@ mod tests {
 
     // --- Notification command tests ---
 
+    fn sample_ws_env() -> claudette::env::WorkspaceEnv {
+        claudette::env::WorkspaceEnv {
+            workspace_name: "my-workspace".into(),
+            workspace_id: "ws-123".into(),
+            workspace_path: "/tmp/worktrees/repo/my-workspace".into(),
+            root_path: "/home/user/repo".into(),
+            default_branch: "main".into(),
+            branch_name: "claudette/my-workspace".into(),
+        }
+    }
+
     #[test]
     fn test_build_notification_command_empty_returns_none() {
-        assert!(build_notification_command("", "t", "b", "id", "name").is_none());
+        assert!(build_notification_command("", &sample_ws_env()).is_none());
     }
 
     #[test]
     fn test_build_notification_command_sets_shell_and_args() {
-        let cmd = build_notification_command("echo hello", "t", "b", "id", "name").unwrap();
+        let cmd = build_notification_command("echo hello", &sample_ws_env()).unwrap();
         let program = cmd.get_program().to_string_lossy().to_string();
         assert_eq!(program, "sh");
         let args: Vec<String> = cmd
@@ -401,14 +413,7 @@ mod tests {
 
     #[test]
     fn test_build_notification_command_sets_env_vars() {
-        let cmd = build_notification_command(
-            "echo test",
-            "My Title",
-            "My Body",
-            "ws-123",
-            "my-workspace",
-        )
-        .unwrap();
+        let cmd = build_notification_command("echo test", &sample_ws_env()).unwrap();
         let envs: std::collections::HashMap<String, String> = cmd
             .get_envs()
             .filter_map(|(k, v)| {
@@ -419,14 +424,19 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            envs.get("CLAUDETTE_NOTIFICATION_TITLE").unwrap(),
-            "My Title"
-        );
-        assert_eq!(envs.get("CLAUDETTE_NOTIFICATION_BODY").unwrap(), "My Body");
-        assert_eq!(envs.get("CLAUDETTE_WORKSPACE_ID").unwrap(), "ws-123");
-        assert_eq!(
             envs.get("CLAUDETTE_WORKSPACE_NAME").unwrap(),
             "my-workspace"
+        );
+        assert_eq!(envs.get("CLAUDETTE_WORKSPACE_ID").unwrap(), "ws-123");
+        assert_eq!(
+            envs.get("CLAUDETTE_WORKSPACE_PATH").unwrap(),
+            "/tmp/worktrees/repo/my-workspace"
+        );
+        assert_eq!(envs.get("CLAUDETTE_ROOT_PATH").unwrap(), "/home/user/repo");
+        assert_eq!(envs.get("CLAUDETTE_DEFAULT_BRANCH").unwrap(), "main");
+        assert_eq!(
+            envs.get("CLAUDETTE_BRANCH_NAME").unwrap(),
+            "claudette/my-workspace"
         );
     }
 
@@ -435,16 +445,14 @@ mod tests {
         // Actually spawn a process and verify env vars are passed through.
         let tmp = std::env::temp_dir().join("claudette-test-notify-cmd.txt");
         let cmd_str = format!(
-            "echo $CLAUDETTE_NOTIFICATION_TITLE,$CLAUDETTE_NOTIFICATION_BODY > {}",
+            "echo $CLAUDETTE_WORKSPACE_NAME,$CLAUDETTE_ROOT_PATH > {}",
             tmp.display()
         );
-        let mut command =
-            build_notification_command(&cmd_str, "TestTitle", "TestBody", "ws-1", "ws-name")
-                .unwrap();
+        let mut command = build_notification_command(&cmd_str, &sample_ws_env()).unwrap();
         let mut child = command.spawn().expect("Failed to spawn test command");
         child.wait().expect("Failed to wait for test command");
         let output = std::fs::read_to_string(&tmp).expect("Failed to read output file");
         std::fs::remove_file(&tmp).ok();
-        assert_eq!(output.trim(), "TestTitle,TestBody");
+        assert_eq!(output.trim(), "my-workspace,/home/user/repo");
     }
 }

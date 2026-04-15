@@ -41,8 +41,14 @@ fn configure_pty_env(cmd: &mut CommandBuilder) {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn spawn_pty(
     working_dir: String,
+    workspace_name: String,
+    workspace_id: String,
+    root_path: String,
+    default_branch: String,
+    branch_name: String,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<u64, String> {
@@ -59,6 +65,19 @@ pub async fn spawn_pty(
     let mut cmd = CommandBuilder::new_default_prog();
     cmd.cwd(&working_dir);
     configure_pty_env(&mut cmd);
+
+    // Set workspace context env vars for scripts and tools.
+    let ws_env = claudette::env::WorkspaceEnv {
+        workspace_name,
+        workspace_id,
+        workspace_path: working_dir.clone(),
+        root_path,
+        default_branch,
+        branch_name,
+    };
+    for (k, v) in ws_env.vars() {
+        cmd.env(k, v);
+    }
 
     let child = pair
         .slave

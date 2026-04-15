@@ -9,6 +9,7 @@ use tokio::process::Command as TokioCommand;
 use claudette::agent;
 use claudette::config;
 use claudette::db::Database;
+use claudette::env::WorkspaceEnv;
 use claudette::git;
 use claudette::mcp_supervisor::McpSupervisor;
 use claudette::model::{AgentStatus, Workspace, WorkspaceStatus};
@@ -142,10 +143,15 @@ pub async fn create_workspace(
     let setup_result = if skip_setup.unwrap_or(false) {
         None
     } else {
+        let default_branch = git::default_branch(&repo_path)
+            .await
+            .unwrap_or_else(|_| "main".to_string());
+        let ws_env = WorkspaceEnv::from_workspace(&ws, &repo_path, default_branch);
         resolve_and_run_setup(
             Path::new(&repo_path),
             Path::new(&actual_path),
             settings_setup_script.as_deref(),
+            &ws_env,
         )
         .await
     };
@@ -163,6 +169,7 @@ async fn resolve_and_run_setup(
     repo_path: &Path,
     worktree_path: &Path,
     settings_script: Option<&str>,
+    ws_env: &WorkspaceEnv,
 ) -> Option<SetupResult> {
     // 1. Check .claudette.json
     let (script, source) = match config::load_config(repo_path) {
@@ -202,16 +209,16 @@ async fn resolve_and_run_setup(
 
     // 2. Execute the script in its own process group so we can kill the
     //    entire tree on timeout (prevents orphan grandchild processes).
-    let mut child = match TokioCommand::new("sh")
-        .arg("-c")
+    let mut cmd = TokioCommand::new("sh");
+    cmd.arg("-c")
         .arg(&script)
         .current_dir(worktree_path)
         .env("PATH", claudette::env::enriched_path())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .process_group(0)
-        .spawn()
-    {
+        .process_group(0);
+    ws_env.apply(&mut cmd);
+    let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
             return Some(SetupResult {
@@ -323,10 +330,16 @@ pub async fn run_workspace_setup(
         .find(|r| r.id == ws.repository_id)
         .ok_or("Repository not found")?;
 
+    let default_branch = git::default_branch(&repo.path)
+        .await
+        .unwrap_or_else(|_| "main".to_string());
+    let ws_env = WorkspaceEnv::from_workspace(ws, &repo.path, default_branch);
+
     let result = resolve_and_run_setup(
         Path::new(&repo.path),
         Path::new(worktree_path),
         repo.setup_script.as_deref(),
+        &ws_env,
     )
     .await;
 

@@ -7,6 +7,9 @@
 //!
 //! This module probes the user's login shell once, caches the result, and
 //! exposes it for subprocess spawning and PATH-based command lookup.
+//!
+//! It also defines [`WorkspaceEnv`], the set of `CLAUDETTE_*` environment
+//! variables injected into every subprocess.
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -139,6 +142,68 @@ pub fn which_in_enriched_path(command: &str) -> Result<std::path::PathBuf, which
     which::which_in(command, Some(path), Path::new("/"))
 }
 
+// ---------------------------------------------------------------------------
+// WorkspaceEnv — CLAUDETTE_* environment variables
+// ---------------------------------------------------------------------------
+
+/// The set of `CLAUDETTE_*` environment variables injected into every
+/// subprocess that Claudette spawns (terminals, setup scripts, agent,
+/// notification commands). Mirrors the `CONDUCTOR_*` env var convention.
+#[derive(Debug, Clone)]
+pub struct WorkspaceEnv {
+    pub workspace_name: String,
+    pub workspace_id: String,
+    pub workspace_path: String,
+    pub root_path: String,
+    pub default_branch: String,
+    pub branch_name: String,
+}
+
+impl WorkspaceEnv {
+    /// Build from a workspace, its repo path, and the resolved default branch.
+    pub fn from_workspace(
+        ws: &crate::model::Workspace,
+        repo_path: &str,
+        default_branch: String,
+    ) -> Self {
+        Self {
+            workspace_name: ws.name.clone(),
+            workspace_id: ws.id.clone(),
+            workspace_path: ws.worktree_path.clone().unwrap_or_default(),
+            root_path: repo_path.to_string(),
+            default_branch,
+            branch_name: ws.branch_name.clone(),
+        }
+    }
+
+    /// Return the 6 env var key-value pairs.  Useful for command builders
+    /// that don't implement `std::process::Command`'s API (e.g. portable-pty).
+    pub fn vars(&self) -> [(&str, &str); 6] {
+        [
+            ("CLAUDETTE_WORKSPACE_NAME", &self.workspace_name),
+            ("CLAUDETTE_WORKSPACE_ID", &self.workspace_id),
+            ("CLAUDETTE_WORKSPACE_PATH", &self.workspace_path),
+            ("CLAUDETTE_ROOT_PATH", &self.root_path),
+            ("CLAUDETTE_DEFAULT_BRANCH", &self.default_branch),
+            ("CLAUDETTE_BRANCH_NAME", &self.branch_name),
+        ]
+    }
+
+    /// Apply env vars to a `tokio::process::Command`.
+    pub fn apply(&self, cmd: &mut tokio::process::Command) {
+        for (k, v) in self.vars() {
+            cmd.env(k, v);
+        }
+    }
+
+    /// Apply env vars to a `std::process::Command`.
+    pub fn apply_std(&self, cmd: &mut std::process::Command) {
+        for (k, v) in self.vars() {
+            cmd.env(k, v);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,5 +268,52 @@ mod tests {
             (None, None) => {} // Both None is fine (e.g. CI with no $SHELL)
             _ => panic!("shell_path returned inconsistent results"),
         }
+    }
+
+    fn sample_env() -> WorkspaceEnv {
+        WorkspaceEnv {
+            workspace_name: "fix-auth-bug".into(),
+            workspace_id: "abc-123".into(),
+            workspace_path: "/tmp/worktrees/repo/fix-auth-bug".into(),
+            root_path: "/home/user/repo".into(),
+            default_branch: "main".into(),
+            branch_name: "claudette/fix-auth-bug".into(),
+        }
+    }
+
+    #[test]
+    fn vars_returns_all_six_pairs() {
+        let env = sample_env();
+        let vars = env.vars();
+        assert_eq!(vars.len(), 6);
+        assert_eq!(vars[0], ("CLAUDETTE_WORKSPACE_NAME", "fix-auth-bug"));
+        assert_eq!(vars[1], ("CLAUDETTE_WORKSPACE_ID", "abc-123"));
+        assert_eq!(
+            vars[2],
+            (
+                "CLAUDETTE_WORKSPACE_PATH",
+                "/tmp/worktrees/repo/fix-auth-bug"
+            )
+        );
+        assert_eq!(vars[3], ("CLAUDETTE_ROOT_PATH", "/home/user/repo"));
+        assert_eq!(vars[4], ("CLAUDETTE_DEFAULT_BRANCH", "main"));
+        assert_eq!(vars[5], ("CLAUDETTE_BRANCH_NAME", "claudette/fix-auth-bug"));
+    }
+
+    #[test]
+    fn apply_std_sets_env_on_command() {
+        let env = sample_env();
+        let mut cmd = std::process::Command::new("echo");
+        env.apply_std(&mut cmd);
+
+        let envs: Vec<_> = cmd.get_envs().collect();
+        assert!(envs.contains(&(
+            std::ffi::OsStr::new("CLAUDETTE_WORKSPACE_NAME"),
+            Some(std::ffi::OsStr::new("fix-auth-bug"))
+        )));
+        assert!(envs.contains(&(
+            std::ffi::OsStr::new("CLAUDETTE_ROOT_PATH"),
+            Some(std::ffi::OsStr::new("/home/user/repo"))
+        )));
     }
 }

@@ -399,6 +399,13 @@ async fn handle_send_chat_message(
     )
     .await;
 
+    // Build workspace env vars for the agent subprocess.
+    let repo_path = repo.as_ref().map(|r| r.path.as_str()).unwrap_or("");
+    let default_branch = claudette::git::default_branch(repo_path)
+        .await
+        .unwrap_or_else(|_| "main".to_string());
+    let ws_env = claudette::env::WorkspaceEnv::from_workspace(ws, repo_path, default_branch);
+
     let turn_handle = agent::run_turn(
         std::path::Path::new(&worktree_path),
         &session_id,
@@ -408,6 +415,7 @@ async fn handle_send_chat_message(
         custom_instructions.as_deref(),
         &agent_settings,
         &[], // Attachments not yet supported over remote transport
+        Some(&ws_env),
     )
     .await?;
 

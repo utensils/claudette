@@ -8,6 +8,7 @@ use claudette::agent::{
     StartContentBlock, StreamEvent,
 };
 use claudette::db::Database;
+use claudette::env::WorkspaceEnv;
 use claudette::git;
 use claudette::mcp_supervisor::McpSupervisor;
 use claudette::model::{
@@ -295,6 +296,13 @@ pub async fn send_chat_message(
     )
     .await;
 
+    // Build workspace env vars for the agent subprocess.
+    let repo_path = repo.as_ref().map(|r| r.path.as_str()).unwrap_or("");
+    let default_branch = git::default_branch(repo_path)
+        .await
+        .unwrap_or_else(|_| "main".to_string());
+    let ws_env = WorkspaceEnv::from_workspace(ws, repo_path, default_branch);
+
     // Use persistent session to keep MCP servers alive across turns.
     // First turn or after restart: start a PersistentSession.
     // Subsequent turns in same session: reuse the existing process via stdin.
@@ -453,6 +461,7 @@ pub async fn send_chat_message(
     let rename_prefs = repo
         .as_ref()
         .and_then(|r| r.branch_rename_preferences.clone());
+    let rename_ws_env = ws_env.clone();
 
     crate::tray::rebuild_tray(&app);
 
@@ -462,6 +471,7 @@ pub async fn send_chat_message(
     let wt_path = worktree_path.clone();
     let user_msg_id = user_msg.id.clone();
     let repo_id_for_mcp = ws.repository_id.clone();
+    let notify_ws_env = ws_env;
     tokio::spawn(async move {
         // On the first turn, spawn a background task to auto-rename the branch
         // using Haiku. Gate on turn count (not persistent_session) because
@@ -476,6 +486,7 @@ pub async fn send_chat_message(
             let db_path2 = db_path.clone();
             let app2 = app.clone();
             let prefs2 = rename_prefs.clone();
+            let ws_env2 = rename_ws_env.clone();
             tokio::spawn(async move {
                 try_auto_rename(
                     &ws_id2,
@@ -486,6 +497,7 @@ pub async fn send_chat_message(
                     prefs2.as_deref(),
                     &db_path2,
                     &app2,
+                    &ws_env2,
                 )
                 .await;
             });
@@ -658,25 +670,14 @@ pub async fn send_chat_message(
                     // tested helper as the settings test button and tray path.
                     if let Ok(Some(cmd)) = db.get_app_setting("notification_command")
                         && !cmd.is_empty()
-                    {
-                        let ws_name = db
-                            .list_workspaces()
-                            .ok()
-                            .and_then(|wss| wss.into_iter().find(|w| w.id == ws_id).map(|w| w.name))
-                            .unwrap_or_else(|| ws_id.clone());
-                        let body = format!("{ws_name} has completed");
-                        if let Some(mut command) =
+                        && let Some(mut command) =
                             crate::commands::settings::build_notification_command(
                                 &cmd,
-                                "Agent Finished",
-                                &body,
-                                &ws_id,
-                                &ws_name,
+                                &notify_ws_env,
                             )
-                            && let Ok(child) = command.spawn()
-                        {
-                            crate::commands::settings::spawn_and_reap(child);
-                        }
+                        && let Ok(child) = command.spawn()
+                    {
+                        crate::commands::settings::spawn_and_reap(child);
                     }
                 }
 
@@ -1080,13 +1081,20 @@ async fn try_auto_rename(
     branch_rename_preferences: Option<&str>,
     db_path: &std::path::Path,
     app: &AppHandle,
+    ws_env: &WorkspaceEnv,
 ) {
     // Ask Haiku for a branch name slug.
-    let slug =
-        match agent::generate_branch_name(prompt, worktree_path, branch_rename_preferences).await {
-            Ok(s) => s,
-            Err(_) => return,
-        };
+    let slug = match agent::generate_branch_name(
+        prompt,
+        worktree_path,
+        branch_rename_preferences,
+        Some(ws_env),
+    )
+    .await
+    {
+        Ok(s) => s,
+        Err(_) => return,
+    };
 
     // Resolve the configured branch prefix.
     let prefix = {

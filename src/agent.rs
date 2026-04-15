@@ -9,6 +9,8 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
+use crate::env::WorkspaceEnv;
+
 // ---------------------------------------------------------------------------
 // Stream event types — maps to Claude CLI `--output-format stream-json`
 // ---------------------------------------------------------------------------
@@ -550,6 +552,7 @@ pub async fn run_turn(
     custom_instructions: Option<&str>,
     settings: &AgentSettings,
     attachments: &[ImageAttachment],
+    ws_env: Option<&WorkspaceEnv>,
 ) -> Result<TurnHandle, String> {
     let has_attachments = !attachments.is_empty();
     let args = build_claude_args(
@@ -587,6 +590,10 @@ pub async fn run_turn(
     }
     cmd.env_remove("CLAUDECODE");
     cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
+
+    if let Some(env) = ws_env {
+        env.apply(&mut cmd);
+    }
 
     let mut child = cmd
         .spawn()
@@ -1063,6 +1070,7 @@ pub async fn generate_branch_name(
     prompt_text: &str,
     worktree_path: &str,
     branch_rename_preferences: Option<&str>,
+    ws_env: Option<&WorkspaceEnv>,
 ) -> Result<String, String> {
     // Truncate prompt to keep the Haiku call fast and cheap.
     let truncated: String = prompt_text.chars().take(200).collect();
@@ -1108,6 +1116,10 @@ pub async fn generate_branch_name(
     }
     cmd.env_remove("CLAUDECODE");
     cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
+
+    if let Some(env) = ws_env {
+        env.apply(&mut cmd);
+    }
 
     let output = cmd.output().await.map_err(|e| {
         format!(

@@ -68,6 +68,8 @@ function closePtyBestEffort(ptyId: number) {
 export const TerminalPanel = memo(function TerminalPanel() {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const workspaces = useAppStore((s) => s.workspaces);
+  const repositories = useAppStore((s) => s.repositories);
+  const defaultBranches = useAppStore((s) => s.defaultBranches);
   const terminalTabs = useAppStore((s) => s.terminalTabs);
   // Workspace-scoped active tab. Read through the selector so each workspace
   // preserves its own active tab independently.
@@ -278,7 +280,19 @@ export const TerminalPanel = memo(function TerminalPanel() {
 
       (async () => {
         try {
-          const ptyId = await spawnPty(worktreePath);
+          const currentWs = useAppStore.getState().workspaces.find((w) => w.id === workspaceId);
+          const currentRepo = currentWs
+            ? useAppStore.getState().repositories.find((r) => r.id === currentWs.repository_id)
+            : undefined;
+          const currentDefaultBranches = useAppStore.getState().defaultBranches;
+          const ptyId = await spawnPty(
+            worktreePath,
+            currentWs?.name ?? "",
+            workspaceId,
+            currentRepo?.path ?? "",
+            currentWs ? (currentDefaultBranches[currentWs.repository_id] ?? "main") : "main",
+            currentWs?.branch_name ?? "",
+          );
           const inst = instancesRef.current.get(tabId);
           if (!inst) {
             closePtyBestEffort(ptyId);
