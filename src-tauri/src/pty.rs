@@ -160,11 +160,14 @@ pub async fn spawn_pty(
                                 );
                             }
                             Osc133Event::PromptStart => {
-                                // Prompt appeared - reset running state if still set
+                                // Prompt appeared - reset running state and clear stale command
                                 let mut running = running_clone.lock();
                                 if *running {
                                     *running = false;
                                 }
+                                // Clear the command so we don't show stale command text from
+                                // an interrupted or failed command
+                                *cmd_clone.lock() = None;
                             }
                         }
                     }
