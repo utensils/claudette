@@ -113,8 +113,15 @@ impl Osc133Parser {
         let s = String::from_utf8_lossy(&self.buffer);
 
         if s.starts_with("133;A") {
-            // Clear any stale command text when a new prompt appears
-            self.command_buffer.clear();
+            // Only clear command buffer if we're still tracking an in-progress
+            // command (e.g. user pressed Ctrl+C before 133;C).  When
+            // tracking_command is already false a CommandExecuted event may
+            // have been emitted earlier in the same feed() call and the caller
+            // hasn't had a chance to extract_command() yet — clearing here
+            // would lose that captured text.
+            if self.tracking_command {
+                self.command_buffer.clear();
+            }
             self.tracking_command = false;
             Some(Osc133Event::PromptStart)
         } else if s.starts_with("133;B") {
@@ -398,5 +405,27 @@ mod tests {
         let cmd = parser.extract_command();
         assert_eq!(cmd, Some("pnpm dev".to_string()));
         assert_ne!(cmd, Some("pnpm resetpnpm dev".to_string()));
+    }
+
+    #[test]
+    fn test_command_preserved_when_executed_and_prompt_in_same_chunk() {
+        let mut parser = Osc133Parser::new();
+
+        // Start a command normally
+        parser.feed(b"\x1b]133;A\x07");
+        parser.feed(b"\x1b]133;B\x07");
+        parser.feed(b"ls -la");
+
+        // 133;C (CommandExecuted) and 133;A (PromptStart) arrive in the
+        // same feed() call.  The command buffer must survive until the
+        // caller processes CommandExecuted via extract_command().
+        let events = parser.feed(b"\x1b]133;C\x07\x1b]133;A\x07");
+        assert_eq!(
+            events,
+            vec![Osc133Event::CommandExecuted, Osc133Event::PromptStart]
+        );
+
+        // extract_command() must still return the captured text
+        assert_eq!(parser.extract_command(), Some("ls -la".to_string()));
     }
 }
