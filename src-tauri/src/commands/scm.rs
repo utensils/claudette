@@ -30,6 +30,40 @@ pub struct ScmDetail {
     pub error: Option<String>,
 }
 
+/// DB lookup result for workspace + repo + manual provider override.
+/// Extracted to avoid repeating this pattern in every command.
+struct WorkspaceContext {
+    workspace: claudette::model::Workspace,
+    repo: claudette::model::Repository,
+    manual_override: Option<String>,
+}
+
+/// Look up workspace, repository, and SCM provider override from the database.
+/// All DB work happens synchronously (Database is not Send).
+fn lookup_workspace_context(
+    db_path: &std::path::Path,
+    workspace_id: &str,
+) -> Result<WorkspaceContext, String> {
+    let db = Database::open(db_path).map_err(|e| e.to_string())?;
+    let workspace = db
+        .list_workspaces()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|w| w.id == workspace_id)
+        .ok_or("Workspace not found")?;
+    let repo = db
+        .get_repository(&workspace.repository_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Repository not found")?;
+    let key = format!("repo:{}:scm_provider", repo.id);
+    let manual_override = db.get_app_setting(&key).ok().flatten();
+    Ok(WorkspaceContext {
+        workspace,
+        repo,
+        manual_override,
+    })
+}
+
 /// List all discovered SCM provider plugins.
 #[tauri::command]
 pub async fn list_plugins(state: State<'_, AppState>) -> Result<Vec<PluginInfo>, String> {
@@ -56,7 +90,6 @@ pub async fn get_scm_provider(
     repo_id: String,
     state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
-    // Do all DB work first (before any .await)
     let (manual_override, repo_path) = {
         let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
         let key = format!("repo:{repo_id}:scm_provider");
@@ -102,42 +135,24 @@ pub async fn load_scm_detail(
     workspace_id: String,
     state: State<'_, AppState>,
 ) -> Result<ScmDetail, String> {
-    // Do all DB work upfront (Database is not Send)
-    let (workspace, repo, manual_override) = {
-        let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-        let ws = db
-            .list_workspaces()
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            .find(|w| w.id == workspace_id)
-            .ok_or("Workspace not found")?;
-        let r = db
-            .get_repository(&ws.repository_id)
-            .map_err(|e| e.to_string())?
-            .ok_or("Repository not found")?;
-        let key = format!("repo:{}:scm_provider", r.id);
-        let manual = db.get_app_setting(&key).ok().flatten();
-        (ws, r, manual)
-    };
+    let ctx = lookup_workspace_context(&state.db_path, &workspace_id)?;
 
-    // Resolve provider (async — git remote URL lookup)
-    let provider_name = resolve_provider_async(&manual_override, &repo.path, &state).await;
+    let provider_name =
+        match resolve_provider_async(&ctx.manual_override, &ctx.repo.path, &state).await {
+            Some(name) => name,
+            None => {
+                return Ok(ScmDetail {
+                    workspace_id,
+                    pull_request: None,
+                    ci_checks: vec![],
+                    provider: None,
+                    error: None,
+                });
+            }
+        };
 
-    let provider_name = match provider_name {
-        Some(name) => name,
-        None => {
-            return Ok(ScmDetail {
-                workspace_id,
-                pull_request: None,
-                ci_checks: vec![],
-                provider: None,
-                error: None,
-            });
-        }
-    };
-
-    let ws_info = make_workspace_info(&workspace, &repo);
-    let cache_key = (repo.id.clone(), workspace.branch_name.clone());
+    let ws_info = make_workspace_info(&ctx.workspace, &ctx.repo);
+    let cache_key = (ctx.repo.id.clone(), ctx.workspace.branch_name.clone());
 
     // Check cache first
     {
@@ -155,7 +170,7 @@ pub async fn load_scm_detail(
         }
     }
 
-    // Fetch fresh data
+    // Fetch fresh data — run both operations concurrently
     let _permit = state
         .scm_semaphore
         .acquire()
@@ -163,21 +178,18 @@ pub async fn load_scm_detail(
         .map_err(|e| e.to_string())?;
     let registry = state.plugins.read().await;
 
-    let branch = workspace.branch_name.clone();
+    let branch = ctx.workspace.branch_name.clone();
     let args = serde_json::json!({"branch": &branch});
 
-    let prs_result = registry
-        .call_operation(
+    let (prs_result, ci_result) = tokio::join!(
+        registry.call_operation(
             &provider_name,
             "list_pull_requests",
             args.clone(),
             ws_info.clone(),
-        )
-        .await;
-
-    let ci_result = registry
-        .call_operation(&provider_name, "ci_status", args, ws_info)
-        .await;
+        ),
+        registry.call_operation(&provider_name, "ci_status", args, ws_info),
+    );
 
     let mut pull_request: Option<PullRequest> = None;
     let mut ci_checks: Vec<CiCheck> = vec![];
@@ -243,33 +255,18 @@ pub async fn scm_create_pr(
     draft: bool,
     state: State<'_, AppState>,
 ) -> Result<PullRequest, String> {
-    let (workspace, repo, manual_override) = {
-        let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-        let ws = db
-            .list_workspaces()
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            .find(|w| w.id == workspace_id)
-            .ok_or("Workspace not found")?;
-        let r = db
-            .get_repository(&ws.repository_id)
-            .map_err(|e| e.to_string())?
-            .ok_or("Repository not found")?;
-        let key = format!("repo:{}:scm_provider", r.id);
-        let manual = db.get_app_setting(&key).ok().flatten();
-        (ws, r, manual)
-    };
+    let ctx = lookup_workspace_context(&state.db_path, &workspace_id)?;
 
-    let provider = resolve_provider_async(&manual_override, &repo.path, &state)
+    let provider = resolve_provider_async(&ctx.manual_override, &ctx.repo.path, &state)
         .await
         .ok_or("No SCM provider configured for this repository")?;
 
-    let ws_info = make_workspace_info(&workspace, &repo);
+    let ws_info = make_workspace_info(&ctx.workspace, &ctx.repo);
     let args = serde_json::json!({
         "title": title,
         "body": body,
         "base": base,
-        "branch": workspace.branch_name,
+        "branch": ctx.workspace.branch_name,
         "draft": draft,
     });
 
@@ -286,7 +283,7 @@ pub async fn scm_create_pr(
         .map_err(|e| e.to_string())?;
 
     // Invalidate cache
-    let cache_key = (repo.id.clone(), workspace.branch_name.clone());
+    let cache_key = (ctx.repo.id.clone(), ctx.workspace.branch_name.clone());
     state.scm_cache.entries.write().await.remove(&cache_key);
 
     serde_json::from_value(result).map_err(|e| e.to_string())
@@ -299,28 +296,13 @@ pub async fn scm_merge_pr(
     pr_number: u64,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    let (workspace, repo, manual_override) = {
-        let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-        let ws = db
-            .list_workspaces()
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            .find(|w| w.id == workspace_id)
-            .ok_or("Workspace not found")?;
-        let r = db
-            .get_repository(&ws.repository_id)
-            .map_err(|e| e.to_string())?
-            .ok_or("Repository not found")?;
-        let key = format!("repo:{}:scm_provider", r.id);
-        let manual = db.get_app_setting(&key).ok().flatten();
-        (ws, r, manual)
-    };
+    let ctx = lookup_workspace_context(&state.db_path, &workspace_id)?;
 
-    let provider = resolve_provider_async(&manual_override, &repo.path, &state)
+    let provider = resolve_provider_async(&ctx.manual_override, &ctx.repo.path, &state)
         .await
         .ok_or("No SCM provider configured for this repository")?;
 
-    let ws_info = make_workspace_info(&workspace, &repo);
+    let ws_info = make_workspace_info(&ctx.workspace, &ctx.repo);
     let args = serde_json::json!({"number": pr_number});
 
     let _permit = state
@@ -336,7 +318,7 @@ pub async fn scm_merge_pr(
         .map_err(|e| e.to_string())?;
 
     // Invalidate cache
-    let cache_key = (repo.id.clone(), workspace.branch_name.clone());
+    let cache_key = (ctx.repo.id.clone(), ctx.workspace.branch_name.clone());
     state.scm_cache.entries.write().await.remove(&cache_key);
 
     Ok(result)
@@ -348,24 +330,10 @@ pub async fn scm_refresh(
     workspace_id: String,
     state: State<'_, AppState>,
 ) -> Result<ScmDetail, String> {
-    // Invalidate cache
-    let cache_key = {
-        let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-        let ws = db
-            .list_workspaces()
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            .find(|w| w.id == workspace_id)
-            .ok_or("Workspace not found")?;
-        let r = db
-            .get_repository(&ws.repository_id)
-            .map_err(|e| e.to_string())?
-            .ok_or("Repository not found")?;
-        (r.id, ws.branch_name)
-    };
+    let ctx = lookup_workspace_context(&state.db_path, &workspace_id)?;
+    let cache_key = (ctx.repo.id, ctx.workspace.branch_name);
     state.scm_cache.entries.write().await.remove(&cache_key);
 
-    // Re-fetch
     load_scm_detail(workspace_id, state).await
 }
 

@@ -47,7 +47,10 @@ pub struct CiCheck {
     pub started_at: Option<String>,
 }
 
+/// Expected argument shape for create_pull_request operations.
+/// Used by Lua plugins — the Rust side passes args as serde_json::Value.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct CreatePrArgs {
     pub title: String,
     pub body: String,

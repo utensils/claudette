@@ -217,17 +217,7 @@ impl PluginRegistry {
 
 /// Check if all required CLI tools are available on PATH.
 fn check_clis_available(clis: &[String]) -> bool {
-    clis.iter().all(|cli| which_cli(cli))
-}
-
-/// Check if a CLI tool is available on PATH.
-fn which_cli(name: &str) -> bool {
-    std::process::Command::new("which")
-        .arg(name)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+    clis.iter().all(|cli| which::which(cli).is_ok())
 }
 
 #[cfg(test)]

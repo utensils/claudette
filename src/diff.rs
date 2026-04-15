@@ -1170,4 +1170,98 @@ mod integration_tests {
         assert!(committed_paths.contains(&"will-modify.txt"));
         assert!(unstaged_paths.contains(&"will-modify.txt"));
     }
+
+    #[tokio::test]
+    async fn test_file_diff_for_layer_committed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        setup_test_repo(dir);
+
+        let base = merge_base(dir.to_str().unwrap(), "feature", "main")
+            .await
+            .unwrap();
+
+        let raw = file_diff_for_layer(dir.to_str().unwrap(), &base, "file.txt", Some("committed"))
+            .await
+            .unwrap();
+        let parsed = parse_unified_diff(&raw, "file.txt");
+        assert!(!parsed.hunks.is_empty(), "committed layer should have diff");
+    }
+
+    #[tokio::test]
+    async fn test_file_diff_for_layer_staged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        setup_test_repo(dir);
+
+        // Stage a change without committing
+        std::fs::write(dir.join("file.txt"), "staged change\n").unwrap();
+        git_cmd(dir, &["add", "file.txt"]);
+
+        let raw = file_diff_for_layer(dir.to_str().unwrap(), "HEAD", "file.txt", Some("staged"))
+            .await
+            .unwrap();
+        let parsed = parse_unified_diff(&raw, "file.txt");
+        assert!(!parsed.hunks.is_empty(), "staged layer should have diff");
+    }
+
+    #[tokio::test]
+    async fn test_file_diff_for_layer_unstaged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        setup_test_repo(dir);
+
+        // Modify without staging
+        std::fs::write(dir.join("file.txt"), "unstaged edit\n").unwrap();
+
+        let raw = file_diff_for_layer(dir.to_str().unwrap(), "HEAD", "file.txt", Some("unstaged"))
+            .await
+            .unwrap();
+        let parsed = parse_unified_diff(&raw, "file.txt");
+        assert!(!parsed.hunks.is_empty(), "unstaged layer should have diff");
+    }
+
+    #[tokio::test]
+    async fn test_file_diff_for_layer_untracked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        setup_test_repo(dir);
+
+        std::fs::write(dir.join("brand-new.txt"), "hello\n").unwrap();
+
+        let raw = file_diff_for_layer(
+            dir.to_str().unwrap(),
+            "HEAD",
+            "brand-new.txt",
+            Some("untracked"),
+        )
+        .await
+        .unwrap();
+        let parsed = parse_unified_diff(&raw, "brand-new.txt");
+        assert!(!parsed.hunks.is_empty(), "untracked layer should have diff");
+        assert!(
+            parsed.hunks[0]
+                .lines
+                .iter()
+                .all(|l| l.line_type == DiffLineType::Added)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_file_diff_for_layer_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        setup_test_repo(dir);
+
+        let base = merge_base(dir.to_str().unwrap(), "feature", "main")
+            .await
+            .unwrap();
+
+        // None layer = default behavior (merge-base to working tree)
+        let raw = file_diff_for_layer(dir.to_str().unwrap(), &base, "file.txt", None)
+            .await
+            .unwrap();
+        let parsed = parse_unified_diff(&raw, "file.txt");
+        assert!(!parsed.hunks.is_empty(), "default layer should have diff");
+    }
 }
