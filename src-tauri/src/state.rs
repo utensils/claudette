@@ -74,6 +74,13 @@ pub struct LocalServerState {
 
 impl Drop for LocalServerState {
     fn drop(&mut self) {
+        // If tokio can still reach the child, check whether it already exited
+        // (e.g. crash, external kill). If so, skip the PID-based cleanup to
+        // avoid signaling a recycled PID that now belongs to another process.
+        if let Ok(Some(_status)) = self.child.try_wait() {
+            eprintln!("[cleanup] Server process already exited");
+            return;
+        }
         // Best-effort tokio-level kill (may fail if runtime is gone).
         let _ = self.child.start_kill();
         // Synchronous POSIX kill — works even during process teardown when the
@@ -113,9 +120,18 @@ pub fn kill_process_sync(pid: u32) {
             // SAFETY: waitpid with WNOHANG is a standard POSIX call.
             let mut status: libc::c_int = 0;
             let ret = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
-            if ret == pid || ret == -1 {
+            if ret == pid {
                 eprintln!("[cleanup] Stopped local claudette-server (pid {pid})");
                 return;
+            }
+            if ret == -1 {
+                let err = std::io::Error::last_os_error();
+                if err.raw_os_error() == Some(libc::ECHILD) {
+                    // No such child — already reaped.
+                    eprintln!("[cleanup] Stopped local claudette-server (pid {pid})");
+                    return;
+                }
+                // EINTR or other transient error — retry.
             }
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -124,9 +140,22 @@ pub fn kill_process_sync(pid: u32) {
         // SAFETY: pid is a valid positive i32.
         unsafe { libc::kill(pid, libc::SIGKILL) };
 
-        // Reap the zombie so the PID is released to the OS.
-        // SAFETY: waitpid is a standard POSIX call.
-        unsafe { libc::waitpid(pid, std::ptr::null_mut(), 0) };
+        // Reap the zombie so the PID is released to the OS. Loop to handle
+        // EINTR — only stop when waitpid returns the pid or ECHILD.
+        loop {
+            // SAFETY: waitpid is a standard POSIX call.
+            let ret = unsafe { libc::waitpid(pid, std::ptr::null_mut(), 0) };
+            if ret == pid {
+                break;
+            }
+            if ret == -1 {
+                let err = std::io::Error::last_os_error();
+                if err.raw_os_error() != Some(libc::EINTR) {
+                    break; // ECHILD or unexpected error — stop.
+                }
+                // EINTR — retry waitpid.
+            }
+        }
         eprintln!("[cleanup] Force-killed local claudette-server (pid {pid})");
     }
 
