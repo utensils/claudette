@@ -665,7 +665,9 @@ mod tests {
     fn make_cache_with_usage(fetched_at: u64) -> RwLock<Option<UsageCacheEntry>> {
         RwLock::new(Some(UsageCacheEntry {
             access_token: "tok".into(),
-            refresh_token: "ref".into(),
+            // Empty refresh_token so resolve_token() returns the cached
+            // access_token directly without attempting an HTTP refresh.
+            refresh_token: "".into(),
             token_expires_at: now_millis() + 3_600_000,
             subscription_type: Some("max".into()),
             rate_limit_tier: None,
@@ -673,7 +675,7 @@ mod tests {
                 subscription_type: Some("max".into()),
                 rate_limit_tier: None,
                 usage: UsageData::default(),
-                fetched_at: 0,
+                fetched_at: 1_700_000_000_000, // realistic timestamp for stale fallback tests
             }),
             last_usage_fetched_at: fetched_at,
         }))
@@ -707,7 +709,7 @@ mod tests {
         // Cache with token but no usage data at all.
         let cache = RwLock::new(Some(UsageCacheEntry {
             access_token: "tok".into(),
-            refresh_token: "ref".into(),
+            refresh_token: "".into(),
             token_expires_at: now_millis() + 3_600_000,
             subscription_type: Some("max".into()),
             rate_limit_tier: None,
@@ -726,7 +728,7 @@ mod tests {
         // Simulate a failed fetch: no usage data, fetched recently.
         let cache = RwLock::new(Some(UsageCacheEntry {
             access_token: "tok".into(),
-            refresh_token: "ref".into(),
+            refresh_token: "".into(),
             token_expires_at: now_millis() + 3_600_000,
             subscription_type: Some("max".into()),
             rate_limit_tier: None,
@@ -753,7 +755,7 @@ mod tests {
         // Simulate a failed fetch: no usage data, fetched 30 seconds ago.
         let cache = RwLock::new(Some(UsageCacheEntry {
             access_token: "tok".into(),
-            refresh_token: "ref".into(),
+            refresh_token: "".into(),
             token_expires_at: now_millis() + 3_600_000,
             subscription_type: Some("max".into()),
             rate_limit_tier: None,
@@ -813,5 +815,47 @@ mod tests {
         assert_eq!(extra.monthly_limit, Some(30000.0));
         assert_eq!(extra.used_credits, Some(0.0));
         assert_eq!(extra.utilization, None);
+    }
+
+    // -- Stale cache edge cases -----------------------------------------------
+
+    #[test]
+    fn stale_cache_without_previous_usage_returns_error() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        // Cache has a valid token but no previous usage data, and the
+        // fetch timestamp is stale (past TTL). Since there's no stale
+        // data to fall back on, get_usage must return an error.
+        let cache = RwLock::new(Some(UsageCacheEntry {
+            access_token: "tok".into(),
+            refresh_token: "".into(),
+            token_expires_at: now_millis() + 3_600_000,
+            subscription_type: Some("max".into()),
+            rate_limit_tier: None,
+            last_usage: None,
+            // Stale: past error backoff so it retries the API.
+            last_usage_fetched_at: now_millis() - USAGE_ERROR_BACKOFF_MS - 1,
+        }));
+
+        let result = rt.block_on(get_usage(&cache));
+        assert!(
+            result.is_err(),
+            "Expected error when no stale data to fall back on"
+        );
+    }
+
+    #[test]
+    fn stale_fallback_preserves_original_fetched_at() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let original_fetched_at = now_millis() - USAGE_CACHE_TTL_MS - 1;
+        let cache = make_cache_with_usage(original_fetched_at);
+
+        // The stale fallback should succeed.
+        let result = rt.block_on(get_usage(&cache)).unwrap();
+        // The returned data should have the original fetched_at from the
+        // cached ClaudeCodeUsage, not a new timestamp.
+        assert_eq!(
+            result.fetched_at, 1_700_000_000_000,
+            "Stale fallback returns the original cached data"
+        );
     }
 }

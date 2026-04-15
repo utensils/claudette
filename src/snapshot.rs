@@ -439,6 +439,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_restore_preserves_extra_large_files() {
+        let dir = setup_test_repo().await;
+        let dir_str = dir.path().to_str().unwrap();
+
+        tokio::fs::write(dir.path().join("keep.txt"), b"keep")
+            .await
+            .unwrap();
+
+        let db_path = dir.path().join("test.db");
+        let db = crate::db::Database::open(&db_path).unwrap();
+        db.execute_batch(TEST_SEED_SQL).unwrap();
+
+        save_snapshot(&db_path, "cp1", dir_str).await.unwrap();
+
+        let large = vec![0u8; (MAX_SNAPSHOT_FILE_SIZE + 1) as usize];
+        tokio::fs::write(dir.path().join("large.bin"), &large)
+            .await
+            .unwrap();
+
+        restore_snapshot(&db_path, "cp1", dir_str).await.unwrap();
+
+        assert!(dir.path().join("keep.txt").exists());
+        assert!(dir.path().join("large.bin").exists());
+    }
+
+    #[tokio::test]
     async fn test_restore_empty_snapshot_deletes_all_files() {
         let dir = setup_test_repo().await;
         let dir_str = dir.path().to_str().unwrap();
@@ -464,6 +490,82 @@ mod tests {
         restore_snapshot(&db_path, "cp1", dir_str).await.unwrap();
         assert!(!dir.path().join("exists.txt").exists());
         assert!(!dir.path().join("also.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn test_restore_replaces_directory_with_file() {
+        let dir = setup_test_repo().await;
+        let dir_str = dir.path().to_str().unwrap();
+
+        tokio::fs::create_dir_all(dir.path().join("nested"))
+            .await
+            .unwrap();
+        tokio::fs::write(dir.path().join("nested/file.txt"), b"original")
+            .await
+            .unwrap();
+
+        let db_path = dir.path().join("test.db");
+        let db = crate::db::Database::open(&db_path).unwrap();
+        db.execute_batch(TEST_SEED_SQL).unwrap();
+
+        save_snapshot(&db_path, "cp1", dir_str).await.unwrap();
+
+        tokio::fs::remove_file(dir.path().join("nested/file.txt"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(dir.path().join("nested/file.txt"))
+            .await
+            .unwrap();
+        tokio::fs::write(dir.path().join("nested/file.txt/junk.txt"), b"junk")
+            .await
+            .unwrap();
+
+        restore_snapshot(&db_path, "cp1", dir_str).await.unwrap();
+
+        let restored_path = dir.path().join("nested/file.txt");
+        assert!(tokio::fs::metadata(&restored_path).await.unwrap().is_file());
+        assert_eq!(
+            tokio::fs::read_to_string(&restored_path).await.unwrap(),
+            "original"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_restore_skips_path_traversal_rows() {
+        let dir = setup_test_repo().await;
+        let dir_str = dir.path().to_str().unwrap();
+        let db_path = dir.path().join("test.db");
+        let db = crate::db::Database::open(&db_path).unwrap();
+        db.execute_batch(TEST_SEED_SQL).unwrap();
+
+        let escape_name = format!("escape-{}.txt", uuid::Uuid::new_v4());
+        let files = vec![
+            CheckpointFile {
+                id: uuid::Uuid::new_v4().to_string(),
+                checkpoint_id: "cp1".into(),
+                file_path: "safe.txt".into(),
+                content: Some(b"safe".to_vec()),
+                file_mode: 0o100644,
+            },
+            CheckpointFile {
+                id: uuid::Uuid::new_v4().to_string(),
+                checkpoint_id: "cp1".into(),
+                file_path: format!("../{escape_name}"),
+                content: Some(b"escape".to_vec()),
+                file_mode: 0o100644,
+            },
+        ];
+        db.insert_checkpoint_files(&files).unwrap();
+
+        restore_snapshot(&db_path, "cp1", dir_str).await.unwrap();
+
+        assert_eq!(
+            tokio::fs::read_to_string(dir.path().join("safe.txt"))
+                .await
+                .unwrap(),
+            "safe"
+        );
+        assert!(!dir.path().parent().unwrap().join(escape_name).exists());
     }
 
     #[cfg(unix)]

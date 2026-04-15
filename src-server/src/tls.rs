@@ -19,8 +19,10 @@ pub fn load_or_generate_tls(
     let key_pem = std::fs::read(&key_path)?;
 
     let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut &cert_pem[..])
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| -> Box<dyn std::error::Error> {
+            format!("Failed to parse cert.pem: {e}").into()
+        })?;
     let key = rustls_pemfile::private_key(&mut &key_pem[..])?.ok_or("No private key found")?;
 
     let config = rustls::ServerConfig::builder()

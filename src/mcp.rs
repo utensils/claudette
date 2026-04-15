@@ -255,7 +255,8 @@ pub fn set_server_disabled_in_config(
 /// Claude Code's project-scoped configs don't include "type", but the
 /// Claude CLI `--mcp-config` flag requires it. This function adds
 /// `"type": "stdio"` if the field is missing.
-fn normalize_mcp_config(mut config: serde_json::Value) -> serde_json::Value {
+#[doc(hidden)] // pub for integration tests only
+pub fn normalize_mcp_config(mut config: serde_json::Value) -> serde_json::Value {
     if let Some(obj) = config.as_object_mut()
         && !obj.contains_key("type")
     {
@@ -289,7 +290,8 @@ fn detect_user_global_mcps() -> Option<Vec<McpServer>> {
 }
 
 /// Parse committed `.mcp.json` at the repository root.
-fn detect_project_mcp_json(repo_path: &Path) -> Option<Vec<McpServer>> {
+#[doc(hidden)] // pub for integration tests only
+pub fn detect_project_mcp_json(repo_path: &Path) -> Option<Vec<McpServer>> {
     let config_path = repo_path.join(".mcp.json");
     let content = std::fs::read_to_string(&config_path).ok()?;
     let root: serde_json::Value = serde_json::from_str(&content).ok()?;
@@ -435,7 +437,7 @@ fn detect_user_project_mcps(repo_path: &Path) -> Option<Vec<McpServer>> {
 
 /// Parse MCPs from `{repo}/.claude.json`, but only if it's explicitly
 /// gitignored.
-fn detect_repo_local_mcps(repo_path: &Path) -> Option<Vec<McpServer>> {
+pub fn detect_repo_local_mcps(repo_path: &Path) -> Option<Vec<McpServer>> {
     let config_path = repo_path.join(".claude.json");
     if !config_path.exists() {
         return None;

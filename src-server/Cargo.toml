@@ -35,3 +35,6 @@ clap = { version = "4", features = ["derive"] }
 futures-util = "0.3"
 gethostname = "1"
 hex = "0.4"
+
+[dev-dependencies]
+tempfile = "3"

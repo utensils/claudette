@@ -622,6 +622,33 @@ pub async fn run_turn(
     settings: &AgentSettings,
     attachments: &[ImageAttachment],
 ) -> Result<TurnHandle, String> {
+    let claude_path = resolve_claude_path().await;
+    run_turn_with_claude_path(
+        &claude_path,
+        working_dir,
+        session_id,
+        prompt,
+        is_resume,
+        allowed_tools,
+        custom_instructions,
+        settings,
+        attachments,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_turn_with_claude_path(
+    claude_path: &std::ffi::OsStr,
+    working_dir: &Path,
+    session_id: &str,
+    prompt: &str,
+    is_resume: bool,
+    allowed_tools: &[String],
+    custom_instructions: Option<&str>,
+    settings: &AgentSettings,
+    attachments: &[ImageAttachment],
+) -> Result<TurnHandle, String> {
     let has_attachments = !attachments.is_empty();
     let args = build_claude_args(
         session_id,
@@ -633,8 +660,7 @@ pub async fn run_turn(
         has_attachments,
     );
 
-    let claude_path = resolve_claude_path().await;
-    let mut cmd = Command::new(&claude_path);
+    let mut cmd = Command::new(claude_path);
     cmd.args(&args)
         .current_dir(working_dir)
         .stdout(std::process::Stdio::piped())
@@ -660,7 +686,7 @@ pub async fn run_turn(
 
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("Failed to spawn claude at {:?}: {e}", claude_path))?;
+        .map_err(|e| format!("Failed to spawn claude at {claude_path:?}: {e}"))?;
 
     let pid = child
         .id()
@@ -668,19 +694,8 @@ pub async fn run_turn(
 
     // When images are present, pipe the prompt + image content blocks to stdin
     // as a stream-json SDKUserMessage, then close stdin to signal EOF.
-    if has_attachments && let Some(mut stdin) = child.stdin.take() {
-        use tokio::io::AsyncWriteExt;
-        let payload = build_stdin_message(prompt, attachments);
-        stdin
-            .write_all(payload.as_bytes())
-            .await
-            .map_err(|e| format!("Failed to write image data to stdin: {e}"))?;
-        stdin
-            .write_all(b"\n")
-            .await
-            .map_err(|e| format!("Failed to write stdin newline: {e}"))?;
-        // Drop closes the pipe, signalling EOF to the child.
-        drop(stdin);
+    if has_attachments {
+        write_attachments_to_child_stdin(&mut child, prompt, attachments).await?;
     }
 
     let stdout = child
@@ -735,6 +750,31 @@ pub async fn run_turn(
     });
 
     Ok(TurnHandle { event_rx, pid })
+}
+
+async fn write_attachments_to_child_stdin(
+    child: &mut tokio::process::Child,
+    prompt: &str,
+    attachments: &[ImageAttachment],
+) -> Result<(), String> {
+    let Some(mut stdin) = child.stdin.take() else {
+        let _ = child.kill().await;
+        return Err("Failed to capture stdin".to_string());
+    };
+
+    use tokio::io::AsyncWriteExt;
+    let payload = build_stdin_message(prompt, attachments);
+    if let Err(e) = stdin.write_all(payload.as_bytes()).await {
+        let _ = child.kill().await;
+        return Err(format!("Failed to write image data to stdin: {e}"));
+    }
+    if let Err(e) = stdin.write_all(b"\n").await {
+        let _ = child.kill().await;
+        return Err(format!("Failed to write stdin newline: {e}"));
+    }
+    // Drop closes the pipe, signalling EOF to the child.
+    drop(stdin);
+    Ok(())
 }
 
 /// Stop an agent process by killing it.
@@ -811,12 +851,9 @@ impl PersistentSession {
         cmd.env_remove("CLAUDECODE");
         cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
 
-        let mut child = cmd.spawn().map_err(|e| {
-            format!(
-                "Failed to spawn persistent session at {:?}: {e}",
-                claude_path
-            )
-        })?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("Failed to spawn persistent session at {claude_path:?}: {e}"))?;
 
         let pid = child
             .id()
@@ -995,6 +1032,9 @@ fn build_persistent_args(
         args.push(model.clone());
     }
 
+    // Persistent sessions spawn a new Claude process each time (even on
+    // resume), so Chrome state doesn't survive restarts. Always pass
+    // --chrome when enabled, unlike build_claude_args (one-shot turns).
     if settings.chrome_enabled {
         args.push("--chrome".to_string());
     }
@@ -1027,7 +1067,9 @@ fn build_persistent_args(
         args.push(serde_json::Value::Object(obj).to_string());
     }
 
-    if let Some(ref effort) = settings.effort {
+    if let Some(ref effort) = settings.effort
+        && matches!(effort.as_str(), "low" | "medium" | "high" | "max")
+    {
         args.push("--effort".to_string());
         args.push(effort.clone());
     }
@@ -1104,11 +1146,26 @@ pub async fn generate_branch_name(
     worktree_path: &str,
     branch_rename_preferences: Option<&str>,
 ) -> Result<String, String> {
+    let claude_path = resolve_claude_path().await;
+    generate_branch_name_with_claude_path(
+        &claude_path,
+        prompt_text,
+        worktree_path,
+        branch_rename_preferences,
+    )
+    .await
+}
+
+async fn generate_branch_name_with_claude_path(
+    claude_path: &std::ffi::OsStr,
+    prompt_text: &str,
+    worktree_path: &str,
+    branch_rename_preferences: Option<&str>,
+) -> Result<String, String> {
     // Truncate prompt to keep the Haiku call fast and cheap.
     let truncated: String = prompt_text.chars().take(200).collect();
 
-    let claude_path = resolve_claude_path().await;
-    let mut cmd = Command::new(&claude_path);
+    let mut cmd = Command::new(claude_path);
     cmd.stdin(std::process::Stdio::null());
     // Run in the user's worktree so the CLI loads *their* project context.
     cmd.current_dir(worktree_path);
@@ -1151,7 +1208,7 @@ pub async fn generate_branch_name(
     let output = cmd.output().await.map_err(|e| {
         format!(
             "Failed to spawn claude at {:?} for branch name: {e}",
-            claude_path
+            std::path::Path::new(claude_path)
         )
     })?;
 
@@ -1177,6 +1234,96 @@ pub async fn generate_branch_name(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use tokio::time::{Duration, timeout};
+
+    fn make_fake_claude_script(dir: &Path) -> std::path::PathBuf {
+        let path = dir.join("claude");
+        std::fs::write(
+            &path,
+            r#"#!/bin/sh
+set -eu
+
+mode_file=".claude-agent-test-mode"
+args_file=".claude-agent-test-args"
+stdin_file=".claude-agent-test-stdin"
+env_file=".claude-agent-test-env"
+pwd_file=".claude-agent-test-pwd"
+pid_file=".claude-agent-test-pid"
+
+mode=""
+if [ -f "$mode_file" ]; then
+  mode=$(cat "$mode_file")
+fi
+
+case "$mode" in
+  run-turn-success)
+    printf '%s\0' "$@" > "$args_file"
+    env | sort > "$env_file"
+    pwd > "$pwd_file"
+    cat > "$stdin_file"
+    printf '%s\n' '{"type":"system","subtype":"init","session_id":"fake-session"}'
+    printf '%s\n' 'not json'
+    printf '%s\n' '{"type":"result","subtype":"success","result":"done","duration_ms":1}'
+    printf '%s\n' '[fake stderr]' >&2
+    ;;
+  run-turn-close-stdin)
+    printf '%s\n' "$$" > "$pid_file"
+    exec 0<&-
+    sleep 3
+    ;;
+  branch-name-success)
+    printf '%s\0' "$@" > "$args_file"
+    env | sort > "$env_file"
+    pwd > "$pwd_file"
+    printf '%s' 'Fix Login Timeout!!!'
+    ;;
+  branch-name-empty)
+    printf '%s' '!!!'
+    ;;
+  branch-name-fail)
+    printf '%s\n' 'branch fail' >&2
+    exit 7
+    ;;
+  *)
+    printf '%s\n' '{"type":"result","subtype":"error"}'
+    ;;
+esac
+"#,
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).unwrap();
+        path
+    }
+
+    fn read_nul_separated_strings(path: &Path) -> Vec<String> {
+        std::fs::read(path)
+            .unwrap()
+            .split(|b| *b == 0)
+            .filter(|chunk| !chunk.is_empty())
+            .map(|chunk| String::from_utf8_lossy(chunk).into_owned())
+            .collect()
+    }
+
+    async fn collect_agent_events(mut handle: TurnHandle) -> Vec<AgentEvent> {
+        let mut events = Vec::new();
+        loop {
+            let event = timeout(Duration::from_secs(2), handle.event_rx.recv())
+                .await
+                .expect("timed out waiting for agent event");
+            let Some(event) = event else {
+                break;
+            };
+            let should_break = matches!(event, AgentEvent::ProcessExited(_));
+            events.push(event);
+            if should_break {
+                break;
+            }
+        }
+        events
+    }
 
     #[test]
     fn test_parse_system_init() {
@@ -2476,5 +2623,403 @@ mod tests {
         let settings = AgentSettings::default();
         let args = build_persistent_args("sess-1", false, &[], Some("   "), &settings);
         assert!(!args.iter().any(|a| a == "--append-system-prompt"));
+    }
+
+    #[tokio::test]
+    #[ignore = "spawns subprocess that can hang on CI runners"]
+    async fn test_run_turn_streams_events_without_attachments() {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let dir = tempfile::tempdir().unwrap();
+            let claude_path = make_fake_claude_script(dir.path());
+            std::fs::write(
+                dir.path().join(".claude-agent-test-mode"),
+                "run-turn-success",
+            )
+            .unwrap();
+
+            let handle = run_turn_with_claude_path(
+                claude_path.as_os_str(),
+                dir.path(),
+                "sess-1",
+                "hello from test",
+                false,
+                &[],
+                None,
+                &AgentSettings::default(),
+                &[],
+            )
+            .await
+            .unwrap();
+            let events = collect_agent_events(handle).await;
+
+            assert!(events.iter().any(|event| matches!(
+                event,
+                AgentEvent::Stream(StreamEvent::System { subtype, session_id })
+                    if subtype == "init" && session_id.as_deref() == Some("fake-session")
+            )));
+            assert!(events.iter().any(|event| matches!(
+                event,
+                AgentEvent::Stream(StreamEvent::Result { subtype, result, .. })
+                    if subtype == "success" && result.as_deref() == Some("done")
+            )));
+            assert!(matches!(
+                events.last(),
+                Some(AgentEvent::ProcessExited(Some(0)))
+            ));
+
+            let args = read_nul_separated_strings(&dir.path().join(".claude-agent-test-args"));
+            assert!(args.iter().any(|arg| arg == "hello from test"));
+            assert!(
+                std::fs::read(dir.path().join(".claude-agent-test-stdin"))
+                    .unwrap()
+                    .is_empty()
+            );
+        })
+        .await
+        .expect("test timed out after 10s");
+    }
+
+    #[tokio::test]
+    #[ignore = "spawns subprocess that can hang on CI runners"]
+    async fn test_run_turn_writes_attachment_payload_to_stdin() {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let dir = tempfile::tempdir().unwrap();
+            let claude_path = make_fake_claude_script(dir.path());
+            std::fs::write(
+                dir.path().join(".claude-agent-test-mode"),
+                "run-turn-success",
+            )
+            .unwrap();
+            let attachments = vec![ImageAttachment {
+                media_type: "image/png".into(),
+                data_base64: "aGVsbG8=".into(),
+            }];
+
+            let handle = run_turn_with_claude_path(
+                claude_path.as_os_str(),
+                dir.path(),
+                "sess-attachments",
+                "describe attachment",
+                false,
+                &["Read".into()],
+                Some("Keep it short"),
+                &AgentSettings::default(),
+                &attachments,
+            )
+            .await
+            .unwrap();
+            let events = collect_agent_events(handle).await;
+            assert!(matches!(
+                events.last(),
+                Some(AgentEvent::ProcessExited(Some(0)))
+            ));
+
+            let args = read_nul_separated_strings(&dir.path().join(".claude-agent-test-args"));
+            assert!(
+                args.windows(2)
+                    .any(|pair| { pair[0] == "--input-format" && pair[1] == "stream-json" })
+            );
+            assert!(!args.iter().any(|arg| arg == "describe attachment"));
+
+            let stdin_payload =
+                std::fs::read_to_string(dir.path().join(".claude-agent-test-stdin")).unwrap();
+            let parsed: serde_json::Value = serde_json::from_str(stdin_payload.trim()).unwrap();
+            let content = parsed["message"]["content"].as_array().unwrap();
+            assert_eq!(content.len(), 2);
+            assert_eq!(content[0]["text"], "describe attachment");
+            assert_eq!(content[1]["type"], "image");
+            assert_eq!(content[1]["source"]["data"], "aGVsbG8=");
+        })
+        .await
+        .expect("test timed out after 10s");
+    }
+
+    #[tokio::test]
+    #[ignore = "spawns subprocess that can hang on CI runners"]
+    async fn test_write_attachments_to_child_stdin_kills_child_on_broken_pipe() {
+        // Wrap in a timeout — this test creates a broken-pipe race condition
+        // that can hang indefinitely on slow CI runners if the shell hasn't
+        // closed fd 0 before the 1 MB write begins.
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let dir = tempfile::tempdir().unwrap();
+            let pid_file = dir.path().join(".claude-agent-test-pid");
+            let attachments = vec![ImageAttachment {
+                media_type: "image/png".into(),
+                data_base64: "A".repeat(1_000_000),
+            }];
+
+            let mut child = Command::new("sh")
+                .arg("-c")
+                .arg(format!(
+                    "printf '%s\\n' $$ > '{}' && exec 0<&- && sleep 3",
+                    pid_file.display()
+                ))
+                .current_dir(dir.path())
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+
+            let result =
+                write_attachments_to_child_stdin(&mut child, "describe attachment", &attachments)
+                    .await;
+
+            assert!(result.is_err());
+
+            let pid = std::fs::read_to_string(&pid_file)
+                .unwrap()
+                .trim()
+                .to_string();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let status = std::process::Command::new("kill")
+                .args(["-0", &pid])
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap();
+            assert!(
+                !status.success(),
+                "child process {pid} should have been killed"
+            );
+        })
+        .await
+        .expect("test timed out after 10s — broken-pipe race condition");
+    }
+
+    #[tokio::test]
+    async fn test_write_attachments_to_child_stdin_errors_if_pipe_missing() {
+        let attachments = vec![ImageAttachment {
+            media_type: "image/png".into(),
+            data_base64: "aGVsbG8=".into(),
+        }];
+        let mut child = Command::new("sleep")
+            .arg("1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+
+        let result =
+            write_attachments_to_child_stdin(&mut child, "describe attachment", &attachments).await;
+
+        assert_eq!(result.unwrap_err(), "Failed to capture stdin");
+        let _ = child.wait().await;
+    }
+
+    #[tokio::test]
+    async fn test_stop_agent_kills_running_process() {
+        let mut child = Command::new("sleep").arg("5").spawn().unwrap();
+        let pid = child.id().unwrap();
+
+        stop_agent(pid).await.unwrap();
+
+        let status = timeout(Duration::from_secs(2), child.wait())
+            .await
+            .expect("timed out waiting for killed process")
+            .unwrap();
+        assert!(!status.success());
+    }
+
+    #[tokio::test]
+    async fn test_stop_agent_returns_error_for_missing_process() {
+        let result = stop_agent(u32::MAX).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_generate_branch_name_success_truncates_prompt_and_preferences() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude_path = make_fake_claude_script(dir.path());
+        std::fs::write(
+            dir.path().join(".claude-agent-test-mode"),
+            "branch-name-success",
+        )
+        .unwrap();
+        let prompt = "a".repeat(240);
+        let prefs = "b".repeat(520);
+
+        let slug = generate_branch_name_with_claude_path(
+            claude_path.as_os_str(),
+            &prompt,
+            dir.path().to_str().unwrap(),
+            Some(&prefs),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(slug, "fix-login-timeout");
+
+        let args = read_nul_separated_strings(&dir.path().join(".claude-agent-test-args"));
+        assert!(
+            args.windows(2)
+                .any(|pair| { pair[0] == "--model" && pair[1] == "claude-haiku-4-5" })
+        );
+        let system_prompt = args
+            .windows(2)
+            .find_map(|pair| (pair[0] == "--append-system-prompt").then_some(pair[1].clone()))
+            .unwrap();
+        assert!(system_prompt.contains(&"b".repeat(500)));
+        assert!(!system_prompt.contains(&"b".repeat(501)));
+        let user_message = args.last().unwrap();
+        assert!(user_message.contains(&"a".repeat(200)));
+        assert!(!user_message.contains(&"a".repeat(201)));
+
+        let pwd = std::fs::read_to_string(dir.path().join(".claude-agent-test-pwd")).unwrap();
+        let actual_pwd = std::path::Path::new(pwd.trim()).canonicalize().unwrap();
+        let expected_pwd = dir.path().canonicalize().unwrap();
+        assert_eq!(actual_pwd, expected_pwd);
+    }
+
+    #[tokio::test]
+    async fn test_generate_branch_name_errors_on_empty_slug() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude_path = make_fake_claude_script(dir.path());
+        std::fs::write(
+            dir.path().join(".claude-agent-test-mode"),
+            "branch-name-empty",
+        )
+        .unwrap();
+
+        let result = generate_branch_name_with_claude_path(
+            claude_path.as_os_str(),
+            "fix something",
+            dir.path().to_str().unwrap(),
+            None,
+        )
+        .await;
+
+        assert!(
+            result
+                .unwrap_err()
+                .contains("Haiku returned empty or unsanitizable output")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_generate_branch_name_surfaces_subprocess_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude_path = make_fake_claude_script(dir.path());
+        std::fs::write(
+            dir.path().join(".claude-agent-test-mode"),
+            "branch-name-fail",
+        )
+        .unwrap();
+
+        let result = generate_branch_name_with_claude_path(
+            claude_path.as_os_str(),
+            "fix something",
+            dir.path().to_str().unwrap(),
+            None,
+        )
+        .await;
+
+        assert!(result.unwrap_err().contains("branch fail"));
+    }
+
+    // -- Persistent args vs build_claude_args consistency --
+
+    #[test]
+    fn test_build_persistent_args_effort_auto_filtered() {
+        // "auto" is not a valid effort level — it should be filtered out.
+        let settings = AgentSettings {
+            effort: Some("auto".to_string()),
+            ..Default::default()
+        };
+        let args = build_persistent_args("sess-1", false, &[], None, &settings);
+        assert!(!args.contains(&"--effort".to_string()));
+    }
+
+    #[test]
+    fn test_build_claude_args_effort_auto_filtered() {
+        // build_claude_args correctly filters invalid effort values
+        let settings = AgentSettings {
+            effort: Some("auto".to_string()),
+            ..Default::default()
+        };
+        let args = build_claude_args("sess-1", "hello", false, &[], None, &settings, false);
+        // "auto" is not in the valid set, so --effort should NOT appear
+        assert!(!args.contains(&"--effort".to_string()));
+    }
+
+    #[test]
+    fn test_build_persistent_args_effort_garbage_filtered() {
+        let settings = AgentSettings {
+            effort: Some("garbage_value".to_string()),
+            ..Default::default()
+        };
+        let args = build_persistent_args("sess-1", false, &[], None, &settings);
+        assert!(!args.contains(&"--effort".to_string()));
+    }
+
+    #[test]
+    fn test_build_persistent_args_effort_empty_filtered() {
+        let settings = AgentSettings {
+            effort: Some("".to_string()),
+            ..Default::default()
+        };
+        let args = build_persistent_args("sess-1", false, &[], None, &settings);
+        assert!(!args.contains(&"--effort".to_string()));
+    }
+
+    #[test]
+    fn test_build_claude_args_effort_empty_filtered() {
+        let settings = AgentSettings {
+            effort: Some("".to_string()),
+            ..Default::default()
+        };
+        let args = build_claude_args("sess-1", "hello", false, &[], None, &settings, false);
+        assert!(!args.contains(&"--effort".to_string()));
+    }
+
+    // -- Chrome on resume: build_persistent_args vs build_claude_args --
+
+    #[test]
+    fn test_build_persistent_args_chrome_on_resume_included() {
+        // Persistent sessions spawn a new process on resume, so Chrome
+        // must be re-enabled every time (unlike one-shot build_claude_args).
+        let settings = AgentSettings {
+            chrome_enabled: true,
+            ..Default::default()
+        };
+        let args = build_persistent_args("sess-1", true, &[], None, &settings);
+        assert!(args.contains(&"--chrome".to_string()));
+    }
+
+    #[test]
+    fn test_build_claude_args_chrome_on_resume_filtered() {
+        // build_claude_args correctly skips --chrome on resume (session-level flag)
+        let settings = AgentSettings {
+            chrome_enabled: true,
+            ..Default::default()
+        };
+        let args = build_claude_args("sess-1", "hello", true, &[], None, &settings, false);
+        assert!(!args.contains(&"--chrome".to_string()));
+    }
+
+    #[test]
+    fn test_build_persistent_args_chrome_on_first_turn() {
+        // Both functions agree: --chrome should be present on first turn
+        let settings = AgentSettings {
+            chrome_enabled: true,
+            ..Default::default()
+        };
+        let args = build_persistent_args("sess-1", false, &[], None, &settings);
+        assert!(args.contains(&"--chrome".to_string()));
+    }
+
+    #[test]
+    fn test_build_persistent_args_chrome_disabled_not_present() {
+        // When chrome_enabled is false, neither function should add --chrome
+        let settings = AgentSettings {
+            chrome_enabled: false,
+            ..Default::default()
+        };
+        let args_fresh = build_persistent_args("sess-1", false, &[], None, &settings);
+        let args_resume = build_persistent_args("sess-1", true, &[], None, &settings);
+        assert!(!args_fresh.contains(&"--chrome".to_string()));
+        assert!(!args_resume.contains(&"--chrome".to_string()));
     }
 }

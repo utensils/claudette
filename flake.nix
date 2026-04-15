@@ -446,7 +446,11 @@
               }
               {
                 name = "run-tests";
-                command = "cargo test --workspace --all-features";
+                command = ''
+                  mkdir -p src/ui/dist
+                  [ -f src/ui/dist/index.html ] || echo '<html></html>' > src/ui/dist/index.html
+                  cargo test --workspace --all-features
+                '';
                 help = "Run all Rust tests";
                 category = "quality";
               }

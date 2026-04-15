@@ -253,10 +253,12 @@ mod tests {
     use super::*;
 
     /// Create a temporary git repo for testing.
-    async fn setup_temp_repo() -> tempfile::TempDir {
+    async fn setup_temp_repo_with_branch(initial_branch: &str) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().to_str().unwrap();
-        run_git(path, &["init", "-b", "main"]).await.unwrap();
+        run_git(path, &["init", "-b", initial_branch])
+            .await
+            .unwrap();
         run_git(path, &["config", "user.email", "test@test.com"])
             .await
             .unwrap();
@@ -271,6 +273,60 @@ mod tests {
         run_git(path, &["commit", "-m", "initial"]).await.unwrap();
 
         dir
+    }
+
+    async fn setup_temp_repo() -> tempfile::TempDir {
+        setup_temp_repo_with_branch("main").await
+    }
+
+    #[tokio::test]
+    async fn test_validate_repo_rejects_missing_directory() {
+        let missing = tempfile::tempdir().unwrap().path().join("missing");
+        let result = validate_repo(missing.to_str().unwrap()).await;
+        assert!(matches!(result, Err(GitError::NotAGitRepo)));
+    }
+
+    #[tokio::test]
+    async fn test_validate_repo_rejects_non_git_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = validate_repo(dir.path().to_str().unwrap()).await;
+        assert!(matches!(result, Err(GitError::CommandFailed(_))));
+    }
+
+    #[tokio::test]
+    async fn test_default_branch_errors_for_non_standard_branch() {
+        // A repo with no remote and no main/master branch should error.
+        let dir = setup_temp_repo_with_branch("trunk").await;
+        let result = default_branch(dir.path().to_str().unwrap()).await;
+        assert!(matches!(result, Err(GitError::CommandFailed(_))));
+    }
+
+    #[tokio::test]
+    async fn test_has_unmerged_commits_detects_branch_ahead_of_base() {
+        let dir = setup_temp_repo().await;
+        let path = dir.path().to_str().unwrap();
+
+        run_git(path, &["checkout", "-b", "feature"]).await.unwrap();
+        std::fs::write(dir.path().join("feature.txt"), "feature").unwrap();
+        run_git(path, &["add", "-A"]).await.unwrap();
+        run_git(path, &["commit", "-m", "feat: branch commit"])
+            .await
+            .unwrap();
+
+        assert!(has_unmerged_commits(path, "feature", "main").await.unwrap());
+        assert!(!has_unmerged_commits(path, "main", "feature").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_current_branch_errors_in_detached_head_state() {
+        let dir = setup_temp_repo().await;
+        let path = dir.path().to_str().unwrap();
+        let head = run_git(path, &["rev-parse", "HEAD"]).await.unwrap();
+
+        run_git(path, &["checkout", &head]).await.unwrap();
+
+        let result = current_branch(path).await;
+        assert!(matches!(result, Err(GitError::CommandFailed(_))));
     }
 
     #[tokio::test]
@@ -466,5 +522,97 @@ mod tests {
         // Renaming branch-a to branch-b should fail (already exists).
         let result = rename_branch(path, "branch-a", "branch-b").await;
         assert!(result.is_err());
+    }
+
+    // ── get_git_username ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_get_git_username_returns_ok() {
+        // Global git config may or may not have user.name; just verify it
+        // returns Ok (not an Err from spawning git).
+        let result = get_git_username().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_get_git_username_no_config_returns_ok() {
+        // We cannot easily unset global user.name in CI, so just confirm
+        // the function succeeds without panicking and returns Ok.
+        let result = get_git_username().await;
+        assert!(result.is_ok());
+    }
+
+    // ── GitError Display ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_git_error_not_a_repo_display() {
+        let err = GitError::NotAGitRepo;
+        let msg = format!("{err}");
+        assert!(!msg.is_empty());
+        assert!(msg.contains("Not a git repository"));
+    }
+
+    #[tokio::test]
+    async fn test_git_error_command_failed_display() {
+        let err = GitError::CommandFailed("something broke".into());
+        let msg = format!("{err}");
+        assert!(msg.contains("something broke"));
+    }
+
+    // ── create_worktree error paths ──────────────────────────────────
+
+    #[tokio::test]
+    async fn test_create_worktree_nonexistent_repo() {
+        let result = create_worktree("/nonexistent/path", "branch", "/tmp/wt").await;
+        assert!(result.is_err());
+    }
+
+    // ── restore_to_commit error paths ────────────────────────────────
+
+    #[tokio::test]
+    async fn test_restore_to_commit_invalid_hash() {
+        let dir = setup_temp_repo().await;
+        let path = dir.path().to_str().unwrap();
+
+        let result = restore_to_commit(path, "invalid_hash").await;
+        assert!(result.is_err());
+    }
+
+    // ── rename_branch error paths ────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_rename_branch_nonexistent() {
+        let dir = setup_temp_repo().await;
+        let path = dir.path().to_str().unwrap();
+
+        let result = rename_branch(path, "nonexistent", "new-name").await;
+        assert!(result.is_err());
+    }
+
+    // ── validate_repo edge case ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_validate_repo_file_not_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("not-a-dir.txt");
+        std::fs::write(&file_path, "I am a file").unwrap();
+
+        let result = validate_repo(file_path.to_str().unwrap()).await;
+        assert!(result.is_err());
+        // Should be NotAGitRepo since it's not a directory
+        assert!(matches!(result, Err(GitError::NotAGitRepo)));
+    }
+
+    // ── default_branch with local main ───────────────────────────────
+
+    #[tokio::test]
+    async fn test_default_branch_local_main() {
+        let dir = setup_temp_repo().await;
+        let path = dir.path().to_str().unwrap();
+
+        // Repo has no remote, but has a local "main" branch.
+        let result = default_branch(path).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "main");
     }
 }

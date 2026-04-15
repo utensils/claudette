@@ -817,3 +817,112 @@ async fn handle_set_app_setting(
     }
     Ok(json!(null))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ---- param_str tests ----
+    //
+    // `param_str` intentionally returns "" for missing keys, null values, and
+    // non-string types. Callers are responsible for validating required
+    // parameters before using the returned value.
+
+    /// Missing keys return empty string (callers validate as needed).
+    #[test]
+    fn test_param_str_missing_key() {
+        let params = json!({"other": "value"});
+        assert_eq!(param_str(&params, "missing"), "");
+    }
+
+    /// Null values return empty string.
+    #[test]
+    fn test_param_str_null_value() {
+        let params = json!({"key": null});
+        assert_eq!(param_str(&params, "key"), "");
+    }
+
+    /// Non-string types (integers) return empty string.
+    #[test]
+    fn test_param_str_integer_value() {
+        let params = json!({"key": 42});
+        assert_eq!(param_str(&params, "key"), "");
+    }
+
+    /// Non-string types (booleans) return empty string.
+    #[test]
+    fn test_param_str_boolean_value() {
+        let params = json!({"key": true});
+        assert_eq!(param_str(&params, "key"), "");
+    }
+
+    #[test]
+    fn test_param_str_normal_string() {
+        let params = json!({"key": "hello world"});
+        assert_eq!(param_str(&params, "key"), "hello world");
+    }
+
+    #[test]
+    fn test_param_str_empty_string() {
+        let params = json!({"key": ""});
+        assert_eq!(param_str(&params, "key"), "");
+    }
+
+    /// Non-string types (objects) return empty string.
+    #[test]
+    fn test_param_str_nested_object() {
+        let params = json!({"key": {"nested": "value"}});
+        assert_eq!(param_str(&params, "key"), "");
+    }
+
+    // ---- now_iso tests ----
+
+    #[test]
+    fn test_now_iso_format() {
+        let result = now_iso();
+        // Format: YYYY-MM-DD HH:MM:SS (space separator, not T)
+        let parts: Vec<&str> = result.split(' ').collect();
+        assert_eq!(parts.len(), 2, "expected 'DATE TIME', got '{result}'");
+
+        let date_parts: Vec<&str> = parts[0].split('-').collect();
+        assert_eq!(
+            date_parts.len(),
+            3,
+            "expected YYYY-MM-DD date, got '{}'",
+            parts[0]
+        );
+        assert_eq!(date_parts[0].len(), 4, "year should be 4 digits");
+        assert_eq!(date_parts[1].len(), 2, "month should be 2 digits");
+        assert_eq!(date_parts[2].len(), 2, "day should be 2 digits");
+
+        let time_parts: Vec<&str> = parts[1].split(':').collect();
+        assert_eq!(
+            time_parts.len(),
+            3,
+            "expected HH:MM:SS time, got '{}'",
+            parts[1]
+        );
+        assert_eq!(time_parts[0].len(), 2, "hour should be 2 digits");
+        assert_eq!(time_parts[1].len(), 2, "minute should be 2 digits");
+        assert_eq!(time_parts[2].len(), 2, "second should be 2 digits");
+
+        // Verify all parts are numeric.
+        for part in date_parts.iter().chain(time_parts.iter()) {
+            assert!(
+                part.chars().all(|c| c.is_ascii_digit()),
+                "non-digit in '{part}'"
+            );
+        }
+    }
+
+    #[test]
+    fn test_now_iso_reasonable_year() {
+        let result = now_iso();
+        let year: u32 = result[..4].parse().expect("first 4 chars should be a year");
+        assert!(
+            year >= 1970,
+            "now_iso() year {year} should be at or after the Unix epoch"
+        );
+    }
+}

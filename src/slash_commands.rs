@@ -16,14 +16,19 @@ pub struct SlashCommand {
 ///
 /// Commands are deduplicated by name with priority: project > user > plugin.
 pub fn discover_slash_commands(project_path: Option<&Path>) -> Vec<SlashCommand> {
-    let mut commands: Vec<SlashCommand> = Vec::new();
-
     let home = match dirs::home_dir() {
         Some(h) => h,
-        None => return commands,
+        None => return Vec::new(),
     };
 
-    let claude_dir = home.join(".claude");
+    discover_slash_commands_in_claude_dir(&home.join(".claude"), project_path)
+}
+
+fn discover_slash_commands_in_claude_dir(
+    claude_dir: &Path,
+    project_path: Option<&Path>,
+) -> Vec<SlashCommand> {
+    let mut commands: Vec<SlashCommand> = Vec::new();
 
     // Plugin commands and skills (lowest priority — collected first, deduped later).
     let marketplaces = claude_dir.join("plugins/marketplaces");
@@ -47,9 +52,10 @@ pub fn discover_slash_commands(project_path: Option<&Path>) -> Vec<SlashCommand>
     collect_commands_from_dir(&claude_dir.join("commands"), "user", &mut commands);
     collect_skills_from_dir(&claude_dir.join("skills"), "user", &mut commands);
 
-    // Project-level commands (highest priority).
+    // Project-level commands and skills (highest priority).
     if let Some(project) = project_path {
         collect_commands_from_dir(&project.join(".claude/commands"), "project", &mut commands);
+        collect_skills_from_dir(&project.join(".claude/skills"), "project", &mut commands);
     }
 
     // Sort by name for consistent ordering.
@@ -238,10 +244,7 @@ mod tests {
         )
         .unwrap();
 
-        // We can't easily override home_dir, so test the helper functions directly.
-        let mut commands = Vec::new();
-        collect_commands_from_dir(&cmds_dir, "user", &mut commands);
-        collect_skills_from_dir(&claude_dir.join("skills"), "user", &mut commands);
+        let commands = discover_slash_commands_in_claude_dir(&claude_dir, None);
 
         assert_eq!(commands.len(), 2);
         assert_eq!(commands[0].name, "my-cmd");
@@ -344,5 +347,75 @@ mod tests {
         assert_eq!(commands[0].name, "deploy");
         assert_eq!(commands[0].description, "Deploy the app to production.");
         assert_eq!(commands[0].source, "project");
+    }
+
+    #[test]
+    fn test_discover_includes_project_skills_and_honors_priority() {
+        let home = tempfile::tempdir().unwrap();
+        let claude_dir = home.path().join(".claude");
+        let project = tempfile::tempdir().unwrap();
+
+        let plugin_dir = claude_dir.join("plugins/marketplaces/test/plugins/demo");
+        fs::create_dir_all(plugin_dir.join("commands")).unwrap();
+        fs::create_dir_all(plugin_dir.join("skills/review")).unwrap();
+        fs::write(
+            plugin_dir.join("commands/deploy.md"),
+            "---\ndescription: Plugin deploy\n---\n",
+        )
+        .unwrap();
+        fs::write(
+            plugin_dir.join("skills/review/SKILL.md"),
+            "---\ndescription: Plugin review\n---\n",
+        )
+        .unwrap();
+
+        let user_commands_dir = claude_dir.join("commands");
+        let user_skill_dir = claude_dir.join("skills/review");
+        fs::create_dir_all(&user_commands_dir).unwrap();
+        fs::create_dir_all(&user_skill_dir).unwrap();
+        fs::write(
+            user_commands_dir.join("deploy.md"),
+            "---\ndescription: User deploy\n---\n",
+        )
+        .unwrap();
+        fs::write(
+            user_skill_dir.join("SKILL.md"),
+            "---\ndescription: User review\n---\n",
+        )
+        .unwrap();
+
+        let project_commands_dir = project.path().join(".claude/commands");
+        let project_skill_dir = project.path().join(".claude/skills/review");
+        fs::create_dir_all(&project_commands_dir).unwrap();
+        fs::create_dir_all(&project_skill_dir).unwrap();
+        fs::write(
+            project_commands_dir.join("deploy.md"),
+            "---\ndescription: Project deploy\n---\n",
+        )
+        .unwrap();
+        fs::write(
+            project_skill_dir.join("SKILL.md"),
+            "---\ndescription: Project review\n---\n",
+        )
+        .unwrap();
+
+        let commands = discover_slash_commands_in_claude_dir(&claude_dir, Some(project.path()));
+
+        assert_eq!(commands.len(), 2);
+        assert_eq!(
+            commands,
+            vec![
+                SlashCommand {
+                    name: "deploy".into(),
+                    description: "Project deploy".into(),
+                    source: "project".into(),
+                },
+                SlashCommand {
+                    name: "review".into(),
+                    description: "Project review".into(),
+                    source: "project".into(),
+                },
+            ]
+        );
     }
 }
