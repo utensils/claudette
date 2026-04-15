@@ -196,6 +196,12 @@ pub struct AppState {
     pub detected_apps: RwLock<Vec<DetectedApp>>,
     /// System tray icon handle (None when tray is disabled).
     pub tray_handle: Mutex<Option<TrayIcon>>,
+    /// Monotonic counter for generating unique tray IDs. Each call to
+    /// `setup_tray` uses a new id so that Linux/libayatana-appindicator
+    /// does not see a DBus-path collision when the user toggles the tray
+    /// off then on (the previous tray's DBus objects release asynchronously
+    /// on the GLib main loop, which can race with our re-registration).
+    pub next_tray_seq: AtomicU64,
     /// Cached Claude Code OAuth token and usage data.
     pub usage_cache: RwLock<Option<UsageCacheEntry>>,
 }
@@ -212,6 +218,7 @@ impl AppState {
             local_server: RwLock::new(None),
             detected_apps: RwLock::new(Vec::new()),
             tray_handle: Mutex::new(None),
+            next_tray_seq: AtomicU64::new(1),
             usage_cache: RwLock::new(None),
         }
     }

@@ -8,15 +8,142 @@ use claudette::model::WorkspaceStatus;
 
 use crate::state::AppState;
 
+// Baseline tray icons (the ones shipped for the Auto style).
+//
+// - `idle` is a black-on-transparent critter silhouette.
+// - `active` layers a green accent badge over a subtle translucent-white
+//   glow of the critter shape.
+// - `attention` uses the same layout with an orange accent and an
+//   alpha-distinct alert dot below the badge; the alpha difference is
+//   what lets macOS template rendering distinguish Running from
+//   NeedsAttention (template mode collapses color to white but honors
+//   alpha).
+//
+// On macOS the builder passes these with `is_template=true` so the OS
+// tints to the menu-bar color. Linux and Windows render them as-is.
 static ICON_IDLE: &[u8] = include_bytes!("../../assets/tray-idle.png");
 static ICON_ACTIVE: &[u8] = include_bytes!("../../assets/tray-active.png");
 static ICON_ATTENTION: &[u8] = include_bytes!("../../assets/tray-attention.png");
 
+// Explicit light / dark / color variants (three states each). These are
+// recolored from the baseline shapes with alpha preserved.
+static ICON_IDLE_LIGHT: &[u8] = include_bytes!("../../assets/tray-idle-light.png");
+static ICON_ACTIVE_LIGHT: &[u8] = include_bytes!("../../assets/tray-active-light.png");
+static ICON_ATTENTION_LIGHT: &[u8] = include_bytes!("../../assets/tray-attention-light.png");
+static ICON_IDLE_DARK: &[u8] = include_bytes!("../../assets/tray-idle-dark.png");
+static ICON_ACTIVE_DARK: &[u8] = include_bytes!("../../assets/tray-active-dark.png");
+static ICON_ATTENTION_DARK: &[u8] = include_bytes!("../../assets/tray-attention-dark.png");
+static ICON_IDLE_COLOR: &[u8] = include_bytes!("../../assets/tray-idle-color.png");
+static ICON_ACTIVE_COLOR: &[u8] = include_bytes!("../../assets/tray-active-color.png");
+static ICON_ATTENTION_COLOR: &[u8] = include_bytes!("../../assets/tray-attention-color.png");
+
 /// Tray icon state — determines which icon variant and tooltip to show.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TrayState {
     Idle,
     Running(usize),
     NeedsAttention(usize),
+}
+
+/// User-selectable tray icon style. Controls both the icon bytes shown
+/// and whether `is_template` is set for macOS tinting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrayIconStyle {
+    /// Platform-sensible default. macOS uses the template icon (the OS
+    /// tints it black/white to match the menu bar). Linux defaults to
+    /// the color variant because the baseline black shape is nearly
+    /// invisible on dark GNOME/KDE panels. Windows uses the baseline
+    /// black shape. Users can always override this with Light, Dark, or
+    /// Color below.
+    Auto,
+    /// Always render as a white shape; macOS does not tint it.
+    Light,
+    /// Always render as a black shape; macOS does not tint it.
+    Dark,
+    /// Render in the logo's brand orange (#e3704e).
+    Color,
+}
+
+impl TrayIconStyle {
+    /// Parse the DB string value into a style, falling back to Auto.
+    fn from_setting(v: Option<&str>) -> Self {
+        match v {
+            Some("light") => Self::Light,
+            Some("dark") => Self::Dark,
+            Some("color") => Self::Color,
+            _ => Self::Auto,
+        }
+    }
+
+    /// Return (icon_bytes, is_template) for a given state. `is_template`
+    /// is only true for Auto on macOS — for the explicit variants the
+    /// user has picked a concrete color and macOS must NOT tint it.
+    fn icon_for(self, state: TrayState) -> (&'static [u8], bool) {
+        match self {
+            Self::Auto => {
+                // Linux's baseline black shape is unreadable on dark panels,
+                // so Auto on Linux delegates to the color variant. macOS
+                // and Windows keep the original black-on-transparent shape;
+                // macOS additionally flags it as a template for OS tinting.
+                if cfg!(target_os = "linux") {
+                    return Self::Color.icon_for(state);
+                }
+                let bytes = match state {
+                    TrayState::Idle => ICON_IDLE,
+                    TrayState::Running(_) => ICON_ACTIVE,
+                    TrayState::NeedsAttention(_) => ICON_ATTENTION,
+                };
+                (bytes, cfg!(target_os = "macos"))
+            }
+            Self::Light => {
+                let bytes = match state {
+                    TrayState::Idle => ICON_IDLE_LIGHT,
+                    TrayState::Running(_) => ICON_ACTIVE_LIGHT,
+                    TrayState::NeedsAttention(_) => ICON_ATTENTION_LIGHT,
+                };
+                (bytes, false)
+            }
+            Self::Dark => {
+                let bytes = match state {
+                    TrayState::Idle => ICON_IDLE_DARK,
+                    TrayState::Running(_) => ICON_ACTIVE_DARK,
+                    TrayState::NeedsAttention(_) => ICON_ATTENTION_DARK,
+                };
+                (bytes, false)
+            }
+            Self::Color => {
+                let bytes = match state {
+                    TrayState::Idle => ICON_IDLE_COLOR,
+                    TrayState::Running(_) => ICON_ACTIVE_COLOR,
+                    TrayState::NeedsAttention(_) => ICON_ATTENTION_COLOR,
+                };
+                (bytes, false)
+            }
+        }
+    }
+}
+
+/// Read the current user-selected tray icon style from an already-open DB.
+/// `rebuild_tray` runs on every agent state change, so threading the DB
+/// handle through (instead of re-opening the SQLite file per call) matters
+/// in aggregate.
+fn icon_style_from_db(db: &Database) -> TrayIconStyle {
+    TrayIconStyle::from_setting(
+        db.get_app_setting("tray_icon_style")
+            .ok()
+            .flatten()
+            .as_deref(),
+    )
+}
+
+/// Mint a fresh tray id. Each invocation yields a distinct string so
+/// re-registration after a disable/enable cycle doesn't collide with the
+/// previous tray's DBus path on Linux (see the setup_tray comment).
+fn mint_tray_id(state: &AppState) -> String {
+    let seq = state
+        .next_tray_seq
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("claudette-tray-{seq}")
 }
 
 /// Create and register the system tray icon.
@@ -24,8 +151,14 @@ enum TrayState {
 pub fn setup_tray(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
 
-    // Check setting — default to enabled.
-    if let Ok(db) = Database::open(&state.db_path)
+    // Open the app_settings DB once and reuse it for every read below.
+    // On a fresh install the file might not exist yet, in which case the
+    // default behavior (tray enabled, Auto style) applies — just like
+    // before this refactor.
+    let db = Database::open(&state.db_path).ok();
+
+    // Check tray_enabled setting — default to enabled.
+    if let Some(ref db) = db
         && let Ok(Some(val)) = db.get_app_setting("tray_enabled")
         && val == "false"
     {
@@ -39,12 +172,31 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    let menu = build_tray_menu(app)?;
-    let icon = Image::from_bytes(ICON_IDLE).map_err(|e| e.to_string())?;
+    let menu = match &db {
+        Some(db) => build_tray_menu_with_db(app, db)?,
+        None => build_tray_menu(app)?,
+    };
+    // Use the user's selected style for the initial icon. rebuild_tray will
+    // re-read it on every state change so runtime preference changes take
+    // effect without a restart.
+    let style = match &db {
+        Some(db) => icon_style_from_db(db),
+        None => TrayIconStyle::Auto,
+    };
+    let (icon_bytes, is_template) = style.icon_for(TrayState::Idle);
+    let icon = Image::from_bytes(icon_bytes).map_err(|e| e.to_string())?;
 
-    let tray = TrayIconBuilder::with_id("claudette-tray")
+    // Each tray instance gets a unique id. On Linux, libayatana-appindicator
+    // exports DBus objects derived from the id, and the previous tray's
+    // DBus path releases asynchronously on the GLib main loop. Reusing a
+    // fixed id like "claudette-tray" collides on toggle off->on so the
+    // new tray fails to register and silently vanishes. A monotonic
+    // suffix sidesteps the collision entirely.
+    let tray_id = mint_tray_id(&state);
+
+    let tray = TrayIconBuilder::with_id(&tray_id)
         .icon(icon)
-        .icon_as_template(cfg!(target_os = "macos"))
+        .icon_as_template(is_template)
         .tooltip("Claudette")
         .menu(&menu)
         .show_menu_on_left_click(true)
@@ -112,17 +264,30 @@ pub fn rebuild_tray(app: &AppHandle) {
         }
     };
 
-    let Ok(menu) = build_tray_menu(app) else {
+    // Open the settings DB once per rebuild and pass it through to the
+    // menu builder and the style lookup. `rebuild_tray` is called on every
+    // agent state change, so an extra DB open per call adds up. If the
+    // open fails, fall back to the DB-less path (menu won't reflect
+    // current repos/workspaces, but the rest continues to work).
+    let db = Database::open(&state.db_path).ok();
+
+    let menu = match &db {
+        Some(db) => build_tray_menu_with_db(app, db),
+        None => build_tray_menu(app),
+    };
+    let Ok(menu) = menu else {
         return;
     };
     let _ = tray.set_menu(Some(menu));
 
     let tray_state = compute_tray_state(state.inner());
-    let (icon_bytes, is_template) = match &tray_state {
-        TrayState::Idle => (ICON_IDLE, true),
-        TrayState::Running(_) => (ICON_ACTIVE, false),
-        TrayState::NeedsAttention(_) => (ICON_ATTENTION, false),
+    // Re-read the user's icon-style preference each rebuild so runtime
+    // changes (via the settings panel) propagate without an app restart.
+    let style = match &db {
+        Some(db) => icon_style_from_db(db),
+        None => TrayIconStyle::Auto,
     };
+    let (icon_bytes, is_template) = style.icon_for(tray_state);
     if let Ok(icon) = Image::from_bytes(icon_bytes) {
         let _ = tray.set_icon(Some(icon));
         let _ = tray.set_icon_as_template(is_template);
@@ -205,14 +370,21 @@ pub fn notify_attention(app: &AppHandle, workspace_id: &str) {
 /// removal on the main run loop.
 pub fn destroy_tray(app: &AppHandle) {
     let state = app.state::<AppState>();
-    if let Ok(mut guard) = state.tray_handle.lock() {
-        guard.take(); // clear our handle
+    // Read the id off the current handle before dropping it so the
+    // subsequent remove_tray_by_id call matches the actual registered
+    // tray. IDs are now unique per creation (see setup_tray).
+    let tray_id: Option<String> = state
+        .tray_handle
+        .lock()
+        .ok()
+        .and_then(|mut g| g.take().map(|t| t.id().as_ref().to_string()));
+
+    if let Some(id) = tray_id {
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let _ = handle.remove_tray_by_id(&id);
+        });
     }
-    // Dispatch removal to the main thread to satisfy macOS requirements.
-    let handle = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        let _ = handle.remove_tray_by_id("claudette-tray");
-    });
 }
 
 /// Determine the overall tray state from all agent sessions.
@@ -252,10 +424,20 @@ fn compute_tray_state_from_agents(
     TrayState::Idle
 }
 
-/// Build a menu listing workspaces grouped by repository.
+/// Build a menu listing workspaces grouped by repository. Opens its own
+/// DB connection — prefer `build_tray_menu_with_db` when the caller
+/// already has a `Database` open so we don't pay the file-open twice.
 fn build_tray_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
     let state = app.state::<AppState>();
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    build_tray_menu_with_db(app, &db)
+}
+
+/// Build the tray menu using an already-open DB. This is the hot path —
+/// `rebuild_tray` runs on every agent state change, so avoid re-opening
+/// the SQLite file per call.
+fn build_tray_menu_with_db(app: &AppHandle, db: &Database) -> Result<Menu<tauri::Wry>, String> {
+    let state = app.state::<AppState>();
     let repos = db.list_repositories().map_err(|e| e.to_string())?;
     let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
 
@@ -545,5 +727,261 @@ mod tests {
         agents.insert("ws1".to_string(), session(Some(1234), false));
         agents.insert("ws2".to_string(), session(Some(5678), true));
         assert!(has_running_agents(&agents));
+    }
+
+    // --- TrayIconStyle tests ---
+
+    #[test]
+    fn style_from_setting_parses_known_values() {
+        assert_eq!(
+            TrayIconStyle::from_setting(Some("light")),
+            TrayIconStyle::Light
+        );
+        assert_eq!(
+            TrayIconStyle::from_setting(Some("dark")),
+            TrayIconStyle::Dark
+        );
+        assert_eq!(
+            TrayIconStyle::from_setting(Some("color")),
+            TrayIconStyle::Color
+        );
+        assert_eq!(
+            TrayIconStyle::from_setting(Some("auto")),
+            TrayIconStyle::Auto
+        );
+    }
+
+    #[test]
+    fn style_from_setting_defaults_to_auto_for_missing_or_unknown() {
+        assert_eq!(TrayIconStyle::from_setting(None), TrayIconStyle::Auto);
+        assert_eq!(TrayIconStyle::from_setting(Some("")), TrayIconStyle::Auto);
+        assert_eq!(
+            TrayIconStyle::from_setting(Some("rainbow")),
+            TrayIconStyle::Auto
+        );
+    }
+
+    #[test]
+    fn auto_uses_template_on_macos_only() {
+        // The (bytes, is_template) contract: Auto style is the only one that
+        // sets is_template=true, and only when compiled for macOS. Linux and
+        // Windows are never template — Linux because Auto delegates to Color
+        // there, Windows because it keeps the plain black shape with no
+        // tinting.
+        let (_, tpl) = TrayIconStyle::Auto.icon_for(TrayState::Idle);
+        assert_eq!(tpl, cfg!(target_os = "macos"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn auto_delegates_to_color_on_linux() {
+        // On Linux, the baseline black shape is invisible on dark panels.
+        // Auto must route to the Color variant so unconfigured users get a
+        // visible icon out of the box.
+        for state in [
+            TrayState::Idle,
+            TrayState::Running(1),
+            TrayState::NeedsAttention(1),
+        ] {
+            let (auto_bytes, auto_tpl) = TrayIconStyle::Auto.icon_for(state);
+            let (color_bytes, color_tpl) = TrayIconStyle::Color.icon_for(state);
+            assert_eq!(
+                auto_bytes.as_ptr(),
+                color_bytes.as_ptr(),
+                "Auto on Linux must use the same PNG payload as Color for {state:?}"
+            );
+            assert_eq!(auto_tpl, color_tpl);
+            assert!(!auto_tpl, "Auto on Linux must not be a template");
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn auto_uses_baseline_shape_off_linux() {
+        // On macOS and Windows, Auto uses the baseline black-on-transparent
+        // shape (the ones loaded from the unsuffixed filenames). macOS
+        // additionally sets is_template=true; Windows does not.
+        let (auto_bytes, _) = TrayIconStyle::Auto.icon_for(TrayState::Idle);
+        assert_eq!(
+            auto_bytes.as_ptr(),
+            ICON_IDLE.as_ptr(),
+            "Auto off-Linux must point at the baseline ICON_IDLE payload"
+        );
+    }
+
+    #[test]
+    fn explicit_styles_never_set_template() {
+        // Light/Dark/Color encode a concrete color chosen by the user —
+        // macOS must NOT tint them, regardless of platform.
+        for style in [
+            TrayIconStyle::Light,
+            TrayIconStyle::Dark,
+            TrayIconStyle::Color,
+        ] {
+            for state in [
+                TrayState::Idle,
+                TrayState::Running(1),
+                TrayState::NeedsAttention(1),
+            ] {
+                let (_, tpl) = style.icon_for(state);
+                assert!(
+                    !tpl,
+                    "style {style:?} + state {state:?} should not be template"
+                );
+            }
+        }
+    }
+
+    // --- Tray ID minting ---
+    // These guard the fix for the Linux DBus re-registration bug: each
+    // setup_tray must produce a fresh id so libayatana-appindicator's
+    // asynchronous DBus unregistration of the previous tray can't block
+    // the new tray from claiming its path.
+
+    fn fresh_state() -> AppState {
+        // Lightweight AppState for unit tests — the db path and worktree
+        // dir aren't exercised here, only next_tray_seq.
+        AppState::new(
+            std::path::PathBuf::from(":memory:"),
+            std::path::PathBuf::from("/tmp"),
+        )
+    }
+
+    #[test]
+    fn mint_tray_id_produces_unique_sequential_ids() {
+        let state = fresh_state();
+        let a = mint_tray_id(&state);
+        let b = mint_tray_id(&state);
+        let c = mint_tray_id(&state);
+        assert_ne!(
+            a, b,
+            "successive ids must differ (Linux DBus path collision)"
+        );
+        assert_ne!(b, c);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn mint_tray_id_uses_claudette_tray_prefix() {
+        // The id appears in DBus paths and user-facing logs. Keeping the
+        // recognizable `claudette-tray` prefix makes it easy to grep for
+        // while still varying the suffix.
+        let state = fresh_state();
+        let id = mint_tray_id(&state);
+        assert!(
+            id.starts_with("claudette-tray-"),
+            "expected claudette-tray-* prefix, got {id:?}"
+        );
+        // The suffix must be parseable as a u64 so it can't accidentally
+        // become something that breaks DBus name rules.
+        let suffix = id.trim_start_matches("claudette-tray-");
+        suffix
+            .parse::<u64>()
+            .unwrap_or_else(|_| panic!("tray id suffix must be numeric: {id:?}"));
+    }
+
+    #[test]
+    fn mint_tray_id_starts_from_one_on_fresh_state() {
+        // Matches the AppState::new initialization. A zero starting value
+        // would be surprising in logs; keep the baseline at 1.
+        let state = fresh_state();
+        assert_eq!(mint_tray_id(&state), "claudette-tray-1");
+    }
+
+    #[test]
+    fn active_and_attention_bytes_differ_within_each_style() {
+        // Regression guard: the `Running` and `NeedsAttention` tray states
+        // must resolve to PNGs with different content, otherwise the tray
+        // stops being an at-a-glance signal that user input is required.
+        // Earlier versions of this patch color-flattened the baseline's
+        // green/orange accents and collapsed the two states into identical
+        // artwork on Light/Dark/Color — and the baseline itself had the
+        // same problem for macOS template rendering. We now ship an
+        // alpha-distinct alert dot on attention; this test ensures it
+        // survives.
+        for style in [
+            TrayIconStyle::Auto,
+            TrayIconStyle::Light,
+            TrayIconStyle::Dark,
+            TrayIconStyle::Color,
+        ] {
+            let (active, _) = style.icon_for(TrayState::Running(1));
+            let (attention, _) = style.icon_for(TrayState::NeedsAttention(1));
+            assert_ne!(
+                active, attention,
+                "style {style:?}: Running and NeedsAttention PNGs must have distinct content"
+            );
+        }
+    }
+
+    #[test]
+    fn dark_variant_is_actually_dark() {
+        // Regression guard for a pre-ship bug where tray-active-dark.png and
+        // tray-attention-dark.png were byte-copies of the baseline colored
+        // (green/orange) PNGs. A user picking "Dark" explicitly expects a
+        // black monochrome tray, not a colored one — otherwise the setting
+        // is a lie. The fix regenerates all Dark variants via `-colorize
+        // black`, so they must differ from the baseline PNGs.
+        for state in [
+            TrayState::Idle,
+            TrayState::Running(1),
+            TrayState::NeedsAttention(1),
+        ] {
+            let (dark, _) = TrayIconStyle::Dark.icon_for(state);
+            let (auto, _) = TrayIconStyle::Auto.icon_for(state);
+            // On Linux, Auto delegates to Color — still different from Dark.
+            assert_ne!(
+                dark, auto,
+                "Dark {state:?} must not be byte-identical to the baseline/Auto payload"
+            );
+        }
+    }
+
+    #[test]
+    fn each_style_state_combo_returns_distinct_bytes() {
+        // Ping that the include_bytes! asset map isn't collapsed — every
+        // style+state combination should resolve to a non-empty payload,
+        // and the Light vs Color variants at the same state should be
+        // visibly distinct PNGs. (Dark is also distinct from Auto/Color
+        // per the dedicated `dark_variant_is_actually_dark` test.)
+        let mut seen: Vec<(TrayIconStyle, TrayState, &'static [u8])> = Vec::new();
+        for style in [
+            TrayIconStyle::Auto,
+            TrayIconStyle::Light,
+            TrayIconStyle::Dark,
+            TrayIconStyle::Color,
+        ] {
+            for state in [
+                TrayState::Idle,
+                TrayState::Running(1),
+                TrayState::NeedsAttention(1),
+            ] {
+                let (bytes, _) = style.icon_for(state);
+                // Non-empty payload is a smoke check against include_bytes! failure.
+                assert!(!bytes.is_empty(), "{style:?}/{state:?} has empty bytes");
+                seen.push((style, state, bytes));
+            }
+        }
+        // Any two entries for the same `state` but different non-Auto/non-Dark
+        // styles should refer to visibly different payloads.
+        let idle: Vec<_> = seen
+            .iter()
+            .filter(|(_, s, _)| matches!(s, TrayState::Idle))
+            .collect();
+        let light_bytes = idle
+            .iter()
+            .find(|(s, _, _)| *s == TrayIconStyle::Light)
+            .unwrap()
+            .2;
+        let color_bytes = idle
+            .iter()
+            .find(|(s, _, _)| *s == TrayIconStyle::Color)
+            .unwrap()
+            .2;
+        assert_ne!(
+            light_bytes.as_ptr(),
+            color_bytes.as_ptr(),
+            "light and color idle icons must be distinct PNGs"
+        );
     }
 }

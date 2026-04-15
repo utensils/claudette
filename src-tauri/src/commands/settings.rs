@@ -63,6 +63,14 @@ pub async fn set_app_setting(
         }
     }
 
+    // Live-apply tray icon style changes. `rebuild_tray` re-reads the
+    // setting from the DB, so the value we just wrote takes effect on
+    // the next call — no restart required. No-op if the tray isn't
+    // currently active (destroy_tray clears the handle).
+    if key == "tray_icon_style" {
+        crate::tray::rebuild_tray(&app);
+    }
+
     Ok(())
 }
 
