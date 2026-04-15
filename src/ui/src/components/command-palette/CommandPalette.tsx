@@ -146,7 +146,17 @@ export function CommandPalette() {
                   thinking: null,
                 });
               }
-            }).catch(() => {});
+            }).catch((err) => {
+              addChatMessage(wsId, {
+                id: crypto.randomUUID(),
+                workspace_id: wsId,
+                role: "System",
+                content: `Setup script failed: ${err}`,
+                cost_usd: null, duration_ms: null,
+                created_at: new Date().toISOString(),
+                thinking: null,
+              });
+            });
           } else {
             openModal("confirmSetupScript", {
               workspaceId: result.workspace.id,

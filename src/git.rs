@@ -149,13 +149,19 @@ pub async fn fetch_remote(repo_path: &str) -> Result<(), GitError> {
         .unwrap_or_else(|| "origin".to_string());
 
     // Spawn with kill_on_drop so the child is terminated if the timeout fires.
-    let mut child = Command::new("git")
+    let mut child = match Command::new("git")
         .args(["-C", repo_path, "fetch", &remote])
         .kill_on_drop(true)
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
         .spawn()
-        .map_err(|e| GitError::CommandFailed(e.to_string()))?;
+    {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[git] failed to spawn fetch {remote}: {e}");
+            return Ok(());
+        }
+    };
 
     match tokio::time::timeout(std::time::Duration::from_secs(15), child.wait()).await {
         Ok(Ok(status)) if status.success() => Ok(()),
