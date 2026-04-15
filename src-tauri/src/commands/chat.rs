@@ -316,20 +316,43 @@ pub async fn send_chat_message(
                 session.persistent_session = None;
                 drop(agents);
 
-                let ps = start_persistent(
+                let is_resume = saved_turn_count > 1;
+                let (ps, final_sid) = match start_persistent(
                     worktree_path.clone(),
                     saved_session_id.clone(),
-                    saved_turn_count > 1, // resume if we had prior turns
+                    is_resume,
                     allowed_tools.clone(),
                     custom_instructions.clone(),
                     agent_settings.clone(),
                 )
-                .await?;
+                .await
+                {
+                    Ok(ps) => (ps, saved_session_id.clone()),
+                    Err(e2) if is_resume => {
+                        eprintln!("[chat] --resume respawn failed ({e2}), starting fresh");
+                        let fresh = uuid::Uuid::new_v4().to_string();
+                        let ps = start_persistent(
+                            worktree_path.clone(),
+                            fresh.clone(),
+                            false,
+                            allowed_tools.clone(),
+                            custom_instructions.clone(),
+                            agent_settings.clone(),
+                        )
+                        .await?;
+                        (ps, fresh)
+                    }
+                    Err(e2) => {
+                        let _ = db.clear_agent_session(&workspace_id);
+                        return Err(e2);
+                    }
+                };
                 let handle = ps.send_turn(&prompt, &image_attachments).await?;
 
                 agents = state.agents.write().await;
                 let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
                 session.persistent_session = Some(ps);
+                session.session_id = final_sid;
                 handle
             }
         }
@@ -373,7 +396,18 @@ pub async fn send_chat_message(
                 .await?;
                 (ps, fresh_sid)
             }
-            Err(e) => return Err(e),
+            Err(e) => {
+                // Spawn failed entirely — clear stale session from DB so the
+                // next attempt doesn't try --resume with a dead session ID.
+                let _ = db.clear_agent_session(&workspace_id);
+                agents = state.agents.write().await;
+                if let Some(session) = agents.get_mut(&workspace_id) {
+                    session.turn_count = 0;
+                    session.session_id = String::new();
+                }
+                drop(agents);
+                return Err(e);
+            }
         };
         let handle = ps.send_turn(&prompt, &image_attachments).await?;
 
@@ -787,19 +821,25 @@ pub async fn stop_agent(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let mut agents = state.agents.write().await;
-    if let Some(session) = agents.get_mut(&workspace_id)
-        && let Some(pid) = session.active_pid.take()
-    {
-        // Clear persistent session so the next turn starts fresh.
+    if let Some(session) = agents.get_mut(&workspace_id) {
+        // Clear persistent session and reset session state so the next
+        // turn starts completely fresh (not --resume with a stale ID).
         session.persistent_session = None;
-        agent::stop_agent(pid).await?;
+        session.turn_count = 0;
+        session.session_id = String::new();
+        if let Some(pid) = session.active_pid.take() {
+            agent::stop_agent(pid).await?;
+        }
     }
     drop(agents);
+
+    // Clear persisted session from DB too.
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let _ = db.clear_agent_session(&workspace_id);
 
     crate::tray::rebuild_tray(&app);
 
     // Log stop message.
-    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let msg = ChatMessage {
         id: uuid::Uuid::new_v4().to_string(),
         workspace_id,
