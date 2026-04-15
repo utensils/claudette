@@ -1,6 +1,11 @@
 import { useEffect } from "react";
 import { useAppStore } from "../stores/useAppStore";
 import { stopAgent, sendRemoteCommand } from "../services/tauri";
+import {
+  focusActiveTerminal,
+  focusChatPrompt,
+  isTerminalFocused,
+} from "../utils/focusTargets";
 
 export function useKeyboardShortcuts() {
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
@@ -113,6 +118,26 @@ export function useKeyboardShortcuts() {
         return;
       }
 
+      // Cmd/Ctrl+0: focus-toggle between terminal and chat prompt.
+      // Unlike Cmd+` this NEVER changes panel visibility — it only moves
+      // focus. If the panel is hidden, we reveal it first so the user can
+      // actually see the terminal we're putting focus into.
+      if (e.key === "0" && !e.shiftKey) {
+        e.preventDefault();
+        if (isTerminalFocused()) {
+          focusChatPrompt();
+        } else {
+          const store = useAppStore.getState();
+          if (!store.terminalPanelVisible) {
+            store.toggleTerminalPanel();
+            requestAnimationFrame(() => focusActiveTerminal());
+          } else {
+            focusActiveTerminal();
+          }
+        }
+        return;
+      }
+
       switch (e.key) {
         case "b":
           e.preventDefault();
@@ -131,9 +156,25 @@ export function useKeyboardShortcuts() {
           toggleRightSidebar();
           break;
         case "`":
+          // Cmd+` — toggle terminal panel AND move focus to whichever
+          // surface just became active: terminal when showing, chat when
+          // hiding. The shells keep running while hidden (the panel is
+          // CSS-hidden, not unmounted).
           e.preventDefault();
           toggleTerminalPanel();
+          requestAnimationFrame(() => {
+            const visible = useAppStore.getState().terminalPanelVisible;
+            if (visible) focusActiveTerminal();
+            else focusChatPrompt();
+          });
           break;
+        // NOTE: Terminal-scoped hotkeys (Cmd+T for new tab, Cmd+Shift+[/]
+        // for prev/next tab) are intentionally NOT bound here. They are
+        // intercepted inside xterm via attachCustomKeyEventHandler in
+        // TerminalPanel.tsx so they only fire when the terminal has focus
+        // and xterm can suppress forwarding the key to the PTY. Cmd+` and
+        // Cmd+0 are bound both here (for focus arriving from the chat side)
+        // and in the xterm handler (so they don't send bytes to the PTY).
         case ",":
           e.preventDefault();
           {

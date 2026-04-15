@@ -99,4 +99,51 @@
   flex: 1;
   overflow: hidden;
   background: var(--terminal-bg);
+  position: relative;
+}
+
+.spawnError {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--error-bg, rgba(180, 60, 60, 0.18));
+  border: 1px solid var(--error-border, rgba(180, 60, 60, 0.55));
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.spawnErrorTitle {
+  font-weight: 600;
+}
+
+.spawnErrorMessage {
+  opacity: 0.85;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.spawnErrorRetry {
+  margin-top: 2px;
+  padding: 4px 10px;
+  background: var(--accent-primary);
+  color: var(--bg-primary, #000);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  transition: opacity var(--transition-fast);
+}
+
+.spawnErrorRetry:hover {
+  opacity: 0.85;
 }

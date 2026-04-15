@@ -235,3 +235,134 @@ pub async fn close_pty(pty_id: u64, state: State<'_, AppState>) -> Result<(), St
     }
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Smoke tests
+//
+// The Tauri-wrapped `spawn_pty` / `write_pty` / `close_pty` commands require
+// an `AppHandle` and `State<AppState>` which are awkward to wire up in unit
+// tests. These tests exercise the exact `portable_pty` integration used by
+// `spawn_pty` (open master/slave, spawn_command, try_clone_reader,
+// take_writer, kill child) against `/bin/sh`, so a regression in the PTY
+// bring-up path gets caught in CI even without a full Tauri harness.
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+#[cfg(unix)]
+mod tests {
+    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+    use std::io::Read;
+    use std::time::{Duration, Instant};
+
+    fn open_sh() -> (
+        Box<dyn portable_pty::MasterPty + Send>,
+        Box<dyn portable_pty::Child + Send>,
+        Box<dyn Read + Send>,
+    ) {
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty should succeed");
+
+        // A short-lived `sh` command that prints a known string and exits. We
+        // avoid an interactive shell so the test can't hang on a missing rc
+        // file or waiting for a prompt.
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.args(["-c", "printf claudette-pty-ok"]);
+        cmd.env("CLAUDETTE_PTY", "1");
+
+        let child = pair
+            .slave
+            .spawn_command(cmd)
+            .expect("spawn_command should succeed");
+
+        drop(pair.slave);
+
+        let reader = pair
+            .master
+            .try_clone_reader()
+            .expect("try_clone_reader should succeed");
+
+        (pair.master, child, reader)
+    }
+
+    /// Drain the reader with a wall-clock deadline so the test cannot hang
+    /// even if the PTY somehow stays open forever.
+    fn read_with_deadline(mut reader: Box<dyn Read + Send>, deadline: Duration) -> Vec<u8> {
+        let end = Instant::now() + deadline;
+        let mut out = Vec::with_capacity(64);
+        let mut buf = [0u8; 256];
+        while Instant::now() < end {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => out.extend_from_slice(&buf[..n]),
+                Err(_) => break,
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn pty_spawn_emits_expected_output() {
+        let (master, mut child, reader) = open_sh();
+
+        // Read until the child prints its payload and closes the PTY.
+        let bytes = read_with_deadline(reader, Duration::from_secs(5));
+
+        // The child exits on its own; make sure we reap it rather than leave
+        // a zombie hanging around.
+        let _ = child.wait();
+        drop(master);
+
+        let s = String::from_utf8_lossy(&bytes);
+        assert!(
+            s.contains("claudette-pty-ok"),
+            "expected PTY output to contain marker, got: {s:?}"
+        );
+    }
+
+    #[test]
+    fn pty_child_kill_terminates_process() {
+        // Spawn a shell that would run indefinitely, then kill it the same
+        // way `close_pty` does (`child.kill()` on the boxed portable_pty
+        // Child). Verifies the kill path works against a live PTY child.
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty should succeed");
+
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.args(["-c", "sleep 30"]);
+
+        let mut child = pair
+            .slave
+            .spawn_command(cmd)
+            .expect("spawn_command should succeed");
+        drop(pair.slave);
+
+        let pid = child
+            .process_id()
+            .expect("child should expose a pid on unix");
+
+        // SAFETY: kill(pid, 0) is a standard existence check.
+        let alive_before = unsafe { libc::kill(pid as i32, 0) == 0 };
+        assert!(alive_before, "child should be alive before kill");
+
+        child.kill().expect("kill should succeed");
+        let _ = child.wait();
+
+        // Give the OS a moment to update the process table.
+        std::thread::sleep(Duration::from_millis(50));
+        let alive_after = unsafe { libc::kill(pid as i32, 0) == 0 };
+        assert!(!alive_after, "child should be dead after kill");
+    }
+}

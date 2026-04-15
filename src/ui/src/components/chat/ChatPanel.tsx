@@ -1820,6 +1820,10 @@ function ChatInputArea({
       )}
       <textarea
         ref={textareaRef}
+        // data-chat-input is the stable selector used by the global focus
+        // shortcuts (Cmd+` and Cmd+0) in useKeyboardShortcuts.ts to move
+        // focus into the prompt from anywhere in the app.
+        data-chat-input
         className={`${styles.input}${planMode ? ` ${styles.inputPlanMode}` : ""}`}
         value={chatInput}
         onChange={(e) => {
