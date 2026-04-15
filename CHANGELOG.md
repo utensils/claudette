@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.10.0](https://github.com/utensils/claudette/compare/v0.9.0...v0.10.0) (2026-04-15)
+
+
+### Features
+
+* make terminal panel colors reflect active theme ([#196](https://github.com/utensils/claudette/issues/196)) ([b10a41b](https://github.com/utensils/claudette/commit/b10a41b9e5d2484312d16d8b3b7ff3fe7ff93012))
+* replace sidebar status dot with braille spinner for running workspaces ([#198](https://github.com/utensils/claudette/issues/198)) ([a7fd34c](https://github.com/utensils/claudette/commit/a7fd34ca4c58f56bb75ad246704016c29c5df5bf))
+
+
+### Bug Fixes
+
+* lowercase base path to match GitHub Pages serving path ([#197](https://github.com/utensils/claudette/issues/197)) ([5b456ba](https://github.com/utensils/claudette/commit/5b456babfdc16acafbd5762ca4bb0cc31e1d54e6))
+* normalize MCP configs to include required 'type' field ([#191](https://github.com/utensils/claudette/issues/191)) ([c85baa4](https://github.com/utensils/claudette/commit/c85baa4a491e18855b020fb033e5883d28a759df))
+* pass MCP config on every turn, not just first turn ([#193](https://github.com/utensils/claudette/issues/193)) ([ef2900d](https://github.com/utensils/claudette/commit/ef2900db6193f3726c6820464a865d7eab273617))
+
 ## [0.9.0](https://github.com/utensils/Claudette/compare/v0.8.0...v0.9.0) (2026-04-14)
 
 
