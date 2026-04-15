@@ -347,7 +347,7 @@ pub async fn send_chat_message(
         // Drop lock before async process spawn.
         drop(agents);
 
-        let ps = start_persistent(
+        let (ps, final_sid) = match start_persistent(
             worktree_path.clone(),
             sid.clone(),
             is_resume,
@@ -355,13 +355,33 @@ pub async fn send_chat_message(
             custom_instructions.clone(),
             agent_settings.clone(),
         )
-        .await?;
+        .await
+        {
+            Ok(ps) => (ps, sid),
+            Err(e) if is_resume => {
+                // Resume failed (stale/corrupt session) — start fresh instead.
+                eprintln!("[chat] --resume failed ({e}), starting fresh session");
+                let fresh_sid = uuid::Uuid::new_v4().to_string();
+                let ps = start_persistent(
+                    worktree_path.clone(),
+                    fresh_sid.clone(),
+                    false,
+                    allowed_tools.clone(),
+                    custom_instructions.clone(),
+                    agent_settings.clone(),
+                )
+                .await?;
+                (ps, fresh_sid)
+            }
+            Err(e) => return Err(e),
+        };
         let handle = ps.send_turn(&prompt, &image_attachments).await?;
 
         agents = state.agents.write().await;
         let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
         session.persistent_session = Some(ps);
-        let _ = db.save_agent_session(&workspace_id, &sid, session.turn_count);
+        session.session_id = final_sid.clone();
+        let _ = db.save_agent_session(&workspace_id, &final_sid, session.turn_count);
         handle
     };
 
