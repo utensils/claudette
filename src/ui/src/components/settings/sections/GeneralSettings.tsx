@@ -1,9 +1,16 @@
 import { useEffect, useState } from "react";
-import { FolderOpen } from "lucide-react";
+import { FolderOpen, RotateCcw } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getVersion } from "@tauri-apps/api/app";
+import { relaunch } from "@tauri-apps/plugin-process";
 import { useAppStore } from "../../../stores/useAppStore";
-import { getAppSetting, setAppSetting } from "../../../services/tauri";
+import {
+  getAppSetting,
+  setAppSetting,
+  getDataDirInfo,
+  setDataDir,
+} from "../../../services/tauri";
+import type { DataDirInfo } from "../../../services/tauri";
 import { checkForUpdate } from "../../../hooks/useAutoUpdater";
 import styles from "../Settings.module.css";
 
@@ -20,6 +27,11 @@ export function GeneralSettings() {
   const [error, setError] = useState<string | null>(null);
   const [appVersion, setAppVersion] = useState("");
   const [checkState, setCheckState] = useState<"idle" | "checking" | "up-to-date">("idle");
+
+  // Data directory state
+  const [dataDirInfo, setDataDirInfo] = useState<DataDirInfo | null>(null);
+  const [dataDirInput, setDataDirInput] = useState("");
+  const [dataDirChanged, setDataDirChanged] = useState(false);
 
   useEffect(() => {
     setPath(worktreeBaseDir);
@@ -56,6 +68,16 @@ export function GeneralSettings() {
     if (updateAvailable) setCheckState("idle");
   }, [updateAvailable]);
 
+  // Load data directory info on mount.
+  useEffect(() => {
+    getDataDirInfo()
+      .then((info) => {
+        setDataDirInfo(info);
+        setDataDirInput(info.configured ?? info.current);
+      })
+      .catch(() => {});
+  }, []);
+
   const handleCheckForUpdates = async () => {
     setError(null);
     setCheckState("checking");
@@ -89,6 +111,35 @@ export function GeneralSettings() {
       await setAppSetting("tray_enabled", next ? "true" : "false");
     } catch (e) {
       setTrayEnabled(!next);
+      setError(String(e));
+    }
+  };
+
+  const handleDataDirBlur = async () => {
+    const trimmed = dataDirInput.trim();
+    if (!dataDirInfo || !trimmed) return;
+    // If the input matches the current active dir and there's no existing
+    // override, nothing to do.
+    if (trimmed === dataDirInfo.current && !dataDirInfo.configured) return;
+    try {
+      setError(null);
+      await setDataDir(trimmed);
+      setDataDirInfo((prev) => prev ? { ...prev, configured: trimmed } : prev);
+      setDataDirChanged(trimmed !== dataDirInfo.current);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const handleDataDirReset = async () => {
+    if (!dataDirInfo) return;
+    try {
+      setError(null);
+      await setDataDir(null);
+      setDataDirInput(dataDirInfo.current);
+      setDataDirInfo((prev) => prev ? { ...prev, configured: null } : prev);
+      setDataDirChanged(false);
+    } catch (e) {
       setError(String(e));
     }
   };
@@ -171,6 +222,97 @@ export function GeneralSettings() {
               <FolderOpen size={14} />
             </button>
           </div>
+        </div>
+      </div>
+
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>Data directory</div>
+          <div className={styles.settingDescription}>
+            Where Claudette stores its data (database, themes, apps config).
+            Existing data is not moved automatically.
+            {dataDirInfo?.env_override && (
+              <>
+                <br />
+                <span style={{ color: "var(--text-tertiary)" }}>
+                  Overridden by CLAUDETTE_DATA_DIR environment variable
+                </span>
+              </>
+            )}
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          {dataDirInfo?.env_override ? (
+            <span className={styles.input} style={{ opacity: 0.6 }}>
+              {dataDirInfo.current}
+            </span>
+          ) : (
+            <div className={styles.inlineControl}>
+              <input
+                className={styles.input}
+                value={dataDirInput}
+                onChange={(e) => setDataDirInput(e.target.value)}
+                onBlur={handleDataDirBlur}
+                placeholder={dataDirInfo?.current ?? ""}
+              />
+              <button
+                className={styles.iconBtn}
+                onClick={async () => {
+                  try {
+                    const selected = await open({
+                      directory: true,
+                      multiple: false,
+                    });
+                    if (selected && dataDirInfo) {
+                      setDataDirInput(selected);
+                      setError(null);
+                      await setDataDir(selected);
+                      setDataDirInfo((prev) =>
+                        prev ? { ...prev, configured: selected } : prev,
+                      );
+                      setDataDirChanged(selected !== dataDirInfo.current);
+                    }
+                  } catch (e) {
+                    setError(String(e));
+                  }
+                }}
+                title="Browse"
+              >
+                <FolderOpen size={14} />
+              </button>
+              {dataDirInfo?.configured && (
+                <button
+                  className={styles.iconBtn}
+                  onClick={handleDataDirReset}
+                  title="Reset to default"
+                >
+                  <RotateCcw size={14} />
+                </button>
+              )}
+            </div>
+          )}
+          {dataDirChanged && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                marginTop: 6,
+              }}
+            >
+              <span
+                style={{
+                  fontSize: "0.8em",
+                  color: "var(--text-warning, var(--text-tertiary))",
+                }}
+              >
+                Restart required
+              </span>
+              <button className={styles.iconBtn} onClick={() => relaunch()}>
+                Restart now
+              </button>
+            </div>
+          )}
         </div>
       </div>
 

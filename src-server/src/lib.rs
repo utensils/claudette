@@ -46,10 +46,7 @@ pub fn default_config_path() -> PathBuf {
 }
 
 pub fn db_path() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("claudette")
-        .join("claudette.db")
+    claudette::app_config::resolve_db_path()
 }
 
 /// Run the claudette-server with the given options. Blocks indefinitely,
@@ -89,9 +86,9 @@ pub async fn run(options: ServerOptions) -> Result<(), Box<dyn std::error::Error
     let _ = claudette::db::Database::open(&db_path);
 
     let worktree_base_dir = {
-        let default = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".claudette")
+        let default = db_path
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
             .join("workspaces");
         if let Ok(db) = claudette::db::Database::open(&db_path) {
             db.get_app_setting("worktree_base_dir")

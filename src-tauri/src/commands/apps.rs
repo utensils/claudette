@@ -52,8 +52,10 @@ pub struct DetectedApp {
 // ---------------------------------------------------------------------------
 
 /// Resolve the path to the user's apps.json config file.
+///
+/// Lives inside the data directory alongside the database, themes, etc.
 fn apps_config_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".claudette").join("apps.json"))
+    Some(claudette::app_config::resolve_data_dir().join("apps.json"))
 }
 
 /// Load and parse apps.json from the given path.
@@ -84,7 +86,7 @@ fn load_apps_config_from(path: &Path) -> AppsConfig {
     serde_json::from_str(DEFAULT_APPS_JSON).expect("embedded default-apps.json must be valid")
 }
 
-/// Public entry point — resolves ~/.claudette/apps.json and loads it.
+/// Public entry point — resolves apps.json from the data directory and loads it.
 fn load_apps_config() -> AppsConfig {
     match apps_config_path() {
         Some(path) => load_apps_config_from(&path),

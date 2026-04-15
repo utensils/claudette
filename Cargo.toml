@@ -23,6 +23,7 @@ url = "2"
 uuid = { version = "1", features = ["v4"] }
 which = "7"
 dirs = "6"
+toml = "0.8"
 open = "5"
 rand = "0.8"
 

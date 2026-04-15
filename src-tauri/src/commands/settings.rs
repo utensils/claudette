@@ -74,6 +74,48 @@ pub async fn set_app_setting(
     Ok(())
 }
 
+/// Information about the current data directory configuration.
+#[derive(Serialize)]
+pub struct DataDirInfo {
+    /// The currently active data directory path.
+    pub current: String,
+    /// The configured override (from config.toml), if any.
+    pub configured: Option<String>,
+    /// Whether the CLAUDETTE_DATA_DIR env var is set.
+    pub env_override: bool,
+    /// The config file path, for display in the UI.
+    pub config_path: Option<String>,
+}
+
+#[tauri::command]
+pub async fn get_data_dir_info(state: State<'_, AppState>) -> Result<DataDirInfo, String> {
+    let current = state
+        .db_path
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .to_string_lossy()
+        .to_string();
+
+    let config = claudette::app_config::load_app_config();
+    let env_override = std::env::var("CLAUDETTE_DATA_DIR")
+        .ok()
+        .is_some_and(|v| !v.trim().is_empty());
+    let config_path =
+        claudette::app_config::app_config_path().map(|p| p.to_string_lossy().to_string());
+
+    Ok(DataDirInfo {
+        current,
+        configured: config.data_dir,
+        env_override,
+        config_path,
+    })
+}
+
+#[tauri::command]
+pub async fn set_data_dir(data_dir: Option<String>) -> Result<(), String> {
+    claudette::app_config::save_data_dir_config(data_dir.as_deref())
+}
+
 /// Read the global `git config user.name` and return it as a branch-safe slug.
 #[tauri::command]
 pub async fn get_git_username() -> Result<Option<String>, String> {
@@ -280,12 +322,15 @@ pub fn run_notification_command(
 }
 
 #[tauri::command]
-pub async fn list_user_themes() -> Result<Vec<ThemeDefinition>, String> {
-    tauri::async_runtime::spawn_blocking(|| {
-        let themes_dir = dirs::home_dir()
-            .ok_or("Could not determine home directory")?
-            .join(".claudette")
-            .join("themes");
+pub async fn list_user_themes(state: State<'_, AppState>) -> Result<Vec<ThemeDefinition>, String> {
+    let data_dir = state
+        .db_path
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .to_path_buf();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let themes_dir = data_dir.join("themes");
 
         if !themes_dir.exists() {
             return Ok(Vec::new());

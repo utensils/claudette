@@ -366,6 +366,21 @@ export function setAppSetting(key: string, value: string): Promise<void> {
   return invoke("set_app_setting", { key, value });
 }
 
+export interface DataDirInfo {
+  current: string;
+  configured: string | null;
+  env_override: boolean;
+  config_path: string | null;
+}
+
+export function getDataDirInfo(): Promise<DataDirInfo> {
+  return invoke("get_data_dir_info");
+}
+
+export function setDataDir(dataDir: string | null): Promise<void> {
+  return invoke("set_data_dir", { dataDir });
+}
+
 import type { ThemeDefinition } from "../types/theme";
 
 export function listUserThemes(): Promise<ThemeDefinition[]> {

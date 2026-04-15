@@ -280,8 +280,11 @@ pub async fn start_local_server(state: State<'_, AppState>) -> Result<LocalServe
         let server_bin = std::env::current_exe()
             .map_err(|e| format!("Failed to locate current executable: {e}"))?;
 
+        let data_dir = state.db_path.parent().unwrap_or(std::path::Path::new("."));
+
         let mut child = tokio::process::Command::new(&server_bin)
             .arg("--server")
+            .env("CLAUDETTE_DATA_DIR", data_dir)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true)

@@ -42,19 +42,16 @@ fn main() {
     }
 
     // Determine database and worktree paths.
-    let data_dir = dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("claudette");
-    let db_path = data_dir.join("claudette.db");
+    let db_path = claudette::app_config::resolve_db_path();
 
     // Ensure DB exists and migrations are applied.
     let _ = Database::open(&db_path);
 
-    // Load worktree base dir from settings, or use default.
+    // Load worktree base dir from settings, or use default (inside data dir).
     let worktree_base_dir = {
-        let default = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".claudette")
+        let default = db_path
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
             .join("workspaces");
         if let Ok(db) = Database::open(&db_path) {
             db.get_app_setting("worktree_base_dir")
@@ -350,6 +347,8 @@ fn main() {
             // Settings
             commands::settings::get_app_setting,
             commands::settings::set_app_setting,
+            commands::settings::get_data_dir_info,
+            commands::settings::set_data_dir,
             commands::settings::list_user_themes,
             commands::settings::list_notification_sounds,
             commands::settings::list_system_fonts,
