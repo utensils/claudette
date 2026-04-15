@@ -1,9 +1,12 @@
+import { createElement } from "react";
 import type { PluggableList } from "unified";
+import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import rehypeHighlight from "rehype-highlight";
 import { AnsiUp } from "ansi_up";
+import { openUrl } from "../services/tauri";
 
 // Shared AnsiUp instance for converting ANSI escape sequences to HTML.
 const ansiUp = new AnsiUp();
@@ -99,3 +102,22 @@ export const REHYPE_PLUGINS: PluggableList = [
   rehypeHighlight,
 ];
 export const REMARK_PLUGINS: PluggableList = [remarkGfm];
+
+// Override <a> to open links in the system browser instead of navigating the webview.
+export const MARKDOWN_COMPONENTS: Components = {
+  a: ({ href, children, ...props }) =>
+    createElement(
+      "a",
+      {
+        ...props,
+        href,
+        onClick: (e: MouseEvent) => {
+          if (href) {
+            e.preventDefault();
+            openUrl(href);
+          }
+        },
+      },
+      children,
+    ),
+};

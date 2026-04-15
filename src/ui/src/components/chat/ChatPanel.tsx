@@ -1,6 +1,6 @@
 import React, { createContext, memo, useContext, useEffect, useRef, useState, useMemo, useCallback } from "react";
 import Markdown from "react-markdown";
-import { preprocessContent, REHYPE_PLUGINS, REMARK_PLUGINS } from "../../utils/markdown";
+import { preprocessContent, MARKDOWN_COMPONENTS, REHYPE_PLUGINS, REMARK_PLUGINS } from "../../utils/markdown";
 import { FileText, GitBranch, LayoutDashboard, Plus, RotateCcw, X } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import type { ToolActivity, CompletedTurn } from "../../stores/useAppStore";
@@ -815,6 +815,7 @@ const StreamingMessage = memo(function StreamingMessage({
         <Markdown
           remarkPlugins={REMARK_PLUGINS}
           rehypePlugins={REHYPE_PLUGINS}
+          components={MARKDOWN_COMPONENTS}
         >
           {preprocessContent(displayed)}
         </Markdown>
@@ -1093,6 +1094,7 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
                 <Markdown
                   remarkPlugins={REMARK_PLUGINS}
                   rehypePlugins={REHYPE_PLUGINS}
+                  components={MARKDOWN_COMPONENTS}
                 >
                   {preprocessContent(msg.content)}
                 </Markdown>

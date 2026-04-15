@@ -360,6 +360,7 @@ fn main() {
             commands::shell::setup_shell_integration,
             commands::shell::apply_shell_integration,
             commands::shell::open_in_editor,
+            commands::shell::open_url,
             // MCP
             commands::mcp::detect_mcp_servers,
             commands::mcp::save_repository_mcps,

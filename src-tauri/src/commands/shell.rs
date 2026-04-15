@@ -187,6 +187,16 @@ pub async fn open_in_editor(path: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+pub async fn open_url(url: String) -> Result<(), String> {
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = opener::open(&url) {
+            eprintln!("Failed to open URL in system browser: {e}");
+        }
+    });
+    Ok(())
+}
+
 mod opener {
     use std::process::Command;
 

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import Markdown from "react-markdown";
-import { preprocessContent, REHYPE_PLUGINS, REMARK_PLUGINS } from "../../utils/markdown";
+import { preprocessContent, MARKDOWN_COMPONENTS, REHYPE_PLUGINS, REMARK_PLUGINS } from "../../utils/markdown";
 import type { PlanApproval } from "../../stores/useAppStore";
 import { readPlanFile, sendRemoteCommand } from "../../services/tauri";
 import styles from "./PlanApprovalCard.module.css";
@@ -70,7 +70,7 @@ export function PlanApprovalCard({
 
       {expanded && planContent && (
         <div className={styles.planContent}>
-          <Markdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS}>
+          <Markdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS} components={MARKDOWN_COMPONENTS}>
             {preprocessContent(planContent)}
           </Markdown>
         </div>
