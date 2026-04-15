@@ -288,6 +288,10 @@ pub async fn start_local_server(state: State<'_, AppState>) -> Result<LocalServe
             .spawn()
             .map_err(|e| format!("Failed to start embedded server: {e}"))?;
 
+        // Capture PID eagerly — child.id() returns None after the process is
+        // reaped, and we need the PID for synchronous cleanup on app exit.
+        let pid = child.id().ok_or("Failed to get server process PID")?;
+
         let stdout = child
             .stdout
             .take()
@@ -360,6 +364,7 @@ pub async fn start_local_server(state: State<'_, AppState>) -> Result<LocalServe
 
         *server = Some(LocalServerState {
             child,
+            pid,
             connection_string,
         });
 

@@ -362,16 +362,36 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error while building Claudette")
         .run(|_app, _event| {
-            // Show the window when the dock icon is clicked (macOS reopen).
-            #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen { .. } = _event {
-                if let Some(window) = _app.get_webview_window("main") {
-                    let _ = window.unminimize();
-                    let _ = window.show();
-                    let _ = window.set_focus();
+            match _event {
+                // Show the window when the dock icon is clicked (macOS reopen).
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Reopen { .. } => {
+                    if let Some(window) = _app.get_webview_window("main") {
+                        let _ = window.unminimize();
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                    // Navigate to session needing attention, if any.
+                    tray::navigate_to_attention(_app);
                 }
-                // Navigate to session needing attention, if any.
-                tray::navigate_to_attention(_app);
+                // Kill the embedded server process (if we spawned one) before
+                // the tokio runtime tears down. Using synchronous POSIX kill
+                // ensures the child is dead before our process exits, preventing
+                // the "Address already in use" error on next launch.
+                tauri::RunEvent::Exit => {
+                    let app_state = _app.state::<state::AppState>();
+                    // try_write avoids blocking if another thread holds the lock
+                    // during shutdown — in that case Drop will still fire.
+                    // Dropping `srv` triggers LocalServerState::drop which
+                    // calls kill_process_sync(pid). Taking it out of the
+                    // Option ensures cleanup runs exactly once.
+                    if let Ok(mut guard) = app_state.local_server.try_write()
+                        && let Some(srv) = guard.take()
+                    {
+                        drop(srv);
+                    }
+                }
+                _ => {}
             }
         });
 }
