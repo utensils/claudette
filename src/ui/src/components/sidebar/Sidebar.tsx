@@ -15,7 +15,7 @@ import {
   pairWithServer,
   startLocalServer,
 } from "../../services/tauri";
-import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, BadgeCheck, BadgeInfo, BadgeQuestionMark, Cog, Filter, Check, LayoutDashboard, GitPullRequestArrow, GitPullRequestDraft, GitMerge, GitPullRequestClosed } from "lucide-react";
+import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, BadgeCheck, BadgeInfo, BadgeQuestionMark, Cog, Filter, Check, LayoutDashboard, GitBranch, GitPullRequestArrow, GitPullRequestDraft, GitMerge, GitPullRequestClosed } from "lucide-react";
 import { RepoIcon } from "../shared/RepoIcon";
 import { useSpinnerFrame } from "../../hooks/useSpinnerFrame";
 import styles from "./Sidebar.module.css";
@@ -499,42 +499,39 @@ export const Sidebar = memo(function Sidebar() {
                       <span className={styles.statusSpinner} aria-hidden="true">
                         {spinnerChar}
                       </span>
-                    ) : (
-                      <span
-                        className={styles.statusDot}
-                        style={{
-                          background:
-                            ws.agent_status === "Stopped"
-                              ? "var(--status-stopped)"
-                              : "var(--status-idle)",
-                        }}
-                      />
-                    )}
+                    ) : (() => {
+                      const summary = scmSummary[ws.id];
+                      if (summary?.hasPr) {
+                        const prState = summary.prState;
+                        const ciState = summary.ciState;
+                        const Icon = prState === "merged" ? GitMerge
+                          : prState === "closed" ? GitPullRequestClosed
+                          : prState === "draft" ? GitPullRequestDraft
+                          : GitPullRequestArrow;
+                        const color = prState === "merged" ? "var(--purple, #a855f7)"
+                          : prState === "closed" ? "var(--red, #ef4444)"
+                          : prState === "draft" ? "var(--text-dim)"
+                          : ciState === "failure" ? "var(--red, #ef4444)"
+                          : ciState === "pending" ? "var(--yellow, #eab308)"
+                          : "var(--green, #22c55e)";
+                        const titleText = `PR: ${prState}${ciState ? `, CI: ${ciState}` : ""}`;
+                        return (
+                          <span className={styles.statusIcon} title={titleText}>
+                            <Icon size={14} style={{ color }} />
+                          </span>
+                        );
+                      }
+                      return (
+                        <span className={styles.statusIcon} title={ws.agent_status === "Stopped" ? "Stopped" : "Idle"}>
+                          <GitBranch size={14} style={{ color: ws.agent_status === "Stopped" ? "var(--status-stopped)" : "var(--text-dim)" }} />
+                        </span>
+                      );
+                    })()}
                     <div className={styles.wsInfo}>
                       <span className={styles.wsName}>
                         {ws.name}
                       </span>
-                      <span className={styles.wsBranch}>
-                        {ws.branch_name}
-                        {(() => {
-                          const summary = scmSummary[ws.id];
-                          if (!summary?.hasPr || ws.agent_status === "Running") return null;
-                          const prState = summary.prState;
-                          const ciState = summary.ciState;
-                          const Icon = prState === "merged" ? GitMerge
-                            : prState === "closed" ? GitPullRequestClosed
-                            : prState === "draft" ? GitPullRequestDraft
-                            : GitPullRequestArrow;
-                          const color = prState === "merged" ? "var(--purple, #a855f7)"
-                            : prState === "closed" ? "var(--red, #ef4444)"
-                            : prState === "draft" ? "var(--text-dim)"
-                            : ciState === "failure" ? "var(--red, #ef4444)"
-                            : ciState === "pending" ? "var(--yellow, #eab308)"
-                            : "var(--green, #22c55e)";
-                          const titleText = `PR: ${prState}${ciState ? `, CI: ${ciState}` : ""}`;
-                          return <span title={titleText} style={{ display: "inline-flex", marginLeft: 4, flexShrink: 0 }}><Icon size={11} style={{ color }} /></span>;
-                        })()}
-                      </span>
+                      <span className={styles.wsBranch}>{ws.branch_name}</span>
                       {(() => {
                         const commandState = workspaceTerminalCommands[ws.id];
                         if (!commandState?.command) return null;

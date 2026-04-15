@@ -320,6 +320,14 @@
   line-height: 1;
 }
 
+.statusIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  flex-shrink: 0;
+}
+
 .wsActions {
   display: flex;
   align-items: center;
