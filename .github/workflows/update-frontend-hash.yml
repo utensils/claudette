@@ -8,8 +8,8 @@ name: Nix
 # claudette-server) use crane, which takes source as a regular input
 # with no hardcoded output hash.
 #
-# The path filter also prevents an infinite loop — the squash-merged
-# PR only touches flake.nix, not src/ui/.
+# The path filter also prevents an infinite loop — the auto-commit
+# only touches flake.nix, not src/ui/.
 #
 # NOTE: if `nix flake update` bumps the bun package version, the
 # hashes will also drift.  Add 'flake.lock' to the paths list below
@@ -28,7 +28,6 @@ concurrency:
 
 permissions:
   contents: write
-  pull-requests: write
 
 jobs:
   hash-linux:
@@ -96,6 +95,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          token: ${{ secrets.PUSH_TOKEN }}
 
       - name: Update hashes
         id: update
@@ -134,36 +134,16 @@ jobs:
           perl -i -pe "s|\Q$CURRENT_LINUX\E|$NEW_LINUX|" flake.nix
           echo "changed=true" >> "$GITHUB_OUTPUT"
 
-      - name: Create or update PR
+      - name: Commit and push
         if: steps.update.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          BRANCH="chore/update-frontend-fod-hashes"
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          # Close any stale hash-update PR from a previous run
-          EXISTING_PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')
-          if [ -n "$EXISTING_PR" ]; then
-            gh pr close "$EXISTING_PR" --delete-branch || true
-          fi
-
-          git checkout -b "$BRANCH"
+          git add flake.nix
+          git diff --cached --quiet && exit 0
+          git stash
+          git pull --rebase origin main
+          git stash pop
           git add flake.nix
           git commit -m "chore(nix): update frontend FOD hashes"
-          git push --force-with-lease origin "$BRANCH"
-
-          PR_URL=$(gh pr create \
-            --title "chore(nix): update frontend FOD hashes" \
-            --body "$(cat <<'EOF'
-          Automated update of the Nix frontend fixed-output derivation hashes.
-
-          Triggered by changes to `src/ui/` on `main`. Auto-merges once required status checks pass.
-          EOF
-          )" \
-            --head "$BRANCH" \
-            --base main)
-
-          gh pr merge "$PR_URL" --auto --squash
+          git push
