@@ -173,6 +173,16 @@ describe("finalizeTurn afterMessageIndex", () => {
     expect(turns[0].id).toBe("cp-new");
   });
 
+  it("defaults completed turn to collapsed", () => {
+    addToolActivities();
+
+    useAppStore.getState().finalizeTurn(WS_ID, 1);
+
+    const turns = useAppStore.getState().completedTurns[WS_ID];
+    expect(turns).toHaveLength(1);
+    expect(turns[0].collapsed).toBe(true);
+  });
+
   it("records afterMessageIndex as current chatMessages length", () => {
     useAppStore.setState({
       chatMessages: {

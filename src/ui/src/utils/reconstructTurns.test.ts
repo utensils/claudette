@@ -3,8 +3,20 @@ import { reconstructCompletedTurns } from "./reconstructTurns";
 import type { ChatMessage } from "../types/chat";
 import type { CompletedTurnData } from "../types/checkpoint";
 
-function makeMsg(id: string, role: "User" | "Assistant" = "Assistant"): ChatMessage {
-  return { id, workspace_id: "ws", role, content: "", cost_usd: null, duration_ms: null, created_at: "", thinking: null };
+function makeMsg(
+  id: string,
+  role: "User" | "Assistant" = "Assistant",
+): ChatMessage {
+  return {
+    id,
+    workspace_id: "ws",
+    role,
+    content: "",
+    cost_usd: null,
+    duration_ms: null,
+    created_at: "",
+    thinking: null,
+  };
 }
 
 function makeTurnData(
@@ -64,11 +76,16 @@ describe("reconstructCompletedTurns", () => {
   });
 
   it("keeps valid turns and drops invalid ones from mixed input", () => {
-    const messages = [makeMsg("m1", "User"), makeMsg("m2"), makeMsg("m3", "User"), makeMsg("m4")];
+    const messages = [
+      makeMsg("m1", "User"),
+      makeMsg("m2"),
+      makeMsg("m3", "User"),
+      makeMsg("m4"),
+    ];
     const turnData = [
-      makeTurnData("cp1", "m2", 3),       // valid — anchored to m2
-      makeTurnData("cp2", "orphaned", 2),  // invalid — message_id not in messages
-      makeTurnData("cp3", "m4", 1),        // valid — anchored to m4
+      makeTurnData("cp1", "m2", 3), // valid — anchored to m2
+      makeTurnData("cp2", "orphaned", 2), // invalid — message_id not in messages
+      makeTurnData("cp3", "m4", 1), // valid — anchored to m4
     ];
 
     const result = reconstructCompletedTurns(messages, turnData);
@@ -94,27 +111,31 @@ describe("reconstructCompletedTurns", () => {
 
   it("maps activity fields correctly", () => {
     const messages = [makeMsg("m1")];
-    const turnData: CompletedTurnData[] = [{
-      checkpoint_id: "cp1",
-      message_id: "m1",
-      turn_index: 0,
-      message_count: 5,
-      activities: [{
-        id: "act-1",
+    const turnData: CompletedTurnData[] = [
+      {
         checkpoint_id: "cp1",
-        tool_use_id: "tu-abc",
-        tool_name: "Bash",
-        input_json: '{"command":"ls"}',
-        result_text: "file.txt",
-        summary: "list files",
-        sort_order: 0,
-      }],
-    }];
+        message_id: "m1",
+        turn_index: 0,
+        message_count: 5,
+        activities: [
+          {
+            id: "act-1",
+            checkpoint_id: "cp1",
+            tool_use_id: "tu-abc",
+            tool_name: "Bash",
+            input_json: '{"command":"ls"}',
+            result_text: "file.txt",
+            summary: "list files",
+            sort_order: 0,
+          },
+        ],
+      },
+    ];
 
     const result = reconstructCompletedTurns(messages, turnData);
 
     expect(result[0].messageCount).toBe(5);
-    expect(result[0].collapsed).toBe(false);
+    expect(result[0].collapsed).toBe(true);
     const act = result[0].activities[0];
     expect(act.toolUseId).toBe("tu-abc");
     expect(act.toolName).toBe("Bash");

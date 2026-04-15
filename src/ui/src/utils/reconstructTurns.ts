@@ -43,7 +43,7 @@ export function reconstructCompletedTurns(
           summary: a.summary,
         })),
         messageCount: td.message_count,
-        collapsed: false,
+        collapsed: true,
         afterMessageIndex,
       };
     });

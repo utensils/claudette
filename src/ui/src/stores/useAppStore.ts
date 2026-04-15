@@ -101,7 +101,7 @@ interface AppState {
   updateToolActivity: (
     wsId: string,
     toolUseId: string,
-    updates: Partial<ToolActivity>
+    updates: Partial<ToolActivity>,
   ) => void;
   toggleToolActivityCollapsed: (wsId: string, index: number) => void;
   finalizeTurn: (wsId: string, messageCount: number, turnId?: string) => void;
@@ -111,7 +111,7 @@ interface AppState {
   appendToolActivityInput: (
     wsId: string,
     toolUseId: string,
-    partialJson: string
+    partialJson: string,
   ) => void;
 
   // -- Agent Questions (per-workspace) --
@@ -148,7 +148,7 @@ interface AppState {
   rollbackConversation: (
     wsId: string,
     checkpointId: string,
-    messages: ChatMessage[]
+    messages: ChatMessage[],
   ) => void;
 
   // -- Notifications --
@@ -204,7 +204,7 @@ interface AppState {
   toggleTerminalPanel: () => void;
   setWorkspaceTerminalCommand: (
     wsId: string,
-    state: WorkspaceCommandState
+    state: WorkspaceCommandState,
   ) => void;
   updateTerminalTabPtyId: (tabId: number, ptyId: number) => void;
 
@@ -327,7 +327,7 @@ export const useAppStore = create<AppState>((set) => ({
   updateRepository: (id, updates) =>
     set((s) => ({
       repositories: s.repositories.map((r) =>
-        r.id === id ? { ...r, ...updates } : r
+        r.id === id ? { ...r, ...updates } : r,
       ),
     })),
   removeRepository: (id) =>
@@ -340,12 +340,11 @@ export const useAppStore = create<AppState>((set) => ({
   workspaces: [],
   selectedWorkspaceId: null,
   setWorkspaces: (workspaces) => set({ workspaces }),
-  addWorkspace: (ws) =>
-    set((s) => ({ workspaces: [...s.workspaces, ws] })),
+  addWorkspace: (ws) => set((s) => ({ workspaces: [...s.workspaces, ws] })),
   updateWorkspace: (id, updates) =>
     set((s) => ({
       workspaces: s.workspaces.map((w) =>
-        w.id === id ? { ...w, ...updates } : w
+        w.id === id ? { ...w, ...updates } : w,
       ),
     })),
   removeWorkspace: (id) =>
@@ -359,7 +358,8 @@ export const useAppStore = create<AppState>((set) => ({
         unreadCompletions: newUnreadCompletions,
       };
     }),
-  selectWorkspace: (id) => set({ selectedWorkspaceId: id, rightSidebarTab: "changes" }),
+  selectWorkspace: (id) =>
+    set({ selectedWorkspaceId: id, rightSidebarTab: "changes" }),
 
   // -- Chat --
   chatMessages: {},
@@ -434,7 +434,7 @@ export const useAppStore = create<AppState>((set) => ({
       toolActivities: {
         ...s.toolActivities,
         [wsId]: (s.toolActivities[wsId] || []).map((a) =>
-          a.toolUseId === toolUseId ? { ...a, ...updates } : a
+          a.toolUseId === toolUseId ? { ...a, ...updates } : a,
         ),
       },
     })),
@@ -443,7 +443,7 @@ export const useAppStore = create<AppState>((set) => ({
       toolActivities: {
         ...s.toolActivities,
         [wsId]: (s.toolActivities[wsId] || []).map((a, i) =>
-          i === index ? { ...a, collapsed: !a.collapsed } : a
+          i === index ? { ...a, collapsed: !a.collapsed } : a,
         ),
       },
     })),
@@ -454,7 +454,7 @@ export const useAppStore = create<AppState>((set) => ({
         [wsId]: (s.toolActivities[wsId] || []).map((a) =>
           a.toolUseId === toolUseId
             ? { ...a, inputJson: a.inputJson + partialJson }
-            : a
+            : a,
         ),
       },
     })),
@@ -466,7 +466,9 @@ export const useAppStore = create<AppState>((set) => ({
           wsId,
           messageCount,
           turnId: turnId ?? null,
-          existingCompletedTurnIds: (s.completedTurns[wsId] || []).map((turn) => turn.id),
+          existingCompletedTurnIds: (s.completedTurns[wsId] || []).map(
+            (turn) => turn.id,
+          ),
         });
         return {};
       }
@@ -481,7 +483,7 @@ export const useAppStore = create<AppState>((set) => ({
           summary: a.summary,
         })),
         messageCount,
-        collapsed: false,
+        collapsed: true,
         afterMessageIndex: (s.chatMessages[wsId] || []).length,
       };
       debugChat("store", "finalizeTurn", {
@@ -491,7 +493,9 @@ export const useAppStore = create<AppState>((set) => ({
         afterMessageIndex: turn.afterMessageIndex,
         toolCount: turn.activities.length,
         toolUseIds: turn.activities.map((activity) => activity.toolUseId),
-        existingCompletedTurnIds: (s.completedTurns[wsId] || []).map((existingTurn) => existingTurn.id),
+        existingCompletedTurnIds: (s.completedTurns[wsId] || []).map(
+          (existingTurn) => existingTurn.id,
+        ),
       });
       return {
         completedTurns: {
@@ -512,7 +516,10 @@ export const useAppStore = create<AppState>((set) => ({
         if (!existingTurn) return turn;
 
         const existingActivitiesById = new Map(
-          existingTurn.activities.map((activity) => [activity.toolUseId, activity])
+          existingTurn.activities.map((activity) => [
+            activity.toolUseId,
+            activity,
+          ]),
         );
 
         return {
@@ -529,7 +536,7 @@ export const useAppStore = create<AppState>((set) => ({
 
       const pendingTurns = existing.filter((turn) => !incomingIds.has(turn.id));
       const nextTurns = [...merged, ...pendingTurns].sort(
-        (a, b) => a.afterMessageIndex - b.afterMessageIndex
+        (a, b) => a.afterMessageIndex - b.afterMessageIndex,
       );
 
       debugChat("store", "hydrateCompletedTurns", {
@@ -563,7 +570,7 @@ export const useAppStore = create<AppState>((set) => ({
       completedTurns: {
         ...s.completedTurns,
         [wsId]: (s.completedTurns[wsId] || []).map((t, i) =>
-          i === turnIndex ? { ...t, collapsed: !t.collapsed } : t
+          i === turnIndex ? { ...t, collapsed: !t.collapsed } : t,
         ),
       },
     })),
@@ -625,7 +632,8 @@ export const useAppStore = create<AppState>((set) => ({
       const { [wsId]: _q, ...restQuestions } = s.agentQuestions;
       const { [wsId]: _p, ...restApprovals } = s.planApprovals;
       // Update lastMessages so workspace preview cards stay in sync.
-      const lastMsg = messages.length > 0 ? messages[messages.length - 1] : undefined;
+      const lastMsg =
+        messages.length > 0 ? messages[messages.length - 1] : undefined;
       const { [wsId]: _lm, ...restLastMessages } = s.lastMessages;
       const updatedLastMessages = lastMsg
         ? { ...s.lastMessages, [wsId]: lastMsg }
@@ -776,7 +784,7 @@ export const useAppStore = create<AppState>((set) => ({
       const newTabs: Record<string, TerminalTab[]> = {};
       for (const [wsId, tabs] of Object.entries(s.terminalTabs)) {
         newTabs[wsId] = tabs.map((tab) =>
-          tab.id === tabId ? { ...tab, pty_id: ptyId } : tab
+          tab.id === tabId ? { ...tab, pty_id: ptyId } : tab,
         );
       }
       return { terminalTabs: newTabs };
@@ -794,8 +802,7 @@ export const useAppStore = create<AppState>((set) => ({
   sidebarFilter: "all",
   repoCollapsed: {},
   fuzzyFinderOpen: false,
-  toggleSidebar: () =>
-    set((s) => ({ sidebarVisible: !s.sidebarVisible })),
+  toggleSidebar: () => set((s) => ({ sidebarVisible: !s.sidebarVisible })),
   toggleRightSidebar: () =>
     set((s) => ({ rightSidebarVisible: !s.rightSidebarVisible })),
   setRightSidebarTab: (tab) => set({ rightSidebarTab: tab }),
@@ -834,7 +841,8 @@ export const useAppStore = create<AppState>((set) => ({
   chatInputPrefill: null,
   setChatInputPrefill: (text) => set({ chatInputPrefill: text }),
   pendingAttachmentsPrefill: null,
-  setPendingAttachmentsPrefill: (atts) => set({ pendingAttachmentsPrefill: atts }),
+  setPendingAttachmentsPrefill: (atts) =>
+    set({ pendingAttachmentsPrefill: atts }),
 
   // -- Settings --
   worktreeBaseDir: "",
@@ -885,11 +893,15 @@ export const useAppStore = create<AppState>((set) => ({
       }));
       return {
         repositories: [
-          ...s.repositories.filter((r) => r.remote_connection_id !== connectionId),
+          ...s.repositories.filter(
+            (r) => r.remote_connection_id !== connectionId,
+          ),
           ...taggedRepos,
         ],
         workspaces: [
-          ...s.workspaces.filter((w) => w.remote_connection_id !== connectionId),
+          ...s.workspaces.filter(
+            (w) => w.remote_connection_id !== connectionId,
+          ),
           ...taggedWorkspaces,
         ],
       };
@@ -897,10 +909,10 @@ export const useAppStore = create<AppState>((set) => ({
   clearRemoteData: (connectionId) =>
     set((s) => ({
       repositories: s.repositories.filter(
-        (r) => r.remote_connection_id !== connectionId
+        (r) => r.remote_connection_id !== connectionId,
       ),
       workspaces: s.workspaces.filter(
-        (w) => w.remote_connection_id !== connectionId
+        (w) => w.remote_connection_id !== connectionId,
       ),
     })),
 
@@ -953,11 +965,14 @@ export const useAppStore = create<AppState>((set) => ({
     set((state) => ({
       updateAvailable: available,
       updateVersion: version,
-      updateDismissed: version === state.updateVersion ? state.updateDismissed : false,
+      updateDismissed:
+        version === state.updateVersion ? state.updateDismissed : false,
     })),
   setUpdateDismissed: (dismissed) => set({ updateDismissed: dismissed }),
-  setUpdateInstallWhenIdle: (enabled) => set({ updateInstallWhenIdle: enabled }),
-  setUpdateDownloading: (downloading) => set({ updateDownloading: downloading }),
+  setUpdateInstallWhenIdle: (enabled) =>
+    set({ updateInstallWhenIdle: enabled }),
+  setUpdateDownloading: (downloading) =>
+    set({ updateDownloading: downloading }),
   setUpdateProgress: (progress) => set({ updateProgress: progress }),
 }));
 
