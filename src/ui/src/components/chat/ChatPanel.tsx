@@ -49,7 +49,7 @@ import { useStickyScroll } from "../../hooks/useStickyScroll";
 import { debugChat } from "../../utils/chatDebug";
 import styles from "./ChatPanel.module.css";
 
-import { SPINNER_FRAMES } from "../../utils/spinnerFrames";
+import { SPINNER_FRAMES, SPINNER_INTERVAL_MS } from "../../utils/spinnerFrames";
 
 /**
  * Lazily renders a PDF first-page thumbnail.
@@ -222,7 +222,7 @@ export function ChatPanel() {
         const newElapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
         setElapsed((prev) => (prev === newElapsed ? prev : newElapsed));
       }
-    }, 80);
+    }, SPINNER_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [isRunning]);
 
