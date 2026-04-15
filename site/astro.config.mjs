@@ -3,7 +3,7 @@ import starlight from '@astrojs/starlight';
 
 export default defineConfig({
   site: 'https://utensils.github.io',
-  base: '/Claudette',
+  base: '/claudette',
   integrations: [
     starlight({
       title: 'Claudette',
