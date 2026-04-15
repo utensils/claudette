@@ -843,6 +843,55 @@ mod tests {
     }
 
     #[test]
+    fn active_and_attention_bytes_differ_within_each_style() {
+        // Regression guard: the `Running` and `NeedsAttention` tray states
+        // must resolve to PNGs with different content, otherwise the tray
+        // stops being an at-a-glance signal that user input is required.
+        // Earlier versions of this patch color-flattened the baseline's
+        // green/orange accents and collapsed the two states into identical
+        // artwork on Light/Dark/Color — and the baseline itself had the
+        // same problem for macOS template rendering. We now ship an
+        // alpha-distinct alert dot on attention; this test ensures it
+        // survives.
+        for style in [
+            TrayIconStyle::Auto,
+            TrayIconStyle::Light,
+            TrayIconStyle::Dark,
+            TrayIconStyle::Color,
+        ] {
+            let (active, _) = style.icon_for(TrayState::Running(1));
+            let (attention, _) = style.icon_for(TrayState::NeedsAttention(1));
+            assert_ne!(
+                active, attention,
+                "style {style:?}: Running and NeedsAttention PNGs must have distinct content"
+            );
+        }
+    }
+
+    #[test]
+    fn dark_variant_is_actually_dark() {
+        // Regression guard for a pre-ship bug where tray-active-dark.png and
+        // tray-attention-dark.png were byte-copies of the baseline colored
+        // (green/orange) PNGs. A user picking "Dark" explicitly expects a
+        // black monochrome tray, not a colored one — otherwise the setting
+        // is a lie. The fix regenerates all Dark variants via `-colorize
+        // black`, so they must differ from the baseline PNGs.
+        for state in [
+            TrayState::Idle,
+            TrayState::Running(1),
+            TrayState::NeedsAttention(1),
+        ] {
+            let (dark, _) = TrayIconStyle::Dark.icon_for(state);
+            let (auto, _) = TrayIconStyle::Auto.icon_for(state);
+            // On Linux, Auto delegates to Color — still different from Dark.
+            assert_ne!(
+                dark, auto,
+                "Dark {state:?} must not be byte-identical to the baseline/Auto payload"
+            );
+        }
+    }
+
+    #[test]
     fn each_style_state_combo_returns_distinct_bytes() {
         // Ping that the include_bytes! asset map isn't collapsed — each
         // combination should resolve to its own PNG payload. The "dark"
