@@ -149,7 +149,7 @@
 
 .iconBtnDanger:hover {
   color: var(--status-stopped);
-  background: rgba(255, 80, 80, 0.15);
+  background: var(--error-hover);
 }
 
 .invalidBadge {
@@ -340,7 +340,7 @@
 .terminalCommand {
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--text-tertiary);
+  color: var(--text-dim);
   display: flex;
   align-items: center;
   gap: 4px;

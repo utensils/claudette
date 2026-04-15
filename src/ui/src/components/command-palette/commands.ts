@@ -17,6 +17,8 @@ import {
   Globe,
   Gauge,
   Sparkles,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import type { ThemeDefinition } from "../../types/theme";
 import { isEffortSupported, isMaxEffortAllowed } from "../chat/EffortSelector";
@@ -69,6 +71,9 @@ export interface CommandContext {
   toggleFuzzyFinder: () => void;
   openModal: (name: string, data?: Record<string, unknown>) => void;
   openSettings: (section?: string) => void;
+  zoomIn: () => void;
+  zoomOut: () => void;
+  resetZoom: () => void;
   close: () => void;
 
   // Theme
@@ -204,6 +209,35 @@ export function buildCommands(ctx: CommandContext): Command[] {
     shortcut: `${mod}+D`,
     keywords: ["diff", "files", "right sidebar"],
     execute: () => { ctx.toggleRightSidebar(); ctx.close(); },
+  });
+  cmds.push({
+    id: "zoom-in",
+    name: "Zoom In",
+    description: "Increase UI font size",
+    category: "ui",
+    icon: ZoomIn,
+    shortcut: `${mod}+=`,
+    keywords: ["zoom", "larger", "bigger", "font", "size"],
+    execute: () => { ctx.zoomIn(); ctx.close(); },
+  });
+  cmds.push({
+    id: "zoom-out",
+    name: "Zoom Out",
+    description: "Decrease UI font size",
+    category: "ui",
+    icon: ZoomOut,
+    shortcut: `${mod}+-`,
+    keywords: ["zoom", "smaller", "font", "size"],
+    execute: () => { ctx.zoomOut(); ctx.close(); },
+  });
+  cmds.push({
+    id: "reset-zoom",
+    name: "Reset Zoom",
+    description: "Reset UI font size to default (13px)",
+    category: "ui",
+    icon: ZoomIn,
+    keywords: ["zoom", "reset", "actual", "default", "font", "size"],
+    execute: () => { ctx.resetZoom(); ctx.close(); },
   });
 
   // -- Agent (only when workspace selected) --

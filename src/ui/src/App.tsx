@@ -1,8 +1,9 @@
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "./stores/useAppStore";
-import { loadInitialData, getAppSetting, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, clearAttention, detectInstalledApps } from "./services/tauri";
-import { applyTheme, loadAllThemes, findTheme } from "./utils/theme";
+import { loadInitialData, getAppSetting, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, clearAttention, detectInstalledApps, listSystemFonts } from "./services/tauri";
+import { applyTheme, applyUserFonts, loadAllThemes, findTheme } from "./utils/theme";
+import { adjustUiFontSize, resetUiFontSize } from "./utils/fontSettings";
 import { useMcpStatus } from "./hooks/useMcpStatus";
 import { AppLayout } from "./components/layout/AppLayout";
 import type { CommandEvent } from "./types";
@@ -20,6 +21,10 @@ function App() {
   const setLocalServerRunning = useAppStore((s) => s.setLocalServerRunning);
   const setLocalServerConnectionString = useAppStore((s) => s.setLocalServerConnectionString);
   const setCurrentThemeId = useAppStore((s) => s.setCurrentThemeId);
+  const setUiFontSize = useAppStore((s) => s.setUiFontSize);
+  const setFontFamilySans = useAppStore((s) => s.setFontFamilySans);
+  const setFontFamilyMono = useAppStore((s) => s.setFontFamilyMono);
+  const setSystemFonts = useAppStore((s) => s.setSystemFonts);
   const setDetectedApps = useAppStore((s) => s.setDetectedApps);
   const setUsageInsightsEnabled = useAppStore((s) => s.setUsageInsightsEnabled);
 
@@ -58,6 +63,19 @@ function App() {
         const theme = findTheme(allThemes, savedThemeId ?? "default-dark");
         setCurrentThemeId(theme.id);
         applyTheme(theme);
+        // Apply user font overrides on top of the theme.
+        const [sansVal, monoVal, sizeVal] = await Promise.all([
+          getAppSetting("font_family_sans"),
+          getAppSetting("font_family_mono"),
+          getAppSetting("ui_font_size"),
+        ]);
+        const sans = sansVal ?? "";
+        const mono = monoVal ?? "";
+        const size = sizeVal ? parseInt(sizeVal, 10) : 13;
+        if (sans) setFontFamilySans(sans);
+        if (mono) setFontFamilyMono(mono);
+        if (sizeVal && size >= 10 && size <= 20) setUiFontSize(size);
+        applyUserFonts(sans, mono, size >= 10 && size <= 20 ? size : 13);
       })
       .catch((err) => console.error("Failed to load theme:", err));
     listRemoteConnections()
@@ -82,6 +100,10 @@ function App() {
     detectInstalledApps()
       .then(setDetectedApps)
       .catch((err) => console.error("Failed to detect installed apps:", err));
+
+    listSystemFonts()
+      .then(setSystemFonts)
+      .catch((err) => console.error("Failed to list system fonts:", err));
 
     getAppSetting("usage_insights_enabled")
       .then((val) => { if (val === "true") setUsageInsightsEnabled(true); })
@@ -152,6 +174,11 @@ function App() {
       useAppStore.getState().openSettings();
     });
 
+    // Listen for zoom events from the View menu.
+    const unlistenZoomIn = listen("zoom-in", () => adjustUiFontSize(+1));
+    const unlistenZoomOut = listen("zoom-out", () => adjustUiFontSize(-1));
+    const unlistenResetZoom = listen("reset-zoom", () => resetUiFontSize());
+
     return () => {
       isActive = false;
       window.clearInterval(discoveredServersPollId);
@@ -161,8 +188,11 @@ function App() {
       });
       unlistenTray.then((fn) => fn());
       unlistenSettings.then((fn) => fn());
+      unlistenZoomIn.then((fn) => fn());
+      unlistenZoomOut.then((fn) => fn());
+      unlistenResetZoom.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setDetectedApps, setUsageInsightsEnabled]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled]);
 
   return <AppLayout />;
 }

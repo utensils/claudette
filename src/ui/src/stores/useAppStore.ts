@@ -260,6 +260,14 @@ interface AppState {
   setDefaultBranches: (branches: Record<string, string>) => void;
   terminalFontSize: number;
   setTerminalFontSize: (size: number) => void;
+  uiFontSize: number;
+  setUiFontSize: (size: number) => void;
+  fontFamilySans: string;
+  setFontFamilySans: (font: string) => void;
+  fontFamilyMono: string;
+  setFontFamilyMono: (font: string) => void;
+  systemFonts: string[];
+  setSystemFonts: (fonts: string[]) => void;
   currentThemeId: string;
   setCurrentThemeId: (id: string) => void;
   lastMessages: Record<string, ChatMessage>;
@@ -895,6 +903,14 @@ export const useAppStore = create<AppState>((set) => ({
   setDefaultBranches: (branches) => set({ defaultBranches: branches }),
   terminalFontSize: 11,
   setTerminalFontSize: (size) => set({ terminalFontSize: size }),
+  uiFontSize: 13,
+  setUiFontSize: (size) => set({ uiFontSize: size }),
+  fontFamilySans: "",
+  setFontFamilySans: (font) => set({ fontFamilySans: font }),
+  fontFamilyMono: "",
+  setFontFamilyMono: (font) => set({ fontFamilyMono: font }),
+  systemFonts: [],
+  setSystemFonts: (fonts) => set({ systemFonts: fonts }),
   currentThemeId: DEFAULT_THEME_ID,
   setCurrentThemeId: (id) => set({ currentThemeId: id }),
   lastMessages: {},

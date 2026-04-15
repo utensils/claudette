@@ -1,7 +1,7 @@
 .backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.65);
+  background: var(--overlay-bg-heavy);
   backdrop-filter: blur(4px);
   display: flex;
   align-items: center;

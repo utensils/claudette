@@ -116,7 +116,7 @@
 }
 
 .stopBtn:hover {
-  background: rgba(240, 72, 72, 0.15);
+  background: var(--error-hover);
 }
 
 /* Messages area */
@@ -152,8 +152,8 @@
 }
 
 .errorBanner {
-  background: rgba(240, 72, 72, 0.08);
-  border: 1px solid rgba(240, 72, 72, 0.2);
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
   border-radius: 8px;
   padding: 10px 14px;
   font-size: 13px;
@@ -828,7 +828,7 @@
   border: 1px solid rgba(var(--accent-primary-rgb), 0.15);
   border-radius: 6px;
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--text-muted);
   flex-shrink: 0;
 }
 

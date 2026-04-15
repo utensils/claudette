@@ -65,6 +65,15 @@
   --toolbar-active: rgba(0, 229, 204, 0.12);
   --toolbar-active-text: var(--accent-primary);
 
+  /* Error states */
+  --error-bg: rgba(240, 72, 72, 0.10);
+  --error-border: rgba(240, 72, 72, 0.25);
+  --error-hover: rgba(240, 72, 72, 0.15);
+
+  /* Overlays */
+  --overlay-bg: rgba(0, 0, 0, 0.5);
+  --overlay-bg-heavy: rgba(0, 0, 0, 0.65);
+
   /* General */
   --app-bg: rgb(14, 14, 18);
   --border-radius: 8px;
@@ -89,6 +98,16 @@
   margin: 0;
   padding: 0;
   box-sizing: border-box;
+}
+
+/* Form elements don't inherit font by default — force inheritance so custom
+   fonts set via --font-sans cascade into buttons, inputs, selects, etc. */
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
 }
 
 html,

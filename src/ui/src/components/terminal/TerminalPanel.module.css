@@ -114,8 +114,8 @@
   gap: 6px;
   padding: 10px 12px;
   border-radius: 6px;
-  background: var(--error-bg, rgba(180, 60, 60, 0.18));
-  border: 1px solid var(--error-border, rgba(180, 60, 60, 0.55));
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
   color: var(--text-primary);
   font-size: 12px;
   font-family: var(--font-mono);

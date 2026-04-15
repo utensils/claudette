@@ -251,7 +251,13 @@ async fn refresh_token(refresh_token: &str) -> Result<TokenRefreshResponse, Stri
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("Token refresh failed ({status}): {body}"));
+        let hint = if body.contains("invalid_grant") || body.contains("not found or invalid") {
+            " — Your refresh token has expired or been revoked. \
+             Run `claude auth login` in a terminal to re-authenticate."
+        } else {
+            ""
+        };
+        return Err(format!("Token refresh failed ({status}): {body}{hint}"));
     }
 
     resp.json()

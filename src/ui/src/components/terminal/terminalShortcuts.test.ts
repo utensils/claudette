@@ -155,4 +155,30 @@ describe("terminalKeyAction", () => {
       terminalKeyAction(mk({ key: "0", metaKey: true, shiftKey: true })),
     ).toBeNull();
   });
+
+  it("recognizes Cmd+= as zoom-in (code-based)", () => {
+    expect(terminalKeyAction(mk({ code: "Equal", metaKey: true })))
+      .toEqual({ kind: "zoom", direction: "in" });
+  });
+
+  it("recognizes Cmd+Shift+= (key='+') as zoom-in via code", () => {
+    // On US keyboards Shift+= produces "+", but code stays "Equal"
+    expect(terminalKeyAction(mk({ key: "+", code: "Equal", metaKey: true, shiftKey: true })))
+      .toEqual({ kind: "zoom", direction: "in" });
+  });
+
+  it("recognizes Cmd+- as zoom-out (code-based)", () => {
+    expect(terminalKeyAction(mk({ code: "Minus", metaKey: true })))
+      .toEqual({ kind: "zoom", direction: "out" });
+  });
+
+  it("recognizes Ctrl+= as zoom-in (Linux)", () => {
+    expect(terminalKeyAction(mk({ code: "Equal", ctrlKey: true })))
+      .toEqual({ kind: "zoom", direction: "in" });
+  });
+
+  it("recognizes Ctrl+- as zoom-out (Linux)", () => {
+    expect(terminalKeyAction(mk({ code: "Minus", ctrlKey: true })))
+      .toEqual({ kind: "zoom", direction: "out" });
+  });
 });

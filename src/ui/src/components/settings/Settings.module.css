@@ -102,7 +102,7 @@
   flex: 1;
   overflow-y: auto;
   padding: 32px 48px;
-  background: var(--chat-bg);
+  background: var(--app-bg);
 }
 
 .sectionTitle {
@@ -147,7 +147,7 @@
 /* ── Controls ── */
 
 .input {
-  background: var(--chat-input-bg);
+  background: rgba(0, 0, 0, 0.25);
   border: 1px solid var(--divider);
   border-radius: 6px;
   padding: 6px 12px;
@@ -164,6 +164,74 @@
 .select {
   composes: input;
   cursor: pointer;
+}
+
+/* ── Font picker (custom dropdown with font previews) ── */
+
+.fontPicker {
+  position: relative;
+  min-width: 200px;
+}
+
+.fontPickerButton {
+  composes: input;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+}
+
+.fontPickerButton::after {
+  content: "▾";
+  font-size: 10px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.fontPickerDropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 100%;
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--sidebar-bg);
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  box-shadow: var(--shadow-md);
+  z-index: 50;
+  padding: 4px;
+}
+
+.fontPickerOption {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-primary);
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.fontPickerOption:hover {
+  background: var(--hover-bg);
+}
+
+.fontPickerOptionSelected {
+  composes: fontPickerOption;
+  background: var(--accent-bg);
+  color: var(--accent-primary);
+}
+
+.fontPickerOptionSelected:hover {
+  background: var(--accent-bg-strong);
 }
 
 .numberInput {
@@ -234,7 +302,7 @@
   composes: input;
   width: 100%;
   min-width: 100%;
-  font-family: monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   resize: vertical;
   min-height: 80px;
@@ -267,7 +335,7 @@
 }
 
 .readOnlyPre {
-  background: var(--chat-input-bg);
+  background: rgba(0, 0, 0, 0.25);
   border: 1px solid var(--divider);
   border-radius: 4px;
   padding: 6px 8px;
@@ -306,7 +374,7 @@
 }
 
 .btnDanger:hover {
-  background: rgba(204, 51, 51, 0.15);
+  background: var(--error-hover);
 }
 
 .error {
@@ -445,7 +513,7 @@
   width: 100%;
   height: 8px;
   border-radius: 4px;
-  background: var(--chat-input-bg);
+  background: rgba(0, 0, 0, 0.25);
   overflow: hidden;
 }
 
@@ -578,7 +646,7 @@
 }
 
 .mcpRemoveBtn:hover {
-  background: rgba(204, 51, 51, 0.15);
+  background: var(--error-hover);
   color: var(--status-stopped);
 }
 

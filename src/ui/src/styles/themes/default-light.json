@@ -15,7 +15,7 @@
     "sidebar-border": "#d0d7de",
     "text-primary": "#24292f",
     "text-muted": "#57606a",
-    "text-dim": "#6e7781",
+    "text-dim": "#6a727c",
     "text-faint": "#8b949e",
     "text-separator": "#d8dee4",
     "hover-bg": "rgba(208, 215, 222, 0.32)",
@@ -48,8 +48,13 @@
     "shadow-md": "0 4px 12px rgba(27, 31, 36, 0.08)",
     "shadow-lg": "0 8px 24px rgba(27, 31, 36, 0.12)",
     "shadow-card-hover": "0 8px 24px rgba(27, 31, 36, 0.12), 0 0 0 1px rgba(9, 105, 218, 0.2)",
+    "error-bg": "rgba(207, 34, 46, 0.08)",
+    "error-border": "rgba(207, 34, 46, 0.25)",
+    "error-hover": "rgba(207, 34, 46, 0.12)",
+    "overlay-bg": "rgba(27, 31, 36, 0.5)",
+    "overlay-bg-heavy": "rgba(27, 31, 36, 0.7)",
     "badge-done": "#0969da",
     "badge-plan": "#8250df",
-    "badge-ask": "#bf8700"
+    "badge-ask": "#956900"
   }
 }

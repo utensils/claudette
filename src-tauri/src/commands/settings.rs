@@ -107,6 +107,72 @@ pub fn list_notification_sounds() -> Vec<String> {
     sounds
 }
 
+/// Cached system font list — populated on first call, reused thereafter.
+static SYSTEM_FONTS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+
+/// Return available system font family names for the current platform.
+///
+/// - macOS: queries Core Text via a small Swift script (always available).
+/// - Linux: queries fontconfig via `fc-list`.
+///
+/// Result is cached after the first call.
+#[tauri::command]
+pub async fn list_system_fonts() -> Vec<String> {
+    if let Some(cached) = SYSTEM_FONTS.get() {
+        return cached.clone();
+    }
+    let mut families = std::collections::BTreeSet::<String>::new();
+
+    #[cfg(target_os = "macos")]
+    {
+        // Swift is always available on macOS; NSFontManager is the canonical API.
+        let script = r#"import AppKit; NSFontManager.shared.availableFontFamilies.sorted().forEach { print($0) }"#;
+        if let Ok(output) = tokio::process::Command::new("/usr/bin/swift")
+            .arg("-e")
+            .arg(script)
+            .output()
+            .await
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                let name = line.trim();
+                if !name.is_empty() && !name.starts_with('.') {
+                    families.insert(name.to_string());
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // fontconfig is standard on all Linux desktops.
+        if let Ok(output) = tokio::process::Command::new("fc-list")
+            .args([":", "family"])
+            .output()
+            .await
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                // fc-list may return comma-separated aliases: "DejaVu Sans,DejaVu Sans Condensed"
+                for name in line.split(',') {
+                    let name = name.trim();
+                    if !name.is_empty() {
+                        families.insert(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    let result: Vec<String> = families.into_iter().collect();
+    // Only cache if we got results — an empty list likely means the
+    // subprocess failed, and we don't want to permanently cache that.
+    if !result.is_empty() {
+        let _ = SYSTEM_FONTS.set(result.clone());
+    }
+    result
+}
+
 /// Play a notification sound by name (for settings preview and agent-finished events).
 #[tauri::command]
 pub fn play_notification_sound(sound: String) {

@@ -50,12 +50,63 @@ const THEMEABLE_VARS = [
   "terminal-selection",
   "toolbar-active",
   "toolbar-active-text",
+  "error-bg",
+  "error-border",
+  "error-hover",
+  "overlay-bg",
+  "overlay-bg-heavy",
   "app-bg",
   "shadow-sm",
   "shadow-md",
   "shadow-lg",
   "shadow-card-hover",
+  "font-sans",
+  "font-mono",
 ];
+
+export const DEFAULT_SANS_STACK =
+  '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+export const DEFAULT_MONO_STACK =
+  '"JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code", monospace';
+
+/**
+ * Apply user font overrides on top of the current theme.
+ * Call AFTER applyTheme() so user preferences take priority.
+ * Empty strings leave the theme/default value untouched.
+ */
+export function applyUserFonts(
+  fontSans: string,
+  fontMono: string,
+  uiFontSize: number,
+): void {
+  const root = document.documentElement;
+  // Escape quotes in font names to produce valid CSS.
+  const esc = (s: string) => s.replace(/"/g, '\\"');
+  if (fontSans) {
+    root.style.setProperty("--font-sans", `"${esc(fontSans)}", ${DEFAULT_SANS_STACK}`);
+  }
+  if (fontMono) {
+    root.style.setProperty("--font-mono", `"${esc(fontMono)}", ${DEFAULT_MONO_STACK}`);
+  }
+  // Use CSS zoom to scale the entire UI proportionally. All component
+  // styles use fixed px values, so changing root font-size alone wouldn't
+  // cascade. CSS zoom scales everything — text, spacing, borders —
+  // just like browser zoom. Base size is 13px, so zoom = size/13.
+  const zoomLevel = uiFontSize / 13;
+  root.style.setProperty("zoom", String(zoomLevel));
+}
+
+/**
+ * Clear user font override, reverting to whatever the theme (or CSS default) set.
+ * Call when the user explicitly selects "Default" in settings.
+ */
+export function clearUserFont(varName: "font-sans" | "font-mono"): void {
+  const root = document.documentElement;
+  // Remove the inline override. Then re-apply the current theme's value if it
+  // has one, so the theme font survives. If the theme doesn't define this var,
+  // removeProperty lets the CSS :root default take over.
+  root.style.removeProperty(`--${varName}`);
+}
 
 export function getTerminalTheme(): ITheme {
   const style = getComputedStyle(document.documentElement);

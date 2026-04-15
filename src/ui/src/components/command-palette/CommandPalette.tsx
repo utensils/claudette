@@ -1,7 +1,8 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { Search, ChevronLeft } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
-import { applyTheme, findTheme, loadAllThemes } from "../../utils/theme";
+import { applyTheme, applyUserFonts, findTheme, loadAllThemes } from "../../utils/theme";
+import { adjustUiFontSize, resetUiFontSize } from "../../utils/fontSettings";
 import {
   setAppSetting,
   stopAgent,
@@ -90,12 +91,18 @@ export function CommandPalette() {
 
   const close = toggleCommandPalette;
 
+  /** Apply a theme and re-apply user font/zoom overrides on top. */
+  const applyThemeWithFonts = useCallback((id: string) => {
+    applyTheme(findTheme(themes, id));
+    const s = useAppStore.getState();
+    applyUserFonts(s.fontFamilySans, s.fontFamilyMono, s.uiFontSize);
+  }, [themes]);
+
   const applyThemeById = useCallback((id: string) => {
-    const theme = findTheme(themes, id);
-    applyTheme(theme);
+    applyThemeWithFonts(id);
     setCurrentThemeId(id);
     setAppSetting("theme", id).catch(console.error);
-  }, [themes, setCurrentThemeId]);
+  }, [applyThemeWithFonts, setCurrentThemeId]);
 
   const handleCreateWorkspace = useCallback(async (repoId: string) => {
     try {
@@ -160,7 +167,7 @@ export function CommandPalette() {
     setSelectedIndex(0);
     // Revert any theme preview
     if (themes.length > 0) {
-      applyTheme(findTheme(themes, originalThemeIdRef.current));
+      applyThemeWithFonts(originalThemeIdRef.current);
     }
   }, [themes]);
 
@@ -174,6 +181,9 @@ export function CommandPalette() {
         toggleFuzzyFinder,
         openModal,
         openSettings: useAppStore.getState().openSettings,
+        zoomIn: () => adjustUiFontSize(+1),
+        zoomOut: () => adjustUiFontSize(-1),
+        resetZoom: () => resetUiFontSize(),
         close,
         themes,
         applyThemeById,
@@ -304,7 +314,7 @@ export function CommandPalette() {
     const cmd = filteredCommands[selectedIndex];
     if (cmd?.id.startsWith("theme:")) {
       const themeId = cmd.id.slice("theme:".length);
-      applyTheme(findTheme(themes, themeId));
+      applyThemeWithFonts(themeId);
     }
   }, [selectedIndex, filteredCommands, themes, mode]);
 
@@ -313,7 +323,11 @@ export function CommandPalette() {
     return () => {
       const storeThemeId = useAppStore.getState().currentThemeId;
       loadAllThemes()
-        .then((all) => applyTheme(findTheme(all, storeThemeId)))
+        .then((all) => {
+          applyTheme(findTheme(all, storeThemeId));
+          const s = useAppStore.getState();
+          applyUserFonts(s.fontFamilySans, s.fontFamilyMono, s.uiFontSize);
+        })
         .catch(() => {});
     };
   }, []);
@@ -343,7 +357,7 @@ export function CommandPalette() {
         exitSubMenu();
       } else {
         if (themes.length > 0) {
-          applyTheme(findTheme(themes, originalThemeIdRef.current));
+          applyThemeWithFonts(originalThemeIdRef.current);
         }
         close();
       }
@@ -355,7 +369,7 @@ export function CommandPalette() {
 
   const handleBackdropClick = () => {
     if (themes.length > 0) {
-      applyTheme(findTheme(themes, originalThemeIdRef.current));
+      applyThemeWithFonts(originalThemeIdRef.current);
     }
     close();
   };

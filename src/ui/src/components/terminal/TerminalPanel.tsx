@@ -81,6 +81,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
   const toggleTerminalPanel = useAppStore((s) => s.toggleTerminalPanel);
   const terminalPanelVisible = useAppStore((s) => s.terminalPanelVisible);
   const terminalFontSize = useAppStore((s) => s.terminalFontSize);
+  const fontFamilyMono = useAppStore((s) => s.fontFamilyMono);
   const currentThemeId = useAppStore((s) => s.currentThemeId);
   const updateTerminalTabPtyId = useAppStore((s) => s.updateTerminalTabPtyId);
 
@@ -206,9 +207,13 @@ export const TerminalPanel = memo(function TerminalPanel() {
       tabContainer.style.width = "100%";
       containerRef.current.appendChild(tabContainer);
 
+      const monoFont =
+        getComputedStyle(document.documentElement)
+          .getPropertyValue("--font-mono")
+          .trim() || "monospace";
       const term = new Terminal({
         fontSize: terminalFontSize,
-        fontFamily: "monospace",
+        fontFamily: monoFont,
         theme: getTerminalTheme(),
       });
       const fit = new FitAddon();
@@ -225,6 +230,9 @@ export const TerminalPanel = memo(function TerminalPanel() {
         const action = terminalKeyAction(ev);
         if (!action) return true;
         ev.preventDefault();
+        // Zoom actions suppress PTY bytes but must NOT stop propagation —
+        // the global handler in useKeyboardShortcuts.ts processes the zoom.
+        if (action.kind === "zoom") return false;
         ev.stopImmediatePropagation();
         if (action.kind === "cycle") {
           cycleActiveTab(action.direction === "next" ? 1 : -1);
@@ -382,13 +390,31 @@ export const TerminalPanel = memo(function TerminalPanel() {
     }
   }, [terminalFontSize]);
 
-  // Update terminal theme on all instances when the app theme changes.
+  // Update terminal theme and font on all instances when the app theme changes.
   useEffect(() => {
     const theme = getTerminalTheme();
+    const monoFont =
+      getComputedStyle(document.documentElement)
+        .getPropertyValue("--font-mono")
+        .trim() || "monospace";
     for (const inst of instancesRef.current.values()) {
       inst.term.options.theme = theme;
+      inst.term.options.fontFamily = monoFont;
+      safeFit(inst);
     }
   }, [currentThemeId]);
+
+  // Update terminal font family when user changes monospace font preference.
+  useEffect(() => {
+    const monoFont =
+      getComputedStyle(document.documentElement)
+        .getPropertyValue("--font-mono")
+        .trim() || "monospace";
+    for (const inst of instancesRef.current.values()) {
+      inst.term.options.fontFamily = monoFont;
+      safeFit(inst);
+    }
+  }, [fontFamilyMono]);
 
   // Cleanup instances for tabs that no longer exist in any workspace. This
   // covers BOTH per-tab close (removeTerminalTab) AND workspace deletion

@@ -143,6 +143,35 @@ fn main() {
                         &PredefinedMenuItem::select_all(app, None)?,
                     ],
                 )?;
+                let view_menu = Submenu::with_items(
+                    app,
+                    "View",
+                    true,
+                    &[
+                        &MenuItem::with_id(
+                            app,
+                            "zoom-in",
+                            "Zoom In",
+                            true,
+                            Some("CmdOrCtrl+Equal"),
+                        )?,
+                        &MenuItem::with_id(
+                            app,
+                            "zoom-out",
+                            "Zoom Out",
+                            true,
+                            Some("CmdOrCtrl+Minus"),
+                        )?,
+                        &PredefinedMenuItem::separator(app)?,
+                        &MenuItem::with_id(
+                            app,
+                            "reset-zoom",
+                            "Actual Size",
+                            true,
+                            Some("CmdOrCtrl+Shift+0"),
+                        )?,
+                    ],
+                )?;
                 let window_menu = Submenu::with_items(
                     app,
                     "Window",
@@ -155,10 +184,16 @@ fn main() {
                         &PredefinedMenuItem::fullscreen(app, None)?,
                     ],
                 )?;
-                Menu::with_items(app, &[&app_menu, &edit_menu, &window_menu])
+                Menu::with_items(app, &[&app_menu, &edit_menu, &view_menu, &window_menu])
             })
             .on_menu_event(|app, event| {
-                if event.id().as_ref() == "open-settings" {
+                if event.id().as_ref() == "zoom-in" {
+                    let _ = app.emit("zoom-in", ());
+                } else if event.id().as_ref() == "zoom-out" {
+                    let _ = app.emit("zoom-out", ());
+                } else if event.id().as_ref() == "reset-zoom" {
+                    let _ = app.emit("reset-zoom", ());
+                } else if event.id().as_ref() == "open-settings" {
                     tray::show_and_focus(app);
                     let _ = app.emit("open-settings", ());
                 } else if event.id().as_ref() == "quit-app" {
@@ -226,6 +261,7 @@ fn main() {
             if let Err(e) = tray::setup_tray(app.handle()) {
                 eprintln!("[tray] Failed to setup tray: {e}");
             }
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -316,6 +352,7 @@ fn main() {
             commands::settings::set_app_setting,
             commands::settings::list_user_themes,
             commands::settings::list_notification_sounds,
+            commands::settings::list_system_fonts,
             commands::settings::play_notification_sound,
             commands::settings::run_notification_command,
             commands::settings::get_git_username,

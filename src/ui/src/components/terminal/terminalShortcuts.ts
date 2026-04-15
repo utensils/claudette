@@ -43,6 +43,7 @@ export type TerminalKeyAction =
   | { kind: "new-tab" }
   | { kind: "toggle-panel" }
   | { kind: "focus-chat" }
+  | { kind: "zoom"; direction: "in" | "out" }
   | null;
 
 /**
@@ -94,6 +95,17 @@ export function terminalKeyAction(ev: KeyboardEvent): TerminalKeyAction {
   // Cmd+0 — focus the chat prompt without touching panel visibility.
   if (!ev.shiftKey && ev.key === "0") {
     return { kind: "focus-chat" };
+  }
+
+  // Cmd+= / Cmd++ — zoom in; Cmd+- — zoom out.
+  // Use ev.code to handle both Cmd+= and Cmd+Shift+= (which sends key="+").
+  // Suppress the key from reaching the PTY but let the global handler
+  // in useKeyboardShortcuts.ts process the actual zoom.
+  if (ev.code === "Equal") {
+    return { kind: "zoom", direction: "in" };
+  }
+  if (ev.code === "Minus") {
+    return { kind: "zoom", direction: "out" };
   }
 
   return null;

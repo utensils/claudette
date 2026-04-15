@@ -380,6 +380,10 @@ export function listNotificationSounds(): Promise<string[]> {
   return invoke("list_notification_sounds");
 }
 
+export function listSystemFonts(): Promise<string[]> {
+  return invoke("list_system_fonts");
+}
+
 export function playNotificationSound(sound: string): Promise<void> {
   return invoke("play_notification_sound", { sound });
 }

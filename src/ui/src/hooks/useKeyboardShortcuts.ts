@@ -6,6 +6,7 @@ import {
   focusChatPrompt,
   isTerminalFocused,
 } from "../utils/focusTargets";
+import { adjustUiFontSize } from "../utils/fontSettings";
 
 export function useKeyboardShortcuts() {
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
@@ -135,6 +136,22 @@ export function useKeyboardShortcuts() {
             focusActiveTerminal();
           }
         }
+        return;
+      }
+
+      // Cmd/Ctrl + =/+ — increase UI font size.
+      // Use e.code ("Equal") to handle both Cmd+= and Cmd+Shift+= (which
+      // produces key="+", shiftKey=true on US keyboards).
+      if (e.code === "Equal") {
+        e.preventDefault();
+        adjustUiFontSize(+1);
+        return;
+      }
+
+      // Cmd/Ctrl + - — decrease UI font size.
+      if (e.code === "Minus") {
+        e.preventDefault();
+        adjustUiFontSize(-1);
         return;
       }
 

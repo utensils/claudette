@@ -11,6 +11,7 @@ import solarizedDark from "./solarized-dark.json";
 import solarizedLight from "./solarized-light.json";
 import jellybeans from "./jellybeans.json";
 import jellybeansMuted from "./jellybeans-muted.json";
+import brink from "./brink.json";
 
 export const BUILTIN_THEMES: ThemeDefinition[] = [
   defaultDark,
@@ -25,6 +26,7 @@ export const BUILTIN_THEMES: ThemeDefinition[] = [
   solarizedLight,
   jellybeans,
   jellybeansMuted,
+  brink,
 ];
 
 export const DEFAULT_THEME_ID = "default-dark";
