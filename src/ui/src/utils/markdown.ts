@@ -1,4 +1,4 @@
-import { createElement } from "react";
+import React, { createElement } from "react";
 import type { PluggableList } from "unified";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -103,18 +103,24 @@ export const REHYPE_PLUGINS: PluggableList = [
 ];
 export const REMARK_PLUGINS: PluggableList = [remarkGfm];
 
-// Override <a> to open links in the system browser instead of navigating the webview.
+// Schemes that should open in the system browser rather than navigate the webview.
+export const EXTERNAL_SCHEMES = /^https?:|^mailto:/i;
+
+// Override <a> to open external links in the system browser instead of navigating the webview.
 export const MARKDOWN_COMPONENTS: Components = {
-  a: ({ href, children, ...props }) =>
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  a: ({ node, href, children, ...props }) =>
     createElement(
       "a",
       {
         ...props,
         href,
-        onClick: (e: MouseEvent) => {
-          if (href) {
+        onClick: (e: React.MouseEvent<HTMLAnchorElement>) => {
+          if (href && EXTERNAL_SCHEMES.test(href)) {
             e.preventDefault();
-            openUrl(href);
+            void openUrl(href).catch((err) =>
+              console.error("Failed to open URL:", href, err),
+            );
           }
         },
       },

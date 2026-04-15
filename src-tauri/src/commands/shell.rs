@@ -187,8 +187,16 @@ pub async fn open_in_editor(path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Returns true if the URL uses a scheme safe for opening in the system browser.
+fn is_safe_url_scheme(url: &str) -> bool {
+    url.starts_with("http://") || url.starts_with("https://") || url.starts_with("mailto:")
+}
+
 #[tauri::command]
 pub async fn open_url(url: String) -> Result<(), String> {
+    if !is_safe_url_scheme(&url) {
+        return Err(format!("Blocked URL with unsupported scheme: {url}"));
+    }
     tauri::async_runtime::spawn(async move {
         if let Err(e) = opener::open(&url) {
             eprintln!("Failed to open URL in system browser: {e}");
@@ -217,5 +225,55 @@ mod opener {
         ));
 
         cmd.map(|_| ())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_safe_url_scheme_allows_http() {
+        assert!(is_safe_url_scheme("http://example.com"));
+    }
+
+    #[test]
+    fn is_safe_url_scheme_allows_https() {
+        assert!(is_safe_url_scheme("https://github.com/utensils/claudette"));
+    }
+
+    #[test]
+    fn is_safe_url_scheme_allows_mailto() {
+        assert!(is_safe_url_scheme("mailto:user@example.com"));
+    }
+
+    #[test]
+    fn is_safe_url_scheme_blocks_file() {
+        assert!(!is_safe_url_scheme("file:///etc/passwd"));
+    }
+
+    #[test]
+    fn is_safe_url_scheme_blocks_javascript() {
+        assert!(!is_safe_url_scheme("javascript:alert(1)"));
+    }
+
+    #[test]
+    fn is_safe_url_scheme_blocks_data() {
+        assert!(!is_safe_url_scheme("data:text/html,<h1>hi</h1>"));
+    }
+
+    #[test]
+    fn is_safe_url_scheme_blocks_empty() {
+        assert!(!is_safe_url_scheme(""));
+    }
+
+    #[test]
+    fn is_safe_url_scheme_blocks_relative_path() {
+        assert!(!is_safe_url_scheme("/some/path"));
+    }
+
+    #[test]
+    fn is_safe_url_scheme_blocks_fragment() {
+        assert!(!is_safe_url_scheme("#section"));
     }
 }
