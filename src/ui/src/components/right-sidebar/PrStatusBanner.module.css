@@ -1,0 +1,50 @@
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--sidebar-border);
+  min-height: 32px;
+  animation: fadeIn 0.15s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.prLink {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  font-family: inherit;
+}
+
+.prLink:hover {
+  text-decoration: underline;
+}
+
+.prNumber {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.externalIcon {
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+.statusText {
+  font-size: 11px;
+  font-weight: 500;
+  margin-left: auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

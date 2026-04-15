@@ -7,6 +7,7 @@ import type { DiffFilesResult } from "../../services/tauri";
 import type { DiffFile, DiffLayer } from "../../types/diff";
 import { TaskList } from "./TaskList";
 import { ScmPanel } from "./ScmPanel";
+import { PrStatusBanner } from "./PrStatusBanner";
 import styles from "./RightSidebar.module.css";
 
 export const RightSidebar = memo(function RightSidebar() {
@@ -177,6 +178,7 @@ export const RightSidebar = memo(function RightSidebar() {
 
   return (
     <div className={styles.panel}>
+      <PrStatusBanner />
       <div className={styles.tabBar} data-tauri-drag-region>
         <button
           className={`${styles.tab} ${activeTab === "changes" ? styles.tabActive : ""}`}
