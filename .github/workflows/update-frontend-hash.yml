@@ -20,6 +20,7 @@ on:
     branches: [main]
     paths:
       - 'src/ui/**'
+  workflow_dispatch:
 
 concurrency:
   group: update-frontend-hash
