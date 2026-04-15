@@ -1,3 +1,4 @@
+import type { ITheme } from "@xterm/xterm";
 import type { ThemeDefinition } from "../types/theme";
 import { BUILTIN_THEMES, DEFAULT_THEME_ID } from "../styles/themes";
 import { listUserThemes } from "../services/tauri";
@@ -43,6 +44,10 @@ const THEMEABLE_VARS = [
   "chat-header-bg",
   "terminal-tab-bg",
   "terminal-tab-active-bg",
+  "terminal-bg",
+  "terminal-fg",
+  "terminal-cursor",
+  "terminal-selection",
   "toolbar-active",
   "toolbar-active-text",
   "app-bg",
@@ -51,6 +56,17 @@ const THEMEABLE_VARS = [
   "shadow-lg",
   "shadow-card-hover",
 ];
+
+export function getTerminalTheme(): ITheme {
+  const style = getComputedStyle(document.documentElement);
+  return {
+    background: style.getPropertyValue("--terminal-bg").trim() || "#121216",
+    foreground: style.getPropertyValue("--terminal-fg").trim() || "#e6e6eb",
+    cursor: style.getPropertyValue("--terminal-cursor").trim() || "#e6e6eb",
+    selectionBackground:
+      style.getPropertyValue("--terminal-selection").trim() || undefined,
+  };
+}
 
 export function applyTheme(theme: ThemeDefinition): void {
   const root = document.documentElement;

@@ -4,6 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "../../stores/useAppStore";
+import { getTerminalTheme } from "../../utils/theme";
 import {
   createTerminalTab,
   deleteTerminalTab,
@@ -42,6 +43,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
   const setActiveTerminalTab = useAppStore((s) => s.setActiveTerminalTab);
   const toggleTerminalPanel = useAppStore((s) => s.toggleTerminalPanel);
   const terminalFontSize = useAppStore((s) => s.terminalFontSize);
+  const currentThemeId = useAppStore((s) => s.currentThemeId);
   const updateTerminalTabPtyId = useAppStore((s) => s.updateTerminalTabPtyId);
 
   const autoCreatedRef = useRef<string | null>(null);
@@ -110,11 +112,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
     const term = new Terminal({
       fontSize: terminalFontSize,
       fontFamily: "monospace",
-      theme: {
-        background: "#121216",
-        foreground: "#e6e6eb",
-        cursor: "#e6e6eb",
-      },
+      theme: getTerminalTheme(),
     });
     const fit = new FitAddon();
     const links = new WebLinksAddon();
@@ -220,6 +218,14 @@ export const TerminalPanel = memo(function TerminalPanel() {
       inst.fit.fit();
     }
   }, [terminalFontSize]);
+
+  // Update terminal theme on all instances when the app theme changes.
+  useEffect(() => {
+    const theme = getTerminalTheme();
+    for (const inst of instancesRef.current.values()) {
+      inst.term.options.theme = theme;
+    }
+  }, [currentThemeId]);
 
   // Cleanup instances for tabs that no longer exist in any workspace.
   useEffect(() => {

@@ -98,5 +98,5 @@
 .termContainer {
   flex: 1;
   overflow: hidden;
-  background: var(--app-bg);
+  background: var(--terminal-bg);
 }
