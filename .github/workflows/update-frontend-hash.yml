@@ -137,8 +137,11 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git pull --rebase origin main
           git add flake.nix
           git diff --cached --quiet && exit 0
+          git stash
+          git pull --rebase origin main
+          git stash pop
+          git add flake.nix
           git commit -m "chore(nix): update frontend FOD hashes"
           git push
