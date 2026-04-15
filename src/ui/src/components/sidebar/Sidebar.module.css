@@ -236,10 +236,18 @@
   height: 6px;
   border-radius: 50%;
   flex-shrink: 0;
+  margin: 0 4px;
 }
 
-.statusDotRunning {
-  animation: pulse-dot 2s ease-in-out infinite;
+.statusSpinner {
+  font-size: 14px;
+  width: 14px;
+  text-align: center;
+  font-family: var(--font-mono);
+  color: var(--accent-primary);
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 3px rgba(var(--accent-primary-rgb), 0.4));
+  line-height: 1;
 }
 
 .wsActions {
@@ -269,8 +277,10 @@
 .badgeDone,
 .badgePlan,
 .badgeAsk {
+  width: 14px;
   flex-shrink: 0;
   display: inline-flex;
+  justify-content: center;
   animation: pulse-badge 2s ease-in-out infinite;
 }
 

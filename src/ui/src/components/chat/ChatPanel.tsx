@@ -49,7 +49,7 @@ import { useStickyScroll } from "../../hooks/useStickyScroll";
 import { debugChat } from "../../utils/chatDebug";
 import styles from "./ChatPanel.module.css";
 
-const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+import { SPINNER_FRAMES } from "../../utils/spinnerFrames";
 
 /**
  * Lazily renders a PDF first-page thumbnail.

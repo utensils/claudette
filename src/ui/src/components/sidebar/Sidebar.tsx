@@ -16,6 +16,7 @@ import {
 } from "../../services/tauri";
 import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, BadgeCheck, BadgeInfo, BadgeQuestionMark, Cog } from "lucide-react";
 import { RepoIcon } from "../shared/RepoIcon";
+import { useSpinnerFrame } from "../../hooks/useSpinnerFrame";
 import styles from "./Sidebar.module.css";
 
 
@@ -48,6 +49,12 @@ export const Sidebar = memo(function Sidebar() {
   const didDragRef = useRef(false);
   const DRAG_THRESHOLD = 5; // px before drag activates
   const workspaceTerminalCommands = useAppStore((s) => s.workspaceTerminalCommands);
+
+  const anyRunning = useMemo(
+    () => workspaces.some((ws) => ws.agent_status === "Running"),
+    [workspaces],
+  );
+  const spinnerChar = useSpinnerFrame(anyRunning);
 
   const creatingRef = useRef(false);
 
@@ -356,16 +363,18 @@ export const Sidebar = memo(function Sidebar() {
                       <span className={styles.badgeAsk} title="Question requires attention" aria-label="Question requires attention" role="img">
                         <BadgeQuestionMark size={14} />
                       </span>
+                    ) : ws.agent_status === "Running" ? (
+                      <span className={styles.statusSpinner} aria-hidden="true">
+                        {spinnerChar}
+                      </span>
                     ) : (
                       <span
-                        className={`${styles.statusDot} ${ws.agent_status === "Running" ? styles.statusDotRunning : ""}`}
+                        className={styles.statusDot}
                         style={{
                           background:
-                            ws.agent_status === "Running"
-                              ? "var(--status-running)"
-                              : ws.agent_status === "Stopped"
-                                ? "var(--status-stopped)"
-                                : "var(--status-idle)",
+                            ws.agent_status === "Stopped"
+                              ? "var(--status-stopped)"
+                              : "var(--status-idle)",
                         }}
                       />
                     )}
@@ -647,6 +656,9 @@ function RemoteConnectionGroup({
     (w) => w.remote_connection_id === conn.id
   );
 
+  const anyRunning = remoteWorkspaces.some((ws) => ws.agent_status === "Running");
+  const spinnerChar = useSpinnerFrame(anyRunning);
+
   const handleCreateWorkspace = async (repoId: string) => {
     if (creatingRef.current.has(repoId)) return;
     creatingRef.current.add(repoId);
@@ -779,17 +791,21 @@ function RemoteConnectionGroup({
                     className={`${styles.wsItem} ${selectedWorkspaceId === ws.id ? styles.wsSelected : ""}`}
                     onClick={() => selectWorkspace(ws.id)}
                   >
-                    <span
-                      className={`${styles.statusDot} ${ws.agent_status === "Running" ? styles.statusDotRunning : ""}`}
-                      style={{
-                        background:
-                          ws.agent_status === "Running"
-                            ? "var(--status-running)"
-                            : ws.agent_status === "Stopped"
+                    {ws.agent_status === "Running" ? (
+                      <span className={styles.statusSpinner} aria-hidden="true">
+                        {spinnerChar}
+                      </span>
+                    ) : (
+                      <span
+                        className={styles.statusDot}
+                        style={{
+                          background:
+                            ws.agent_status === "Stopped"
                               ? "var(--status-stopped)"
                               : "var(--status-idle)",
-                      }}
-                    />
+                        }}
+                      />
+                    )}
                     <div className={styles.wsInfo}>
                       <span className={styles.wsName}>{ws.name}</span>
                       <span className={styles.wsBranch}>{ws.branch_name}</span>
