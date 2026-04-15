@@ -596,7 +596,6 @@ export function ChatPanel() {
         <div className={styles.headerRight}>
           <WorkspaceActions
             worktreePath={ws.worktree_path}
-            disabled={isRunning}
           />
           <HeaderMenu
             label="Permissions"
