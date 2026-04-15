@@ -1023,6 +1023,12 @@
   border-color: var(--text-dim);
 }
 
+.attachBtnActive {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text-primary);
+  border-color: var(--text-dim);
+}
+
 /* -- Inline message images -- */
 
 .messageImages {

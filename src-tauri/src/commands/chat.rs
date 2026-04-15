@@ -1,12 +1,15 @@
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use claudette::agent::{
-    self, AgentEvent, AgentSettings, ImageAttachment, InnerStreamEvent, StartContentBlock,
-    StreamEvent,
+    self, AgentEvent, AgentSettings, ImageAttachment, InnerStreamEvent, PersistentSession,
+    StartContentBlock, StreamEvent,
 };
 use claudette::db::Database;
 use claudette::git;
+use claudette::mcp_supervisor::McpSupervisor;
 use claudette::model::{
     Attachment, ChatMessage, ChatRole, CompletedTurnData, ConversationCheckpoint, TurnToolActivity,
 };
@@ -188,29 +191,7 @@ pub async fn send_chat_message(
             );
             e.to_string()
         })?;
-    let mcp_config = if db_rows.is_empty() {
-        None
-    } else {
-        let mcp_servers: Vec<claudette::mcp::McpServer> = db_rows
-            .iter()
-            .filter_map(|row| {
-                let config: serde_json::Value = serde_json::from_str(&row.config_json).ok()?;
-                let source: claudette::mcp::McpSource =
-                    serde_json::from_str(&format!("\"{}\"", row.source))
-                        .unwrap_or(claudette::mcp::McpSource::UserProjectConfig);
-                Some(claudette::mcp::McpServer {
-                    name: row.name.clone(),
-                    config,
-                    source,
-                })
-            })
-            .collect();
-        if mcp_servers.is_empty() {
-            None
-        } else {
-            Some(claudette::mcp::serialize_for_cli(&mcp_servers))
-        }
-    };
+    let mcp_config = claudette::mcp::cli_config_from_rows(&db_rows);
 
     // Get or create agent session. Custom instructions are resolved once on
     // the first turn and cached for the session lifetime.
@@ -241,6 +222,7 @@ pub async fn send_chat_message(
                 custom_instructions: instructions.clone(),
                 needs_attention: false,
                 attention_kind: None,
+                persistent_session: None,
             };
         }
 
@@ -251,26 +233,26 @@ pub async fn send_chat_message(
             custom_instructions: instructions,
             needs_attention: false,
             attention_kind: None,
+            persistent_session: None,
         }
     });
 
-    // If a previous turn is still running, stop it before starting a new one.
-    // This prevents overlapping processes for the same workspace.
-    if let Some(old_pid) = session.active_pid.take() {
+    // If a previous turn is still running and there's no persistent session,
+    // stop the stale process. With a persistent session, the process is shared
+    // and the CLI serializes turns internally.
+    if session.persistent_session.is_none()
+        && let Some(old_pid) = session.active_pid.take()
+    {
         eprintln!("[chat] Stopping stale process {old_pid} before new turn");
         drop(agents); // release lock while waiting
         let _ = agent::stop_agent(old_pid).await;
-        // Brief wait for process cleanup.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         agents = state.agents.write().await;
-        // Re-borrow session after re-acquiring lock.
         let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
         session.active_pid = None;
     }
     let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
 
-    let is_resume = session.turn_count > 0;
-    let session_id = session.session_id.clone();
     let custom_instructions = session.custom_instructions.clone();
     session.turn_count += 1;
     session.needs_attention = false;
@@ -278,7 +260,7 @@ pub async fn send_chat_message(
 
     // Build agent settings from frontend params.
     let agent_settings = AgentSettings {
-        model: if !is_resume { model } else { None },
+        model,
         fast_mode: fast_mode.unwrap_or(false),
         thinking_enabled: thinking_enabled.unwrap_or(false),
         plan_mode: plan_mode.unwrap_or(false),
@@ -295,26 +277,154 @@ pub async fn send_chat_message(
     )
     .await;
 
-    // Spawn the agent turn.
-    let turn_handle = agent::run_turn(
-        std::path::Path::new(&worktree_path),
-        &session_id,
-        &prompt,
-        is_resume,
-        &allowed_tools,
-        custom_instructions.as_deref(),
-        &agent_settings,
-        &image_attachments,
-    )
-    .await?;
+    // Use persistent session to keep MCP servers alive across turns.
+    // First turn or after restart: start a PersistentSession.
+    // Subsequent turns in same session: reuse the existing process via stdin.
+    let existing_persistent = session.persistent_session.clone();
+    let saved_session_id = session.session_id.clone();
+    let saved_turn_count = session.turn_count;
 
-    // Persist session state only after the subprocess spawned successfully.
-    // If run_turn fails (missing binary, spawn error), we avoid persisting a
-    // turn_count > 0 for a session Claude never initialized.
-    let _ = db.save_agent_session(&workspace_id, &session_id, session.turn_count);
+    // Helper: start a persistent session, using --resume for restored sessions.
+    let start_persistent = |worktree: String,
+                            sid: String,
+                            is_resume: bool,
+                            tools: Vec<String>,
+                            instructions: Option<String>,
+                            settings: AgentSettings| async move {
+        let ps = Arc::new(
+            PersistentSession::start(
+                std::path::Path::new(&worktree),
+                &sid,
+                is_resume,
+                &tools,
+                instructions.as_deref(),
+                &settings,
+            )
+            .await?,
+        );
+        Ok::<Arc<PersistentSession>, String>(ps)
+    };
+
+    let turn_handle = if let Some(ref ps) = existing_persistent {
+        // Reuse existing persistent process — send turn via stdin.
+        match ps.send_turn(&prompt, &image_attachments).await {
+            Ok(handle) => handle,
+            Err(e) => {
+                // Persistent session died — drop lock before async spawn to
+                // avoid blocking other workspaces during process startup.
+                eprintln!("[chat] Persistent session failed, respawning: {e}");
+                session.persistent_session = None;
+                drop(agents);
+
+                let is_resume = saved_turn_count > 1;
+                let (ps, final_sid) = match start_persistent(
+                    worktree_path.clone(),
+                    saved_session_id.clone(),
+                    is_resume,
+                    allowed_tools.clone(),
+                    custom_instructions.clone(),
+                    agent_settings.clone(),
+                )
+                .await
+                {
+                    Ok(ps) => (ps, saved_session_id.clone()),
+                    Err(e2) if is_resume => {
+                        eprintln!("[chat] --resume respawn failed ({e2}), starting fresh");
+                        let fresh = uuid::Uuid::new_v4().to_string();
+                        let ps = start_persistent(
+                            worktree_path.clone(),
+                            fresh.clone(),
+                            false,
+                            allowed_tools.clone(),
+                            custom_instructions.clone(),
+                            agent_settings.clone(),
+                        )
+                        .await?;
+                        (ps, fresh)
+                    }
+                    Err(e2) => {
+                        let _ = db.clear_agent_session(&workspace_id);
+                        return Err(e2);
+                    }
+                };
+                let handle = ps.send_turn(&prompt, &image_attachments).await?;
+
+                agents = state.agents.write().await;
+                let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
+                session.persistent_session = Some(ps);
+                session.session_id = final_sid;
+                handle
+            }
+        }
+    } else {
+        // No persistent session — start one. Use --resume if we have a saved
+        // session from the DB (app restart), fresh ID if brand new.
+        let is_resume = saved_turn_count > 1;
+        let sid = if is_resume {
+            saved_session_id.clone()
+        } else {
+            let fresh = uuid::Uuid::new_v4().to_string();
+            session.session_id = fresh.clone();
+            fresh
+        };
+        // Drop lock before async process spawn.
+        drop(agents);
+
+        let (ps, final_sid) = match start_persistent(
+            worktree_path.clone(),
+            sid.clone(),
+            is_resume,
+            allowed_tools.clone(),
+            custom_instructions.clone(),
+            agent_settings.clone(),
+        )
+        .await
+        {
+            Ok(ps) => (ps, sid),
+            Err(e) if is_resume => {
+                // Resume failed (stale/corrupt session) — start fresh instead.
+                eprintln!("[chat] --resume failed ({e}), starting fresh session");
+                let fresh_sid = uuid::Uuid::new_v4().to_string();
+                let ps = start_persistent(
+                    worktree_path.clone(),
+                    fresh_sid.clone(),
+                    false,
+                    allowed_tools.clone(),
+                    custom_instructions.clone(),
+                    agent_settings.clone(),
+                )
+                .await?;
+                (ps, fresh_sid)
+            }
+            Err(e) => {
+                // Spawn failed entirely — clear stale session from DB so the
+                // next attempt doesn't try --resume with a dead session ID.
+                let _ = db.clear_agent_session(&workspace_id);
+                agents = state.agents.write().await;
+                if let Some(session) = agents.get_mut(&workspace_id) {
+                    session.turn_count = 0;
+                    session.session_id = String::new();
+                }
+                drop(agents);
+                return Err(e);
+            }
+        };
+        let handle = ps.send_turn(&prompt, &image_attachments).await?;
+
+        agents = state.agents.write().await;
+        let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
+        session.persistent_session = Some(ps);
+        session.session_id = final_sid.clone();
+        let _ = db.save_agent_session(&workspace_id, &final_sid, session.turn_count);
+        handle
+    };
 
     let spawned_pid = turn_handle.pid;
-    session.active_pid = Some(spawned_pid);
+    {
+        let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
+        session.active_pid = Some(spawned_pid);
+        let _ = db.save_agent_session(&workspace_id, &session.session_id, session.turn_count);
+    }
     drop(agents);
 
     // Capture rename context before the bridge spawn.
@@ -333,10 +443,13 @@ pub async fn send_chat_message(
     let db_path = state.db_path.clone();
     let wt_path = worktree_path.clone();
     let user_msg_id = user_msg.id.clone();
+    let repo_id_for_mcp = ws.repository_id.clone();
     tokio::spawn(async move {
         // On the first turn, spawn a background task to auto-rename the branch
-        // using Haiku. This runs concurrently and does not block the event loop.
-        if !is_resume && has_repo {
+        // using Haiku. Gate on turn count (not persistent_session) because
+        // persistent_session is in-memory only and is None after app restart
+        // even for resumed sessions.
+        if saved_turn_count <= 1 && has_repo {
             let ws_id2 = ws_id.clone();
             let wt_path2 = wt_path.clone();
             let old_branch2 = rename_old_branch.clone();
@@ -362,6 +475,9 @@ pub async fn send_chat_message(
 
         let mut rx = turn_handle.event_rx;
         let mut got_init = false;
+        // MCP monitoring: map tool_use_id → tool_name for MCP error detection.
+        let mut mcp_tool_names: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
         // Track the last assistant message inserted in THIS turn. Falls back
         // to the user message ID for tool-only turns (AskUserQuestion, plan
         // approval) so that checkpoint creation isn't skipped entirely.
@@ -413,6 +529,63 @@ pub async fn send_chat_message(
                 }
             }
 
+            // MCP monitoring: track tool_use_id → tool_name for all MCP tool calls.
+            if let AgentEvent::Stream(StreamEvent::Stream {
+                event:
+                    InnerStreamEvent::ContentBlockStart {
+                        content_block: Some(StartContentBlock::ToolUse { id, name }),
+                        ..
+                    },
+            }) = &event
+                && claudette::mcp_supervisor::extract_mcp_server_name(name).is_some()
+            {
+                mcp_tool_names.insert(id.clone(), name.clone());
+            }
+
+            // MCP monitoring: check tool results for connection failure patterns.
+            if let AgentEvent::Stream(StreamEvent::User { message }) = &event {
+                for block in &message.content {
+                    if let claudette::agent::UserContentBlock::ToolResult {
+                        tool_use_id,
+                        content,
+                    } = block
+                        && let Some(tool_name) = mcp_tool_names.get(tool_use_id)
+                    {
+                        let content_str = content.to_string();
+                        if claudette::mcp_supervisor::is_terminal_mcp_error(&content_str)
+                            && let Some(server_name) =
+                                claudette::mcp_supervisor::extract_mcp_server_name(tool_name)
+                        {
+                            let sv = app.state::<Arc<McpSupervisor>>();
+                            sv.report_tool_failure(&repo_id_for_mcp, server_name, &content_str)
+                                .await;
+                            if let Some(snapshot) = sv.get_status(&repo_id_for_mcp).await {
+                                let _ = app.emit("mcp-status-changed", &snapshot);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // When a persistent turn completes (Result event), clear active_pid
+            // so the workspace shows as idle. The persistent process stays alive
+            // for the next turn — only active_pid is cleared, not persistent_session.
+            if let AgentEvent::Stream(StreamEvent::Result { .. }) = &event {
+                let app_state = app.state::<AppState>();
+                let mut agents = app_state.agents.write().await;
+                if let Some(session) = agents.get_mut(&ws_id)
+                    && session.active_pid == Some(spawned_pid)
+                    && session.persistent_session.is_some()
+                {
+                    session.active_pid = None;
+                }
+                drop(agents);
+                // Rebuild tray so it reflects the idle state. Without this,
+                // the tray stays stuck on "Running" because the persistent
+                // process doesn't exit (only ProcessExited triggered rebuild).
+                crate::tray::rebuild_tray(&app);
+            }
+
             if let AgentEvent::ProcessExited(_code) = &event {
                 let app_state = app.state::<AppState>();
                 let mut agents = app_state.agents.write().await;
@@ -429,6 +602,9 @@ pub async fn send_chat_message(
                     // Only clear active_pid if it still matches the process that
                     // exited. A new turn may have already replaced it.
                     session.active_pid = None;
+                    // Process died — clear persistent session so the next turn
+                    // spawns a fresh one.
+                    session.persistent_session = None;
                 }
                 // Play notification sound + run command if the window is not focused.
                 // This runs on the Rust side so it works even when the webview
@@ -646,17 +822,25 @@ pub async fn stop_agent(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let mut agents = state.agents.write().await;
-    if let Some(session) = agents.get_mut(&workspace_id)
-        && let Some(pid) = session.active_pid.take()
-    {
-        agent::stop_agent(pid).await?;
+    if let Some(session) = agents.get_mut(&workspace_id) {
+        // Clear persistent session and reset session state so the next
+        // turn starts completely fresh (not --resume with a stale ID).
+        session.persistent_session = None;
+        session.turn_count = 0;
+        session.session_id = String::new();
+        if let Some(pid) = session.active_pid.take() {
+            agent::stop_agent(pid).await?;
+        }
     }
     drop(agents);
+
+    // Clear persisted session from DB too.
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let _ = db.clear_agent_session(&workspace_id);
 
     crate::tray::rebuild_tray(&app);
 
     // Log stop message.
-    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let msg = ChatMessage {
         id: uuid::Uuid::new_v4().to_string(),
         workspace_id,

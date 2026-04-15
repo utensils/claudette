@@ -176,6 +176,24 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* MCP server health indicator next to repo name */
+.mcpIndicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-left: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mcpDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
 /* Keyboard shortcut badge shown on Cmd/Ctrl hold — absolutely positioned
    so it doesn't reflow the header when it appears/disappears. */
 .shortcutBadge {

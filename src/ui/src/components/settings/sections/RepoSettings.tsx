@@ -3,10 +3,15 @@ import { useAppStore } from "../../../stores/useAppStore";
 import { updateRepositorySettings, getRepoConfig } from "../../../services/tauri";
 import {
   loadRepositoryMcps,
-  deleteRepositoryMcp,
+  detectMcpServers,
+  saveRepositoryMcps,
+  reconnectMcpServer,
+  setMcpServerEnabled,
+  getMcpStatus,
 } from "../../../services/mcp";
 import type { RepoConfigInfo } from "../../../types/repository";
-import type { SavedMcpServer } from "../../../types/mcp";
+import type { SavedMcpServer, McpSource } from "../../../types/mcp";
+import { MCP_SOURCE_LABELS } from "../../../types/mcp";
 import { RepoIcon } from "../../shared/RepoIcon";
 import { IconPicker } from "../../modals/IconPicker";
 import styles from "../Settings.module.css";
@@ -20,8 +25,11 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
   const activeModal = useAppStore((s) => s.activeModal);
   const updateRepo = useAppStore((s) => s.updateRepository);
   const repositories = useAppStore((s) => s.repositories);
+  const mcpStatus = useAppStore((s) => s.mcpStatus);
+  const setMcpStatus = useAppStore((s) => s.setMcpStatus);
 
   const repo = repositories.find((r) => r.id === repoId);
+  const repoMcpStatus = mcpStatus[repoId];
 
   const [name, setName] = useState(repo?.name ?? "");
   const [icon, setIcon] = useState(repo?.icon ?? "");
@@ -63,8 +71,27 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
   }, [repoId]);
 
   useEffect(() => {
-    refreshMcpServers();
-  }, [refreshMcpServers]);
+    // Load saved servers, and auto-detect + save if none exist yet.
+    loadRepositoryMcps(repoId)
+      .then(async (saved) => {
+        if (saved.length > 0) {
+          setMcpServers(saved);
+          return;
+        }
+        // No saved servers — auto-detect and save so they appear immediately.
+        try {
+          const detected = await detectMcpServers(repoId);
+          if (detected.length > 0) {
+            await saveRepositoryMcps(repoId, detected);
+            const updated = await loadRepositoryMcps(repoId);
+            setMcpServers(updated);
+          }
+        } catch {
+          // Detection failed — leave empty.
+        }
+      })
+      .catch(() => setMcpServers([]));
+  }, [repoId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Refresh MCP list when the selection modal closes (user may have saved new MCPs).
   const prevModal = useRef(activeModal);
@@ -304,67 +331,144 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
       <div className={styles.fieldGroup}>
         <div className={styles.fieldLabel}>MCP servers</div>
         <div className={styles.fieldHint} style={{ marginBottom: 12 }}>
-          Non-portable MCP servers injected into agent sessions via{" "}
-          <code>--mcp-config</code>. These are servers from your user config or
-          gitignored repo config that aren't automatically available in
-          worktrees.
+          Servers injected into agent sessions. Toggle to enable or disable for
+          this repository.
         </div>
         {mcpServers.length === 0 ? (
           <div className={styles.fieldHint}>
-            No MCP servers configured for this repository.
+            No MCP servers detected for this repository.
           </div>
         ) : (
           <div className={styles.mcpList}>
-            {mcpServers.map((server) => {
-              let transport = "unknown";
-              try {
-                const cfg = JSON.parse(server.config_json);
-                if (cfg.command) transport = "stdio";
-                else if (cfg.url) transport = "http";
-                if (cfg.type) transport = cfg.type;
-              } catch {
-                /* ignore parse errors */
+            {/* Group servers by source */}
+            {(() => {
+              const groups = new Map<string, typeof mcpServers>();
+              for (const server of mcpServers) {
+                const key = server.source;
+                const list = groups.get(key) ?? [];
+                list.push(server);
+                groups.set(key, list);
               }
-              const sourceLabel =
-                server.source === "user_project_config"
-                  ? "~/.claude.json"
-                  : server.source === "repo_local_config"
-                    ? ".claude.json"
-                    : server.source;
-              return (
-                <div key={server.id} className={styles.mcpRow}>
-                  <div className={styles.mcpInfo}>
-                    <span className={styles.mcpName}>{server.name}</span>
-                    <span className={styles.mcpBadge}>{transport}</span>
-                    <span className={styles.mcpSource}>{sourceLabel}</span>
+              return [...groups.entries()].map(([source, servers]) => (
+                <div key={source}>
+                  <div className={styles.mcpGroupLabel}>
+                    {MCP_SOURCE_LABELS[source as McpSource] ?? source}
                   </div>
-                  <button
-                    className={styles.mcpRemoveBtn}
-                    title="Remove this MCP server"
-                    aria-label={`Remove MCP server ${server.name}`}
-                    onClick={async () => {
-                      try {
-                        await deleteRepositoryMcp(server.id);
-                        refreshMcpServers();
-                      } catch (e) {
-                        setError(String(e));
-                      }
-                    }}
-                  >
-                    ×
-                  </button>
+                  {servers.map((server) => {
+                    let transport = "unknown";
+                    try {
+                      const cfg = JSON.parse(server.config_json);
+                      if (cfg.command) transport = "stdio";
+                      else if (cfg.url) transport = "http";
+                      if (cfg.type) transport = cfg.type;
+                    } catch {
+                      /* ignore */
+                    }
+                    const serverStatus = repoMcpStatus?.servers.find(
+                      (s) => s.name === server.name,
+                    );
+                    const stateColor =
+                      serverStatus?.state === "connected"
+                        ? "var(--status-running)"
+                        : serverStatus?.state === "failed"
+                          ? "var(--status-stopped)"
+                          : serverStatus?.state === "disabled"
+                            ? "var(--text-faint)"
+                            : "var(--status-idle)";
+                    return (
+                      <div key={server.id} className={styles.mcpRow}>
+                        <div className={styles.mcpInfo}>
+                          <span
+                            className={styles.mcpStatusDot}
+                            style={{ background: stateColor }}
+                            title={serverStatus?.state ?? "pending"}
+                          />
+                          <span
+                            className={`${styles.mcpName} ${!server.enabled ? styles.mcpNameDisabled : ""}`}
+                          >
+                            {server.name}
+                          </span>
+                          <span className={styles.mcpBadge}>{transport}</span>
+                          {serverStatus?.last_error && (
+                            <span
+                              className={styles.mcpError}
+                              title={serverStatus.last_error}
+                            >
+                              {serverStatus.last_error.slice(0, 40)}
+                            </span>
+                          )}
+                        </div>
+                        <div className={styles.mcpActions}>
+                          {serverStatus?.state === "failed" && (
+                            <button
+                              className={styles.mcpReconnectBtn}
+                              onClick={async () => {
+                                try {
+                                  await reconnectMcpServer(repoId, server.name);
+                                  const snap = await getMcpStatus(repoId);
+                                  if (snap) setMcpStatus(repoId, snap);
+                                } catch (e) {
+                                  setError(String(e));
+                                }
+                              }}
+                            >
+                              Reconnect
+                            </button>
+                          )}
+                          <button
+                            className={`${styles.mcpToggle} ${server.enabled ? styles.mcpToggleOn : ""}`}
+                            onClick={async () => {
+                              try {
+                                await setMcpServerEnabled(
+                                  server.id,
+                                  repoId,
+                                  server.name,
+                                  !server.enabled,
+                                );
+                                refreshMcpServers();
+                                const snap = await getMcpStatus(repoId);
+                                if (snap) setMcpStatus(repoId, snap);
+                              } catch (err) {
+                                setError(String(err));
+                              }
+                            }}
+                            role="switch"
+                            aria-checked={server.enabled}
+                            aria-label={`${server.enabled ? "Disable" : "Enable"} ${server.name}`}
+                          >
+                            <span className={styles.mcpToggleKnob} />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-              );
-            })}
+              ));
+            })()}
           </div>
         )}
-        <div style={{ marginTop: 8 }}>
+        <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
           <button
             className={styles.iconBtn}
             onClick={() => openModal("mcpSelection", { repoId })}
           >
             Re-detect &amp; add servers
           </button>
+          {mcpServers.length > 0 && (
+            <button
+              className={styles.iconBtn}
+              onClick={async () => {
+                try {
+                  const snap = await getMcpStatus(repoId);
+                  if (snap) setMcpStatus(repoId, snap);
+                } catch (e) {
+                  setError(String(e));
+                }
+              }}
+            >
+              Refresh status
+            </button>
+          )}
         </div>
       </div>
 

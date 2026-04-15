@@ -78,6 +78,7 @@ fn main() {
 
     let app_state = state::AppState::new(db_path, worktree_base_dir);
     let remote_manager = remote::RemoteConnectionManager::new();
+    let mcp_supervisor = std::sync::Arc::new(claudette::mcp_supervisor::McpSupervisor::new());
 
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
@@ -87,7 +88,8 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
         .manage(app_state)
-        .manage(remote_manager);
+        .manage(remote_manager)
+        .manage(mcp_supervisor);
 
     // Custom app menu (macOS only): replace the default Quit item (which
     // calls NSApp.terminate() immediately) with one we can intercept to
@@ -326,6 +328,10 @@ fn main() {
             commands::mcp::save_repository_mcps,
             commands::mcp::load_repository_mcps,
             commands::mcp::delete_repository_mcp,
+            commands::mcp::get_mcp_status,
+            commands::mcp::ensure_and_validate_mcps,
+            commands::mcp::reconnect_mcp_server,
+            commands::mcp::set_mcp_server_enabled,
             // Apps
             commands::apps::detect_installed_apps,
             commands::apps::open_workspace_in_app,

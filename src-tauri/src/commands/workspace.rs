@@ -1,14 +1,16 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 use tokio::process::Command as TokioCommand;
 
 use claudette::agent;
 use claudette::config;
 use claudette::db::Database;
 use claudette::git;
+use claudette::mcp_supervisor::McpSupervisor;
 use claudette::model::{AgentStatus, Workspace, WorkspaceStatus};
 use claudette::names::NameGenerator;
 
@@ -426,6 +428,7 @@ pub async fn delete_workspace(
     id: String,
     app: AppHandle,
     state: State<'_, AppState>,
+    supervisor: State<'_, Arc<McpSupervisor>>,
 ) -> Result<(), String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
 
@@ -435,10 +438,12 @@ pub async fn delete_workspace(
         .find(|w| w.id == id)
         .ok_or("Workspace not found")?;
 
+    let repo_id = ws.repository_id.clone();
+
     let repos = db.list_repositories().map_err(|e| e.to_string())?;
     let repo = repos
         .iter()
-        .find(|r| r.id == ws.repository_id)
+        .find(|r| r.id == repo_id)
         .ok_or("Repository not found")?;
 
     // Stop any running agent and clear session so tray state stays consistent.
@@ -461,6 +466,14 @@ pub async fn delete_workspace(
 
     // Cascade deletes chat messages and terminal tabs.
     db.delete_workspace(&id).map_err(|e| e.to_string())?;
+
+    // If this was the last workspace for the repo, clean up MCP supervisor state
+    // and notify the frontend to clear the stale MCP status indicator.
+    let remaining = db.list_workspaces().unwrap_or_default();
+    if !remaining.iter().any(|w| w.repository_id == repo_id) {
+        supervisor.remove_repo(&repo_id).await;
+        let _ = app.emit("mcp-status-cleared", &repo_id);
+    }
 
     crate::tray::rebuild_tray(&app);
 

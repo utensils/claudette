@@ -432,6 +432,7 @@ mod tests {
             } else {
                 None
             },
+            persistent_session: None,
         }
     }
 

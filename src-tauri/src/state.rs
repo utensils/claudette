@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use claudette::agent::PersistentSession;
 use parking_lot::Mutex as ParkingMutex;
 use tokio::sync::RwLock;
 
@@ -34,6 +35,10 @@ pub struct AgentSessionState {
     pub needs_attention: bool,
     /// What kind of input the agent needs, if any.
     pub attention_kind: Option<AttentionKind>,
+    /// Long-lived process that persists MCP servers across turns.
+    /// When present, subsequent turns write to this process's stdin instead of
+    /// spawning new processes.
+    pub persistent_session: Option<Arc<PersistentSession>>,
 }
 
 /// Handle to an active PTY process.

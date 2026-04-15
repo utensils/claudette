@@ -16,6 +16,7 @@ import type {
   DiscoveredServer,
   ConversationCheckpoint,
 } from "../types";
+import type { McpStatusSnapshot } from "../types/mcp";
 import type { RemoteInitialData } from "../types/remote";
 import type { DetectedApp } from "../types/apps";
 import type { ClaudeCodeUsage } from "../types/usage";
@@ -281,6 +282,11 @@ interface AppState {
   localServerConnectionString: string | null;
   setLocalServerRunning: (running: boolean) => void;
   setLocalServerConnectionString: (cs: string | null) => void;
+
+  // -- MCP Status (per-repository) --
+  mcpStatus: Record<string, McpStatusSnapshot>;
+  setMcpStatus: (repoId: string, snapshot: McpStatusSnapshot) => void;
+  clearMcpStatus: (repoId: string) => void;
 
   // -- Detected Apps --
   detectedApps: DetectedApp[];
@@ -904,6 +910,18 @@ export const useAppStore = create<AppState>((set) => ({
   setLocalServerRunning: (running) => set({ localServerRunning: running }),
   setLocalServerConnectionString: (cs) =>
     set({ localServerConnectionString: cs }),
+
+  // -- MCP Status --
+  mcpStatus: {},
+  setMcpStatus: (repoId, snapshot) =>
+    set((state) => ({
+      mcpStatus: { ...state.mcpStatus, [repoId]: snapshot },
+    })),
+  clearMcpStatus: (repoId) =>
+    set((state) => {
+      const { [repoId]: _, ...rest } = state.mcpStatus;
+      return { mcpStatus: rest };
+    }),
 
   // -- Detected Apps --
   detectedApps: [],

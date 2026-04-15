@@ -38,6 +38,7 @@ import { ChatToolbar } from "./ChatToolbar";
 import { WorkspaceActions } from "./WorkspaceActions";
 import { HeaderMenu } from "./HeaderMenu";
 import { SlashCommandPicker, filterSlashCommands } from "./SlashCommandPicker";
+import { AttachMenu } from "./AttachMenu";
 import { FileMentionPicker, matchFiles } from "./FileMentionPicker";
 import { checkpointHasFileChanges, clearAllHasFileChanges, buildRollbackMap } from "../../utils/checkpointUtils";
 import { ThinkingBlock } from "./ThinkingBlock";
@@ -640,8 +641,6 @@ export function ChatPanel() {
 
       <ScrollContext.Provider value={scrollContextValue}>
         <div className={styles.messages} ref={messagesContainerRef}>
-          {error && <div className={styles.errorBanner}>{error}</div>}
-
           {messages.length === 0 && !hasStreaming ? (
             <div className={styles.empty}>
               Send a message to start a conversation
@@ -721,6 +720,8 @@ export function ChatPanel() {
                   </button>
                 </div>
               )}
+
+              {error && <div className={styles.errorBanner}>{error}</div>}
             </>
           )}
         </div>
@@ -736,6 +737,7 @@ export function ChatPanel() {
         isRunning={isRunning}
         isRemote={!!ws?.remote_connection_id}
         selectedWorkspaceId={selectedWorkspaceId!}
+        repoId={repo?.id}
         projectPath={repo?.path}
         historyRef={historyRef}
         historyIndexRef={historyIndexRef}
@@ -1252,6 +1254,7 @@ function ChatInputArea({
   isRunning,
   isRemote,
   selectedWorkspaceId,
+  repoId,
   projectPath,
   historyRef,
   historyIndexRef,
@@ -1265,6 +1268,7 @@ function ChatInputArea({
   isRunning: boolean;
   isRemote: boolean;
   selectedWorkspaceId: string;
+  repoId: string | undefined;
   projectPath: string | undefined;
   historyRef: React.MutableRefObject<Record<string, string[]>>;
   historyIndexRef: React.MutableRefObject<number>;
@@ -1284,6 +1288,7 @@ function ChatInputArea({
   const mentionedFilesRef = useRef<Set<string>>(new Set());
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const [dragActive, setDragActive] = useState(false);
+  const [attachMenuOpen, setAttachMenuOpen] = useState(false);
 
   // Per-workspace draft storage: save input when switching away,
   // restore when switching back.
@@ -1829,14 +1834,26 @@ function ChatInputArea({
         placeholder={isRunning ? "Type to queue a message..." : "Send a message..."}
       />
       <div className={styles.inputControls}>
-        <button
-          className={styles.attachBtn}
-          onClick={handleAttachClick}
-          disabled={isRemote}
-          title={isRemote ? "Attachments not supported for remote workspaces" : "Add files or images"}
-        >
-          <Plus size={16} />
-        </button>
+        <div style={{ position: "relative" }}>
+          <button
+            className={`${styles.attachBtn} ${attachMenuOpen ? styles.attachBtnActive : ""}`}
+            onClick={() => setAttachMenuOpen((v) => !v)}
+            title="Add files or connectors"
+          >
+            <Plus size={16} />
+          </button>
+          {attachMenuOpen && (
+            <AttachMenu
+              repoId={repoId}
+              onAttachFiles={() => {
+                setAttachMenuOpen(false);
+                handleAttachClick();
+              }}
+              onClose={() => setAttachMenuOpen(false)}
+              isRemote={isRemote}
+            />
+          )}
+        </div>
         <ChatToolbar
           workspaceId={selectedWorkspaceId}
           disabled={isRunning}

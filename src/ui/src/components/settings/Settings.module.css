@@ -582,6 +582,96 @@
   color: var(--status-stopped);
 }
 
+.mcpStatusDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.mcpError {
+  font-size: 11px;
+  color: var(--status-stopped);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
+}
+
+.mcpActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.mcpReconnectBtn {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  border: 1px solid var(--sidebar-border);
+  background: none;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.mcpReconnectBtn:hover {
+  background: var(--accent-bg);
+}
+
+.mcpNameDisabled {
+  color: var(--text-dim);
+}
+
+/* Group label for MCP source sections */
+.mcpGroupLabel {
+  padding: 8px 8px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  letter-spacing: 0.02em;
+}
+
+.mcpGroupLabel:not(:first-child) {
+  margin-top: 8px;
+  border-top: 1px solid var(--divider);
+  padding-top: 12px;
+}
+
+/* iOS-style toggle switch (matching AttachMenu) */
+.mcpToggle {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: 10px;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+  background: var(--text-faint);
+  transition: background 0.2s ease;
+}
+
+.mcpToggleOn {
+  background: var(--accent-primary);
+}
+
+.mcpToggleKnob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: white;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: transform 0.2s ease;
+}
+
+.mcpToggleOn .mcpToggleKnob {
+  transform: translateX(16px);
+}
+
 /* ── Placeholder ── */
 
 .placeholder {

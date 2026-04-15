@@ -371,6 +371,16 @@ async fn handle_send_chat_message(
     let custom_instructions = session.custom_instructions.clone();
     session.turn_count += 1;
 
+    // Load repository MCP configs for injection on EVERY turn. Each `claude
+    // --print` is an independent process — MCP connections are per-process and
+    // NOT restored from session state on `--resume`.
+    let mcp_config = {
+        let db_rows = db
+            .list_repository_mcp_servers(&ws.repository_id)
+            .unwrap_or_default();
+        claudette::mcp::cli_config_from_rows(&db_rows)
+    };
+
     let agent_settings = AgentSettings {
         model: if !is_resume { model } else { None },
         fast_mode: fast_mode.unwrap_or(false),
@@ -378,7 +388,7 @@ async fn handle_send_chat_message(
         plan_mode: plan_mode.unwrap_or(false),
         effort,
         chrome_enabled: chrome_enabled.unwrap_or(false),
-        mcp_config: None,
+        mcp_config,
     };
 
     // Expand @-file mentions into inline file content for the agent prompt.

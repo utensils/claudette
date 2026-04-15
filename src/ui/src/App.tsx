@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "./stores/useAppStore";
 import { loadInitialData, getAppSetting, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, clearAttention, detectInstalledApps } from "./services/tauri";
 import { applyTheme, loadAllThemes, findTheme } from "./utils/theme";
+import { useMcpStatus } from "./hooks/useMcpStatus";
 import { AppLayout } from "./components/layout/AppLayout";
 import type { CommandEvent } from "./types";
 import "./styles/theme.css";
@@ -21,6 +22,9 @@ function App() {
   const setCurrentThemeId = useAppStore((s) => s.setCurrentThemeId);
   const setDetectedApps = useAppStore((s) => s.setDetectedApps);
   const setUsageInsightsEnabled = useAppStore((s) => s.setUsageInsightsEnabled);
+
+  // Listen for MCP supervisor status events from the Rust backend.
+  useMcpStatus();
 
   useEffect(() => {
     loadInitialData().then((data) => {
