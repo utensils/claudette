@@ -1030,18 +1030,50 @@ describe("formatHelpMessage", () => {
   it("alphabetizes entries within each group", () => {
     const out = formatHelpMessage(helpFixture);
     // /clear, /help come before /status alphabetically — confirm clear precedes help.
-    expect(out.indexOf("- /clear ")).toBeLessThan(out.indexOf("- /help "));
+    expect(out.indexOf("`/clear`")).toBeLessThan(out.indexOf("`/help`"));
     // Within prompt_expansion, /init precedes /review.
-    expect(out.indexOf("- /init ")).toBeLessThan(out.indexOf("- /review "));
+    expect(out.indexOf("`/init ")).toBeLessThan(out.indexOf("`/review "));
   });
 
-  it("renders argument hints and descriptions inline", () => {
+  it("renders the command invocation as inline code and appends description", () => {
     const out = formatHelpMessage(helpFixture);
-    expect(out).toContain("- /config [general|models|usage]  (alias: /configure) — Open Claudette settings");
-    expect(out).toContain("- /init [extra guidance] — Bootstrap repo guidance (CLAUDE.md) via the agent");
+    expect(out).toContain(
+      "- `/config [general|models|usage]`  (alias: /configure) — Open Claudette settings",
+    );
+    expect(out).toContain(
+      "- `/init [extra guidance]` — Bootstrap repo guidance (CLAUDE.md) via the agent",
+    );
+    expect(out).toContain("- `/help` — List available slash commands");
   });
 
-  it("renders aliases as '(alias: /x, /y)'", () => {
+  it("wraps angle-bracket placeholders so the markdown pipeline renders them literally", () => {
+    // Regression: without inline code, `<source>` / `<model>` are parsed by
+    // rehype-raw as HTML tags, get dropped by rehype-sanitize, and the hint
+    // disappears from the rendered /help output.
+    const withAngles: SlashCommand[] = [
+      {
+        name: "marketplace",
+        description: "Manage plugin marketplaces in settings",
+        source: "builtin",
+        aliases: [],
+        argument_hint: "[add|remove|update] <source>",
+        kind: "settings_route",
+      },
+      {
+        name: "model",
+        description: "Show or change the workspace model",
+        source: "builtin",
+        aliases: [],
+        argument_hint: "[<model>]",
+        kind: "local_action",
+      },
+    ];
+    const out = formatHelpMessage(withAngles);
+    expect(out).toContain("`/marketplace [add|remove|update] <source>`");
+    expect(out).toContain("`/model [<model>]`");
+  });
+
+  it("renders aliases as '(alias: /x, /y)' when not shadowed", () => {
     const withMulti: SlashCommand[] = [
       {
         name: "permissions",
@@ -1056,14 +1088,85 @@ describe("formatHelpMessage", () => {
     expect(out).toContain("(alias: /allowed-tools, /perm)");
   });
 
+  it("omits aliases shadowed by a user/project command of the same name", () => {
+    // Regression: the ChatPanel dispatcher routes typed native aliases to a
+    // file-based command when a user/project markdown with that name exists.
+    // /help must not continue advertising the alias as routing to the native.
+    const withShadow: SlashCommand[] = [
+      {
+        name: "permissions",
+        description: "Show or change the workspace permission mode",
+        source: "builtin",
+        aliases: ["allowed-tools", "perm"],
+        argument_hint: "[readonly|standard|full]",
+        kind: "local_action",
+      },
+      // User has .claude/commands/allowed-tools.md — shadows the native alias.
+      {
+        name: "allowed-tools",
+        description: "User override",
+        source: "user",
+        aliases: [],
+      },
+    ];
+    const out = formatHelpMessage(withShadow);
+    // Only the non-shadowed alias survives on the native's line.
+    expect(out).toContain("`/permissions [readonly|standard|full]`  (alias: /perm) —");
+    expect(out).not.toContain("/allowed-tools)");
+    // The file-based command still shows up under **User commands**.
+    expect(out).toContain("- `/allowed-tools` — User override");
+  });
+
+  it("drops the whole alias block when every alias is shadowed", () => {
+    const allShadowed: SlashCommand[] = [
+      {
+        name: "config",
+        description: "Open Claudette settings",
+        source: "builtin",
+        aliases: ["configure"],
+        argument_hint: "[general|models]",
+        kind: "settings_route",
+      },
+      {
+        name: "configure",
+        description: "User-defined configure",
+        source: "project",
+        aliases: [],
+      },
+    ];
+    const out = formatHelpMessage(allShadowed);
+    expect(out).toContain("- `/config [general|models]` — Open Claudette settings");
+    expect(out).not.toContain("(alias:");
+  });
+
+  it("alias shadow check is case-insensitive", () => {
+    const mixedCase: SlashCommand[] = [
+      {
+        name: "config",
+        description: "Open Claudette settings",
+        source: "builtin",
+        aliases: ["Configure"],
+        kind: "settings_route",
+      },
+      {
+        name: "CONFIGURE",
+        description: "User override",
+        source: "user",
+        aliases: [],
+      },
+    ];
+    const out = formatHelpMessage(mixedCase);
+    expect(out).not.toContain("(alias: /Configure)");
+  });
+
   it("groups file-based commands by source under dedicated headings", () => {
     const out = formatHelpMessage(helpFixture);
     expect(out).toContain("**Project commands**");
-    expect(out).toContain("- /my-project-cmd — A project command");
+    expect(out).toContain("- `/my-project-cmd` — A project command");
     expect(out).toContain("**User commands**");
-    expect(out).toContain("- /my-user-cmd — A user command");
+    expect(out).toContain("- `/my-user-cmd` — A user command");
     expect(out).toContain("**Plugin commands**");
-    expect(out).toContain("- /plugin-ns:deploy — Deploy via plugin");
+    expect(out).toContain("- `/plugin-ns:deploy` — Deploy via plugin");
   });
 
   it("omits an entire group heading when the group is empty", () => {
@@ -1160,7 +1263,7 @@ describe("help native handler", () => {
     const rendered = (ctx.addLocalMessage as ReturnType<typeof vi.fn>).mock
       .calls[0][0] as string;
     expect(rendered).toContain("**User commands**");
-    expect(rendered).toContain("- /deploy — User-authored deploy command");
+    expect(rendered).toContain("- `/deploy` — User-authored deploy command");
   });
 });
 

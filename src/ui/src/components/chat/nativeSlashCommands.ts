@@ -585,11 +585,30 @@ const initHandler: NativeHandler = {
   },
 };
 
-function formatCommandLine(cmd: SlashCommand): string {
-  const head = cmd.argument_hint ? `/${cmd.name} ${cmd.argument_hint}` : `/${cmd.name}`;
+function formatCommandLine(
+  cmd: SlashCommand,
+  shadowedAliases: ReadonlySet<string>,
+): string {
+  // Wrap the command invocation in inline code so angle-bracket placeholders
+  // like `<source>` and `<model>` survive the markdown pipeline intact —
+  // rehype-raw otherwise parses them as HTML tags and either drops them via
+  // rehype-sanitize or renders them as self-closing tags. Inline code also
+  // gives /help a consistent visual anchor in the chat transcript.
+  const head = cmd.argument_hint
+    ? `\`/${cmd.name} ${cmd.argument_hint}\``
+    : `\`/${cmd.name}\``;
+
+  // Drop aliases that a file-based user/project command has shadowed. The
+  // dispatcher in ChatPanel.handleSend treats typing such an alias as a
+  // file-based invocation, so /help advertising it as "(alias: …)" for the
+  // native would be misleading. Aliases owned by the native (no file-based
+  // collision) render normally.
+  const visibleAliases = (cmd.aliases ?? []).filter(
+    (alias) => !shadowedAliases.has(alias.toLowerCase()),
+  );
   const aliasPart =
-    cmd.aliases && cmd.aliases.length > 0
-      ? `  (alias: ${cmd.aliases.map((a) => `/${a}`).join(", ")})`
+    visibleAliases.length > 0
+      ? `  (alias: ${visibleAliases.map((a) => `/${a}`).join(", ")})`
       : "";
   const desc = cmd.description.trim().length > 0 ? ` — ${cmd.description}` : "";
   return `- ${head}${aliasPart}${desc}`;
@@ -615,6 +634,15 @@ function formatCommandLine(cmd: SlashCommand): string {
  */
 export function formatHelpMessage(commands: SlashCommand[]): string {
   const sorted = [...commands].sort((a, b) => a.name.localeCompare(b.name));
+
+  // Names claimed by a user/project markdown command shadow any colliding
+  // native alias in ChatPanel's dispatcher, so /help must suppress those
+  // alias lines to stay consistent with actual routing behavior.
+  const shadowedAliases: ReadonlySet<string> = new Set(
+    sorted
+      .filter((c) => c.source === "user" || c.source === "project")
+      .map((c) => c.name.toLowerCase()),
+  );
 
   const byKind = new Map<NativeSlashKind, SlashCommand[]>();
   const bySource: Record<"project" | "user" | "plugin", SlashCommand[]> = {
@@ -653,7 +681,7 @@ export function formatHelpMessage(commands: SlashCommand[]): string {
     const entries = byKind.get(kind);
     if (!entries || entries.length === 0) continue;
     nativeLines.push(heading);
-    entries.forEach((cmd) => nativeLines.push(formatCommandLine(cmd)));
+    entries.forEach((cmd) => nativeLines.push(formatCommandLine(cmd, shadowedAliases)));
     nativeLines.push("");
   }
 
@@ -674,7 +702,7 @@ export function formatHelpMessage(commands: SlashCommand[]): string {
   for (const { key, heading } of sourceOrder) {
     const entries = bySource[key];
     if (entries.length === 0) continue;
-    const block = [heading, "", ...entries.map(formatCommandLine)];
+    const block = [heading, "", ...entries.map((cmd) => formatCommandLine(cmd, shadowedAliases))];
     sections.push(block.join("\n"));
   }
 
