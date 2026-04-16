@@ -51,6 +51,7 @@ tags
 
 # Claude Code
 .claude/worktrees/
+.claude/scheduled_tasks.lock
 
 # Superpowers brainstorm
 .superpowers/
