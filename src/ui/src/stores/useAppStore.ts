@@ -219,7 +219,7 @@ interface AppState {
   rightSidebarWidth: number;
   terminalHeight: number;
   rightSidebarTab: "changes" | "tasks";
-  sidebarFilter: "all" | "active" | "archived";
+  sidebarFilter: "all" | "active" | "archived" | "remote";
   repoCollapsed: Record<string, boolean>;
   fuzzyFinderOpen: boolean;
   commandPaletteOpen: boolean;
@@ -229,7 +229,7 @@ interface AppState {
   setSidebarWidth: (w: number) => void;
   setRightSidebarWidth: (w: number) => void;
   setTerminalHeight: (h: number) => void;
-  setSidebarFilter: (f: "all" | "active" | "archived") => void;
+  setSidebarFilter: (f: "all" | "active" | "archived" | "remote") => void;
   toggleRepoCollapsed: (id: string) => void;
   toggleFuzzyFinder: () => void;
   toggleCommandPalette: () => void;

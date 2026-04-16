@@ -70,6 +70,7 @@ export const Sidebar = memo(function Sidebar() {
   const planApprovals = useAppStore((s) => s.planApprovals);
   const setRepositories = useAppStore((s) => s.setRepositories);
   const metaKeyHeld = useAppStore((s) => s.metaKeyHeld);
+  const remoteConnections = useAppStore((s) => s.remoteConnections);
   const isMac = navigator.platform.startsWith("Mac");
 
   // Pointer-based reorder state (HTML5 drag-and-drop doesn't work in WKWebView)
@@ -172,7 +173,7 @@ export const Sidebar = memo(function Sidebar() {
       </div>
 
       <div className={styles.filters}>
-        {(["all", "active", "archived"] as const).map((f) => (
+        {(["all", "active", "archived", ...(remoteConnections.length > 0 ? ["remote" as const] : [])] as const).map((f) => (
           <button
             key={f}
             className={`${styles.filterBtn} ${sidebarFilter === f ? styles.filterActive : ""}`}
@@ -184,7 +185,7 @@ export const Sidebar = memo(function Sidebar() {
       </div>
 
       <div className={styles.list}>
-        {repositories.filter((r) => !r.remote_connection_id).map((repo, repoIdx) => {
+        {sidebarFilter !== "remote" && repositories.filter((r) => !r.remote_connection_id).map((repo, repoIdx) => {
           const collapsed = repoCollapsed[repo.id];
           const repoWorkspaces = filteredWorkspaces.filter(
             (ws) => ws.repository_id === repo.id
@@ -490,12 +491,12 @@ export const Sidebar = memo(function Sidebar() {
             </div>
           );
         })}
-        {draggedRepoId && dropTargetIdx === repositories.filter((r) => !r.remote_connection_id).length && (
+        {sidebarFilter !== "remote" && draggedRepoId && dropTargetIdx === repositories.filter((r) => !r.remote_connection_id).length && (
           <div className={styles.dropIndicator} />
         )}
-      </div>
 
-      <RemoteSections />
+        {sidebarFilter === "all" || sidebarFilter === "remote" ? <RemoteSections /> : null}
+      </div>
 
       <div className={styles.footer}>
         <button
@@ -601,7 +602,7 @@ function RemoteSections() {
   return (
     <>
       {unpaired.length > 0 && (
-        <div className={styles.list} style={{ borderTop: "1px solid var(--border-subtle)" }}>
+        <div style={{ borderTop: "1px solid var(--border-subtle)" }}>
           <div className={styles.repoHeader} style={{ opacity: 0.7, cursor: "default" }}>
             <span className={styles.repoName} style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.5px" }}>
               Nearby
@@ -628,7 +629,7 @@ function RemoteSections() {
       )}
 
       {remoteConnections.length > 0 && (
-        <div className={styles.list} style={{ borderTop: "1px solid var(--border-subtle)" }}>
+        <div style={{ borderTop: "1px solid var(--border-subtle)" }}>
           {connectError && (
             <div style={{ padding: "4px 12px", fontSize: 11, color: "var(--status-error, #f55)", lineHeight: 1.3 }}>
               {connectError}
