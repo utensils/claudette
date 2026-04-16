@@ -27,7 +27,9 @@ try:
     s.connect(('${HOST}', ${PORT}))
 except ConnectionRefusedError:
     print('ERROR: Cannot connect to debug server on ${HOST}:${PORT}', file=sys.stderr)
-    print('Is the app running via cargo tauri dev?', file=sys.stderr)
+    print('The dev build must be running via \`cargo tauri dev\`.', file=sys.stderr)
+    print('Do NOT launch the installed /Applications/Claudette.app — it has no debug server.', file=sys.stderr)
+    print('Ask the user to start \`cargo tauri dev\` if it is not already running.', file=sys.stderr)
     sys.exit(1)
 s.sendall(sys.stdin.buffer.read())
 s.shutdown(socket.SHUT_WR)

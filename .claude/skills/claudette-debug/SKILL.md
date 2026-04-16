@@ -30,6 +30,8 @@ Execute JavaScript inside the running Claudette Tauri webview via a TCP debug se
 - Port 19432 available on localhost
 - `python3` in PATH (used by eval helper)
 
+**Do NOT launch the installed app.** Never run `osascript -e 'tell application "Claudette" to activate'`, `open -a Claudette`, or double-click `/Applications/Claudette.app`. The debug TCP server on port 19432 only exists in dev builds (gated by `#[cfg(debug_assertions)]`); the installed release build has no debug server and eval calls against it will fail or silently target the wrong process. If the dev build is not already running, ask the user to start `cargo tauri dev` — do not start it yourself and do not fall back to the installed app.
+
 ## Scripts
 
 All scripts live in `${CLAUDE_SKILL_DIR}/scripts/`:
