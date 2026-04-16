@@ -188,6 +188,23 @@ function App() {
     const unlistenZoomOut = listen("zoom-out", () => adjustUiFontSize(-1));
     const unlistenResetZoom = listen("reset-zoom", () => resetUiFontSize());
 
+    // Listen for background SCM polling updates.
+    const unlistenScmUpdate = listen<import("./types/plugin").ScmDetail>("scm-data-updated", (event) => {
+      const detail = event.payload;
+      const store = useAppStore.getState();
+      // Update summary for sidebar badges
+      store.setScmSummary(detail.workspace_id, {
+        hasPr: detail.pull_request !== null,
+        prState: detail.pull_request?.state ?? null,
+        ciState: detail.pull_request?.ci_status ?? null,
+        lastUpdated: Date.now(),
+      });
+      // Update detail if this is the selected workspace
+      if (store.selectedWorkspaceId === detail.workspace_id) {
+        store.setScmDetail(detail);
+      }
+    });
+
     return () => {
       isActive = false;
       window.clearInterval(discoveredServersPollId);
@@ -200,6 +217,7 @@ function App() {
       unlistenZoomIn.then((fn) => fn());
       unlistenZoomOut.then((fn) => fn());
       unlistenResetZoom.then((fn) => fn());
+      unlistenScmUpdate.then((fn) => fn());
     };
   }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setPluginManagementEnabled, setAppVersion]);
 

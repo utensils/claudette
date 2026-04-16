@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{Emitter, Manager, State};
 
 use claudette::db::Database;
 use claudette::plugin::detect;
@@ -370,4 +370,160 @@ fn make_workspace_info(
             .unwrap_or_else(|| repo.path.clone()),
         repo_path: repo.path.clone(),
     }
+}
+
+// --- Background polling ---
+
+/// Resolve SCM provider without a Tauri State wrapper (for background tasks).
+async fn resolve_provider_for_polling(
+    manual_override: &Option<String>,
+    repo_path: &str,
+    app_state: &AppState,
+) -> Option<String> {
+    if let Some(provider) = manual_override
+        && !provider.is_empty()
+    {
+        return Some(provider.clone());
+    }
+
+    let remote_url = claudette::git::get_remote_url(repo_path).await.ok()?;
+    let registry = app_state.plugins.read().await;
+    detect::detect_provider(&remote_url, &registry.plugins)
+}
+
+/// Fetch SCM data for a single workspace (used by the polling loop).
+async fn poll_workspace_scm(app_state: &AppState, workspace_id: &str) -> Option<ScmDetail> {
+    let ctx = lookup_workspace_context(&app_state.db_path, workspace_id).ok()?;
+
+    let provider_name =
+        resolve_provider_for_polling(&ctx.manual_override, &ctx.repo.path, app_state).await?;
+
+    let ws_info = make_workspace_info(&ctx.workspace, &ctx.repo);
+    let cache_key = (ctx.repo.id.clone(), ctx.workspace.branch_name.clone());
+
+    // Skip if cache is fresh (< 30s for background polling)
+    {
+        let cache = app_state.scm_cache.entries.read().await;
+        if let Some(entry) = cache.get(&cache_key)
+            && entry.last_fetched.elapsed().as_secs() < 30
+        {
+            // Return cached data so frontend still gets populated
+            return Some(ScmDetail {
+                workspace_id: workspace_id.to_string(),
+                pull_request: entry.pull_request.clone(),
+                ci_checks: entry.ci_checks.clone(),
+                provider: Some(provider_name),
+                error: entry.error.as_ref().map(|e| e.to_string()),
+            });
+        }
+    }
+
+    let _permit = app_state.scm_semaphore.acquire().await.ok()?;
+    let registry = app_state.plugins.read().await;
+
+    let branch = ctx.workspace.branch_name.clone();
+    let args = serde_json::json!({"branch": &branch});
+
+    let (prs_result, ci_result) = tokio::join!(
+        registry.call_operation(
+            &provider_name,
+            "list_pull_requests",
+            args.clone(),
+            ws_info.clone()
+        ),
+        registry.call_operation(&provider_name, "ci_status", args, ws_info),
+    );
+
+    let mut pull_request: Option<PullRequest> = None;
+    let mut ci_checks: Vec<CiCheck> = vec![];
+    let mut error: Option<String> = None;
+
+    match prs_result {
+        Ok(val) => {
+            if let Ok(prs) = serde_json::from_value::<Vec<PullRequest>>(val) {
+                pull_request = prs.into_iter().find(|pr| pr.branch == branch);
+            }
+        }
+        Err(e) => error = Some(e.to_string()),
+    }
+
+    match ci_result {
+        Ok(val) => {
+            if let Ok(checks) = serde_json::from_value::<Vec<CiCheck>>(val) {
+                ci_checks = checks;
+            }
+        }
+        Err(e) => {
+            if error.is_none() {
+                error = Some(e.to_string());
+            }
+        }
+    }
+
+    // Update cache
+    {
+        let scm_error = error
+            .as_ref()
+            .map(|e| claudette::plugin::ScmError::ScriptError(e.clone()));
+        let mut cache = app_state.scm_cache.entries.write().await;
+        cache.insert(
+            cache_key,
+            ScmCacheEntry {
+                pull_request: pull_request.clone(),
+                ci_checks: ci_checks.clone(),
+                last_fetched: Instant::now(),
+                error: scm_error,
+            },
+        );
+    }
+
+    Some(ScmDetail {
+        workspace_id: workspace_id.to_string(),
+        pull_request,
+        ci_checks,
+        provider: Some(provider_name),
+        error,
+    })
+}
+
+/// Start the background SCM polling loop.
+///
+/// Runs every 30 seconds, iterating all active workspaces and emitting
+/// `scm-data-updated` events to the frontend so sidebar badges and the
+/// PR status banner stay fresh without user interaction.
+pub fn start_scm_polling(app_handle: tauri::AppHandle) {
+    let handle = app_handle.clone();
+    tauri::async_runtime::spawn(async move {
+        // Small delay to let the app fully initialize
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+        loop {
+            let app_state = handle.state::<AppState>();
+
+            // Get all active workspace IDs from the database
+            let workspace_ids: Vec<String> = {
+                let db = match Database::open(&app_state.db_path) {
+                    Ok(db) => db,
+                    Err(_) => {
+                        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                        continue;
+                    }
+                };
+                db.list_workspaces()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|ws| ws.status == claudette::model::WorkspaceStatus::Active)
+                    .map(|ws| ws.id)
+                    .collect()
+            };
+
+            for ws_id in &workspace_ids {
+                if let Some(detail) = poll_workspace_scm(&app_state, ws_id).await {
+                    let _ = handle.emit("scm-data-updated", &detail);
+                }
+            }
+
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        }
+    });
 }

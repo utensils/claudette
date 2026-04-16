@@ -284,6 +284,9 @@ fn main() {
                 eprintln!("[tray] Failed to setup tray: {e}");
             }
 
+            // Start background SCM polling for PR status and CI checks.
+            commands::scm::start_scm_polling(app.handle().clone());
+
             Ok(())
         })
         .on_window_event(|window, event| {
