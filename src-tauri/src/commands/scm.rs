@@ -557,8 +557,8 @@ async fn auto_archive_workspace(
     app_state: &AppState,
     workspace_id: &str,
 ) {
-    // All DB work in a block (Database is not Send)
-    let archive_info: Option<(String, String, Option<String>)> = {
+    // All DB work in a block (Database is not Send — must not hold across .await)
+    let archive_info: Option<(String, String, Option<String>, Option<String>)> = {
         let db = match Database::open(&app_state.db_path) {
             Ok(db) => db,
             Err(e) => {
@@ -581,11 +581,6 @@ async fn auto_archive_workspace(
             .flatten()
             .map(|r| r.path);
 
-        // Remove worktree
-        if let (Some(wt_path), Some(repo_path)) = (&ws.worktree_path, &repo_path) {
-            let _ = claudette::git::remove_worktree(repo_path, wt_path, false).await;
-        }
-
         // Update DB status
         let _ = db.delete_terminal_tabs_for_workspace(workspace_id);
         let _ = db.update_workspace_status(
@@ -594,12 +589,22 @@ async fn auto_archive_workspace(
             None,
         );
 
-        Some((ws.id.clone(), ws.name.clone(), ws.worktree_path.clone()))
+        Some((
+            ws.id.clone(),
+            ws.name.clone(),
+            ws.worktree_path.clone(),
+            repo_path,
+        ))
     };
 
-    let Some((ws_id, ws_name, _)) = archive_info else {
+    let Some((ws_id, ws_name, wt_path, repo_path)) = archive_info else {
         return;
     };
+
+    // Remove worktree (async — must happen outside the DB block)
+    if let (Some(wt_path), Some(repo_path)) = (&wt_path, &repo_path) {
+        let _ = claudette::git::remove_worktree(repo_path, wt_path, false).await;
+    }
 
     // Stop any running agent
     {
