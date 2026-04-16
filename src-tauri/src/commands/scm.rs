@@ -500,8 +500,8 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
         loop {
             let app_state = handle.state::<AppState>();
 
-            // Get all active workspace IDs from the database
-            let workspace_ids: Vec<String> = {
+            // All DB reads for this poll cycle in one block
+            let (workspace_ids, archive_on_merge) = {
                 let db = match Database::open(&app_state.db_path) {
                     Ok(db) => db,
                     Err(_) => {
@@ -509,21 +509,20 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                         continue;
                     }
                 };
-                db.list_workspaces()
+                let ids: Vec<String> = db
+                    .list_workspaces()
                     .unwrap_or_default()
                     .into_iter()
                     .filter(|ws| ws.status == claudette::model::WorkspaceStatus::Active)
                     .map(|ws| ws.id)
-                    .collect()
-            };
-
-            // Check the archive_on_merge setting once per poll cycle
-            let archive_on_merge = {
-                Database::open(&app_state.db_path)
+                    .collect();
+                let merge_setting = db
+                    .get_app_setting("archive_on_merge")
                     .ok()
-                    .and_then(|db| db.get_app_setting("archive_on_merge").ok().flatten())
+                    .flatten()
                     .as_deref()
-                    == Some("true")
+                    == Some("true");
+                (ids, merge_setting)
             };
 
             for ws_id in &workspace_ids {

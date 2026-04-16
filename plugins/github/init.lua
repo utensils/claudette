@@ -9,12 +9,17 @@ local function gh(args)
 end
 
 function M.list_pull_requests(args)
-    local data = gh({
+    local gh_args = {
         "pr", "list",
         "--state", "all",
         "--json", "number,title,state,url,author,headRefName,baseRefName,isDraft,statusCheckRollup",
         "--limit", "30",
-    })
+    }
+    if args.branch then
+        table.insert(gh_args, "--head")
+        table.insert(gh_args, args.branch)
+    end
+    local data = gh(gh_args)
     local prs = {}
     for _, item in ipairs(data) do
         local ci = nil

@@ -9,11 +9,16 @@ local function glab(args)
 end
 
 function M.list_pull_requests(args)
-    local data = glab({
+    local glab_args = {
         "mr", "list",
         "--state", "all",
         "--output-format", "json",
-    })
+    }
+    if args.branch then
+        table.insert(glab_args, "--source-branch")
+        table.insert(glab_args, args.branch)
+    end
+    local data = glab(glab_args)
     local prs = {}
     for _, item in ipairs(data) do
         table.insert(prs, {
