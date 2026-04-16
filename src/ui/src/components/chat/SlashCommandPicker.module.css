@@ -57,3 +57,12 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.commandArgHint {
+  color: var(--text-muted, var(--text-dim));
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  margin-left: 8px;
+  white-space: nowrap;
+  opacity: 0.7;
+}

@@ -29,6 +29,9 @@ export function SlashCommandPicker({
         >
           <span className={styles.commandSlash}>/</span>
           <span className={styles.commandName}>{cmd.name}</span>
+          {cmd.argument_hint ? (
+            <span className={styles.commandArgHint}>{cmd.argument_hint}</span>
+          ) : null}
           <span className={styles.commandDesc}>{cmd.description}</span>
         </div>
       ))}
@@ -38,5 +41,9 @@ export function SlashCommandPicker({
 
 export function filterSlashCommands(commands: SlashCommand[], query: string): SlashCommand[] {
   const q = query.toLowerCase();
-  return commands.filter((cmd) => cmd.name.toLowerCase().includes(q));
+  return commands.filter((cmd) => {
+    if (cmd.name.toLowerCase().includes(q)) return true;
+    const aliases = cmd.aliases ?? [];
+    return aliases.some((alias) => alias.toLowerCase().includes(q));
+  });
 }

@@ -4,6 +4,19 @@ use std::path::Path;
 use serde::Deserialize;
 use serde::Serialize;
 
+/// Kind of native slash command. Only set for entries produced by the native
+/// registry; file-based commands (user/project/plugin) leave this as `None`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeKind {
+    /// Mutates local UI state without contacting the agent.
+    LocalAction,
+    /// Opens a settings route/panel.
+    SettingsRoute,
+    /// Expands into seeded prompt text that then flows through the agent pipeline.
+    PromptExpansion,
+}
+
 /// A discovered slash command or skill.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct SlashCommand {
@@ -11,6 +24,75 @@ pub struct SlashCommand {
     pub description: String,
     /// Where the command was found: "builtin", "user", "project", or "plugin".
     pub source: String,
+    /// Alternative names that resolve to this same canonical command.
+    /// Always empty for file-based entries.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    /// Short hint describing the expected argument shape, e.g. `[add|remove] <source>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argument_hint: Option<String>,
+    /// Native command kind. `None` for file-based commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<NativeKind>,
+}
+
+impl SlashCommand {
+    fn file_based(name: String, description: String, source: &str) -> Self {
+        SlashCommand {
+            name,
+            description,
+            source: source.to_string(),
+            aliases: Vec::new(),
+            argument_hint: None,
+            kind: None,
+        }
+    }
+}
+
+/// Build the registry of native slash commands.
+///
+/// Each entry is fully described here (canonical name, aliases, argument hint, kind).
+/// The matching frontend `NATIVE_HANDLERS` table binds handler functions to these
+/// canonical names.
+pub fn native_command_registry(plugin_management_enabled: bool) -> Vec<SlashCommand> {
+    let mut commands = Vec::new();
+    if plugin_management_enabled {
+        commands.push(SlashCommand {
+            name: "plugin".to_string(),
+            description: "Browse and manage plugins in settings".to_string(),
+            source: "builtin".to_string(),
+            aliases: vec!["plugins".to_string()],
+            argument_hint: Some(
+                "[install|enable|disable|uninstall|update|manage|browse|marketplace …]".to_string(),
+            ),
+            kind: Some(NativeKind::SettingsRoute),
+        });
+        commands.push(SlashCommand {
+            name: "marketplace".to_string(),
+            description: "Manage plugin marketplaces in settings".to_string(),
+            source: "builtin".to_string(),
+            aliases: Vec::new(),
+            argument_hint: Some("[add|remove|update] <source>".to_string()),
+            kind: Some(NativeKind::SettingsRoute),
+        });
+    }
+    commands
+}
+
+/// Resolve an input token (command name without the leading `/`) against the native registry,
+/// matching canonical names and aliases case-insensitively.
+pub fn resolve_native<'a>(token: &str, natives: &'a [SlashCommand]) -> Option<&'a SlashCommand> {
+    let needle = token.trim().to_ascii_lowercase();
+    if needle.is_empty() {
+        return None;
+    }
+    natives.iter().find(|cmd| {
+        cmd.name.to_ascii_lowercase() == needle
+            || cmd
+                .aliases
+                .iter()
+                .any(|alias| alias.to_ascii_lowercase() == needle)
+    })
 }
 
 /// Discover all available slash commands by scanning known Claude Code directories.
@@ -43,8 +125,8 @@ pub fn discover_slash_commands(
         collect_commands_from_dir(&project.join(".claude/commands"), "project", &mut commands);
     }
 
-    // Built-in app commands must always win.
-    collect_builtin_commands(&mut commands, plugin_management_enabled);
+    // Native app commands must always win.
+    collect_native_commands(&mut commands, plugin_management_enabled);
 
     // Sort by name for consistent ordering.
     commands.sort_by(|a, b| a.name.cmp(&b.name));
@@ -70,18 +152,10 @@ struct PluginCommandSpec {
     explicit_description: Option<String>,
 }
 
-fn collect_builtin_commands(commands: &mut Vec<SlashCommand>, plugin_management_enabled: bool) {
-    if !plugin_management_enabled {
-        return;
+fn collect_native_commands(commands: &mut Vec<SlashCommand>, plugin_management_enabled: bool) {
+    for native in native_command_registry(plugin_management_enabled) {
+        upsert_command(commands, native);
     }
-    upsert_command(
-        commands,
-        SlashCommand {
-            name: "plugin".to_string(),
-            description: "Browse and manage plugins in settings".to_string(),
-            source: "builtin".to_string(),
-        },
-    );
 }
 
 /// Scan a directory of `*.md` command files.
@@ -116,11 +190,7 @@ fn collect_skills_from_dir(dir: &Path, source: &str, commands: &mut Vec<SlashCom
                 let description = parse_description(&contents);
                 upsert_command(
                     commands,
-                    SlashCommand {
-                        name,
-                        description,
-                        source: source.to_string(),
-                    },
+                    SlashCommand::file_based(name, description, source),
                 );
             }
         }
@@ -296,11 +366,7 @@ fn collect_plugin_command_path(
                 .unwrap_or_else(|| plugin_skill_name(plugin_name, base_dir, path));
             upsert_command(
                 commands,
-                SlashCommand {
-                    name,
-                    description,
-                    source: "plugin".to_string(),
-                },
+                SlashCommand::file_based(name, description, "plugin"),
             );
         }
         return;
@@ -373,11 +439,7 @@ fn parse_command_file(path: &Path, source: &str) -> Option<SlashCommand> {
     let name = path.file_stem()?.to_string_lossy().into_owned();
     let contents = std::fs::read_to_string(path).ok()?;
     let description = parse_description(&contents);
-    Some(SlashCommand {
-        name,
-        description,
-        source: source.to_string(),
-    })
+    Some(SlashCommand::file_based(name, description, source))
 }
 
 /// Extract a description from file contents.
@@ -521,19 +583,15 @@ mod tests {
 
     #[test]
     fn test_upsert_replaces_by_name() {
-        let mut commands = vec![SlashCommand {
-            name: "commit".into(),
-            description: "Plugin commit".into(),
-            source: "plugin".into(),
-        }];
+        let mut commands = vec![SlashCommand::file_based(
+            "commit".into(),
+            "Plugin commit".into(),
+            "plugin",
+        )];
 
         upsert_command(
             &mut commands,
-            SlashCommand {
-                name: "commit".into(),
-                description: "User commit".into(),
-                source: "user".into(),
-            },
+            SlashCommand::file_based("commit".into(), "User commit".into(), "user"),
         );
 
         assert_eq!(commands.len(), 1);
@@ -542,19 +600,65 @@ mod tests {
     }
 
     #[test]
-    fn test_collect_builtin_commands_injects_plugin() {
+    fn test_collect_native_commands_injects_plugin_and_marketplace() {
         let mut commands = Vec::new();
-        collect_builtin_commands(&mut commands, true);
-        assert_eq!(commands.len(), 1);
-        assert_eq!(commands[0].name, "plugin");
-        assert_eq!(commands[0].source, "builtin");
+        collect_native_commands(&mut commands, true);
+        let names: Vec<_> = commands.iter().map(|c| c.name.as_str()).collect();
+        assert!(names.contains(&"plugin"));
+        assert!(names.contains(&"marketplace"));
+        let plugin = commands.iter().find(|c| c.name == "plugin").unwrap();
+        assert_eq!(plugin.source, "builtin");
+        assert_eq!(plugin.aliases, vec!["plugins".to_string()]);
+        assert_eq!(plugin.kind, Some(NativeKind::SettingsRoute));
+        assert!(plugin.argument_hint.is_some());
     }
 
     #[test]
-    fn test_collect_builtin_commands_skips_plugin_when_disabled() {
+    fn test_collect_native_commands_skips_when_disabled() {
         let mut commands = Vec::new();
-        collect_builtin_commands(&mut commands, false);
+        collect_native_commands(&mut commands, false);
         assert!(commands.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_native_matches_canonical_and_alias_case_insensitive() {
+        let natives = native_command_registry(true);
+        assert_eq!(resolve_native("plugin", &natives).unwrap().name, "plugin");
+        assert_eq!(resolve_native("Plugin", &natives).unwrap().name, "plugin");
+        assert_eq!(resolve_native("PLUGINS", &natives).unwrap().name, "plugin");
+        assert_eq!(
+            resolve_native("marketplace", &natives).unwrap().name,
+            "marketplace"
+        );
+        assert!(resolve_native("unknown", &natives).is_none());
+        assert!(resolve_native("", &natives).is_none());
+    }
+
+    #[test]
+    fn test_native_command_registry_canonicals_are_unique() {
+        let natives = native_command_registry(true);
+        let mut names: Vec<_> = natives.iter().map(|c| c.name.clone()).collect();
+        names.sort();
+        let before = names.len();
+        names.dedup();
+        assert_eq!(before, names.len());
+    }
+
+    #[test]
+    fn test_native_kind_serializes_snake_case() {
+        let json = serde_json::to_string(&NativeKind::SettingsRoute).unwrap();
+        assert_eq!(json, "\"settings_route\"");
+        let round: NativeKind = serde_json::from_str("\"prompt_expansion\"").unwrap();
+        assert_eq!(round, NativeKind::PromptExpansion);
+    }
+
+    #[test]
+    fn test_slash_command_serialization_skips_empty_native_fields_for_file_based() {
+        let cmd = SlashCommand::file_based("commit".into(), "do it".into(), "user");
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(!json.contains("aliases"));
+        assert!(!json.contains("argument_hint"));
+        assert!(!json.contains("kind"));
     }
 
     #[test]
@@ -607,21 +711,9 @@ mod tests {
     #[test]
     fn test_sort_commands_by_usage() {
         let mut commands = vec![
-            SlashCommand {
-                name: "alpha".into(),
-                description: "".into(),
-                source: "user".into(),
-            },
-            SlashCommand {
-                name: "beta".into(),
-                description: "".into(),
-                source: "user".into(),
-            },
-            SlashCommand {
-                name: "gamma".into(),
-                description: "".into(),
-                source: "user".into(),
-            },
+            SlashCommand::file_based("alpha".into(), "".into(), "user"),
+            SlashCommand::file_based("beta".into(), "".into(), "user"),
+            SlashCommand::file_based("gamma".into(), "".into(), "user"),
         ];
 
         let mut usage = HashMap::new();
@@ -638,16 +730,8 @@ mod tests {
     #[test]
     fn test_sort_commands_by_usage_alphabetical_tiebreaker() {
         let mut commands = vec![
-            SlashCommand {
-                name: "zebra".into(),
-                description: "".into(),
-                source: "user".into(),
-            },
-            SlashCommand {
-                name: "apple".into(),
-                description: "".into(),
-                source: "user".into(),
-            },
+            SlashCommand::file_based("zebra".into(), "".into(), "user"),
+            SlashCommand::file_based("apple".into(), "".into(), "user"),
         ];
 
         let usage = HashMap::new(); // no usage
