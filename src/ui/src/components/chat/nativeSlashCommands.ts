@@ -1,6 +1,8 @@
 import type { PluginSettingsIntent } from "../../types/plugins";
 import type { NativeSlashKind } from "../../services/tauri";
+import type { PermissionLevel } from "../../stores/useAppStore";
 import { parsePluginSlashCommand } from "./pluginSlashCommand";
+import { MODELS } from "./modelRegistry";
 
 export type { NativeSlashKind };
 
@@ -41,6 +43,27 @@ export interface NativeCommandContext {
   addLocalMessage: (text: string) => void;
   openUsageSettingsExternal: () => void;
   openReleaseNotes: () => void;
+
+  // -- Per-workspace state read by workspace-control commands
+  // (/clear, /plan, /model, /permissions, /status). --
+  workspaceId: string | null;
+  agentStatus: string | null;
+  selectedModel: string;
+  permissionLevel: PermissionLevel;
+  planMode: boolean;
+  fastMode: boolean;
+  thinkingEnabled: boolean;
+  chromeEnabled: boolean;
+  effortLevel: string;
+  pendingPlanFilePath: string | null;
+
+  // -- Pre-bound per-workspace write callbacks. Callers wire these to the
+  // same store setters / backend commands the toolbar and shortcuts use. --
+  setSelectedModel: (model: string) => Promise<void>;
+  setPermissionLevel: (level: PermissionLevel) => Promise<void>;
+  setPlanMode: (enabled: boolean) => void;
+  clearConversation: (restoreFiles: boolean) => Promise<void>;
+  readPlanFile: (path: string) => Promise<string>;
 }
 
 export type NativeCommandResult =
@@ -52,7 +75,10 @@ export interface NativeHandler {
   name: string;
   aliases: string[];
   kind: NativeSlashKind;
-  execute: (ctx: NativeCommandContext, args: string) => NativeCommandResult;
+  execute: (
+    ctx: NativeCommandContext,
+    args: string,
+  ) => NativeCommandResult | Promise<NativeCommandResult>;
 }
 
 /** Split `/token rest of args` into its token and the argument tail. */
@@ -326,6 +352,205 @@ const versionHandler: NativeHandler = {
   },
 };
 
+const PERMISSION_MODES: PermissionLevel[] = ["readonly", "standard", "full"];
+
+function isPermissionLevel(value: string): value is PermissionLevel {
+  return (PERMISSION_MODES as string[]).includes(value);
+}
+
+function formatOnOff(enabled: boolean): string {
+  return enabled ? "on" : "off";
+}
+
+const clearHandler: NativeHandler = {
+  name: "clear",
+  aliases: [],
+  kind: "local_action",
+  execute: async (ctx, args) => {
+    const handled = { kind: "handled" as const, canonicalName: "clear" };
+    if (!ctx.workspaceId) {
+      ctx.addLocalMessage("/clear: no active workspace");
+      return handled;
+    }
+    if (args.trim() !== "") {
+      ctx.addLocalMessage("/clear: does not accept arguments. Usage: /clear");
+      return handled;
+    }
+    try {
+      // Chat history only — file restore is available from the rollback modal
+      // when the user explicitly wants it.
+      await ctx.clearConversation(false);
+      ctx.addLocalMessage("Conversation cleared.");
+    } catch (error) {
+      ctx.addLocalMessage(`/clear failed: ${String(error)}`);
+    }
+    return handled;
+  },
+};
+
+const planHandler: NativeHandler = {
+  name: "plan",
+  aliases: [],
+  kind: "local_action",
+  execute: async (ctx, args) => {
+    const handled = { kind: "handled" as const, canonicalName: "plan" };
+    if (!ctx.workspaceId) {
+      ctx.addLocalMessage("/plan: no active workspace");
+      return handled;
+    }
+    const arg = args.trim().toLowerCase();
+    if (arg === "" || arg === "toggle") {
+      const next = !ctx.planMode;
+      ctx.setPlanMode(next);
+      ctx.addLocalMessage(`Plan mode ${formatOnOff(next)}.`);
+      return handled;
+    }
+    if (arg === "on") {
+      ctx.setPlanMode(true);
+      ctx.addLocalMessage("Plan mode enabled.");
+      return handled;
+    }
+    if (arg === "off") {
+      ctx.setPlanMode(false);
+      ctx.addLocalMessage("Plan mode disabled.");
+      return handled;
+    }
+    if (arg === "open") {
+      if (!ctx.pendingPlanFilePath) {
+        ctx.addLocalMessage(
+          "/plan open: no active plan file. Enable plan mode and run a turn to produce one.",
+        );
+        return handled;
+      }
+      try {
+        const content = await ctx.readPlanFile(ctx.pendingPlanFilePath);
+        ctx.addLocalMessage(
+          `Plan file — ${ctx.pendingPlanFilePath}\n\n${content}`,
+        );
+      } catch (error) {
+        ctx.addLocalMessage(`/plan open failed: ${String(error)}`);
+      }
+      return handled;
+    }
+    ctx.addLocalMessage(
+      "/plan: unknown argument. Usage: /plan [on|off|toggle|open]",
+    );
+    return handled;
+  },
+};
+
+const modelHandler: NativeHandler = {
+  name: "model",
+  aliases: [],
+  kind: "local_action",
+  execute: async (ctx, args) => {
+    const handled = { kind: "handled" as const, canonicalName: "model" };
+    if (!ctx.workspaceId) {
+      ctx.addLocalMessage("/model: no active workspace");
+      return handled;
+    }
+    const arg = args.trim();
+    const modelIds = MODELS.map((m) => m.id);
+    if (arg === "") {
+      const lines = MODELS.map((m) => {
+        const marker = m.id === ctx.selectedModel ? "•" : " ";
+        return ` ${marker} ${m.id} — ${m.label}`;
+      }).join("\n");
+      ctx.addLocalMessage(`Current model: ${ctx.selectedModel}\n${lines}`);
+      return handled;
+    }
+    const normalized = arg.toLowerCase();
+    const match = MODELS.find((m) => m.id.toLowerCase() === normalized);
+    if (!match) {
+      ctx.addLocalMessage(
+        `/model: unknown model "${arg}". Valid options: ${modelIds.join(", ")}`,
+      );
+      return handled;
+    }
+    if (match.id === ctx.selectedModel) {
+      ctx.addLocalMessage(`Model is already ${match.id}.`);
+      return handled;
+    }
+    try {
+      await ctx.setSelectedModel(match.id);
+      ctx.addLocalMessage(`Model set to ${match.id}.`);
+    } catch (error) {
+      ctx.addLocalMessage(`/model failed: ${String(error)}`);
+    }
+    return handled;
+  },
+};
+
+const permissionsHandler: NativeHandler = {
+  name: "permissions",
+  aliases: ["allowed-tools"],
+  kind: "local_action",
+  execute: async (ctx, args) => {
+    const handled = {
+      kind: "handled" as const,
+      canonicalName: "permissions",
+    };
+    if (!ctx.workspaceId) {
+      ctx.addLocalMessage("/permissions: no active workspace");
+      return handled;
+    }
+    const arg = args.trim().toLowerCase();
+    if (arg === "") {
+      ctx.addLocalMessage(
+        `Permission mode: ${ctx.permissionLevel}. Options: ${PERMISSION_MODES.join(", ")}`,
+      );
+      return handled;
+    }
+    if (!isPermissionLevel(arg)) {
+      ctx.addLocalMessage(
+        `/permissions: unknown mode "${args.trim()}". Valid options: ${PERMISSION_MODES.join(", ")}`,
+      );
+      return handled;
+    }
+    if (arg === ctx.permissionLevel) {
+      ctx.addLocalMessage(`Permission mode is already ${arg}.`);
+      return handled;
+    }
+    try {
+      await ctx.setPermissionLevel(arg);
+      ctx.addLocalMessage(`Permission mode set to ${arg}.`);
+    } catch (error) {
+      ctx.addLocalMessage(`/permissions failed: ${String(error)}`);
+    }
+    return handled;
+  },
+};
+
+const statusHandler: NativeHandler = {
+  name: "status",
+  aliases: [],
+  kind: "local_action",
+  execute: (ctx) => {
+    const handled = { kind: "handled" as const, canonicalName: "status" };
+    if (!ctx.workspaceId) {
+      ctx.addLocalMessage("/status: no active workspace");
+      return handled;
+    }
+    const repo = ctx.repository?.name ?? "(unknown repo)";
+    const branch = ctx.workspace?.branch ?? "(no branch)";
+    const agent = ctx.agentStatus ?? "(unknown)";
+    const lines = [
+      `Repo: ${repo}`,
+      `Branch: ${branch}`,
+      `Agent: ${agent}`,
+      `Model: ${ctx.selectedModel}`,
+      `Permission: ${ctx.permissionLevel}`,
+      `Plan mode: ${formatOnOff(ctx.planMode)}`,
+      `Fast: ${formatOnOff(ctx.fastMode)}`,
+      `Thinking: ${formatOnOff(ctx.thinkingEnabled)}`,
+      `Chrome: ${formatOnOff(ctx.chromeEnabled)}`,
+      `Effort: ${ctx.effortLevel}`,
+    ];
+    ctx.addLocalMessage(lines.join("\n"));
+    return handled;
+  },
+};
+
 export const NATIVE_HANDLERS: NativeHandler[] = [
   pluginHandler("plugin"),
   pluginHandler("marketplace"),
@@ -337,6 +562,11 @@ export const NATIVE_HANDLERS: NativeHandler[] = [
   extraUsageHandler,
   releaseNotesHandler,
   versionHandler,
+  clearHandler,
+  planHandler,
+  modelHandler,
+  permissionsHandler,
+  statusHandler,
 ];
 
 /** Resolve a slash command token (no leading `/`) against the native handler table. */

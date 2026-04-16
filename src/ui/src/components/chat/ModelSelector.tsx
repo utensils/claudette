@@ -1,15 +1,9 @@
 import { useEffect, useRef, type RefObject } from "react";
 import { BadgeDollarSign } from "lucide-react";
 import styles from "./ModelSelector.module.css";
+import { MODELS } from "./modelRegistry";
 
-export const MODELS = [
-  { id: "opus", label: "Opus 4.7 1M", group: "Claude Code", extraUsage: true },
-  { id: "claude-opus-4-7", label: "Opus 4.7", group: "Claude Code", extraUsage: false },
-  { id: "claude-opus-4-6", label: "Opus 4.6", group: "Claude Code", extraUsage: false },
-  { id: "sonnet", label: "Sonnet 4.6", group: "Claude Code", extraUsage: false },
-  { id: "claude-sonnet-4-6[1m]", label: "Sonnet 4.6 1M", group: "Claude Code", extraUsage: true },
-  { id: "haiku", label: "Haiku 4.5", group: "Claude Code", extraUsage: false },
-] as const;
+export { MODELS } from "./modelRegistry";
 
 interface ModelSelectorProps {
   anchorRef: RefObject<HTMLButtonElement | null>;

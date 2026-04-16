@@ -20,7 +20,12 @@ import {
   getAppSetting,
   setAppSetting,
   listWorkspaceFiles,
+  clearConversation,
+  readPlanFile,
+  loadDiffFiles,
 } from "../../services/tauri";
+import { applySelectedModel } from "./applySelectedModel";
+import type { PermissionLevel } from "../../stores/useAppStore";
 import { open } from "@tauri-apps/plugin-dialog";
 import { reconstructCompletedTurns } from "../../utils/reconstructTurns";
 import type { SlashCommand, FileEntry } from "../../services/tauri";
@@ -494,7 +499,97 @@ export function ChatPanel() {
       const nativeHandler = shadowed ? null : candidateHandler;
       if (nativeHandler) {
         const workspaceId = selectedWorkspaceId;
-        const result = nativeHandler.execute(
+        const state = useAppStore.getState();
+        const currentModel = state.selectedModel[workspaceId] ?? "opus";
+        const currentPermission: PermissionLevel =
+          state.permissionLevel[workspaceId] ?? "full";
+        const currentPlanMode = state.planMode[workspaceId] ?? false;
+        const currentFastMode = state.fastMode[workspaceId] ?? false;
+        const currentThinking = state.thinkingEnabled[workspaceId] ?? false;
+        const currentChrome = state.chromeEnabled[workspaceId] ?? false;
+        const currentEffort = state.effortLevel[workspaceId] ?? "auto";
+        const pendingPlanFilePath =
+          state.planApprovals[workspaceId]?.planFilePath ?? null;
+        const agentStatusLabel =
+          typeof ws.agent_status === "string"
+            ? ws.agent_status
+            : `Error: ${ws.agent_status.Error}`;
+        const isRemoteWorkspace = !!ws.remote_connection_id;
+
+        const addLocalMessage = (text: string) => {
+          addChatMessage(workspaceId, {
+            id: crypto.randomUUID(),
+            workspace_id: workspaceId,
+            role: "System",
+            content: text,
+            cost_usd: null,
+            duration_ms: null,
+            created_at: new Date().toISOString(),
+            thinking: null,
+          });
+        };
+
+        const setSelectedModelBound = (nextModel: string) =>
+          applySelectedModel(workspaceId, nextModel);
+
+        const setPermissionLevelBound = async (level: PermissionLevel) => {
+          const previous =
+            useAppStore.getState().permissionLevel[workspaceId] ?? "full";
+          useAppStore.getState().setPermissionLevel(workspaceId, level);
+          try {
+            await setAppSetting(`permission_level:${workspaceId}`, level);
+          } catch (err) {
+            useAppStore.getState().setPermissionLevel(workspaceId, previous);
+            throw err;
+          }
+        };
+
+        const setPlanModeBound = (enabled: boolean) => {
+          useAppStore.getState().setPlanMode(workspaceId, enabled);
+        };
+
+        const clearConversationBound = async (restoreFiles: boolean) => {
+          // The /clear pipeline (clearConversation + follow-up reloads) runs
+          // via local Tauri invokes only — RollbackModal has the same
+          // boundary. Surface a clear local message on remote workspaces
+          // rather than partially executing and leaving the UI in a
+          // half-reset state.
+          if (isRemoteWorkspace) {
+            throw new Error(
+              "/clear is not yet supported for remote workspaces",
+            );
+          }
+          const store = useAppStore.getState();
+          const messages = await clearConversation(workspaceId, restoreFiles);
+          store.rollbackConversation(workspaceId, "__clear__", messages);
+          loadCompletedTurns(workspaceId)
+            .then((turnData) => {
+              const turns = reconstructCompletedTurns(messages, turnData);
+              useAppStore.getState().setCompletedTurns(workspaceId, turns);
+            })
+            .catch((err) =>
+              console.error("Failed to reload turns after /clear:", err),
+            );
+          loadAttachmentsForWorkspace(workspaceId)
+            .then((atts) =>
+              useAppStore.getState().setChatAttachments(workspaceId, atts),
+            )
+            .catch((err) =>
+              console.error("Failed to reload attachments after /clear:", err),
+            );
+          useAppStore.getState().clearDiff();
+          loadDiffFiles(workspaceId)
+            .then((result) =>
+              useAppStore
+                .getState()
+                .setDiffFiles(result.files, result.merge_base),
+            )
+            .catch((err) =>
+              console.error("Failed to refresh diff after /clear:", err),
+            );
+        };
+
+        const result = await nativeHandler.execute(
           {
             repoId: repo?.remote_connection_id ? null : repo?.id ?? null,
             pluginManagementEnabled,
@@ -507,18 +602,7 @@ export function ChatPanel() {
             repoDefaultBranch: defaultBranch ?? null,
             openSettings,
             appVersion,
-            addLocalMessage: (text: string) => {
-              addChatMessage(workspaceId, {
-                id: crypto.randomUUID(),
-                workspace_id: workspaceId,
-                role: "System",
-                content: text,
-                cost_usd: null,
-                duration_ms: null,
-                created_at: new Date().toISOString(),
-                thinking: null,
-              });
-            },
+            addLocalMessage,
             openUsageSettingsExternal: () => {
               void openUsageSettings().catch((err) =>
                 console.error("Failed to open usage settings:", err),
@@ -529,6 +613,21 @@ export function ChatPanel() {
                 console.error("Failed to open release notes:", err),
               );
             },
+            workspaceId,
+            agentStatus: agentStatusLabel,
+            selectedModel: currentModel,
+            permissionLevel: currentPermission,
+            planMode: currentPlanMode,
+            fastMode: currentFastMode,
+            thinkingEnabled: currentThinking,
+            chromeEnabled: currentChrome,
+            effortLevel: currentEffort,
+            pendingPlanFilePath,
+            setSelectedModel: setSelectedModelBound,
+            setPermissionLevel: setPermissionLevelBound,
+            setPlanMode: setPlanModeBound,
+            clearConversation: clearConversationBound,
+            readPlanFile,
           },
           parsedSlash.args,
         );
