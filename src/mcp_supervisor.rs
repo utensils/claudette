@@ -182,7 +182,7 @@ pub async fn validate_stdio_server(config: &serde_json::Value) -> Result<(), Str
         .and_then(|v| v.as_str())
         .ok_or("stdio server config missing 'command' field")?;
 
-    which::which(command)
+    crate::env::which_in_enriched_path(command)
         .map(|_| ())
         .map_err(|_| format!("command not found in PATH: {command}"))
 }

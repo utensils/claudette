@@ -206,6 +206,7 @@ async fn resolve_and_run_setup(
         .arg("-c")
         .arg(&script)
         .current_dir(worktree_path)
+        .env("PATH", claudette::env::enriched_path())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .process_group(0)
