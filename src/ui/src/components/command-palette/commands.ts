@@ -1,5 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import {
+  BadgeDollarSign,
   PanelLeft,
   Terminal,
   GitCompare,
@@ -130,18 +131,19 @@ export function buildModelCommands(
   close: () => void,
 ): Command[] {
   const models = [
-    { id: "opus", label: "Opus 4.7 1M" },
-    { id: "claude-opus-4-7", label: "Opus 4.7" },
-    { id: "claude-opus-4-6", label: "Opus 4.6" },
-    { id: "sonnet", label: "Sonnet 4.6" },
-    { id: "claude-sonnet-4-6[1m]", label: "Sonnet 4.6 1M" },
-    { id: "haiku", label: "Haiku 4.5" },
+    { id: "opus", label: "Opus 4.7 1M", extraUsage: true },
+    { id: "claude-opus-4-7", label: "Opus 4.7", extraUsage: false },
+    { id: "claude-opus-4-6", label: "Opus 4.6", extraUsage: false },
+    { id: "sonnet", label: "Sonnet 4.6", extraUsage: false },
+    { id: "claude-sonnet-4-6[1m]", label: "Sonnet 4.6 1M", extraUsage: true },
+    { id: "haiku", label: "Haiku 4.5", extraUsage: false },
   ];
   return models.map((m) => ({
     id: `model:${m.id}`,
     name: `${m.label}${m.id === selectedModel ? " ✓" : ""}`,
+    description: m.extraUsage ? "Extra usage: 1M context billed at API rates" : undefined,
     category: "agent" as const,
-    icon: Sparkles,
+    icon: m.extraUsage ? BadgeDollarSign : Sparkles,
     keywords: ["model", ...m.label.toLowerCase().split(/\s+/)],
     execute: () => { onSelect(m.id); close(); },
   }));

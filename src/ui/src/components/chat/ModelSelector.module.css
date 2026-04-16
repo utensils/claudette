@@ -60,6 +60,12 @@
   flex-shrink: 0;
 }
 
+.extraUsage {
+  display: inline-flex;
+  color: var(--text-dim);
+  cursor: help;
+}
+
 .check {
   margin-left: auto;
   color: var(--accent-primary);

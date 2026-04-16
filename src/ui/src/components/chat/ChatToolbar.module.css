@@ -58,6 +58,10 @@
   line-height: 1;
 }
 
+.extraUsage {
+  color: var(--text-dim);
+}
+
 /* Inside chips, the badge floats centered over the content at its natural size */
 .chip :global(.shortcut-badge) {
   position: absolute;

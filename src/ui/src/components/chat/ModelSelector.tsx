@@ -1,4 +1,5 @@
 import { useEffect, useRef, type RefObject } from "react";
+import { BadgeDollarSign } from "lucide-react";
 import styles from "./ModelSelector.module.css";
 
 export const MODELS = [
@@ -59,6 +60,14 @@ export function ModelSelector({
               >
                 <span className={styles.dot} />
                 {model.label}
+                {model.label.includes("1M") && (
+                  <span
+                    className={styles.extraUsage}
+                    title="Extra usage: 1M context requests are billed at API rates beyond your subscription plan allocation"
+                  >
+                    <BadgeDollarSign size={14} />
+                  </span>
+                )}
                 {model.id === selected && <span className={styles.check}>✓</span>}
               </button>
             ))}

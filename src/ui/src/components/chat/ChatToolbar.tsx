@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Sparkles, Zap, Brain, BookOpen, Gauge, Eye, EyeOff, Globe } from "lucide-react";
+import { BadgeDollarSign, Sparkles, Zap, Brain, BookOpen, Gauge, Eye, EyeOff, Globe } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import { resetAgentSession, setAppSetting, getAppSetting } from "../../services/tauri";
 import { ModelSelector, MODELS } from "./ModelSelector";
@@ -170,8 +170,9 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
     return () => window.removeEventListener("keydown", handleKey);
   }, [disabled, toggleThinking]);
 
-  const modelLabel =
-    MODELS.find((m) => m.id === selectedModel)?.label ?? selectedModel;
+  const currentModel = MODELS.find((m) => m.id === selectedModel);
+  const modelLabel = currentModel?.label ?? selectedModel;
+  const isExtraUsage = modelLabel.includes("1M");
   const effortLabel =
     EFFORT_LEVELS.find((l) => l.id === effortLevel)?.label ?? effortLevel;
 
@@ -184,10 +185,11 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
         className={`${styles.chip}`}
         onClick={() => setModelSelectorOpen(!modelSelectorOpen)}
         disabled={disabled}
-        title="Change model"
+        title={isExtraUsage ? "Change model (extra usage: 1M context billed at API rates)" : "Change model"}
       >
         <Sparkles size={14} />
         <span className={styles.chipLabel}>{modelLabel}</span>
+        {isExtraUsage && <BadgeDollarSign size={14} className={styles.extraUsage} />}
       </button>
 
       <button
