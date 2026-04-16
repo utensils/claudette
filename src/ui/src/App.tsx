@@ -205,6 +205,17 @@ function App() {
       }
     });
 
+    // Listen for workspace auto-archived events (e.g. PR merged with archive_on_merge).
+    const unlistenAutoArchived = listen<{ workspace_id: string; workspace_name: string }>("workspace-auto-archived", (event) => {
+      const { workspace_id } = event.payload;
+      const store = useAppStore.getState();
+      store.updateWorkspace(workspace_id, { status: "Archived" as const });
+      // If the archived workspace was selected, deselect it
+      if (store.selectedWorkspaceId === workspace_id) {
+        store.selectWorkspace(null);
+      }
+    });
+
     return () => {
       isActive = false;
       window.clearInterval(discoveredServersPollId);
@@ -218,6 +229,7 @@ function App() {
       unlistenZoomOut.then((fn) => fn());
       unlistenResetZoom.then((fn) => fn());
       unlistenScmUpdate.then((fn) => fn());
+      unlistenAutoArchived.then((fn) => fn());
     };
   }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setPluginManagementEnabled, setAppVersion]);
 

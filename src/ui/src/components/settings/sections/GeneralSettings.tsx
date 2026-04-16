@@ -17,6 +17,7 @@ export function GeneralSettings() {
   const [trayIconStyle, setTrayIconStyle] = useState<
     "auto" | "light" | "dark" | "color"
   >("auto");
+  const [archiveOnMerge, setArchiveOnMerge] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [appVersion, setAppVersion] = useState("");
   const [checkState, setCheckState] = useState<"idle" | "checking" | "up-to-date">("idle");
@@ -37,6 +38,9 @@ export function GeneralSettings() {
           setTrayIconStyle("auto");
         }
       })
+      .catch(() => {});
+    getAppSetting("archive_on_merge")
+      .then((val) => setArchiveOnMerge(val === "true"))
       .catch(() => {});
   }, []);
 
@@ -89,6 +93,18 @@ export function GeneralSettings() {
       await setAppSetting("tray_enabled", next ? "true" : "false");
     } catch (e) {
       setTrayEnabled(!next);
+      setError(String(e));
+    }
+  };
+
+  const handleArchiveOnMergeToggle = async () => {
+    const next = !archiveOnMerge;
+    setArchiveOnMerge(next);
+    try {
+      setError(null);
+      await setAppSetting("archive_on_merge", next ? "true" : "false");
+    } catch (e) {
+      setArchiveOnMerge(!next);
       setError(String(e));
     }
   };
@@ -171,6 +187,27 @@ export function GeneralSettings() {
               <FolderOpen size={14} />
             </button>
           </div>
+        </div>
+      </div>
+
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>Archive on merge</div>
+          <div className={styles.settingDescription}>
+            Automatically archive a workspace when its pull request is merged.
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          <button
+            className={styles.toggle}
+            role="switch"
+            aria-checked={archiveOnMerge}
+            aria-label="Archive on merge"
+            data-checked={archiveOnMerge}
+            onClick={handleArchiveOnMergeToggle}
+          >
+            <div className={styles.toggleKnob} />
+          </button>
         </div>
       </div>
 

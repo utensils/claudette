@@ -517,13 +517,109 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                     .collect()
             };
 
+            // Check the archive_on_merge setting once per poll cycle
+            let archive_on_merge = {
+                Database::open(&app_state.db_path)
+                    .ok()
+                    .and_then(|db| db.get_app_setting("archive_on_merge").ok().flatten())
+                    .as_deref()
+                    == Some("true")
+            };
+
             for ws_id in &workspace_ids {
                 if let Some(detail) = poll_workspace_scm(&app_state, ws_id).await {
                     let _ = handle.emit("scm-data-updated", &detail);
+
+                    // Auto-archive workspace if PR is merged and setting is enabled
+                    if archive_on_merge
+                        && detail
+                            .pull_request
+                            .as_ref()
+                            .is_some_and(|pr| pr.state == claudette::plugin::scm::PrState::Merged)
+                    {
+                        eprintln!("[scm] PR merged for workspace {} — auto-archiving", ws_id);
+                        auto_archive_workspace(&handle, &app_state, ws_id).await;
+                    }
                 }
             }
 
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
         }
     });
+}
+
+/// Auto-archive a workspace when its PR is merged.
+///
+/// Performs the same core steps as the `archive_workspace` Tauri command:
+/// removes the worktree, updates the DB status, stops any running agent,
+/// and emits a `workspace-auto-archived` event to the frontend.
+async fn auto_archive_workspace(
+    handle: &tauri::AppHandle,
+    app_state: &AppState,
+    workspace_id: &str,
+) {
+    // All DB work in a block (Database is not Send)
+    let archive_info: Option<(String, String, Option<String>)> = {
+        let db = match Database::open(&app_state.db_path) {
+            Ok(db) => db,
+            Err(e) => {
+                eprintln!("[scm] Failed to open DB for auto-archive: {e}");
+                return;
+            }
+        };
+        let ws = db
+            .list_workspaces()
+            .unwrap_or_default()
+            .into_iter()
+            .find(|w| w.id == workspace_id);
+        let ws = match ws {
+            Some(ws) => ws,
+            None => return,
+        };
+        let repo_path = db
+            .get_repository(&ws.repository_id)
+            .ok()
+            .flatten()
+            .map(|r| r.path);
+
+        // Remove worktree
+        if let (Some(wt_path), Some(repo_path)) = (&ws.worktree_path, &repo_path) {
+            let _ = claudette::git::remove_worktree(repo_path, wt_path, false).await;
+        }
+
+        // Update DB status
+        let _ = db.delete_terminal_tabs_for_workspace(workspace_id);
+        let _ = db.update_workspace_status(
+            workspace_id,
+            &claudette::model::WorkspaceStatus::Archived,
+            None,
+        );
+
+        Some((ws.id.clone(), ws.name.clone(), ws.worktree_path.clone()))
+    };
+
+    let Some((ws_id, ws_name, _)) = archive_info else {
+        return;
+    };
+
+    // Stop any running agent
+    {
+        let mut agents = app_state.agents.write().await;
+        if let Some(session) = agents.remove(&ws_id)
+            && let Some(pid) = session.active_pid
+        {
+            let _ = claudette::agent::stop_agent(pid).await;
+        }
+    }
+
+    // Rebuild tray and notify frontend
+    crate::tray::rebuild_tray(handle);
+    let _ = handle.emit(
+        "workspace-auto-archived",
+        serde_json::json!({
+            "workspace_id": ws_id,
+            "workspace_name": ws_name,
+        }),
+    );
+    eprintln!("[scm] Auto-archived workspace '{ws_name}' ({ws_id})");
 }
