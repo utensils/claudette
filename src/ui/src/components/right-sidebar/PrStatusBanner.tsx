@@ -81,7 +81,7 @@ export const PrStatusBanner = memo(function PrStatusBanner() {
       >
         <Icon size={14} />
         <span className={styles.prNumber}>#{pr.number}</span>
-        <ExternalLink size={10} className={styles.externalIcon} />
+        <ExternalLink size={14} className={styles.externalIcon} />
       </button>
       <span className={styles.statusText} style={{ color: config.fg }}>
         {config.text}
