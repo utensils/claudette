@@ -547,6 +547,30 @@ impl Database {
         Ok(())
     }
 
+    /// Insert multiple workspaces atomically. All succeed or none are committed.
+    pub fn insert_workspaces_batch(&self, workspaces: &[Workspace]) -> Result<(), rusqlite::Error> {
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO workspaces (id, repository_id, name, branch_name, worktree_path, status, status_line)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            )?;
+            for ws in workspaces {
+                stmt.execute(params![
+                    ws.id,
+                    ws.repository_id,
+                    ws.name,
+                    ws.branch_name,
+                    ws.worktree_path,
+                    ws.status.as_str(),
+                    ws.status_line,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn list_workspaces(&self) -> Result<Vec<Workspace>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
             "SELECT id, repository_id, name, branch_name, worktree_path, status, status_line, created_at

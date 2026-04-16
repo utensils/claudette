@@ -48,6 +48,9 @@ export function McpSelectionModal() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Accept pre-fetched detected servers via modalData to avoid redundant detection.
+  const prefetchedMcps = modalData.detectedMcps as McpServer[] | undefined;
+
   useEffect(() => {
     if (!repoId) return;
     setLoading(true);
@@ -55,7 +58,10 @@ export function McpSelectionModal() {
     // Load both detected and already-saved servers, then merge.
     // Already-saved servers stay selected; newly detected ones are also
     // pre-selected (opt-out default).
-    Promise.all([detectMcpServers(repoId), loadRepositoryMcps(repoId)])
+    const detectPromise = prefetchedMcps
+      ? Promise.resolve(prefetchedMcps)
+      : detectMcpServers(repoId);
+    Promise.all([detectPromise, loadRepositoryMcps(repoId)])
       .then(([detected, saved]) => {
         const savedNames = new Set(saved.map((s) => s.name));
 

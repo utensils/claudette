@@ -63,7 +63,7 @@ export function AddRepoModal() {
       }
 
       if (mcps.length > 0) {
-        openModal("mcpSelection", { repoId: repo.id });
+        openModal("mcpSelection", { repoId: repo.id, detectedMcps: mcps });
         return;
       }
       closeModal();

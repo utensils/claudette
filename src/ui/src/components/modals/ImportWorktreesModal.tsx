@@ -54,7 +54,7 @@ export function ImportWorktreesModal() {
 
   const chainOrClose = () => {
     if (pendingMcps && pendingMcps.length > 0) {
-      openModal("mcpSelection", { repoId });
+      openModal("mcpSelection", { repoId, detectedMcps: pendingMcps });
     } else {
       closeModal();
     }

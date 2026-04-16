@@ -94,12 +94,7 @@ pub async fn create_workspace(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<CreateWorkspaceResult, String> {
-    // Validate workspace name: must be ASCII alphanumeric + hyphens only (branch-safe).
-    if name.is_empty()
-        || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-        || name.starts_with('-')
-        || name.ends_with('-')
-    {
+    if !is_valid_workspace_name(&name) {
         return Err(format!("Invalid workspace name: '{name}'"));
     }
 
@@ -652,6 +647,10 @@ pub struct WorktreeImport {
 }
 
 /// Import existing git worktrees as Claudette workspaces.
+///
+/// Re-validates each import against `git worktree list` to ensure the paths
+/// are genuine linked worktrees. All inserts are atomic — either all succeed
+/// or none are committed.
 #[tauri::command]
 pub async fn import_worktrees(
     repo_id: String,
@@ -661,31 +660,48 @@ pub async fn import_worktrees(
 ) -> Result<Vec<Workspace>, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let repos = db.list_repositories().map_err(|e| e.to_string())?;
-    let _repo = repos
+    let repo = repos
         .iter()
         .find(|r| r.id == repo_id)
         .ok_or("Repository not found")?;
 
+    // Re-validate imports against the actual git worktree list.
+    let worktrees = git::list_worktrees(&repo.path)
+        .await
+        .map_err(|e| e.to_string())?;
+    let valid_worktree_paths: std::collections::HashSet<String> = worktrees
+        .iter()
+        .filter(|wt| wt.branch.is_some() && !wt.is_bare)
+        .filter_map(|wt| {
+            std::fs::canonicalize(&wt.path)
+                .map(|p| p.to_string_lossy().to_string())
+                .ok()
+        })
+        .collect();
+
     let mut created = Vec::new();
 
-    for imp in imports {
+    for imp in &imports {
         if !is_valid_workspace_name(&imp.name) {
             return Err(format!("Invalid workspace name: '{}'", imp.name));
-        }
-
-        if !Path::new(&imp.path).is_dir() {
-            return Err(format!("Worktree path does not exist: '{}'", imp.path));
         }
 
         let canon = std::fs::canonicalize(&imp.path)
             .map_err(|e| format!("Invalid path '{}': {e}", imp.path))?;
         let canon_str = canon.to_string_lossy().to_string();
 
+        if !valid_worktree_paths.contains(&canon_str) {
+            return Err(format!(
+                "'{}' is not a linked worktree of this repository",
+                imp.path
+            ));
+        }
+
         let ws = Workspace {
             id: uuid::Uuid::new_v4().to_string(),
             repository_id: repo_id.clone(),
-            name: imp.name,
-            branch_name: imp.branch_name,
+            name: imp.name.clone(),
+            branch_name: imp.branch_name.clone(),
             worktree_path: Some(canon_str),
             status: WorkspaceStatus::Active,
             agent_status: AgentStatus::Idle,
@@ -693,9 +709,12 @@ pub async fn import_worktrees(
             created_at: now_iso(),
         };
 
-        db.insert_workspace(&ws).map_err(|e| e.to_string())?;
         created.push(ws);
     }
+
+    // Atomic batch insert — all or nothing.
+    db.insert_workspaces_batch(&created)
+        .map_err(|e| e.to_string())?;
 
     crate::tray::rebuild_tray(&app);
 
