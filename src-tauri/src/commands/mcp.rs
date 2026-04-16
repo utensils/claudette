@@ -254,7 +254,8 @@ pub async fn set_mcp_server_enabled(
     // Mark affected sessions as dirty so the next turn tears down the
     // persistent session and starts a fresh one with updated MCP config.
     // This avoids killing an agent mid-turn — the current turn completes
-    // normally and the config change takes effect on the next send_message.
+    // normally and the config change takes effect on the next
+    // `send_chat_message` command.
     let workspaces = db.list_workspaces().unwrap_or_default();
     let repo_workspace_ids: Vec<String> = workspaces
         .iter()
