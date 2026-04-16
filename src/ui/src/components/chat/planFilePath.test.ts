@@ -174,6 +174,85 @@ describe("findLatestPlanFilePath", () => {
     expect(findLatestPlanFilePath(WS)).toBeNull();
   });
 
+  it("extracts a plan path that contains whitespace (macOS home dirs with spaces)", () => {
+    useAppStore.setState({
+      chatMessages: {
+        [WS]: [
+          msg(
+            "m1",
+            "Assistant",
+            "Plan written to /Users/Ada Lovelace/.claude/plans/compiler notes.md.",
+          ),
+        ],
+      },
+    });
+    expect(findLatestPlanFilePath(WS)).toBe(
+      "/Users/Ada Lovelace/.claude/plans/compiler notes.md",
+    );
+  });
+
+  it("stops the match at trailing punctuation rather than swallowing following prose", () => {
+    useAppStore.setState({
+      chatMessages: {
+        [WS]: [
+          msg(
+            "m1",
+            "Assistant",
+            "See /Users/alice/.claude/plans/final.md, then come back.",
+          ),
+        ],
+      },
+    });
+    expect(findLatestPlanFilePath(WS)).toBe(
+      "/Users/alice/.claude/plans/final.md",
+    );
+  });
+
+  it("returns the NEWEST tool activity when several activities mention different plans", () => {
+    // addToolActivity appends to the end of the array — scan must iterate
+    // newest-first so the most recent plan wins when a workspace has produced
+    // plans across multiple turns within the same session window.
+    useAppStore.setState({
+      toolActivities: {
+        [WS]: [
+          activity({
+            toolUseId: "tu-old",
+            toolName: "EnterPlanMode",
+            resultText: "/repo/.claude/plans/oldest.md",
+          }),
+          activity({
+            toolUseId: "tu-mid",
+            toolName: "EnterPlanMode",
+            resultText: "/repo/.claude/plans/middle.md",
+          }),
+          activity({
+            toolUseId: "tu-new",
+            toolName: "EnterPlanMode",
+            resultText: "/repo/.claude/plans/newest.md",
+          }),
+        ],
+      },
+    });
+    expect(findLatestPlanFilePath(WS)).toBe("/repo/.claude/plans/newest.md");
+  });
+
+  it("ignores paths that do not point under `.claude/plans/` with a .md suffix", () => {
+    // Guard the whitespace-allowing regex against overreach: it must still
+    // only match the specific plan-file shape.
+    useAppStore.setState({
+      chatMessages: {
+        [WS]: [
+          msg(
+            "m1",
+            "Assistant",
+            "see /Users/alice/.claude/plans/draft.txt or /other/file.md",
+          ),
+        ],
+      },
+    });
+    expect(findLatestPlanFilePath(WS)).toBeNull();
+  });
+
   it("scopes results by workspace id — one workspace's plan does not leak to another", () => {
     useAppStore.setState({
       chatMessages: {

@@ -549,6 +549,17 @@ export function ChatPanel() {
           useAppStore.getState().setPlanMode(workspaceId, enabled);
         };
 
+        // Route plan-file reads through the remote server for remote
+        // workspaces, matching the PlanApprovalCard's "View plan" dispatch.
+        // Falls through to the local Tauri command for local workspaces.
+        const remoteConnectionId = ws.remote_connection_id;
+        const readPlanFileBound = remoteConnectionId
+          ? async (path: string) =>
+              (await sendRemoteCommand(remoteConnectionId, "read_plan_file", {
+                path,
+              })) as string
+          : readPlanFile;
+
         const clearConversationBound = async (restoreFiles: boolean) => {
           // The /clear pipeline (clearConversation + follow-up reloads) runs
           // via local Tauri invokes only — RollbackModal has the same
@@ -628,7 +639,7 @@ export function ChatPanel() {
             setPermissionLevel: setPermissionLevelBound,
             setPlanMode: setPlanModeBound,
             clearConversation: clearConversationBound,
-            readPlanFile,
+            readPlanFile: readPlanFileBound,
           },
           parsedSlash.args,
         );

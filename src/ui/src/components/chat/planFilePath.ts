@@ -1,6 +1,14 @@
 import { useAppStore } from "../../stores/useAppStore";
 
-const PLAN_PATH_RE = /(\/[^\s)"`]+\/\.claude\/plans\/[^\s)"`]+\.md)/;
+// Match POSIX absolute paths pointing at `.claude/plans/*.md`. Allows spaces
+// in directory segments (macOS home directories with spaces are legitimate)
+// but keeps the filename portion on a single path segment — otherwise a
+// stretch of prose like "see /a/.claude/plans/x.txt or /b/y.md" would match
+// across the intermediate directory boundary. Windows-style drive paths are
+// intentionally not matched — Claudette only targets macOS and Linux (see
+// CLAUDE.md).
+const PLAN_PATH_RE =
+  /(\/[^\r\n)"`]*?\/\.claude\/plans\/[^\r\n/)"`]+?\.md)(?=$|[\s)"'`.,:;!?])/;
 
 /**
  * Locate the most recent plan file path for the given workspace by scanning
@@ -27,8 +35,12 @@ export function findLatestPlanFilePath(workspaceId: string): string | null {
   const streamingMatch = streaming.match(PLAN_PATH_RE);
   if (streamingMatch) return streamingMatch[1];
 
+  // Tool activities are appended in insertion order, so iterate newest-first
+  // to match the "most recent" contract when a workspace has produced plans
+  // across multiple turns within the current session window.
   const activities = state.toolActivities[workspaceId] ?? [];
-  for (const activity of activities) {
+  for (let i = activities.length - 1; i >= 0; i--) {
+    const activity = activities[i];
     const match = (activity.inputJson + activity.resultText).match(
       PLAN_PATH_RE,
     );
