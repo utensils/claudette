@@ -2,10 +2,13 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
+  padding: 10px 20px;
+  height: 47px;
+  box-sizing: border-box;
   flex-shrink: 0;
-  border-bottom: 1px solid var(--sidebar-border);
-  min-height: 32px;
+  background: var(--chat-header-bg);
+  border-bottom: 1px solid var(--divider);
+  box-shadow: var(--shadow-sm);
   animation: fadeIn 0.15s ease;
 }
 
