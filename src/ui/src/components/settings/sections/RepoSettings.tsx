@@ -504,6 +504,20 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
         </div>
       </div>
 
+      <div className={styles.fieldGroup}>
+        <div className={styles.fieldLabel}>Worktree discovery</div>
+        <div className={styles.fieldHint} style={{ marginBottom: 8 }}>
+          Scan for existing git worktrees (e.g. from Conductor) and import them
+          as workspaces.
+        </div>
+        <button
+          className={styles.iconBtn}
+          onClick={() => openModal("importWorktrees", { repoId })}
+        >
+          Discover worktrees
+        </button>
+      </div>
+
       <div className={styles.dangerZone}>
         <div className={styles.dangerLabel}>Danger Zone</div>
         <button

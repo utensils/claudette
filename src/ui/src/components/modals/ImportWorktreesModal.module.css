@@ -1,0 +1,92 @@
+.loading {
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 16px 0;
+  text-align: center;
+}
+
+.description {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin: 0 0 12px;
+  line-height: 1.5;
+}
+
+.worktreeList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+.worktreeRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.worktreeRow:hover {
+  background: var(--hover-bg);
+}
+
+.worktreeRow input[type="checkbox"] {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.worktreeInfo {
+  flex: 1;
+  min-width: 0;
+}
+
+.worktreeHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.nameInput {
+  background: var(--chat-input-bg);
+  border: 1px solid var(--divider);
+  border-radius: 4px;
+  padding: 2px 6px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  width: 160px;
+  outline: none;
+}
+
+.nameInput:focus {
+  border-color: var(--text-dim);
+}
+
+.nameInputInvalid {
+  composes: nameInput;
+  border-color: var(--status-stopped);
+}
+
+.badge {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--selected-bg);
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+
+.worktreePath {
+  color: var(--text-dim);
+  font-size: 11px;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

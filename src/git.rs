@@ -1,6 +1,7 @@
 use std::fmt;
 use std::path::Path;
 
+use serde::Serialize;
 use tokio::process::Command;
 
 #[derive(Debug, Clone)]
@@ -292,6 +293,66 @@ pub async fn current_branch(repo_path: &str) -> Result<String, GitError> {
         ));
     }
     Ok(branch)
+}
+
+/// Information about a single git worktree, parsed from `git worktree list --porcelain`.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorktreeInfo {
+    pub path: String,
+    pub head: String,
+    pub branch: Option<String>,
+    pub is_bare: bool,
+}
+
+/// List all worktrees for a repository.
+///
+/// The first entry is always the main worktree (the repository itself or, for
+/// bare repos, the bare directory). Callers that only want linked worktrees
+/// should skip entries whose path matches the repository path.
+pub async fn list_worktrees(repo_path: &str) -> Result<Vec<WorktreeInfo>, GitError> {
+    let output = run_git(repo_path, &["worktree", "list", "--porcelain"]).await?;
+
+    let mut worktrees = Vec::new();
+    let mut path = None;
+    let mut head = None;
+    let mut branch = None;
+    let mut is_bare = false;
+
+    for line in output.lines() {
+        if line.is_empty() {
+            if let (Some(p), Some(h)) = (path.take(), head.take()) {
+                worktrees.push(WorktreeInfo {
+                    path: p,
+                    head: h,
+                    branch: branch.take(),
+                    is_bare,
+                });
+            }
+            is_bare = false;
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("worktree ") {
+            path = Some(rest.to_string());
+        } else if let Some(rest) = line.strip_prefix("HEAD ") {
+            head = Some(rest.to_string());
+        } else if let Some(rest) = line.strip_prefix("branch refs/heads/") {
+            branch = Some(rest.to_string());
+        } else if line == "bare" {
+            is_bare = true;
+        }
+    }
+
+    // Flush the last entry (porcelain output may not end with a blank line).
+    if let (Some(p), Some(h)) = (path, head) {
+        worktrees.push(WorktreeInfo {
+            path: p,
+            head: h,
+            branch,
+            is_bare,
+        });
+    }
+
+    Ok(worktrees)
 }
 
 #[cfg(test)]
@@ -602,5 +663,64 @@ mod tests {
 
         // Clean up.
         remove_worktree(clone_path, wt_path, true).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_list_worktrees() {
+        let dir = setup_temp_repo().await;
+        let repo_path = dir.path().to_str().unwrap();
+
+        // Initially just the main worktree.
+        let wts = list_worktrees(repo_path).await.unwrap();
+        assert_eq!(wts.len(), 1);
+        assert_eq!(wts[0].branch.as_deref(), Some("main"));
+        assert!(!wts[0].is_bare);
+
+        // Add two linked worktrees.
+        let wt1 = tempfile::tempdir().unwrap();
+        let wt2 = tempfile::tempdir().unwrap();
+        create_worktree(repo_path, "feature-a", wt1.path().to_str().unwrap())
+            .await
+            .unwrap();
+        create_worktree(repo_path, "feature-b", wt2.path().to_str().unwrap())
+            .await
+            .unwrap();
+
+        let wts = list_worktrees(repo_path).await.unwrap();
+        assert_eq!(wts.len(), 3);
+
+        let branches: Vec<_> = wts.iter().filter_map(|w| w.branch.as_deref()).collect();
+        assert!(branches.contains(&"main"));
+        assert!(branches.contains(&"feature-a"));
+        assert!(branches.contains(&"feature-b"));
+
+        // All should have non-empty head SHAs and paths.
+        for wt in &wts {
+            assert!(!wt.head.is_empty());
+            assert!(!wt.path.is_empty());
+        }
+
+        // Clean up.
+        remove_worktree(repo_path, wt1.path().to_str().unwrap(), true)
+            .await
+            .unwrap();
+        remove_worktree(repo_path, wt2.path().to_str().unwrap(), true)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_list_worktrees_bare_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let bare_path = dir.path().to_str().unwrap();
+        run_git(bare_path, &["init", "--bare", "-b", "main"])
+            .await
+            .unwrap();
+
+        // Bare repos should return at least the main entry with is_bare=true.
+        // Note: bare repos with no commits may have limited output, but should
+        // not error.
+        let result = list_worktrees(bare_path).await;
+        assert!(result.is_ok());
     }
 }

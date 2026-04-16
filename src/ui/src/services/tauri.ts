@@ -139,6 +139,33 @@ export function openWorkspaceInTerminal(worktreePath: string): Promise<void> {
   return invoke("open_workspace_in_terminal", { worktreePath });
 }
 
+// -- Worktree Discovery --
+
+export interface DiscoveredWorktree {
+  path: string;
+  branch_name: string;
+  head_sha: string;
+  suggested_name: string;
+  name_valid: boolean;
+}
+
+export function discoverWorktrees(repoId: string): Promise<DiscoveredWorktree[]> {
+  return invoke("discover_worktrees", { repoId });
+}
+
+export interface WorktreeImport {
+  path: string;
+  branch_name: string;
+  name: string;
+}
+
+export function importWorktrees(
+  repoId: string,
+  imports: WorktreeImport[]
+): Promise<Workspace[]> {
+  return invoke("import_worktrees", { repoId, imports });
+}
+
 // -- Slash Commands --
 
 export type NativeSlashKind = "local_action" | "settings_route" | "prompt_expansion";

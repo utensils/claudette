@@ -8,6 +8,7 @@ import { RollbackModal } from "./RollbackModal";
 import { ShareModal } from "./ShareModal";
 import { ConfirmSetupScriptModal } from "./ConfirmSetupScriptModal";
 import { McpSelectionModal } from "./McpSelectionModal";
+import { ImportWorktreesModal } from "./ImportWorktreesModal";
 
 export function ModalRouter() {
   const activeModal = useAppStore((s) => s.activeModal);
@@ -31,6 +32,8 @@ export function ModalRouter() {
       return <ConfirmSetupScriptModal />;
     case "mcpSelection":
       return <McpSelectionModal />;
+    case "importWorktrees":
+      return <ImportWorktreesModal />;
     default:
       return null;
   }

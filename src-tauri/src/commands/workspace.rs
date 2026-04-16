@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use tokio::process::Command as TokioCommand;
 
@@ -540,6 +540,166 @@ pub async fn refresh_branches(state: State<'_, AppState>) -> Result<Vec<(String,
     }
 
     Ok(updates)
+}
+
+#[derive(Serialize)]
+pub struct DiscoveredWorktree {
+    pub path: String,
+    pub branch_name: String,
+    pub head_sha: String,
+    pub suggested_name: String,
+    pub name_valid: bool,
+}
+
+/// Validate a workspace name: ASCII alphanumeric + hyphens, no leading/trailing hyphens.
+fn is_valid_workspace_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+}
+
+/// Discover existing git worktrees for a repository that are not yet tracked in Claudette.
+#[tauri::command]
+pub async fn discover_worktrees(
+    repo_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<DiscoveredWorktree>, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let repos = db.list_repositories().map_err(|e| e.to_string())?;
+    let repo = repos
+        .iter()
+        .find(|r| r.id == repo_id)
+        .ok_or("Repository not found")?;
+
+    let worktrees = git::list_worktrees(&repo.path)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Build sets of already-tracked paths and branches for filtering.
+    let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
+    let tracked_paths: std::collections::HashSet<String> = workspaces
+        .iter()
+        .filter(|w| w.repository_id == repo_id)
+        .filter_map(|w| w.worktree_path.clone())
+        .collect();
+    let tracked_branches: std::collections::HashSet<&str> = workspaces
+        .iter()
+        .filter(|w| w.repository_id == repo_id)
+        .map(|w| w.branch_name.as_str())
+        .collect();
+
+    let repo_canon = std::fs::canonicalize(&repo.path)
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| repo.path.clone());
+
+    let mut discovered = Vec::new();
+
+    for wt in worktrees {
+        // Skip the main repo entry.
+        let wt_canon = std::fs::canonicalize(&wt.path)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| wt.path.clone());
+        if wt_canon == repo_canon || wt.is_bare {
+            continue;
+        }
+
+        // Skip detached HEAD worktrees.
+        let branch = match &wt.branch {
+            Some(b) => b.clone(),
+            None => continue,
+        };
+
+        // Skip worktrees that don't exist on disk.
+        if !Path::new(&wt.path).is_dir() {
+            continue;
+        }
+
+        // Skip already-tracked worktrees.
+        if tracked_paths.contains(&wt_canon) || tracked_branches.contains(branch.as_str()) {
+            continue;
+        }
+
+        let suggested_name = Path::new(&wt.path)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        let name_valid = is_valid_workspace_name(&suggested_name);
+
+        discovered.push(DiscoveredWorktree {
+            path: wt_path_display(&wt.path),
+            branch_name: branch,
+            head_sha: wt.head,
+            suggested_name,
+            name_valid,
+        });
+    }
+
+    Ok(discovered)
+}
+
+/// Return a display-friendly path (use the raw path, not canonicalized).
+fn wt_path_display(path: &str) -> String {
+    path.to_string()
+}
+
+#[derive(Deserialize)]
+pub struct WorktreeImport {
+    pub path: String,
+    pub branch_name: String,
+    pub name: String,
+}
+
+/// Import existing git worktrees as Claudette workspaces.
+#[tauri::command]
+pub async fn import_worktrees(
+    repo_id: String,
+    imports: Vec<WorktreeImport>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<Workspace>, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let repos = db.list_repositories().map_err(|e| e.to_string())?;
+    let _repo = repos
+        .iter()
+        .find(|r| r.id == repo_id)
+        .ok_or("Repository not found")?;
+
+    let mut created = Vec::new();
+
+    for imp in imports {
+        if !is_valid_workspace_name(&imp.name) {
+            return Err(format!("Invalid workspace name: '{}'", imp.name));
+        }
+
+        if !Path::new(&imp.path).is_dir() {
+            return Err(format!("Worktree path does not exist: '{}'", imp.path));
+        }
+
+        let canon = std::fs::canonicalize(&imp.path)
+            .map_err(|e| format!("Invalid path '{}': {e}", imp.path))?;
+        let canon_str = canon.to_string_lossy().to_string();
+
+        let ws = Workspace {
+            id: uuid::Uuid::new_v4().to_string(),
+            repository_id: repo_id.clone(),
+            name: imp.name,
+            branch_name: imp.branch_name,
+            worktree_path: Some(canon_str),
+            status: WorkspaceStatus::Active,
+            agent_status: AgentStatus::Idle,
+            status_line: String::new(),
+            created_at: now_iso(),
+        };
+
+        db.insert_workspace(&ws).map_err(|e| e.to_string())?;
+        created.push(ws);
+    }
+
+    crate::tray::rebuild_tray(&app);
+
+    Ok(created)
 }
 
 #[tauri::command]
