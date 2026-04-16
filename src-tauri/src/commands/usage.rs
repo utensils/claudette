@@ -10,8 +10,15 @@ pub async fn get_claude_code_usage(state: State<'_, AppState>) -> Result<ClaudeC
 
 #[tauri::command]
 pub async fn open_usage_settings() -> Result<(), String> {
-    let url = "https://claude.ai/settings/usage";
+    open_external_url("https://claude.ai/settings/usage").await
+}
 
+#[tauri::command]
+pub async fn open_release_notes() -> Result<(), String> {
+    open_external_url("https://github.com/utensils/Claudette/releases").await
+}
+
+async fn open_external_url(url: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         tokio::process::Command::new("open")

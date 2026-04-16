@@ -402,6 +402,7 @@ fn main() {
             // Usage
             commands::usage::get_claude_code_usage,
             commands::usage::open_usage_settings,
+            commands::usage::open_release_notes,
             // Local server
             commands::remote::start_local_server,
             commands::remote::stop_local_server,

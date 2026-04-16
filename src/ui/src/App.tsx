@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { getVersion } from "@tauri-apps/api/app";
 import { useAppStore } from "./stores/useAppStore";
 import { loadInitialData, getAppSetting, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, clearAttention, detectInstalledApps, listSystemFonts } from "./services/tauri";
 import { applyTheme, applyUserFonts, loadAllThemes, findTheme } from "./utils/theme";
@@ -28,6 +29,7 @@ function App() {
   const setDetectedApps = useAppStore((s) => s.setDetectedApps);
   const setUsageInsightsEnabled = useAppStore((s) => s.setUsageInsightsEnabled);
   const setPluginManagementEnabled = useAppStore((s) => s.setPluginManagementEnabled);
+  const setAppVersion = useAppStore((s) => s.setAppVersion);
 
   // Listen for MCP supervisor status events from the Rust backend.
   useMcpStatus();
@@ -79,6 +81,9 @@ function App() {
         applyUserFonts(sans, mono, size >= 10 && size <= 20 ? size : 13);
       })
       .catch((err) => console.error("Failed to load theme:", err));
+    getVersion()
+      .then((v) => setAppVersion(v))
+      .catch((err) => console.error("Failed to load app version:", err));
     listRemoteConnections()
       .then(setRemoteConnections)
       .catch((err) => console.error("Failed to load remote connections:", err));
@@ -196,7 +201,7 @@ function App() {
       unlistenZoomOut.then((fn) => fn());
       unlistenResetZoom.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setPluginManagementEnabled]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setPluginManagementEnabled, setAppVersion]);
 
   return <AppLayout />;
 }

@@ -11,6 +11,8 @@ import {
   listCheckpoints,
   loadCompletedTurns,
   listSlashCommands,
+  openReleaseNotes,
+  openUsageSettings,
   recordSlashCommandUsage,
   sendChatMessage,
   sendRemoteCommand,
@@ -143,6 +145,11 @@ export function ChatPanel() {
   const updateWorkspace = useAppStore((s) => s.updateWorkspace);
   const openPluginSettings = useAppStore((s) => s.openPluginSettings);
   const pluginManagementEnabled = useAppStore((s) => s.pluginManagementEnabled);
+  const usageInsightsEnabled = useAppStore((s) => s.usageInsightsEnabled);
+  const openSettings = useAppStore((s) => s.openSettings);
+  const appVersion = useAppStore((s) => s.appVersion);
+  const slashCommandsByWorkspace = useAppStore((s) => s.slashCommandsByWorkspace);
+  const setSlashCommandsCache = useAppStore((s) => s.setSlashCommands);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const processingRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
@@ -438,18 +445,90 @@ export function ChatPanel() {
     // prompt_expansion commands can rewrite the prompt before it is sent.
     const parsedSlash = parseSlashInput(trimmed);
     if (parsedSlash) {
-      const nativeHandler = resolveNativeHandler(parsedSlash.token);
+      // A user- or project-defined markdown command with the same name takes
+      // priority over non-reserved natives (plugin/marketplace remain reserved
+      // upstream in the backend registry). Plugin-source commands do NOT get
+      // this precedence — only humans editing `.claude/commands/*.md` can
+      // override built-ins. Skip native dispatch when such a shadow exists so
+      // the custom markdown prompt reaches Claude.
+      //
+      // The slash-command cache is populated async by ChatInputArea on mount
+      // and on workspace change. If a user sends a slash command before that
+      // first fetch lands (rare but possible on fast startup), fall back to a
+      // synchronous fetch here so shadowing decisions are always made against
+      // a fresh list. The Rust side already returns a 5-minute cached result.
+      let cmds = slashCommandsByWorkspace[selectedWorkspaceId];
+      if (!cmds) {
+        try {
+          cmds = await listSlashCommands(repo?.path, selectedWorkspaceId);
+          setSlashCommandsCache(selectedWorkspaceId, cmds);
+        } catch (err) {
+          console.error("Failed to load slash commands before native dispatch:", err);
+          cmds = [];
+        }
+      }
+      const tokenLower = parsedSlash.token.toLowerCase();
+      const candidateHandler = resolveNativeHandler(parsedSlash.token);
+      // Only same-name collisions shadow native dispatch. If the typed token
+      // is a native alias, also honor a file-based command for the canonical
+      // name — the user has replaced the whole native, so the alias should
+      // route through the replacement too. If the typed token is the
+      // canonical name, do NOT expand to aliases: a user `configure.md`
+      // should not hijack `/config` when the canonical slot is still the
+      // built-in.
+      const shadowNames = new Set<string>([tokenLower]);
+      if (candidateHandler) {
+        const canonicalLower = candidateHandler.name.toLowerCase();
+        const typedIsAlias = candidateHandler.aliases.some(
+          (alias) => alias.toLowerCase() === tokenLower,
+        );
+        if (typedIsAlias) {
+          shadowNames.add(canonicalLower);
+        }
+      }
+      const shadowed = cmds.some(
+        (c) =>
+          (c.source === "user" || c.source === "project") &&
+          shadowNames.has(c.name.toLowerCase()),
+      );
+      const nativeHandler = shadowed ? null : candidateHandler;
       if (nativeHandler) {
+        const workspaceId = selectedWorkspaceId;
         const result = nativeHandler.execute(
           {
             repoId: repo?.remote_connection_id ? null : repo?.id ?? null,
             pluginManagementEnabled,
+            usageInsightsEnabled,
             openPluginSettings,
             repository: repo ? { name: repo.name, path: repo.path } : null,
             workspace: ws
               ? { branch: ws.branch_name, worktreePath: ws.worktree_path }
               : null,
             repoDefaultBranch: defaultBranch ?? null,
+            openSettings,
+            appVersion,
+            addLocalMessage: (text: string) => {
+              addChatMessage(workspaceId, {
+                id: crypto.randomUUID(),
+                workspace_id: workspaceId,
+                role: "System",
+                content: text,
+                cost_usd: null,
+                duration_ms: null,
+                created_at: new Date().toISOString(),
+                thinking: null,
+              });
+            },
+            openUsageSettingsExternal: () => {
+              void openUsageSettings().catch((err) =>
+                console.error("Failed to open usage settings:", err),
+              );
+            },
+            openReleaseNotes: () => {
+              void openReleaseNotes().catch((err) =>
+                console.error("Failed to open release notes:", err),
+              );
+            },
           },
           parsedSlash.args,
         );
@@ -1309,7 +1388,15 @@ function ChatInputArea({
   const [cursorPos, setCursorPos] = useState(0);
   const [slashPickerIndex, setSlashPickerIndex] = useState(0);
   const [slashPickerDismissed, setSlashPickerDismissed] = useState(false);
-  const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
+  const [slashCommands, setSlashCommandsLocal] = useState<SlashCommand[]>([]);
+  const setSlashCommandsStore = useAppStore((s) => s.setSlashCommands);
+  const setSlashCommands = useCallback(
+    (cmds: SlashCommand[]) => {
+      setSlashCommandsLocal(cmds);
+      setSlashCommandsStore(selectedWorkspaceId, cmds);
+    },
+    [selectedWorkspaceId, setSlashCommandsStore],
+  );
   const [filePickerIndex, setFilePickerIndex] = useState(0);
   const [filePickerDismissed, setFilePickerDismissed] = useState(false);
   const [workspaceFiles, setWorkspaceFiles] = useState<FileEntry[]>([]);

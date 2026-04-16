@@ -20,6 +20,7 @@ import type { McpStatusSnapshot } from "../types/mcp";
 import type { RemoteInitialData } from "../types/remote";
 import type { DetectedApp } from "../types/apps";
 import type { ClaudeCodeUsage } from "../types/usage";
+import type { SlashCommand } from "../services/tauri";
 import type {
   PluginSettingsIntent,
   PluginSettingsTab,
@@ -341,6 +342,14 @@ interface AppState {
   setUpdateInstallWhenIdle: (enabled: boolean) => void;
   setUpdateDownloading: (downloading: boolean) => void;
   setUpdateProgress: (progress: number) => void;
+
+  // -- App info --
+  appVersion: string | null;
+  setAppVersion: (version: string | null) => void;
+
+  // -- Slash commands (shared so native dispatch can honor file-based shadows) --
+  slashCommandsByWorkspace: Record<string, SlashCommand[]>;
+  setSlashCommands: (wsId: string, cmds: SlashCommand[]) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -1144,6 +1153,17 @@ export const useAppStore = create<AppState>((set) => ({
   setUpdateDownloading: (downloading) =>
     set({ updateDownloading: downloading }),
   setUpdateProgress: (progress) => set({ updateProgress: progress }),
+
+  // -- App info --
+  appVersion: null,
+  setAppVersion: (version) => set({ appVersion: version }),
+
+  // -- Slash commands --
+  slashCommandsByWorkspace: {},
+  setSlashCommands: (wsId, cmds) =>
+    set((s) => ({
+      slashCommandsByWorkspace: { ...s.slashCommandsByWorkspace, [wsId]: cmds },
+    })),
 }));
 
 // Expose store on window in dev builds for debug_eval_js access.

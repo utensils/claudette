@@ -100,6 +100,48 @@ pub fn native_command_registry(plugin_management_enabled: bool) -> Vec<SlashComm
         argument_hint: Some("[PR number or extra guidance]".to_string()),
         kind: Some(NativeKind::PromptExpansion),
     });
+    commands.push(SlashCommand {
+        name: "config".to_string(),
+        description: "Open Claudette settings".to_string(),
+        source: "builtin".to_string(),
+        aliases: vec!["configure".to_string()],
+        argument_hint: Some(
+            "[general|models|usage|appearance|notifications|git|plugins|experimental]".to_string(),
+        ),
+        kind: Some(NativeKind::SettingsRoute),
+    });
+    commands.push(SlashCommand {
+        name: "usage".to_string(),
+        description: "Open the Claude Code usage panel".to_string(),
+        source: "builtin".to_string(),
+        aliases: Vec::new(),
+        argument_hint: None,
+        kind: Some(NativeKind::SettingsRoute),
+    });
+    commands.push(SlashCommand {
+        name: "extra-usage".to_string(),
+        description: "Manage extra usage on claude.ai".to_string(),
+        source: "builtin".to_string(),
+        aliases: Vec::new(),
+        argument_hint: None,
+        kind: Some(NativeKind::SettingsRoute),
+    });
+    commands.push(SlashCommand {
+        name: "release-notes".to_string(),
+        description: "Open Claudette release notes".to_string(),
+        source: "builtin".to_string(),
+        aliases: vec!["changelog".to_string()],
+        argument_hint: None,
+        kind: Some(NativeKind::LocalAction),
+    });
+    commands.push(SlashCommand {
+        name: "version".to_string(),
+        description: "Show the current Claudette version".to_string(),
+        source: "builtin".to_string(),
+        aliases: vec!["about".to_string()],
+        argument_hint: None,
+        kind: Some(NativeKind::LocalAction),
+    });
     commands
 }
 
@@ -176,21 +218,37 @@ struct PluginCommandSpec {
     explicit_description: Option<String>,
 }
 
+/// Native command names that always win against file-based commands.
+///
+/// `plugin`/`marketplace` control plugin management and cannot be shadowed —
+/// their aliases are also reserved so the picker never exposes an unreachable
+/// duplicate. Other native commands (`config`, `usage`, `version`, `review`, …)
+/// use plausible names that users may already have defined as local markdown
+/// commands, so they yield to file-based entries when a collision exists.
+fn is_reserved_native_name(name: &str) -> bool {
+    matches!(name, "plugin" | "plugins" | "marketplace")
+}
+
 fn collect_native_commands(commands: &mut Vec<SlashCommand>, plugin_management_enabled: bool) {
     let natives = native_command_registry(plugin_management_enabled);
-    // Drop any file-based command whose name collides with a native's canonical
-    // name or alias. The native registry owns these slots; otherwise the alias
-    // would resolve to the native handler while the file-based entry still
-    // rendered in the picker, creating an unreachable duplicate.
-    if !natives.is_empty() {
-        let reserved: std::collections::HashSet<String> = natives
-            .iter()
-            .flat_map(|cmd| std::iter::once(&cmd.name).chain(cmd.aliases.iter()))
-            .map(|name| name.to_ascii_lowercase())
-            .collect();
-        commands.retain(|cmd| !reserved.contains(&cmd.name.to_ascii_lowercase()));
-    }
+    // For reserved natives (plugin/marketplace), drop any file-based command
+    // whose name collides with the native canonical name or alias: the native
+    // registry owns those slots outright.
+    commands.retain(|cmd| !is_reserved_native_name(&cmd.name.to_ascii_lowercase()));
     for native in natives {
+        let lowered = native.name.to_ascii_lowercase();
+        if !is_reserved_native_name(&lowered)
+            && commands.iter().any(|existing| {
+                existing.name.eq_ignore_ascii_case(&native.name)
+                    && matches!(existing.source.as_str(), "user" | "project")
+            })
+        {
+            // A user/project markdown command already owns this slot; the
+            // native is non-reserved, so let the custom command win. Plugin
+            // commands do NOT get this precedence — only humans editing
+            // `.claude/commands/*.md` should be able to override built-ins.
+            continue;
+        }
         upsert_command(commands, native);
     }
 }
@@ -654,13 +712,19 @@ mod tests {
     fn test_collect_native_commands_skips_plugin_entries_when_disabled() {
         let mut commands = Vec::new();
         collect_native_commands(&mut commands, false);
-        let names: Vec<_> = commands.iter().map(|c| c.name.as_str()).collect();
+        let names: Vec<&str> = commands.iter().map(|c| c.name.as_str()).collect();
         assert!(!names.contains(&"plugin"));
         assert!(!names.contains(&"marketplace"));
         // Review workflow entries are always present regardless of the plugin flag.
         assert!(names.contains(&"review"));
         assert!(names.contains(&"security-review"));
         assert!(names.contains(&"pr-comments"));
+        // Non-plugin native settings/version commands are still registered.
+        assert!(names.contains(&"config"));
+        assert!(names.contains(&"usage"));
+        assert!(names.contains(&"extra-usage"));
+        assert!(names.contains(&"release-notes"));
+        assert!(names.contains(&"version"));
     }
 
     #[test]
@@ -684,6 +748,102 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_native_command_registry_includes_settings_and_version_commands() {
+        for enabled in [true, false] {
+            let natives = native_command_registry(enabled);
+            let by_name: HashMap<&str, &SlashCommand> =
+                natives.iter().map(|c| (c.name.as_str(), c)).collect();
+
+            let config = by_name.get("config").expect("config registered");
+            assert_eq!(config.kind, Some(NativeKind::SettingsRoute));
+            assert_eq!(config.aliases, vec!["configure".to_string()]);
+            assert!(config.argument_hint.is_some());
+
+            let usage = by_name.get("usage").expect("usage registered");
+            assert_eq!(usage.kind, Some(NativeKind::SettingsRoute));
+            assert!(usage.aliases.is_empty());
+
+            let extra = by_name.get("extra-usage").expect("extra-usage registered");
+            assert_eq!(extra.kind, Some(NativeKind::SettingsRoute));
+
+            let release = by_name
+                .get("release-notes")
+                .expect("release-notes registered");
+            assert_eq!(release.kind, Some(NativeKind::LocalAction));
+            assert_eq!(release.aliases, vec!["changelog".to_string()]);
+
+            let version = by_name.get("version").expect("version registered");
+            assert_eq!(version.kind, Some(NativeKind::LocalAction));
+            assert_eq!(version.aliases, vec!["about".to_string()]);
+        }
+    }
+
+    #[test]
+    fn test_resolve_native_resolves_new_command_aliases() {
+        let natives = native_command_registry(false);
+        assert_eq!(
+            resolve_native("configure", &natives).unwrap().name,
+            "config"
+        );
+        assert_eq!(
+            resolve_native("CONFIGURE", &natives).unwrap().name,
+            "config"
+        );
+        assert_eq!(
+            resolve_native("changelog", &natives).unwrap().name,
+            "release-notes"
+        );
+        assert_eq!(resolve_native("about", &natives).unwrap().name, "version");
+    }
+
+    #[test]
+    fn test_collect_native_commands_yields_to_user_commands_for_non_reserved_slots() {
+        // A user-defined `config`/`review` command should take priority over the
+        // built-in natives — unlike plugin/marketplace, generic names like
+        // `config`/`usage`/`version`/`review` must not silently displace
+        // pre-existing custom workflows.
+        let mut commands = vec![
+            SlashCommand::file_based("config".into(), "User custom config".into(), "user"),
+            SlashCommand::file_based("review".into(), "Project custom review".into(), "project"),
+        ];
+        collect_native_commands(&mut commands, true);
+
+        let config = commands.iter().find(|c| c.name == "config").unwrap();
+        assert_eq!(config.source, "user");
+        assert_eq!(config.description, "User custom config");
+
+        let review = commands.iter().find(|c| c.name == "review").unwrap();
+        assert_eq!(review.source, "project");
+
+        // Other natives still register when no collision exists.
+        let names: Vec<&str> = commands.iter().map(|c| c.name.as_str()).collect();
+        assert!(names.contains(&"usage"));
+        assert!(names.contains(&"extra-usage"));
+        assert!(names.contains(&"version"));
+        assert!(names.contains(&"security-review"));
+        assert!(names.contains(&"pr-comments"));
+    }
+
+    #[test]
+    fn test_collect_native_commands_ignores_plugin_source_shadows() {
+        // Plugin-provided commands must NOT override non-reserved natives:
+        // the user/project markdown precedence applies to humans editing
+        // `.claude/commands/*.md`, not to anything a plugin drops in.
+        let mut commands = vec![
+            SlashCommand::file_based("config".into(), "Plugin hostile config".into(), "plugin"),
+            SlashCommand::file_based("usage".into(), "Plugin hostile usage".into(), "plugin"),
+        ];
+        collect_native_commands(&mut commands, true);
+
+        // The natives own these slots: both the builtin entry wins via upsert,
+        // and the plugin entries get replaced in place.
+        let config = commands.iter().find(|c| c.name == "config").unwrap();
+        assert_eq!(config.source, "builtin");
+        let usage = commands.iter().find(|c| c.name == "usage").unwrap();
+        assert_eq!(usage.source, "builtin");
     }
 
     #[test]

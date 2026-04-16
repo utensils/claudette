@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { PluginSettingsIntent } from "../../types/plugins";
 import {
+  CONFIG_SECTIONS,
   NATIVE_HANDLERS,
   describeSlashQuery,
+  formatVersionMessage,
   parseSlashInput,
   resolveNativeHandler,
   type NativeCommandContext,
@@ -15,10 +17,16 @@ function makeCtx(overrides: Partial<NativeCommandContext> = {}): NativeCommandCo
   return {
     repoId: "repo-1",
     pluginManagementEnabled: true,
+    usageInsightsEnabled: true,
     openPluginSettings: vi.fn<(intent: Partial<PluginSettingsIntent>) => void>(),
     repository: { name: "claudette", path: "/tmp/repos/claudette" },
     workspace: { branch: "feat/review-cmds", worktreePath: "/tmp/wt/review-cmds" },
     repoDefaultBranch: "origin/main",
+    openSettings: vi.fn<(section?: string) => void>(),
+    appVersion: "1.2.3",
+    addLocalMessage: vi.fn<(text: string) => void>(),
+    openUsageSettingsExternal: vi.fn<() => void>(),
+    openReleaseNotes: vi.fn<() => void>(),
     ...overrides,
   };
 }
@@ -220,6 +228,24 @@ describe("native handler table", () => {
       expect(handler!.aliases).toEqual([]);
     }
   });
+
+  it("exposes config, usage, extra-usage, release-notes, and version entries", () => {
+    const names = NATIVE_HANDLERS.map((h) => h.name);
+    expect(names).toContain("config");
+    expect(names).toContain("usage");
+    expect(names).toContain("extra-usage");
+    expect(names).toContain("release-notes");
+    expect(names).toContain("version");
+  });
+
+  it("declares the expected kinds for the settings/version handlers", () => {
+    const byName = new Map(NATIVE_HANDLERS.map((h) => [h.name, h]));
+    expect(byName.get("config")?.kind).toBe("settings_route");
+    expect(byName.get("usage")?.kind).toBe("settings_route");
+    expect(byName.get("extra-usage")?.kind).toBe("settings_route");
+    expect(byName.get("release-notes")?.kind).toBe("local_action");
+    expect(byName.get("version")?.kind).toBe("local_action");
+  });
 });
 
 describe("review workflow native handlers", () => {
@@ -394,5 +420,145 @@ describe("review workflow native handlers", () => {
     });
     const unique = new Set(prompts);
     expect(unique.size).toBe(REVIEW_NAMES.length);
+  });
+});
+
+describe("config native handler", () => {
+  it("opens settings with the default general section when no args given", () => {
+    const ctx = makeCtx();
+    const handler = resolveNativeHandler("config")!;
+    const result = handler.execute(ctx, "");
+    expect(result).toEqual({ kind: "handled", canonicalName: "config" });
+    expect(ctx.openSettings).toHaveBeenCalledTimes(1);
+    expect(ctx.openSettings).toHaveBeenCalledWith("general");
+  });
+
+  it("resolves the /configure alias to the config handler", () => {
+    expect(resolveNativeHandler("configure")?.name).toBe("config");
+    expect(resolveNativeHandler("CONFIGURE")?.name).toBe("config");
+  });
+
+  it("routes each valid section to openSettings with that section", () => {
+    const handler = resolveNativeHandler("config")!;
+    for (const section of CONFIG_SECTIONS) {
+      const ctx = makeCtx();
+      const result = handler.execute(ctx, section);
+      expect(result).toEqual({ kind: "handled", canonicalName: "config" });
+      expect(ctx.openSettings).toHaveBeenCalledTimes(1);
+      expect(ctx.openSettings).toHaveBeenCalledWith(section);
+    }
+  });
+
+  it("redirects /config usage to experimental when Usage Insights is disabled", () => {
+    const ctx = makeCtx({ usageInsightsEnabled: false });
+    const handler = resolveNativeHandler("config")!;
+    handler.execute(ctx, "usage");
+    expect(ctx.openSettings).toHaveBeenCalledWith("experimental");
+  });
+
+  it("is case-insensitive for section names", () => {
+    const ctx = makeCtx();
+    const handler = resolveNativeHandler("config")!;
+    handler.execute(ctx, "APPEARANCE");
+    expect(ctx.openSettings).toHaveBeenCalledWith("appearance");
+  });
+
+  it("ignores extra arguments after the section token", () => {
+    const ctx = makeCtx();
+    const handler = resolveNativeHandler("config")!;
+    handler.execute(ctx, "models foo bar");
+    expect(ctx.openSettings).toHaveBeenCalledWith("models");
+  });
+
+  it("falls back to general for an unknown section", () => {
+    const ctx = makeCtx();
+    const handler = resolveNativeHandler("config")!;
+    const result = handler.execute(ctx, "bogus-section");
+    expect(result).toEqual({ kind: "handled", canonicalName: "config" });
+    expect(ctx.openSettings).toHaveBeenCalledWith("general");
+  });
+});
+
+describe("usage native handler", () => {
+  it("resolves /usage and opens the usage settings section when the gate is on", () => {
+    const ctx = makeCtx();
+    const handler = resolveNativeHandler("usage")!;
+    const result = handler.execute(ctx, "");
+    expect(result).toEqual({ kind: "handled", canonicalName: "usage" });
+    expect(ctx.openSettings).toHaveBeenCalledWith("usage");
+    expect(ctx.openUsageSettingsExternal).not.toHaveBeenCalled();
+  });
+
+  it("routes /usage to Experimental when Usage Insights is disabled", () => {
+    const ctx = makeCtx({ usageInsightsEnabled: false });
+    const handler = resolveNativeHandler("usage")!;
+    handler.execute(ctx, "");
+    expect(ctx.openSettings).toHaveBeenCalledWith("experimental");
+  });
+});
+
+describe("extra-usage native handler", () => {
+  it("reuses both the in-app and external usage paths when the gate is on", () => {
+    const ctx = makeCtx();
+    const handler = resolveNativeHandler("extra-usage")!;
+    const result = handler.execute(ctx, "");
+    expect(result).toEqual({ kind: "handled", canonicalName: "extra-usage" });
+    expect(ctx.openSettings).toHaveBeenCalledWith("usage");
+    expect(ctx.openUsageSettingsExternal).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes /extra-usage to Experimental and does NOT launch claude.ai when gated off", () => {
+    const ctx = makeCtx({ usageInsightsEnabled: false });
+    const handler = resolveNativeHandler("extra-usage")!;
+    handler.execute(ctx, "");
+    expect(ctx.openSettings).toHaveBeenCalledWith("experimental");
+    expect(ctx.openUsageSettingsExternal).not.toHaveBeenCalled();
+  });
+});
+
+describe("release-notes native handler", () => {
+  it("resolves /release-notes and routes through openReleaseNotes", () => {
+    const ctx = makeCtx();
+    const handler = resolveNativeHandler("release-notes")!;
+    const result = handler.execute(ctx, "");
+    expect(result).toEqual({
+      kind: "handled",
+      canonicalName: "release-notes",
+    });
+    expect(ctx.openReleaseNotes).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves the /changelog alias to the release-notes handler", () => {
+    expect(resolveNativeHandler("changelog")?.name).toBe("release-notes");
+  });
+});
+
+describe("version native handler", () => {
+  it("formats the version string with a v-prefix", () => {
+    expect(formatVersionMessage("1.2.3")).toBe("Claudette v1.2.3");
+  });
+
+  it("falls back to 'unknown' when no version is available", () => {
+    expect(formatVersionMessage(null)).toBe("Claudette vunknown");
+  });
+
+  it("posts a local message containing the provided app version", () => {
+    const ctx = makeCtx({ appVersion: "9.9.9" });
+    const handler = resolveNativeHandler("version")!;
+    const result = handler.execute(ctx, "");
+    expect(result).toEqual({ kind: "handled", canonicalName: "version" });
+    expect(ctx.addLocalMessage).toHaveBeenCalledTimes(1);
+    expect(ctx.addLocalMessage).toHaveBeenCalledWith("Claudette v9.9.9");
+  });
+
+  it("posts a local 'unknown' fallback when appVersion is null", () => {
+    const ctx = makeCtx({ appVersion: null });
+    const handler = resolveNativeHandler("version")!;
+    handler.execute(ctx, "");
+    expect(ctx.addLocalMessage).toHaveBeenCalledWith("Claudette vunknown");
+  });
+
+  it("resolves the /about alias to the version handler", () => {
+    expect(resolveNativeHandler("about")?.name).toBe("version");
   });
 });

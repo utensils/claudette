@@ -689,6 +689,10 @@ export function openUsageSettings(): Promise<void> {
   return invoke("open_usage_settings");
 }
 
+export function openReleaseNotes(): Promise<void> {
+  return invoke("open_release_notes");
+}
+
 // -- Debug (dev builds only) --
 
 export function debugEvalJs(js: string): Promise<string> {
