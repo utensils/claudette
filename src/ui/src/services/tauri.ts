@@ -141,10 +141,18 @@ export function openWorkspaceInTerminal(worktreePath: string): Promise<void> {
 
 // -- Slash Commands --
 
+export type NativeSlashKind = "local_action" | "settings_route" | "prompt_expansion";
+
 export interface SlashCommand {
   name: string;
   description: string;
   source: string;
+  /** Alternative names for this canonical command. Empty for file-based entries. */
+  aliases?: string[];
+  /** Short hint describing expected argument shape, e.g. "[add|remove] <source>". */
+  argument_hint?: string | null;
+  /** Native command kind. Absent for file-based commands. */
+  kind?: NativeSlashKind | null;
 }
 
 export function listSlashCommands(

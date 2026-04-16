@@ -40,7 +40,11 @@ import { HeaderMenu } from "./HeaderMenu";
 import { SlashCommandPicker, filterSlashCommands } from "./SlashCommandPicker";
 import { AttachMenu } from "./AttachMenu";
 import { FileMentionPicker, matchFiles } from "./FileMentionPicker";
-import { isPluginSlashCommandInput, parsePluginSlashCommand } from "./pluginSlashCommand";
+import {
+  describeSlashQuery,
+  parseSlashInput,
+  resolveNativeHandler,
+} from "./nativeSlashCommands";
 import { checkpointHasFileChanges, clearAllHasFileChanges, buildRollbackMap } from "../../utils/checkpointUtils";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { PanelToggles } from "../shared/PanelToggles";
@@ -421,7 +425,7 @@ export function ChatPanel() {
     mentionedFiles?: Set<string>,
     attachments?: AttachmentInput[],
   ) => {
-    const trimmed = content.trim();
+    let trimmed = content.trim();
     if ((!trimmed && !attachments?.length) || !selectedWorkspaceId) return;
 
     // Convert mentioned files set to array for the backend.
@@ -429,21 +433,33 @@ export function ChatPanel() {
       ? [...mentionedFiles]
       : undefined;
 
-    const pluginSlash = parsePluginSlashCommand(
-      trimmed,
-      repo?.remote_connection_id ? null : repo?.id ?? null,
-      pluginManagementEnabled,
-    );
-    if (pluginSlash) {
-      openPluginSettings(pluginSlash.intent);
-      if (selectedWorkspaceId) {
-        recordSlashCommandUsage(selectedWorkspaceId, pluginSlash.usageCommandName)
-          .catch((nextError) => console.error("Failed to record slash command usage:", nextError));
+    // Native slash command dispatch. Runs before the agent send path so that
+    // local_action/settings_route commands never leak to the CLI and
+    // prompt_expansion commands can rewrite the prompt before it is sent.
+    const parsedSlash = parseSlashInput(trimmed);
+    if (parsedSlash) {
+      const nativeHandler = resolveNativeHandler(parsedSlash.token);
+      if (nativeHandler) {
+        const result = nativeHandler.execute(
+          {
+            repoId: repo?.remote_connection_id ? null : repo?.id ?? null,
+            pluginManagementEnabled,
+            openPluginSettings,
+          },
+          parsedSlash.args,
+        );
+        if (result.kind !== "skipped") {
+          recordSlashCommandUsage(selectedWorkspaceId, result.canonicalName)
+            .catch((nextError) => console.error("Failed to record slash command usage:", nextError));
+        }
+        if (result.kind === "handled") return;
+        if (result.kind === "expand") {
+          // Rewrite the outgoing content to the expanded prompt and fall through
+          // to the normal agent send path (queue, optimistic message, stream).
+          trimmed = result.prompt.trim();
+          if (!trimmed) return;
+        }
       }
-      return;
-    }
-    if (!pluginManagementEnabled && isPluginSlashCommandInput(trimmed)) {
-      return;
     }
 
     // If the agent is running, queue the message instead of interrupting.
@@ -1368,17 +1384,22 @@ function ChatInputArea({
     };
   }, [projectPath, selectedWorkspaceId]);
 
-  const slashQuery = chatInput.startsWith("/") ? chatInput.slice(1) : null;
+  // Filter by the command-name token (text before the first whitespace) so the
+  // picker stays open while the user types arguments. This keeps the argument
+  // hint visible for native commands like `/plugin install …`.
+  const slashQuery = describeSlashQuery(chatInput);
+  const slashQueryToken = slashQuery?.token ?? null;
+  const slashHasArgs = slashQuery?.hasArgs ?? false;
   const slashResults = useMemo(
-    () => (slashQuery === null ? [] : filterSlashCommands(slashCommands, slashQuery)),
-    [slashCommands, slashQuery],
+    () => (slashQueryToken === null ? [] : filterSlashCommands(slashCommands, slashQueryToken)),
+    [slashCommands, slashQueryToken],
   );
-  const showSlashPicker = slashQuery !== null && slashResults.length > 0 && !slashPickerDismissed;
+  const showSlashPicker = slashQueryToken !== null && slashResults.length > 0 && !slashPickerDismissed;
 
   useEffect(() => {
     setSlashPickerIndex(0);
     setSlashPickerDismissed(false);
-  }, [slashQuery]);
+  }, [slashQueryToken]);
 
   // --- File mention picker ---
 
@@ -1731,9 +1752,15 @@ function ChatInputArea({
         e.preventDefault();
         const cmd = slashResults[slashPickerIndex];
         if (cmd) {
-          onSend("/" + cmd.name);
+          // If the user has already typed arguments after the command name,
+          // keep what they typed; otherwise substitute the canonical name.
+          const send = slashHasArgs ? chatInput : "/" + cmd.name;
+          onSend(send);
           setChatInput("");
-          if (cmd.name !== "plugin") {
+          // Native commands record their canonical name from inside the
+          // handleSend dispatcher; record here only for file-based commands
+          // that go straight to the agent.
+          if (!cmd.kind) {
             recordSlashCommandUsage(selectedWorkspaceId, cmd.name)
               .then(refreshSlashCommands)
               .catch((e) => console.error("Failed to record slash command usage:", e));
@@ -1806,9 +1833,10 @@ function ChatInputArea({
           commands={slashResults}
           selectedIndex={slashPickerIndex}
           onSelect={(cmd) => {
-            onSend("/" + cmd.name);
+            const send = slashHasArgs ? chatInput : "/" + cmd.name;
+            onSend(send);
             setChatInput("");
-            if (cmd.name !== "plugin") {
+            if (!cmd.kind) {
               recordSlashCommandUsage(selectedWorkspaceId, cmd.name)
                 .then(refreshSlashCommands)
                 .catch((e) => console.error("Failed to record slash command usage:", e));
