@@ -76,6 +76,30 @@ pub fn native_command_registry(plugin_management_enabled: bool) -> Vec<SlashComm
             kind: Some(NativeKind::SettingsRoute),
         });
     }
+    commands.push(SlashCommand {
+        name: "review".to_string(),
+        description: "Seed a code review of the current branch against its base".to_string(),
+        source: "builtin".to_string(),
+        aliases: Vec::new(),
+        argument_hint: Some("[extra focus areas]".to_string()),
+        kind: Some(NativeKind::PromptExpansion),
+    });
+    commands.push(SlashCommand {
+        name: "security-review".to_string(),
+        description: "Seed a security-focused review of the current branch".to_string(),
+        source: "builtin".to_string(),
+        aliases: Vec::new(),
+        argument_hint: Some("[extra focus areas]".to_string()),
+        kind: Some(NativeKind::PromptExpansion),
+    });
+    commands.push(SlashCommand {
+        name: "pr-comments".to_string(),
+        description: "Summarize PR comments for the current branch".to_string(),
+        source: "builtin".to_string(),
+        aliases: Vec::new(),
+        argument_hint: Some("[PR number or extra guidance]".to_string()),
+        kind: Some(NativeKind::PromptExpansion),
+    });
     commands
 }
 
@@ -627,10 +651,39 @@ mod tests {
     }
 
     #[test]
-    fn test_collect_native_commands_skips_when_disabled() {
+    fn test_collect_native_commands_skips_plugin_entries_when_disabled() {
         let mut commands = Vec::new();
         collect_native_commands(&mut commands, false);
-        assert!(commands.is_empty());
+        let names: Vec<_> = commands.iter().map(|c| c.name.as_str()).collect();
+        assert!(!names.contains(&"plugin"));
+        assert!(!names.contains(&"marketplace"));
+        // Review workflow entries are always present regardless of the plugin flag.
+        assert!(names.contains(&"review"));
+        assert!(names.contains(&"security-review"));
+        assert!(names.contains(&"pr-comments"));
+    }
+
+    #[test]
+    fn test_native_command_registry_includes_review_workflow_entries() {
+        for enabled in [true, false] {
+            let natives = native_command_registry(enabled);
+            for name in ["review", "security-review", "pr-comments"] {
+                let entry = natives
+                    .iter()
+                    .find(|c| c.name == name)
+                    .unwrap_or_else(|| panic!("missing native entry `{name}` (enabled={enabled})"));
+                assert_eq!(entry.source, "builtin");
+                assert_eq!(entry.kind, Some(NativeKind::PromptExpansion));
+                assert!(
+                    entry.argument_hint.is_some(),
+                    "argument hint missing for `{name}`"
+                );
+                assert!(
+                    entry.aliases.is_empty(),
+                    "review commands expose no aliases"
+                );
+            }
+        }
     }
 
     #[test]

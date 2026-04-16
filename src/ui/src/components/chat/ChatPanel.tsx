@@ -445,6 +445,11 @@ export function ChatPanel() {
             repoId: repo?.remote_connection_id ? null : repo?.id ?? null,
             pluginManagementEnabled,
             openPluginSettings,
+            repository: repo ? { name: repo.name, path: repo.path } : null,
+            workspace: ws
+              ? { branch: ws.branch_name, worktreePath: ws.worktree_path }
+              : null,
+            defaultBranch: defaultBranch ?? null,
           },
           parsedSlash.args,
         );
