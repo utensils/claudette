@@ -157,10 +157,7 @@ mod tests {
     #[test]
     fn enriched_path_is_nonempty() {
         let enriched = enriched_path();
-        assert!(
-            !enriched.is_empty(),
-            "enriched PATH must never be empty"
-        );
+        assert!(!enriched.is_empty(), "enriched PATH must never be empty");
     }
 
     #[test]
@@ -190,10 +187,7 @@ mod tests {
     #[test]
     fn which_in_enriched_path_rejects_missing_command() {
         let result = which_in_enriched_path("nonexistent_binary_xyz_12345");
-        assert!(
-            result.is_err(),
-            "should not find a nonexistent command"
-        );
+        assert!(result.is_err(), "should not find a nonexistent command");
     }
 
     #[test]
