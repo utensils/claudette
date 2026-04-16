@@ -751,6 +751,7 @@ impl PersistentSession {
         allowed_tools: &[String],
         custom_instructions: Option<&str>,
         settings: &AgentSettings,
+        ws_env: Option<&WorkspaceEnv>,
     ) -> Result<Self, String> {
         let args = build_persistent_args(
             session_id,
@@ -777,6 +778,10 @@ impl PersistentSession {
         }
         cmd.env_remove("CLAUDECODE");
         cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
+
+        if let Some(env) = ws_env {
+            env.apply(&mut cmd);
+        }
 
         let mut child = cmd.spawn().map_err(|e| {
             format!(

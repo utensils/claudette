@@ -311,24 +311,29 @@ pub async fn send_chat_message(
     let saved_turn_count = session.turn_count;
 
     // Helper: start a persistent session, using --resume for restored sessions.
+    let ws_env_for_persistent = ws_env.clone();
     let start_persistent = |worktree: String,
                             sid: String,
                             is_resume: bool,
                             tools: Vec<String>,
                             instructions: Option<String>,
-                            settings: AgentSettings| async move {
-        let ps = Arc::new(
-            PersistentSession::start(
-                std::path::Path::new(&worktree),
-                &sid,
-                is_resume,
-                &tools,
-                instructions.as_deref(),
-                &settings,
-            )
-            .await?,
-        );
-        Ok::<Arc<PersistentSession>, String>(ps)
+                            settings: AgentSettings| {
+        let env = ws_env_for_persistent.clone();
+        async move {
+            let ps = Arc::new(
+                PersistentSession::start(
+                    std::path::Path::new(&worktree),
+                    &sid,
+                    is_resume,
+                    &tools,
+                    instructions.as_deref(),
+                    &settings,
+                    Some(&env),
+                )
+                .await?,
+            );
+            Ok::<Arc<PersistentSession>, String>(ps)
+        }
     };
 
     let turn_handle = if let Some(ref ps) = existing_persistent {
