@@ -40,6 +40,10 @@ describe("isEffortSupported", () => {
     expect(isEffortSupported("sonnet")).toBe(true);
   });
 
+  it("returns true for claude-sonnet-4-6[1m]", () => {
+    expect(isEffortSupported("claude-sonnet-4-6[1m]")).toBe(true);
+  });
+
   it("returns false for haiku", () => {
     expect(isEffortSupported("haiku")).toBe(false);
   });
