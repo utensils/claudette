@@ -70,12 +70,28 @@ export const ScmPanel = memo(function ScmPanel() {
     try {
       const detail = await scmRefresh(selectedWorkspaceId);
       setScmDetail(detail);
+      // Also update summary so sidebar badges stay in sync
+      if (detail.pull_request) {
+        setScmSummary(selectedWorkspaceId, {
+          hasPr: true,
+          prState: detail.pull_request.state,
+          ciState: detail.pull_request.ci_status,
+          lastUpdated: Date.now(),
+        });
+      } else {
+        setScmSummary(selectedWorkspaceId, {
+          hasPr: false,
+          prState: null,
+          ciState: null,
+          lastUpdated: Date.now(),
+        });
+      }
     } catch {
       // ignore
     } finally {
       setRefreshing(false);
     }
-  }, [selectedWorkspaceId, refreshing, setScmDetail]);
+  }, [selectedWorkspaceId, refreshing, setScmDetail, setScmSummary]);
 
   if (!selectedWorkspaceId) {
     return <div className={styles.empty}>Select a workspace</div>;

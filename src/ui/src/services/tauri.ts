@@ -502,7 +502,7 @@ import type { DiffLayer, StagedDiffFiles } from "../types/diff";
 export interface DiffFilesResult {
   files: DiffFile[];
   merge_base: string;
-  staged_files?: StagedDiffFiles;
+  staged_files?: StagedDiffFiles | null;
 }
 
 export function loadDiffFiles(workspaceId: string): Promise<DiffFilesResult> {

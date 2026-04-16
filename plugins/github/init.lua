@@ -121,6 +121,16 @@ function M.merge_pull_request(args)
     }
 end
 
+-- Normalize GitHub check state to canonical CiCheckStatus values.
+-- gh returns: SUCCESS, FAILURE, PENDING, CANCELLED, ERROR, EXPECTED, STALE, etc.
+local function normalize_check_status(state)
+    local s = string.upper(state or "")
+    if s == "SUCCESS" then return "success" end
+    if s == "FAILURE" or s == "ERROR" then return "failure" end
+    if s == "CANCELLED" or s == "CANCELED" then return "cancelled" end
+    return "pending"
+end
+
 function M.ci_status(args)
     local ok, data = pcall(gh, {
         "pr", "checks", args.branch,
@@ -133,7 +143,7 @@ function M.ci_status(args)
     for _, item in ipairs(data) do
         table.insert(checks, {
             name = item.name,
-            status = string.lower(item.state),
+            status = normalize_check_status(item.state),
             url = item.detailsUrl,
             started_at = item.startedAt,
         })

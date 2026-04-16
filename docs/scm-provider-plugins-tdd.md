@@ -405,12 +405,12 @@ Two plugins ship with the initial release:
 
 ### 9.1 Polling Schedule
 
+All active workspaces are polled on a single fixed interval. The polling loop runs concurrently (up to 8 workspaces at a time, gated by a 4-permit semaphore for CLI invocations).
+
 | Context | Interval | Rationale |
 |---------|----------|-----------|
-| Selected workspace | 30 seconds | User is actively viewing it |
-| Other active workspaces | 120 seconds | Sidebar badges need reasonable freshness |
+| All active workspaces | 30 seconds | Single fixed interval, polled concurrently |
 | Archived workspaces | Never | Not visible |
-| Window unfocused | Paused | No reason to poll when invisible |
 
 ### 9.2 Cache
 
@@ -517,35 +517,34 @@ Each command follows the pattern:
 
 | Event | Payload | Purpose |
 |-------|---------|---------|
-| `scm-summary-update` | `{workspace_id, has_pr, pr_state, ci_state}` | Update sidebar badges |
-| `scm-detail-update` | `{workspace_id, pull_request, ci_checks}` | Update right sidebar SCM tab |
-| `scm-error` | `{workspace_id, error}` | Surface errors to UI |
+| `scm-data-updated` | `ScmDetail` (workspace_id, pull_request, ci_checks, provider, error) | Update sidebar badges + SCM tab + PR banner |
+| `workspace-auto-archived` | `{workspace_id, workspace_name}` | Notify frontend that a workspace was auto-archived on merge |
 
 ### 11.4 Polling Loop
 
-A background tokio task started at app launch:
+A background task spawned via `tauri::async_runtime::spawn` in the `.setup()` handler (5-second initial delay):
 
 ```
 loop {
-    for each active workspace:
-        if workspace is archived: skip
-        if cache is fresh enough for its tier: skip
-        if semaphore has no permits: skip (don't queue, try next cycle)
+    read all active workspace IDs + archive_on_merge setting from DB
 
-        spawn task:
-            acquire semaphore permit
-            detect provider for workspace's repo
-            call list_pull_requests (filtered to workspace branch)
-            call ci_status (for workspace branch)
+    poll all workspaces concurrently (buffer_unordered, up to 8):
+        for each workspace:
+            detect provider from git remote URL
+            if cache is fresh (< 30s): return cached data
+            acquire semaphore permit (max 4 concurrent CLI calls)
+            call list_pull_requests + ci_status via tokio::join!
             update cache
-            emit scm-summary-update event
-            if workspace is selected: emit scm-detail-update event
+            emit scm-data-updated event
 
-    sleep 10 seconds (polling loop granularity)
+    for each result:
+        if archive_on_merge && PR merged:
+            auto-archive workspace
+            emit workspace-auto-archived event
+
+    sleep 30 seconds
 }
 ```
-
-The 10-second loop granularity means the effective intervals are approximate (30s selected = polled every 3rd cycle, 120s others = every 12th cycle).
 
 ## 12. Frontend Integration
 

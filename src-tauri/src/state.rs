@@ -8,8 +8,8 @@ use claudette::agent::PersistentSession;
 use parking_lot::Mutex as ParkingMutex;
 use tokio::sync::{RwLock, Semaphore};
 
+use claudette::scm_provider::PluginRegistry;
 use claudette::scm_provider::scm::{CiCheck, PullRequest};
-use claudette::scm_provider::{PluginRegistry, ScmError};
 
 use crate::commands::apps::DetectedApp;
 use crate::remote::DiscoveredServer;
@@ -200,7 +200,7 @@ pub struct ScmCacheEntry {
     pub pull_request: Option<PullRequest>,
     pub ci_checks: Vec<CiCheck>,
     pub last_fetched: Instant,
-    pub error: Option<ScmError>,
+    pub error: Option<String>,
 }
 
 /// In-memory cache for SCM data, keyed by (repo_id, branch_name).

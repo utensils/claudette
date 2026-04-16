@@ -151,13 +151,22 @@ async fn host_exec(
         args.push(arg);
     }
 
-    // Build and execute the command
+    // Build and execute the command with kill_on_drop so timed-out
+    // processes don't leak.
     let mut command = Command::new(cmd);
     command.args(&args);
     command.current_dir(&ctx.workspace_info.worktree_path);
+    command.kill_on_drop(true);
+    command.stdout(std::process::Stdio::piped());
+    command.stderr(std::process::Stdio::piped());
 
-    // Run with timeout
-    let output = tokio::time::timeout(EXEC_TIMEOUT, command.output())
+    let child = command
+        .spawn()
+        .map_err(|e| LuaError::external(format!("Failed to execute '{cmd}': {e}")))?;
+
+    // Run with timeout — kill_on_drop ensures the child is killed if
+    // the future is dropped on timeout.
+    let output = tokio::time::timeout(EXEC_TIMEOUT, child.wait_with_output())
         .await
         .map_err(|_| {
             LuaError::external(format!(

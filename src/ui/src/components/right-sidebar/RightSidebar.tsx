@@ -16,6 +16,7 @@ export const RightSidebar = memo(function RightSidebar() {
   const diffFiles = useAppStore((s) => s.diffFiles);
   const diffStagedFiles = useAppStore((s) => s.diffStagedFiles);
   const diffSelectedFile = useAppStore((s) => s.diffSelectedFile);
+  const diffSelectedLayer = useAppStore((s) => s.diffSelectedLayer);
   const diffLoading = useAppStore((s) => s.diffLoading);
   const setDiffFiles = useAppStore((s) => s.setDiffFiles);
   const setDiffSelectedFile = useAppStore((s) => s.setDiffSelectedFile);
@@ -143,10 +144,13 @@ export const RightSidebar = memo(function RightSidebar() {
     return "var(--diff-hunk-header)";
   };
 
-  const renderFileRow = (file: DiffFile, layer?: DiffLayer) => (
+  const renderFileRow = (file: DiffFile, layer?: DiffLayer) => {
+    const isSelected = diffSelectedFile === file.path
+      && (diffSelectedLayer ?? "flat") === (layer ?? "flat");
+    return (
     <div
       key={`${layer ?? "flat"}-${file.path}`}
-      className={`${styles.file} ${diffSelectedFile === file.path ? styles.fileSelected : ""}`}
+      className={`${styles.file} ${isSelected ? styles.fileSelected : ""}`}
       onClick={() => setDiffSelectedFile(file.path, layer)}
     >
       <span
@@ -167,7 +171,8 @@ export const RightSidebar = memo(function RightSidebar() {
         </span>
       )}
     </div>
-  );
+    );
+  };
 
   // Determine if we have grouped data to show
   const hasGrouped = diffStagedFiles &&

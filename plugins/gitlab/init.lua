@@ -74,6 +74,16 @@ function M.merge_pull_request(args)
     })
 end
 
+-- Normalize GitLab job status to canonical CiCheckStatus values.
+-- GitLab returns: created, pending, running, success, failed, canceled, skipped, manual.
+local function normalize_job_status(status)
+    local s = string.lower(status or "")
+    if s == "success" then return "success" end
+    if s == "failed" then return "failure" end
+    if s == "canceled" then return "cancelled" end
+    return "pending"
+end
+
 function M.ci_status(args)
     local ok, data = pcall(glab, {
         "ci", "status",
@@ -87,7 +97,7 @@ function M.ci_status(args)
     for _, job in ipairs(data.jobs or {}) do
         table.insert(checks, {
             name = job.name,
-            status = string.lower(job.status),
+            status = normalize_job_status(job.status),
             url = job.web_url,
         })
     end

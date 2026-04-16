@@ -62,7 +62,10 @@ export function usePrBannerData(): {
           });
         }
       })
-      .catch(() => {})
+      .catch(() => {
+        // Reset so a retry is possible on next render cycle
+        fetchedForRef.current = null;
+      })
       .finally(() => setScmDetailLoading(false));
   }, [
     selectedWorkspaceId,

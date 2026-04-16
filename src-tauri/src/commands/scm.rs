@@ -1,5 +1,6 @@
 use std::time::Instant;
 
+use futures::stream::{self, StreamExt};
 use serde::Serialize;
 use tauri::{Emitter, Manager, State};
 
@@ -165,7 +166,7 @@ pub async fn load_scm_detail(
                 pull_request: entry.pull_request.clone(),
                 ci_checks: entry.ci_checks.clone(),
                 provider: Some(provider_name),
-                error: entry.error.as_ref().map(|e| e.to_string()),
+                error: entry.error.clone(),
             });
         }
     }
@@ -221,9 +222,7 @@ pub async fn load_scm_detail(
 
     // Update cache
     {
-        let scm_error = error
-            .as_ref()
-            .map(|e| claudette::scm_provider::ScmError::ScriptError(e.clone()));
+        let cached_error = error.clone();
         let mut cache = state.scm_cache.entries.write().await;
         cache.insert(
             cache_key,
@@ -231,7 +230,7 @@ pub async fn load_scm_detail(
                 pull_request: pull_request.clone(),
                 ci_checks: ci_checks.clone(),
                 last_fetched: Instant::now(),
-                error: scm_error,
+                error: cached_error,
             },
         );
     }
@@ -413,7 +412,7 @@ async fn poll_workspace_scm(app_state: &AppState, workspace_id: &str) -> Option<
                 pull_request: entry.pull_request.clone(),
                 ci_checks: entry.ci_checks.clone(),
                 provider: Some(provider_name),
-                error: entry.error.as_ref().map(|e| e.to_string()),
+                error: entry.error.clone(),
             });
         }
     }
@@ -462,9 +461,7 @@ async fn poll_workspace_scm(app_state: &AppState, workspace_id: &str) -> Option<
 
     // Update cache
     {
-        let scm_error = error
-            .as_ref()
-            .map(|e| claudette::scm_provider::ScmError::ScriptError(e.clone()));
+        let cached_error = error.clone();
         let mut cache = app_state.scm_cache.entries.write().await;
         cache.insert(
             cache_key,
@@ -472,7 +469,7 @@ async fn poll_workspace_scm(app_state: &AppState, workspace_id: &str) -> Option<
                 pull_request: pull_request.clone(),
                 ci_checks: ci_checks.clone(),
                 last_fetched: Instant::now(),
-                error: scm_error,
+                error: cached_error,
             },
         );
     }
@@ -525,18 +522,31 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                 (ids, merge_setting)
             };
 
-            for ws_id in &workspace_ids {
-                if let Some(detail) = poll_workspace_scm(&app_state, ws_id).await {
+            // Poll all workspaces concurrently. The semaphore inside
+            // poll_workspace_scm limits actual CLI invocations to 4 at a time.
+            let results: Vec<(String, Option<ScmDetail>)> = stream::iter(workspace_ids)
+                .map(|ws_id| {
+                    let state = &*app_state;
+                    async move {
+                        let detail = poll_workspace_scm(state, &ws_id).await;
+                        (ws_id, detail)
+                    }
+                })
+                .buffer_unordered(8)
+                .collect()
+                .await;
+
+            for (ws_id, detail) in results {
+                if let Some(detail) = detail {
                     let _ = handle.emit("scm-data-updated", &detail);
 
-                    // Auto-archive workspace if PR is merged and setting is enabled
                     if archive_on_merge
                         && detail.pull_request.as_ref().is_some_and(|pr| {
                             pr.state == claudette::scm_provider::scm::PrState::Merged
                         })
                     {
                         eprintln!("[scm] PR merged for workspace {} — auto-archiving", ws_id);
-                        auto_archive_workspace(&handle, &app_state, ws_id).await;
+                        auto_archive_workspace(&handle, &app_state, &ws_id).await;
                     }
                 }
             }
