@@ -12,8 +12,14 @@ export interface NativeCommandContext {
   repository: { name: string; path: string } | null;
   /** Workspace branch + worktree path for the current workspace. */
   workspace: { branch: string; worktreePath: string | null } | null;
-  /** Base branch (e.g. `origin/main`) for the current repo, when known. */
-  defaultBranch: string | null;
+  /**
+   * Repo-level default branch (e.g. `origin/main`) when known. This is the
+   * repository's default branch, NOT a guaranteed review base — a branch may
+   * target a release/hotfix branch or be stacked on another feature branch.
+   * Review-workflow prompts treat it as a hint and ask the agent to resolve
+   * the real review base via git/gh.
+   */
+  repoDefaultBranch: string | null;
 }
 
 export type NativeCommandResult =
@@ -101,7 +107,11 @@ export function buildReviewContextBlock(ctx: NativeCommandContext): string {
   if (ctx.repository?.path) lines.push(`- Repository path: ${ctx.repository.path}`);
   if (ctx.workspace?.worktreePath) lines.push(`- Worktree: ${ctx.workspace.worktreePath}`);
   if (ctx.workspace?.branch) lines.push(`- Current branch: ${ctx.workspace.branch}`);
-  if (ctx.defaultBranch) lines.push(`- Base branch: ${ctx.defaultBranch}`);
+  if (ctx.repoDefaultBranch) {
+    lines.push(
+      `- Repo default branch (hint only — not guaranteed to be this branch's review base): ${ctx.repoDefaultBranch}`,
+    );
+  }
   return lines.join("\n");
 }
 
@@ -111,15 +121,31 @@ function buildUserGuidanceBlock(args: string): string {
 }
 
 /**
+ * Shared instruction block telling the agent how to resolve the actual review
+ * base for the current branch. Repo default branch is only a fallback hint —
+ * a branch may target a release/hotfix branch, or be stacked on another
+ * feature branch, so the agent must check the upstream and PR metadata first.
+ */
+const RESOLVE_REVIEW_BASE_BLOCK = [
+  "Resolve the review base ref before diffing. Prefer in this order:",
+  "1. `gh pr view --json baseRefName -q .baseRefName` — use it (prefixed with `origin/`) if a PR exists.",
+  "2. `git rev-parse --abbrev-ref @{upstream}` — use it if the branch tracks an explicit upstream.",
+  "3. Otherwise, fall back to the repo default branch listed in the context above.",
+  "4. If none of those yield a ref, stop and ask the user which branch to review against.",
+  "Call the resolved ref `<base>` in the rest of this task.",
+].join("\n");
+
+/**
  * Prompt for `/review` — general code review over the current branch's diff
  * vs. the base branch. Emphasizes correctness, regressions, risk, and tests.
  */
 const REVIEW_PROMPT = [
-  "Perform a focused code review of the current branch against the base branch.",
+  "Perform a focused code review of the current branch against its review base.",
+  "",
+  RESOLVE_REVIEW_BASE_BLOCK,
   "",
   "Review scope:",
-  "- Inspect the diff between the base branch and HEAD in the worktree above.",
-  "- Use `git diff <base>...HEAD` (three dots) to see only this branch's changes.",
+  "- Run `git diff <base>...HEAD` (three dots) in the worktree above to see only this branch's changes.",
   "",
   "What to look for, in priority order:",
   "1. Correctness bugs and regressions in behavior.",
@@ -139,11 +165,12 @@ const REVIEW_PROMPT = [
  * Concrete high-signal findings only.
  */
 const SECURITY_REVIEW_PROMPT = [
-  "Perform a security-focused review of the current branch against the base branch.",
+  "Perform a security-focused review of the current branch against its review base.",
+  "",
+  RESOLVE_REVIEW_BASE_BLOCK,
   "",
   "Review scope:",
-  "- Inspect the diff between the base branch and HEAD in the worktree above.",
-  "- Use `git diff <base>...HEAD` (three dots) to see only this branch's changes.",
+  "- Run `git diff <base>...HEAD` (three dots) in the worktree above to see only this branch's changes.",
   "",
   "Focus areas (only report concrete, high-signal findings — no generic checklist output):",
   "- Authentication and authorization changes; privilege boundaries.",

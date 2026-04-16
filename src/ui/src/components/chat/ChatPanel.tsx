@@ -449,7 +449,7 @@ export function ChatPanel() {
             workspace: ws
               ? { branch: ws.branch_name, worktreePath: ws.worktree_path }
               : null,
-            defaultBranch: defaultBranch ?? null,
+            repoDefaultBranch: defaultBranch ?? null,
           },
           parsedSlash.args,
         );
