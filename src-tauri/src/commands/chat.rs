@@ -476,7 +476,7 @@ pub async fn send_chat_message(
     let wt_path = worktree_path.clone();
     let user_msg_id = user_msg.id.clone();
     let repo_id_for_mcp = ws.repository_id.clone();
-    let notify_ws_env = ws_env;
+    drop(ws_env); // consumed by rename_ws_env; notification path rebuilds from DB
     tokio::spawn(async move {
         // On the first turn, spawn a background task to auto-rename the branch
         // using Haiku. Gate on turn count (not persistent_session) because
@@ -673,16 +673,35 @@ pub async fn send_chat_message(
                     }
                     // Run notification command if configured — uses the same
                     // tested helper as the settings test button and tray path.
+                    // Rebuild WorkspaceEnv from the DB so it reflects any
+                    // renames that happened during the turn (try_auto_rename).
                     if let Ok(Some(cmd)) = db.get_app_setting("notification_command")
                         && !cmd.is_empty()
-                        && let Some(mut command) =
+                        && let Some(fresh_ws) = db
+                            .list_workspaces()
+                            .ok()
+                            .and_then(|wss| wss.into_iter().find(|w| w.id == ws_id))
+                    {
+                        let repo_path = db
+                            .get_repository(&fresh_ws.repository_id)
+                            .ok()
+                            .flatten()
+                            .map(|r| r.path)
+                            .unwrap_or_default();
+                        let fresh_env = WorkspaceEnv::from_workspace(
+                            &fresh_ws,
+                            &repo_path,
+                            "main".into(),
+                        );
+                        if let Some(mut command) =
                             crate::commands::settings::build_notification_command(
                                 &cmd,
-                                &notify_ws_env,
+                                &fresh_env,
                             )
-                        && let Ok(child) = command.spawn()
-                    {
-                        crate::commands::settings::spawn_and_reap(child);
+                            && let Ok(child) = command.spawn()
+                        {
+                            crate::commands::settings::spawn_and_reap(child);
+                        }
                     }
                 }
 
