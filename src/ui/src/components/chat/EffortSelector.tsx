@@ -11,7 +11,7 @@ export const EFFORT_LEVELS = [
 ] as const;
 
 /** Models that support effort levels. */
-const EFFORT_SUPPORTED_MODELS = new Set(["opus", "claude-opus-4-7", "claude-opus-4-6", "sonnet"]);
+const EFFORT_SUPPORTED_MODELS = new Set(["opus", "claude-opus-4-7", "claude-opus-4-6", "sonnet", "claude-sonnet-4-6[1m]"]);
 
 /** Models that support the "xhigh" effort level (Opus 4.7+ only). */
 const XHIGH_EFFORT_MODELS = new Set(["opus", "claude-opus-4-7"]);

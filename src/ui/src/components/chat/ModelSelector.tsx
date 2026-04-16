@@ -6,6 +6,7 @@ export const MODELS = [
   { id: "claude-opus-4-7", label: "Opus 4.7", group: "Claude Code" },
   { id: "claude-opus-4-6", label: "Opus 4.6", group: "Claude Code" },
   { id: "sonnet", label: "Sonnet 4.6", group: "Claude Code" },
+  { id: "claude-sonnet-4-6[1m]", label: "Sonnet 4.6 1M", group: "Claude Code" },
   { id: "haiku", label: "Haiku 4.5", group: "Claude Code" },
 ] as const;
 

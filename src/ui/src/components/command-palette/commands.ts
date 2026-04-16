@@ -134,6 +134,7 @@ export function buildModelCommands(
     { id: "claude-opus-4-7", label: "Opus 4.7" },
     { id: "claude-opus-4-6", label: "Opus 4.6" },
     { id: "sonnet", label: "Sonnet 4.6" },
+    { id: "claude-sonnet-4-6[1m]", label: "Sonnet 4.6 1M" },
     { id: "haiku", label: "Haiku 4.5" },
   ];
   return models.map((m) => ({
