@@ -685,9 +685,49 @@ describe("/plan handler", () => {
     expect(ctx.readPlanFile).toHaveBeenCalledWith(
       "/tmp/.claude/plans/draft.md",
     );
-    expect(ctx.addLocalMessage).toHaveBeenCalledWith(
-      expect.stringContaining("# Draft plan"),
+    const msg = (ctx.addLocalMessage as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as string;
+    // Path header is markdown-formatted (italic + inline code) so the
+    // System-message renderer treats it as metadata above the body.
+    expect(msg).toContain("_Plan file — `/tmp/.claude/plans/draft.md`_");
+    // A blank line separates the header from the plan body so the
+    // markdown renderer sees them as distinct blocks.
+    expect(msg).toContain(
+      "_Plan file — `/tmp/.claude/plans/draft.md`_\n\n# Draft plan",
     );
+    // The plan body itself is passed through verbatim so the renderer can
+    // handle its internal headings, lists, and code blocks.
+    expect(msg).toContain("# Draft plan");
+  });
+
+  it("preserves plan-body newlines so the markdown renderer sees distinct blocks", async () => {
+    const planBody = [
+      "# Plan: make it work",
+      "",
+      "## Context",
+      "- one",
+      "- two",
+      "",
+      "```bash",
+      "cargo test",
+      "```",
+    ].join("\n");
+    const ctx = makeCtx({
+      planFilePath: "/tmp/.claude/plans/multi-block.md",
+      readPlanFile: vi.fn(async () => planBody),
+    });
+    const handler = resolveNativeHandler("plan")!;
+    await handler.execute(ctx, "open");
+    const msg = (ctx.addLocalMessage as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as string;
+    // All the original newlines survive — nothing is collapsed to one paragraph.
+    expect(msg.split("\n").length).toBeGreaterThanOrEqual(
+      planBody.split("\n").length,
+    );
+    // Each markdown block the renderer relies on is still intact.
+    expect(msg).toContain("## Context");
+    expect(msg).toContain("- one\n- two");
+    expect(msg).toContain("```bash\ncargo test\n```");
   });
 
   it("reports when /plan open has no plan file to open", async () => {

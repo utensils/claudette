@@ -424,7 +424,12 @@ const planHandler: NativeHandler = {
       }
       try {
         const content = await ctx.readPlanFile(ctx.planFilePath);
-        ctx.addLocalMessage(`Plan file — ${ctx.planFilePath}\n\n${content}`);
+        // Emit as markdown so the renderer surfaces headings, lists, and code
+        // fences inside the plan instead of collapsing it into one paragraph.
+        // The path line is rendered as italic muted metadata above the body.
+        ctx.addLocalMessage(
+          `_Plan file — \`${ctx.planFilePath}\`_\n\n${content}`,
+        );
       } catch (error) {
         ctx.addLocalMessage(`/plan open failed: ${String(error)}`);
       }

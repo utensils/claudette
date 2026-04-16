@@ -25,6 +25,7 @@ import {
   loadDiffFiles,
 } from "../../services/tauri";
 import { applySelectedModel } from "./applySelectedModel";
+import { roleClassKey, shouldRenderAsMarkdown } from "./messageRendering";
 import { findLatestPlanFilePath } from "./planFilePath";
 import type { PermissionLevel } from "../../stores/useAppStore";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -1243,7 +1244,7 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
       {messages.map((msg, idx) => (
         <React.Fragment key={msg.id}>
           {renderTurns(idx)}
-          <div className={`${styles.message} ${styles[`role_${msg.role}`]}`}>
+          <div className={`${styles.message} ${styles[roleClassKey(msg.role, msg.content)]}`}>
             {msg.role === "User" && (
               <div className={styles.roleLabel}>You</div>
             )}
@@ -1297,7 +1298,11 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
                   )}
                 </div>
               )}
-              {msg.role === "Assistant" ? (
+              {shouldRenderAsMarkdown(msg.role) ? (
+                // Assistant + System: run through Markdown so plan-mode dumps,
+                // setup-script output, and other multi-line system notes
+                // preserve headings, lists, and code blocks instead of
+                // collapsing newlines into a single paragraph.
                 <Markdown
                   remarkPlugins={REMARK_PLUGINS}
                   rehypePlugins={REHYPE_PLUGINS}
