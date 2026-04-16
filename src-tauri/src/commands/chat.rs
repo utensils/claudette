@@ -688,16 +688,10 @@ pub async fn send_chat_message(
                             .flatten()
                             .map(|r| r.path)
                             .unwrap_or_default();
-                        let fresh_env = WorkspaceEnv::from_workspace(
-                            &fresh_ws,
-                            &repo_path,
-                            "main".into(),
-                        );
+                        let fresh_env =
+                            WorkspaceEnv::from_workspace(&fresh_ws, &repo_path, "main".into());
                         if let Some(mut command) =
-                            crate::commands::settings::build_notification_command(
-                                &cmd,
-                                &fresh_env,
-                            )
+                            crate::commands::settings::build_notification_command(&cmd, &fresh_env)
                             && let Ok(child) = command.spawn()
                         {
                             crate::commands::settings::spawn_and_reap(child);
