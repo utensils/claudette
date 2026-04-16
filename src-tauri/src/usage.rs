@@ -135,6 +135,7 @@ static USER_AGENT_CACHE: std::sync::OnceLock<String> = std::sync::OnceLock::new(
 pub fn warm_user_agent_cache_sync() {
     let output = std::process::Command::new("claude")
         .arg("--version")
+        .env("PATH", claudette::env::enriched_path())
         .output();
     let ua = match output {
         Ok(o) if o.status.success() => {

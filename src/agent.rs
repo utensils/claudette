@@ -527,81 +527,10 @@ fn search_path_dirs(path: &std::ffi::OsStr, exists: &impl Fn(&Path) -> bool) -> 
 
 /// Get the PATH as seen by the user's login shell.
 ///
-/// Runs `$SHELL -l -c 'printf "%s\n" "$PATH"'` to pick up profile/rc files
-/// that desktop-launched apps don't source. For fish shells, uses
-/// `string join :` to convert fish's space-separated list to colon-separated.
-///
-/// If the shell prints startup output (motd, banner, etc.), only the last
-/// non-empty line is used as the PATH value.
-///
-/// A 5-second timeout kills the subprocess if the shell init hangs (nvm,
-/// pyenv, etc.), preventing leaked processes.
-///
-/// Returns `None` if `$SHELL` is unset or not an absolute path.
+/// Delegates to the shared `crate::env::shell_path()` which probes the
+/// login shell once and caches the result for the process lifetime.
 fn login_shell_path() -> Option<OsString> {
-    let shell = std::env::var("SHELL").ok()?;
-
-    // Validate: must be an absolute path.
-    if !shell.starts_with('/') {
-        return None;
-    }
-
-    // Fish treats $PATH as a list and prints space-separated entries.
-    // Convert to colon-separated so std::env::split_paths works correctly.
-    let is_fish = shell.ends_with("/fish");
-    let cmd_arg = if is_fish {
-        r#"printf '%s\n' (string join : $PATH)"#
-    } else {
-        r#"printf '%s\n' "$PATH""#
-    };
-
-    let mut child = std::process::Command::new(&shell)
-        .args(["-l", "-c", cmd_arg])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .ok()?;
-
-    // Wait up to 5 seconds. If the shell init hangs (nvm, pyenv, etc.),
-    // kill the subprocess to avoid leaking a stuck process.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) => {
-                if std::time::Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    break None;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            Err(_) => break None,
-        }
-    };
-
-    let status = status?;
-    if !status.success() {
-        return None;
-    }
-
-    let mut stdout = String::new();
-    if let Some(mut out) = child.stdout.take() {
-        use std::io::Read;
-        let _ = out.read_to_string(&mut stdout);
-    }
-    // Take the last non-empty line to skip any startup banner output.
-    let path = stdout
-        .lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .map(|line| line.trim().to_string())?;
-    if path.is_empty() {
-        None
-    } else {
-        Some(OsString::from(path))
-    }
+    crate::env::shell_path().cloned()
 }
 
 /// Run a single agent turn by spawning `claude -p` with the given prompt.
@@ -638,7 +567,8 @@ pub async fn run_turn(
     cmd.args(&args)
         .current_dir(working_dir)
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
+        .stderr(std::process::Stdio::piped())
+        .env("PATH", crate::env::enriched_path());
 
     if has_attachments {
         cmd.stdin(std::process::Stdio::piped());
@@ -800,7 +730,8 @@ impl PersistentSession {
             .current_dir(working_dir)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
+            .stderr(std::process::Stdio::piped())
+            .env("PATH", crate::env::enriched_path());
 
         // Strip OAuth tokens (same as run_turn).
         if let Ok(key) = std::env::var("ANTHROPIC_API_KEY")
@@ -1109,7 +1040,8 @@ pub async fn generate_branch_name(
 
     let claude_path = resolve_claude_path().await;
     let mut cmd = Command::new(&claude_path);
-    cmd.stdin(std::process::Stdio::null());
+    cmd.stdin(std::process::Stdio::null())
+        .env("PATH", crate::env::enriched_path());
     // Run in the user's worktree so the CLI loads *their* project context.
     cmd.current_dir(worktree_path);
     let user_message = format!(
