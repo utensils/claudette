@@ -65,8 +65,8 @@ export function NotificationsSettings() {
       await runNotificationCommand(
         "test-workspace",
         "test",
-        "/tmp/test",
-        "/tmp/test",
+        "",
+        "",
         "main",
         "claudette/test-workspace"
       );

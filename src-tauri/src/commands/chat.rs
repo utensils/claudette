@@ -688,8 +688,11 @@ pub async fn send_chat_message(
                             .flatten()
                             .map(|r| r.path)
                             .unwrap_or_default();
+                        let default_branch = git::default_branch(&repo_path)
+                            .await
+                            .unwrap_or_else(|_| "main".into());
                         let fresh_env =
-                            WorkspaceEnv::from_workspace(&fresh_ws, &repo_path, "main".into());
+                            WorkspaceEnv::from_workspace(&fresh_ws, &repo_path, default_branch);
                         if let Some(mut command) =
                             crate::commands::settings::build_notification_command(&cmd, &fresh_env)
                             && let Ok(child) = command.spawn()
