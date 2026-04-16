@@ -142,6 +142,46 @@ pub fn native_command_registry(plugin_management_enabled: bool) -> Vec<SlashComm
         argument_hint: None,
         kind: Some(NativeKind::LocalAction),
     });
+    commands.push(SlashCommand {
+        name: "clear".to_string(),
+        description: "Clear the current workspace conversation".to_string(),
+        source: "builtin".to_string(),
+        aliases: Vec::new(),
+        argument_hint: None,
+        kind: Some(NativeKind::LocalAction),
+    });
+    commands.push(SlashCommand {
+        name: "plan".to_string(),
+        description: "Show, toggle, or open the current plan".to_string(),
+        source: "builtin".to_string(),
+        aliases: Vec::new(),
+        argument_hint: Some("[on|off|toggle|open]".to_string()),
+        kind: Some(NativeKind::LocalAction),
+    });
+    commands.push(SlashCommand {
+        name: "model".to_string(),
+        description: "Show or change the workspace model".to_string(),
+        source: "builtin".to_string(),
+        aliases: Vec::new(),
+        argument_hint: Some("[<model>]".to_string()),
+        kind: Some(NativeKind::LocalAction),
+    });
+    commands.push(SlashCommand {
+        name: "permissions".to_string(),
+        description: "Show or change the workspace permission mode".to_string(),
+        source: "builtin".to_string(),
+        aliases: vec!["allowed-tools".to_string()],
+        argument_hint: Some("[readonly|standard|full]".to_string()),
+        kind: Some(NativeKind::LocalAction),
+    });
+    commands.push(SlashCommand {
+        name: "status".to_string(),
+        description: "Show a summary of the current workspace".to_string(),
+        source: "builtin".to_string(),
+        aliases: Vec::new(),
+        argument_hint: None,
+        kind: Some(NativeKind::LocalAction),
+    });
     commands
 }
 
@@ -725,6 +765,92 @@ mod tests {
         assert!(names.contains(&"extra-usage"));
         assert!(names.contains(&"release-notes"));
         assert!(names.contains(&"version"));
+        // Workspace-control commands are unconditional too.
+        assert!(names.contains(&"clear"));
+        assert!(names.contains(&"plan"));
+        assert!(names.contains(&"model"));
+        assert!(names.contains(&"permissions"));
+        assert!(names.contains(&"status"));
+    }
+
+    #[test]
+    fn test_native_command_registry_includes_workspace_control_commands() {
+        let natives = native_command_registry(false);
+        for name in ["clear", "plan", "model", "permissions", "status"] {
+            let cmd = natives
+                .iter()
+                .find(|c| c.name == name)
+                .unwrap_or_else(|| panic!("missing native command {name}"));
+            assert_eq!(cmd.source, "builtin");
+            assert_eq!(cmd.kind, Some(NativeKind::LocalAction));
+        }
+    }
+
+    #[test]
+    fn test_permissions_exposes_allowed_tools_alias() {
+        let natives = native_command_registry(false);
+        let permissions = natives
+            .iter()
+            .find(|c| c.name == "permissions")
+            .expect("missing permissions command");
+        assert_eq!(permissions.aliases, vec!["allowed-tools".to_string()]);
+        assert_eq!(
+            resolve_native("allowed-tools", &natives).map(|c| c.name.as_str()),
+            Some("permissions")
+        );
+        assert_eq!(
+            resolve_native("Allowed-Tools", &natives).map(|c| c.name.as_str()),
+            Some("permissions")
+        );
+    }
+
+    #[test]
+    fn test_workspace_control_commands_have_argument_hints() {
+        let natives = native_command_registry(false);
+        // Commands that accept arguments advertise an argument hint.
+        for name in ["plan", "model", "permissions"] {
+            let cmd = natives.iter().find(|c| c.name == name).unwrap();
+            assert!(
+                cmd.argument_hint.is_some(),
+                "{name} should have an argument hint"
+            );
+        }
+        // /clear and /status take no arguments.
+        for name in ["clear", "status"] {
+            let cmd = natives.iter().find(|c| c.name == name).unwrap();
+            assert!(
+                cmd.argument_hint.is_none(),
+                "{name} should not expose an argument hint"
+            );
+        }
+    }
+
+    #[test]
+    fn test_collect_native_commands_yields_workspace_control_slots_to_user_markdown() {
+        // Workspace-control natives (clear/plan/model/permissions/status) are
+        // NOT on the reserved list — they share `is_reserved_native_name`'s
+        // rules with config/usage/review: if a human has a `.claude/commands/
+        // clear.md`, their version wins so Claudette does not silently displace
+        // a custom workflow the user already relied on.
+        let mut commands = vec![
+            SlashCommand::file_based("clear".into(), "User custom clear".into(), "user"),
+            SlashCommand::file_based("status".into(), "Project custom status".into(), "project"),
+            SlashCommand::file_based("keep-me".into(), "Unrelated".into(), "user"),
+        ];
+        collect_native_commands(&mut commands, false);
+
+        let clear = commands.iter().find(|c| c.name == "clear").unwrap();
+        assert_eq!(clear.source, "user");
+        assert_eq!(clear.description, "User custom clear");
+        let status = commands.iter().find(|c| c.name == "status").unwrap();
+        assert_eq!(status.source, "project");
+
+        // Non-colliding workspace-control natives still register from the registry.
+        let names: Vec<&str> = commands.iter().map(|c| c.name.as_str()).collect();
+        assert!(names.contains(&"plan"));
+        assert!(names.contains(&"model"));
+        assert!(names.contains(&"permissions"));
+        assert!(names.contains(&"keep-me"));
     }
 
     #[test]

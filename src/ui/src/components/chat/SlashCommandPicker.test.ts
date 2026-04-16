@@ -18,6 +18,15 @@ describe("filterSlashCommands", () => {
   const commands: SlashCommand[] = [
     cmd({ name: "plugin", aliases: ["plugins"], kind: "settings_route" }),
     cmd({ name: "marketplace", kind: "settings_route" }),
+    cmd({ name: "clear", kind: "local_action" }),
+    cmd({ name: "plan", kind: "local_action" }),
+    cmd({ name: "model", kind: "local_action" }),
+    cmd({
+      name: "permissions",
+      aliases: ["allowed-tools"],
+      kind: "local_action",
+    }),
+    cmd({ name: "status", kind: "local_action" }),
     cmd({ name: "commit", source: "user" }),
     cmd({ name: "deploy", source: "project" }),
     cmd({ name: "cmux-browser", source: "plugin" }),
@@ -56,5 +65,32 @@ describe("filterSlashCommands", () => {
     expect(filterSlashCommands(legacy, "leg").map((c) => c.name)).toEqual([
       "legacy",
     ]);
+  });
+
+  it("surfaces /clear, /plan, /model, /status from their prefixes", () => {
+    expect(filterSlashCommands(commands, "clear").map((c) => c.name)).toEqual([
+      "clear",
+    ]);
+    expect(filterSlashCommands(commands, "plan").map((c) => c.name)).toEqual([
+      "plan",
+    ]);
+    expect(filterSlashCommands(commands, "mod").map((c) => c.name)).toEqual([
+      "model",
+    ]);
+    expect(filterSlashCommands(commands, "status").map((c) => c.name)).toEqual([
+      "status",
+    ]);
+  });
+
+  it("surfaces /permissions by canonical name or via its allowed-tools alias", () => {
+    expect(
+      filterSlashCommands(commands, "permissions").map((c) => c.name),
+    ).toEqual(["permissions"]);
+    expect(
+      filterSlashCommands(commands, "allowed-tools").map((c) => c.name),
+    ).toEqual(["permissions"]);
+    expect(
+      filterSlashCommands(commands, "Allowed-Tools").map((c) => c.name),
+    ).toEqual(["permissions"]);
   });
 });

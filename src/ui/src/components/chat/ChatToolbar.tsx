@@ -5,6 +5,7 @@ import { resetAgentSession, setAppSetting, getAppSetting } from "../../services/
 import { ModelSelector, MODELS } from "./ModelSelector";
 import { EffortSelector, EFFORT_LEVELS } from "./EffortSelector";
 import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "./modelCapabilities";
+import { applySelectedModel } from "./applySelectedModel";
 import styles from "./ChatToolbar.module.css";
 
 interface ChatToolbarProps {
@@ -92,35 +93,11 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
   const handleModelSelect = useCallback(
     async (model: string) => {
       if (model !== selectedModel) {
-        setSelectedModel(workspaceId, model);
-        await setAppSetting(`model:${workspaceId}`, model);
-        // Model is session-level — reset session so next turn uses the new model.
-        await resetAgentSession(workspaceId);
-        clearAgentQuestion(workspaceId);
-        clearPlanApproval(workspaceId);
-        // Turn off fast mode if the new model doesn't support it.
-        if (fastMode && !isFastSupported(model)) {
-          setFastMode(workspaceId, false);
-          await setAppSetting(`fast_mode:${workspaceId}`, "false");
-        }
-        // Reset effort when switching to a model with different support.
-        if (!isEffortSupported(model)) {
-          // Model doesn't support effort at all — clear to auto (won't be sent).
-          setEffortLevel(workspaceId, "auto");
-          await setAppSetting(`effort_level:${workspaceId}`, "auto");
-        } else if (effortLevel === "xhigh" && !isXhighEffortAllowed(model)) {
-          // Model supports effort but not "xhigh" — fall back to high.
-          setEffortLevel(workspaceId, "high");
-          await setAppSetting(`effort_level:${workspaceId}`, "high");
-        } else if (effortLevel === "max" && !isMaxEffortAllowed(model)) {
-          // Model supports effort but not "max" — fall back to high.
-          setEffortLevel(workspaceId, "high");
-          await setAppSetting(`effort_level:${workspaceId}`, "high");
-        }
+        await applySelectedModel(workspaceId, model);
       }
       setModelSelectorOpen(false);
     },
-    [workspaceId, selectedModel, fastMode, effortLevel, setSelectedModel, setFastMode, setEffortLevel, setModelSelectorOpen, clearAgentQuestion, clearPlanApproval]
+    [workspaceId, selectedModel, setModelSelectorOpen],
   );
 
   const handleEffortSelect = useCallback(

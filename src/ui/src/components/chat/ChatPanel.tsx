@@ -20,7 +20,14 @@ import {
   getAppSetting,
   setAppSetting,
   listWorkspaceFiles,
+  clearConversation,
+  readPlanFile,
+  loadDiffFiles,
 } from "../../services/tauri";
+import { applySelectedModel } from "./applySelectedModel";
+import { roleClassKey, shouldRenderAsMarkdown } from "./messageRendering";
+import { findLatestPlanFilePath } from "./planFilePath";
+import type { PermissionLevel } from "../../stores/useAppStore";
 import { open } from "@tauri-apps/plugin-dialog";
 import { reconstructCompletedTurns } from "../../utils/reconstructTurns";
 import type { SlashCommand, FileEntry } from "../../services/tauri";
@@ -494,7 +501,107 @@ export function ChatPanel() {
       const nativeHandler = shadowed ? null : candidateHandler;
       if (nativeHandler) {
         const workspaceId = selectedWorkspaceId;
-        const result = nativeHandler.execute(
+        const state = useAppStore.getState();
+        const currentModel = state.selectedModel[workspaceId] ?? "opus";
+        const currentPermission: PermissionLevel =
+          state.permissionLevel[workspaceId] ?? "full";
+        const currentPlanMode = state.planMode[workspaceId] ?? false;
+        const currentFastMode = state.fastMode[workspaceId] ?? false;
+        const currentThinking = state.thinkingEnabled[workspaceId] ?? false;
+        const currentChrome = state.chromeEnabled[workspaceId] ?? false;
+        const currentEffort = state.effortLevel[workspaceId] ?? "auto";
+        const planFilePath = findLatestPlanFilePath(workspaceId);
+        const agentStatusLabel =
+          typeof ws.agent_status === "string"
+            ? ws.agent_status
+            : `Error: ${ws.agent_status.Error}`;
+        const isRemoteWorkspace = !!ws.remote_connection_id;
+
+        const addLocalMessage = (text: string) => {
+          addChatMessage(workspaceId, {
+            id: crypto.randomUUID(),
+            workspace_id: workspaceId,
+            role: "System",
+            content: text,
+            cost_usd: null,
+            duration_ms: null,
+            created_at: new Date().toISOString(),
+            thinking: null,
+          });
+        };
+
+        const setSelectedModelBound = (nextModel: string) =>
+          applySelectedModel(workspaceId, nextModel);
+
+        const setPermissionLevelBound = async (level: PermissionLevel) => {
+          const previous =
+            useAppStore.getState().permissionLevel[workspaceId] ?? "full";
+          useAppStore.getState().setPermissionLevel(workspaceId, level);
+          try {
+            await setAppSetting(`permission_level:${workspaceId}`, level);
+          } catch (err) {
+            useAppStore.getState().setPermissionLevel(workspaceId, previous);
+            throw err;
+          }
+        };
+
+        const setPlanModeBound = (enabled: boolean) => {
+          useAppStore.getState().setPlanMode(workspaceId, enabled);
+        };
+
+        // Route plan-file reads through the remote server for remote
+        // workspaces, matching the PlanApprovalCard's "View plan" dispatch.
+        // Falls through to the local Tauri command for local workspaces.
+        const remoteConnectionId = ws.remote_connection_id;
+        const readPlanFileBound = remoteConnectionId
+          ? async (path: string) =>
+              (await sendRemoteCommand(remoteConnectionId, "read_plan_file", {
+                path,
+              })) as string
+          : readPlanFile;
+
+        const clearConversationBound = async (restoreFiles: boolean) => {
+          // The /clear pipeline (clearConversation + follow-up reloads) runs
+          // via local Tauri invokes only — RollbackModal has the same
+          // boundary. Surface a clear local message on remote workspaces
+          // rather than partially executing and leaving the UI in a
+          // half-reset state.
+          if (isRemoteWorkspace) {
+            throw new Error(
+              "/clear is not yet supported for remote workspaces",
+            );
+          }
+          const store = useAppStore.getState();
+          const messages = await clearConversation(workspaceId, restoreFiles);
+          store.rollbackConversation(workspaceId, "__clear__", messages);
+          loadCompletedTurns(workspaceId)
+            .then((turnData) => {
+              const turns = reconstructCompletedTurns(messages, turnData);
+              useAppStore.getState().setCompletedTurns(workspaceId, turns);
+            })
+            .catch((err) =>
+              console.error("Failed to reload turns after /clear:", err),
+            );
+          loadAttachmentsForWorkspace(workspaceId)
+            .then((atts) =>
+              useAppStore.getState().setChatAttachments(workspaceId, atts),
+            )
+            .catch((err) =>
+              console.error("Failed to reload attachments after /clear:", err),
+            );
+          useAppStore.getState().clearDiff();
+          loadDiffFiles(workspaceId)
+            .then((result) =>
+              useAppStore
+                .getState()
+                .setDiffFiles(result.files, result.merge_base),
+            )
+            .catch((err) =>
+              console.error("Failed to refresh diff after /clear:", err),
+            );
+        };
+
+        const result = await nativeHandler.execute(
           {
             repoId: repo?.remote_connection_id ? null : repo?.id ?? null,
             pluginManagementEnabled,
@@ -507,18 +614,7 @@ export function ChatPanel() {
             repoDefaultBranch: defaultBranch ?? null,
             openSettings,
             appVersion,
-            addLocalMessage: (text: string) => {
-              addChatMessage(workspaceId, {
-                id: crypto.randomUUID(),
-                workspace_id: workspaceId,
-                role: "System",
-                content: text,
-                cost_usd: null,
-                duration_ms: null,
-                created_at: new Date().toISOString(),
-                thinking: null,
-              });
-            },
+            addLocalMessage,
             openUsageSettingsExternal: () => {
               void openUsageSettings().catch((err) =>
                 console.error("Failed to open usage settings:", err),
@@ -529,6 +625,21 @@ export function ChatPanel() {
                 console.error("Failed to open release notes:", err),
               );
             },
+            workspaceId,
+            agentStatus: agentStatusLabel,
+            selectedModel: currentModel,
+            permissionLevel: currentPermission,
+            planMode: currentPlanMode,
+            fastMode: currentFastMode,
+            thinkingEnabled: currentThinking,
+            chromeEnabled: currentChrome,
+            effortLevel: currentEffort,
+            planFilePath,
+            setSelectedModel: setSelectedModelBound,
+            setPermissionLevel: setPermissionLevelBound,
+            setPlanMode: setPlanModeBound,
+            clearConversation: clearConversationBound,
+            readPlanFile: readPlanFileBound,
           },
           parsedSlash.args,
         );
@@ -1144,7 +1255,7 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
       {messages.map((msg, idx) => (
         <React.Fragment key={msg.id}>
           {renderTurns(idx)}
-          <div className={`${styles.message} ${styles[`role_${msg.role}`]}`}>
+          <div className={`${styles.message} ${styles[roleClassKey(msg.role, msg.content)]}`}>
             {msg.role === "User" && (
               <div className={styles.roleLabel}>You</div>
             )}
@@ -1198,7 +1309,11 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
                   )}
                 </div>
               )}
-              {msg.role === "Assistant" ? (
+              {shouldRenderAsMarkdown(msg.role) ? (
+                // Assistant + System: run through Markdown so plan-mode dumps,
+                // setup-script output, and other multi-line system notes
+                // preserve headings, lists, and code blocks instead of
+                // collapsing newlines into a single paragraph.
                 <Markdown
                   remarkPlugins={REMARK_PLUGINS}
                   rehypePlugins={REHYPE_PLUGINS}
