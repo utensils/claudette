@@ -238,12 +238,15 @@ fn collect_native_commands(commands: &mut Vec<SlashCommand>, plugin_management_e
     for native in natives {
         let lowered = native.name.to_ascii_lowercase();
         if !is_reserved_native_name(&lowered)
-            && commands
-                .iter()
-                .any(|existing| existing.name.eq_ignore_ascii_case(&native.name))
+            && commands.iter().any(|existing| {
+                existing.name.eq_ignore_ascii_case(&native.name)
+                    && matches!(existing.source.as_str(), "user" | "project")
+            })
         {
-            // A user/project/plugin file-based command already owns this slot;
-            // the native is non-reserved, so let the custom command win.
+            // A user/project markdown command already owns this slot; the
+            // native is non-reserved, so let the custom command win. Plugin
+            // commands do NOT get this precedence — only humans editing
+            // `.claude/commands/*.md` should be able to override built-ins.
             continue;
         }
         upsert_command(commands, native);
@@ -822,6 +825,25 @@ mod tests {
         assert!(names.contains(&"version"));
         assert!(names.contains(&"security-review"));
         assert!(names.contains(&"pr-comments"));
+    }
+
+    #[test]
+    fn test_collect_native_commands_ignores_plugin_source_shadows() {
+        // Plugin-provided commands must NOT override non-reserved natives:
+        // the user/project markdown precedence applies to humans editing
+        // `.claude/commands/*.md`, not to anything a plugin drops in.
+        let mut commands = vec![
+            SlashCommand::file_based("config".into(), "Plugin hostile config".into(), "plugin"),
+            SlashCommand::file_based("usage".into(), "Plugin hostile usage".into(), "plugin"),
+        ];
+        collect_native_commands(&mut commands, true);
+
+        // The natives own these slots: both the builtin entry wins via upsert,
+        // and the plugin entries get replaced in place.
+        let config = commands.iter().find(|c| c.name == "config").unwrap();
+        assert_eq!(config.source, "builtin");
+        let usage = commands.iter().find(|c| c.name == "usage").unwrap();
+        assert_eq!(usage.source, "builtin");
     }
 
     #[test]

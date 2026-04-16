@@ -149,6 +149,7 @@ export function ChatPanel() {
   const openSettings = useAppStore((s) => s.openSettings);
   const appVersion = useAppStore((s) => s.appVersion);
   const slashCommandsByWorkspace = useAppStore((s) => s.slashCommandsByWorkspace);
+  const setSlashCommandsCache = useAppStore((s) => s.setSlashCommands);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const processingRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
@@ -444,18 +445,47 @@ export function ChatPanel() {
     // prompt_expansion commands can rewrite the prompt before it is sent.
     const parsedSlash = parseSlashInput(trimmed);
     if (parsedSlash) {
-      // A user- or project-defined file-based command with the same name takes
+      // A user- or project-defined markdown command with the same name takes
       // priority over non-reserved natives (plugin/marketplace remain reserved
-      // upstream in the backend registry). Skip native dispatch entirely when a
-      // file-based shadow exists so the custom markdown prompt reaches Claude.
-      const cmds = slashCommandsByWorkspace[selectedWorkspaceId] ?? [];
+      // upstream in the backend registry). Plugin-source commands do NOT get
+      // this precedence — only humans editing `.claude/commands/*.md` can
+      // override built-ins. Skip native dispatch when such a shadow exists so
+      // the custom markdown prompt reaches Claude.
+      //
+      // The slash-command cache is populated async by ChatInputArea on mount
+      // and on workspace change. If a user sends a slash command before that
+      // first fetch lands (rare but possible on fast startup), fall back to a
+      // synchronous fetch here so shadowing decisions are always made against
+      // a fresh list. The Rust side already returns a 5-minute cached result.
+      let cmds = slashCommandsByWorkspace[selectedWorkspaceId];
+      if (!cmds) {
+        try {
+          cmds = await listSlashCommands(repo?.path, selectedWorkspaceId);
+          setSlashCommandsCache(selectedWorkspaceId, cmds);
+        } catch (err) {
+          console.error("Failed to load slash commands before native dispatch:", err);
+          cmds = [];
+        }
+      }
       const tokenLower = parsedSlash.token.toLowerCase();
+      const candidateHandler = resolveNativeHandler(parsedSlash.token);
+      // Also guard against a user-defined command shadowing the native's
+      // canonical name or any of its aliases — e.g. `config.md` should
+      // disable `/configure` just as it disables `/config`, so the picker and
+      // the dispatcher stay consistent.
+      const shadowNames = new Set<string>([tokenLower]);
+      if (candidateHandler) {
+        shadowNames.add(candidateHandler.name.toLowerCase());
+        for (const alias of candidateHandler.aliases) {
+          shadowNames.add(alias.toLowerCase());
+        }
+      }
       const shadowed = cmds.some(
-        (c) => c.source !== "builtin" && c.name.toLowerCase() === tokenLower,
+        (c) =>
+          (c.source === "user" || c.source === "project") &&
+          shadowNames.has(c.name.toLowerCase()),
       );
-      const nativeHandler = shadowed
-        ? null
-        : resolveNativeHandler(parsedSlash.token);
+      const nativeHandler = shadowed ? null : candidateHandler;
       if (nativeHandler) {
         const workspaceId = selectedWorkspaceId;
         const result = nativeHandler.execute(
