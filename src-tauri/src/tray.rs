@@ -615,6 +615,7 @@ mod tests {
                 None
             },
             persistent_session: None,
+            mcp_config_dirty: false,
         }
     }
 

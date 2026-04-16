@@ -251,10 +251,11 @@ pub async fn set_mcp_server_enabled(
         .set_server_enabled(&repo_id, &server_name, enabled)
         .await;
 
-    // Invalidate persistent sessions for all workspaces in this repo so the
-    // next turn starts a fresh process with the updated MCP config.
-    // Collect PIDs under the lock, then drop it before awaiting stop_agent
-    // to avoid blocking other workspace commands during process shutdown.
+    // Mark affected sessions as dirty so the next turn tears down the
+    // persistent session and starts a fresh one with updated MCP config.
+    // This avoids killing an agent mid-turn — the current turn completes
+    // normally and the config change takes effect on the next
+    // `send_chat_message` command.
     let workspaces = db.list_workspaces().unwrap_or_default();
     let repo_workspace_ids: Vec<String> = workspaces
         .iter()
@@ -262,22 +263,13 @@ pub async fn set_mcp_server_enabled(
         .map(|w| w.id.clone())
         .collect();
 
-    let pids_to_stop = {
+    {
         let mut agents = state.agents.write().await;
-        let mut pids = Vec::new();
         for ws_id in &repo_workspace_ids {
             if let Some(session) = agents.get_mut(ws_id) {
-                if let Some(pid) = session.active_pid.take() {
-                    pids.push(pid);
-                }
-                session.persistent_session = None;
+                session.mcp_config_dirty = true;
             }
         }
-        pids
-    };
-
-    for pid in pids_to_stop {
-        let _ = claudette::agent::stop_agent(pid).await;
     }
 
     Ok(())

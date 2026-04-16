@@ -223,6 +223,7 @@ pub async fn send_chat_message(
                 needs_attention: false,
                 attention_kind: None,
                 persistent_session: None,
+                mcp_config_dirty: false,
             };
         }
 
@@ -234,6 +235,7 @@ pub async fn send_chat_message(
             needs_attention: false,
             attention_kind: None,
             persistent_session: None,
+            mcp_config_dirty: false,
         }
     });
 
@@ -250,6 +252,22 @@ pub async fn send_chat_message(
         agents = state.agents.write().await;
         let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
         session.active_pid = None;
+    }
+    let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
+
+    // MCP config changed while a previous turn was in flight — tear down the
+    // persistent session so the next spawn picks up updated --mcp-config.
+    // The session is idle between turns so a graceful SIGTERM is sufficient.
+    if session.mcp_config_dirty {
+        eprintln!("[chat] MCP config dirty — tearing down persistent session for {workspace_id}");
+        let stale_pid = session.persistent_session.as_ref().map(|ps| ps.pid());
+        session.persistent_session = None;
+        session.mcp_config_dirty = false;
+        if let Some(pid) = stale_pid {
+            drop(agents);
+            let _ = agent::stop_agent_graceful(pid).await;
+            agents = state.agents.write().await;
+        }
     }
     let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
 

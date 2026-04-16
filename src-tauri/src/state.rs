@@ -39,6 +39,11 @@ pub struct AgentSessionState {
     /// When present, subsequent turns write to this process's stdin instead of
     /// spawning new processes.
     pub persistent_session: Option<Arc<PersistentSession>>,
+    /// Set when MCP server config changes while a turn is in flight.
+    /// The next call to `send_chat_message` tears down the persistent session
+    /// and starts a fresh one with updated `--mcp-config`, then clears
+    /// the flag. This avoids killing an agent mid-turn.
+    pub mcp_config_dirty: bool,
 }
 
 /// Handle to an active PTY process.

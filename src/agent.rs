@@ -685,6 +685,35 @@ pub async fn stop_agent(pid: u32) -> Result<(), String> {
     }
 }
 
+/// Gracefully stop an agent process (SIGTERM → wait → SIGKILL).
+///
+/// Sends SIGTERM first and allows up to 500 ms for the process to exit.
+/// Falls back to SIGKILL if the deadline expires. Suitable for tearing
+/// down idle persistent sessions at turn boundaries where we don't need
+/// an instant kill.
+pub async fn stop_agent_graceful(pid: u32) -> Result<(), String> {
+    // Send SIGTERM for graceful shutdown.
+    let _ = tokio::process::Command::new("kill")
+        .args(["-15", &pid.to_string()])
+        .output()
+        .await;
+
+    // Poll for up to 500 ms.
+    for _ in 0..10 {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let probe = tokio::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .output()
+            .await;
+        if probe.is_ok_and(|o| !o.status.success()) {
+            return Ok(());
+        }
+    }
+
+    // Escalate to SIGKILL.
+    stop_agent(pid).await
+}
+
 // ---------------------------------------------------------------------------
 // Persistent session — long-lived process for multi-turn MCP retention
 // ---------------------------------------------------------------------------
@@ -2408,5 +2437,40 @@ mod tests {
         let settings = AgentSettings::default();
         let args = build_persistent_args("sess-1", false, &[], Some("   "), &settings);
         assert!(!args.iter().any(|a| a == "--append-system-prompt"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_stop_agent_graceful_stops_process_before_escalation() {
+        // Spawn a process that traps SIGTERM and exits cleanly.
+        let mut child = tokio::process::Command::new("sh")
+            .args(["-c", "trap 'exit 0' TERM; sleep 5"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("failed to spawn test child");
+
+        let pid = child.id().expect("child pid should be available");
+
+        let result = stop_agent_graceful(pid).await;
+        assert!(
+            result.is_ok(),
+            "expected graceful stop to succeed: {result:?}"
+        );
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), child.wait())
+            .await
+            .expect("child did not exit in time")
+            .expect("failed to reap child");
+
+        // kill -0 should fail for a dead process.
+        let probe = tokio::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .output()
+            .await;
+        assert!(
+            probe.is_ok_and(|o| !o.status.success()),
+            "process {pid} should no longer exist after graceful stop"
+        );
     }
 }
