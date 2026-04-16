@@ -4,9 +4,9 @@ use serde::Serialize;
 use tauri::{Emitter, Manager, State};
 
 use claudette::db::Database;
-use claudette::plugin::detect;
-use claudette::plugin::host_api::WorkspaceInfo;
-use claudette::plugin::scm::{CiCheck, PullRequest};
+use claudette::scm_provider::detect;
+use claudette::scm_provider::host_api::WorkspaceInfo;
+use claudette::scm_provider::scm::{CiCheck, PullRequest};
 
 use crate::state::{AppState, ScmCacheEntry};
 
@@ -66,7 +66,7 @@ fn lookup_workspace_context(
 
 /// List all discovered SCM provider plugins.
 #[tauri::command]
-pub async fn list_plugins(state: State<'_, AppState>) -> Result<Vec<PluginInfo>, String> {
+pub async fn list_scm_providers(state: State<'_, AppState>) -> Result<Vec<PluginInfo>, String> {
     let registry = state.plugins.read().await;
     let plugins = registry
         .plugins
@@ -223,7 +223,7 @@ pub async fn load_scm_detail(
     {
         let scm_error = error
             .as_ref()
-            .map(|e| claudette::plugin::ScmError::ScriptError(e.clone()));
+            .map(|e| claudette::scm_provider::ScmError::ScriptError(e.clone()));
         let mut cache = state.scm_cache.entries.write().await;
         cache.insert(
             cache_key,
@@ -464,7 +464,7 @@ async fn poll_workspace_scm(app_state: &AppState, workspace_id: &str) -> Option<
     {
         let scm_error = error
             .as_ref()
-            .map(|e| claudette::plugin::ScmError::ScriptError(e.clone()));
+            .map(|e| claudette::scm_provider::ScmError::ScriptError(e.clone()));
         let mut cache = app_state.scm_cache.entries.write().await;
         cache.insert(
             cache_key,
@@ -532,10 +532,9 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
 
                     // Auto-archive workspace if PR is merged and setting is enabled
                     if archive_on_merge
-                        && detail
-                            .pull_request
-                            .as_ref()
-                            .is_some_and(|pr| pr.state == claudette::plugin::scm::PrState::Merged)
+                        && detail.pull_request.as_ref().is_some_and(|pr| {
+                            pr.state == claudette::scm_provider::scm::PrState::Merged
+                        })
                     {
                         eprintln!("[scm] PR merged for workspace {} — auto-archiving", ws_id);
                         auto_archive_workspace(&handle, &app_state, ws_id).await;

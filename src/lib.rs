@@ -11,6 +11,7 @@ pub mod model;
 pub mod names;
 pub mod permissions;
 pub mod plugin;
+pub mod scm_provider;
 pub mod slash_commands;
 pub mod snapshot;
 

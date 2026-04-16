@@ -82,11 +82,11 @@ fn main() {
         .join(".claudette")
         .join("plugins");
     let _ = std::fs::create_dir_all(&plugin_dir);
-    let seed_warnings = claudette::plugin::seed::seed_bundled_plugins(&plugin_dir);
+    let seed_warnings = claudette::scm_provider::seed::seed_bundled_plugins(&plugin_dir);
     for warning in &seed_warnings {
         eprintln!("[plugin] {warning}");
     }
-    let plugins = claudette::plugin::PluginRegistry::discover(&plugin_dir);
+    let plugins = claudette::scm_provider::PluginRegistry::discover(&plugin_dir);
     eprintln!(
         "[plugin] Discovered {} plugin(s): {}",
         plugins.plugins.len(),

@@ -220,7 +220,7 @@ mod tests {
     }
 
     fn make_plugin(name: &str, patterns: &[&str], cli_available: bool) -> LoadedPlugin {
-        use crate::plugin::manifest::PluginManifest;
+        use crate::scm_provider::manifest::PluginManifest;
         LoadedPlugin {
             manifest: PluginManifest {
                 name: name.to_string(),
