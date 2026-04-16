@@ -149,9 +149,11 @@ const turns = s.completedTurns[wsId] || [];
 const last = acts[acts.length - 1];
 const c = document.querySelector('[class*="messages_"]');
 const gap = c ? Math.round(c.scrollHeight - c.scrollTop - c.clientHeight) : -1;
+const storeStatus = ws?.agent_status;
+const isActive = storeStatus === 'Running' || stream.length > 0 || acts.length > 0 || (s.streamingThinking[wsId] || '').length > 0;
 return {
   workspace: ws?.name,
-  agentStatus: ws?.agent_status,
+  agentStatus: isActive ? 'Running' : storeStatus,
   messageCount: msgs.length,
   lastMessageRole: msgs[msgs.length - 1]?.role,
   streaming: stream.length > 0,
@@ -177,6 +179,11 @@ JS
 
 Substitute `MESSAGE_TEXT_HERE` with the actual message. Escape backticks with `\``.
 
+**Important**: This sets `agent_status` to `"Running"` in the store before invoking the
+Tauri command. The normal UI path (ChatPanel) does this in React; since we bypass that
+component, we must replicate it here so that `wait`, `monitor`, and `status` see the
+correct state.
+
 ```bash
 ${CLAUDE_SKILL_DIR}/scripts/debug-eval.sh <<'JS'
 const s = window.__CLAUDETTE_STORE__.getState();
@@ -184,6 +191,8 @@ const wsId = s.selectedWorkspaceId;
 if (!wsId) return 'ERROR: no workspace selected';
 const ws = s.workspaces.find(w => w.id === wsId);
 if (ws?.agent_status === 'Running') return 'ERROR: agent already running';
+s.updateWorkspace(wsId, { agent_status: 'Running' });
+s.clearUnreadCompletion(wsId);
 await window.__CLAUDETTE_INVOKE__('send_chat_message', {
   workspaceId: wsId,
   content: `MESSAGE_TEXT_HERE`,
@@ -235,8 +244,11 @@ if (wsId) {
   const stream = s.streamingContent[wsId] || '';
   const acts = s.toolActivities[wsId] || [];
   const turns = s.completedTurns[wsId] || [];
+  const storeStatus = ws?.agent_status;
+  const isActive = storeStatus === 'Running' || stream.length > 0 || acts.length > 0 || (s.streamingThinking[wsId] || '').length > 0;
+  const effectiveStatus = isActive ? 'Running' : storeStatus;
   lines.push('=== Active: ' + ws?.name + ' (' + wsId.substring(0, 8) + ') ===');
-  lines.push('  agentStatus: ' + ws?.agent_status);
+  lines.push('  agentStatus: ' + effectiveStatus);
   lines.push('  messages: ' + msgs.length + (msgs.length > 0 ? ' (last: ' + msgs[msgs.length-1].role + ')' : ''));
   lines.push('  streaming: ' + (stream.length > 0 ? stream.length + ' chars' : 'false'));
   lines.push('  activeTools: ' + acts.length + (acts.length > 0 ? ' (last: ' + acts[acts.length-1].toolName + ')' : ''));

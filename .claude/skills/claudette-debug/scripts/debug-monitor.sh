@@ -14,8 +14,12 @@ INTERVAL=1
 MAX_ITER=3600  # 1 hour at 1s interval
 LOGFILE="/tmp/claudette-debug/monitor.log"
 
-# Default JS expression: comprehensive session state
-JS_EXPR='const s=window.__CLAUDETTE_STORE__.getState();const w=s.selectedWorkspaceId;const acts=s.toolActivities[w]||[];const completedTurns=(s.completedTurns[w]||[]).length;const agentStatus=s.workspaces.find(x=>x.id===w)?.agent_status||"unknown";const c=document.querySelector("[class*=messages_]");const scrollGap=c?Math.round(c.scrollHeight-c.scrollTop-c.clientHeight):-1;const messageCount=(s.chatMessages[w]||[]).length;const last=acts[acts.length-1];const inputJsonValid=last?.inputJson?((()=>{try{JSON.parse(last.inputJson);return true}catch{return false}})()):null;const streaming=(s.streamingContent[w]||"").length>0;const thinking=(s.streamingThinking[w]||"").length;const thinkingEnabled=s.thinkingEnabled[w]||false;const showThinking=s.showThinkingBlocks[w]===true;return JSON.stringify({toolCount:acts.length,completedTurns,agentStatus,scrollGap,messageCount,lastToolSummary:last?.summary?.substring(0,60)||"",inputJsonValid,streaming,thinking,thinkingEnabled,showThinking})'
+# Default JS expression: comprehensive session state.
+# NOTE: agentStatus reads the store's workspace.agent_status field.
+# effectiveStatus derives the real status from streaming/tool signals — the store
+# value can lag when messages are sent via the debug eval API (bypasses the
+# ChatPanel React handler that sets agent_status to "Running").
+JS_EXPR='const s=window.__CLAUDETTE_STORE__.getState();const w=s.selectedWorkspaceId;const acts=s.toolActivities[w]||[];const completedTurns=(s.completedTurns[w]||[]).length;const storeStatus=s.workspaces.find(x=>x.id===w)?.agent_status||"unknown";const c=document.querySelector("[class*=messages_]");const scrollGap=c?Math.round(c.scrollHeight-c.scrollTop-c.clientHeight):-1;const messageCount=(s.chatMessages[w]||[]).length;const last=acts[acts.length-1];const inputJsonValid=last?.inputJson?((()=>{try{JSON.parse(last.inputJson);return true}catch{return false}})()):null;const streaming=(s.streamingContent[w]||"").length>0;const thinking=(s.streamingThinking[w]||"").length;const thinkingEnabled=s.thinkingEnabled[w]||false;const showThinking=s.showThinkingBlocks[w]===true;const effectiveStatus=(storeStatus==="Running"||streaming||acts.length>0||thinking>0)?"Running":storeStatus;return JSON.stringify({toolCount:acts.length,completedTurns,agentStatus:effectiveStatus,scrollGap,messageCount,lastToolSummary:last?.summary?.substring(0,60)||"",inputJsonValid,streaming,thinking,thinkingEnabled,showThinking})'
 
 # Parse args
 while [[ $# -gt 0 ]]; do
