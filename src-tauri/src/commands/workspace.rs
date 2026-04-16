@@ -143,15 +143,11 @@ pub async fn create_workspace(
     let setup_result = if skip_setup.unwrap_or(false) {
         None
     } else {
-        let default_branch = git::default_branch(&repo_path)
-            .await
-            .unwrap_or_else(|_| "main".to_string());
-        let ws_env = WorkspaceEnv::from_workspace(&ws, &repo_path, default_branch);
         resolve_and_run_setup(
+            &ws,
             Path::new(&repo_path),
             Path::new(&actual_path),
             settings_setup_script.as_deref(),
-            &ws_env,
         )
         .await
     };
@@ -165,11 +161,15 @@ pub async fn create_workspace(
 }
 
 /// Resolve the setup script from .claudette.json or settings fallback, then execute it.
+///
+/// `WorkspaceEnv` is built lazily — `git::default_branch()` is only called
+/// when a script is actually found, avoiding an unnecessary git subprocess
+/// in the common no-script case.
 async fn resolve_and_run_setup(
+    ws: &Workspace,
     repo_path: &Path,
     worktree_path: &Path,
     settings_script: Option<&str>,
-    ws_env: &WorkspaceEnv,
 ) -> Option<SetupResult> {
     // 1. Check .claudette.json
     let (script, source) = match config::load_config(repo_path) {
@@ -207,7 +207,14 @@ async fn resolve_and_run_setup(
         }
     };
 
-    // 2. Execute the script in its own process group so we can kill the
+    // 2. Build workspace env vars now that we know a script will run.
+    let repo_path_str = repo_path.to_string_lossy();
+    let default_branch = git::default_branch(&repo_path_str)
+        .await
+        .unwrap_or_else(|_| "main".to_string());
+    let ws_env = WorkspaceEnv::from_workspace(ws, &repo_path_str, default_branch);
+
+    // 3. Execute the script in its own process group so we can kill the
     //    entire tree on timeout (prevents orphan grandchild processes).
     let mut cmd = TokioCommand::new("sh");
     cmd.arg("-c")
@@ -330,16 +337,11 @@ pub async fn run_workspace_setup(
         .find(|r| r.id == ws.repository_id)
         .ok_or("Repository not found")?;
 
-    let default_branch = git::default_branch(&repo.path)
-        .await
-        .unwrap_or_else(|_| "main".to_string());
-    let ws_env = WorkspaceEnv::from_workspace(ws, &repo.path, default_branch);
-
     let result = resolve_and_run_setup(
+        ws,
         Path::new(&repo.path),
         Path::new(worktree_path),
         repo.setup_script.as_deref(),
-        &ws_env,
     )
     .await;
 
