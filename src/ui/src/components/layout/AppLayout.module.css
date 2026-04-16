@@ -14,13 +14,8 @@
   --terminal-h: 300px;
 }
 
-.settings {
-  display: flex;
-  flex: 1;
-  overflow: hidden;
-}
-
-.workspace {
+/* Shared wrapper for settings and workspace view panels. */
+.viewPanel {
   display: flex;
   flex: 1;
   overflow: hidden;

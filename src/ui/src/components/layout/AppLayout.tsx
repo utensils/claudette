@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import { Sidebar } from "../sidebar/Sidebar";
 import { ChatPanel } from "../chat/ChatPanel";
@@ -65,6 +65,13 @@ export function AppLayout() {
     setTerminalHeight(finalHeight);
   }, [setTerminalHeight]);
 
+  // Lazy-mount SettingsPage: defer initial mount until the user first opens
+  // settings, then keep it mounted so subsequent toggles are instant.
+  const [settingsMounted, setSettingsMounted] = useState(false);
+  useEffect(() => {
+    if (settingsOpen && !settingsMounted) setSettingsMounted(true);
+  }, [settingsOpen, settingsMounted]);
+
   const isMac = typeof navigator !== "undefined" && navigator.platform.startsWith("Mac");
 
   return (
@@ -72,16 +79,19 @@ export function AppLayout() {
       <UpdateBanner installNow={installNow} installWhenIdle={installWhenIdle} dismiss={dismiss} />
       <div className={styles.main} ref={mainRef}>
         {/*
-          Settings and workspace content are BOTH always mounted.
-          We toggle visibility via CSS display:none so opening settings
-          never unmounts the workspace tree — unmounting would destroy
-          xterm instances and kill PTY children (same rationale as the
-          terminal panel toggle below).
+          Settings is lazy-mounted on first open, then kept alive so
+          subsequent toggles are instant.  The workspace subtree is
+          ALWAYS mounted.  We swap visibility via CSS display:none so
+          opening settings never unmounts the workspace tree —
+          unmounting would destroy xterm instances and kill PTY children
+          (same rationale as the terminal panel toggle below).
         */}
-        <div className={`${styles.settings} ${settingsOpen ? "" : styles.hidden}`}>
-          <SettingsPage />
-        </div>
-        <div className={`${styles.workspace} ${settingsOpen ? styles.hidden : ""}`}>
+        {settingsMounted && (
+          <div className={`${styles.viewPanel} ${settingsOpen ? "" : styles.hidden}`}>
+            <SettingsPage />
+          </div>
+        )}
+        <div className={`${styles.viewPanel} ${settingsOpen ? styles.hidden : ""}`}>
           {sidebarVisible && (
             <>
               <div className={styles.sidebar}>
