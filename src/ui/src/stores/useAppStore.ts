@@ -26,8 +26,6 @@ import type {
   PluginSettingsTab,
 } from "../types/plugins";
 
-export type PermissionLevel = "readonly" | "standard" | "full";
-
 export interface ToolActivity {
   toolUseId: string;
   toolName: string;
@@ -160,10 +158,6 @@ interface AppState {
   unreadCompletions: Set<string>; // workspace IDs with unread completions
   markWorkspaceAsUnread: (wsId: string) => void;
   clearUnreadCompletion: (wsId: string) => void;
-
-  // -- Permissions --
-  permissionLevel: Record<string, PermissionLevel>;
-  setPermissionLevel: (wsId: string, level: PermissionLevel) => void;
 
   // -- Toolbar --
   selectedModel: Record<string, string>;
@@ -747,13 +741,6 @@ export const useAppStore = create<AppState>((set) => ({
       newSet.delete(wsId);
       return { unreadCompletions: newSet };
     }),
-
-  // -- Permissions --
-  permissionLevel: {},
-  setPermissionLevel: (wsId, level) =>
-    set((s) => ({
-      permissionLevel: { ...s.permissionLevel, [wsId]: level },
-    })),
 
   // -- Toolbar --
   selectedModel: {},
