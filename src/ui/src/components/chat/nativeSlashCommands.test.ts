@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { PluginSettingsIntent } from "../../types/plugins";
+import type { SlashCommand } from "../../services/tauri";
 import {
   CONFIG_SECTIONS,
   NATIVE_HANDLERS,
   describeSlashQuery,
+  formatHelpMessage,
   formatVersionMessage,
   parseSlashInput,
   resolveNativeHandler,
@@ -42,6 +44,7 @@ function makeCtx(overrides: Partial<NativeCommandContext> = {}): NativeCommandCo
     setPlanMode: vi.fn(),
     clearConversation: vi.fn(async () => {}),
     readPlanFile: vi.fn(async () => "plan content"),
+    slashCommands: [],
     ...overrides,
   };
 }
@@ -949,5 +952,302 @@ describe("workspace-control picker filtering", () => {
   it("resolves /allowed-tools as an alias to /permissions", () => {
     expect(resolveNativeHandler("allowed-tools")?.name).toBe("permissions");
     expect(resolveNativeHandler("Allowed-Tools")?.name).toBe("permissions");
+  });
+});
+
+// Shared fixture for /help rendering tests — mirrors the shape of what the
+// Rust side would return for a typical workspace.
+const helpFixture: SlashCommand[] = [
+  {
+    name: "clear",
+    description: "Clear the current workspace conversation",
+    source: "builtin",
+    aliases: [],
+    kind: "local_action",
+  },
+  {
+    name: "config",
+    description: "Open Claudette settings",
+    source: "builtin",
+    aliases: ["configure"],
+    argument_hint: "[general|models|usage]",
+    kind: "settings_route",
+  },
+  {
+    name: "help",
+    description: "List available slash commands",
+    source: "builtin",
+    aliases: [],
+    kind: "local_action",
+  },
+  {
+    name: "init",
+    description: "Bootstrap repo guidance (CLAUDE.md) via the agent",
+    source: "builtin",
+    aliases: [],
+    argument_hint: "[extra guidance]",
+    kind: "prompt_expansion",
+  },
+  {
+    name: "review",
+    description: "Seed a code review of the current branch against its base",
+    source: "builtin",
+    aliases: [],
+    argument_hint: "[extra focus areas]",
+    kind: "prompt_expansion",
+  },
+  {
+    name: "my-project-cmd",
+    description: "A project command",
+    source: "project",
+    aliases: [],
+  },
+  {
+    name: "my-user-cmd",
+    description: "A user command",
+    source: "user",
+    aliases: [],
+  },
+  {
+    name: "plugin-ns:deploy",
+    description: "Deploy via plugin",
+    source: "plugin",
+    aliases: [],
+  },
+];
+
+describe("formatHelpMessage", () => {
+  it("groups native commands by kind with the specified heading order", () => {
+    const out = formatHelpMessage(helpFixture);
+    const actionsIdx = out.indexOf("_Actions (stay local");
+    const settingsIdx = out.indexOf("_Settings shortcuts_");
+    const promptIdx = out.indexOf("_Prompt expansions");
+    expect(actionsIdx).toBeGreaterThan(-1);
+    expect(settingsIdx).toBeGreaterThan(actionsIdx);
+    expect(promptIdx).toBeGreaterThan(settingsIdx);
+  });
+
+  it("alphabetizes entries within each group", () => {
+    const out = formatHelpMessage(helpFixture);
+    // /clear, /help come before /status alphabetically — confirm clear precedes help.
+    expect(out.indexOf("- /clear ")).toBeLessThan(out.indexOf("- /help "));
+    // Within prompt_expansion, /init precedes /review.
+    expect(out.indexOf("- /init ")).toBeLessThan(out.indexOf("- /review "));
+  });
+
+  it("renders argument hints and descriptions inline", () => {
+    const out = formatHelpMessage(helpFixture);
+    expect(out).toContain("- /config [general|models|usage]  (alias: /configure) — Open Claudette settings");
+    expect(out).toContain("- /init [extra guidance] — Bootstrap repo guidance (CLAUDE.md) via the agent");
+  });
+
+  it("renders aliases as '(alias: /x, /y)'", () => {
+    const withMulti: SlashCommand[] = [
+      {
+        name: "permissions",
+        description: "Show or change the workspace permission mode",
+        source: "builtin",
+        aliases: ["allowed-tools", "perm"],
+        argument_hint: "[readonly|standard|full]",
+        kind: "local_action",
+      },
+    ];
+    const out = formatHelpMessage(withMulti);
+    expect(out).toContain("(alias: /allowed-tools, /perm)");
+  });
+
+  it("groups file-based commands by source under dedicated headings", () => {
+    const out = formatHelpMessage(helpFixture);
+    expect(out).toContain("**Project commands**");
+    expect(out).toContain("- /my-project-cmd — A project command");
+    expect(out).toContain("**User commands**");
+    expect(out).toContain("- /my-user-cmd — A user command");
+    expect(out).toContain("**Plugin commands**");
+    expect(out).toContain("- /plugin-ns:deploy — Deploy via plugin");
+  });
+
+  it("omits an entire group heading when the group is empty", () => {
+    const onlyNative: SlashCommand[] = [
+      {
+        name: "version",
+        description: "Show the current Claudette version",
+        source: "builtin",
+        aliases: ["about"],
+        kind: "local_action",
+      },
+    ];
+    const out = formatHelpMessage(onlyNative);
+    expect(out).not.toContain("**Project commands**");
+    expect(out).not.toContain("**User commands**");
+    expect(out).not.toContain("**Plugin commands**");
+    expect(out).not.toContain("_Settings shortcuts_");
+    expect(out).not.toContain("_Prompt expansions");
+    expect(out).toContain("_Actions (stay local");
+  });
+
+  it("excludes builtin commands that are missing a kind", () => {
+    // Defensive: a builtin without `kind` would have no handler, so it must not
+    // appear in /help output either.
+    const malformed: SlashCommand[] = [
+      { name: "broken", description: "no kind set", source: "builtin", aliases: [] },
+    ];
+    expect(formatHelpMessage(malformed)).toBe("No slash commands are registered.");
+  });
+
+  it("returns a graceful message when no commands are registered", () => {
+    expect(formatHelpMessage([])).toBe("No slash commands are registered.");
+  });
+
+  it("does not include builtin entries in the file-based sections", () => {
+    // Prevent regressions where `/config` could be double-listed under User
+    // commands if the source filter were mis-spelled.
+    const out = formatHelpMessage(helpFixture);
+    // Everything after the first file-based heading should NOT contain /config.
+    const firstFileHeading = out.indexOf("**Project commands**");
+    if (firstFileHeading !== -1) {
+      const tail = out.slice(firstFileHeading);
+      expect(tail).not.toContain("/config");
+      expect(tail).not.toContain("/review");
+    }
+  });
+});
+
+describe("help native handler", () => {
+  it("routes /help to addLocalMessage using the context's slashCommands", async () => {
+    const ctx = makeCtx({ slashCommands: helpFixture });
+    const handler = resolveNativeHandler("help")!;
+    expect(handler.name).toBe("help");
+    expect(handler.kind).toBe("local_action");
+    const result = await handler.execute(ctx, "");
+    expect(result).toEqual({ kind: "handled", canonicalName: "help" });
+    expect(ctx.addLocalMessage).toHaveBeenCalledOnce();
+    const rendered = (ctx.addLocalMessage as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as string;
+    expect(rendered).toBe(formatHelpMessage(helpFixture));
+  });
+
+  it("does not send anything to the agent", async () => {
+    // The handler is local_action and must return "handled" so handleSend never
+    // falls through to sendChatMessage. Any accidental kind=expand would cause
+    // the agent to be invoked.
+    const ctx = makeCtx({ slashCommands: helpFixture });
+    const result = await resolveNativeHandler("help")!.execute(ctx, "");
+    expect(result.kind).toBe("handled");
+  });
+
+  it("renders a graceful placeholder when the registry is empty", async () => {
+    const ctx = makeCtx({ slashCommands: [] });
+    await resolveNativeHandler("help")!.execute(ctx, "");
+    const rendered = (ctx.addLocalMessage as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as string;
+    expect(rendered).toBe("No slash commands are registered.");
+  });
+
+  it("consumes ctx.slashCommands rather than NATIVE_HANDLERS directly", async () => {
+    // If the handler accidentally used NATIVE_HANDLERS, file-based user/project
+    // commands would be invisible in /help. Pass a list containing only a
+    // user command and assert it IS rendered.
+    const onlyUser: SlashCommand[] = [
+      {
+        name: "deploy",
+        description: "User-authored deploy command",
+        source: "user",
+        aliases: [],
+      },
+    ];
+    const ctx = makeCtx({ slashCommands: onlyUser });
+    await resolveNativeHandler("help")!.execute(ctx, "");
+    const rendered = (ctx.addLocalMessage as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as string;
+    expect(rendered).toContain("**User commands**");
+    expect(rendered).toContain("- /deploy — User-authored deploy command");
+  });
+});
+
+describe("init native handler", () => {
+  it("is registered as prompt_expansion with no aliases", () => {
+    const handler = resolveNativeHandler("init")!;
+    expect(handler.name).toBe("init");
+    expect(handler.kind).toBe("prompt_expansion");
+    expect(handler.aliases).toEqual([]);
+  });
+
+  it("expands with repo, branch, worktree, and default-branch context", async () => {
+    const ctx = makeCtx({
+      repository: { name: "claudette", path: "/Users/me/Projects/claudette" },
+      workspace: { branch: "feat/init-help", worktreePath: "/Users/me/wt/init-help" },
+      repoDefaultBranch: "origin/main",
+    });
+    const handler = resolveNativeHandler("init")!;
+    const result = await handler.execute(ctx, "");
+    expect(result.kind).toBe("expand");
+    if (result.kind !== "expand") return;
+    expect(result.canonicalName).toBe("init");
+    expect(result.prompt).toContain("CLAUDE.md");
+    expect(result.prompt).toContain("Workspace context:");
+    expect(result.prompt).toContain("- Repository: claudette");
+    expect(result.prompt).toContain("- Repository path: /Users/me/Projects/claudette");
+    expect(result.prompt).toContain("- Worktree: /Users/me/wt/init-help");
+    expect(result.prompt).toContain("- Current branch: feat/init-help");
+    expect(result.prompt).toContain("- Repo default branch (hint): origin/main");
+  });
+
+  it("instructs the agent to merge, not overwrite, existing CLAUDE.md", async () => {
+    const ctx = makeCtx();
+    const result = await resolveNativeHandler("init")!.execute(ctx, "");
+    if (result.kind !== "expand") throw new Error("expected expand");
+    expect(result.prompt.toLowerCase()).toContain("merge");
+    expect(result.prompt).toContain("preserve existing guidance");
+  });
+
+  it("instructs the agent not to commit or push", async () => {
+    const ctx = makeCtx();
+    const result = await resolveNativeHandler("init")!.execute(ctx, "");
+    if (result.kind !== "expand") throw new Error("expected expand");
+    expect(result.prompt).toContain("Do not commit or push");
+  });
+
+  it("omits missing context fields without leaking undefined/null", async () => {
+    const ctx = makeCtx({
+      repository: null,
+      workspace: null,
+      repoDefaultBranch: null,
+    });
+    const result = await resolveNativeHandler("init")!.execute(ctx, "");
+    if (result.kind !== "expand") throw new Error("expected expand");
+    expect(result.prompt).not.toContain("null");
+    expect(result.prompt).not.toContain("undefined");
+    expect(result.prompt).not.toContain("Workspace context:");
+  });
+
+  it("appends user arguments under 'Additional guidance from user:'", async () => {
+    const ctx = makeCtx();
+    const result = await resolveNativeHandler("init")!.execute(
+      ctx,
+      "focus on the Tauri command surface",
+    );
+    if (result.kind !== "expand") throw new Error("expected expand");
+    expect(result.prompt).toContain(
+      "Additional guidance from user: focus on the Tauri command surface",
+    );
+  });
+
+  it("does not add a local message (expansion only)", async () => {
+    const ctx = makeCtx();
+    await resolveNativeHandler("init")!.execute(ctx, "");
+    expect(ctx.addLocalMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("repo-bootstrap picker filtering", () => {
+  it("exposes /help and /init as canonical NATIVE_HANDLERS entries", () => {
+    const names = NATIVE_HANDLERS.map((h) => h.name);
+    expect(names).toContain("help");
+    expect(names).toContain("init");
+  });
+
+  it("/help and /init expose no aliases", () => {
+    expect(NATIVE_HANDLERS.find((h) => h.name === "help")!.aliases).toEqual([]);
+    expect(NATIVE_HANDLERS.find((h) => h.name === "init")!.aliases).toEqual([]);
   });
 });

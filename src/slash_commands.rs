@@ -182,6 +182,22 @@ pub fn native_command_registry(plugin_management_enabled: bool) -> Vec<SlashComm
         argument_hint: None,
         kind: Some(NativeKind::LocalAction),
     });
+    commands.push(SlashCommand {
+        name: "help".to_string(),
+        description: "List available slash commands".to_string(),
+        source: "builtin".to_string(),
+        aliases: Vec::new(),
+        argument_hint: None,
+        kind: Some(NativeKind::LocalAction),
+    });
+    commands.push(SlashCommand {
+        name: "init".to_string(),
+        description: "Bootstrap repo guidance (CLAUDE.md) via the agent".to_string(),
+        source: "builtin".to_string(),
+        aliases: Vec::new(),
+        argument_hint: Some("[extra guidance]".to_string()),
+        kind: Some(NativeKind::PromptExpansion),
+    });
     commands
 }
 
@@ -771,6 +787,9 @@ mod tests {
         assert!(names.contains(&"model"));
         assert!(names.contains(&"permissions"));
         assert!(names.contains(&"status"));
+        // Repo-bootstrap commands are also unconditional.
+        assert!(names.contains(&"help"));
+        assert!(names.contains(&"init"));
     }
 
     #[test]
@@ -905,6 +924,51 @@ mod tests {
             assert_eq!(version.kind, Some(NativeKind::LocalAction));
             assert_eq!(version.aliases, vec!["about".to_string()]);
         }
+    }
+
+    #[test]
+    fn test_native_command_registry_includes_help_and_init() {
+        for enabled in [true, false] {
+            let natives = native_command_registry(enabled);
+            let by_name: HashMap<&str, &SlashCommand> =
+                natives.iter().map(|c| (c.name.as_str(), c)).collect();
+
+            let help = by_name
+                .get("help")
+                .unwrap_or_else(|| panic!("help missing (enabled={enabled})"));
+            assert_eq!(help.source, "builtin");
+            assert_eq!(help.kind, Some(NativeKind::LocalAction));
+            assert!(help.aliases.is_empty(), "/help exposes no aliases");
+            assert!(help.argument_hint.is_none(), "/help takes no arguments");
+            assert_eq!(help.description, "List available slash commands");
+
+            let init = by_name
+                .get("init")
+                .unwrap_or_else(|| panic!("init missing (enabled={enabled})"));
+            assert_eq!(init.source, "builtin");
+            assert_eq!(init.kind, Some(NativeKind::PromptExpansion));
+            assert!(init.aliases.is_empty(), "/init exposes no aliases");
+            assert_eq!(init.argument_hint.as_deref(), Some("[extra guidance]"));
+        }
+    }
+
+    #[test]
+    fn test_collect_native_commands_yields_help_and_init_to_user_markdown() {
+        // /help and /init are non-reserved natives, so a user-defined
+        // commands/help.md or commands/init.md should win — matches the
+        // precedence rule for /config, /review, etc.
+        let mut commands = vec![
+            SlashCommand::file_based("help".into(), "User custom help".into(), "user"),
+            SlashCommand::file_based("init".into(), "Project custom init".into(), "project"),
+        ];
+        collect_native_commands(&mut commands, false);
+
+        let help = commands.iter().find(|c| c.name == "help").unwrap();
+        assert_eq!(help.source, "user");
+        assert_eq!(help.description, "User custom help");
+
+        let init = commands.iter().find(|c| c.name == "init").unwrap();
+        assert_eq!(init.source, "project");
     }
 
     #[test]

@@ -640,6 +640,7 @@ export function ChatPanel() {
             setPlanMode: setPlanModeBound,
             clearConversation: clearConversationBound,
             readPlanFile: readPlanFileBound,
+            slashCommands: cmds,
           },
           parsedSlash.args,
         );

@@ -1,5 +1,5 @@
 import type { PluginSettingsIntent } from "../../types/plugins";
-import type { NativeSlashKind } from "../../services/tauri";
+import type { NativeSlashKind, SlashCommand } from "../../services/tauri";
 import type { PermissionLevel } from "../../stores/useAppStore";
 import { parsePluginSlashCommand } from "./pluginSlashCommand";
 import { MODELS } from "./modelRegistry";
@@ -64,6 +64,13 @@ export interface NativeCommandContext {
   setPlanMode: (enabled: boolean) => void;
   clearConversation: (restoreFiles: boolean) => Promise<void>;
   readPlanFile: (path: string) => Promise<string>;
+
+  /**
+   * Full slash command registry as exposed to the picker. Read by `/help`
+   * so the help surface and the picker can never drift. Pass the same list
+   * `list_slash_commands` returned for this workspace — do not reconstruct.
+   */
+  slashCommands: SlashCommand[];
 }
 
 export type NativeCommandResult =
@@ -524,6 +531,170 @@ const permissionsHandler: NativeHandler = {
   },
 };
 
+/**
+ * Seed prompt for `/init` — repo-bootstrap workflow. The seeded text is sent
+ * through the normal agent pipeline so the agent can inspect the codebase and
+ * write or update `CLAUDE.md` via the standard tool flow. Existing `CLAUDE.md`
+ * content must be merged, not overwritten, so mature repos don't lose guidance.
+ */
+const INIT_PROMPT = [
+  "Bootstrap project guidance for this repository.",
+  "",
+  "Goal: produce or update a repo-level `CLAUDE.md` at the repo root that is useful to a future agent (or engineer) who has never seen this codebase. If `CLAUDE.md` already exists, MERGE new findings into it — preserve existing guidance, only add or refine.",
+  "",
+  "Inspection pass (do this first):",
+  "- Identify the project type, primary languages, and frameworks.",
+  "- Find the build, test, lint, and format commands (look at package.json, Cargo.toml, Makefile, flake.nix, pyproject.toml, etc.).",
+  "- Map the top-level directory structure and what each area is for.",
+  "- Note the commit convention (scan `git log --oneline -20`).",
+  "- Note any code-style config (rustfmt, prettier, ruff, .editorconfig) and the stance it encodes.",
+  "- Detect any existing `.claudette.json` or similar instruction files — cross-reference so CLAUDE.md doesn't contradict them.",
+  "",
+  "CLAUDE.md should include, in this order:",
+  "1. One-paragraph project summary.",
+  "2. Build & test commands as copy-paste shell snippets.",
+  "3. Code style conventions the repo actually uses.",
+  "4. Commit conventions (e.g. Conventional Commits, PR title rules).",
+  "5. Architecture overview: crates/modules/packages and their responsibilities.",
+  "6. Project structure tree (pruned — skip node_modules, target, dist, etc.).",
+  "7. Guidelines for new code (where data types live, where commands live, state conventions).",
+  "8. Debugging / dev loop notes if the repo has non-trivial dev tooling.",
+  "",
+  "Rules:",
+  "- Write the file via the normal file-write tool flow.",
+  "- Do not commit or push.",
+  "- If a `CLAUDE.md` already exists, read it first and preserve sections the user has clearly authored (custom conventions, team rules). Only update sections that are stale or missing.",
+  "- Keep the file concise and high-signal; this is agent instruction material, not marketing copy.",
+].join("\n");
+
+const initHandler: NativeHandler = {
+  name: "init",
+  aliases: [],
+  kind: "prompt_expansion",
+  execute: (ctx, args) => {
+    const lines: string[] = [];
+    if (ctx.repository?.name) lines.push(`- Repository: ${ctx.repository.name}`);
+    if (ctx.repository?.path) lines.push(`- Repository path: ${ctx.repository.path}`);
+    if (ctx.workspace?.worktreePath) lines.push(`- Worktree: ${ctx.workspace.worktreePath}`);
+    if (ctx.workspace?.branch) lines.push(`- Current branch: ${ctx.workspace.branch}`);
+    if (ctx.repoDefaultBranch)
+      lines.push(`- Repo default branch (hint): ${ctx.repoDefaultBranch}`);
+    const contextBlock = lines.length > 0 ? `\n\nWorkspace context:\n${lines.join("\n")}` : "";
+    const prompt = `${INIT_PROMPT}${contextBlock}${buildUserGuidanceBlock(args)}`;
+    return { kind: "expand", canonicalName: "init", prompt };
+  },
+};
+
+function formatCommandLine(cmd: SlashCommand): string {
+  const head = cmd.argument_hint ? `/${cmd.name} ${cmd.argument_hint}` : `/${cmd.name}`;
+  const aliasPart =
+    cmd.aliases && cmd.aliases.length > 0
+      ? `  (alias: ${cmd.aliases.map((a) => `/${a}`).join(", ")})`
+      : "";
+  const desc = cmd.description.trim().length > 0 ? ` — ${cmd.description}` : "";
+  return `- ${head}${aliasPart}${desc}`;
+}
+
+/**
+ * Build the multi-line `/help` output. Pure function so tests can pin exact
+ * formatting without spinning up a context.
+ *
+ * Layout:
+ *   **Native commands**
+ *   _Actions (stay local, do not contact the agent)_
+ *     - /clear — ...
+ *   _Settings shortcuts_
+ *     - /config [...] — ...
+ *   _Prompt expansions (seed a prompt, then send to the agent)_
+ *     - /review [...] — ...
+ *   **Project commands** / **User commands** / **Plugin commands**
+ *
+ * Native entries are grouped by `kind`. File-based entries are grouped by
+ * `source`. Each group is alphabetized. Empty groups are omitted entirely so
+ * the output stays tight when plugin/project commands don't apply.
+ */
+export function formatHelpMessage(commands: SlashCommand[]): string {
+  const sorted = [...commands].sort((a, b) => a.name.localeCompare(b.name));
+
+  const byKind = new Map<NativeSlashKind, SlashCommand[]>();
+  const bySource: Record<"project" | "user" | "plugin", SlashCommand[]> = {
+    project: [],
+    user: [],
+    plugin: [],
+  };
+
+  for (const cmd of sorted) {
+    if (cmd.source === "builtin") {
+      const kind = cmd.kind ?? null;
+      if (!kind) continue;
+      if (!byKind.has(kind)) byKind.set(kind, []);
+      byKind.get(kind)!.push(cmd);
+    } else if (cmd.source === "project" || cmd.source === "user" || cmd.source === "plugin") {
+      bySource[cmd.source].push(cmd);
+    }
+  }
+
+  const sections: string[] = [];
+  const nativeLines: string[] = [];
+
+  const kindOrder: Array<{ kind: NativeSlashKind; heading: string }> = [
+    {
+      kind: "local_action",
+      heading: "_Actions (stay local, do not contact the agent)_",
+    },
+    { kind: "settings_route", heading: "_Settings shortcuts_" },
+    {
+      kind: "prompt_expansion",
+      heading: "_Prompt expansions (seed a prompt, then send to the agent)_",
+    },
+  ];
+
+  for (const { kind, heading } of kindOrder) {
+    const entries = byKind.get(kind);
+    if (!entries || entries.length === 0) continue;
+    nativeLines.push(heading);
+    entries.forEach((cmd) => nativeLines.push(formatCommandLine(cmd)));
+    nativeLines.push("");
+  }
+
+  if (nativeLines.length > 0) {
+    // Drop trailing blank line from the native block before emitting.
+    while (nativeLines.length > 0 && nativeLines[nativeLines.length - 1] === "") {
+      nativeLines.pop();
+    }
+    sections.push(["**Native commands**", "", ...nativeLines].join("\n"));
+  }
+
+  const sourceOrder: Array<{ key: "project" | "user" | "plugin"; heading: string }> = [
+    { key: "project", heading: "**Project commands**" },
+    { key: "user", heading: "**User commands**" },
+    { key: "plugin", heading: "**Plugin commands**" },
+  ];
+
+  for (const { key, heading } of sourceOrder) {
+    const entries = bySource[key];
+    if (entries.length === 0) continue;
+    const block = [heading, "", ...entries.map(formatCommandLine)];
+    sections.push(block.join("\n"));
+  }
+
+  if (sections.length === 0) {
+    return "No slash commands are registered.";
+  }
+
+  return sections.join("\n\n");
+}
+
+const helpHandler: NativeHandler = {
+  name: "help",
+  aliases: [],
+  kind: "local_action",
+  execute: (ctx) => {
+    ctx.addLocalMessage(formatHelpMessage(ctx.slashCommands));
+    return { kind: "handled", canonicalName: "help" };
+  },
+};
+
 const statusHandler: NativeHandler = {
   name: "status",
   aliases: [],
@@ -570,6 +741,8 @@ export const NATIVE_HANDLERS: NativeHandler[] = [
   modelHandler,
   permissionsHandler,
   statusHandler,
+  helpHandler,
+  initHandler,
 ];
 
 /** Resolve a slash command token (no leading `/`) against the native handler table. */
