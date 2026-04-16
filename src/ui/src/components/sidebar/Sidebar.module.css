@@ -6,6 +6,9 @@
 
 .header {
   padding: 14px 16px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 [data-platform="mac"] .header {
@@ -20,31 +23,68 @@
   letter-spacing: 0.08em;
 }
 
-.filters {
-  display: flex;
-  gap: 2px;
-  padding: 0 12px 8px;
+.filterDropdown {
+  position: relative;
 }
 
-.filterBtn {
+.filterToggle {
   background: none;
   border: none;
   color: var(--text-dim);
-  font-size: 12px;
-  padding: 3px 8px;
-  border-radius: 4px;
   cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
   transition: color var(--transition-fast), background var(--transition-fast);
 }
 
-.filterBtn:hover {
+.filterToggle:hover {
   background: var(--hover-bg);
   color: var(--text-muted);
 }
 
-.filterActive {
+.filterMenu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  background: var(--chat-input-bg);
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  min-width: 120px;
+  z-index: 100;
+  overflow: hidden;
+}
+
+.filterMenuItem {
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-size: 13px;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+  text-align: left;
+}
+
+.filterMenuItem:hover {
+  background: var(--hover-bg);
+}
+
+.filterMenuItem span {
+  flex: 1;
+}
+
+.filterMenuItem svg {
   color: var(--accent-primary);
-  background: var(--accent-bg);
+  flex-shrink: 0;
 }
 
 .list {

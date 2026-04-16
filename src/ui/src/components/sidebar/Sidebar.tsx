@@ -1,4 +1,4 @@
-import { memo, useRef, useState, useMemo, useCallback } from "react";
+import { memo, useRef, useState, useMemo, useCallback, useEffect } from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import {
   archiveWorkspace,
@@ -15,7 +15,7 @@ import {
   pairWithServer,
   startLocalServer,
 } from "../../services/tauri";
-import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, BadgeCheck, BadgeInfo, BadgeQuestionMark, Cog } from "lucide-react";
+import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, BadgeCheck, BadgeInfo, BadgeQuestionMark, Cog, Filter, Check } from "lucide-react";
 import { RepoIcon } from "../shared/RepoIcon";
 import { useSpinnerFrame } from "../../hooks/useSpinnerFrame";
 import type { McpStatusSnapshot } from "../../types/mcp";
@@ -72,7 +72,26 @@ export const Sidebar = memo(function Sidebar() {
   const setRepositories = useAppStore((s) => s.setRepositories);
   const metaKeyHeld = useAppStore((s) => s.metaKeyHeld);
   const remoteConnections = useAppStore((s) => s.remoteConnections);
+  const discoveredServers = useAppStore((s) => s.discoveredServers);
   const isMac = navigator.platform.startsWith("Mac");
+
+  // Filter dropdown state
+  const [filterMenuOpen, setFilterMenuOpen] = useState(false);
+  const filterDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close filter menu when clicking outside
+  useEffect(() => {
+    if (!filterMenuOpen) return;
+
+    const handleClickOutside = (e: MouseEvent) => {
+      if (filterDropdownRef.current && !filterDropdownRef.current.contains(e.target as Node)) {
+        setFilterMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [filterMenuOpen]);
 
   // Pointer-based reorder state (HTML5 drag-and-drop doesn't work in WKWebView)
   const [draggedRepoId, setDraggedRepoId] = useState<string | null>(null);
@@ -201,18 +220,69 @@ export const Sidebar = memo(function Sidebar() {
     <div className={styles.sidebar}>
       <div className={styles.header} data-tauri-drag-region>
         <span className={styles.title}>Workspaces</span>
-      </div>
-
-      <div className={styles.filters}>
-        {(["all", "active", "archived", ...(remoteConnections.length > 0 ? ["remote" as const] : [])] as const).map((f) => (
+        <div className={styles.filterDropdown} ref={filterDropdownRef}>
           <button
-            key={f}
-            className={`${styles.filterBtn} ${sidebarFilter === f ? styles.filterActive : ""}`}
-            onClick={() => setSidebarFilter(f)}
+            className={styles.filterToggle}
+            onClick={() => setFilterMenuOpen((open) => !open)}
+            title="Filter workspaces"
+            aria-label="Filter workspaces"
+            aria-haspopup="menu"
+            aria-expanded={filterMenuOpen}
+            aria-controls="workspace-filter-menu"
           >
-            {f.charAt(0).toUpperCase() + f.slice(1)}
+            <Filter size={12} />
           </button>
-        ))}
+          {filterMenuOpen && (
+            <div className={styles.filterMenu} id="workspace-filter-menu" role="menu">
+              <button
+                className={styles.filterMenuItem}
+                onClick={() => {
+                  setSidebarFilter("all");
+                  setFilterMenuOpen(false);
+                }}
+                role="menuitem"
+              >
+                <span>All</span>
+                {sidebarFilter === "all" && <Check size={14} />}
+              </button>
+              <button
+                className={styles.filterMenuItem}
+                onClick={() => {
+                  setSidebarFilter("active");
+                  setFilterMenuOpen(false);
+                }}
+                role="menuitem"
+              >
+                <span>Active</span>
+                {sidebarFilter === "active" && <Check size={14} />}
+              </button>
+              <button
+                className={styles.filterMenuItem}
+                onClick={() => {
+                  setSidebarFilter("archived");
+                  setFilterMenuOpen(false);
+                }}
+                role="menuitem"
+              >
+                <span>Archived</span>
+                {sidebarFilter === "archived" && <Check size={14} />}
+              </button>
+              {(remoteConnections.length > 0 || discoveredServers.length > 0) && (
+                <button
+                  className={styles.filterMenuItem}
+                  onClick={() => {
+                    setSidebarFilter("remote");
+                    setFilterMenuOpen(false);
+                  }}
+                  role="menuitem"
+                >
+                  <span>Remote</span>
+                  {sidebarFilter === "remote" && <Check size={14} />}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className={styles.list}>
