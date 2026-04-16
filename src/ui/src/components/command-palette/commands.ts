@@ -22,7 +22,8 @@ import {
   ZoomOut,
 } from "lucide-react";
 import type { ThemeDefinition } from "../../types/theme";
-import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "../chat/EffortSelector";
+import { MODELS } from "../chat/ModelSelector";
+import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "../chat/modelCapabilities";
 
 export type CommandCategory =
   | "general"
@@ -130,15 +131,7 @@ export function buildModelCommands(
   onSelect: (model: string) => void,
   close: () => void,
 ): Command[] {
-  const models = [
-    { id: "opus", label: "Opus 4.7 1M", extraUsage: true },
-    { id: "claude-opus-4-7", label: "Opus 4.7", extraUsage: false },
-    { id: "claude-opus-4-6", label: "Opus 4.6", extraUsage: false },
-    { id: "sonnet", label: "Sonnet 4.6", extraUsage: false },
-    { id: "claude-sonnet-4-6[1m]", label: "Sonnet 4.6 1M", extraUsage: true },
-    { id: "haiku", label: "Haiku 4.5", extraUsage: false },
-  ];
-  return models.map((m) => ({
+  return MODELS.map((m) => ({
     id: `model:${m.id}`,
     name: `${m.label}${m.id === selectedModel ? " ✓" : ""}`,
     description: m.extraUsage ? "Extra usage: 1M context billed at API rates" : undefined,

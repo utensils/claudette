@@ -3,7 +3,8 @@ import { BadgeDollarSign, Sparkles, Zap, Brain, BookOpen, Gauge, Eye, EyeOff, Gl
 import { useAppStore } from "../../stores/useAppStore";
 import { resetAgentSession, setAppSetting, getAppSetting } from "../../services/tauri";
 import { ModelSelector, MODELS } from "./ModelSelector";
-import { EffortSelector, EFFORT_LEVELS, isMaxEffortAllowed, isXhighEffortAllowed, isEffortSupported, isFastSupported } from "./EffortSelector";
+import { EffortSelector, EFFORT_LEVELS } from "./EffortSelector";
+import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "./modelCapabilities";
 import styles from "./ChatToolbar.module.css";
 
 interface ChatToolbarProps {
@@ -177,7 +178,7 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
 
   const currentModel = MODELS.find((m) => m.id === selectedModel);
   const modelLabel = currentModel?.label ?? selectedModel;
-  const isExtraUsage = modelLabel.includes("1M");
+  const isExtraUsage = currentModel?.extraUsage ?? false;
   const effortLabel =
     EFFORT_LEVELS.find((l) => l.id === effortLevel)?.label ?? effortLevel;
 
