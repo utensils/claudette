@@ -97,6 +97,128 @@ describe("streamingThinking (per-workspace)", () => {
   });
 });
 
+describe("plugin settings routing", () => {
+  beforeEach(() => {
+    useAppStore.setState({
+      pluginManagementEnabled: true,
+      settingsOpen: false,
+      settingsSection: null,
+      pluginSettingsTab: "installed",
+      pluginSettingsRepoId: null,
+      pluginSettingsIntent: null,
+      pluginRefreshToken: 0,
+    });
+  });
+
+  it("openPluginSettings opens settings and stores the merged intent", () => {
+    useAppStore.getState().openPluginSettings({
+      action: "install",
+      repoId: "repo-1",
+      scope: "project",
+      source: "demo@market",
+      tab: "installed",
+    });
+
+    const state = useAppStore.getState();
+    expect(state.settingsOpen).toBe(true);
+    expect(state.settingsSection).toBe("plugins");
+    expect(state.pluginSettingsTab).toBe("installed");
+    expect(state.pluginSettingsRepoId).toBe("repo-1");
+    expect(state.pluginSettingsIntent).toEqual({
+      action: "install",
+      repoId: "repo-1",
+      scope: "project",
+      source: "demo@market",
+      tab: "installed",
+      target: null,
+    });
+  });
+
+  it("openPluginSettings defaults repo context to global when none is provided", () => {
+    useAppStore.setState({
+      pluginSettingsRepoId: "repo-stale",
+      pluginSettingsTab: "installed",
+    });
+
+    useAppStore.getState().openPluginSettings({
+      tab: "available",
+    });
+
+    const state = useAppStore.getState();
+    expect(state.pluginSettingsRepoId).toBeNull();
+    expect(state.pluginSettingsIntent).toEqual({
+      action: null,
+      repoId: null,
+      scope: "user",
+      source: null,
+      tab: "available",
+      target: null,
+    });
+  });
+
+  it("manual plugins settings entry resets to global available view", () => {
+    useAppStore.setState({
+      pluginSettingsRepoId: "repo-1",
+      pluginSettingsIntent: {
+        action: "install",
+        repoId: "repo-1",
+        scope: "project",
+        source: "demo@market",
+        tab: "installed",
+        target: null,
+      },
+      pluginSettingsTab: "installed",
+    });
+
+    useAppStore.getState().setSettingsSection("plugins");
+
+    const state = useAppStore.getState();
+    expect(state.settingsSection).toBe("plugins");
+    expect(state.pluginSettingsRepoId).toBeNull();
+    expect(state.pluginSettingsIntent).toBeNull();
+    expect(state.pluginSettingsTab).toBe("available");
+  });
+
+  it("defaults plugin management to disabled", () => {
+    useAppStore.setState({ pluginManagementEnabled: false });
+    expect(useAppStore.getState().pluginManagementEnabled).toBe(false);
+  });
+
+  it("redirects plugin settings section to experimental when disabled", () => {
+    useAppStore.setState({ pluginManagementEnabled: false });
+
+    useAppStore.getState().setSettingsSection("plugins");
+
+    const state = useAppStore.getState();
+    expect(state.settingsSection).toBe("experimental");
+    expect(state.pluginSettingsIntent).toBeNull();
+    expect(state.pluginSettingsRepoId).toBeNull();
+  });
+
+  it("ignores openPluginSettings when plugin management is disabled", () => {
+    useAppStore.setState({ pluginManagementEnabled: false });
+
+    useAppStore.getState().openPluginSettings({
+      action: "install",
+      repoId: "repo-1",
+      scope: "project",
+      source: "demo@market",
+      tab: "available",
+    });
+
+    const state = useAppStore.getState();
+    expect(state.settingsOpen).toBe(false);
+    expect(state.settingsSection).toBeNull();
+    expect(state.pluginSettingsIntent).toBeNull();
+  });
+
+  it("bumpPluginRefreshToken increments monotonically", () => {
+    useAppStore.getState().bumpPluginRefreshToken();
+    useAppStore.getState().bumpPluginRefreshToken();
+    expect(useAppStore.getState().pluginRefreshToken).toBe(2);
+  });
+});
+
 describe("agentQuestion lifecycle (per-workspace)", () => {
   beforeEach(() => {
     useAppStore.setState({

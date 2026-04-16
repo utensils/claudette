@@ -27,6 +27,7 @@ function App() {
   const setSystemFonts = useAppStore((s) => s.setSystemFonts);
   const setDetectedApps = useAppStore((s) => s.setDetectedApps);
   const setUsageInsightsEnabled = useAppStore((s) => s.setUsageInsightsEnabled);
+  const setPluginManagementEnabled = useAppStore((s) => s.setPluginManagementEnabled);
 
   // Listen for MCP supervisor status events from the Rust backend.
   useMcpStatus();
@@ -107,6 +108,9 @@ function App() {
 
     getAppSetting("usage_insights_enabled")
       .then((val) => { if (val === "true") setUsageInsightsEnabled(true); })
+      .catch(() => {});
+    getAppSetting("plugin_management_enabled")
+      .then((val) => { if (val === "true") setPluginManagementEnabled(true); })
       .catch(() => {});
 
     // Listen for terminal command events
@@ -192,7 +196,7 @@ function App() {
       unlistenZoomOut.then((fn) => fn());
       unlistenResetZoom.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setPluginManagementEnabled]);
 
   return <AppLayout />;
 }

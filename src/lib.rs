@@ -10,6 +10,7 @@ pub mod mcp_supervisor;
 pub mod model;
 pub mod names;
 pub mod permissions;
+pub mod plugin;
 pub mod slash_commands;
 pub mod snapshot;
 

@@ -14,10 +14,16 @@ pub async fn list_slash_commands(
     state: State<'_, AppState>,
 ) -> Result<Vec<SlashCommand>, String> {
     let path = project_path.map(PathBuf::from);
-    let mut commands = slash_commands::discover_slash_commands(path.as_deref());
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let plugin_management_enabled = db
+        .get_app_setting("plugin_management_enabled")
+        .map_err(|e| e.to_string())?
+        .as_deref()
+        == Some("true");
+    let mut commands =
+        slash_commands::discover_slash_commands(path.as_deref(), plugin_management_enabled);
 
     if let Some(ws_id) = workspace_id {
-        let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
         let usage = db
             .get_slash_command_usage(&ws_id)
             .map_err(|e| e.to_string())?;

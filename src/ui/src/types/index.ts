@@ -32,3 +32,21 @@ export type {
 } from "./remote";
 export type { ConversationCheckpoint } from "./checkpoint";
 export type { DetectedApp, AppCategory } from "./apps";
+export type {
+  PluginScope,
+  EditablePluginScope,
+  PluginSettingsTab,
+  PluginConfigField,
+  PluginChannelSummary,
+  InstalledPlugin,
+  AvailablePlugin,
+  PluginCatalog,
+  PluginMarketplace,
+  PluginConfigState,
+  PluginConfigSection,
+  PluginChannelConfiguration,
+  PluginConfiguration,
+  BulkPluginUpdateResult,
+  PluginSettingsAction,
+  PluginSettingsIntent,
+} from "./plugins";

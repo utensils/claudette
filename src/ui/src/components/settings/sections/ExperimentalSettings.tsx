@@ -6,6 +6,8 @@ import styles from "../Settings.module.css";
 export function ExperimentalSettings() {
   const usageInsightsEnabled = useAppStore((s) => s.usageInsightsEnabled);
   const setUsageInsightsEnabled = useAppStore((s) => s.setUsageInsightsEnabled);
+  const pluginManagementEnabled = useAppStore((s) => s.pluginManagementEnabled);
+  const setPluginManagementEnabled = useAppStore((s) => s.setPluginManagementEnabled);
   const [error, setError] = useState<string | null>(null);
 
   const handleUsageToggle = async () => {
@@ -20,11 +22,45 @@ export function ExperimentalSettings() {
     }
   };
 
+  const handlePluginManagementToggle = async () => {
+    const next = !pluginManagementEnabled;
+    setPluginManagementEnabled(next);
+    try {
+      setError(null);
+      await setAppSetting("plugin_management_enabled", next ? "true" : "false");
+    } catch (e) {
+      setPluginManagementEnabled(!next);
+      setError(String(e));
+    }
+  };
+
   return (
     <div>
       <h2 className={styles.sectionTitle}>Experimental</h2>
 
       {error && <div className={styles.error}>{error}</div>}
+
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>Plugin Management</div>
+          <div className={styles.settingDescription}>
+            Show the Plugins settings section and enable the built-in
+            plugin-management slash commands that open it.
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          <button
+            className={styles.toggle}
+            role="switch"
+            aria-checked={pluginManagementEnabled}
+            aria-label="Plugin Management"
+            data-checked={pluginManagementEnabled}
+            onClick={handlePluginManagementToggle}
+          >
+            <div className={styles.toggleKnob} />
+          </button>
+        </div>
+      </div>
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>

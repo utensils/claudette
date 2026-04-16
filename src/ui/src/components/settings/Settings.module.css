@@ -278,6 +278,9 @@
 }
 
 .iconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: var(--selected-bg);
   border: 1px solid var(--divider);
   color: var(--text-primary);
@@ -285,6 +288,9 @@
   border-radius: 6px;
   cursor: pointer;
   font-size: 13px;
+  line-height: 1.2;
+  min-height: 34px;
+  white-space: nowrap;
 }
 
 .iconBtn:hover {
@@ -320,6 +326,285 @@
   font-size: 14px;
   font-weight: 500;
   margin-bottom: 8px;
+}
+
+.fieldHint {
+  color: var(--text-dim);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.pluginToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 20px 0 24px;
+  flex-wrap: wrap;
+}
+
+.pluginTabs {
+  display: flex;
+  gap: 8px;
+}
+
+.pluginTab {
+  composes: iconBtn;
+}
+
+.pluginTabActive {
+  composes: pluginTab;
+  background: var(--accent-bg);
+  color: var(--accent-primary);
+}
+
+.pluginPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.pluginSummaryGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.pluginStatCard {
+  border: 1px solid var(--divider);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--selected-bg) 65%, transparent), transparent 70%),
+    color-mix(in srgb, var(--sidebar-bg) 82%, transparent);
+  min-height: 110px;
+}
+
+.pluginStatValue {
+  color: var(--text-primary);
+  font-size: 28px;
+  line-height: 1;
+  font-weight: 600;
+}
+
+.pluginStatLabel {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  margin-top: 10px;
+}
+
+.pluginStatDetail {
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.45;
+  margin-top: 6px;
+}
+
+.pluginInlineNote {
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 22%, var(--divider));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-bg) 44%, transparent);
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.pluginFormRow {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.pluginList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pluginCard {
+  border: 1px solid var(--divider);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--sidebar-bg) 78%, transparent);
+  overflow: hidden;
+}
+
+.pluginCardSelected {
+  border-color: var(--accent-primary);
+}
+
+.pluginCardHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  padding: 16px;
+  align-items: flex-start;
+}
+
+.pluginCardBody {
+  min-width: 0;
+}
+
+.pluginCardTitle {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.pluginBadge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--selected-bg);
+  color: var(--text-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.pluginMeta {
+  color: var(--text-dim);
+  font-size: 12px;
+  margin-top: 6px;
+  word-break: break-all;
+}
+
+.pluginLinkRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.pluginLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 22%, var(--divider));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-bg) 36%, transparent);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.2;
+  cursor: pointer;
+  max-width: min(100%, 420px);
+  min-width: 0;
+  text-align: left;
+}
+
+.pluginLink:hover {
+  border-color: color-mix(in srgb, var(--accent-primary) 46%, var(--divider));
+  background: color-mix(in srgb, var(--accent-bg) 54%, transparent);
+}
+
+.pluginLinkLabel {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.pluginLinkDetail {
+  color: var(--text-primary);
+  font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pluginLinkMeta {
+  color: var(--text-dim);
+  font-size: 11px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pluginActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: flex-start;
+  flex-shrink: 0;
+}
+
+@media (max-width: 960px) {
+  .pluginCardHeader {
+    grid-template-columns: 1fr;
+  }
+
+  .pluginActions {
+    justify-content: flex-start;
+  }
+}
+
+.pluginConfigPanel {
+  border-top: 1px solid var(--divider);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.pluginConfigSection {
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  padding: 14px;
+  background: color-mix(in srgb, var(--app-bg) 75%, transparent);
+}
+
+.pluginConfigHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.pluginConfigFields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.pluginField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pluginFieldMeta {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.pluginNotice {
+  margin-top: 16px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--selected-bg);
+  color: var(--text-primary);
+}
+
+.pluginSuccess {
+  composes: pluginNotice;
+  background: color-mix(in srgb, var(--status-running) 14%, transparent);
+}
+
+.pluginError {
+  composes: pluginNotice;
+  background: color-mix(in srgb, var(--status-stopped) 14%, transparent);
 }
 
 .fieldHint {

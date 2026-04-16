@@ -7,6 +7,7 @@ pub mod diff;
 pub mod files;
 pub mod mcp;
 pub mod plan;
+pub mod plugin;
 pub mod remote;
 pub mod repository;
 pub mod settings;

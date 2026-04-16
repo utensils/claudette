@@ -20,6 +20,10 @@ import type { McpStatusSnapshot } from "../types/mcp";
 import type { RemoteInitialData } from "../types/remote";
 import type { DetectedApp } from "../types/apps";
 import type { ClaudeCodeUsage } from "../types/usage";
+import type {
+  PluginSettingsIntent,
+  PluginSettingsTab,
+} from "../types/plugins";
 
 export type PermissionLevel = "readonly" | "standard" | "full";
 
@@ -240,6 +244,15 @@ interface AppState {
   openSettings: (section?: string) => void;
   closeSettings: () => void;
   setSettingsSection: (section: string) => void;
+  pluginSettingsTab: PluginSettingsTab;
+  pluginSettingsRepoId: string | null;
+  pluginSettingsIntent: PluginSettingsIntent | null;
+  pluginRefreshToken: number;
+  openPluginSettings: (intent?: Partial<PluginSettingsIntent>) => void;
+  setPluginSettingsTab: (tab: PluginSettingsTab) => void;
+  setPluginSettingsRepoId: (repoId: string | null) => void;
+  clearPluginSettingsIntent: () => void;
+  bumpPluginRefreshToken: () => void;
 
   // -- Modals --
   activeModal: string | null;
@@ -305,6 +318,8 @@ interface AppState {
   // -- Experimental --
   usageInsightsEnabled: boolean;
   setUsageInsightsEnabled: (enabled: boolean) => void;
+  pluginManagementEnabled: boolean;
+  setPluginManagementEnabled: (enabled: boolean) => void;
 
   // -- Claude Code Usage --
   claudeCodeUsage: ClaudeCodeUsage | null;
@@ -879,9 +894,67 @@ export const useAppStore = create<AppState>((set) => ({
   settingsOpen: false,
   settingsSection: null,
   openSettings: (section = "general") =>
-    set({ settingsOpen: true, settingsSection: section }),
-  closeSettings: () => set({ settingsOpen: false, settingsSection: null }),
-  setSettingsSection: (section) => set({ settingsSection: section }),
+    set((state) => {
+      const nextSection = section === "plugins" && !state.pluginManagementEnabled
+        ? "experimental"
+        : section;
+      return {
+        settingsOpen: true,
+        settingsSection: nextSection,
+        pluginSettingsIntent: nextSection === "plugins" ? null : state.pluginSettingsIntent,
+        pluginSettingsRepoId: nextSection === "plugins" ? null : state.pluginSettingsRepoId,
+        pluginSettingsTab: nextSection === "plugins" ? "available" : state.pluginSettingsTab,
+      };
+    }),
+  closeSettings: () =>
+    set({
+      settingsOpen: false,
+      settingsSection: null,
+      pluginSettingsIntent: null,
+      pluginSettingsRepoId: null,
+    }),
+  setSettingsSection: (section) =>
+    set((state) => {
+      const nextSection = section === "plugins" && !state.pluginManagementEnabled
+        ? "experimental"
+        : section;
+      return {
+        settingsSection: nextSection,
+        pluginSettingsIntent: nextSection === "plugins" ? null : state.pluginSettingsIntent,
+        pluginSettingsRepoId: nextSection === "plugins" ? null : state.pluginSettingsRepoId,
+        pluginSettingsTab: nextSection === "plugins" ? "available" : state.pluginSettingsTab,
+      };
+    }),
+  pluginSettingsTab: "available",
+  pluginSettingsRepoId: null,
+  pluginSettingsIntent: null,
+  pluginRefreshToken: 0,
+  openPluginSettings: (intent = {}) =>
+    set((state) => {
+      if (!state.pluginManagementEnabled) {
+        return {};
+      }
+      const mergedIntent: PluginSettingsIntent = {
+        action: intent.action ?? null,
+        repoId: intent.repoId ?? null,
+        scope: intent.scope ?? "user",
+        source: intent.source ?? null,
+        tab: intent.tab ?? state.pluginSettingsTab,
+        target: intent.target ?? null,
+      };
+      return {
+        settingsOpen: true,
+        settingsSection: "plugins",
+        pluginSettingsTab: mergedIntent.tab,
+        pluginSettingsRepoId: mergedIntent.repoId,
+        pluginSettingsIntent: mergedIntent,
+      };
+    }),
+  setPluginSettingsTab: (tab) => set({ pluginSettingsTab: tab }),
+  setPluginSettingsRepoId: (repoId) => set({ pluginSettingsRepoId: repoId }),
+  clearPluginSettingsIntent: () => set({ pluginSettingsIntent: null }),
+  bumpPluginRefreshToken: () =>
+    set((state) => ({ pluginRefreshToken: state.pluginRefreshToken + 1 })),
 
   // -- Modals --
   activeModal: null,
@@ -1002,6 +1075,17 @@ export const useAppStore = create<AppState>((set) => ({
   // -- Experimental --
   usageInsightsEnabled: false,
   setUsageInsightsEnabled: (enabled) => set({ usageInsightsEnabled: enabled }),
+  pluginManagementEnabled: false,
+  setPluginManagementEnabled: (enabled) =>
+    set((state) => ({
+      pluginManagementEnabled: enabled,
+      settingsSection: !enabled && state.settingsSection === "plugins"
+        ? "experimental"
+        : state.settingsSection,
+      pluginSettingsIntent: enabled ? state.pluginSettingsIntent : null,
+      pluginSettingsRepoId: enabled ? state.pluginSettingsRepoId : null,
+      pluginSettingsTab: enabled ? state.pluginSettingsTab : "available",
+    })),
 
   // -- Claude Code Usage --
   claudeCodeUsage: null,

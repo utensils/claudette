@@ -1,3 +1,7 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # Claudette
 
 Cross-platform desktop orchestrator for parallel Claude Code agents, built with Rust (Tauri 2) and React/TypeScript.
@@ -7,6 +11,8 @@ Cross-platform desktop orchestrator for parallel Claude Code agents, built with 
 ```bash
 # Backend (Rust)
 cargo test --all-features                        # Run all backend tests
+cargo test -p claudette --test diff_tests        # Run a single test file
+cargo test -p claudette parse_unified -- --exact # Run a single test by name
 cargo clippy --workspace --all-targets           # Lint (must pass with zero warnings)
 cargo fmt --all --check                          # Check formatting
 
@@ -14,6 +20,8 @@ cargo fmt --all --check                          # Check formatting
 cd src/ui && bun install                         # Install frontend dependencies
 cd src/ui && bun run build                       # Build frontend for production
 cd src/ui && bunx tsc --noEmit                   # TypeScript type check
+cd src/ui && bun run test                        # Run frontend tests (vitest)
+cd src/ui && bun run test:watch                  # Run tests in watch mode
 
 # Full app
 cargo tauri dev                                  # Dev mode with hot-reload
@@ -21,6 +29,8 @@ cargo tauri build                                # Release build
 ```
 
 IMPORTANT: CI sets `RUSTFLAGS="-Dwarnings"` — all compiler warnings are errors. Fix warnings before committing.
+
+CI also enforces `bun install --frozen-lockfile` — do not modify `bun.lock` without intention. CI runs `cargo llvm-cov` for Rust test coverage (uploaded to Codecov). CI lints only the `claudette` and `claudette-server` crates (not `claudette-tauri`, which requires system libs).
 
 ## Code style
 
@@ -47,6 +57,32 @@ IMPORTANT: CI sets `RUSTFLAGS="-Dwarnings"` — all compiler warnings are errors
 - **Terminal emulation**: portable-pty (Rust) + xterm.js (frontend)
 - **IPC**: Tauri commands (`#[tauri::command]`) for request/response, Tauri events for streaming
 
+### Crate structure
+
+Three crates in a Cargo workspace:
+
+| Crate | Path | Purpose |
+|---|---|---|
+| `claudette` | `src/` (workspace root) | Core library — models, db, git, diff, agent logic. No UI or Tauri dependencies. |
+| `claudette-tauri` | `src-tauri/` | Tauri binary. Thin `#[tauri::command]` wrappers that call into `claudette`. |
+| `claudette-server` | `src-server/` | WebSocket server for remote access. Also embeddable in the Tauri binary. |
+
+Feature flags in `claudette-tauri`:
+- `default = ["server"]` — bundles the remote server into the desktop app
+- `devtools` — enables Tauri devtools (`tauri/devtools`)
+- `server` — optional dep on `claudette-server`
+
+### Frontend
+
+- Vite dev server runs on **port 1420** with `strictPort: true` — if the port is taken, dev mode fails
+- TypeScript enforces `noUnusedLocals`, `noUnusedParameters`, `noFallthroughCasesInSwitch`
+- Test runner is **vitest** (not Jest)
+- macOS uses overlay title bar (`titleBarStyle: "Overlay"`) — affects layout near top of window
+
+### Tauri commands
+
+Commands in `src-tauri/src/commands/` are organized by domain: `chat`, `workspace`, `repository`, `terminal`, `diff`, `settings`, `plugin`, `mcp`, `remote`, `usage`, `files`, `shell`, `slash_commands`, `plan`, `apps`, `data`, `debug`. Each is a thin wrapper — business logic belongs in the `claudette` crate.
+
 ## Project structure
 
 ```
@@ -58,52 +94,16 @@ src/
   diff.rs               — diff parsing and git diff operations
   agent.rs              — Claude CLI subprocess + JSON streaming
   model/                — data types (no UI or IO logic)
-    repository.rs
-    workspace.rs
-    chat_message.rs
-    terminal_tab.rs
-    diff.rs
   names/                — random workspace name generator
-  ui/                   — React/Vite frontend
-    src/
-      App.tsx           — root component, loads initial data
-      components/       — UI components by feature area
-        layout/         — AppLayout, StatusBar
-        sidebar/        — Sidebar with repo/workspace tree
-        chat/           — ChatPanel with markdown + streaming
-        diff/           — DiffViewer with unified diff rendering
-        terminal/       — TerminalPanel with xterm.js
-        modals/         — Modal dialogs (add repo, create workspace, etc.)
-        right-sidebar/  — Changed files list
-        fuzzy-finder/   — Cmd+K workspace search
-      hooks/            — useAgentStream, useKeyboardShortcuts, useBranchRefresh
-      stores/           — Zustand store (useAppStore)
-      services/         — Typed Tauri invoke() wrappers
-      types/            — TypeScript types matching Rust models
-      utils/            — Pure logic helpers (checkpoint utilities, etc.)
-      styles/           — CSS custom properties (dark theme)
-src-tauri/
-  Cargo.toml            — Tauri binary crate (depends on claudette + claudette-server)
-  tauri.conf.json       — Tauri configuration
-  src/
-    main.rs             — Tauri entry point, command registration, custom macOS app menu
-    commands/           — #[tauri::command] wrappers by domain
-    state.rs            — managed AppState (db_path, agents, PTYs)
-    pty.rs              — PTY management via portable-pty
-    tray.rs             — system tray: icon/menu/tooltip, notifications, agent state
-    transport/          — Remote transport trait + WebSocket client
-    remote.rs           — Remote connection manager
-    mdns.rs             — mDNS service browser
-src-server/
-  Cargo.toml            — Server library + standalone binary crate
-  src/
-    lib.rs              — Server library (shared by Tauri binary and standalone CLI)
-    main.rs             — Standalone CLI entry point (clap)
-    ws.rs               — WebSocket accept loop + per-connection handler
-    handler.rs          — JSON-RPC command dispatcher
-    tls.rs              — Self-signed TLS certificate management
-    auth.rs             — Pairing token + session token auth
-    mdns.rs             — mDNS service advertisement
+  ui/                   — React/Vite frontend (see src/ui/package.json)
+src-tauri/              — Tauri binary crate
+  src/commands/         — #[tauri::command] wrappers by domain
+  src/state.rs          — managed AppState (db_path, agents, PTYs)
+  src/pty.rs            — PTY management via portable-pty
+  src/tray.rs           — system tray: icon/menu/tooltip, notifications
+  src/transport/        — Remote transport trait + WebSocket client
+src-server/             — Standalone + embeddable remote server
+docs/                   — Technical design documents (TDDs)
 ```
 
 ### Guidelines for new code
@@ -115,6 +115,11 @@ src-server/
 - **State** lives in the Zustand store (`useAppStore`) — UI state in React, agent sessions in Rust-side `AppState`
 - **Streaming data** (agent events, PTY output) flows via Tauri events, consumed by React hooks
 - **Colors and styling** use CSS custom properties defined in `styles/theme.css`
+
+### Testing patterns
+
+- **Rust**: tests use `tempfile::tempdir()` to create ephemeral git repos — no fixtures or test databases. Async tests use `#[tokio::test]`. Test modules live at the bottom of each file (`#[cfg(test)] mod tests`).
+- **TypeScript**: vitest with `describe`/`it`/`expect`. Zustand tests reset state via `useAppStore.setState()` in `beforeEach`. No test database — frontend tests are pure state/logic tests.
 
 ### Notification architecture
 
@@ -133,7 +138,7 @@ src-server/
 
 - See GitHub Issue #5 for the full MVP PRD
 - See GitHub Issue #11 for the Workspace Management TDD
-- See `docs/tauri-migration-tdd.md` for the Iced-to-Tauri migration design document
+- Design documents live in `docs/` — covers migration rationale, MCP detection, remote terminals, shell integration, permission handling, and more
 - P0 features: workspace management, agent chat, diff viewer, integrated terminal, checkpoints, git/GitHub integration, scripts, repo settings
 - Target platforms: macOS (Apple Silicon + Intel) and Linux (x86_64, Wayland + X11)
 

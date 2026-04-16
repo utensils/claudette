@@ -1,4 +1,4 @@
-import { SlidersHorizontal, Cpu, Palette, Bell, GitBranch, FlaskConical, BarChart3 } from "lucide-react";
+import { SlidersHorizontal, Cpu, Palette, Bell, GitBranch, FlaskConical, BarChart3, Puzzle } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import { RepoIcon } from "../shared/RepoIcon";
 import styles from "./Settings.module.css";
@@ -9,11 +9,18 @@ const APP_SECTIONS = [
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "notifications", label: "Notifications", icon: Bell },
   { id: "git", label: "Git", icon: GitBranch },
+  { id: "plugins", label: "Plugins", icon: Puzzle },
 ];
 
 const MORE_SECTIONS = [
   { id: "experimental", label: "Experimental", icon: FlaskConical },
 ];
+
+export function getAppSections(pluginManagementEnabled: boolean) {
+  return APP_SECTIONS.filter((section) =>
+    section.id !== "plugins" || pluginManagementEnabled,
+  );
+}
 
 export function SettingsSidebar() {
   const settingsSection = useAppStore((s) => s.settingsSection);
@@ -21,6 +28,7 @@ export function SettingsSidebar() {
   const closeSettings = useAppStore((s) => s.closeSettings);
   const repositories = useAppStore((s) => s.repositories);
   const usageInsightsEnabled = useAppStore((s) => s.usageInsightsEnabled);
+  const pluginManagementEnabled = useAppStore((s) => s.pluginManagementEnabled);
 
   return (
     <div className={styles.sidebar}>
@@ -28,7 +36,7 @@ export function SettingsSidebar() {
         &larr; Back to app
       </button>
 
-      {APP_SECTIONS.map((s) => (
+      {getAppSections(pluginManagementEnabled).map((s) => (
         <button
           key={s.id}
           className={

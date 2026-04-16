@@ -40,6 +40,7 @@ import { HeaderMenu } from "./HeaderMenu";
 import { SlashCommandPicker, filterSlashCommands } from "./SlashCommandPicker";
 import { AttachMenu } from "./AttachMenu";
 import { FileMentionPicker, matchFiles } from "./FileMentionPicker";
+import { isPluginSlashCommandInput, parsePluginSlashCommand } from "./pluginSlashCommand";
 import { checkpointHasFileChanges, clearAllHasFileChanges, buildRollbackMap } from "../../utils/checkpointUtils";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { PanelToggles } from "../shared/PanelToggles";
@@ -136,6 +137,8 @@ export function ChatPanel() {
   const hydrateCompletedTurns = useAppStore((s) => s.hydrateCompletedTurns);
   const addChatMessage = useAppStore((s) => s.addChatMessage);
   const updateWorkspace = useAppStore((s) => s.updateWorkspace);
+  const openPluginSettings = useAppStore((s) => s.openPluginSettings);
+  const pluginManagementEnabled = useAppStore((s) => s.pluginManagementEnabled);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const processingRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
@@ -426,6 +429,23 @@ export function ChatPanel() {
     const mentionedFilesArray = mentionedFiles?.size
       ? [...mentionedFiles]
       : undefined;
+
+    const pluginSlash = parsePluginSlashCommand(
+      trimmed,
+      repo?.remote_connection_id ? null : repo?.id ?? null,
+      pluginManagementEnabled,
+    );
+    if (pluginSlash) {
+      openPluginSettings(pluginSlash.intent);
+      if (selectedWorkspaceId) {
+        recordSlashCommandUsage(selectedWorkspaceId, pluginSlash.usageCommandName)
+          .catch((nextError) => console.error("Failed to record slash command usage:", nextError));
+      }
+      return;
+    }
+    if (!pluginManagementEnabled && isPluginSlashCommandInput(trimmed)) {
+      return;
+    }
 
     // If the agent is running, queue the message instead of interrupting.
     // The user can press Escape to stop the agent if they want to interrupt.
@@ -1290,6 +1310,7 @@ function ChatInputArea({
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const [dragActive, setDragActive] = useState(false);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
+  const pluginRefreshToken = useAppStore((s) => s.pluginRefreshToken);
 
   // Per-workspace draft storage: save input when switching away,
   // restore when switching back.
@@ -1344,7 +1365,7 @@ function ChatInputArea({
     listSlashCommands(projectPath, selectedWorkspaceId)
       .then(setSlashCommands)
       .catch((e) => console.error("Failed to load slash commands:", e));
-  }, [projectPath, selectedWorkspaceId]);
+  }, [pluginRefreshToken, projectPath, selectedWorkspaceId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1723,9 +1744,11 @@ function ChatInputArea({
         if (cmd) {
           onSend("/" + cmd.name);
           setChatInput("");
-          recordSlashCommandUsage(selectedWorkspaceId, cmd.name)
-            .then(refreshSlashCommands)
-            .catch((e) => console.error("Failed to record slash command usage:", e));
+          if (cmd.name !== "plugin") {
+            recordSlashCommandUsage(selectedWorkspaceId, cmd.name)
+              .then(refreshSlashCommands)
+              .catch((e) => console.error("Failed to record slash command usage:", e));
+          }
         }
         return;
       }
@@ -1796,9 +1819,11 @@ function ChatInputArea({
           onSelect={(cmd) => {
             onSend("/" + cmd.name);
             setChatInput("");
-            recordSlashCommandUsage(selectedWorkspaceId, cmd.name)
-            .then(refreshSlashCommands)
-            .catch((e) => console.error("Failed to record slash command usage:", e));
+            if (cmd.name !== "plugin") {
+              recordSlashCommandUsage(selectedWorkspaceId, cmd.name)
+                .then(refreshSlashCommands)
+                .catch((e) => console.error("Failed to record slash command usage:", e));
+            }
           }}
           onHover={setSlashPickerIndex}
         />
