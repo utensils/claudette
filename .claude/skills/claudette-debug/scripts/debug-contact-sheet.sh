@@ -18,8 +18,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUTDIR="/tmp/claudette-debug/contact"
 OUTFILE=""
-TILE="4x4"
-CELL="640x350"
+TILE="5x4"
+CELL="520x290"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -84,18 +84,18 @@ sleep 0.4
 
 # Theme list — order in the grid is left→right, top→bottom
 THEMES=(
-  default claudette dracula tokyo-night
-  catppuccin-mocha linear velvet rose
-  greenhouse solar gruvbox monokai-pro
-  neon-tokyo bunker uplink-1984 phosphor-uplink
+  default claudette dracula tokyo-night catppuccin-mocha
+  linear velvet rose greenhouse solar
+  gruvbox monokai-pro neon-tokyo bunker uplink-1984
+  phosphor-uplink codex
 )
 
 # Human-readable labels, same order
 LABELS=(
-  "Default" "Claudette" "Dracula" "Tokyo Night"
-  "Catppuccin Mocha" "Linear" "Velvet" "Rosé"
-  "Greenhouse" "Solar" "Gruvbox" "Monokai Pro"
-  "Neon Tokyo" "Bunker" "Uplink 1984" "Phosphor Uplink"
+  "Default" "Claudette" "Dracula" "Tokyo Night" "Catppuccin Mocha"
+  "Linear" "Velvet" "Rosé" "Greenhouse" "Solar"
+  "Gruvbox" "Monokai Pro" "Neon Tokyo" "Bunker" "Uplink 1984"
+  "Phosphor Uplink" "Codex"
 )
 
 FONT="/System/Library/Fonts/HelveticaNeue.ttc"

@@ -16,6 +16,7 @@ import draculaTheme from "./dracula.json";
 import tokyoNightTheme from "./tokyo-night.json";
 import catppuccinMochaTheme from "./catppuccin-mocha.json";
 import monokaiProTheme from "./monokai-pro.json";
+import codexTheme from "./codex.json";
 
 import defaultCss from "./stylesheets/default.css?url";
 import claudetteCss from "./stylesheets/claudette.css?url";
@@ -33,6 +34,7 @@ import draculaCss from "./stylesheets/dracula.css?url";
 import tokyoNightCss from "./stylesheets/tokyo-night.css?url";
 import catppuccinMochaCss from "./stylesheets/catppuccin-mocha.css?url";
 import monokaiProCss from "./stylesheets/monokai-pro.css?url";
+import codexCss from "./stylesheets/codex.css?url";
 
 /**
  * Per-theme stylesheet URLs. Keyed by theme id. Each entry is a Vite
@@ -64,6 +66,7 @@ const BUILTIN_STYLESHEETS: Record<string, string> = {
   "tokyo-night": tokyoNightCss,
   "catppuccin-mocha": catppuccinMochaCss,
   "monokai-pro": monokaiProCss,
+  codex: codexCss,
 };
 
 function withStylesheet(theme: ThemeDefinition): ThemeDefinition {
@@ -96,6 +99,7 @@ export const BUILTIN_THEMES: ThemeDefinition[] = [
   greenhouseTheme as ThemeDefinition,
   uplink1984Theme as ThemeDefinition,
   phosphorUplinkTheme as ThemeDefinition,
+  codexTheme as ThemeDefinition,
 ].map(withStylesheet);
 
 export const DEFAULT_THEME_ID = "claudette";
