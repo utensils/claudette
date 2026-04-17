@@ -1,0 +1,141 @@
+{
+  "$schema": "./theme.schema.json",
+  "manifest": {
+    "id": "claudette",
+    "name": "Claudette",
+    "author": "Claudette",
+    "version": "2.0.0",
+    "scheme": "dark",
+    "description": "The flagship — terracotta ember over warm parchment-black. Claude Code in the terminal, rendered with intent.",
+    "preview": {
+      "background": "#14100d",
+      "surface": "#241e17",
+      "accent": "#d97757",
+      "text": "#f1e8d6"
+    }
+  },
+  "tokens": {
+    "color": {
+      "color-scheme": "dark",
+
+      "app-bg": "#14100d",
+      "sidebar-bg": "#181310",
+      "sidebar-border": "#2d2319",
+      "panel-bg": "#1c1713",
+      "surface-bg": "#241e17",
+      "sunken-bg": "#0a0806",
+
+      "text-primary": "#f1e8d6",
+      "text-muted": "#cbbca4",
+      "text-dim": "#9a8b77",
+      "text-faint": "#6a5f51",
+      "text-separator": "#3a2f24",
+
+      "accent-primary": "#d97757",
+      "accent-primary-rgb": "217, 119, 87",
+      "accent-dim": "#b75f42",
+      "accent-bg": "rgba(217, 119, 87, 0.08)",
+      "accent-bg-strong": "rgba(217, 119, 87, 0.20)",
+      "accent-glow": "0 0 1px rgba(255, 220, 180, 0.70), 0 0 10px rgba(217, 119, 87, 0.55), 0 0 28px rgba(217, 119, 87, 0.28), 0 0 60px rgba(217, 119, 87, 0.10)",
+
+      "hover-bg": "rgba(245, 237, 224, 0.055)",
+      "hover-bg-subtle": "rgba(245, 237, 224, 0.03)",
+      "selected-bg": "rgba(217, 119, 87, 0.13)",
+      "divider": "#2d2218",
+
+      "status-running": "#d97757",
+      "status-idle": "#9a8b77",
+      "status-stopped": "#a84838",
+
+      "badge-done": "#a2b56b",
+      "badge-plan": "#8c8fc4",
+      "badge-ask": "#eabd75",
+
+      "diff-added-bg": "rgba(162, 181, 107, 0.12)",
+      "diff-removed-bg": "rgba(168, 72, 56, 0.14)",
+      "diff-added-text": "#b8c97f",
+      "diff-removed-text": "#d47560",
+      "diff-hunk-header": "#eabd75",
+      "diff-line-number": "#6a5f51",
+
+      "chat-user-bg": "rgba(245, 237, 224, 0.025)",
+      "chat-system-bg": "rgba(217, 119, 87, 0.06)",
+      "chat-input-bg": "#0d0a08",
+      "chat-header-bg": "#181310",
+
+      "terminal-tab-bg": "#181310",
+      "terminal-tab-active-bg": "#241e17",
+      "terminal-bg": "#0a0806",
+      "terminal-fg": "#f1e8d6",
+      "terminal-cursor": "#d97757",
+      "terminal-selection": "rgba(217, 119, 87, 0.30)",
+
+      "toolbar-active": "rgba(217, 119, 87, 0.18)",
+      "toolbar-active-text": "#ea9776",
+
+      "error-bg": "rgba(168, 72, 56, 0.10)",
+      "error-border": "rgba(168, 72, 56, 0.40)",
+      "error-hover": "rgba(168, 72, 56, 0.16)",
+
+      "overlay-bg": "rgba(10, 8, 6, 0.68)",
+      "overlay-bg-heavy": "rgba(10, 8, 6, 0.88)",
+
+      "canvas-atmosphere": "radial-gradient(85% 55% at 50% -5%, rgba(217, 119, 87, 0.085), transparent 55%), radial-gradient(70% 45% at 50% 0%, rgba(234, 189, 117, 0.045), transparent 70%), radial-gradient(120% 80% at 50% 100%, rgba(10, 8, 6, 0.55), transparent 60%), url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 160 160'><filter id='p'><feTurbulence type='fractalNoise' baseFrequency='0.78' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.96  0 0 0 0 0.91  0 0 0 0 0.84  0 0 0 0.045 0'/></filter><rect width='100%25' height='100%25' filter='url(%23p)'/></svg>\")",
+      "rim-light": "inset 0 1px 0 rgba(245, 237, 224, 0.065)",
+      "rim-light-strong": "inset 0 1px 0 rgba(234, 189, 117, 0.18), inset 0 -1px 0 rgba(10, 8, 6, 0.50)",
+      "selection-bg": "rgba(217, 119, 87, 0.34)"
+    },
+    "elevation": {
+      "shadow-sm": "0 1px 2px rgba(10, 8, 6, 0.60), 0 0 0 1px rgba(217, 119, 87, 0.04)",
+      "shadow-md": "0 10px 28px -12px rgba(10, 8, 6, 0.80), 0 2px 6px -2px rgba(26, 20, 16, 0.50), 0 0 0 1px rgba(217, 119, 87, 0.05)",
+      "shadow-lg": "0 24px 52px -18px rgba(10, 8, 6, 0.90), 0 8px 16px -6px rgba(26, 20, 16, 0.60), 0 0 0 1px rgba(217, 119, 87, 0.08)",
+      "shadow-card-hover": "0 16px 36px -14px rgba(10, 8, 6, 0.85), 0 4px 10px -2px rgba(26, 20, 16, 0.55), 0 0 0 1px rgba(217, 119, 87, 0.38), 0 0 28px rgba(217, 119, 87, 0.18)",
+      "well-shadow": "inset 0 2px 10px rgba(5, 3, 2, 0.75), inset 0 -1px 0 rgba(245, 237, 224, 0.045), inset 0 0 0 1px rgba(217, 119, 87, 0.05)",
+      "composer-ring": "inset 0 0 0 1px rgba(217, 119, 87, 0.22), inset 0 1px 0 rgba(245, 237, 224, 0.06)",
+      "composer-ring-focus": "inset 0 0 0 1px rgba(217, 119, 87, 0.80), inset 0 1px 0 rgba(255, 220, 180, 0.20), 0 0 0 3px rgba(217, 119, 87, 0.16), 0 10px 28px -8px rgba(217, 119, 87, 0.32), 0 0 40px rgba(217, 119, 87, 0.10)"
+    },
+    "typography": {
+      "font-size-sm": "11px",
+      "font-size-base": "13px",
+      "font-size-md": "14px",
+      "font-size-lg": "16px",
+      "font-weight-regular": "400",
+      "font-weight-medium": "500",
+      "font-weight-semibold": "600",
+      "font-weight-bold": "700",
+      "line-height-tight": "1.28",
+      "line-height-normal": "1.58",
+      "line-height-relaxed": "1.72",
+      "letter-spacing-tight": "-0.012em",
+      "letter-spacing-wide": "0.06em"
+    },
+    "radius": {
+      "radius-sm": "3px",
+      "radius-md": "6px",
+      "radius-lg": "10px",
+      "radius-pill": "999px",
+      "border-radius": "6px"
+    },
+    "spacing": {
+      "space-xs": "4px",
+      "space-sm": "8px",
+      "space-md": "12px",
+      "space-lg": "16px",
+      "space-xl": "24px"
+    },
+    "motion": {
+      "transition-fast": "0.14s cubic-bezier(0.2, 0.8, 0.2, 1)",
+      "transition-normal": "0.22s cubic-bezier(0.2, 0.8, 0.2, 1)",
+      "transition-slow": "0.34s cubic-bezier(0.2, 0.8, 0.2, 1)",
+      "ease-standard": "cubic-bezier(0.2, 0.8, 0.2, 1)",
+      "ease-accelerate": "cubic-bezier(0.4, 0, 1, 1)",
+      "ease-decelerate": "cubic-bezier(0, 0, 0.2, 1)"
+    },
+    "layout": {
+      "scrollbar-width": "8px",
+      "scrollbar-thumb-bg": "rgba(217, 119, 87, 0.14)",
+      "scrollbar-thumb-hover-bg": "rgba(217, 119, 87, 0.42)",
+      "focus-ring": "0 0 0 1px rgba(255, 220, 180, 0.50), 0 0 0 3px rgba(217, 119, 87, 0.55), 0 6px 18px rgba(217, 119, 87, 0.25)"
+    }
+  }
+}

@@ -1,6 +1,6 @@
 import type { ThemeDefinition } from "../../types/theme";
 import defaultTheme from "./default.json";
-import claudeTheme from "./claude.json";
+import claudetteTheme from "./claudette.json";
 import velvetTheme from "./velvet.json";
 import neonTokyoTheme from "./neon-tokyo.json";
 import solarTheme from "./solar.json";
@@ -11,7 +11,7 @@ import phosphorUplinkTheme from "./phosphor-uplink.json";
 
 export const BUILTIN_THEMES: ThemeDefinition[] = [
   defaultTheme as ThemeDefinition,
-  claudeTheme as ThemeDefinition,
+  claudetteTheme as ThemeDefinition,
   velvetTheme as ThemeDefinition,
   neonTokyoTheme as ThemeDefinition,
   solarTheme as ThemeDefinition,
