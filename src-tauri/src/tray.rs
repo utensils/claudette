@@ -632,6 +632,8 @@ mod tests {
             },
             persistent_session: None,
             mcp_config_dirty: false,
+            session_plan_mode: false,
+            session_allowed_tools: Vec::new(),
         }
     }
 

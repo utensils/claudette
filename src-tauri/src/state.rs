@@ -44,6 +44,14 @@ pub struct AgentSessionState {
     /// and starts a fresh one with updated `--mcp-config`, then clears
     /// the flag. This avoids killing an agent mid-turn.
     pub mcp_config_dirty: bool,
+    /// `--permission-mode plan` flag baked into the current `persistent_session`.
+    /// Checked each turn against the requested `plan_mode`; a mismatch forces
+    /// a teardown + respawn so the CLI actually exits plan mode after approval.
+    pub session_plan_mode: bool,
+    /// `--allowedTools` list the current `persistent_session` was spawned with.
+    /// A mismatch on the next turn (e.g. permission level changed, or plan
+    /// approval elevates access) forces a teardown + respawn.
+    pub session_allowed_tools: Vec<String>,
 }
 
 /// Handle to an active PTY process.
