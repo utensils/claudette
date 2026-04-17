@@ -130,7 +130,6 @@
   flex-direction: column;
   gap: 2px;
   max-width: var(--chat-max-width, none);
-  margin-inline: auto;
   width: 100%;
   contain: layout style;
   mask-image: linear-gradient(
