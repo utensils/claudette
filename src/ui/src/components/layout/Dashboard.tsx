@@ -88,8 +88,8 @@ const WorkspaceCard = memo(function WorkspaceCard({
         : styles.cardIdle,
   ].join(" ");
 
-  const statusText = isRunning
-    ? formatElapsed(elapsed)
+  const statusTitle = isRunning
+    ? "Running"
     : typeof ws.agent_status === "string"
       ? ws.agent_status
       : "Error";
@@ -115,9 +115,11 @@ const WorkspaceCard = memo(function WorkspaceCard({
           )}
         </span>
         <span className={styles.statusIndicator}>
-          <span className={styles.statusLabel} style={{ color: statusColor }}>
-            {statusText}
-          </span>
+          {isRunning && (
+            <span className={styles.statusLabel} style={{ color: statusColor }}>
+              {formatElapsed(elapsed)}
+            </span>
+          )}
           {badge === "done" ? (
             <span className={styles.badgeDone} title="Completed" aria-label="Completed" role="img">
               <BadgeCheck size={12} />
@@ -131,13 +133,16 @@ const WorkspaceCard = memo(function WorkspaceCard({
               <BadgeQuestionMark size={12} />
             </span>
           ) : isRunning ? (
-            <span className={styles.statusSpinner} aria-hidden="true">
+            <span className={styles.statusSpinner} title={statusTitle} aria-label={statusTitle} role="img">
               {spinnerChar}
             </span>
           ) : (
             <span
               className={styles.statusDot}
               style={{ background: statusColor }}
+              title={statusTitle}
+              aria-label={statusTitle}
+              role="img"
             />
           )}
         </span>
@@ -195,13 +200,34 @@ export function Dashboard() {
     [remoteConnections]
   );
 
-  const activeWorkspaces = workspaces.filter((ws) => ws.status === "Active");
+  const activeWorkspaces = useMemo(
+    () => workspaces.filter((ws) => ws.status === "Active"),
+    [workspaces],
+  );
 
   const anyRunning = useMemo(
     () => activeWorkspaces.some((ws) => ws.agent_status === "Running"),
     [activeWorkspaces],
   );
   const spinnerChar = useSpinnerFrame(anyRunning);
+
+  const sortedWorkspaces = useMemo(() => {
+    const rows = activeWorkspaces.map((ws) => {
+      const badge: "ask" | "plan" | "done" | null =
+        agentQuestions[ws.id] ? "ask" :
+        planApprovals[ws.id] ? "plan" :
+        unreadCompletions.has(ws.id) && ws.agent_status !== "Running" ? "done" :
+        null;
+      const groupKey = badge ? 0 : ws.agent_status === "Running" ? 1 : 2;
+      const lastUsed = lastMessages[ws.id]?.created_at ?? ws.created_at;
+      return { ws, badge, groupKey, lastUsed };
+    });
+    rows.sort((a, b) => {
+      if (a.groupKey !== b.groupKey) return a.groupKey - b.groupKey;
+      return b.lastUsed.localeCompare(a.lastUsed);
+    });
+    return rows;
+  }, [activeWorkspaces, agentQuestions, planApprovals, unreadCompletions, lastMessages]);
 
   if (activeWorkspaces.length === 0) {
     return (
@@ -240,13 +266,8 @@ export function Dashboard() {
         <PanelToggles />
       </div>
       <div className={styles.grid}>
-        {activeWorkspaces.map((ws, i) => {
+        {sortedWorkspaces.map(({ ws, badge }, i) => {
           const repo = repoMap.get(ws.repository_id);
-          const badge: "ask" | "plan" | "done" | null =
-            agentQuestions[ws.id] ? "ask" :
-            planApprovals[ws.id] ? "plan" :
-            unreadCompletions.has(ws.id) && ws.agent_status !== "Running" ? "done" :
-            null;
           return (
             <WorkspaceCard
               key={ws.id}
