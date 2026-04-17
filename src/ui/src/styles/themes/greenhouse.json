@@ -17,69 +17,56 @@
   "tokens": {
     "color": {
       "color-scheme": "dark",
-
       "app-bg": "#0e1310",
       "sidebar-bg": "#141a16",
       "sidebar-border": "#2a332b",
       "panel-bg": "#141a16",
       "surface-bg": "#1b2520",
       "sunken-bg": "#090d0b",
-
       "text-primary": "#ecdcc0",
       "text-muted": "#c6b79a",
       "text-dim": "#9a8e76",
       "text-faint": "#70664f",
       "text-separator": "#3d4539",
-
       "accent-primary": "#e8a53c",
       "accent-primary-rgb": "232, 165, 60",
       "accent-dim": "#b8822a",
       "accent-bg": "rgba(232, 165, 60, 0.09)",
       "accent-bg-strong": "rgba(232, 165, 60, 0.20)",
       "accent-glow": "0 0 14px rgba(232, 165, 60, 0.40), 0 0 40px rgba(232, 165, 60, 0.14)",
-
       "hover-bg": "rgba(236, 220, 192, 0.06)",
       "hover-bg-subtle": "rgba(236, 220, 192, 0.035)",
       "selected-bg": "rgba(232, 165, 60, 0.13)",
       "divider": "#2a332b",
-
       "status-running": "#e8a53c",
       "status-idle": "#9a8e76",
       "status-stopped": "#c0543a",
-
       "badge-done": "#7fb38a",
       "badge-plan": "#b09acb",
       "badge-ask": "#d8813e",
-
       "diff-added-bg": "rgba(127, 179, 138, 0.14)",
       "diff-removed-bg": "rgba(192, 84, 58, 0.15)",
       "diff-added-text": "#9dc9a4",
       "diff-removed-text": "#d47a5a",
       "diff-hunk-header": "#c1a678",
       "diff-line-number": "#70664f",
-
       "chat-user-bg": "rgba(236, 220, 192, 0.035)",
       "chat-system-bg": "rgba(232, 165, 60, 0.055)",
       "chat-input-bg": "#0b100d",
       "chat-header-bg": "#141a16",
-
       "terminal-tab-bg": "#141a16",
       "terminal-tab-active-bg": "#1f2a24",
       "terminal-bg": "#0a0f0c",
       "terminal-fg": "#ecdcc0",
       "terminal-cursor": "#e8a53c",
       "terminal-selection": "rgba(232, 165, 60, 0.24)",
-
       "toolbar-active": "rgba(232, 165, 60, 0.16)",
       "toolbar-active-text": "#f1b655",
-
       "error-bg": "rgba(192, 84, 58, 0.10)",
       "error-border": "rgba(192, 84, 58, 0.38)",
       "error-hover": "rgba(192, 84, 58, 0.16)",
-
       "overlay-bg": "rgba(14, 19, 16, 0.62)",
       "overlay-bg-heavy": "rgba(9, 13, 11, 0.82)",
-
       "canvas-atmosphere": "radial-gradient(140% 90% at 78% -10%, rgba(232, 165, 60, 0.10), transparent 55%), radial-gradient(100% 70% at 12% 110%, rgba(72, 110, 80, 0.07), transparent 60%)",
       "rim-light": "inset 0 1px 0 rgba(236, 220, 192, 0.045)",
       "rim-light-strong": "inset 0 1px 0 rgba(232, 165, 60, 0.10)",
@@ -129,13 +116,27 @@
       "transition-slow": "0.5s cubic-bezier(0.22, 1, 0.36, 1)",
       "ease-standard": "cubic-bezier(0.22, 1, 0.36, 1)",
       "ease-accelerate": "cubic-bezier(0.55, 0, 1, 0.45)",
-      "ease-decelerate": "cubic-bezier(0, 0, 0.25, 1)"
+      "ease-decelerate": "cubic-bezier(0, 0, 0.25, 1)",
+      "transition-hover": "0.2s ease"
     },
     "layout": {
       "scrollbar-width": "10px",
       "scrollbar-thumb-bg": "rgba(236, 220, 192, 0.07)",
       "scrollbar-thumb-hover-bg": "rgba(232, 165, 60, 0.28)",
       "focus-ring": "0 0 0 2px rgba(232, 165, 60, 0.60), 0 0 18px rgba(232, 165, 60, 0.30)"
+    },
+    "border": {
+      "border-thin": "1px",
+      "border-medium": "2px"
+    },
+    "icon": {
+      "icon-md": "16px"
+    },
+    "control": {
+      "control-height-md": "33px"
+    },
+    "component": {
+      "card-padding": "18px"
     }
   }
 }

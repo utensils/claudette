@@ -6,7 +6,7 @@
     "author": "Claudette",
     "version": "1.0.0",
     "scheme": "dark",
-    "description": "Amber P3 phosphor on cathode black — debugging a satellite uplink in 1984.",
+    "description": "Amber P3 phosphor on cathode black \u2014 debugging a satellite uplink in 1984.",
     "preview": {
       "background": "#080b0f",
       "surface": "#11161b",
@@ -17,69 +17,56 @@
   "tokens": {
     "color": {
       "color-scheme": "dark",
-
       "app-bg": "#070a0d",
       "sidebar-bg": "#0c1014",
       "sidebar-border": "#1a2028",
       "panel-bg": "#0c1014",
       "surface-bg": "#11161b",
       "sunken-bg": "#04070a",
-
       "text-primary": "#e8d9bf",
       "text-muted": "#b89c72",
       "text-dim": "#8a7554",
       "text-faint": "#5e5038",
       "text-separator": "#3a3226",
-
       "accent-primary": "#ffb347",
       "accent-primary-rgb": "255, 179, 71",
       "accent-dim": "#c8873a",
       "accent-bg": "rgba(255, 179, 71, 0.08)",
       "accent-bg-strong": "rgba(255, 179, 71, 0.18)",
       "accent-glow": "0 0 2px rgba(255, 235, 180, 0.85), 0 0 10px rgba(255, 179, 71, 0.60), 0 0 22px rgba(255, 179, 71, 0.28)",
-
       "hover-bg": "rgba(255, 179, 71, 0.07)",
       "hover-bg-subtle": "rgba(255, 179, 71, 0.04)",
       "selected-bg": "rgba(255, 179, 71, 0.12)",
       "divider": "#1a2028",
-
       "status-running": "#ffcc66",
       "status-idle": "#8a7554",
       "status-stopped": "#ff5c3d",
-
       "badge-done": "#6ee0a0",
       "badge-plan": "#66c4ff",
       "badge-ask": "#ffb347",
-
       "diff-added-bg": "rgba(110, 224, 160, 0.10)",
       "diff-removed-bg": "rgba(255, 92, 61, 0.10)",
       "diff-added-text": "#6ee0a0",
       "diff-removed-text": "#ff7a5c",
       "diff-hunk-header": "#ffb347",
       "diff-line-number": "#5e5038",
-
       "chat-user-bg": "rgba(255, 179, 71, 0.03)",
       "chat-system-bg": "rgba(255, 179, 71, 0.06)",
       "chat-input-bg": "#04070a",
       "chat-header-bg": "#0c1014",
-
       "terminal-tab-bg": "#0c1014",
       "terminal-tab-active-bg": "#161c22",
       "terminal-bg": "#04070a",
       "terminal-fg": "#ffb347",
       "terminal-cursor": "#ffcc66",
       "terminal-selection": "rgba(255, 179, 71, 0.25)",
-
       "toolbar-active": "rgba(255, 179, 71, 0.14)",
       "toolbar-active-text": "#ffcc66",
-
       "error-bg": "rgba(255, 92, 61, 0.10)",
       "error-border": "rgba(255, 92, 61, 0.40)",
       "error-hover": "rgba(255, 92, 61, 0.16)",
-
       "overlay-bg": "rgba(4, 7, 10, 0.70)",
       "overlay-bg-heavy": "rgba(4, 7, 10, 0.88)",
-
       "canvas-atmosphere": "repeating-linear-gradient(to bottom, rgba(255, 179, 71, 0.022) 0px, rgba(255, 179, 71, 0.022) 1px, transparent 1px, transparent 3px), radial-gradient(ellipse 120% 70% at 50% -10%, rgba(255, 179, 71, 0.10), transparent 55%)",
       "rim-light": "inset 0 1px 0 rgba(255, 179, 71, 0.05)",
       "rim-light-strong": "inset 0 1px 0 rgba(255, 179, 71, 0.10)",
@@ -129,13 +116,30 @@
       "transition-slow": "0.24s cubic-bezier(0.77, 0, 0.175, 1)",
       "ease-standard": "cubic-bezier(0.95, 0.05, 0.795, 0.035)",
       "ease-accelerate": "cubic-bezier(0.95, 0.05, 1, 1)",
-      "ease-decelerate": "cubic-bezier(0, 0, 0.2, 1)"
+      "ease-decelerate": "cubic-bezier(0, 0, 0.2, 1)",
+      "transition-hover": "0s",
+      "transition-emphasis": "0.12s steps(3, end)"
     },
     "layout": {
       "scrollbar-width": "8px",
       "scrollbar-thumb-bg": "rgba(255, 179, 71, 0.10)",
       "scrollbar-thumb-hover-bg": "rgba(255, 179, 71, 0.35)",
       "focus-ring": "0 0 0 1px rgba(255, 179, 71, 0.85), 0 0 10px rgba(255, 179, 71, 0.35)"
+    },
+    "border": {
+      "border-thin": "1px"
+    },
+    "icon": {
+      "icon-xs": "9px",
+      "icon-sm": "12px",
+      "icon-md": "14px"
+    },
+    "control": {
+      "control-height-md": "26px"
+    },
+    "component": {
+      "menu-item-padding-y": "4px",
+      "menu-item-padding-x": "10px"
     }
   }
 }

@@ -2,11 +2,11 @@
   "$schema": "./theme.schema.json",
   "manifest": {
     "id": "rose",
-    "name": "Rosé",
+    "name": "Ros\u00e9",
     "author": "Claudette",
     "version": "1.0.0",
     "scheme": "dark",
-    "description": "Dusty rose ink on moonlit vellum — a leather-bound journal for writers and long-form thinkers.",
+    "description": "Dusty rose ink on moonlit vellum \u2014 a leather-bound journal for writers and long-form thinkers.",
     "stylesheet": "stylesheets/rose.css",
     "preview": {
       "background": "#191724",
@@ -18,70 +18,57 @@
   "tokens": {
     "color": {
       "color-scheme": "dark",
-
       "app-bg": "#191724",
       "sidebar-bg": "#1c1a2a",
       "sidebar-border": "#2a2740",
       "panel-bg": "#1f1d2e",
       "surface-bg": "#26233a",
       "sunken-bg": "#13111c",
-
       "text-primary": "#e0def4",
       "text-muted": "#c4c1dc",
       "text-dim": "#908caa",
       "text-faint": "#6e6a86",
       "text-separator": "#403d58",
-
       "accent-primary": "#ebbcba",
       "accent-primary-rgb": "235, 188, 186",
       "accent-dim": "#c89b9a",
       "accent-bg": "rgba(235, 188, 186, 0.08)",
       "accent-bg-strong": "rgba(235, 188, 186, 0.20)",
       "accent-glow": "0 0 1px rgba(255, 230, 228, 0.55), 0 0 10px rgba(235, 188, 186, 0.45), 0 0 28px rgba(235, 188, 186, 0.20), 0 0 60px rgba(196, 167, 231, 0.08)",
-
       "hover-bg": "rgba(224, 222, 244, 0.055)",
       "hover-bg-subtle": "rgba(224, 222, 244, 0.03)",
       "selected-bg": "rgba(235, 188, 186, 0.13)",
       "divider": "#2a2740",
       "selection-bg": "rgba(235, 188, 186, 0.32)",
-
       "status-running": "#ebbcba",
       "status-idle": "#908caa",
       "status-stopped": "#eb6f92",
-
       "badge-done": "#9ccfd8",
       "badge-plan": "#c4a7e7",
       "badge-ask": "#f6c177",
-
       "diff-added-bg": "rgba(156, 207, 216, 0.12)",
       "diff-removed-bg": "rgba(235, 111, 146, 0.14)",
       "diff-added-text": "#a8d8df",
       "diff-removed-text": "#eb8aa3",
       "diff-hunk-header": "#c4a7e7",
       "diff-line-number": "#6e6a86",
-
       "chat-user-bg": "rgba(224, 222, 244, 0.025)",
       "chat-system-bg": "rgba(235, 188, 186, 0.06)",
       "chat-input-bg": "#13111c",
       "chat-header-bg": "#1c1a2a",
-
       "terminal-tab-bg": "#1c1a2a",
       "terminal-tab-active-bg": "#26233a",
       "terminal-bg": "#100e18",
       "terminal-fg": "#e0def4",
       "terminal-cursor": "#ebbcba",
       "terminal-selection": "rgba(235, 188, 186, 0.28)",
-
       "toolbar-active": "rgba(235, 188, 186, 0.18)",
       "toolbar-active-text": "#f2ccca",
-
       "error-bg": "rgba(235, 111, 146, 0.10)",
       "error-border": "rgba(235, 111, 146, 0.38)",
       "error-hover": "rgba(235, 111, 146, 0.16)",
-
       "overlay-bg": "rgba(12, 10, 20, 0.70)",
       "overlay-bg-heavy": "rgba(12, 10, 20, 0.88)",
-
       "canvas-atmosphere": "radial-gradient(85% 55% at 50% -5%, rgba(235, 188, 186, 0.055), transparent 55%), radial-gradient(70% 45% at 50% 0%, rgba(196, 167, 231, 0.035), transparent 70%), radial-gradient(120% 80% at 50% 100%, rgba(12, 10, 20, 0.55), transparent 60%), url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 160 160'><filter id='p'><feTurbulence type='fractalNoise' baseFrequency='0.78' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.92  0 0 0 0 0.87  0 0 0 0 0.96  0 0 0 0.03 0'/></filter><rect width='100%25' height='100%25' filter='url(%23p)'/></svg>\")",
       "rim-light": "inset 0 1px 0 rgba(235, 188, 186, 0.08)",
       "rim-light-strong": "inset 0 1px 0 rgba(235, 188, 186, 0.15), inset 0 -1px 0 rgba(12, 10, 20, 0.45)"
@@ -130,7 +117,8 @@
       "transition-slow": "0.40s cubic-bezier(0.2, 0.8, 0.2, 1)",
       "ease-standard": "cubic-bezier(0.2, 0.8, 0.2, 1)",
       "ease-accelerate": "cubic-bezier(0.4, 0, 1, 1)",
-      "ease-decelerate": "cubic-bezier(0, 0, 0.2, 1)"
+      "ease-decelerate": "cubic-bezier(0, 0, 0.2, 1)",
+      "transition-hover": "0.18s ease"
     },
     "layout": {
       "scrollbar-width": "8px",
@@ -142,6 +130,18 @@
       "canvas-padding-inline": "40px",
       "composer-min-height": "76px",
       "sidebar-item-padding-y": "7px"
+    },
+    "icon": {
+      "icon-md": "16px",
+      "icon-lg": "19px"
+    },
+    "control": {
+      "control-height-md": "32px",
+      "control-height-lg": "38px"
+    },
+    "component": {
+      "card-padding": "18px",
+      "menu-item-padding-y": "9px"
     }
   }
 }

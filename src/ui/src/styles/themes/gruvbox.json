@@ -6,7 +6,7 @@
     "author": "Claudette",
     "version": "1.0.0",
     "scheme": "dark",
-    "description": "Ochre ember on warm sepia — the beloved retro dev palette, rendered on a vintage CRT.",
+    "description": "Ochre ember on warm sepia \u2014 the beloved retro dev palette, rendered on a vintage CRT.",
     "stylesheet": "stylesheets/gruvbox.css",
     "preview": {
       "background": "#282828",
@@ -18,69 +18,56 @@
   "tokens": {
     "color": {
       "color-scheme": "dark",
-
       "app-bg": "#282828",
       "sidebar-bg": "#2a2725",
       "sidebar-border": "#3c3836",
       "panel-bg": "#32302f",
       "surface-bg": "#3c3836",
       "sunken-bg": "#1d2021",
-
       "text-primary": "#ebdbb2",
       "text-muted": "#bdae93",
       "text-dim": "#a89984",
       "text-faint": "#7c6f64",
       "text-separator": "#504945",
-
       "accent-primary": "#fe8019",
       "accent-primary-rgb": "254, 128, 25",
       "accent-dim": "#d65d0e",
       "accent-bg": "rgba(254, 128, 25, 0.09)",
       "accent-bg-strong": "rgba(254, 128, 25, 0.22)",
       "accent-glow": "0 0 1px rgba(255, 230, 180, 0.60), 0 0 10px rgba(214, 93, 14, 0.50), 0 0 28px rgba(214, 93, 14, 0.22), 0 0 60px rgba(214, 93, 14, 0.09)",
-
       "hover-bg": "rgba(235, 219, 178, 0.055)",
       "hover-bg-subtle": "rgba(235, 219, 178, 0.03)",
       "selected-bg": "rgba(254, 128, 25, 0.14)",
       "divider": "#3c3836",
-
       "status-running": "#fe8019",
       "status-idle": "#a89984",
       "status-stopped": "#cc241d",
-
       "badge-done": "#b8bb26",
       "badge-plan": "#83a598",
       "badge-ask": "#d79921",
-
       "diff-added-bg": "rgba(152, 151, 26, 0.14)",
       "diff-removed-bg": "rgba(204, 36, 29, 0.14)",
       "diff-added-text": "#b8bb26",
       "diff-removed-text": "#fb4934",
       "diff-hunk-header": "#d79921",
       "diff-line-number": "#7c6f64",
-
       "chat-user-bg": "rgba(235, 219, 178, 0.028)",
       "chat-system-bg": "rgba(254, 128, 25, 0.06)",
       "chat-input-bg": "#1d2021",
       "chat-header-bg": "#2a2725",
-
       "terminal-tab-bg": "#2a2725",
       "terminal-tab-active-bg": "#3c3836",
       "terminal-bg": "#1d2021",
       "terminal-fg": "#ebdbb2",
       "terminal-cursor": "#fe8019",
       "terminal-selection": "rgba(254, 128, 25, 0.30)",
-
       "toolbar-active": "rgba(254, 128, 25, 0.18)",
       "toolbar-active-text": "#fabd2f",
-
       "error-bg": "rgba(204, 36, 29, 0.10)",
       "error-border": "rgba(204, 36, 29, 0.40)",
       "error-hover": "rgba(204, 36, 29, 0.16)",
-
       "overlay-bg": "rgba(20, 16, 12, 0.68)",
       "overlay-bg-heavy": "rgba(20, 16, 12, 0.88)",
-
       "canvas-atmosphere": "radial-gradient(85% 55% at 50% -5%, rgba(254, 128, 25, 0.075), transparent 55%), radial-gradient(70% 45% at 50% 0%, rgba(215, 153, 33, 0.045), transparent 70%), radial-gradient(120% 80% at 50% 100%, rgba(29, 32, 33, 0.55), transparent 60%), url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 160 160'><filter id='p'><feTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.92  0 0 0 0 0.86  0 0 0 0 0.70  0 0 0 0.04 0'/></filter><rect width='100%25' height='100%25' filter='url(%23p)'/></svg>\")",
       "rim-light": "inset 0 1px 0 rgba(235, 219, 178, 0.065)",
       "rim-light-strong": "inset 0 1px 0 rgba(215, 153, 33, 0.20), inset 0 -1px 0 rgba(20, 16, 12, 0.50)",
@@ -130,7 +117,8 @@
       "transition-slow": "0.34s cubic-bezier(0.2, 0.8, 0.2, 1)",
       "ease-standard": "cubic-bezier(0.2, 0.8, 0.2, 1)",
       "ease-accelerate": "cubic-bezier(0.4, 0, 1, 1)",
-      "ease-decelerate": "cubic-bezier(0, 0, 0.2, 1)"
+      "ease-decelerate": "cubic-bezier(0, 0, 0.2, 1)",
+      "transition-hover": "0.12s ease"
     },
     "layout": {
       "scrollbar-width": "8px",
@@ -141,6 +129,19 @@
       "turn-gap": "14px",
       "canvas-padding-inline": "28px",
       "composer-min-height": "60px"
+    },
+    "border": {
+      "border-thin": "1px",
+      "border-medium": "2px"
+    },
+    "icon": {
+      "icon-md": "16px"
+    },
+    "control": {
+      "control-height-md": "32px"
+    },
+    "component": {
+      "menu-item-padding-x": "12px"
     }
   }
 }

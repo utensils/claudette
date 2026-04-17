@@ -6,7 +6,7 @@
     "author": "James Brink",
     "version": "1.0.0",
     "scheme": "dark",
-    "description": "Synth rain on wet asphalt — 2049-era magenta and cyan electricity across chrome-black substrates.",
+    "description": "Synth rain on wet asphalt \u2014 2049-era magenta and cyan electricity across chrome-black substrates.",
     "stylesheet": "stylesheets/neon-tokyo.css",
     "preview": {
       "background": "#0a0612",
@@ -18,69 +18,56 @@
   "tokens": {
     "color": {
       "color-scheme": "dark",
-
       "app-bg": "#0a0612",
       "sidebar-bg": "#0d0a1a",
       "sidebar-border": "#2a1b3d",
       "panel-bg": "#120d22",
       "surface-bg": "#17112a",
       "sunken-bg": "#050308",
-
       "text-primary": "#f4ebff",
       "text-muted": "#c8b8e0",
       "text-dim": "#9a8ab8",
       "text-faint": "#6b5d85",
       "text-separator": "#3a2d55",
-
       "accent-primary": "#ff2e88",
       "accent-primary-rgb": "255, 46, 136",
       "accent-dim": "#c91f6a",
       "accent-bg": "rgba(255, 46, 136, 0.12)",
       "accent-bg-strong": "rgba(255, 46, 136, 0.24)",
       "accent-glow": "0 0 20px rgba(255, 46, 136, 0.55), 0 0 40px rgba(255, 46, 136, 0.28), 0 0 80px rgba(255, 46, 136, 0.12)",
-
       "hover-bg": "rgba(255, 46, 136, 0.10)",
       "hover-bg-subtle": "rgba(0, 229, 255, 0.05)",
       "selected-bg": "rgba(255, 46, 136, 0.18)",
       "divider": "#2a1b3d",
-
       "status-running": "#ff2e88",
       "status-idle": "#9a8ab8",
       "status-stopped": "#c6ff00",
-
       "badge-done": "#00e5ff",
       "badge-plan": "#b388ff",
       "badge-ask": "#ffb300",
-
       "diff-added-bg": "rgba(64, 255, 218, 0.14)",
       "diff-removed-bg": "rgba(255, 46, 136, 0.14)",
       "diff-added-text": "#5effd6",
       "diff-removed-text": "#ff4d9a",
       "diff-hunk-header": "#00e5ff",
       "diff-line-number": "#6b5d85",
-
       "chat-user-bg": "rgba(0, 229, 255, 0.04)",
       "chat-system-bg": "rgba(255, 46, 136, 0.06)",
       "chat-input-bg": "#050308",
       "chat-header-bg": "#0d0a1a",
-
       "terminal-tab-bg": "#0d0a1a",
       "terminal-tab-active-bg": "#1a1235",
       "terminal-bg": "#030107",
       "terminal-fg": "#f4ebff",
       "terminal-cursor": "#ff2e88",
       "terminal-selection": "rgba(255, 46, 136, 0.30)",
-
       "toolbar-active": "rgba(255, 46, 136, 0.20)",
       "toolbar-active-text": "#ff5ca0",
-
       "error-bg": "rgba(255, 23, 104, 0.12)",
       "error-border": "rgba(255, 23, 104, 0.45)",
       "error-hover": "rgba(255, 23, 104, 0.18)",
-
       "overlay-bg": "rgba(5, 3, 12, 0.70)",
       "overlay-bg-heavy": "rgba(5, 3, 12, 0.88)",
-
       "canvas-atmosphere": "repeating-linear-gradient(0deg, rgba(0, 229, 255, 0.020) 0 1px, transparent 1px 3px), radial-gradient(120% 80% at 85% 0%, rgba(255, 46, 136, 0.14), transparent 55%), radial-gradient(100% 70% at 15% 100%, rgba(0, 229, 255, 0.11), transparent 60%), linear-gradient(180deg, rgba(179, 136, 255, 0.05), transparent 40%)",
       "rim-light": "inset 0 1px 0 rgba(255, 46, 136, 0.18)",
       "rim-light-strong": "inset 0 1px 0 rgba(0, 229, 255, 0.22)",
@@ -130,7 +117,8 @@
       "transition-slow": "0.3s ease",
       "ease-standard": "cubic-bezier(0.4, 0, 0.2, 1)",
       "ease-accelerate": "cubic-bezier(0.4, 0, 1, 1)",
-      "ease-decelerate": "cubic-bezier(0, 0, 0.2, 1)"
+      "ease-decelerate": "cubic-bezier(0, 0, 0.2, 1)",
+      "transition-hover": "0.08s ease"
     },
     "layout": {
       "scrollbar-width": "8px",
@@ -144,6 +132,23 @@
       "canvas-padding-inline": "20px",
       "sidebar-item-padding-y": "4px",
       "sidebar-item-gap": "0px"
+    },
+    "border": {
+      "border-thin": "1px",
+      "border-medium": "2px"
+    },
+    "icon": {
+      "icon-xs": "9px",
+      "icon-sm": "12px",
+      "icon-md": "14px"
+    },
+    "control": {
+      "control-height-md": "28px",
+      "control-height-lg": "32px"
+    },
+    "component": {
+      "menu-item-padding-y": "5px",
+      "card-padding": "12px"
     }
   }
 }

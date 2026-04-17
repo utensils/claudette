@@ -6,7 +6,7 @@
     "author": "Monokai (port)",
     "version": "1.0.0",
     "scheme": "dark",
-    "description": "Iconic sunset palette — coral red, warm yellow, green, cyan against smoky charcoal.",
+    "description": "Iconic sunset palette \u2014 coral red, warm yellow, green, cyan against smoky charcoal.",
     "stylesheet": "stylesheets/monokai-pro.css",
     "preview": {
       "background": "#2d2a2e",
@@ -18,69 +18,56 @@
   "tokens": {
     "color": {
       "color-scheme": "dark",
-
       "app-bg": "#2d2a2e",
       "sidebar-bg": "#221f22",
       "sidebar-border": "#403b3f",
       "panel-bg": "#2f2b2d",
       "surface-bg": "#3a3639",
       "sunken-bg": "#19181a",
-
       "text-primary": "#fcfcfa",
       "text-muted": "#d5cfcd",
       "text-dim": "#a59f9d",
       "text-faint": "#72696a",
       "text-separator": "#5b5458",
-
       "accent-primary": "#ff6188",
       "accent-primary-rgb": "255, 97, 136",
       "accent-dim": "#dd4770",
       "accent-bg": "rgba(255, 97, 136, 0.10)",
       "accent-bg-strong": "rgba(255, 97, 136, 0.22)",
       "accent-glow": "0 0 1px rgba(255, 220, 200, 0.70), 0 0 12px rgba(255, 97, 136, 0.55), 0 0 32px rgba(255, 216, 102, 0.20), 0 0 68px rgba(169, 220, 118, 0.08)",
-
       "hover-bg": "rgba(252, 252, 250, 0.05)",
       "hover-bg-subtle": "rgba(252, 252, 250, 0.028)",
       "selected-bg": "rgba(255, 97, 136, 0.15)",
       "divider": "#403b3f",
-
       "status-running": "#a9dc76",
       "status-idle": "#a59f9d",
       "status-stopped": "#ff6188",
-
       "badge-done": "#a9dc76",
       "badge-plan": "#78dce8",
       "badge-ask": "#ffd866",
-
       "diff-added-bg": "rgba(169, 220, 118, 0.13)",
       "diff-removed-bg": "rgba(255, 97, 136, 0.13)",
       "diff-added-text": "#bbe68a",
       "diff-removed-text": "#ff7d9c",
       "diff-hunk-header": "#ffd866",
       "diff-line-number": "#72696a",
-
       "chat-user-bg": "rgba(252, 252, 250, 0.028)",
       "chat-system-bg": "rgba(255, 216, 102, 0.06)",
       "chat-input-bg": "#19181a",
       "chat-header-bg": "#221f22",
-
       "terminal-tab-bg": "#221f22",
       "terminal-tab-active-bg": "#3a3639",
       "terminal-bg": "#19181a",
       "terminal-fg": "#fcfcfa",
       "terminal-cursor": "#ffd866",
       "terminal-selection": "rgba(255, 97, 136, 0.30)",
-
       "toolbar-active": "rgba(255, 97, 136, 0.18)",
       "toolbar-active-text": "#ff85a3",
-
       "error-bg": "rgba(255, 97, 136, 0.10)",
       "error-border": "rgba(255, 97, 136, 0.42)",
       "error-hover": "rgba(255, 97, 136, 0.16)",
-
       "overlay-bg": "rgba(18, 16, 18, 0.68)",
       "overlay-bg-heavy": "rgba(18, 16, 18, 0.88)",
-
       "canvas-atmosphere": "conic-gradient(from 210deg at 80% 0%, rgba(255, 97, 136, 0.11), rgba(255, 216, 102, 0.08) 25%, rgba(169, 220, 118, 0.05) 45%, transparent 70%), radial-gradient(120% 90% at 50% 100%, rgba(18, 16, 18, 0.65), transparent 55%), linear-gradient(180deg, rgba(45, 42, 46, 0) 0%, rgba(25, 22, 24, 0.35) 100%), url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'><filter id='m'><feTurbulence type='fractalNoise' baseFrequency='0.80' numOctaves='2' stitchTiles='stitch' seed='13'/><feColorMatrix values='0 0 0 0 0.99  0 0 0 0 0.85  0 0 0 0 0.40  0 0 0 0.05 0'/></filter><rect width='100%25' height='100%25' filter='url(%23m)'/></svg>\")",
       "rim-light": "inset 0 1px 0 rgba(252, 252, 250, 0.06)",
       "rim-light-strong": "inset 0 1px 0 rgba(255, 216, 102, 0.18), inset 0 -1px 0 rgba(18, 16, 18, 0.45)",
@@ -130,7 +117,8 @@
       "transition-slow": "0.3s ease",
       "ease-standard": "cubic-bezier(0.4, 0, 0.2, 1)",
       "ease-accelerate": "cubic-bezier(0.4, 0, 1, 1)",
-      "ease-decelerate": "cubic-bezier(0, 0, 0.2, 1)"
+      "ease-decelerate": "cubic-bezier(0, 0, 0.2, 1)",
+      "transition-hover": "0.1s ease"
     },
     "layout": {
       "scrollbar-width": "8px",
@@ -143,6 +131,16 @@
       "composer-padding-y": "13px",
       "canvas-padding-inline": "32px",
       "sidebar-item-padding-y": "6px"
+    },
+    "icon": {
+      "icon-sm": "13px",
+      "icon-md": "15px"
+    },
+    "control": {
+      "control-height-md": "30px"
+    },
+    "component": {
+      "menu-item-padding-x": "12px"
     }
   }
 }

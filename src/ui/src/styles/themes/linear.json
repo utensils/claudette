@@ -6,7 +6,7 @@
     "author": "Claudette",
     "version": "1.0.0",
     "scheme": "dark",
-    "description": "Modern product editorial — hushed indigo-black, a single violet signature, clean radii and quiet precision.",
+    "description": "Modern product editorial \u2014 hushed indigo-black, a single violet signature, clean radii and quiet precision.",
     "stylesheet": "stylesheets/linear.css",
     "preview": {
       "background": "#0a0a14",
@@ -18,69 +18,56 @@
   "tokens": {
     "color": {
       "color-scheme": "dark",
-
       "app-bg": "#0a0a14",
       "sidebar-bg": "#0d0d1a",
       "sidebar-border": "#1d1d33",
       "panel-bg": "#10101e",
       "surface-bg": "#16162a",
       "sunken-bg": "#06060e",
-
       "text-primary": "#e4e4ef",
       "text-muted": "#b4b4c8",
       "text-dim": "#8585a0",
       "text-faint": "#585870",
       "text-separator": "#232340",
-
       "accent-primary": "#7b6ef4",
       "accent-primary-rgb": "123, 110, 244",
       "accent-dim": "#5e52c9",
       "accent-bg": "rgba(123, 110, 244, 0.08)",
       "accent-bg-strong": "rgba(123, 110, 244, 0.20)",
       "accent-glow": "0 0 1px rgba(230, 220, 255, 0.65), 0 0 10px rgba(123, 110, 244, 0.50), 0 0 28px rgba(123, 110, 244, 0.22), 0 0 60px rgba(123, 110, 244, 0.08)",
-
       "hover-bg": "rgba(228, 228, 239, 0.05)",
       "hover-bg-subtle": "rgba(228, 228, 239, 0.028)",
       "selected-bg": "rgba(123, 110, 244, 0.14)",
       "divider": "#1c1c30",
-
       "status-running": "#7b6ef4",
       "status-idle": "#8585a0",
       "status-stopped": "#ef6a78",
-
       "badge-done": "#56e1e9",
       "badge-plan": "#7b6ef4",
       "badge-ask": "#e8c97a",
-
       "diff-added-bg": "rgba(86, 225, 233, 0.10)",
       "diff-removed-bg": "rgba(239, 106, 120, 0.12)",
       "diff-added-text": "#7ce9ee",
       "diff-removed-text": "#ef8a94",
       "diff-hunk-header": "#56e1e9",
       "diff-line-number": "#585870",
-
       "chat-user-bg": "rgba(228, 228, 239, 0.025)",
       "chat-system-bg": "rgba(123, 110, 244, 0.055)",
       "chat-input-bg": "#08080f",
       "chat-header-bg": "#0d0d1a",
-
       "terminal-tab-bg": "#0d0d1a",
       "terminal-tab-active-bg": "#16162a",
       "terminal-bg": "#06060e",
       "terminal-fg": "#e4e4ef",
       "terminal-cursor": "#7b6ef4",
       "terminal-selection": "rgba(123, 110, 244, 0.28)",
-
       "toolbar-active": "rgba(123, 110, 244, 0.18)",
       "toolbar-active-text": "#a79cf8",
-
       "error-bg": "rgba(239, 106, 120, 0.10)",
       "error-border": "rgba(239, 106, 120, 0.38)",
       "error-hover": "rgba(239, 106, 120, 0.16)",
-
       "overlay-bg": "rgba(6, 4, 16, 0.68)",
       "overlay-bg-heavy": "rgba(6, 4, 16, 0.88)",
-
       "canvas-atmosphere": "radial-gradient(70% 45% at 82% -8%, rgba(123, 110, 244, 0.085), transparent 58%), radial-gradient(60% 40% at 18% 0%, rgba(86, 225, 233, 0.028), transparent 68%), radial-gradient(120% 80% at 50% 110%, rgba(6, 4, 16, 0.55), transparent 60%), url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 160 160'><filter id='p'><feTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.89  0 0 0 0 0.89  0 0 0 0 0.96  0 0 0 0.022 0'/></filter><rect width='100%25' height='100%25' filter='url(%23p)'/></svg>\")",
       "rim-light": "inset 0 1px 0 rgba(228, 228, 239, 0.05)",
       "rim-light-strong": "inset 0 1px 0 rgba(167, 156, 248, 0.12), inset 0 -1px 0 rgba(6, 4, 16, 0.55)",
@@ -130,7 +117,8 @@
       "transition-slow": "0.34s cubic-bezier(0.2, 0.8, 0.2, 1)",
       "ease-standard": "cubic-bezier(0.2, 0.8, 0.2, 1)",
       "ease-accelerate": "cubic-bezier(0.4, 0, 1, 1)",
-      "ease-decelerate": "cubic-bezier(0, 0, 0.2, 1)"
+      "ease-decelerate": "cubic-bezier(0, 0, 0.2, 1)",
+      "transition-hover": "0.1s ease"
     },
     "layout": {
       "scrollbar-width": "8px",
@@ -143,6 +131,21 @@
       "canvas-padding-inline": "28px",
       "sidebar-item-padding-y": "5px",
       "sidebar-item-gap": "1px"
+    },
+    "border": {
+      "border-thin": "1px"
+    },
+    "icon": {
+      "icon-sm": "13px",
+      "icon-md": "15px"
+    },
+    "control": {
+      "control-height-md": "30px",
+      "control-height-lg": "36px"
+    },
+    "component": {
+      "menu-item-padding-y": "6px",
+      "menu-item-padding-x": "12px"
     }
   }
 }

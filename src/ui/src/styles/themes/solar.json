@@ -6,7 +6,7 @@
     "author": "James Brink",
     "version": "1.0.0",
     "scheme": "light",
-    "description": "High-noon warm paper and burnt-amber wire — a desert-solstice light theme.",
+    "description": "High-noon warm paper and burnt-amber wire \u2014 a desert-solstice light theme.",
     "stylesheet": "stylesheets/solar.css",
     "preview": {
       "background": "#f3e6c9",
@@ -18,69 +18,56 @@
   "tokens": {
     "color": {
       "color-scheme": "light",
-
       "app-bg": "#f3e6c9",
       "sidebar-bg": "#ecdcba",
       "sidebar-border": "#d9c59a",
       "panel-bg": "#f6ead3",
       "surface-bg": "#fbf2e1",
       "sunken-bg": "#e8d8b4",
-
       "text-primary": "#2a1f14",
       "text-muted": "#5a4632",
       "text-dim": "#836a4e",
       "text-faint": "#a8906f",
       "text-separator": "#c7ae87",
-
       "accent-primary": "#b25c18",
       "accent-primary-rgb": "178, 92, 24",
       "accent-dim": "#8a4510",
       "accent-bg": "rgba(178, 92, 24, 0.08)",
       "accent-bg-strong": "rgba(178, 92, 24, 0.16)",
       "accent-glow": "0 0 12px rgba(178, 92, 24, 0.28)",
-
       "hover-bg": "rgba(101, 70, 35, 0.08)",
       "hover-bg-subtle": "rgba(101, 70, 35, 0.04)",
       "selected-bg": "rgba(178, 92, 24, 0.14)",
       "divider": "#d9c59a",
-
       "status-running": "#b25c18",
       "status-idle": "#836a4e",
       "status-stopped": "#b44a3a",
-
       "badge-done": "#6d7f3a",
       "badge-plan": "#3c5a8a",
       "badge-ask": "#c06d2a",
-
       "diff-added-bg": "rgba(134, 152, 74, 0.18)",
       "diff-removed-bg": "rgba(192, 92, 92, 0.16)",
       "diff-added-text": "#4e5f24",
       "diff-removed-text": "#8a3320",
       "diff-hunk-header": "#8a4510",
       "diff-line-number": "#a8906f",
-
       "chat-user-bg": "rgba(178, 92, 24, 0.05)",
       "chat-system-bg": "rgba(121, 90, 45, 0.06)",
       "chat-input-bg": "#f9f0dc",
       "chat-header-bg": "#ecdcba",
-
       "terminal-tab-bg": "#e8d8b4",
       "terminal-tab-active-bg": "#fbf2e1",
       "terminal-bg": "#fbf2e1",
       "terminal-fg": "#2a1f14",
       "terminal-cursor": "#b25c18",
       "terminal-selection": "rgba(178, 92, 24, 0.28)",
-
       "toolbar-active": "rgba(178, 92, 24, 0.14)",
       "toolbar-active-text": "#8a4510",
-
       "error-bg": "rgba(180, 74, 58, 0.10)",
       "error-border": "rgba(180, 74, 58, 0.38)",
       "error-hover": "rgba(180, 74, 58, 0.16)",
-
       "overlay-bg": "rgba(60, 40, 20, 0.38)",
       "overlay-bg-heavy": "rgba(40, 28, 14, 0.55)",
-
       "canvas-atmosphere": "radial-gradient(120% 80% at 50% 0%, rgba(255, 214, 140, 0.24), transparent 65%), url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 140 140'><filter id='p'><feTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.38  0 0 0 0 0.25  0 0 0 0 0.12  0 0 0 0.055 0'/></filter><rect width='100%25' height='100%25' filter='url(%23p)'/></svg>\")",
       "rim-light": "inset 0 1px 0 rgba(60, 40, 20, 0.05)",
       "rim-light-strong": "inset 0 1px 0 rgba(178, 92, 24, 0.14), inset 0 -1px 0 rgba(60, 40, 20, 0.08)",
@@ -130,7 +117,9 @@
       "transition-slow": "0.3s ease",
       "ease-standard": "cubic-bezier(0.4, 0, 0.2, 1)",
       "ease-accelerate": "cubic-bezier(0.4, 0, 1, 1)",
-      "ease-decelerate": "cubic-bezier(0, 0, 0.2, 1)"
+      "ease-decelerate": "cubic-bezier(0, 0, 0.2, 1)",
+      "transition-hover": "0.2s ease",
+      "transition-emphasis": "0.6s ease"
     },
     "layout": {
       "scrollbar-width": "8px",
@@ -143,6 +132,19 @@
       "composer-min-height": "88px",
       "composer-padding-y": "18px",
       "sidebar-item-padding-y": "8px"
+    },
+    "icon": {
+      "icon-md": "17px",
+      "icon-lg": "20px"
+    },
+    "control": {
+      "control-height-md": "36px",
+      "control-height-lg": "42px"
+    },
+    "component": {
+      "card-padding": "20px",
+      "menu-item-padding-y": "10px",
+      "menu-item-padding-x": "18px"
     }
   }
 }

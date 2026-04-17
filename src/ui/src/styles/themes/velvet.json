@@ -6,7 +6,7 @@
     "author": "James Brink",
     "version": "1.0.0",
     "scheme": "dark",
-    "description": "Champagne and ink — a midnight-opera theme of indigo velvet and low-lit gilt.",
+    "description": "Champagne and ink \u2014 a midnight-opera theme of indigo velvet and low-lit gilt.",
     "stylesheet": "stylesheets/velvet.css",
     "preview": {
       "background": "#0c0f1f",
@@ -18,69 +18,56 @@
   "tokens": {
     "color": {
       "color-scheme": "dark",
-
       "app-bg": "#0c0f1f",
       "sidebar-bg": "#11152a",
       "sidebar-border": "#1d2140",
       "panel-bg": "#141831",
       "surface-bg": "#1a1e38",
       "sunken-bg": "#070917",
-
       "text-primary": "#ece7d9",
       "text-muted": "#c4bfb2",
       "text-dim": "#8f8a7d",
       "text-faint": "#625d6f",
       "text-separator": "#2a2e48",
-
       "accent-primary": "#d4b86a",
       "accent-primary-rgb": "212, 184, 106",
       "accent-dim": "#a4904f",
       "accent-bg": "rgba(212, 184, 106, 0.10)",
       "accent-bg-strong": "rgba(212, 184, 106, 0.24)",
       "accent-glow": "0 0 1px rgba(255, 244, 210, 0.65), 0 0 10px rgba(212, 184, 106, 0.50), 0 0 28px rgba(212, 184, 106, 0.22), 0 0 60px rgba(212, 184, 106, 0.08)",
-
       "hover-bg": "rgba(255, 250, 235, 0.05)",
       "hover-bg-subtle": "rgba(255, 250, 235, 0.03)",
       "selected-bg": "rgba(212, 184, 106, 0.16)",
       "divider": "#1d2140",
-
       "status-running": "#d4b86a",
       "status-idle": "#8f8a7d",
       "status-stopped": "#8c3a4a",
-
       "badge-done": "#7a9f8a",
       "badge-plan": "#b0a598",
       "badge-ask": "#c9a96a",
-
       "diff-added-bg": "rgba(143, 176, 140, 0.12)",
       "diff-removed-bg": "rgba(140, 58, 74, 0.14)",
       "diff-added-text": "#9fbd9a",
       "diff-removed-text": "#b65a6c",
       "diff-hunk-header": "#c9a96a",
       "diff-line-number": "#625d6f",
-
       "chat-user-bg": "rgba(236, 231, 217, 0.025)",
       "chat-system-bg": "rgba(212, 184, 106, 0.04)",
       "chat-input-bg": "#070917",
       "chat-header-bg": "#11152a",
-
       "terminal-tab-bg": "#11152a",
       "terminal-tab-active-bg": "#1a1e38",
       "terminal-bg": "#070917",
       "terminal-fg": "#ece7d9",
       "terminal-cursor": "#d4b86a",
       "terminal-selection": "rgba(212, 184, 106, 0.20)",
-
       "toolbar-active": "rgba(212, 184, 106, 0.22)",
       "toolbar-active-text": "#d4b86a",
-
       "error-bg": "rgba(140, 58, 74, 0.12)",
       "error-border": "rgba(140, 58, 74, 0.38)",
       "error-hover": "rgba(140, 58, 74, 0.18)",
-
       "overlay-bg": "rgba(5, 6, 14, 0.62)",
       "overlay-bg-heavy": "rgba(5, 6, 14, 0.82)",
-
       "canvas-atmosphere": "radial-gradient(70% 55% at 50% -10%, rgba(212, 184, 106, 0.07), transparent 55%), radial-gradient(140% 90% at 50% 120%, rgba(4, 6, 22, 0.65), transparent 70%)",
       "rim-light": "inset 0 1px 0 rgba(255, 250, 235, 0.035)",
       "rim-light-strong": "inset 0 1px 0 rgba(212, 184, 106, 0.18), inset 0 -1px 0 rgba(4, 6, 22, 0.60)",
@@ -130,7 +117,8 @@
       "transition-slow": "0.36s ease",
       "ease-standard": "cubic-bezier(0.4, 0, 0.2, 1)",
       "ease-accelerate": "cubic-bezier(0.4, 0, 1, 1)",
-      "ease-decelerate": "cubic-bezier(0, 0, 0.2, 1)"
+      "ease-decelerate": "cubic-bezier(0, 0, 0.2, 1)",
+      "transition-hover": "0.18s ease"
     },
     "layout": {
       "scrollbar-width": "8px",
@@ -141,6 +129,19 @@
       "turn-gap": "18px",
       "canvas-padding-inline": "36px",
       "composer-min-height": "68px"
+    },
+    "border": {
+      "border-thin": "1px",
+      "border-medium": "1px"
+    },
+    "icon": {
+      "icon-md": "15px"
+    },
+    "control": {
+      "control-height-md": "30px"
+    },
+    "component": {
+      "card-padding": "18px"
     }
   }
 }
