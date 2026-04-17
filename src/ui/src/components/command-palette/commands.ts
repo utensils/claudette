@@ -155,7 +155,7 @@ export function buildEffortCommands(
     { id: "medium", label: "Medium", description: "Balanced" },
     { id: "high", label: "High", description: "Deep reasoning" },
     { id: "xhigh", label: "Extra High", description: "Extended reasoning (Opus 4.7+)" },
-    { id: "max", label: "Max", description: "Full budget (Opus only)" },
+    { id: "max", label: "Max", description: "Full budget" },
   ];
   const levels = !isEffortSupported(selectedModel)
     ? all.filter((l) => l.id === "auto")

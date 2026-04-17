@@ -1,4 +1,4 @@
-import { useEffect, useState, type RefObject } from "react";
+import { useEffect, useState } from "react";
 import { BadgeDollarSign, ChevronRight } from "lucide-react";
 import styles from "./ModelSelector.module.css";
 import { MODELS, type Model } from "./modelRegistry";
@@ -6,7 +6,6 @@ import { MODELS, type Model } from "./modelRegistry";
 export { MODELS } from "./modelRegistry";
 
 interface ModelSelectorProps {
-  anchorRef: RefObject<HTMLButtonElement | null>;
   selected: string;
   onSelect: (model: string) => void;
   onClose: () => void;
