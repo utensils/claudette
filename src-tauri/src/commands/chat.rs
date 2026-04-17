@@ -281,6 +281,10 @@ pub async fn send_chat_message(
         eprintln!("[chat] MCP config dirty — tearing down persistent session for {workspace_id}");
         let stale_pid = session.persistent_session.as_ref().map(|ps| ps.pid());
         session.persistent_session = None;
+        // Clear active_pid alongside persistent_session so a failed respawn
+        // can't leave the next turn with a stale PID that the kernel may
+        // have recycled (would get SIGKILLed by the stale-process branch).
+        session.active_pid = None;
         session.mcp_config_dirty = false;
         if let Some(pid) = stale_pid {
             drop(agents);
@@ -330,6 +334,11 @@ pub async fn send_chat_message(
         );
         let stale_pid = session.persistent_session.as_ref().map(|ps| ps.pid());
         session.persistent_session = None;
+        // Clear active_pid alongside persistent_session. A concurrent turn
+        // streaming this process at drift time would leave active_pid set;
+        // without this clear, a failed respawn + next turn would SIGKILL a
+        // potentially recycled PID via the stale-process teardown branch.
+        session.active_pid = None;
         if let Some(pid) = stale_pid {
             drop(agents);
             let _ = agent::stop_agent_graceful(pid).await;
