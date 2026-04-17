@@ -1,7 +1,7 @@
 import React, { createContext, memo, useContext, useEffect, useRef, useState, useMemo, useCallback } from "react";
 import Markdown from "react-markdown";
 import { preprocessContent, MARKDOWN_COMPONENTS, REHYPE_PLUGINS, REMARK_PLUGINS } from "../../utils/markdown";
-import { FileText, GitBranch, Plus, RotateCcw, X } from "lucide-react";
+import { FileText, GitBranch, Octagon, Plus, RotateCcw, Send, X } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import type { ToolActivity, CompletedTurn } from "../../stores/useAppStore";
 import {
@@ -779,19 +779,6 @@ export function ChatPanel() {
     }
   };
 
-  const agentStatusLabel =
-    typeof ws.agent_status === "string"
-      ? ws.agent_status
-      : `Error: ${ws.agent_status.Error}`;
-
-  const agentStatusColor =
-    ws.agent_status === "Running"
-      ? "var(--status-running)"
-      : ws.agent_status === "Stopped" ||
-          typeof ws.agent_status !== "string"
-        ? "var(--status-stopped)"
-        : "var(--status-idle)";
-
   return (
     <div className={styles.panel}>
       <div className={styles.header} data-tauri-drag-region>
@@ -817,17 +804,6 @@ export function ChatPanel() {
           <WorkspaceActions
             worktreePath={ws.worktree_path}
           />
-          <span
-            className={styles.statusBadge}
-            style={{ color: agentStatusColor }}
-          >
-            {agentStatusLabel}
-          </span>
-          {isRunning ? (
-            <button className={styles.stopBtn} onClick={handleStop}>
-              Stop
-            </button>
-          ) : null}
           <PanelToggles />
         </div>
       </div>
@@ -927,6 +903,7 @@ export function ChatPanel() {
 
       <ChatInputArea
         onSend={handleSend}
+        onStop={handleStop}
         isRunning={isRunning}
         isRemote={!!ws?.remote_connection_id}
         selectedWorkspaceId={selectedWorkspaceId!}
@@ -1450,6 +1427,7 @@ function fileToBase64(file: Blob): Promise<string> {
 
 function ChatInputArea({
   onSend,
+  onStop,
   isRunning,
   isRemote,
   selectedWorkspaceId,
@@ -1464,6 +1442,7 @@ function ChatInputArea({
     mentionedFiles?: Set<string>,
     attachments?: AttachmentInput[],
   ) => Promise<void>;
+  onStop: () => void | Promise<void>;
   isRunning: boolean;
   isRemote: boolean;
   selectedWorkspaceId: string;
@@ -2087,11 +2066,13 @@ function ChatInputArea({
           disabled={isRunning}
         />
         <button
-          className={styles.sendBtn}
-          onClick={handleSend}
-          disabled={!chatInput.trim() && pendingAttachments.length === 0}
+          className={`${styles.sendBtn} ${isRunning ? styles.sendBtnStop : ""}`}
+          onClick={isRunning ? onStop : handleSend}
+          disabled={!isRunning && !chatInput.trim() && pendingAttachments.length === 0}
+          title={isRunning ? "Stop agent" : "Send message"}
+          aria-label={isRunning ? "Stop agent" : "Send message"}
         >
-          Send
+          {isRunning ? <Octagon size={16} /> : <Send size={16} />}
         </button>
       </div>
     </div>

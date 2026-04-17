@@ -95,26 +95,6 @@
 }
 
 
-.statusBadge {
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.stopBtn {
-  background: none;
-  border: 1px solid var(--status-stopped);
-  color: var(--status-stopped);
-  padding: 2px 10px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 11px;
-  transition: background var(--transition-fast);
-}
-
-.stopBtn:hover {
-  background: var(--error-hover);
-}
-
 /* Messages area */
 .messages {
   flex: 1;
@@ -936,32 +916,47 @@
 }
 
 .sendBtn {
-  background: transparent;
-  border: 1px solid rgba(var(--accent-primary-rgb), 0.2);
-  color: var(--accent-dim);
-  padding: 7px 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-primary);
+  border: 1px solid var(--accent-primary);
+  color: var(--app-bg);
+  width: 28px;
+  height: 28px;
+  padding: 0;
   border-radius: 8px;
   cursor: pointer;
-  font-size: 13px;
-  font-weight: 500;
   margin-left: auto;
-  transition: background var(--transition-fast), color var(--transition-fast),
-              border-color var(--transition-fast);
+  flex-shrink: 0;
+  transition: background var(--transition-fast), border-color var(--transition-fast),
+              color var(--transition-fast), opacity var(--transition-fast);
 }
 
 .sendBtn:hover:not(:disabled) {
-  background: rgba(var(--accent-primary-rgb), 0.08);
-  color: var(--accent-primary);
-  border-color: rgba(var(--accent-primary-rgb), 0.3);
+  background: var(--accent-dim);
+  border-color: var(--accent-dim);
 }
 
 .sendBtn:active:not(:disabled) {
-  background: rgba(var(--accent-primary-rgb), 0.12);
+  filter: brightness(0.95);
 }
 
 .sendBtn:disabled {
-  opacity: 0.25;
+  opacity: 0.35;
   cursor: not-allowed;
+}
+
+.sendBtnStop {
+  background: var(--status-stopped);
+  border-color: var(--status-stopped);
+  color: var(--app-bg);
+}
+
+.sendBtnStop:hover:not(:disabled) {
+  background: var(--status-stopped);
+  border-color: var(--status-stopped);
+  filter: brightness(1.1);
 }
 
 /* -- Attachment UI -- */
