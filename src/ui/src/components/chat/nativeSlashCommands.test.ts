@@ -32,6 +32,7 @@ function makeCtx(overrides: Partial<NativeCommandContext> = {}): NativeCommandCo
     workspaceId: "ws-1",
     agentStatus: "Idle",
     selectedModel: "opus",
+    permissionLevel: "full",
     planMode: false,
     fastMode: false,
     thinkingEnabled: false,
@@ -39,6 +40,7 @@ function makeCtx(overrides: Partial<NativeCommandContext> = {}): NativeCommandCo
     effortLevel: "auto",
     planFilePath: null,
     setSelectedModel: vi.fn(async () => {}),
+    setPermissionLevel: vi.fn(async () => {}),
     setPlanMode: vi.fn(),
     clearConversation: vi.fn(async () => {}),
     readPlanFile: vi.fn(async () => "plan content"),
@@ -816,6 +818,70 @@ describe("/model handler", () => {
   });
 });
 
+describe("/permissions handler", () => {
+  it("reports current level when invoked with no args", async () => {
+    const ctx = makeCtx({ permissionLevel: "standard" });
+    const handler = resolveNativeHandler("permissions")!;
+    await handler.execute(ctx, "");
+    expect(ctx.setPermissionLevel).not.toHaveBeenCalled();
+    expect(ctx.addLocalMessage).toHaveBeenCalledWith(
+      expect.stringContaining("Permission mode: standard"),
+    );
+  });
+
+  it("updates level when given a valid mode", async () => {
+    const ctx = makeCtx({ permissionLevel: "full" });
+    const handler = resolveNativeHandler("permissions")!;
+    await handler.execute(ctx, "readonly");
+    expect(ctx.setPermissionLevel).toHaveBeenCalledWith("readonly");
+    expect(ctx.addLocalMessage).toHaveBeenCalledWith(
+      "Permission mode set to readonly.",
+    );
+  });
+
+  it("accepts the /allowed-tools alias and updates the same state", async () => {
+    const ctx = makeCtx({ permissionLevel: "full" });
+    const handler = resolveNativeHandler("allowed-tools")!;
+    expect(handler.name).toBe("permissions");
+    const result = await handler.execute(ctx, "standard");
+    expect(result).toEqual({
+      kind: "handled",
+      canonicalName: "permissions",
+    });
+    expect(ctx.setPermissionLevel).toHaveBeenCalledWith("standard");
+  });
+
+  it("is case-insensitive on the mode argument", async () => {
+    const ctx = makeCtx({ permissionLevel: "full" });
+    const handler = resolveNativeHandler("permissions")!;
+    await handler.execute(ctx, "READONLY");
+    expect(ctx.setPermissionLevel).toHaveBeenCalledWith("readonly");
+  });
+
+  it("no-ops when the requested mode matches the current one", async () => {
+    const ctx = makeCtx({ permissionLevel: "full" });
+    const handler = resolveNativeHandler("permissions")!;
+    await handler.execute(ctx, "full");
+    expect(ctx.setPermissionLevel).not.toHaveBeenCalled();
+    expect(ctx.addLocalMessage).toHaveBeenCalledWith(
+      "Permission mode is already full.",
+    );
+  });
+
+  it("rejects unknown modes with a list of valid options", async () => {
+    const ctx = makeCtx();
+    const handler = resolveNativeHandler("permissions")!;
+    await handler.execute(ctx, "god");
+    expect(ctx.setPermissionLevel).not.toHaveBeenCalled();
+    const msg = (ctx.addLocalMessage as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as string;
+    expect(msg).toContain('unknown mode "god"');
+    expect(msg).toContain("readonly");
+    expect(msg).toContain("standard");
+    expect(msg).toContain("full");
+  });
+});
+
 describe("/status handler", () => {
   it("emits a single local message reporting the current workspace state", async () => {
     const ctx = makeCtx({
@@ -823,6 +889,7 @@ describe("/status handler", () => {
       workspace: { branch: "feat/slashes", worktreePath: "/tmp/wt/slashes" },
       agentStatus: "Running",
       selectedModel: "sonnet",
+      permissionLevel: "standard",
       planMode: true,
       fastMode: false,
       thinkingEnabled: true,
@@ -839,6 +906,7 @@ describe("/status handler", () => {
     expect(msg).toContain("Branch: feat/slashes");
     expect(msg).toContain("Agent: Running");
     expect(msg).toContain("Model: sonnet");
+    expect(msg).toContain("Permission: standard");
     expect(msg).toContain("Plan mode: on");
     expect(msg).toContain("Fast: off");
     expect(msg).toContain("Thinking: on");
@@ -851,6 +919,7 @@ describe("/status handler", () => {
     const handler = resolveNativeHandler("status")!;
     await handler.execute(ctx, "");
     expect(ctx.setSelectedModel).not.toHaveBeenCalled();
+    expect(ctx.setPermissionLevel).not.toHaveBeenCalled();
     expect(ctx.setPlanMode).not.toHaveBeenCalled();
     expect(ctx.clearConversation).not.toHaveBeenCalled();
   });
@@ -876,7 +945,13 @@ describe("workspace-control picker filtering", () => {
     expect(names).toContain("clear");
     expect(names).toContain("plan");
     expect(names).toContain("model");
+    expect(names).toContain("permissions");
     expect(names).toContain("status");
+  });
+
+  it("resolves /allowed-tools as an alias to /permissions", () => {
+    expect(resolveNativeHandler("allowed-tools")?.name).toBe("permissions");
+    expect(resolveNativeHandler("Allowed-Tools")?.name).toBe("permissions");
   });
 });
 
@@ -1001,16 +1076,16 @@ describe("formatHelpMessage", () => {
   it("renders aliases as '(alias: /x, /y)' when not shadowed", () => {
     const withMulti: SlashCommand[] = [
       {
-        name: "sample",
-        description: "Synthetic command used to exercise alias rendering",
+        name: "permissions",
+        description: "Show or change the workspace permission mode",
         source: "builtin",
-        aliases: ["sample-alt", "smp"],
-        argument_hint: "[a|b|c]",
+        aliases: ["allowed-tools", "perm"],
+        argument_hint: "[readonly|standard|full]",
         kind: "local_action",
       },
     ];
     const out = formatHelpMessage(withMulti);
-    expect(out).toContain("(alias: /sample-alt, /smp)");
+    expect(out).toContain("(alias: /allowed-tools, /perm)");
   });
 
   it("omits aliases shadowed by a user/project command of the same name", () => {
@@ -1019,16 +1094,16 @@ describe("formatHelpMessage", () => {
     // /help must not continue advertising the alias as routing to the native.
     const withShadow: SlashCommand[] = [
       {
-        name: "sample",
-        description: "Synthetic command used to exercise alias rendering",
+        name: "permissions",
+        description: "Show or change the workspace permission mode",
         source: "builtin",
-        aliases: ["sample-alt", "smp"],
-        argument_hint: "[a|b|c]",
+        aliases: ["allowed-tools", "perm"],
+        argument_hint: "[readonly|standard|full]",
         kind: "local_action",
       },
-      // User has .claude/commands/sample-alt.md — shadows the native alias.
+      // User has .claude/commands/allowed-tools.md — shadows the native alias.
       {
-        name: "sample-alt",
+        name: "allowed-tools",
         description: "User override",
         source: "user",
         aliases: [],
@@ -1036,10 +1111,10 @@ describe("formatHelpMessage", () => {
     ];
     const out = formatHelpMessage(withShadow);
     // Only the non-shadowed alias survives on the native's line.
-    expect(out).toContain("`/sample [a|b|c]`  (alias: /smp) —");
-    expect(out).not.toContain("/sample-alt)");
+    expect(out).toContain("`/permissions [readonly|standard|full]`  (alias: /perm) —");
+    expect(out).not.toContain("/allowed-tools)");
     // The file-based command still shows up under **User commands**.
-    expect(out).toContain("- `/sample-alt` — User override");
+    expect(out).toContain("- `/allowed-tools` — User override");
   });
 
   it("drops the whole alias block when every alias is shadowed", () => {

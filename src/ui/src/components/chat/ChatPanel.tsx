@@ -17,6 +17,8 @@ import {
   sendChatMessage,
   sendRemoteCommand,
   stopAgent,
+  getAppSetting,
+  setAppSetting,
   listWorkspaceFiles,
   clearConversation,
   readPlanFile,
@@ -25,6 +27,7 @@ import {
 import { applySelectedModel } from "./applySelectedModel";
 import { roleClassKey, shouldRenderAsMarkdown } from "./messageRendering";
 import { findLatestPlanFilePath } from "./planFilePath";
+import type { PermissionLevel } from "../../stores/useAppStore";
 import { open } from "@tauri-apps/plugin-dialog";
 import { reconstructCompletedTurns } from "../../utils/reconstructTurns";
 import type { SlashCommand, FileEntry } from "../../services/tauri";
@@ -189,6 +192,11 @@ export function ChatPanel() {
   const completedTurnsCount = useAppStore(
     (s) => (selectedWorkspaceId ? (s.completedTurns[selectedWorkspaceId] || []).length : 0)
   );
+  const permissionLevelMap = useAppStore((s) => s.permissionLevel);
+  const setPermissionLevel = useAppStore((s) => s.setPermissionLevel);
+  const permissionLevel = selectedWorkspaceId
+    ? permissionLevelMap[selectedWorkspaceId] ?? "full"
+    : "full";
   const pendingQuestion = useAppStore(
     (s) => (selectedWorkspaceId ? s.agentQuestions[selectedWorkspaceId] ?? null : null)
   );
@@ -244,6 +252,25 @@ export function ChatPanel() {
     const s = secs % 60;
     return `${m}m ${s}s`;
   }, []);
+
+  // Load persisted permission level when workspace changes.
+  useEffect(() => {
+    if (!selectedWorkspaceId) return;
+    let cancelled = false;
+    getAppSetting(`permission_level:${selectedWorkspaceId}`)
+      .then((val) => {
+        if (cancelled) return;
+        if (val === "readonly" || val === "standard" || val === "full") {
+          setPermissionLevel(selectedWorkspaceId, val);
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to load permission level:", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedWorkspaceId, setPermissionLevel]);
 
   // Load chat history when workspace changes, seed prompt history from it.
   useEffect(() => {
@@ -475,6 +502,8 @@ export function ChatPanel() {
         const workspaceId = selectedWorkspaceId;
         const state = useAppStore.getState();
         const currentModel = state.selectedModel[workspaceId] ?? "opus";
+        const currentPermission: PermissionLevel =
+          state.permissionLevel[workspaceId] ?? "full";
         const currentPlanMode = state.planMode[workspaceId] ?? false;
         const currentFastMode = state.fastMode[workspaceId] ?? false;
         const currentThinking = state.thinkingEnabled[workspaceId] ?? false;
@@ -502,6 +531,18 @@ export function ChatPanel() {
 
         const setSelectedModelBound = (nextModel: string) =>
           applySelectedModel(workspaceId, nextModel);
+
+        const setPermissionLevelBound = async (level: PermissionLevel) => {
+          const previous =
+            useAppStore.getState().permissionLevel[workspaceId] ?? "full";
+          useAppStore.getState().setPermissionLevel(workspaceId, level);
+          try {
+            await setAppSetting(`permission_level:${workspaceId}`, level);
+          } catch (err) {
+            useAppStore.getState().setPermissionLevel(workspaceId, previous);
+            throw err;
+          }
+        };
 
         const setPlanModeBound = (enabled: boolean) => {
           useAppStore.getState().setPlanMode(workspaceId, enabled);
@@ -586,6 +627,7 @@ export function ChatPanel() {
             workspaceId,
             agentStatus: agentStatusLabel,
             selectedModel: currentModel,
+            permissionLevel: currentPermission,
             planMode: currentPlanMode,
             fastMode: currentFastMode,
             thinkingEnabled: currentThinking,
@@ -593,6 +635,7 @@ export function ChatPanel() {
             effortLevel: currentEffort,
             planFilePath,
             setSelectedModel: setSelectedModelBound,
+            setPermissionLevel: setPermissionLevelBound,
             setPlanMode: setPlanModeBound,
             clearConversation: clearConversationBound,
             readPlanFile: readPlanFileBound,
@@ -677,6 +720,7 @@ export function ChatPanel() {
           workspace_id: selectedWorkspaceId,
           content: trimmed,
           mentioned_files: mentionedFilesArray,
+          permission_level: permissionLevel,
           model: state.selectedModel[selectedWorkspaceId] || null,
           fast_mode: state.fastMode[selectedWorkspaceId] || false,
           thinking_enabled: state.thinkingEnabled[selectedWorkspaceId] || false,
@@ -696,6 +740,7 @@ export function ChatPanel() {
           selectedWorkspaceId,
           trimmed,
           mentionedFilesArray,
+          permissionLevel,
           model,
           fastMode || undefined,
           thinkingEnabled || undefined,

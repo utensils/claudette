@@ -1,5 +1,6 @@
 import type { PluginSettingsIntent } from "../../types/plugins";
 import type { NativeSlashKind, SlashCommand } from "../../services/tauri";
+import type { PermissionLevel } from "../../stores/useAppStore";
 import { parsePluginSlashCommand } from "./pluginSlashCommand";
 import { MODELS } from "./modelRegistry";
 
@@ -44,10 +45,11 @@ export interface NativeCommandContext {
   openReleaseNotes: () => void;
 
   // -- Per-workspace state read by workspace-control commands
-  // (/clear, /plan, /model, /status). --
+  // (/clear, /plan, /model, /permissions, /status). --
   workspaceId: string | null;
   agentStatus: string | null;
   selectedModel: string;
+  permissionLevel: PermissionLevel;
   planMode: boolean;
   fastMode: boolean;
   thinkingEnabled: boolean;
@@ -58,6 +60,7 @@ export interface NativeCommandContext {
   // -- Pre-bound per-workspace write callbacks. Callers wire these to the
   // same store setters / backend commands the toolbar and shortcuts use. --
   setSelectedModel: (model: string) => Promise<void>;
+  setPermissionLevel: (level: PermissionLevel) => Promise<void>;
   setPlanMode: (enabled: boolean) => void;
   clearConversation: (restoreFiles: boolean) => Promise<void>;
   readPlanFile: (path: string) => Promise<string>;
@@ -356,6 +359,12 @@ const versionHandler: NativeHandler = {
   },
 };
 
+const PERMISSION_MODES: PermissionLevel[] = ["readonly", "standard", "full"];
+
+function isPermissionLevel(value: string): value is PermissionLevel {
+  return (PERMISSION_MODES as string[]).includes(value);
+}
+
 function formatOnOff(enabled: boolean): string {
   return enabled ? "on" : "off";
 }
@@ -477,6 +486,46 @@ const modelHandler: NativeHandler = {
       ctx.addLocalMessage(`Model set to ${match.id}.`);
     } catch (error) {
       ctx.addLocalMessage(`/model failed: ${String(error)}`);
+    }
+    return handled;
+  },
+};
+
+const permissionsHandler: NativeHandler = {
+  name: "permissions",
+  aliases: ["allowed-tools"],
+  kind: "local_action",
+  execute: async (ctx, args) => {
+    const handled = {
+      kind: "handled" as const,
+      canonicalName: "permissions",
+    };
+    if (!ctx.workspaceId) {
+      ctx.addLocalMessage("/permissions: no active workspace");
+      return handled;
+    }
+    const arg = args.trim().toLowerCase();
+    if (arg === "") {
+      ctx.addLocalMessage(
+        `Permission mode: ${ctx.permissionLevel}. Options: ${PERMISSION_MODES.join(", ")}`,
+      );
+      return handled;
+    }
+    if (!isPermissionLevel(arg)) {
+      ctx.addLocalMessage(
+        `/permissions: unknown mode "${args.trim()}". Valid options: ${PERMISSION_MODES.join(", ")}`,
+      );
+      return handled;
+    }
+    if (arg === ctx.permissionLevel) {
+      ctx.addLocalMessage(`Permission mode is already ${arg}.`);
+      return handled;
+    }
+    try {
+      await ctx.setPermissionLevel(arg);
+      ctx.addLocalMessage(`Permission mode set to ${arg}.`);
+    } catch (error) {
+      ctx.addLocalMessage(`/permissions failed: ${String(error)}`);
     }
     return handled;
   },
@@ -692,6 +741,7 @@ const statusHandler: NativeHandler = {
       `Branch: ${branch}`,
       `Agent: ${agent}`,
       `Model: ${ctx.selectedModel}`,
+      `Permission: ${ctx.permissionLevel}`,
       `Plan mode: ${formatOnOff(ctx.planMode)}`,
       `Fast: ${formatOnOff(ctx.fastMode)}`,
       `Thinking: ${formatOnOff(ctx.thinkingEnabled)}`,
@@ -717,6 +767,7 @@ export const NATIVE_HANDLERS: NativeHandler[] = [
   clearHandler,
   planHandler,
   modelHandler,
+  permissionsHandler,
   statusHandler,
   helpHandler,
   initHandler,
