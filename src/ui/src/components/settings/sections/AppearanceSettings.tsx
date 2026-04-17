@@ -9,6 +9,7 @@ import {
   buildFontOptions,
 } from "../../../utils/fontSettings";
 import type { ThemeDefinition } from "../../../types/theme";
+import { normalizeTheme } from "../../../types/theme";
 import { FontSelect } from "../FontSelect";
 import styles from "../Settings.module.css";
 
@@ -206,11 +207,14 @@ export function AppearanceSettings() {
             value={currentThemeId}
             onChange={(e) => handleThemeChange(e.target.value)}
           >
-            {availableThemes.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
+            {availableThemes.map((t) => {
+              const meta = normalizeTheme(t);
+              return (
+                <option key={meta.id} value={meta.id}>
+                  {meta.name}
+                </option>
+              );
+            })}
           </select>
         </div>
       </div>

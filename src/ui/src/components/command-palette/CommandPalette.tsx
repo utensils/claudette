@@ -13,6 +13,7 @@ import {
   runWorkspaceSetup,
 } from "../../services/tauri";
 import type { ThemeDefinition } from "../../types/theme";
+import { normalizeTheme } from "../../types/theme";
 import { scoreCommand } from "./searchScore";
 import {
   buildCommands,
@@ -471,8 +472,11 @@ export function CommandPalette() {
                 const Icon = cmd.icon;
                 const isTheme = cmd.id.startsWith("theme:");
                 const themeColor = isTheme
-                  ? themes.find((t) => t.id === cmd.id.slice("theme:".length))
-                      ?.colors["accent-primary"]
+                  ? (() => {
+                      const id = cmd.id.slice("theme:".length);
+                      const match = themes.find((t) => normalizeTheme(t).id === id);
+                      return match ? normalizeTheme(match).tokens["accent-primary"] : undefined;
+                    })()
                   : undefined;
                 const isActive = isTheme &&
                   cmd.id.slice("theme:".length) === currentThemeId;

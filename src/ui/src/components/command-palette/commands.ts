@@ -22,6 +22,7 @@ import {
   ZoomOut,
 } from "lucide-react";
 import type { ThemeDefinition } from "../../types/theme";
+import { normalizeTheme } from "../../types/theme";
 import { MODELS } from "../chat/ModelSelector";
 import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "../chat/modelCapabilities";
 
@@ -114,15 +115,18 @@ export function buildThemeCommands(
   applyThemeById: (id: string) => void,
   close: () => void,
 ): Command[] {
-  return themes.map((theme) => ({
-    id: `theme:${theme.id}`,
-    name: theme.name,
-    description: theme.author ? `by ${theme.author}` : theme.description,
-    category: "theme" as const,
-    icon: Palette,
-    keywords: ["theme", "color", "appearance", ...theme.name.toLowerCase().split(/\s+/)],
-    execute: () => { applyThemeById(theme.id); close(); },
-  }));
+  return themes.map((theme) => {
+    const meta = normalizeTheme(theme);
+    return {
+      id: `theme:${meta.id}`,
+      name: meta.name,
+      description: meta.author ? `by ${meta.author}` : meta.description,
+      category: "theme" as const,
+      icon: Palette,
+      keywords: ["theme", "color", "appearance", ...meta.name.toLowerCase().split(/\s+/)],
+      execute: () => { applyThemeById(meta.id); close(); },
+    };
+  });
 }
 
 /** Build model sub-menu commands. */
