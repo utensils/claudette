@@ -4,6 +4,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { useAppStore } from "./stores/useAppStore";
 import { loadInitialData, getAppSetting, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, clearAttention, detectInstalledApps, listSystemFonts } from "./services/tauri";
 import { applyTheme, applyUserFonts, loadAllThemes, findTheme } from "./utils/theme";
+import { DEFAULT_THEME_ID } from "./styles/themes";
 import { adjustUiFontSize, resetUiFontSize } from "./utils/fontSettings";
 import { useMcpStatus } from "./hooks/useMcpStatus";
 import { AppLayout } from "./components/layout/AppLayout";
@@ -63,7 +64,7 @@ function App() {
     getAppSetting("theme")
       .then(async (savedThemeId) => {
         const allThemes = await loadAllThemes();
-        const theme = findTheme(allThemes, savedThemeId ?? "default-dark");
+        const theme = findTheme(allThemes, savedThemeId ?? DEFAULT_THEME_ID);
         setCurrentThemeId(theme.id);
         applyTheme(theme);
         // Apply user font overrides on top of the theme.

@@ -1,5 +1,6 @@
 import type { ITheme } from "@xterm/xterm";
 import type { ThemeDefinition } from "../types/theme";
+import { normalizeTheme } from "../types/theme";
 import { BUILTIN_THEMES, DEFAULT_THEME_ID } from "../styles/themes";
 import { listUserThemes } from "../services/tauri";
 
@@ -7,78 +8,164 @@ import { listUserThemes } from "../services/tauri";
 import hljsDarkUrl from "highlight.js/styles/github-dark.min.css?url";
 import hljsLightUrl from "highlight.js/styles/github.min.css?url";
 
-const THEMEABLE_VARS = [
+export const DEFAULT_SANS_STACK =
+  '"Instrument Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+export const DEFAULT_MONO_STACK =
+  '"JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code", monospace';
+
+/**
+ * Tokens a theme is *allowed* to set. This is the single source of truth
+ * listing every CSS variable the runtime will pick up from a theme file.
+ * Any token not in this list is silently ignored when applying a theme —
+ * this protects against user themes setting arbitrary CSS custom
+ * properties that have nothing to do with Claudette's design system
+ * (and against typos cluttering `:root`).
+ *
+ * To expose a new theme-controllable value:
+ *   1. Add its `--var` default to `styles/theme.css` :root
+ *   2. Add the token name here
+ *   3. Document it in `docs/theming.md`
+ */
+const THEMEABLE_TOKENS = new Set<string>([
+  // Color scheme
   "color-scheme",
+
+  // Surfaces
+  "app-bg",
+  "sidebar-bg",
+  "sidebar-border",
+  "panel-bg",
+  "surface-bg",
+  "sunken-bg",
+
+  // Text
+  "text-primary",
+  "text-muted",
+  "text-dim",
+  "text-faint",
+  "text-separator",
+
+  // Accent
   "accent-primary",
   "accent-primary-rgb",
   "accent-dim",
   "accent-bg",
   "accent-bg-strong",
   "accent-glow",
-  "sidebar-bg",
-  "sidebar-border",
-  "text-primary",
-  "text-muted",
-  "text-dim",
-  "text-faint",
-  "text-separator",
+
+  // Interactive
   "hover-bg",
   "hover-bg-subtle",
   "selected-bg",
   "divider",
+  "selection-bg",
+
+  // Status
   "status-running",
   "status-idle",
   "status-stopped",
+
+  // Attention badges
   "badge-done",
   "badge-plan",
   "badge-ask",
+
+  // Diff
   "diff-added-bg",
   "diff-removed-bg",
   "diff-added-text",
   "diff-removed-text",
   "diff-hunk-header",
   "diff-line-number",
+
+  // Chat
   "chat-user-bg",
   "chat-system-bg",
   "chat-input-bg",
   "chat-header-bg",
+
+  // Terminal
   "terminal-tab-bg",
   "terminal-tab-active-bg",
   "terminal-bg",
   "terminal-fg",
   "terminal-cursor",
   "terminal-selection",
+
+  // Toolbar
   "toolbar-active",
   "toolbar-active-text",
+
+  // Error
   "error-bg",
   "error-border",
   "error-hover",
+
+  // Overlay
   "overlay-bg",
   "overlay-bg-heavy",
-  "app-bg",
+
+  // Atmosphere / rim lights (Atelier chrome)
+  "canvas-atmosphere",
+  "rim-light",
+  "rim-light-strong",
+
+  // Elevation
   "shadow-sm",
   "shadow-md",
   "shadow-lg",
   "shadow-card-hover",
-  "font-sans",
-  "font-mono",
-  // Substrate layers + rim light language (Atelier chrome redesign)
-  "panel-bg",
-  "surface-bg",
-  "sunken-bg",
-  "rim-light",
-  "rim-light-strong",
   "well-shadow",
   "composer-ring",
   "composer-ring-focus",
-  "canvas-atmosphere",
-  "font-display",
-];
 
-export const DEFAULT_SANS_STACK =
-  '"Instrument Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-export const DEFAULT_MONO_STACK =
-  '"JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code", monospace';
+  // Typography
+  "font-sans",
+  "font-mono",
+  "font-display",
+  "font-size-sm",
+  "font-size-base",
+  "font-size-md",
+  "font-size-lg",
+  "font-weight-regular",
+  "font-weight-medium",
+  "font-weight-semibold",
+  "font-weight-bold",
+  "line-height-tight",
+  "line-height-normal",
+  "line-height-relaxed",
+  "letter-spacing-tight",
+  "letter-spacing-wide",
+
+  // Radius
+  "radius-sm",
+  "radius-md",
+  "radius-lg",
+  "radius-pill",
+  "border-radius",
+
+  // Spacing
+  "space-xs",
+  "space-sm",
+  "space-md",
+  "space-lg",
+  "space-xl",
+
+  // Motion
+  "transition-fast",
+  "transition-normal",
+  "transition-slow",
+  "ease-standard",
+  "ease-accelerate",
+  "ease-decelerate",
+
+  // Layout
+  "sidebar-width",
+  "scrollbar-width",
+  "scrollbar-thumb-bg",
+  "scrollbar-thumb-hover-bg",
+  "focus-ring",
+]);
 
 /**
  * Apply user font overrides on top of the current theme.
@@ -132,20 +219,36 @@ export function getTerminalTheme(): ITheme {
 
 export function applyTheme(theme: ThemeDefinition): void {
   const root = document.documentElement;
-  for (const varName of THEMEABLE_VARS) {
-    const value = theme.colors[varName];
-    if (value) {
-      root.style.setProperty(`--${varName}`, value);
+  const { tokens, scheme } = normalizeTheme(theme);
+
+  // Clear every themeable variable first so removing a token in a
+  // reloaded theme file actually takes effect. Any token NOT in the
+  // theme falls back to :root defaults in styles/theme.css.
+  for (const name of THEMEABLE_TOKENS) {
+    root.style.removeProperty(`--${name}`);
+  }
+
+  // Apply every known token the theme declares. Unknown tokens are
+  // silently ignored (see THEMEABLE_TOKENS rationale).
+  const unknown: string[] = [];
+  for (const [name, value] of Object.entries(tokens)) {
+    if (THEMEABLE_TOKENS.has(name)) {
+      root.style.setProperty(`--${name}`, value);
     } else {
-      root.style.removeProperty(`--${varName}`);
+      unknown.push(name);
     }
   }
+  if (unknown.length > 0) {
+    console.warn(
+      `[theme] Ignoring unknown tokens: ${unknown.join(", ")}. ` +
+        "Add them to THEMEABLE_TOKENS in utils/theme.ts if intentional.",
+    );
+  }
+
   // Set the real color-scheme property so native controls match.
-  // Default to "dark" if the theme doesn't specify (e.g. older user themes).
-  const scheme = theme.colors["color-scheme"] ?? "dark";
   root.style.setProperty("color-scheme", scheme);
 
-  // Swap highlight.js syntax theme to match light/dark
+  // Swap highlight.js syntax theme to match light/dark.
   const isLight = scheme === "light";
   let link = document.getElementById("hljs-theme") as HTMLLinkElement | null;
   if (!link) {
@@ -166,10 +269,10 @@ export async function loadAllThemes(): Promise<ThemeDefinition[]> {
   }
   const themesById = new Map<string, ThemeDefinition>();
   for (const theme of BUILTIN_THEMES) {
-    themesById.set(theme.id, theme);
+    themesById.set(normalizeTheme(theme).id, theme);
   }
   for (const theme of userThemes) {
-    themesById.set(theme.id, theme);
+    themesById.set(normalizeTheme(theme).id, theme);
   }
   return Array.from(themesById.values());
 }
@@ -178,10 +281,12 @@ export function findTheme(
   themes: ThemeDefinition[],
   id: string,
 ): ThemeDefinition {
-  const requested = themes.find((t) => t.id === id);
+  const requested = themes.find((t) => normalizeTheme(t).id === id);
   if (requested) return requested;
 
-  const fallback = themes.find((t) => t.id === DEFAULT_THEME_ID);
+  const fallback = themes.find(
+    (t) => normalizeTheme(t).id === DEFAULT_THEME_ID,
+  );
   if (fallback) return fallback;
 
   if (themes[0]) return themes[0];

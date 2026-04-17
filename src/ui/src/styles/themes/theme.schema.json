@@ -1,0 +1,232 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://claudette.app/schemas/theme.schema.json",
+  "title": "Claudette Theme",
+  "description": "A Claudette UI theme — manifest metadata plus grouped design tokens that map 1:1 to CSS custom properties on :root.",
+  "type": "object",
+  "required": ["manifest", "tokens"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "manifest": { "$ref": "#/$defs/manifest" },
+    "tokens": { "$ref": "#/$defs/tokens" }
+  },
+  "$defs": {
+    "manifest": {
+      "type": "object",
+      "required": ["id", "name"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+          "description": "Unique theme identifier. kebab-case, lowercase, no spaces."
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable theme name shown in settings."
+        },
+        "author": {
+          "type": "string",
+          "description": "Theme author / attribution."
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "description": "Semver theme version."
+        },
+        "scheme": {
+          "enum": ["dark", "light"],
+          "description": "Controls the native color-scheme CSS property. Affects form controls, scrollbars (some platforms), and which syntax highlighting theme loads."
+        },
+        "description": {
+          "type": "string",
+          "description": "Short tagline shown in the theme picker."
+        },
+        "preview": {
+          "type": "object",
+          "description": "Color swatches shown in the picker preview tile. Optional — the picker falls back to reading tokens directly.",
+          "additionalProperties": false,
+          "properties": {
+            "background": { "type": "string" },
+            "surface": { "type": "string" },
+            "accent": { "type": "string" },
+            "text": { "type": "string" }
+          }
+        }
+      }
+    },
+    "tokens": {
+      "type": "object",
+      "description": "Design tokens grouped for readability. Group names are organizational — at runtime the leaf key becomes the CSS variable name. Every known token and its default live in styles/theme.css.",
+      "additionalProperties": false,
+      "properties": {
+        "color": { "$ref": "#/$defs/colorTokens" },
+        "elevation": { "$ref": "#/$defs/elevationTokens" },
+        "typography": { "$ref": "#/$defs/typographyTokens" },
+        "radius": { "$ref": "#/$defs/radiusTokens" },
+        "spacing": { "$ref": "#/$defs/spacingTokens" },
+        "motion": { "$ref": "#/$defs/motionTokens" },
+        "layout": { "$ref": "#/$defs/layoutTokens" }
+      }
+    },
+    "colorTokens": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "color-scheme": { "enum": ["dark", "light"] },
+
+        "app-bg":        { "type": "string", "description": "Outermost window background." },
+        "sidebar-bg":    { "type": "string", "description": "Workspace sidebar background." },
+        "sidebar-border": { "type": "string", "description": "Sidebar trailing edge (rarely used with substrate-based depth)." },
+        "panel-bg":      { "type": "string", "description": "Middle substrate layer — sidebar, right rail." },
+        "surface-bg":    { "type": "string", "description": "Raised layer — chat canvas." },
+        "sunken-bg":     { "type": "string", "description": "Recessed wells — composer, code blocks, tool detail." },
+
+        "text-primary":   { "type": "string" },
+        "text-muted":     { "type": "string" },
+        "text-dim":       { "type": "string" },
+        "text-faint":     { "type": "string" },
+        "text-separator": { "type": "string" },
+
+        "accent-primary":     { "type": "string", "description": "Brand wire color." },
+        "accent-primary-rgb": { "type": "string", "description": "RGB triple for rgba() usage, e.g. \"0, 229, 204\"." },
+        "accent-dim":         { "type": "string" },
+        "accent-bg":          { "type": "string" },
+        "accent-bg-strong":   { "type": "string" },
+        "accent-glow":        { "type": "string" },
+
+        "hover-bg":        { "type": "string" },
+        "hover-bg-subtle": { "type": "string" },
+        "selected-bg":     { "type": "string" },
+        "divider":         { "type": "string" },
+        "selection-bg":    { "type": "string" },
+
+        "status-running": { "type": "string" },
+        "status-idle":    { "type": "string" },
+        "status-stopped": { "type": "string" },
+
+        "badge-done": { "type": "string" },
+        "badge-plan": { "type": "string" },
+        "badge-ask":  { "type": "string" },
+
+        "diff-added-bg":     { "type": "string" },
+        "diff-removed-bg":   { "type": "string" },
+        "diff-added-text":   { "type": "string" },
+        "diff-removed-text": { "type": "string" },
+        "diff-hunk-header":  { "type": "string" },
+        "diff-line-number":  { "type": "string" },
+
+        "chat-user-bg":   { "type": "string" },
+        "chat-system-bg": { "type": "string" },
+        "chat-input-bg":  { "type": "string" },
+        "chat-header-bg": { "type": "string" },
+
+        "terminal-tab-bg":        { "type": "string" },
+        "terminal-tab-active-bg": { "type": "string" },
+        "terminal-bg":            { "type": "string" },
+        "terminal-fg":            { "type": "string" },
+        "terminal-cursor":        { "type": "string" },
+        "terminal-selection":     { "type": "string" },
+
+        "toolbar-active":      { "type": "string" },
+        "toolbar-active-text": { "type": "string" },
+
+        "error-bg":     { "type": "string" },
+        "error-border": { "type": "string" },
+        "error-hover":  { "type": "string" },
+
+        "overlay-bg":       { "type": "string" },
+        "overlay-bg-heavy": { "type": "string" },
+
+        "canvas-atmosphere": { "type": "string", "description": "Background gradient for the canvas. Use `none` to disable." },
+        "rim-light":         { "type": "string" },
+        "rim-light-strong":  { "type": "string" }
+      }
+    },
+    "elevationTokens": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "shadow-sm":           { "type": "string" },
+        "shadow-md":           { "type": "string" },
+        "shadow-lg":           { "type": "string" },
+        "shadow-card-hover":   { "type": "string" },
+        "well-shadow":         { "type": "string", "description": "Inset shadow for sunken surfaces (composer, code blocks)." },
+        "composer-ring":       { "type": "string", "description": "box-shadow applied to the chat composer at rest." },
+        "composer-ring-focus": { "type": "string", "description": "box-shadow applied to the chat composer when focused." }
+      }
+    },
+    "typographyTokens": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "font-sans":    { "type": "string", "description": "Primary UI font stack." },
+        "font-mono":    { "type": "string", "description": "Monospace font stack (code, branches, mono UI bits)." },
+        "font-display": { "type": "string", "description": "Optional display font for editorial accents." },
+
+        "font-size-sm":   { "type": "string" },
+        "font-size-base": { "type": "string", "description": "Base UI size. Used by html/body font-size." },
+        "font-size-md":   { "type": "string" },
+        "font-size-lg":   { "type": "string" },
+
+        "font-weight-regular":   { "type": "string" },
+        "font-weight-medium":    { "type": "string" },
+        "font-weight-semibold":  { "type": "string" },
+        "font-weight-bold":      { "type": "string" },
+
+        "line-height-tight":   { "type": "string" },
+        "line-height-normal":  { "type": "string" },
+        "line-height-relaxed": { "type": "string" },
+
+        "letter-spacing-tight": { "type": "string" },
+        "letter-spacing-wide":  { "type": "string" }
+      }
+    },
+    "radiusTokens": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "radius-sm":     { "type": "string" },
+        "radius-md":     { "type": "string" },
+        "radius-lg":     { "type": "string" },
+        "radius-pill":   { "type": "string", "description": "Full-pill radius (use a large value like 999px)." },
+        "border-radius": { "type": "string", "description": "Legacy catch-all radius. Defaults to --radius-md." }
+      }
+    },
+    "spacingTokens": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "space-xs": { "type": "string" },
+        "space-sm": { "type": "string" },
+        "space-md": { "type": "string" },
+        "space-lg": { "type": "string" },
+        "space-xl": { "type": "string" }
+      }
+    },
+    "motionTokens": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "transition-fast":   { "type": "string" },
+        "transition-normal": { "type": "string" },
+        "transition-slow":   { "type": "string" },
+        "ease-standard":     { "type": "string" },
+        "ease-accelerate":   { "type": "string" },
+        "ease-decelerate":   { "type": "string" }
+      }
+    },
+    "layoutTokens": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sidebar-width":            { "type": "string" },
+        "scrollbar-width":          { "type": "string" },
+        "scrollbar-thumb-bg":       { "type": "string" },
+        "scrollbar-thumb-hover-bg": { "type": "string" },
+        "focus-ring":               { "type": "string", "description": "box-shadow applied to :focus-visible." }
+      }
+    }
+  }
+}

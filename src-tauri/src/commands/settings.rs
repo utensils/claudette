@@ -14,11 +14,60 @@ pub(crate) fn spawn_and_reap(mut child: std::process::Child) {
     });
 }
 
+/// A theme definition loaded from disk. Accepts both the new structured
+/// shape (manifest + grouped tokens) and the legacy flat shape (top-level
+/// id/name/colors). The frontend normalizes either into a flat token map
+/// before applying as CSS variables — see `utils/theme.ts`.
 #[derive(Serialize, Deserialize)]
-pub struct ThemeDefinition {
+#[serde(untagged)]
+pub enum ThemeDefinition {
+    Structured(StructuredTheme),
+    Legacy(LegacyTheme),
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct StructuredTheme {
+    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    pub manifest: ThemeManifest,
+    pub tokens: HashMap<String, HashMap<String, String>>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ThemeManifest {
     pub id: String,
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scheme: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<ThemePreview>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ThemePreview {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub surface: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct LegacyTheme {
+    pub id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub colors: HashMap<String, String>,
 }
