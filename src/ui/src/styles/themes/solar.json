@@ -80,19 +80,19 @@
       "overlay-bg": "rgba(60, 40, 20, 0.38)",
       "overlay-bg-heavy": "rgba(40, 28, 14, 0.55)",
 
-      "canvas-atmosphere": "radial-gradient(120% 80% at 50% 0%, rgba(255, 214, 140, 0.22), transparent 65%)",
+      "canvas-atmosphere": "radial-gradient(120% 80% at 50% 0%, rgba(255, 214, 140, 0.24), transparent 65%), url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 140 140'><filter id='p'><feTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.38  0 0 0 0 0.25  0 0 0 0 0.12  0 0 0 0.055 0'/></filter><rect width='100%25' height='100%25' filter='url(%23p)'/></svg>\")",
       "rim-light": "inset 0 1px 0 rgba(60, 40, 20, 0.05)",
-      "rim-light-strong": "inset 0 1px 0 rgba(60, 40, 20, 0.09)",
+      "rim-light-strong": "inset 0 1px 0 rgba(178, 92, 24, 0.14), inset 0 -1px 0 rgba(60, 40, 20, 0.08)",
       "selection-bg": "rgba(178, 92, 24, 0.26)"
     },
     "elevation": {
-      "shadow-sm": "0 1px 2px rgba(60, 40, 20, 0.08)",
-      "shadow-md": "0 4px 14px rgba(60, 40, 20, 0.10)",
-      "shadow-lg": "0 10px 28px rgba(60, 40, 20, 0.14)",
-      "shadow-card-hover": "0 10px 28px rgba(60, 40, 20, 0.14), 0 0 0 1px rgba(178, 92, 24, 0.28)",
-      "well-shadow": "inset 0 2px 5px rgba(60, 40, 20, 0.10)",
-      "composer-ring": "inset 0 0 0 1px rgba(101, 70, 35, 0.20)",
-      "composer-ring-focus": "inset 0 0 0 2px rgba(178, 92, 24, 0.55), 0 2px 10px rgba(178, 92, 24, 0.14)"
+      "shadow-sm": "0 1px 2px rgba(80, 55, 30, 0.10)",
+      "shadow-md": "0 8px 20px -8px rgba(80, 55, 30, 0.22), 0 2px 4px -2px rgba(80, 55, 30, 0.08)",
+      "shadow-lg": "0 18px 40px -14px rgba(80, 55, 30, 0.28), 0 6px 12px -6px rgba(80, 55, 30, 0.10)",
+      "shadow-card-hover": "0 14px 32px -10px rgba(80, 55, 30, 0.26), 0 0 0 1px rgba(178, 92, 24, 0.35)",
+      "well-shadow": "inset 0 2px 6px rgba(80, 55, 30, 0.16), inset 0 1px 0 rgba(60, 40, 20, 0.10)",
+      "composer-ring": "inset 0 0 0 1px rgba(101, 70, 35, 0.24)",
+      "composer-ring-focus": "inset 0 0 0 2px rgba(178, 92, 24, 0.60), 0 0 0 4px rgba(178, 92, 24, 0.12), 0 6px 18px -6px rgba(178, 92, 24, 0.25)"
     },
     "typography": {
       "font-size-sm": "11px",
@@ -135,7 +135,7 @@
       "scrollbar-width": "8px",
       "scrollbar-thumb-bg": "rgba(101, 70, 35, 0.20)",
       "scrollbar-thumb-hover-bg": "rgba(178, 92, 24, 0.40)",
-      "focus-ring": "0 0 0 2px rgba(178, 92, 24, 0.50)"
+      "focus-ring": "0 0 0 2px rgba(178, 92, 24, 0.60), 0 6px 14px rgba(80, 55, 30, 0.18)"
     }
   }
 }

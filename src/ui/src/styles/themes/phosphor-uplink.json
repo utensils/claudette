@@ -36,7 +36,7 @@
       "accent-dim": "#c8873a",
       "accent-bg": "rgba(255, 179, 71, 0.08)",
       "accent-bg-strong": "rgba(255, 179, 71, 0.18)",
-      "accent-glow": "0 0 8px rgba(255, 179, 71, 0.55), 0 0 20px rgba(255, 179, 71, 0.25)",
+      "accent-glow": "0 0 2px rgba(255, 235, 180, 0.85), 0 0 10px rgba(255, 179, 71, 0.60), 0 0 22px rgba(255, 179, 71, 0.28)",
 
       "hover-bg": "rgba(255, 179, 71, 0.07)",
       "hover-bg-subtle": "rgba(255, 179, 71, 0.04)",
@@ -80,7 +80,7 @@
       "overlay-bg": "rgba(4, 7, 10, 0.70)",
       "overlay-bg-heavy": "rgba(4, 7, 10, 0.88)",
 
-      "canvas-atmosphere": "radial-gradient(ellipse 120% 70% at 50% -10%, rgba(255, 179, 71, 0.07), transparent 55%), repeating-linear-gradient(to bottom, transparent 0px, transparent 2px, rgba(255, 179, 71, 0.012) 2px, rgba(255, 179, 71, 0.012) 3px)",
+      "canvas-atmosphere": "repeating-linear-gradient(to bottom, rgba(255, 179, 71, 0.022) 0px, rgba(255, 179, 71, 0.022) 1px, transparent 1px, transparent 3px), radial-gradient(ellipse 120% 70% at 50% -10%, rgba(255, 179, 71, 0.10), transparent 55%)",
       "rim-light": "inset 0 1px 0 rgba(255, 179, 71, 0.05)",
       "rim-light-strong": "inset 0 1px 0 rgba(255, 179, 71, 0.10)",
       "selection-bg": "rgba(255, 179, 71, 0.32)"
@@ -91,8 +91,8 @@
       "shadow-lg": "0 10px 28px rgba(0, 0, 0, 0.75), 0 0 3px rgba(255, 179, 71, 0.10)",
       "shadow-card-hover": "0 8px 24px rgba(0, 0, 0, 0.70), 0 0 0 1px rgba(255, 179, 71, 0.28), 0 0 14px rgba(255, 179, 71, 0.12)",
       "well-shadow": "inset 0 2px 8px rgba(0, 0, 0, 0.70)",
-      "composer-ring": "inset 0 0 0 1px rgba(255, 179, 71, 0.10)",
-      "composer-ring-focus": "inset 0 0 0 1px rgba(255, 179, 71, 0.55), 0 0 12px rgba(255, 179, 71, 0.20)"
+      "composer-ring": "inset 0 0 0 1px rgba(255, 179, 71, 0.18), inset 0 0 0 2px rgba(255, 179, 71, 0.04)",
+      "composer-ring-focus": "inset 0 0 0 1px rgba(255, 235, 180, 0.68), inset 0 0 0 2px rgba(255, 179, 71, 0.45), 0 0 16px rgba(255, 179, 71, 0.38)"
     },
     "typography": {
       "font-size-sm": "11px",

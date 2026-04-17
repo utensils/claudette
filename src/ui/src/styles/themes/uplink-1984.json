@@ -36,7 +36,7 @@
       "accent-dim": "#00b27c",
       "accent-bg": "rgba(0, 255, 179, 0.08)",
       "accent-bg-strong": "rgba(0, 255, 179, 0.18)",
-      "accent-glow": "0 0 14px rgba(0, 255, 179, 0.55), 0 0 2px rgba(0, 255, 179, 0.9)",
+      "accent-glow": "0 0 2px rgba(230, 255, 240, 0.85), 0 0 8px rgba(0, 255, 179, 0.65), 0 0 20px rgba(0, 255, 179, 0.30)",
 
       "hover-bg": "rgba(0, 255, 179, 0.08)",
       "hover-bg-subtle": "rgba(0, 255, 179, 0.04)",
@@ -81,7 +81,7 @@
       "overlay-bg": "rgba(2, 4, 6, 0.70)",
       "overlay-bg-heavy": "rgba(2, 4, 6, 0.88)",
 
-      "canvas-atmosphere": "radial-gradient(130% 90% at 50% 0%, rgba(0, 255, 179, 0.06), transparent 55%), radial-gradient(140% 100% at 50% 120%, rgba(0, 90, 70, 0.08), transparent 60%), repeating-linear-gradient(to bottom, rgba(0, 255, 179, 0.018) 0px, rgba(0, 255, 179, 0.018) 1px, transparent 1px, transparent 3px)",
+      "canvas-atmosphere": "repeating-linear-gradient(to bottom, rgba(0, 255, 179, 0.028) 0px, rgba(0, 255, 179, 0.028) 1px, transparent 1px, transparent 3px), radial-gradient(130% 90% at 50% 0%, rgba(0, 255, 179, 0.08), transparent 55%), radial-gradient(140% 100% at 50% 120%, rgba(0, 90, 70, 0.10), transparent 60%)",
       "rim-light": "inset 0 1px 0 rgba(0, 255, 179, 0.06)",
       "rim-light-strong": "inset 0 1px 0 rgba(0, 255, 179, 0.14)"
     },
@@ -91,8 +91,8 @@
       "shadow-lg": "0 10px 30px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(0, 255, 179, 0.08), 0 0 32px rgba(0, 255, 179, 0.06)",
       "shadow-card-hover": "0 8px 24px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(0, 255, 179, 0.35), 0 0 22px rgba(0, 255, 179, 0.18)",
       "well-shadow": "inset 0 2px 8px rgba(0, 0, 0, 0.75), inset 0 0 0 1px rgba(0, 255, 179, 0.04)",
-      "composer-ring": "inset 0 0 0 1px rgba(0, 255, 179, 0.12)",
-      "composer-ring-focus": "inset 0 0 0 1px rgba(0, 255, 179, 0.6), 0 0 12px rgba(0, 255, 179, 0.25)"
+      "composer-ring": "inset 0 0 0 1px rgba(0, 255, 179, 0.18), inset 0 0 0 2px rgba(0, 255, 179, 0.04)",
+      "composer-ring-focus": "inset 0 0 0 1px rgba(230, 255, 240, 0.70), inset 0 0 0 2px rgba(0, 255, 179, 0.45), 0 0 18px rgba(0, 255, 179, 0.40)"
     },
     "typography": {
       "font-size-sm": "11px",

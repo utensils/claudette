@@ -80,19 +80,19 @@
       "overlay-bg": "rgba(5, 3, 12, 0.70)",
       "overlay-bg-heavy": "rgba(5, 3, 12, 0.88)",
 
-      "canvas-atmosphere": "radial-gradient(120% 80% at 85% 0%, rgba(255, 46, 136, 0.10), transparent 55%), radial-gradient(100% 70% at 15% 100%, rgba(0, 229, 255, 0.08), transparent 60%), linear-gradient(180deg, rgba(179, 136, 255, 0.04), transparent 40%)",
+      "canvas-atmosphere": "repeating-linear-gradient(0deg, rgba(0, 229, 255, 0.020) 0 1px, transparent 1px 3px), radial-gradient(120% 80% at 85% 0%, rgba(255, 46, 136, 0.14), transparent 55%), radial-gradient(100% 70% at 15% 100%, rgba(0, 229, 255, 0.11), transparent 60%), linear-gradient(180deg, rgba(179, 136, 255, 0.05), transparent 40%)",
       "rim-light": "inset 0 1px 0 rgba(255, 46, 136, 0.18)",
       "rim-light-strong": "inset 0 1px 0 rgba(0, 229, 255, 0.22)",
       "selection-bg": "rgba(255, 46, 136, 0.38)"
     },
     "elevation": {
-      "shadow-sm": "0 1px 2px rgba(0, 0, 0, 0.65)",
-      "shadow-md": "0 4px 16px rgba(0, 0, 0, 0.70), 0 0 1px rgba(255, 46, 136, 0.15)",
-      "shadow-lg": "0 12px 36px rgba(0, 0, 0, 0.80), 0 0 2px rgba(179, 136, 255, 0.20)",
-      "shadow-card-hover": "0 10px 30px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 46, 136, 0.45), 0 0 24px rgba(255, 46, 136, 0.25)",
-      "well-shadow": "inset 0 2px 10px rgba(0, 0, 0, 0.75), inset 0 0 0 1px rgba(255, 46, 136, 0.08)",
-      "composer-ring": "inset 0 0 0 1px rgba(179, 136, 255, 0.22), inset 0 0 0 2px rgba(255, 46, 136, 0.06)",
-      "composer-ring-focus": "inset 0 0 0 1px rgba(255, 46, 136, 0.85), inset 0 0 0 2px rgba(0, 229, 255, 0.25), 0 0 24px rgba(255, 46, 136, 0.45)"
+      "shadow-sm": "0 1px 2px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(179, 136, 255, 0.08)",
+      "shadow-md": "0 6px 20px rgba(0, 0, 0, 0.80), 0 0 1px rgba(255, 46, 136, 0.18), 0 0 12px rgba(255, 46, 136, 0.06)",
+      "shadow-lg": "0 18px 48px rgba(0, 0, 0, 0.88), 0 0 2px rgba(179, 136, 255, 0.25), 0 0 32px rgba(0, 229, 255, 0.08)",
+      "shadow-card-hover": "0 10px 30px rgba(0, 0, 0, 0.70), 0 0 0 1px rgba(255, 46, 136, 0.60), 0 0 28px rgba(255, 46, 136, 0.35), 0 0 56px rgba(0, 229, 255, 0.12)",
+      "well-shadow": "inset 0 2px 12px rgba(0, 0, 0, 0.85), inset 0 0 0 1px rgba(255, 46, 136, 0.14), inset 0 -1px 0 rgba(0, 229, 255, 0.10)",
+      "composer-ring": "inset 0 0 0 1px rgba(255, 46, 136, 0.28), inset 0 0 0 2px rgba(0, 229, 255, 0.06)",
+      "composer-ring-focus": "inset 0 0 0 1px rgba(255, 46, 136, 0.95), inset 0 0 0 2px rgba(0, 229, 255, 0.30), 0 0 28px rgba(255, 46, 136, 0.55), 0 0 56px rgba(255, 46, 136, 0.18)"
     },
     "typography": {
       "font-size-sm": "11px",
@@ -135,7 +135,7 @@
       "scrollbar-width": "8px",
       "scrollbar-thumb-bg": "rgba(179, 136, 255, 0.14)",
       "scrollbar-thumb-hover-bg": "rgba(255, 46, 136, 0.40)",
-      "focus-ring": "0 0 0 2px rgba(255, 46, 136, 0.60), 0 0 14px rgba(255, 46, 136, 0.35)"
+      "focus-ring": "0 0 0 1px rgba(255, 46, 136, 0.90), 0 0 0 3px rgba(0, 229, 255, 0.25), 0 0 18px rgba(255, 46, 136, 0.45), 0 0 36px rgba(255, 46, 136, 0.18)"
     }
   }
 }

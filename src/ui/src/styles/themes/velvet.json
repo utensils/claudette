@@ -36,7 +36,7 @@
       "accent-dim": "#a4904f",
       "accent-bg": "rgba(212, 184, 106, 0.08)",
       "accent-bg-strong": "rgba(212, 184, 106, 0.16)",
-      "accent-glow": "0 0 10px rgba(212, 184, 106, 0.22)",
+      "accent-glow": "0 0 24px rgba(212, 184, 106, 0.22), 0 0 56px rgba(212, 184, 106, 0.09)",
 
       "hover-bg": "rgba(255, 250, 235, 0.05)",
       "hover-bg-subtle": "rgba(255, 250, 235, 0.03)",
@@ -80,19 +80,19 @@
       "overlay-bg": "rgba(5, 6, 14, 0.62)",
       "overlay-bg-heavy": "rgba(5, 6, 14, 0.82)",
 
-      "canvas-atmosphere": "radial-gradient(130% 90% at 50% 0%, rgba(212, 184, 106, 0.035), transparent 65%)",
+      "canvas-atmosphere": "radial-gradient(70% 55% at 50% -10%, rgba(212, 184, 106, 0.07), transparent 55%), radial-gradient(140% 90% at 50% 120%, rgba(4, 6, 22, 0.65), transparent 70%)",
       "rim-light": "inset 0 1px 0 rgba(255, 250, 235, 0.035)",
-      "rim-light-strong": "inset 0 1px 0 rgba(255, 250, 235, 0.06)",
+      "rim-light-strong": "inset 0 1px 0 rgba(212, 184, 106, 0.18), inset 0 -1px 0 rgba(4, 6, 22, 0.60)",
       "selection-bg": "rgba(212, 184, 106, 0.28)"
     },
     "elevation": {
-      "shadow-sm": "0 1px 2px rgba(0, 0, 0, 0.45)",
-      "shadow-md": "0 6px 18px rgba(0, 0, 0, 0.55)",
-      "shadow-lg": "0 16px 40px rgba(0, 0, 0, 0.65)",
-      "shadow-card-hover": "0 10px 28px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(212, 184, 106, 0.18)",
-      "well-shadow": "inset 0 2px 8px rgba(0, 0, 0, 0.55)",
-      "composer-ring": "inset 0 0 0 1px rgba(255, 250, 235, 0.05)",
-      "composer-ring-focus": "inset 0 0 0 1px rgba(212, 184, 106, 0.40)"
+      "shadow-sm": "0 1px 2px rgba(4, 6, 22, 0.55)",
+      "shadow-md": "0 10px 30px -14px rgba(4, 6, 22, 0.80)",
+      "shadow-lg": "0 28px 56px -22px rgba(4, 6, 22, 0.90)",
+      "shadow-card-hover": "0 20px 40px -18px rgba(4, 6, 22, 0.85), 0 0 0 1px rgba(212, 184, 106, 0.22)",
+      "well-shadow": "inset 0 2px 10px rgba(4, 6, 22, 0.70), inset 0 0 0 1px rgba(255, 250, 235, 0.02)",
+      "composer-ring": "inset 0 0 0 1px rgba(255, 250, 235, 0.06), inset 0 0 0 2px rgba(212, 184, 106, 0.045)",
+      "composer-ring-focus": "inset 0 0 0 1px rgba(212, 184, 106, 0.65)"
     },
     "typography": {
       "font-size-sm": "11px",
@@ -135,7 +135,7 @@
       "scrollbar-width": "8px",
       "scrollbar-thumb-bg": "rgba(255, 250, 235, 0.06)",
       "scrollbar-thumb-hover-bg": "rgba(212, 184, 106, 0.22)",
-      "focus-ring": "0 0 0 2px rgba(212, 184, 106, 0.45)"
+      "focus-ring": "0 0 0 1px rgba(212, 184, 106, 0.75), 0 0 0 4px rgba(212, 184, 106, 0.10)"
     }
   }
 }

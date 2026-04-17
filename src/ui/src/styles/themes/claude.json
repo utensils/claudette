@@ -36,7 +36,7 @@
       "accent-dim": "#b75f42",
       "accent-bg": "rgba(217, 119, 87, 0.08)",
       "accent-bg-strong": "rgba(217, 119, 87, 0.18)",
-      "accent-glow": "0 0 16px rgba(217, 119, 87, 0.35)",
+      "accent-glow": "0 0 14px rgba(217, 119, 87, 0.45), 0 0 36px rgba(217, 119, 87, 0.18), 0 0 2px rgba(232, 178, 106, 0.55)",
 
       "hover-bg": "rgba(245, 237, 224, 0.06)",
       "hover-bg-subtle": "rgba(245, 237, 224, 0.035)",
@@ -80,19 +80,19 @@
       "overlay-bg": "rgba(15, 12, 10, 0.62)",
       "overlay-bg-heavy": "rgba(15, 12, 10, 0.82)",
 
-      "canvas-atmosphere": "radial-gradient(140% 90% at 50% -10%, rgba(217, 119, 87, 0.05), transparent 55%), radial-gradient(100% 60% at 50% 0%, rgba(232, 178, 106, 0.025), transparent 70%)",
-      "rim-light": "inset 0 1px 0 rgba(245, 237, 224, 0.05)",
-      "rim-light-strong": "inset 0 1px 0 rgba(245, 237, 224, 0.08)",
+      "canvas-atmosphere": "radial-gradient(140% 90% at 50% -10%, rgba(217, 119, 87, 0.06), transparent 55%), radial-gradient(100% 60% at 50% 0%, rgba(232, 178, 106, 0.03), transparent 70%), url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.94  0 0 0 0 0.89  0 0 0 0 0.83  0 0 0 0.035 0'/></filter><rect width='100%25' height='100%25' filter='url(%23g)'/></svg>\")",
+      "rim-light": "inset 0 1px 0 rgba(245, 237, 224, 0.06)",
+      "rim-light-strong": "inset 0 1px 0 rgba(232, 178, 106, 0.14)",
       "selection-bg": "rgba(217, 119, 87, 0.32)"
     },
     "elevation": {
       "shadow-sm": "0 1px 2px rgba(15, 12, 10, 0.55)",
-      "shadow-md": "0 6px 20px -10px rgba(26, 20, 16, 0.65)",
-      "shadow-lg": "0 14px 36px -12px rgba(15, 12, 10, 0.75)",
-      "shadow-card-hover": "0 10px 28px -10px rgba(15, 12, 10, 0.65), 0 0 0 1px rgba(217, 119, 87, 0.22)",
-      "well-shadow": "inset 0 2px 6px rgba(8, 6, 4, 0.55)",
-      "composer-ring": "inset 0 0 0 1px rgba(217, 119, 87, 0.14)",
-      "composer-ring-focus": "inset 0 0 0 1px rgba(217, 119, 87, 0.65), 0 0 0 3px rgba(217, 119, 87, 0.12)"
+      "shadow-md": "0 8px 24px -10px rgba(26, 20, 16, 0.75), 0 2px 4px -2px rgba(26, 20, 16, 0.45)",
+      "shadow-lg": "0 20px 44px -16px rgba(15, 12, 10, 0.85), 0 6px 12px -6px rgba(26, 20, 16, 0.55)",
+      "shadow-card-hover": "0 14px 32px -12px rgba(15, 12, 10, 0.80), 0 0 0 1px rgba(217, 119, 87, 0.30), 0 0 20px rgba(217, 119, 87, 0.12)",
+      "well-shadow": "inset 0 2px 8px rgba(8, 6, 4, 0.70), inset 0 -1px 0 rgba(245, 237, 224, 0.035)",
+      "composer-ring": "inset 0 0 0 1px rgba(217, 119, 87, 0.18), inset 0 1px 0 rgba(245, 237, 224, 0.04)",
+      "composer-ring-focus": "inset 0 0 0 1px rgba(217, 119, 87, 0.70), 0 0 0 3px rgba(217, 119, 87, 0.14), 0 8px 24px -8px rgba(217, 119, 87, 0.30)"
     },
     "typography": {
       "font-size-sm": "11px",
@@ -135,7 +135,7 @@
       "scrollbar-width": "8px",
       "scrollbar-thumb-bg": "rgba(245, 237, 224, 0.07)",
       "scrollbar-thumb-hover-bg": "rgba(217, 119, 87, 0.30)",
-      "focus-ring": "0 0 0 2px rgba(217, 119, 87, 0.50)"
+      "focus-ring": "0 0 0 2px rgba(217, 119, 87, 0.60), 0 4px 14px rgba(217, 119, 87, 0.22)"
     }
   }
 }

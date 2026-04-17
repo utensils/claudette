@@ -36,7 +36,7 @@
       "accent-dim": "#b8822a",
       "accent-bg": "rgba(232, 165, 60, 0.09)",
       "accent-bg-strong": "rgba(232, 165, 60, 0.20)",
-      "accent-glow": "0 0 18px rgba(232, 165, 60, 0.28)",
+      "accent-glow": "0 0 14px rgba(232, 165, 60, 0.40), 0 0 40px rgba(232, 165, 60, 0.14)",
 
       "hover-bg": "rgba(236, 220, 192, 0.06)",
       "hover-bg-subtle": "rgba(236, 220, 192, 0.035)",
@@ -135,7 +135,7 @@
       "scrollbar-width": "10px",
       "scrollbar-thumb-bg": "rgba(236, 220, 192, 0.07)",
       "scrollbar-thumb-hover-bg": "rgba(232, 165, 60, 0.28)",
-      "focus-ring": "0 0 0 2px rgba(232, 165, 60, 0.55)"
+      "focus-ring": "0 0 0 2px rgba(232, 165, 60, 0.60), 0 0 18px rgba(232, 165, 60, 0.30)"
     }
   }
 }
