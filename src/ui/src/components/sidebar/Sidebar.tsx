@@ -77,14 +77,25 @@ export const Sidebar = memo(function Sidebar() {
   const spinnerChar = useSpinnerFrame(anyRunning);
 
   const creatingRef = useRef(false);
+  const archivingRef = useRef<Set<string>>(new Set());
+  const restoringRef = useRef<Set<string>>(new Set());
+  const [creatingWorkspace, setCreatingWorkspace] = useState<{ repoId: string } | null>(null);
 
   const handleCreateWorkspace = useCallback(async (repoId: string) => {
     if (creatingRef.current) return;
     creatingRef.current = true;
+
+    // Show optimistic loading workspace
+    setCreatingWorkspace({ repoId });
+
     try {
       const generated = await generateWorkspaceName();
       // Always skip setup initially — we'll prompt for confirmation if needed.
       const result = await createWorkspace(repoId, generated.slug, true);
+
+      // Remove optimistic workspace
+      setCreatingWorkspace(null);
+
       addWorkspace(result.workspace);
       selectWorkspace(result.workspace.id);
       if (generated.message) {
@@ -147,6 +158,7 @@ export const Sidebar = memo(function Sidebar() {
       }
     } catch (e) {
       console.error("Failed to create workspace:", e);
+      setCreatingWorkspace(null);
     } finally {
       creatingRef.current = false;
     }
@@ -162,6 +174,8 @@ export const Sidebar = memo(function Sidebar() {
   );
 
   const handleArchive = useCallback(async (wsId: string) => {
+    if (archivingRef.current.has(wsId)) return;
+    archivingRef.current.add(wsId);
     try {
       await archiveWorkspace(wsId);
       updateWorkspace(wsId, {
@@ -170,17 +184,23 @@ export const Sidebar = memo(function Sidebar() {
         agent_status: "Stopped",
       });
       if (useAppStore.getState().selectedWorkspaceId === wsId) selectWorkspace(null);
-    } catch {
-      // ignore
+    } catch (e) {
+      console.error("Failed to archive workspace:", e);
+    } finally {
+      archivingRef.current.delete(wsId);
     }
   }, [updateWorkspace, selectWorkspace]);
 
   const handleRestore = useCallback(async (wsId: string) => {
+    if (restoringRef.current.has(wsId)) return;
+    restoringRef.current.add(wsId);
     try {
       const path = await restoreWorkspace(wsId);
       updateWorkspace(wsId, { status: "Active", worktree_path: path });
-    } catch {
-      // ignore
+    } catch (e) {
+      console.error("Failed to restore workspace:", e);
+    } finally {
+      restoringRef.current.delete(wsId);
     }
   }, [updateWorkspace]);
 
@@ -566,6 +586,19 @@ export const Sidebar = memo(function Sidebar() {
                   </div>
                   );
                 })}
+              {/* Show loading workspace while creating */}
+              {!collapsed && creatingWorkspace && creatingWorkspace.repoId === repo.id && (
+                <div className={`${styles.wsItem} ${styles.wsItemLoading}`}>
+                  <span className={styles.statusSpinner} aria-hidden="true">
+                    {spinnerChar}
+                  </span>
+                  <div className={styles.wsInfo}>
+                    <span className={styles.wsName} style={{ opacity: 0.5 }}>
+                      Creating workspace...
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
           );
         })}

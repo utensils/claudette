@@ -295,6 +295,12 @@
   background: var(--accent-primary);
 }
 
+.wsItemLoading {
+  opacity: 0.6;
+  cursor: default;
+  pointer-events: none;
+}
+
 .statusDot {
   width: 6px;
   height: 6px;
