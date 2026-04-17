@@ -59,14 +59,14 @@
   flex: 1;
   height: 3px;
   background: var(--hover-bg);
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
 }
 
 .progressFill {
   height: 100%;
   background: var(--accent-primary);
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   transition: width 0.3s ease;
 }
 
@@ -103,7 +103,7 @@
   padding: 10px 14px;
   background: var(--hover-bg-subtle);
   border: 1px solid var(--divider);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   text-align: left;
   color: var(--text-primary);
@@ -141,7 +141,7 @@
   padding: 10px 14px;
   background: rgba(var(--accent-primary-rgb), 0.1);
   border: 1px solid rgba(var(--accent-primary-rgb), 0.25);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   color: var(--accent-primary);
   font-size: 13px;
   font-weight: 600;
@@ -181,7 +181,7 @@
   flex: 1;
   background: var(--hover-bg-subtle);
   border: 1px solid var(--divider);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 10px 14px;
   color: var(--text-primary);
   font-size: 13px;
@@ -207,7 +207,7 @@
   border: 1px solid rgba(var(--accent-primary-rgb), 0.25);
   color: var(--accent-dim);
   padding: 10px 16px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   font-size: 13px;
   font-weight: 500;
@@ -234,7 +234,7 @@
 
 .navBtn {
   padding: 8px 18px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;

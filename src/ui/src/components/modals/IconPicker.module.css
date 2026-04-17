@@ -16,7 +16,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--selected-bg);
   border: 1px solid var(--divider);
   flex-shrink: 0;
@@ -39,7 +39,7 @@
   font-size: 11px;
   cursor: pointer;
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .clearBtn:hover {
@@ -51,7 +51,7 @@
   width: 100%;
   background: var(--chat-input-bg);
   border: 1px solid var(--divider);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 6px 10px;
   color: var(--text-primary);
   font-size: 12px;
@@ -69,7 +69,7 @@
   max-height: 180px;
   overflow-y: auto;
   border: 1px solid var(--divider);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 4px;
   background: var(--chat-input-bg);
 }
@@ -81,7 +81,7 @@
   width: 32px;
   height: 32px;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--text-muted);
   cursor: pointer;

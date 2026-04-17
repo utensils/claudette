@@ -16,7 +16,7 @@
   align-items: flex-start;
   gap: 8px;
   padding: 5px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   font-size: 12px;
   transition: background var(--transition-fast);
 }
@@ -53,7 +53,7 @@
   font-size: 10px;
   font-weight: 600;
   padding: 0 4px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   line-height: 18px;
 }
 

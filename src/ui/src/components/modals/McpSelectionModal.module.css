@@ -25,7 +25,7 @@
   align-items: flex-start;
   gap: 8px;
   padding: 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   font-size: 13px;
 }
@@ -58,7 +58,7 @@
 .badge {
   font-size: 10px;
   padding: 1px 5px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: var(--selected-bg);
   color: var(--text-dim);
   text-transform: uppercase;

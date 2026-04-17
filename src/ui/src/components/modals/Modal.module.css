@@ -13,7 +13,7 @@
 .card {
   background: var(--app-bg);
   border: 1px solid var(--sidebar-border);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   width: 420px;
   max-height: 80vh;
   overflow-y: auto;

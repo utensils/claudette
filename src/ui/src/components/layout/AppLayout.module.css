@@ -51,7 +51,7 @@
   contain: layout style;
   background: var(--surface-bg);
   background-image: var(--canvas-atmosphere);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   box-shadow: var(--rim-light), var(--shadow-md);
   position: relative;
 }
@@ -81,7 +81,7 @@
   background: var(--panel-bg);
   overflow-y: auto;
   contain: layout style paint;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   box-shadow: var(--rim-light);
 }
 

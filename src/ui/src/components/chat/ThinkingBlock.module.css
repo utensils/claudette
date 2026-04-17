@@ -1,6 +1,6 @@
 .container {
   border: 1px solid var(--divider);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   margin: 4px 0;
   overflow: hidden;
   transition: border-color var(--transition-fast);

@@ -42,7 +42,7 @@
   margin-bottom: 14px;
   background: var(--hover-bg-subtle);
   border: 1px solid var(--divider);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   color: var(--accent-primary);
   font-size: 13px;
   font-family: var(--font-mono, monospace);
@@ -63,7 +63,7 @@
 .planContent {
   background: var(--hover-bg-subtle);
   border: 1px solid var(--divider);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 14px 18px;
   margin-bottom: 14px;
   max-height: 400px;
@@ -114,14 +114,14 @@
   font-size: 0.9em;
   background: rgba(255, 255, 255, 0.06);
   padding: 0.15em 0.4em;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .planContent pre {
   margin: 0.6em 0;
   padding: 10px 12px;
   background: rgba(0, 0, 0, 0.25);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   overflow-x: auto;
 }
 
@@ -235,7 +235,7 @@
   color: var(--text-dim);
   padding: 4px 8px;
   background: var(--hover-bg-subtle);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .permTool {
@@ -254,7 +254,7 @@
   padding: 10px 14px;
   background: rgba(var(--accent-primary-rgb), 0.1);
   border: 1px solid rgba(var(--accent-primary-rgb), 0.25);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   color: var(--accent-primary);
   font-size: 13px;
   font-weight: 600;
@@ -270,7 +270,7 @@
   padding: 10px 14px;
   background: transparent;
   border: 1px solid var(--divider);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   color: var(--text-dim);
   font-size: 13px;
   font-weight: 500;

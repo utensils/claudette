@@ -44,7 +44,7 @@
   background: var(--hover-bg);
   color: var(--text-dim);
   padding: 0 5px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   line-height: 16px;
 }
 
@@ -74,7 +74,7 @@
   border: 1px solid var(--divider);
   color: var(--text-dim);
   padding: 1px 6px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   font-size: 14px;
   transition: color var(--transition-fast), background var(--transition-fast);
@@ -103,7 +103,7 @@
   align-items: center;
   gap: 8px;
   padding: 5px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   font-size: 12px;
   font-family: var(--font-mono);

@@ -12,7 +12,7 @@
   min-width: 210px;
   background: var(--sidebar-bg);
   border: 1px solid var(--sidebar-border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 4px;
   z-index: 100;
   box-shadow: var(--shadow-lg);
@@ -35,7 +35,7 @@
   width: 100%;
   padding: 6px 8px;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text-primary);
   font-size: 13px;

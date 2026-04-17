@@ -8,7 +8,7 @@
   padding: 6px 14px;
   background: var(--chat-input-bg);
   border: 1px solid var(--divider);
-  border-radius: 20px;
+  border-radius: var(--radius-lg);
   color: var(--accent-primary);
   font-size: 12px;
   font-weight: 500;
