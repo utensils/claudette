@@ -1,9 +1,17 @@
-/* Velvet — theatrical spotlight vignette, champagne hairlines. */
+/* Velvet — narrow theatrical spotlight + diagonal gold pinstripe. Opera curtain drama. */
 
 body[data-theme="velvet"] [class*="messages_"] {
   background-image:
-    radial-gradient(55% 45% at 50% -10%, rgba(212, 184, 106, 0.10), transparent 60%),
-    radial-gradient(140% 100% at 50% 50%, transparent 40%, rgba(4, 6, 18, 0.55) 100%);
+    radial-gradient(22% 18% at 50% -4%, rgba(255, 218, 140, 0.32), transparent 70%),
+    radial-gradient(40% 35% at 50% 0%, rgba(212, 184, 106, 0.16), transparent 75%),
+    radial-gradient(140% 110% at 50% 55%, transparent 30%, rgba(2, 2, 10, 0.72) 100%),
+    repeating-linear-gradient(
+      135deg,
+      rgba(212, 184, 106, 0.04) 0px,
+      rgba(212, 184, 106, 0.04) 1px,
+      transparent 1px,
+      transparent 7px
+    );
   background-attachment: fixed;
 }
 
@@ -29,7 +37,7 @@ body[data-theme="velvet"] [class*="roleLabel_"]::after {
 body[data-theme="velvet"] [class*="composer_"] {
   background-image: linear-gradient(
     180deg,
-    rgba(212, 184, 106, 0.025),
+    rgba(212, 184, 106, 0.035),
     transparent 40%
   );
 }

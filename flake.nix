@@ -291,6 +291,9 @@
               pkgs.cmake
               pkgs.perl
               pkgs.cargo-llvm-cov
+              # UAT tooling for the claudette-debug skill — `magick montage`
+              # drives the theme contact-sheet generator.
+              pkgs.imagemagick
             ]
             ++ darwinBuildInputs
             ++ linuxBuildInputs

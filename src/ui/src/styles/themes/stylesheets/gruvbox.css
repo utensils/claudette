@@ -1,10 +1,18 @@
-/* Gruvbox — ochre paper grain, warm retro underlines, mono tracking. */
+/* Gruvbox — ochre fiber paper + diagonal mono-pinstripe. Worn graph paper. */
 
 body[data-theme="gruvbox"] [class*="messages_"] {
   background-image:
-    radial-gradient(100% 70% at 50% 0%, rgba(254, 128, 25, 0.05), transparent 70%),
-    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.72' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.92  0 0 0 0 0.70  0 0 0 0 0.30  0 0 0 0.035 0'/></filter><rect width='100%25' height='100%25' filter='url(%23g)'/></svg>");
-  background-attachment: fixed, local;
+    repeating-linear-gradient(
+      45deg,
+      rgba(254, 128, 25, 0.035) 0px,
+      rgba(254, 128, 25, 0.035) 1px,
+      transparent 1px,
+      transparent 6px
+    ),
+    radial-gradient(100% 70% at 50% 0%, rgba(254, 128, 25, 0.09), transparent 70%),
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.62' numOctaves='3' stitchTiles='stitch' seed='11'/><feColorMatrix values='0 0 0 0 0.95  0 0 0 0 0.66  0 0 0 0 0.22  0 0 0 0.11 0'/></filter><rect width='100%25' height='100%25' filter='url(%23g)'/></svg>");
+  background-size: auto, auto, 200px 200px;
+  background-attachment: fixed, fixed, local;
 }
 
 body[data-theme="gruvbox"] [class*="wsSelected_"] {

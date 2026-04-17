@@ -1,16 +1,28 @@
-/* Solar — letterpress paper, warm page edges, amber underlines. */
+/* Solar — sepia paper-grain + golden-hour conic sunrise. Desert solstice. */
 
 body[data-theme="solar"] [class*="messages_"] {
   background-image:
-    radial-gradient(120% 80% at 50% 0%, rgba(178, 92, 24, 0.06), transparent 60%),
-    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.92' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.35  0 0 0 0 0.22  0 0 0 0 0.10  0 0 0 0.05 0'/></filter><rect width='100%25' height='100%25' filter='url(%23g)'/></svg>");
-  background-attachment: fixed, local;
+    conic-gradient(
+      from 210deg at 50% 120%,
+      rgba(255, 180, 80, 0.22) 0deg,
+      rgba(255, 140, 60, 0.28) 30deg,
+      rgba(220, 90, 40, 0.22) 60deg,
+      rgba(130, 60, 30, 0.12) 95deg,
+      rgba(80, 40, 20, 0.08) 130deg,
+      rgba(130, 60, 30, 0.12) 230deg,
+      rgba(255, 180, 80, 0.22) 300deg,
+      rgba(255, 180, 80, 0.22) 360deg
+    ),
+    radial-gradient(70% 45% at 50% 100%, rgba(255, 200, 110, 0.28), transparent 70%),
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.78' numOctaves='3' stitchTiles='stitch' seed='4'/><feColorMatrix values='0 0 0 0 0.42  0 0 0 0 0.24  0 0 0 0 0.10  0 0 0 0.12 0'/></filter><rect width='100%25' height='100%25' filter='url(%23g)'/></svg>");
+  background-size: auto, auto, 200px 200px;
+  background-attachment: fixed, fixed, local;
 }
 
 body[data-theme="solar"] [class*="panel_"] {
   box-shadow:
-    inset 1px 0 0 rgba(178, 92, 24, 0.10),
-    inset -1px 0 0 rgba(178, 92, 24, 0.06);
+    inset 1px 0 0 rgba(178, 92, 24, 0.12),
+    inset -1px 0 0 rgba(178, 92, 24, 0.08);
 }
 
 body[data-theme="solar"] [class*="wsSelected_"] {

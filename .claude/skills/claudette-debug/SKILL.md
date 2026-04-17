@@ -42,6 +42,7 @@ All scripts live in `${CLAUDE_SKILL_DIR}/scripts/`:
 | `scripts/debug-monitor.sh` | Long-running session monitor (readable key names) |
 | `scripts/debug-wait.sh` | Poll until agent idle, return summary JSON |
 | `scripts/debug-screenshot.sh` | Cross-platform screenshot capture |
+| `scripts/debug-contact-sheet.sh` | Cycle every built-in theme and build a labeled contact-sheet grid via ImageMagick. macOS only today. Requires `magick` in PATH (devshell ships it). |
 
 **IMPORTANT**: Always reference scripts via `${CLAUDE_SKILL_DIR}/scripts/` to ensure correct resolution regardless of working directory.
 

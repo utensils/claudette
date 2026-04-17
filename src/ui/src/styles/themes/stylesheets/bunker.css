@@ -1,11 +1,28 @@
-/* Bunker — concrete block grid, hard shadows, ALL CAPS brutalism. */
+/* Bunker — blueprint grid + architectural I-beam silhouettes in corners. Industrial. */
+
+body[data-theme="bunker"] [class*="messages_"] {
+  background-image:
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='340' height='340' viewBox='0 0 340 340'><g fill='rgba(255,255,255,0.055)'><path d='M10 14 h70 v10 h-28 v62 h28 v10 h-70 v-10 h28 v-62 h-28 z'/><path d='M270 250 h60 v8 h-24 v54 h24 v8 h-60 v-8 h24 v-54 h-24 z'/><rect x='20' y='260' width='46' height='46'/><rect x='72' y='260' width='46' height='46'/><rect x='20' y='312' width='46' height='18'/></g></svg>"),
+    linear-gradient(rgba(255, 255, 255, 0.065) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.065) 1px, transparent 1px),
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size:
+    340px 340px,
+    100px 100px,
+    100px 100px,
+    20px 20px,
+    20px 20px;
+  background-position: 0 0, 0 0, 0 0, 0 0, 0 0;
+  background-repeat: no-repeat, repeat, repeat, repeat, repeat;
+  background-attachment: fixed;
+}
 
 body[data-theme="bunker"] [class*="sidebar_"] {
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'><filter id='c'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.04 0'/></filter><rect width='100%25' height='100%25' filter='url(%23c)'/></svg>");
-  background-size: 32px 32px, 32px 32px, 120px 120px;
+    linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  background-size: 20px 20px, 20px 20px;
 }
 
 body[data-theme="bunker"] [class*="wsItem_"] {
@@ -21,13 +38,4 @@ body[data-theme="bunker"] [class*="roleLabel_"] {
   text-transform: uppercase;
   font-weight: 800;
   letter-spacing: 0.12em;
-}
-
-body[data-theme="bunker"] [class*="messages_"] {
-  background-image: repeating-linear-gradient(
-    135deg,
-    transparent 0 22px,
-    rgba(255, 255, 255, 0.012) 22px 23px
-  );
-  background-attachment: fixed;
 }

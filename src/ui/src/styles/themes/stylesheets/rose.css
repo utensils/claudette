@@ -1,11 +1,17 @@
-/* Rosé — watercolor wash, soft lilac halos, pastel warmth. */
+/* Rosé — pastel watercolor mesh + floral SVG silhouette in corner. */
 
 body[data-theme="rose"] [class*="messages_"] {
   background-image:
-    radial-gradient(60% 45% at 20% 0%, rgba(235, 188, 186, 0.10), transparent 65%),
-    radial-gradient(55% 45% at 85% 15%, rgba(196, 167, 231, 0.09), transparent 70%),
-    radial-gradient(70% 55% at 50% 100%, rgba(246, 193, 119, 0.05), transparent 70%);
-  background-attachment: fixed;
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='280' height='280' viewBox='0 0 280 280'><g fill='rgba(235,188,186,0.22)'><circle cx='40' cy='40' r='12'/><circle cx='54' cy='32' r='9'/><circle cx='56' cy='50' r='9'/><circle cx='28' cy='50' r='9'/><circle cx='40' cy='58' r='9'/><circle cx='40' cy='40' r='5' fill='rgba(246,193,119,0.35)'/></g><g fill='rgba(196,167,231,0.18)'><ellipse cx='95' cy='22' rx='18' ry='6' transform='rotate(-30 95 22)'/><ellipse cx='14' cy='90' rx='18' ry='6' transform='rotate(60 14 90)'/></g></svg>"),
+    radial-gradient(50% 40% at 15% -5%, rgba(235, 188, 186, 0.30), transparent 70%),
+    radial-gradient(50% 45% at 90% 10%, rgba(196, 167, 231, 0.26), transparent 72%),
+    radial-gradient(55% 50% at 85% 95%, rgba(246, 193, 119, 0.22), transparent 72%),
+    radial-gradient(60% 50% at 15% 100%, rgba(252, 211, 212, 0.24), transparent 70%),
+    radial-gradient(40% 40% at 50% 50%, rgba(235, 188, 220, 0.10), transparent 75%);
+  background-size: 280px 280px, auto, auto, auto, auto, auto;
+  background-position: left 8px top 8px, 0 0, 0 0, 0 0, 0 0, 0 0;
+  background-repeat: no-repeat, no-repeat, no-repeat, no-repeat, no-repeat, no-repeat;
+  background-attachment: local, fixed, fixed, fixed, fixed, fixed;
 }
 
 body[data-theme="rose"] [class*="composer_"] {
