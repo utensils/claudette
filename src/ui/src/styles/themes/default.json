@@ -81,8 +81,8 @@
       "overlay-bg-heavy": "rgba(0, 0, 0, 0.75)",
 
       "canvas-atmosphere": "radial-gradient(120% 80% at 50% 0%, rgba(255, 255, 255, 0.03), transparent 60%)",
-      "rim-light": "rgba(255, 255, 255, 0.04)",
-      "rim-light-strong": "rgba(255, 255, 255, 0.08)",
+      "rim-light": "inset 0 1px 0 rgba(255, 255, 255, 0.04)",
+      "rim-light-strong": "inset 0 1px 0 rgba(255, 255, 255, 0.08)",
       "selection-bg": "rgba(249, 204, 108, 0.30)"
     },
     "elevation": {
@@ -95,9 +95,6 @@
       "composer-ring-focus": "inset 0 0 0 1px rgba(249, 204, 108, 0.45)"
     },
     "typography": {
-      "font-sans": "\"Instrument Sans\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif",
-      "font-mono": "\"JetBrains Mono\", ui-monospace, \"SF Mono\", \"Cascadia Code\", monospace",
-      "font-display": "\"Instrument Serif\", \"Iowan Old Style\", Georgia, serif",
       "font-size-sm": "11px",
       "font-size-base": "13px",
       "font-size-md": "14px",
@@ -135,7 +132,6 @@
       "ease-decelerate": "cubic-bezier(0, 0, 0.2, 1)"
     },
     "layout": {
-      "sidebar-width": "260px",
       "scrollbar-width": "8px",
       "scrollbar-thumb-bg": "rgba(255, 255, 255, 0.08)",
       "scrollbar-thumb-hover-bg": "rgba(249, 204, 108, 0.25)",

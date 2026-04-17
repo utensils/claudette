@@ -109,8 +109,40 @@ export function normalizeTheme(theme: ThemeDefinition): {
     author: theme.author,
     description: theme.description,
     scheme: detectScheme(theme.colors),
-    tokens: theme.colors,
+    tokens: backfillLegacyShellTokens(theme.colors),
   };
+}
+
+/**
+ * Legacy flat themes predate the substrate-layer system (`panel-bg`,
+ * `surface-bg`, `sunken-bg`). Without these, the refactored app shell
+ * would render old themes with a mismatched palette — the sidebar and
+ * canvas would fall back to the built-in defaults instead of the
+ * theme's colors. Synthesize reasonable aliases from the legacy tokens
+ * the old theme *does* define so the overall palette stays coherent.
+ *
+ * Priority order per target:
+ *   panel-bg   ← sidebar-bg ← app-bg
+ *   surface-bg ← app-bg adjusted slightly lighter (we just reuse app-bg)
+ *   sunken-bg  ← chat-input-bg ← app-bg
+ */
+function backfillLegacyShellTokens(
+  colors: Record<string, string>,
+): Record<string, string> {
+  const out = { ...colors };
+  if (!("panel-bg" in out)) {
+    const fallback = out["sidebar-bg"] ?? out["app-bg"];
+    if (fallback) out["panel-bg"] = fallback;
+  }
+  if (!("surface-bg" in out)) {
+    const fallback = out["app-bg"] ?? out["panel-bg"];
+    if (fallback) out["surface-bg"] = fallback;
+  }
+  if (!("sunken-bg" in out)) {
+    const fallback = out["chat-input-bg"] ?? out["app-bg"];
+    if (fallback) out["sunken-bg"] = fallback;
+  }
+  return out;
 }
 
 function detectScheme(tokens: Record<string, string>): "dark" | "light" {

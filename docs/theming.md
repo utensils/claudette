@@ -132,7 +132,7 @@ See `theme.css` for the full list. Every `--var` declared there is overridable.
 | Token | Use |
 |---|---|
 | `canvas-atmosphere` | `background` value applied behind the chat canvas. Use `none` to disable, or replace with your own gradients. |
-| `rim-light` / `rim-light-strong` | `inset 0 1px 0 …` top-edge highlights on raised surfaces. |
+| `rim-light` / `rim-light-strong` | Full `box-shadow` values (typically `inset 0 1px 0 <color>`) applied as 1px top-edge highlights on raised surfaces. Use `none` to disable. |
 
 ### `elevation` — shadow language
 
@@ -148,15 +148,16 @@ See `theme.css` for the full list. Every `--var` declared there is overridable.
 
 ### `typography`
 
+Typographic **scale** only — sizes, weights, line-heights, letter-spacing. Font **families** are intentionally NOT themable so every theme shares a consistent typographic voice. Users who want different fonts set them in **Settings → Appearance**, which applies on top of the theme.
+
 | Token | Default | Notes |
 |---|---|---|
-| `font-sans` | Instrument Sans | UI body. |
-| `font-mono` | JetBrains Mono | Code, branches, terminal UI bits. |
-| `font-display` | Instrument Serif | Optional editorial accent (the italic "Workspaces" eyebrow). |
 | `font-size-sm` / `-base` / `-md` / `-lg` | 11 / 13 / 14 / 16 px | Use these instead of raw `px` in component CSS. |
 | `font-weight-regular` / `-medium` / `-semibold` / `-bold` | 400 / 500 / 600 / 700 | |
 | `line-height-tight` / `-normal` / `-relaxed` | 1.3 / 1.55 / 1.7 | |
 | `letter-spacing-tight` / `-wide` | -0.01em / 0.05em | |
+
+> ⚠️ Declaring `font-sans`, `font-mono`, or `font-display` in a theme has no effect — they're outside the allowlist. A console warning flags ignored tokens.
 
 ### `radius`
 
@@ -187,10 +188,11 @@ See `theme.css` for the full list. Every `--var` declared there is overridable.
 
 | Token | Use |
 |---|---|
-| `sidebar-width` | Initial sidebar width (user-resizable afterwards). |
 | `scrollbar-width` | Scrollbar gutter size. |
 | `scrollbar-thumb-bg` / `scrollbar-thumb-hover-bg` | Scrollbar thumb colors. |
 | `focus-ring` | `box-shadow` applied to `:focus-visible`. |
+
+> Panel widths (sidebar, right rail, terminal height) are **user preferences** persisted per user, not theme tokens. They're drag-resizable and saved to the app database.
 
 ---
 

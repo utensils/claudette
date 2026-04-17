@@ -119,10 +119,11 @@ const THEMEABLE_TOKENS = new Set<string>([
   "composer-ring",
   "composer-ring-focus",
 
-  // Typography
-  "font-sans",
-  "font-mono",
-  "font-display",
+  // Typography scale (note: font *families* are intentionally NOT themable —
+  // they come from the app's `--font-sans` / `--font-mono` / `--font-display`
+  // defaults and from the user's Appearance settings. Themes should adhere
+  // to the app's typographic voice; if a theme file declares one of those
+  // tokens it's silently ignored with a console warning.)
   "font-size-sm",
   "font-size-base",
   "font-size-md",
@@ -160,7 +161,10 @@ const THEMEABLE_TOKENS = new Set<string>([
   "ease-decelerate",
 
   // Layout
-  "sidebar-width",
+  // Note: sidebar-width is intentionally NOT themable — it's user
+  // preference state (persisted per user, not per theme). AppLayout
+  // writes --sidebar-w inline from Zustand on every render, which
+  // would clobber any theme value.
   "scrollbar-width",
   "scrollbar-thumb-bg",
   "scrollbar-thumb-hover-bg",

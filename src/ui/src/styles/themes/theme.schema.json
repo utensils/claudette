@@ -140,8 +140,8 @@
         "overlay-bg-heavy": { "type": "string" },
 
         "canvas-atmosphere": { "type": "string", "description": "Background gradient for the canvas. Use `none` to disable." },
-        "rim-light":         { "type": "string" },
-        "rim-light-strong":  { "type": "string" }
+        "rim-light":         { "type": "string", "description": "`box-shadow` value (typically `inset 0 1px 0 <color>`) used as a 1px top-edge highlight on raised surfaces." },
+        "rim-light-strong":  { "type": "string", "description": "Stronger variant of `rim-light`. Also a full `box-shadow` value." }
       }
     },
     "elevationTokens": {
@@ -159,12 +159,9 @@
     },
     "typographyTokens": {
       "type": "object",
+      "description": "Typographic *scale* — sizes, weights, line-heights, letter-spacing. Font **families** are intentionally NOT themable (they're controlled by the app default + the user's Appearance settings) so every theme shares a consistent typographic voice.",
       "additionalProperties": false,
       "properties": {
-        "font-sans":    { "type": "string", "description": "Primary UI font stack." },
-        "font-mono":    { "type": "string", "description": "Monospace font stack (code, branches, mono UI bits)." },
-        "font-display": { "type": "string", "description": "Optional display font for editorial accents." },
-
         "font-size-sm":   { "type": "string" },
         "font-size-base": { "type": "string", "description": "Base UI size. Used by html/body font-size." },
         "font-size-md":   { "type": "string" },
@@ -219,9 +216,9 @@
     },
     "layoutTokens": {
       "type": "object",
+      "description": "Layout-adjacent tokens. Note: sidebar/panel widths are user preferences (persisted per user) rather than theme tokens — they are NOT exposed here.",
       "additionalProperties": false,
       "properties": {
-        "sidebar-width":            { "type": "string" },
         "scrollbar-width":          { "type": "string" },
         "scrollbar-thumb-bg":       { "type": "string" },
         "scrollbar-thumb-hover-bg": { "type": "string" },

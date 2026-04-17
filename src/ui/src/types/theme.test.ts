@@ -108,7 +108,7 @@ describe("normalizeTheme (legacy shape)", () => {
     expect(meta.author).toBe("Bob");
   });
 
-  it("returns the colors map directly as tokens", () => {
+  it("preserves colors as tokens (modulo backfill)", () => {
     const { tokens } = normalizeTheme(theme);
     expect(tokens["accent-primary"]).toBe("#112233");
   });
@@ -124,6 +124,70 @@ describe("normalizeTheme (legacy shape)", () => {
       colors: { "accent-primary": "#f00" },
     };
     expect(normalizeTheme(bare).scheme).toBe("dark");
+  });
+});
+
+describe("normalizeTheme legacy shell-token backfill", () => {
+  it("synthesizes panel-bg/surface-bg/sunken-bg from older tokens", () => {
+    const legacy: LegacyTheme = {
+      id: "vintage",
+      name: "Vintage",
+      colors: {
+        "app-bg": "#101010",
+        "sidebar-bg": "#202020",
+        "chat-input-bg": "#050505",
+        "accent-primary": "#f00",
+      },
+    };
+    const { tokens } = normalizeTheme(legacy);
+    // sidebar-bg is the best source for panel-bg
+    expect(tokens["panel-bg"]).toBe("#202020");
+    // surface-bg falls back to app-bg
+    expect(tokens["surface-bg"]).toBe("#101010");
+    // sunken-bg falls back to chat-input-bg when present
+    expect(tokens["sunken-bg"]).toBe("#050505");
+  });
+
+  it("uses app-bg as the panel-bg fallback when no sidebar-bg is declared", () => {
+    const legacy: LegacyTheme = {
+      id: "minimal",
+      name: "Minimal",
+      colors: {
+        "app-bg": "#222",
+        "accent-primary": "#0f0",
+      },
+    };
+    const { tokens } = normalizeTheme(legacy);
+    expect(tokens["panel-bg"]).toBe("#222");
+    expect(tokens["surface-bg"]).toBe("#222");
+    expect(tokens["sunken-bg"]).toBe("#222");
+  });
+
+  it("does NOT overwrite shell tokens the legacy theme already declared", () => {
+    const legacy: LegacyTheme = {
+      id: "hybrid",
+      name: "Hybrid",
+      colors: {
+        "app-bg": "#111",
+        "sidebar-bg": "#222",
+        "panel-bg": "#explicit-panel",
+        "accent-primary": "#f0f",
+      },
+    };
+    const { tokens } = normalizeTheme(legacy);
+    expect(tokens["panel-bg"]).toBe("#explicit-panel");
+  });
+
+  it("leaves tokens undefined when there's nothing to backfill from", () => {
+    const legacy: LegacyTheme = {
+      id: "sparse",
+      name: "Sparse",
+      colors: { "accent-primary": "#fff" },
+    };
+    const { tokens } = normalizeTheme(legacy);
+    expect(tokens["panel-bg"]).toBeUndefined();
+    expect(tokens["surface-bg"]).toBeUndefined();
+    expect(tokens["sunken-bg"]).toBeUndefined();
   });
 });
 
