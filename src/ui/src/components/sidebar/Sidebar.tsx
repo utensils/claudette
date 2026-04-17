@@ -18,44 +18,12 @@ import {
 import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, BadgeCheck, BadgeInfo, BadgeQuestionMark, Cog, Filter, Check, LayoutDashboard } from "lucide-react";
 import { RepoIcon } from "../shared/RepoIcon";
 import { useSpinnerFrame } from "../../hooks/useSpinnerFrame";
-import type { McpStatusSnapshot } from "../../types/mcp";
 import styles from "./Sidebar.module.css";
-
-/** Compact MCP status badge for the repo row: [dot] connected/enabled */
-function McpStatusBadge({ status }: { status: McpStatusSnapshot | undefined }) {
-  if (!status || status.servers.length === 0) return null;
-  const enabled = status.servers.filter((s) => s.enabled);
-  if (enabled.length === 0) return null;
-  const connected = enabled.filter((s) => s.state === "connected").length;
-  const total = enabled.length;
-  const hasFailed = enabled.some((s) => s.state === "failed");
-  const allConnected = connected === total;
-  return (
-    <span
-      className={styles.mcpIndicator}
-      title={`MCP: ${connected}/${total} connected`}
-    >
-      <span
-        className={styles.mcpDot}
-        style={{
-          background: allConnected
-            ? "var(--status-running)"
-            : hasFailed
-              ? "var(--status-stopped)"
-              : "var(--status-idle)",
-        }}
-      />
-      {connected}/{total}
-    </span>
-  );
-}
-
 
 export const Sidebar = memo(function Sidebar() {
   const repositories = useAppStore((s) => s.repositories);
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
-  const mcpStatus = useAppStore((s) => s.mcpStatus);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
   const sidebarFilter = useAppStore((s) => s.sidebarFilter);
   const setSidebarFilter = useAppStore((s) => s.setSidebarFilter);
@@ -416,7 +384,6 @@ export const Sidebar = memo(function Sidebar() {
                     <span className={styles.runningBadge}>{runningCount}</span>
                   )}
                 </span>
-                <McpStatusBadge status={mcpStatus[repo.id]} />
                 {!repo.path_valid && (
                   <span className={styles.invalidBadge}>!</span>
                 )}
