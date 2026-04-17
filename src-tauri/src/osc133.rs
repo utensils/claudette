@@ -113,15 +113,13 @@ impl Osc133Parser {
         let s = String::from_utf8_lossy(&self.buffer);
 
         if s.starts_with("133;A") {
-            // Only clear command buffer if we're still tracking an in-progress
-            // command (e.g. user pressed Ctrl+C before 133;C).  When
-            // tracking_command is already false a CommandExecuted event may
-            // have been emitted earlier in the same feed() call and the caller
-            // hasn't had a chance to extract_command() yet — clearing here
-            // would lose that captured text.
-            if self.tracking_command {
-                self.command_buffer.clear();
-            }
+            // Stop tracking on PromptStart, but DON'T clear the buffer yet.
+            // Rationale: if CommandExecuted and PromptStart arrive in the same
+            // feed() call, the buffer must survive until extract_command() is
+            // called by the event handler (pty.rs processes events in a loop
+            // and calls extract_command() immediately when CommandExecuted is
+            // seen). The buffer will be cleared either by extract_command() or
+            // when CommandStart begins a new command.
             self.tracking_command = false;
             Some(Osc133Event::PromptStart)
         } else if s.starts_with("133;B") {
@@ -417,15 +415,26 @@ mod tests {
         parser.feed(b"ls -la");
 
         // 133;C (CommandExecuted) and 133;A (PromptStart) arrive in the
-        // same feed() call.  The command buffer must survive until the
-        // caller processes CommandExecuted via extract_command().
+        // same feed() call. In real usage (pty.rs), events are processed
+        // in a loop and extract_command() is called immediately when
+        // CommandExecuted is seen, before PromptStart is processed.
         let events = parser.feed(b"\x1b]133;C\x07\x1b]133;A\x07");
         assert_eq!(
             events,
             vec![Osc133Event::CommandExecuted, Osc133Event::PromptStart]
         );
 
-        // extract_command() must still return the captured text
-        assert_eq!(parser.extract_command(), Some("ls -la".to_string()));
+        // Simulate real usage: extract command immediately when CommandExecuted is seen
+        let mut extracted_cmd = None;
+        for event in events {
+            if event == Osc133Event::CommandExecuted {
+                extracted_cmd = parser.extract_command();
+            }
+        }
+        assert_eq!(extracted_cmd, Some("ls -la".to_string()));
+
+        // The earlier extract_command() call consumed the buffered command text,
+        // so there should be nothing left to extract after PromptStart.
+        assert_eq!(parser.extract_command(), None);
     }
 }
