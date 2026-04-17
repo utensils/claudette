@@ -1,3 +1,15 @@
+/* ─────────────────────────────────────────────────────────────────────────
+ * Claudette — "Atelier Instrument" chrome
+ *
+ * Depth language: graded substrate layers. Containers sit in inset wells,
+ * edges catch a 1px rim light, floating elements get a single warm shadow.
+ * Accent teal is a WIRE, not a fill — hairlines, dots, one glowing caret.
+ * Typography: Instrument Sans (utilitarian editorial) + JetBrains Mono +
+ * Instrument Serif for the rare editorial eyebrow.
+ * ───────────────────────────────────────────────────────────────────────── */
+
+@import url("https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:ital,wght@0,400..700;1,400..700&display=swap");
+
 :root {
   /* System color scheme — controls native UI elements (selects, scrollbars) */
   --color-scheme: dark;
@@ -11,10 +23,27 @@
   --accent-bg-strong: rgba(0, 229, 204, 0.15);
   --accent-glow: 0 0 12px rgba(0, 229, 204, 0.25);
 
-  /* Sidebar */
-  --sidebar-bg: rgb(22, 22, 28);
-  --sidebar-border: rgb(40, 40, 50);
+  /* --- SUBSTRATE LAYERS (new)
+   * app-bg      → outermost (darkest): window shell
+   * panel-bg    → middle: sidebar, right rail
+   * surface-bg  → raised: chat canvas sits *above* the panels visually
+   * sunken-bg   → recessed: composer well, code blocks, tool detail wells
+   * Dark themes grade from near-black up; light themes invert the ramp.
+   */
+  --panel-bg: rgb(18, 18, 22);
+  --surface-bg: rgb(22, 22, 27);
+  --sunken-bg: rgb(15, 15, 19);
+
+  /* Sidebar (panel-bg is the source of truth; sidebar-bg kept for back-compat) */
+  --sidebar-bg: var(--panel-bg);
+  --sidebar-border: rgba(255, 255, 255, 0.04);
   --sidebar-width: 260px;
+
+  /* Rim lights — top-edge 1px highlight on raised surfaces, bottom inset
+     shadow on sunken wells. Used INSTEAD of hard dividers where possible. */
+  --rim-light: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  --rim-light-strong: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --well-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4), inset 0 0 0 1px rgba(255, 255, 255, 0.02);
 
   /* Text */
   --text-primary: rgb(235, 235, 240);
@@ -24,10 +53,10 @@
   --text-separator: rgb(65, 65, 80);
 
   /* Interactive */
-  --hover-bg: rgba(255, 255, 255, 0.06);
-  --hover-bg-subtle: rgba(255, 255, 255, 0.04);
-  --selected-bg: rgba(0, 229, 204, 0.1);
-  --divider: rgb(42, 42, 54);
+  --hover-bg: rgba(255, 255, 255, 0.05);
+  --hover-bg-subtle: rgba(255, 255, 255, 0.03);
+  --selected-bg: rgba(0, 229, 204, 0.08);
+  --divider: rgba(255, 255, 255, 0.05);
 
   /* Agent status */
   --status-running: #00e5cc;
@@ -48,15 +77,22 @@
   --diff-line-number: rgb(85, 85, 100);
 
   /* Chat */
-  --chat-user-bg: rgba(255, 255, 255, 0.05);
-  --chat-system-bg: rgba(255, 255, 255, 0.03);
-  --chat-input-bg: rgb(26, 26, 33);
-  --chat-header-bg: rgb(22, 22, 28);
+  --chat-user-bg: rgba(255, 255, 255, 0.035);
+  --chat-system-bg: rgba(255, 255, 255, 0.025);
+  --chat-input-bg: var(--sunken-bg);
+  --chat-header-bg: transparent;
+  /* Composer ring — a precision instrument focal point */
+  --composer-ring: 0 0 0 1px rgba(255, 255, 255, 0.06),
+                   0 1px 0 0 rgba(255, 255, 255, 0.03) inset,
+                   0 14px 30px -18px rgba(0, 0, 0, 0.6);
+  --composer-ring-focus: 0 0 0 1px rgba(var(--accent-primary-rgb), 0.45),
+                         0 0 0 4px rgba(var(--accent-primary-rgb), 0.06),
+                         0 14px 30px -18px rgba(0, 0, 0, 0.6);
 
   /* Terminal */
-  --terminal-tab-bg: rgb(26, 26, 33);
-  --terminal-tab-active-bg: rgb(38, 38, 48);
-  --terminal-bg: #121216;
+  --terminal-tab-bg: var(--sunken-bg);
+  --terminal-tab-active-bg: var(--surface-bg);
+  --terminal-bg: #0c0c10;
   --terminal-fg: #e6e6eb;
   --terminal-cursor: #e6e6eb;
   --terminal-selection: rgba(230, 230, 235, 0.3);
@@ -75,18 +111,27 @@
   --overlay-bg-heavy: rgba(0, 0, 0, 0.65);
 
   /* General */
-  --app-bg: rgb(14, 14, 18);
-  --border-radius: 8px;
+  --app-bg: rgb(10, 10, 14);
+  --border-radius: 10px;
 
-  /* Elevation / shadows */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
-  --shadow-card-hover: 0 8px 24px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(0, 229, 204, 0.15);
+  /* Elevation / shadows — ONE warm, directional language.
+     All shadows point slightly down-right, soft, never hard. */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 6px 20px -10px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 24px 48px -20px rgba(0, 0, 0, 0.65);
+  --shadow-card-hover: 0 10px 28px -14px rgba(0, 0, 0, 0.55),
+                      0 0 0 1px rgba(var(--accent-primary-rgb), 0.18);
+
+  /* Ambient atmosphere — a very faint radial wash on the main canvas so
+     it doesn't read as a flat plane. Overridden in some themes. */
+  --canvas-atmosphere:
+    radial-gradient(1200px 500px at 75% -10%, rgba(var(--accent-primary-rgb), 0.035), transparent 60%),
+    radial-gradient(900px 600px at 20% 110%, rgba(var(--accent-primary-rgb), 0.02), transparent 55%);
 
   /* Typography */
-  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-sans: "Instrument Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code", monospace;
+  --font-display: "Instrument Serif", "Instrument Sans", serif;
 
   /* Transitions */
   --transition-fast: 0.12s ease;
@@ -120,6 +165,7 @@ body,
   color: var(--text-primary);
   font-family: var(--font-sans);
   font-size: 13px;
+  font-feature-settings: "ss01", "cv11";
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -136,7 +182,7 @@ body,
   box-shadow: 0 0 0 2px rgba(var(--accent-primary-rgb), 0.5);
 }
 
-/* Scrollbars */
+/* Scrollbars — nearly invisible, reveal on hover over parent */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -147,12 +193,16 @@ body,
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.05);
   border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(var(--accent-primary-rgb), 0.25);
+  background-clip: padding-box;
+  border: 2px solid transparent;
 }
 
 /* Global keyframes */

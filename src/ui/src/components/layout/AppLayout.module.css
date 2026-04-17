@@ -3,6 +3,7 @@
   flex-direction: column;
   height: 100%;
   width: 100%;
+  background: var(--app-bg);
 }
 
 .main {
@@ -12,6 +13,8 @@
   --sidebar-w: 260px;
   --right-sidebar-w: 250px;
   --terminal-h: 300px;
+  /* The whole main region is the dark substrate that panels sit on top of. */
+  background: var(--app-bg);
 }
 
 /* Shared wrapper for settings and workspace view panels. */
@@ -19,23 +22,38 @@
   display: flex;
   flex: 1;
   overflow: hidden;
+  /* Inset the raised surface 6px on top + right + bottom so the canvas reads
+     as a slab resting inside the app shell, not butted into its edges. */
+  padding: 6px 6px 6px 0;
+  gap: 6px;
 }
 
+/* The sidebar is the "plinth" — panel-bg, rim light along its top,
+   no hard border against the canvas (the inset gap does the talking). */
 .sidebar {
   flex-shrink: 0;
   width: var(--sidebar-w);
-  background: var(--sidebar-bg);
-  border-right: 1px solid var(--sidebar-border);
+  background: var(--panel-bg);
   overflow-y: auto;
   contain: layout style paint;
+  /* Top rim light creates edge without a dividing rule */
+  box-shadow: var(--rim-light);
+  position: relative;
 }
 
+/* Center column — this is the "canvas" substrate. Rounded, raised, with
+   a faint radial atmosphere so it doesn't read as a flat plane. */
 .center {
   flex: 1;
   overflow: hidden;
   display: flex;
   flex-direction: column;
   contain: layout style;
+  background: var(--surface-bg);
+  background-image: var(--canvas-atmosphere);
+  border-radius: 12px;
+  box-shadow: var(--rim-light), var(--shadow-md);
+  position: relative;
 }
 
 .content {
@@ -49,18 +67,22 @@
 .terminal {
   flex-shrink: 0;
   height: var(--terminal-h);
-  border-top: 1px solid var(--sidebar-border);
   overflow: hidden;
   contain: layout style paint;
+  /* Integrated into the canvas — divider is a soft inset, not a hard line */
+  background: var(--sunken-bg);
+  box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.4),
+              inset 0 2px 0 rgba(255, 255, 255, 0.02);
 }
 
 .rightSidebar {
   flex-shrink: 0;
   width: var(--right-sidebar-w);
-  background: var(--sidebar-bg);
-  border-left: 1px solid var(--sidebar-border);
+  background: var(--panel-bg);
   overflow-y: auto;
   contain: layout style paint;
+  border-radius: 12px;
+  box-shadow: var(--rim-light);
 }
 
 .empty {

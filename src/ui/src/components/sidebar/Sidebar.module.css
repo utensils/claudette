@@ -5,7 +5,7 @@
 }
 
 .header {
-  padding: 14px 16px 8px;
+  padding: 14px 16px 10px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -15,12 +15,16 @@
   padding-top: 38px;
 }
 
+/* Editorial eyebrow — the one place we let the display serif sing.
+   Small, italic, low-saturation. Sets the "atelier" tone. */
 .title {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  color: var(--text-dim);
-  letter-spacing: 0.08em;
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 400;
+  font-style: italic;
+  text-transform: none;
+  color: var(--text-muted);
+  letter-spacing: 0.005em;
 }
 
 .headerActions {
@@ -74,10 +78,10 @@
   top: 100%;
   right: 0;
   margin-top: 4px;
-  background: var(--chat-input-bg);
-  border: 1px solid var(--divider);
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  background: var(--surface-bg);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  box-shadow: var(--shadow-md);
   min-width: 120px;
   z-index: 100;
   overflow: hidden;
@@ -114,11 +118,11 @@
 .list {
   flex: 1;
   overflow-y: auto;
-  padding: 0 8px;
+  padding: 0 6px;
 }
 
 .repoGroup {
-  margin-bottom: 4px;
+  margin-bottom: 2px;
   touch-action: none;
   transition: opacity 0.15s ease;
 }
@@ -134,21 +138,21 @@
 }
 
 .dropIndicator {
-  height: 2px;
+  height: 1px;
   background: var(--accent-primary);
-  border-radius: 1px;
-  margin: 2px 8px;
-  box-shadow: 0 0 4px rgba(var(--accent-primary-rgb), 0.4);
+  border-radius: 0.5px;
+  margin: 2px 10px;
+  box-shadow: 0 0 6px rgba(var(--accent-primary-rgb), 0.5);
 }
 
 .repoHeader {
   position: relative;
   display: flex;
   align-items: center;
-  padding: 5px 8px;
+  padding: 6px 10px;
   border-radius: 6px;
   cursor: grab;
-  gap: 6px;
+  gap: 8px;
   transition: background var(--transition-fast);
 }
 
@@ -161,20 +165,22 @@
 }
 
 .chevron {
-  font-size: 10px;
-  color: var(--text-dim);
-  width: 12px;
+  font-size: 9px;
+  color: var(--text-faint);
+  width: 10px;
   font-family: var(--font-mono);
   transition: transform var(--transition-fast);
 }
 
 .repoName {
   flex: 1;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: 0.005em;
   display: flex;
   align-items: center;
   gap: 6px;
+  color: var(--text-primary);
 }
 
 .iconBtn {
@@ -229,26 +235,27 @@
   flex-shrink: 0;
 }
 
-/* Running count badge next to repo name */
+/* Running count badge — tiny mono numeral in a subtle pill */
 .runningBadge {
+  font-family: var(--font-mono);
   font-size: 10px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--accent-primary);
-  background: var(--accent-bg);
-  padding: 0 5px;
-  border-radius: 8px;
+  background: transparent;
+  padding: 0 4px;
+  border-radius: 0;
   font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
 }
 
-/* Keyboard shortcut badge shown on Cmd/Ctrl hold — absolutely positioned
-   so it doesn't reflow the header when it appears/disappears. */
+/* Keyboard shortcut badge */
 .shortcutBadge {
   position: absolute;
   right: 8px;
   top: 50%;
   transform: translateY(-50%);
   font-size: 11px;
-  font-family: inherit;
+  font-family: var(--font-mono);
   color: var(--accent-primary);
   background: var(--accent-bg-strong);
   border: 1px solid rgba(var(--accent-primary-rgb), 0.25);
@@ -268,7 +275,7 @@
 .wsItem {
   display: flex;
   align-items: center;
-  padding: 6px 8px 6px 28px;
+  padding: 6px 10px 6px 30px;
   border-radius: 6px;
   cursor: pointer;
   gap: 8px;
@@ -280,6 +287,8 @@
   background: var(--hover-bg);
 }
 
+/* Selected workspace: a single hairline wire to the left, no fill block.
+   The hover fill still shows on top for tactile feedback. */
 .wsSelected {
   background: var(--selected-bg);
 }
@@ -287,17 +296,18 @@
 .wsSelected::before {
   content: "";
   position: absolute;
-  left: 12px;
-  top: 8px;
-  bottom: 8px;
-  width: 2px;
-  border-radius: 1px;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 16px;
+  width: 1px;
   background: var(--accent-primary);
+  box-shadow: 0 0 6px rgba(var(--accent-primary-rgb), 0.55);
 }
 
 .statusDot {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
   flex-shrink: 0;
   margin: 0 4px;
@@ -329,13 +339,14 @@
 }
 
 .wsName {
-  font-size: 13px;
+  font-size: 12.5px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   display: flex;
   align-items: center;
   gap: 6px;
+  letter-spacing: 0.005em;
 }
 
 .badgeDone,
@@ -361,7 +372,7 @@
 }
 
 .wsUnread .wsName {
-  font-weight: 700;
+  font-weight: 600;
 }
 
 @keyframes pulse-badge {
@@ -374,18 +385,19 @@
 }
 
 .wsBranch {
-  font-size: 11px;
+  font-size: 10.5px;
   color: var(--text-dim);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   font-family: var(--font-mono);
+  letter-spacing: -0.01em;
 }
 
 /* Terminal command display */
 .terminalCommand {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 10.5px;
   color: var(--text-dim);
   display: flex;
   align-items: center;
@@ -432,13 +444,14 @@
   white-space: nowrap;
 }
 
+/* Footer — no hard divider. A faint rim light fades it into the plinth. */
 .footer {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 4px;
-  padding: 8px 12px;
-  border-top: 1px solid var(--sidebar-border);
+  padding: 10px 12px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
 }
 
 .footerBtn {
@@ -449,7 +462,7 @@
   padding: 6px 8px;
   display: flex;
   align-items: center;
-  border-radius: 4px;
+  border-radius: 6px;
   transition: color var(--transition-fast), background var(--transition-fast);
 }
 

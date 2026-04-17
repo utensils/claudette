@@ -62,10 +62,21 @@ const THEMEABLE_VARS = [
   "shadow-card-hover",
   "font-sans",
   "font-mono",
+  // Substrate layers + rim light language (Atelier chrome redesign)
+  "panel-bg",
+  "surface-bg",
+  "sunken-bg",
+  "rim-light",
+  "rim-light-strong",
+  "well-shadow",
+  "composer-ring",
+  "composer-ring-focus",
+  "canvas-atmosphere",
+  "font-display",
 ];
 
 export const DEFAULT_SANS_STACK =
-  '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  '"Instrument Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
 export const DEFAULT_MONO_STACK =
   '"JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code", monospace';
 

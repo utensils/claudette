@@ -5,14 +5,18 @@
   position: relative;
 }
 
+/* Header dissolves into the canvas — no border, no shadow. The ambient
+   radial atmosphere on the parent surface-bg gives it separation without
+   a mechanical rule. A very faint scroll-edge fade appears below via
+   the messages container. */
 .header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 20px;
-  background: var(--chat-header-bg);
-  border-bottom: 1px solid var(--divider);
-  box-shadow: var(--shadow-sm);
+  padding: 12px 22px;
+  background: transparent;
+  position: relative;
+  z-index: 2;
 }
 
 .headerLeft {
@@ -55,13 +59,14 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 13px;
+  font-size: 12.5px;
   font-family: var(--font-mono);
   min-width: 0;
+  letter-spacing: -0.01em;
 }
 
 .repoName {
-  font-weight: 600;
+  font-weight: 500;
   color: var(--text-primary);
   white-space: nowrap;
 }
@@ -115,15 +120,23 @@
   background: var(--error-hover);
 }
 
-/* Messages area */
+/* Messages area — generous top padding so the first turn breathes away
+   from the header region. Faint top fade mask hints at scrollable overflow. */
 .messages {
   flex: 1;
   overflow-y: auto;
-  padding: 20px 28px;
+  padding: 24px 32px 12px;
   display: flex;
   flex-direction: column;
   gap: 2px;
   contain: layout style;
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    black 24px,
+    black calc(100% - 8px),
+    transparent 100%
+  );
 }
 
 .empty {
@@ -139,12 +152,14 @@
 }
 
 .empty::before {
-  content: ">";
+  content: "—";
   display: block;
-  font-size: 28px;
+  font-size: 32px;
   font-weight: 200;
-  color: rgba(var(--accent-primary-rgb), 0.2);
-  font-family: var(--font-mono);
+  color: rgba(var(--accent-primary-rgb), 0.35);
+  font-family: var(--font-display);
+  font-style: italic;
+  letter-spacing: -0.04em;
 }
 
 .errorBanner {
@@ -170,13 +185,15 @@
   animation: fadeInUp 0.15s ease both;
 }
 
-/* User messages — compact input blocks */
+/* User messages — a quoted note with a single accent wire on the left.
+   No bounding box — the whole turn reads as indented prose with a hairline. */
 .role_User {
   position: relative;
-  background: var(--chat-user-bg);
-  border-radius: 8px;
-  padding: 10px 14px;
-  margin-top: 20px;
+  background: transparent;
+  border-radius: 0;
+  padding: 8px 14px 8px 16px;
+  margin-top: 24px;
+  box-shadow: inset 2px 0 0 rgba(var(--accent-primary-rgb), 0.35);
 }
 
 .messages > .role_User:first-child,
@@ -186,9 +203,10 @@
 
 .role_User .content {
   white-space: pre-wrap;
-  font-size: 13px;
-  line-height: 1.55;
-  color: var(--text-muted);
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  letter-spacing: 0.002em;
 }
 
 /* Rollback button — always visible on eligible user messages */
@@ -880,88 +898,140 @@
   color: var(--text-primary);
 }
 
-/* Input area */
+/* Input area — the composer is the product's primary interaction surface.
+   Treat it as a *slab*: one recessed well that contains the textarea AND
+   the control row. Shipped as a single unit with a subtle precision ring
+   that intensifies on focus — no dramatic glow, no generic shadow. */
 .inputArea {
   position: relative;
   display: flex;
   flex-direction: column;
   gap: 0;
-  padding: 12px 28px 16px;
-  border-top: 1px solid var(--divider);
+  padding: 10px 22px 18px;
   background: transparent;
+  border: none;
+}
+
+/* The slab itself — background well, rim ring, focus-within intensifies. */
+.inputArea::before {
+  content: "";
+  position: absolute;
+  inset: 6px 22px 18px 22px;
+  background: var(--sunken-bg);
+  border-radius: 12px;
+  box-shadow: var(--composer-ring);
+  pointer-events: none;
+  transition: box-shadow var(--transition-normal);
+  z-index: 0;
+}
+
+.inputArea:focus-within::before {
+  box-shadow: var(--composer-ring-focus);
 }
 
 .inputControls {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding-top: 6px;
+  padding: 2px 12px 8px;
+  position: relative;
+  z-index: 1;
 }
 
+/* The textarea itself is now invisible chrome — the slab provides the
+   surface; text lives directly in the well. */
 .input {
   flex: 1;
-  background: var(--chat-input-bg);
-  border: 1px solid var(--divider);
-  border-radius: 10px;
-  padding: 12px 16px;
+  background: transparent;
+  border: none;
+  border-radius: 12px 12px 0 0;
+  padding: 14px 18px 8px;
   color: var(--text-primary);
   font-size: 14px;
   font-family: inherit;
-  line-height: 1.5;
+  line-height: 1.55;
+  letter-spacing: 0.002em;
   outline: none;
   resize: none;
   min-height: 44px;
   max-height: 160px;
-  transition: border-color var(--transition-normal), box-shadow var(--transition-normal),
-              background var(--transition-normal);
+  position: relative;
+  z-index: 1;
+  caret-color: var(--accent-primary);
+  /* Tabular figures + stylistic set for Instrument Sans */
+  font-feature-settings: "ss01", "cv11";
 }
 
 .input:focus {
-  border-color: rgba(var(--accent-primary-rgb), 0.4);
-  box-shadow: 0 0 0 3px rgba(var(--accent-primary-rgb), 0.08);
+  border: none;
+  box-shadow: none;
 }
 
 .input::placeholder {
   color: var(--text-faint);
+  font-style: italic;
+  letter-spacing: 0.005em;
 }
 
+/* Plan mode — subtle ring replacement, no dashed border template */
 .inputPlanMode {
-  border: 2px dashed rgba(var(--accent-primary-rgb), 0.5);
-  background: rgba(var(--accent-primary-rgb), 0.04);
-}
-
-.inputPlanMode:focus {
-  border-color: rgba(var(--accent-primary-rgb), 0.6);
-  box-shadow: 0 0 0 3px rgba(var(--accent-primary-rgb), 0.12);
-}
-
-.sendBtn {
   background: transparent;
-  border: 1px solid rgba(var(--accent-primary-rgb), 0.2);
-  color: var(--accent-dim);
-  padding: 7px 16px;
+}
+
+/* Tint the slab when plan mode is active */
+.inputArea:has(.inputPlanMode)::before {
+  background: linear-gradient(
+    180deg,
+    rgba(var(--accent-primary-rgb), 0.04) 0%,
+    var(--sunken-bg) 40%
+  );
+  box-shadow: 0 0 0 1px rgba(var(--accent-primary-rgb), 0.2),
+              0 1px 0 0 rgba(255, 255, 255, 0.03) inset,
+              0 14px 30px -18px rgba(0, 0, 0, 0.6);
+}
+
+.inputArea:has(.inputPlanMode):focus-within::before {
+  box-shadow: 0 0 0 1px rgba(var(--accent-primary-rgb), 0.45),
+              0 0 0 4px rgba(var(--accent-primary-rgb), 0.08),
+              0 14px 30px -18px rgba(0, 0, 0, 0.6);
+}
+
+/* Send — a proper instrument button. Accent fill, not a ghosted outline.
+   The disabled state is the "empty" state, filled only when intentful. */
+.sendBtn {
+  background: rgba(var(--accent-primary-rgb), 0.12);
+  border: 1px solid rgba(var(--accent-primary-rgb), 0.25);
+  color: var(--accent-primary);
+  padding: 6px 14px;
   border-radius: 8px;
   cursor: pointer;
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 500;
+  letter-spacing: 0.01em;
   margin-left: auto;
+  font-family: var(--font-mono);
+  text-transform: lowercase;
   transition: background var(--transition-fast), color var(--transition-fast),
-              border-color var(--transition-fast);
+              border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .sendBtn:hover:not(:disabled) {
-  background: rgba(var(--accent-primary-rgb), 0.08);
-  color: var(--accent-primary);
-  border-color: rgba(var(--accent-primary-rgb), 0.3);
+  background: rgba(var(--accent-primary-rgb), 0.2);
+  color: var(--text-primary);
+  border-color: rgba(var(--accent-primary-rgb), 0.45);
+  box-shadow: 0 0 0 2px rgba(var(--accent-primary-rgb), 0.1);
 }
 
 .sendBtn:active:not(:disabled) {
-  background: rgba(var(--accent-primary-rgb), 0.12);
+  background: rgba(var(--accent-primary-rgb), 0.3);
 }
 
 .sendBtn:disabled {
-  opacity: 0.25;
+  opacity: 0.3;
   cursor: not-allowed;
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.08);
+  color: var(--text-faint);
 }
 
 /* -- Attachment UI -- */
@@ -1018,32 +1088,32 @@
 }
 
 .attachBtn {
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid var(--divider);
-  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: var(--text-dim);
   cursor: pointer;
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   padding: 0;
   margin-right: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 8px;
+  border-radius: 6px;
   flex-shrink: 0;
   transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 
 .attachBtn:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
   color: var(--text-primary);
-  border-color: var(--text-dim);
+  border-color: rgba(255, 255, 255, 0.14);
 }
 
 .attachBtnActive {
-  background: rgba(255, 255, 255, 0.12);
-  color: var(--text-primary);
-  border-color: var(--text-dim);
+  background: rgba(var(--accent-primary-rgb), 0.08);
+  color: var(--accent-primary);
+  border-color: rgba(var(--accent-primary-rgb), 0.25);
 }
 
 /* -- Inline message images -- */
