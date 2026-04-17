@@ -256,7 +256,7 @@ export function Dashboard() {
               lastMsg={lastMessages[ws.id]}
               remoteName={ws.remote_connection_id ? remoteNameMap.get(ws.remote_connection_id) : undefined}
               badge={badge}
-              spinnerChar={spinnerChar}
+              spinnerChar={ws.agent_status === "Running" ? spinnerChar : ""}
               onClick={selectWorkspace}
               index={i}
             />
