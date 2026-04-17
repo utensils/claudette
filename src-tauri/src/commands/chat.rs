@@ -1440,4 +1440,38 @@ mod tests {
             &s(&["Write", "Read"]),
         ));
     }
+
+    #[test]
+    fn no_drift_when_wildcard_unchanged() {
+        // Permission level "full" resolves to the wildcard sentinel; reusing
+        // the same bypass-permissions session should not trigger a respawn.
+        let full = s(&["*"]);
+        assert!(!persistent_session_flags_drifted(
+            false, &full, false, &full,
+        ));
+    }
+
+    #[test]
+    fn drift_when_escalating_to_wildcard() {
+        // Switching from a concrete list ("standard"/"readonly") up to "full"
+        // needs a respawn so `build_claude_args` can apply
+        // `--permission-mode bypassPermissions`.
+        let standard = s(&["Read", "Write", "Edit"]);
+        let full = s(&["*"]);
+        assert!(persistent_session_flags_drifted(
+            false, &standard, false, &full,
+        ));
+    }
+
+    #[test]
+    fn drift_when_demoting_from_wildcard() {
+        // Dropping from "full" back to a concrete list needs a respawn so
+        // the bypass-permissions mode is cleared and `--allowedTools` is
+        // constrained.
+        let full = s(&["*"]);
+        let readonly = s(&["Read", "Glob", "Grep"]);
+        assert!(persistent_session_flags_drifted(
+            false, &full, false, &readonly,
+        ));
+    }
 }
