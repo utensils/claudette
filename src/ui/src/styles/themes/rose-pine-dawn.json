@@ -22,17 +22,17 @@
     "hover-bg-subtle": "rgba(87, 82, 121, 0.04)",
     "selected-bg": "rgba(126, 101, 155, 0.12)",
     "divider": "#f2e9e1",
-    "status-running": "#457780",
+    "status-running": "#286983",
     "status-idle": "#9893a5",
     "status-stopped": "#a4506a",
-    "diff-added-bg": "rgba(40, 105, 131, 0.1)",
+    "diff-added-bg": "rgba(40, 105, 131, 0.12)",
     "diff-removed-bg": "rgba(180, 99, 122, 0.1)",
     "diff-added-text": "#286983",
     "diff-removed-text": "#a4506a",
-    "diff-hunk-header": "#7e659b",
+    "diff-hunk-header": "#d7827e",
     "diff-line-number": "#cecacd",
-    "chat-user-bg": "rgba(87, 82, 121, 0.05)",
-    "chat-system-bg": "rgba(234, 157, 52, 0.08)",
+    "chat-user-bg": "rgba(215, 130, 126, 0.06)",
+    "chat-system-bg": "rgba(234, 157, 52, 0.10)",
     "chat-input-bg": "#fffaf3",
     "chat-header-bg": "#fffaf3",
     "terminal-tab-bg": "#fffaf3",
@@ -53,8 +53,8 @@
     "error-hover": "rgba(164, 80, 106, 0.15)",
     "overlay-bg": "rgba(0, 0, 0, 0.3)",
     "overlay-bg-heavy": "rgba(0, 0, 0, 0.5)",
-    "badge-done": "#457780",
+    "badge-done": "#286983",
     "badge-plan": "#7e659b",
-    "badge-ask": "#9e6210"
+    "badge-ask": "#ea9d34"
   }
 }
