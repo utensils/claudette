@@ -6,6 +6,10 @@ describe("isFastSupported", () => {
     expect(isFastSupported("claude-opus-4-6")).toBe(true);
   });
 
+  it("returns true for claude-opus-4-6[1m]", () => {
+    expect(isFastSupported("claude-opus-4-6[1m]")).toBe(true);
+  });
+
   it("returns false for opus alias", () => {
     expect(isFastSupported("opus")).toBe(false);
   });
@@ -34,6 +38,10 @@ describe("isEffortSupported", () => {
 
   it("returns true for claude-opus-4-6", () => {
     expect(isEffortSupported("claude-opus-4-6")).toBe(true);
+  });
+
+  it("returns true for claude-opus-4-6[1m]", () => {
+    expect(isEffortSupported("claude-opus-4-6[1m]")).toBe(true);
   });
 
   it("returns true for sonnet", () => {
@@ -66,6 +74,10 @@ describe("isXhighEffortAllowed", () => {
     expect(isXhighEffortAllowed("claude-opus-4-6")).toBe(false);
   });
 
+  it("returns false for claude-opus-4-6[1m]", () => {
+    expect(isXhighEffortAllowed("claude-opus-4-6[1m]")).toBe(false);
+  });
+
   it("returns false for sonnet", () => {
     expect(isXhighEffortAllowed("sonnet")).toBe(false);
   });
@@ -88,8 +100,16 @@ describe("isMaxEffortAllowed", () => {
     expect(isMaxEffortAllowed("claude-opus-4-6")).toBe(true);
   });
 
-  it("returns false for sonnet", () => {
-    expect(isMaxEffortAllowed("sonnet")).toBe(false);
+  it("returns true for claude-opus-4-6[1m]", () => {
+    expect(isMaxEffortAllowed("claude-opus-4-6[1m]")).toBe(true);
+  });
+
+  it("returns true for sonnet", () => {
+    expect(isMaxEffortAllowed("sonnet")).toBe(true);
+  });
+
+  it("returns true for claude-sonnet-4-6[1m]", () => {
+    expect(isMaxEffortAllowed("claude-sonnet-4-6[1m]")).toBe(true);
   });
 
   it("returns false for haiku", () => {

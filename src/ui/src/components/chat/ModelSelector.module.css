@@ -80,3 +80,18 @@
   font-size: 11px;
   font-family: var(--font-mono);
 }
+
+.moreToggle {
+  color: var(--text-dim);
+  padding-left: 22px;
+}
+
+.chevron {
+  margin-left: auto;
+  color: var(--text-dim);
+  transition: transform var(--transition-fast);
+}
+
+.chevronOpen {
+  transform: rotate(90deg);
+}

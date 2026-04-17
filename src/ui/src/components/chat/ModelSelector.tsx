@@ -1,12 +1,11 @@
-import { useEffect, useRef, type RefObject } from "react";
-import { BadgeDollarSign } from "lucide-react";
+import { useEffect, useState } from "react";
+import { BadgeDollarSign, ChevronRight } from "lucide-react";
 import styles from "./ModelSelector.module.css";
-import { MODELS } from "./modelRegistry";
+import { MODELS, type Model } from "./modelRegistry";
 
 export { MODELS } from "./modelRegistry";
 
 interface ModelSelectorProps {
-  anchorRef: RefObject<HTMLButtonElement | null>;
   selected: string;
   onSelect: (model: string) => void;
   onClose: () => void;
@@ -17,9 +16,12 @@ export function ModelSelector({
   onSelect,
   onClose,
 }: ModelSelectorProps) {
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  const primary = MODELS.filter((m) => !m.legacy);
+  const legacy = MODELS.filter((m) => m.legacy);
+  const selectedIsLegacy = legacy.some((m) => m.id === selected);
 
-  // Close on Escape.
+  const [moreOpen, setMoreOpen] = useState(selectedIsLegacy);
+
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
@@ -31,43 +33,89 @@ export function ModelSelector({
     return () => window.removeEventListener("keydown", handleKey);
   }, [onClose]);
 
-  // Group models.
-  const groups = new Map<string, typeof MODELS[number][]>();
-  for (const model of MODELS) {
-    const list = groups.get(model.group) ?? [];
+  const primaryGroups = new Map<string, Model[]>();
+  for (const model of primary) {
+    const list = primaryGroups.get(model.group) ?? [];
     list.push(model);
-    groups.set(model.group, list);
+    primaryGroups.set(model.group, list);
   }
 
   return (
     <>
       <div className={styles.overlay} onClick={onClose} />
-      <div ref={dropdownRef} className={styles.dropdown}>
-        {[...groups.entries()].map(([group, models]) => (
+      <div className={styles.dropdown}>
+        {[...primaryGroups.entries()].map(([group, models]) => (
           <div key={group}>
             <div className={styles.groupLabel}>{group}</div>
             {models.map((model) => (
-              <button
+              <ModelRow
                 key={model.id}
-                className={`${styles.item} ${model.id === selected ? styles.itemSelected : ""}`}
-                onClick={() => onSelect(model.id)}
-              >
-                <span className={styles.dot} />
-                {model.label}
-                {model.extraUsage && (
-                  <span
-                    className={styles.extraUsage}
-                    title="Extra usage: 1M context requests are billed at API rates beyond your subscription plan allocation"
-                  >
-                    <BadgeDollarSign size={14} />
-                  </span>
-                )}
-                {model.id === selected && <span className={styles.check}>✓</span>}
-              </button>
+                model={model}
+                selected={model.id === selected}
+                onSelect={onSelect}
+              />
             ))}
           </div>
         ))}
+        {legacy.length > 0 && (
+          <>
+            <button
+              type="button"
+              className={`${styles.item} ${styles.moreToggle}`}
+              aria-expanded={moreOpen}
+              onClick={() => setMoreOpen((v) => !v)}
+            >
+              More
+              <ChevronRight
+                size={14}
+                className={`${styles.chevron} ${moreOpen ? styles.chevronOpen : ""}`}
+              />
+            </button>
+            {moreOpen && (
+              <div>
+                {legacy.map((model) => (
+                  <ModelRow
+                    key={model.id}
+                    model={model}
+                    selected={model.id === selected}
+                    onSelect={onSelect}
+                  />
+                ))}
+              </div>
+            )}
+          </>
+        )}
       </div>
     </>
+  );
+}
+
+function ModelRow({
+  model,
+  selected,
+  onSelect,
+}: {
+  model: Model;
+  selected: boolean;
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`${styles.item} ${selected ? styles.itemSelected : ""}`}
+      onClick={() => onSelect(model.id)}
+    >
+      <span className={styles.dot} />
+      {model.label}
+      {model.extraUsage && (
+        <span
+          className={styles.extraUsage}
+          title="Extra usage: 1M context requests are billed at API rates beyond your subscription plan allocation"
+        >
+          <BadgeDollarSign size={14} />
+        </span>
+      )}
+      {selected && <span className={styles.check}>✓</span>}
+    </button>
   );
 }

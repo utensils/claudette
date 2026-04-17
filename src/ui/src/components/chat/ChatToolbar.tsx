@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { BadgeDollarSign, Sparkles, Zap, Brain, BookOpen, Gauge, Eye, EyeOff, Globe } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import { resetAgentSession, setAppSetting, getAppSetting } from "../../services/tauri";
@@ -37,7 +37,6 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
   const clearPlanApproval = useAppStore((s) => s.clearPlanApproval);
   const metaKeyHeld = useAppStore((s) => s.metaKeyHeld);
 
-  const modelChipRef = useRef<HTMLButtonElement>(null);
   const [loaded, setLoaded] = useState(false);
   const [effortSelectorOpen, setEffortSelectorOpen] = useState(false);
 
@@ -164,7 +163,6 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
   return (
     <div className={styles.toolbar}>
       <button
-        ref={modelChipRef}
         className={`${styles.chip}`}
         onClick={() => setModelSelectorOpen(!modelSelectorOpen)}
         disabled={disabled}
@@ -245,7 +243,6 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
 
       {modelSelectorOpen && (
         <ModelSelector
-          anchorRef={modelChipRef}
           selected={selectedModel}
           onSelect={handleModelSelect}
           onClose={() => setModelSelectorOpen(false)}
