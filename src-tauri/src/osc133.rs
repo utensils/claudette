@@ -433,7 +433,8 @@ mod tests {
         }
         assert_eq!(extracted_cmd, Some("ls -la".to_string()));
 
-        // After PromptStart, buffer should be clear for next command
+        // The earlier extract_command() call consumed the buffered command text,
+        // so there should be nothing left to extract after PromptStart.
         assert_eq!(parser.extract_command(), None);
     }
 }
