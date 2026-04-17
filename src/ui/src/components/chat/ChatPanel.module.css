@@ -947,44 +947,17 @@
   cursor: not-allowed;
 }
 
-/* Stop state — drop button chrome and show only a small red square. */
-.sendBtnStop,
+/* Stop state — match the neutral .attachBtn chrome to the left so the two
+   buttons visually pair, with a red icon to signal the stop affordance. */
+.sendBtnStop {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--divider);
+  color: var(--status-stopped);
+}
+
 .sendBtnStop:hover:not(:disabled) {
-  background: transparent;
-  border-color: transparent;
-}
-
-/* Override the inherited .sendBtn:active brightness so it doesn't compose
-   with the child .stopSquare filter and dim the square more than intended. */
-.sendBtnStop:active:not(:disabled) {
-  filter: none;
-}
-
-.sendBtnStop:hover:not(:disabled) .stopSquare {
-  filter: brightness(1.1);
-}
-
-.sendBtnStop:active:not(:disabled) .stopSquare {
-  filter: brightness(0.9);
-}
-
-.stopSquare {
-  display: block;
-  width: 10px;
-  height: 10px;
-  background: var(--status-stopped);
-  animation: stopPulse 1.2s ease-in-out infinite;
-}
-
-@keyframes stopPulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.45; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .stopSquare {
-    animation: none;
-  }
+  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--text-dim);
 }
 
 /* -- Attachment UI -- */
