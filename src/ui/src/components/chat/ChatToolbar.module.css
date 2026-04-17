@@ -15,7 +15,6 @@
   border-radius: 6px;
   background: transparent;
   color: var(--text-dim);
-  font-size: 12px;
   cursor: pointer;
   white-space: nowrap;
   position: relative;
@@ -54,7 +53,6 @@
 }
 
 .chipLabel {
-  font-size: 12px;
   line-height: 1;
 }
 
