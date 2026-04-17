@@ -673,6 +673,22 @@ impl Database {
         Ok(())
     }
 
+    /// Reconcile the stored branch name with the worktree's actual branch.
+    /// Only touches `branch_name` — the workspace's user-facing `name` is a
+    /// human label that shouldn't shift when the underlying branch is
+    /// renamed externally.
+    pub fn update_workspace_branch_name(
+        &self,
+        id: &str,
+        new_branch_name: &str,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE workspaces SET branch_name = ?1 WHERE id = ?2",
+            params![new_branch_name, id],
+        )?;
+        Ok(())
+    }
+
     pub fn delete_workspace(&self, id: &str) -> Result<(), rusqlite::Error> {
         self.conn
             .execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
@@ -1566,6 +1582,20 @@ mod tests {
         let workspaces = db.list_workspaces().unwrap();
         assert_eq!(workspaces[0].name, "new-name");
         assert_eq!(workspaces[0].branch_name, "claudette/new-name");
+    }
+
+    #[test]
+    fn test_update_workspace_branch_name() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w1", "r1", "friendly-name"))
+            .unwrap();
+        db.update_workspace_branch_name("w1", "eben/renamed-branch")
+            .unwrap();
+        let workspaces = db.list_workspaces().unwrap();
+        assert_eq!(workspaces[0].name, "friendly-name");
+        assert_eq!(workspaces[0].branch_name, "eben/renamed-branch");
     }
 
     #[test]

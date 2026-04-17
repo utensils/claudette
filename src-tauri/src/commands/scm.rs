@@ -39,30 +39,52 @@ struct WorkspaceContext {
     manual_override: Option<String>,
 }
 
-/// Look up workspace, repository, and SCM provider override from the database.
-/// All DB work happens synchronously (Database is not Send).
-fn lookup_workspace_context(
+/// Look up workspace, repository, and SCM provider override from the database,
+/// then reconcile the stored `branch_name` with the worktree's actual branch
+/// so the DB remains the source of truth when a branch is renamed externally
+/// (e.g. by an agent running `git branch -m`). All DB work happens in
+/// synchronous blocks — `rusqlite::Connection` isn't `Send`, so we drop it
+/// before the async git call and reopen it for the reconciliation write.
+async fn lookup_workspace_context(
     db_path: &std::path::Path,
     workspace_id: &str,
 ) -> Result<WorkspaceContext, String> {
-    let db = Database::open(db_path).map_err(|e| e.to_string())?;
-    let workspace = db
-        .list_workspaces()
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .find(|w| w.id == workspace_id)
-        .ok_or("Workspace not found")?;
-    let repo = db
-        .get_repository(&workspace.repository_id)
-        .map_err(|e| e.to_string())?
-        .ok_or("Repository not found")?;
-    let key = format!("repo:{}:scm_provider", repo.id);
-    let manual_override = db.get_app_setting(&key).ok().flatten();
-    Ok(WorkspaceContext {
-        workspace,
-        repo,
-        manual_override,
-    })
+    let mut ctx = {
+        let db = Database::open(db_path).map_err(|e| e.to_string())?;
+        let workspace = db
+            .list_workspaces()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|w| w.id == workspace_id)
+            .ok_or("Workspace not found")?;
+        let repo = db
+            .get_repository(&workspace.repository_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("Repository not found")?;
+        let key = format!("repo:{}:scm_provider", repo.id);
+        let manual_override = db.get_app_setting(&key).ok().flatten();
+        WorkspaceContext {
+            workspace,
+            repo,
+            manual_override,
+        }
+    };
+
+    // Reconcile DB-stored branch_name against the worktree's actual branch.
+    // If they differ, sync the DB and use the fresh value going forward.
+    // Failures (missing worktree, detached HEAD, etc.) fall back silently to
+    // the stored value so SCM lookups still proceed.
+    if let Some(worktree) = ctx.workspace.worktree_path.clone()
+        && let Ok(actual) = claudette::git::current_branch(&worktree).await
+        && actual != ctx.workspace.branch_name
+    {
+        if let Ok(db) = Database::open(db_path) {
+            let _ = db.update_workspace_branch_name(&ctx.workspace.id, &actual);
+        }
+        ctx.workspace.branch_name = actual;
+    }
+
+    Ok(ctx)
 }
 
 /// List all discovered SCM provider plugins.
@@ -136,7 +158,7 @@ pub async fn load_scm_detail(
     workspace_id: String,
     state: State<'_, AppState>,
 ) -> Result<ScmDetail, String> {
-    let ctx = lookup_workspace_context(&state.db_path, &workspace_id)?;
+    let ctx = lookup_workspace_context(&state.db_path, &workspace_id).await?;
 
     let provider_name =
         match resolve_provider_async(&ctx.manual_override, &ctx.repo.path, &state).await {
@@ -254,7 +276,7 @@ pub async fn scm_create_pr(
     draft: bool,
     state: State<'_, AppState>,
 ) -> Result<PullRequest, String> {
-    let ctx = lookup_workspace_context(&state.db_path, &workspace_id)?;
+    let ctx = lookup_workspace_context(&state.db_path, &workspace_id).await?;
 
     let provider = resolve_provider_async(&ctx.manual_override, &ctx.repo.path, &state)
         .await
@@ -295,7 +317,7 @@ pub async fn scm_merge_pr(
     pr_number: u64,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    let ctx = lookup_workspace_context(&state.db_path, &workspace_id)?;
+    let ctx = lookup_workspace_context(&state.db_path, &workspace_id).await?;
 
     let provider = resolve_provider_async(&ctx.manual_override, &ctx.repo.path, &state)
         .await
@@ -329,7 +351,7 @@ pub async fn scm_refresh(
     workspace_id: String,
     state: State<'_, AppState>,
 ) -> Result<ScmDetail, String> {
-    let ctx = lookup_workspace_context(&state.db_path, &workspace_id)?;
+    let ctx = lookup_workspace_context(&state.db_path, &workspace_id).await?;
     let cache_key = (ctx.repo.id, ctx.workspace.branch_name);
     state.scm_cache.entries.write().await.remove(&cache_key);
 
@@ -392,7 +414,9 @@ async fn resolve_provider_for_polling(
 
 /// Fetch SCM data for a single workspace (used by the polling loop).
 async fn poll_workspace_scm(app_state: &AppState, workspace_id: &str) -> Option<ScmDetail> {
-    let ctx = lookup_workspace_context(&app_state.db_path, workspace_id).ok()?;
+    let ctx = lookup_workspace_context(&app_state.db_path, workspace_id)
+        .await
+        .ok()?;
 
     let provider_name =
         resolve_provider_for_polling(&ctx.manual_override, &ctx.repo.path, app_state).await?;
