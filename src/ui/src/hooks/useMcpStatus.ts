@@ -8,15 +8,15 @@ import { ensureAndValidateMcps } from "../services/mcp";
  * Listen for "mcp-status-changed" events from the Rust MCP supervisor
  * and update the Zustand store with the latest per-repository status.
  *
- * Also triggers MCP detection + validation when the active workspace changes.
+ * Triggers MCP detection + validation for every known repository once per
+ * session so the sidebar indicators populate without waiting for a workspace
+ * to be selected.
  */
 export function useMcpStatus() {
   const setMcpStatus = useAppStore((s) => s.setMcpStatus);
   const clearMcpStatus = useAppStore((s) => s.clearMcpStatus);
-  const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
-  const workspaces = useAppStore((s) => s.workspaces);
   const repositories = useAppStore((s) => s.repositories);
-  const lastRepoId = useRef<string | null>(null);
+  const validated = useRef<Set<string>>(new Set());
 
   // Listen for supervisor status events.
   useEffect(() => {
@@ -41,24 +41,17 @@ export function useMcpStatus() {
     };
   }, [clearMcpStatus]);
 
-  // When the selected workspace changes, ensure MCPs are detected + validated.
+  // Validate MCPs for every repository once per session. Runs on initial load
+  // and whenever a new repo is added. The AttachMenu re-detects on open for
+  // fresh state, so we don't need to re-validate on workspace switches.
   useEffect(() => {
-    if (!selectedWorkspaceId) return;
-    const ws = workspaces.find((w) => w.id === selectedWorkspaceId);
-    if (!ws) return;
-    const repoId = ws.repository_id;
-
-    // Skip if we already validated this repo during this session.
-    // This avoids re-running detection on every workspace switch within the
-    // same repo. The AttachMenu always re-detects on open for fresh state.
-    if (lastRepoId.current === repoId) return;
-    lastRepoId.current = repoId;
-
-    // Check repo exists.
-    if (!repositories.some((r) => r.id === repoId)) return;
-
-    ensureAndValidateMcps(repoId)
-      .then((snapshot) => setMcpStatus(repoId, snapshot))
-      .catch(() => {});
-  }, [selectedWorkspaceId, workspaces, repositories, setMcpStatus]);
+    for (const repo of repositories) {
+      if (!repo.path_valid) continue;
+      if (validated.current.has(repo.id)) continue;
+      validated.current.add(repo.id);
+      ensureAndValidateMcps(repo.id)
+        .then((snapshot) => setMcpStatus(repo.id, snapshot))
+        .catch(() => {});
+    }
+  }, [repositories, setMcpStatus]);
 }

@@ -240,14 +240,14 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* MCP server health indicator next to repo name */
+/* MCP server health indicator — pushed to end of repo header row */
 .mcpIndicator {
   display: inline-flex;
   align-items: center;
   gap: 3px;
   font-size: 10px;
   color: var(--text-dim);
-  margin-left: 4px;
+  order: 1;
   font-variant-numeric: tabular-nums;
 }
 
