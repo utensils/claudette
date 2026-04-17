@@ -65,6 +65,23 @@ fi
 osascript -e 'tell application "System Events" to set frontmost of first process whose name is "claudette" to true' 2>/dev/null || true
 sleep 0.4
 
+# Select a sample workspace (prefer one with chat history; fall back to the
+# first workspace) so the captured canvas shows the themed chat view instead
+# of the empty-workspace dashboard. Without this, sample captures only show
+# the workspace grid, which doesn't exercise the chat canvas background.
+"${SCRIPT_DIR}/debug-eval.sh" <<'JS' >/dev/null
+const s = window.__CLAUDETTE_STORE__.getState();
+const wsList = s.workspaces ?? [];
+if (wsList.length === 0) return 'no workspaces';
+// Prefer a workspace that already has chat messages loaded; otherwise pick
+// the first available so the chat canvas (not the dashboard) is rendered.
+const withMsgs = wsList.find(w => (s.chatMessages?.[w.id] ?? []).length > 0);
+const target = withMsgs ?? wsList[0];
+s.selectWorkspace(target.id);
+return target.name;
+JS
+sleep 0.4
+
 # Theme list — order in the grid is left→right, top→bottom
 THEMES=(
   default claudette dracula tokyo-night
