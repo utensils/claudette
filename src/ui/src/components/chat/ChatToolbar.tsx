@@ -66,9 +66,9 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
       const effectiveThinking = thinking === "true" || (!thinking && defThinking === "true");
       setFastMode(workspaceId, effectiveFast);
       setThinkingEnabled(workspaceId, effectiveThinking);
-      // Plan mode is not persisted per-workspace (in-memory only); apply global
-      // default only when fast/thinking aren't already enabled.
-      setPlanMode(workspaceId, !effectiveFast && !effectiveThinking && defPlan === "true");
+      // Plan mode is not persisted per-workspace (in-memory only);
+      // always apply the global default on load.
+      setPlanMode(workspaceId, defPlan === "true");
       // Normalize effort against the loaded model to prevent stale values.
       const effectiveEffort = effort ?? defEffort;
       if (effectiveEffort) {
