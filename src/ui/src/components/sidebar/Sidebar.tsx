@@ -77,6 +77,8 @@ export const Sidebar = memo(function Sidebar() {
   const spinnerChar = useSpinnerFrame(anyRunning);
 
   const creatingRef = useRef(false);
+  const archivingRef = useRef<Set<string>>(new Set());
+  const restoringRef = useRef<Set<string>>(new Set());
 
   const handleCreateWorkspace = useCallback(async (repoId: string) => {
     if (creatingRef.current) return;
@@ -162,6 +164,8 @@ export const Sidebar = memo(function Sidebar() {
   );
 
   const handleArchive = useCallback(async (wsId: string) => {
+    if (archivingRef.current.has(wsId)) return;
+    archivingRef.current.add(wsId);
     try {
       await archiveWorkspace(wsId);
       updateWorkspace(wsId, {
@@ -170,17 +174,23 @@ export const Sidebar = memo(function Sidebar() {
         agent_status: "Stopped",
       });
       if (useAppStore.getState().selectedWorkspaceId === wsId) selectWorkspace(null);
-    } catch {
-      // ignore
+    } catch (e) {
+      console.error("Failed to archive workspace:", e);
+    } finally {
+      archivingRef.current.delete(wsId);
     }
   }, [updateWorkspace, selectWorkspace]);
 
   const handleRestore = useCallback(async (wsId: string) => {
+    if (restoringRef.current.has(wsId)) return;
+    restoringRef.current.add(wsId);
     try {
       const path = await restoreWorkspace(wsId);
       updateWorkspace(wsId, { status: "Active", worktree_path: path });
-    } catch {
-      // ignore
+    } catch (e) {
+      console.error("Failed to restore workspace:", e);
+    } finally {
+      restoringRef.current.delete(wsId);
     }
   }, [updateWorkspace]);
 
