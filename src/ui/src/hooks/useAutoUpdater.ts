@@ -100,7 +100,5 @@ export function useAutoUpdater() {
     if (updateInstallWhenIdle && updateAvailable && !hasRunningAgents) {
       installNow();
     }
-  }, [updateInstallWhenIdle, updateAvailable, hasRunningAgents]);
-
-  return { installNow, installWhenIdle, dismiss };
+  }, [updateInstallWhenIdle, updateAvailable, hasRunningAgents, installNow]);
 }
