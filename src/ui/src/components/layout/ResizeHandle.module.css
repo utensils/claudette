@@ -5,8 +5,13 @@
   transition: background var(--transition-fast);
 }
 
+/* Negative margins collapse the handle's layout width to 0 while keeping a
+   4px-wide mouse-capture zone that overlaps the adjacent panels. Without this
+   the handle would leave a visible gap between panels (equal to its width)
+   because its background is transparent and the app background shows through. */
 .horizontal {
   width: 4px;
+  margin: 0 -2px;
   cursor: col-resize;
   flex-shrink: 0;
 }
@@ -18,6 +23,7 @@
 
 .vertical {
   height: 4px;
+  margin: -2px 0;
   cursor: row-resize;
   flex-shrink: 0;
 }
