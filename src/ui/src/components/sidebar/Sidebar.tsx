@@ -17,6 +17,7 @@ import {
 } from "../../services/tauri";
 import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, BadgeCheck, BadgeInfo, BadgeQuestionMark, Cog, Filter, Check, LayoutDashboard, CircleDashed, GitPullRequestArrow, GitPullRequestDraft, GitMerge, GitPullRequestClosed } from "lucide-react";
 import { RepoIcon } from "../shared/RepoIcon";
+import { UpdateBanner } from "../layout/UpdateBanner";
 import { useSpinnerFrame } from "../../hooks/useSpinnerFrame";
 import styles from "./Sidebar.module.css";
 
@@ -626,6 +627,8 @@ export const Sidebar = memo(function Sidebar() {
 
         {sidebarFilter === "all" || sidebarFilter === "remote" ? <RemoteSections /> : null}
       </div>
+
+      <UpdateBanner />
 
       <div className={styles.footer}>
         <button

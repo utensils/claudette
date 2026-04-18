@@ -1,13 +1,8 @@
 import { useAppStore } from "../../stores/useAppStore";
+import { installNow, installWhenIdle, dismiss } from "../../hooks/useAutoUpdater";
 import styles from "./UpdateBanner.module.css";
 
-interface UpdateBannerProps {
-  installNow: () => void;
-  installWhenIdle: () => void;
-  dismiss: () => void;
-}
-
-export function UpdateBanner({ installNow, installWhenIdle, dismiss }: UpdateBannerProps) {
+export function UpdateBanner() {
   const updateAvailable = useAppStore((s) => s.updateAvailable);
   const updateVersion = useAppStore((s) => s.updateVersion);
   const updateDismissed = useAppStore((s) => s.updateDismissed);

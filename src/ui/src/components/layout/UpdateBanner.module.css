@@ -1,17 +1,16 @@
 .banner {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 16px;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
   background: var(--accent-bg);
-  border-bottom: 1px solid var(--sidebar-border);
-  animation: slideDown 0.2s ease;
+  border-top: 1px solid var(--sidebar-border);
+  animation: slideUp 0.2s ease;
 }
 
 .message {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--text-primary);
-  flex: 1;
 }
 
 .version {
@@ -21,6 +20,7 @@
 
 .actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
@@ -28,10 +28,10 @@
   background: var(--selected-bg);
   border: 1px solid var(--divider);
   color: var(--text-primary);
-  padding: 4px 12px;
+  padding: 3px 8px;
   border-radius: 4px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 11px;
   transition: background var(--transition-fast);
 }
 
@@ -52,10 +52,10 @@
 }
 
 .progressWrap {
-  flex: 1;
+  width: 100%;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 .progressTrack {
@@ -74,7 +74,7 @@
 }
 
 .progressLabel {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
   min-width: 32px;
@@ -82,15 +82,15 @@
 }
 
 .idleMessage {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-muted);
   font-style: italic;
 }
 
-@keyframes slideDown {
+@keyframes slideUp {
   from {
     opacity: 0;
-    transform: translateY(-100%);
+    transform: translateY(100%);
   }
   to {
     opacity: 1;

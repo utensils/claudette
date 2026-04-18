@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from "react";
+import { useEffect } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { useAppStore } from "../stores/useAppStore";
@@ -30,64 +30,58 @@ export async function checkForUpdate(): Promise<UpdateCheckResult> {
   }
 }
 
-export function useAutoUpdater() {
-  const setUpdateDismissed = useAppStore((s) => s.setUpdateDismissed);
-  const setUpdateInstallWhenIdle = useAppStore((s) => s.setUpdateInstallWhenIdle);
-  const setUpdateDownloading = useAppStore((s) => s.setUpdateDownloading);
-  const setUpdateProgress = useAppStore((s) => s.setUpdateProgress);
+export async function installNow(): Promise<void> {
+  const update = pendingUpdate;
+  if (!update) return;
+  if (useAppStore.getState().updateDownloading) return;
 
-  const installNow = useCallback(async () => {
-    const update = pendingUpdate;
-    if (!update) return;
-    if (useAppStore.getState().updateDownloading) return;
+  useAppStore.getState().setUpdateDownloading(true);
+  useAppStore.getState().setUpdateProgress(0);
 
-    setUpdateDownloading(true);
-    setUpdateProgress(0);
+  let totalBytes = 0;
+  let downloadedBytes = 0;
 
-    let totalBytes = 0;
-    let downloadedBytes = 0;
-
-    try {
-      await update.downloadAndInstall((event) => {
-        if (event.event === "Started" && event.data.contentLength) {
-          totalBytes = event.data.contentLength;
-        } else if (event.event === "Progress") {
-          downloadedBytes += event.data.chunkLength;
-          if (totalBytes > 0) {
-            setUpdateProgress(Math.round((downloadedBytes / totalBytes) * 100));
-          }
-        } else if (event.event === "Finished") {
-          setUpdateProgress(100);
+  try {
+    await update.downloadAndInstall((event) => {
+      if (event.event === "Started" && event.data.contentLength) {
+        totalBytes = event.data.contentLength;
+      } else if (event.event === "Progress") {
+        downloadedBytes += event.data.chunkLength;
+        if (totalBytes > 0) {
+          useAppStore.getState().setUpdateProgress(
+            Math.round((downloadedBytes / totalBytes) * 100)
+          );
         }
-      });
-      await relaunch();
-    } catch (e) {
-      console.error("[updater] Install failed:", e);
-      setUpdateDownloading(false);
-      setUpdateProgress(0);
-      // Re-check to get a fresh Update instance after failure
-      checkForUpdate();
-    }
-  }, [setUpdateDownloading, setUpdateProgress]);
+      } else if (event.event === "Finished") {
+        useAppStore.getState().setUpdateProgress(100);
+      }
+    });
+    await relaunch();
+  } catch (e) {
+    console.error("[updater] Install failed:", e);
+    useAppStore.getState().setUpdateDownloading(false);
+    useAppStore.getState().setUpdateProgress(0);
+    checkForUpdate();
+  }
+}
 
-  const installWhenIdle = useCallback(() => {
-    const hasRunning = useAppStore.getState().workspaces.some(
-      (ws) => ws.agent_status === "Running"
-    );
-    if (!hasRunning) {
-      installNow();
-      return;
-    }
-    setUpdateInstallWhenIdle(true);
-    setUpdateDismissed(true);
-  }, [setUpdateInstallWhenIdle, setUpdateDismissed, installNow]);
+export function installWhenIdle(): void {
+  const hasRunning = useAppStore.getState().workspaces.some(
+    (ws) => ws.agent_status === "Running"
+  );
+  if (!hasRunning) {
+    installNow();
+    return;
+  }
+  useAppStore.getState().setUpdateInstallWhenIdle(true);
+  useAppStore.getState().setUpdateDismissed(true);
+}
 
-  const dismiss = useCallback(() => {
-    setUpdateDismissed(true);
-  }, [setUpdateDismissed]);
+export function dismiss(): void {
+  useAppStore.getState().setUpdateDismissed(true);
+}
 
-  // Periodic update checks — disabled in dev mode where the updater endpoint
-  // won't have matching artifacts and relaunch() can't restart the dev server.
+export function useAutoUpdater() {
   useEffect(() => {
     if (import.meta.env.DEV) return;
 
@@ -96,7 +90,6 @@ export function useAutoUpdater() {
     return () => window.clearInterval(intervalId);
   }, []);
 
-  // Install when idle: watch for all agents to stop running.
   const updateInstallWhenIdle = useAppStore((s) => s.updateInstallWhenIdle);
   const updateAvailable = useAppStore((s) => s.updateAvailable);
   const hasRunningAgents = useAppStore(
@@ -107,7 +100,7 @@ export function useAutoUpdater() {
     if (updateInstallWhenIdle && updateAvailable && !hasRunningAgents) {
       installNow();
     }
-  }, [updateInstallWhenIdle, updateAvailable, hasRunningAgents, installNow]);
+  }, [updateInstallWhenIdle, updateAvailable, hasRunningAgents]);
 
   return { installNow, installWhenIdle, dismiss };
 }

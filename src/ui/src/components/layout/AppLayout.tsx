@@ -8,7 +8,6 @@ import { RightSidebar } from "../right-sidebar/RightSidebar";
 import { FuzzyFinder } from "../fuzzy-finder/FuzzyFinder";
 import { CommandPalette } from "../command-palette/CommandPalette";
 import { Dashboard } from "./Dashboard";
-import { UpdateBanner } from "./UpdateBanner";
 import { ModalRouter } from "../modals/ModalRouter";
 import { SettingsPage } from "../settings/SettingsPage";
 import { ResizeHandle } from "./ResizeHandle";
@@ -35,7 +34,7 @@ export function AppLayout() {
 
   useKeyboardShortcuts();
   useBranchRefresh();
-  const { installNow, installWhenIdle, dismiss } = useAutoUpdater();
+  useAutoUpdater();
 
   const showDiff = diffSelectedFile !== null;
 
@@ -76,7 +75,6 @@ export function AppLayout() {
 
   return (
     <div className={styles.container} {...(isMac ? { "data-platform": "mac" } : {})}>
-      <UpdateBanner installNow={installNow} installWhenIdle={installWhenIdle} dismiss={dismiss} />
       <div className={styles.main} ref={mainRef}>
         {/*
           Settings is lazy-mounted on first open, then kept alive so
