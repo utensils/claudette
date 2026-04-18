@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.13.1](https://github.com/utensils/claudette/compare/v0.13.0...v0.13.1) (2026-04-18)
+
+
+### Bug Fixes
+
+* **chat:** force session teardown after ExitPlanMode ([#285](https://github.com/utensils/claudette/issues/285)) ([ce3844b](https://github.com/utensils/claudette/commit/ce3844b76afcb961924f58ac6e2c30105caa43d9))
+* **chat:** round-trip AskUserQuestion / ExitPlanMode via control_response ([#271](https://github.com/utensils/claudette/issues/271)) ([809b9d3](https://github.com/utensils/claudette/commit/809b9d3645612daddcd281870e08da800c5845c6))
+* **scm:** use enriched PATH so plugins find gh/glab in release builds ([#287](https://github.com/utensils/claudette/issues/287)) ([d57c706](https://github.com/utensils/claudette/commit/d57c70657c56e6c0b6b10cf7c8ff21aa64b6e918))
+
 ## [0.13.0](https://github.com/utensils/claudette/compare/v0.12.0...v0.13.0) (2026-04-18)
 
 
