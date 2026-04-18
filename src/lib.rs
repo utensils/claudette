@@ -8,6 +8,7 @@ pub mod fork;
 pub mod git;
 pub mod mcp;
 pub mod mcp_supervisor;
+pub mod metrics;
 pub mod model;
 pub mod names;
 pub mod permissions;

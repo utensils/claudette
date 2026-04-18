@@ -1,0 +1,700 @@
+//! Aggregation queries for the dashboard metrics widgets.
+//!
+//! Queries run against the v20 schema: `agent_sessions`, `agent_commits`, and
+//! `deleted_workspace_summaries`. Frozen summaries are merged with live rows so
+//! lifetime stats survive workspace hard-deletes.
+
+use std::collections::HashMap;
+use std::path::Path;
+
+use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardMetrics {
+    pub active_sessions: u32,
+    pub sessions_today: u32,
+    pub commits_today: u32,
+    pub additions_7d: u64,
+    pub deletions_7d: u64,
+    pub cost_30d_usd: f64,
+    pub success_rate_30d: f32,
+    pub commits_daily_14d: Vec<u32>,
+    pub cost_daily_30d: Vec<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceMetrics {
+    pub commits_count: u32,
+    pub additions: u64,
+    pub deletions: u64,
+    pub latest_session_turns: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoLeaderRow {
+    pub repository_id: String,
+    pub sessions: u32,
+    pub commits: u32,
+    pub total_cost_usd: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeatmapCell {
+    pub dow: u8,
+    pub week: u8,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionDot {
+    pub ended_at: String,
+    pub completed_ok: bool,
+    pub workspace_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalyticsMetrics {
+    pub repo_leaderboard: Vec<RepoLeaderRow>,
+    pub heatmap: Vec<HeatmapCell>,
+    pub turn_histogram: Vec<u32>,
+    pub top_slash_commands: Vec<(String, u32)>,
+    pub recent_sessions_24h: Vec<SessionDot>,
+}
+
+/// 8 turn-count buckets: [1,2], [3,4], [5,8], [9,16], [17,32], [33,64], [65,128], [129+].
+const TURN_BUCKET_UPPER_BOUNDS: [i64; 7] = [2, 4, 8, 16, 32, 64, 128];
+
+pub fn dashboard_metrics(db_path: &Path) -> Result<DashboardMetrics, rusqlite::Error> {
+    let conn = Connection::open(db_path)?;
+    dashboard_metrics_with(&conn)
+}
+
+pub fn workspace_metrics_batch(
+    db_path: &Path,
+    ids: &[String],
+) -> Result<HashMap<String, WorkspaceMetrics>, rusqlite::Error> {
+    let conn = Connection::open(db_path)?;
+    workspace_metrics_batch_with(&conn, ids)
+}
+
+pub fn analytics_metrics(db_path: &Path) -> Result<AnalyticsMetrics, rusqlite::Error> {
+    let conn = Connection::open(db_path)?;
+    analytics_metrics_with(&conn)
+}
+
+fn dashboard_metrics_with(conn: &Connection) -> Result<DashboardMetrics, rusqlite::Error> {
+    let active_sessions: u32 = conn.query_row(
+        "SELECT COUNT(*) FROM agent_sessions WHERE ended_at IS NULL",
+        [],
+        |row| row.get::<_, i64>(0).map(|n| n as u32),
+    )?;
+
+    let sessions_today: u32 = conn.query_row(
+        "SELECT COUNT(*) FROM agent_sessions WHERE started_at >= date('now')",
+        [],
+        |row| row.get::<_, i64>(0).map(|n| n as u32),
+    )?;
+
+    let commits_today: u32 = conn.query_row(
+        "SELECT COUNT(*) FROM agent_commits WHERE committed_at >= date('now')",
+        [],
+        |row| row.get::<_, i64>(0).map(|n| n as u32),
+    )?;
+
+    let (additions_7d, deletions_7d): (u64, u64) = conn.query_row(
+        "SELECT COALESCE(SUM(additions), 0), COALESCE(SUM(deletions), 0)
+         FROM agent_commits
+         WHERE committed_at >= date('now','-6 days')",
+        [],
+        |row| Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64)),
+    )?;
+
+    let live_cost_30d: f64 = conn.query_row(
+        "SELECT COALESCE(SUM(cost_usd), 0) FROM chat_messages
+         WHERE created_at >= date('now','-29 days')",
+        [],
+        |row| row.get(0),
+    )?;
+    let deleted_cost_30d: f64 = conn.query_row(
+        "SELECT COALESCE(SUM(total_cost_usd), 0) FROM deleted_workspace_summaries
+         WHERE last_message_at IS NOT NULL
+           AND last_message_at >= date('now','-29 days')",
+        [],
+        |row| row.get(0),
+    )?;
+    let cost_30d_usd = live_cost_30d + deleted_cost_30d;
+
+    let success_rate_30d: f32 = conn
+        .query_row(
+            "SELECT AVG(CASE WHEN completed_ok THEN 1.0 ELSE 0.0 END)
+             FROM agent_sessions
+             WHERE ended_at IS NOT NULL
+               AND started_at >= date('now','-29 days')",
+            [],
+            |row| row.get::<_, Option<f64>>(0),
+        )?
+        .unwrap_or(0.0) as f32;
+
+    let commits_daily_14d = daily_counts_14d(conn)?;
+    let cost_daily_30d = daily_cost_30d(conn)?;
+
+    Ok(DashboardMetrics {
+        active_sessions,
+        sessions_today,
+        commits_today,
+        additions_7d,
+        deletions_7d,
+        cost_30d_usd,
+        success_rate_30d,
+        commits_daily_14d,
+        cost_daily_30d,
+    })
+}
+
+fn daily_counts_14d(conn: &Connection) -> Result<Vec<u32>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT date(committed_at) AS d, COUNT(*) FROM agent_commits
+         WHERE committed_at >= date('now','-13 days')
+         GROUP BY d",
+    )?;
+    let counts: HashMap<String, u32> = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u32))
+        })?
+        .collect::<Result<_, _>>()?;
+    fill_last_n_days(conn, 14, |d| counts.get(d).copied().unwrap_or(0))
+}
+
+fn daily_cost_30d(conn: &Connection) -> Result<Vec<f64>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT date(created_at) AS d, COALESCE(SUM(cost_usd), 0) FROM chat_messages
+         WHERE created_at >= date('now','-29 days')
+         GROUP BY d",
+    )?;
+    let costs: HashMap<String, f64> = stmt
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?)))?
+        .collect::<Result<_, _>>()?;
+    fill_last_n_days(conn, 30, |d| costs.get(d).copied().unwrap_or(0.0))
+}
+
+fn fill_last_n_days<T, F>(conn: &Connection, n: i64, mut f: F) -> Result<Vec<T>, rusqlite::Error>
+where
+    F: FnMut(&str) -> T,
+{
+    // Use SQLite's own date() so we match its handling of timezone / date math exactly.
+    let mut stmt = conn.prepare("SELECT date('now', ?1 || ' days')")?;
+    let mut out = Vec::with_capacity(n as usize);
+    for offset in (0..n).rev() {
+        let day: String = stmt.query_row([format!("-{offset}")], |row| row.get(0))?;
+        out.push(f(&day));
+    }
+    Ok(out)
+}
+
+fn workspace_metrics_batch_with(
+    conn: &Connection,
+    ids: &[String],
+) -> Result<HashMap<String, WorkspaceMetrics>, rusqlite::Error> {
+    let mut result: HashMap<String, WorkspaceMetrics> = HashMap::with_capacity(ids.len());
+    if ids.is_empty() {
+        return Ok(result);
+    }
+
+    let mut commit_stmt = conn.prepare(
+        "SELECT COUNT(*), COALESCE(SUM(additions), 0), COALESCE(SUM(deletions), 0)
+         FROM agent_commits WHERE workspace_id = ?1",
+    )?;
+    let mut turn_stmt = conn.prepare(
+        "SELECT turn_count FROM agent_sessions
+         WHERE workspace_id = ?1
+         ORDER BY started_at DESC LIMIT 1",
+    )?;
+
+    for id in ids {
+        let (commits_count, additions, deletions): (u32, u64, u64) =
+            commit_stmt.query_row([id], |row| {
+                Ok((
+                    row.get::<_, i64>(0)? as u32,
+                    row.get::<_, i64>(1)? as u64,
+                    row.get::<_, i64>(2)? as u64,
+                ))
+            })?;
+        let latest_session_turns: u32 = turn_stmt
+            .query_row([id], |row| row.get::<_, i64>(0).map(|n| n as u32))
+            .or_else(|e| {
+                if matches!(e, rusqlite::Error::QueryReturnedNoRows) {
+                    Ok(0)
+                } else {
+                    Err(e)
+                }
+            })?;
+        result.insert(
+            id.clone(),
+            WorkspaceMetrics {
+                commits_count,
+                additions,
+                deletions,
+                latest_session_turns,
+            },
+        );
+    }
+    Ok(result)
+}
+
+fn analytics_metrics_with(conn: &Connection) -> Result<AnalyticsMetrics, rusqlite::Error> {
+    Ok(AnalyticsMetrics {
+        repo_leaderboard: repo_leaderboard(conn)?,
+        heatmap: heatmap(conn)?,
+        turn_histogram: turn_histogram(conn)?,
+        top_slash_commands: top_slash_commands(conn)?,
+        recent_sessions_24h: recent_sessions_24h(conn)?,
+    })
+}
+
+fn repo_leaderboard(conn: &Connection) -> Result<Vec<RepoLeaderRow>, rusqlite::Error> {
+    // Merge live sessions + commits + chat cost with frozen deleted-workspace summaries,
+    // then re-aggregate per repository.
+    let sql = "
+        WITH repo_ids AS (
+            SELECT DISTINCT repository_id FROM agent_sessions
+            UNION SELECT DISTINCT repository_id FROM agent_commits
+            UNION SELECT DISTINCT repository_id FROM deleted_workspace_summaries
+            UNION SELECT DISTINCT w.repository_id FROM chat_messages m JOIN workspaces w ON w.id = m.workspace_id
+        ),
+        live AS (
+            SELECT r.repository_id,
+                (SELECT COUNT(*) FROM agent_sessions s WHERE s.repository_id = r.repository_id) AS sessions,
+                (SELECT COUNT(*) FROM agent_commits  c WHERE c.repository_id = r.repository_id) AS commits,
+                (SELECT COALESCE(SUM(m.cost_usd),0) FROM chat_messages m
+                 JOIN workspaces w ON w.id = m.workspace_id
+                 WHERE w.repository_id = r.repository_id) AS total_cost_usd
+            FROM repo_ids r
+        ),
+        deleted AS (
+            SELECT repository_id,
+                COALESCE(SUM(sessions_started), 0) AS sessions,
+                COALESCE(SUM(commits_made),    0) AS commits,
+                COALESCE(SUM(total_cost_usd),  0) AS total_cost_usd
+            FROM deleted_workspace_summaries
+            GROUP BY repository_id
+        ),
+        merged AS (
+            SELECT repository_id, sessions, commits, total_cost_usd FROM live
+            UNION ALL
+            SELECT repository_id, sessions, commits, total_cost_usd FROM deleted
+        )
+        SELECT repository_id,
+               CAST(COALESCE(SUM(sessions), 0) AS INTEGER) AS sessions,
+               CAST(COALESCE(SUM(commits),  0) AS INTEGER) AS commits,
+               COALESCE(SUM(total_cost_usd), 0) AS total_cost_usd
+        FROM merged
+        GROUP BY repository_id
+        ORDER BY sessions DESC, commits DESC, total_cost_usd DESC
+        LIMIT 5
+    ";
+    let mut stmt = conn.prepare(sql)?;
+    stmt.query_map([], |row| {
+        Ok(RepoLeaderRow {
+            repository_id: row.get(0)?,
+            sessions: row.get::<_, i64>(1)? as u32,
+            commits: row.get::<_, i64>(2)? as u32,
+            total_cost_usd: row.get(3)?,
+        })
+    })?
+    .collect()
+}
+
+fn heatmap(conn: &Connection) -> Result<Vec<HeatmapCell>, rusqlite::Error> {
+    // 13 weeks × 7 days = 91 cells. Week index = days-ago / 7 (0 = most recent).
+    let mut stmt = conn.prepare(
+        "SELECT CAST(strftime('%w', started_at) AS INTEGER) AS dow,
+                CAST((julianday(date('now')) - julianday(date(started_at))) / 7 AS INTEGER) AS week,
+                COUNT(*) AS c
+         FROM agent_sessions
+         WHERE started_at >= date('now','-90 days')
+         GROUP BY dow, week",
+    )?;
+    let mut grid = [[0u32; 13]; 7];
+    for row in stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, i64>(2)? as u32,
+        ))
+    })? {
+        let (dow, week, count) = row?;
+        if (0..7).contains(&dow) && (0..13).contains(&week) {
+            grid[dow as usize][week as usize] = count;
+        }
+    }
+    let mut out = Vec::with_capacity(91);
+    for dow in 0u8..7 {
+        for week in 0u8..13 {
+            out.push(HeatmapCell {
+                dow,
+                week,
+                count: grid[dow as usize][week as usize],
+            });
+        }
+    }
+    Ok(out)
+}
+
+fn turn_histogram(conn: &Connection) -> Result<Vec<u32>, rusqlite::Error> {
+    let mut stmt = conn.prepare("SELECT turn_count FROM agent_sessions WHERE turn_count > 0")?;
+    let mut buckets = vec![0u32; 8];
+    for row in stmt.query_map([], |row| row.get::<_, i64>(0))? {
+        let count = row?;
+        let idx = TURN_BUCKET_UPPER_BOUNDS
+            .iter()
+            .position(|&upper| count <= upper)
+            .unwrap_or(7);
+        buckets[idx] += 1;
+    }
+    Ok(buckets)
+}
+
+fn top_slash_commands(conn: &Connection) -> Result<Vec<(String, u32)>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT command_name, CAST(SUM(use_count) AS INTEGER) AS total
+         FROM slash_command_usage
+         GROUP BY command_name
+         ORDER BY total DESC
+         LIMIT 5",
+    )?;
+    stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u32))
+    })?
+    .collect()
+}
+
+fn recent_sessions_24h(conn: &Connection) -> Result<Vec<SessionDot>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT ended_at, completed_ok, COALESCE(workspace_id, '')
+         FROM agent_sessions
+         WHERE ended_at IS NOT NULL
+           AND ended_at >= datetime('now','-24 hours')
+         ORDER BY ended_at DESC",
+    )?;
+    stmt.query_map([], |row| {
+        Ok(SessionDot {
+            ended_at: row.get(0)?,
+            completed_ok: row.get::<_, i64>(1)? != 0,
+            workspace_id: row.get(2)?,
+        })
+    })?
+    .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Database;
+
+    fn setup_db() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("claudette.db");
+        let _db = Database::open(&path).unwrap();
+        (dir, path)
+    }
+
+    fn insert_repo(conn: &Connection, id: &str) {
+        conn.execute(
+            "INSERT INTO repositories (id, path, name, path_slug) VALUES (?1, ?2, ?3, ?3)",
+            [id, &format!("/tmp/{id}"), id],
+        )
+        .unwrap();
+    }
+
+    fn insert_workspace(conn: &Connection, ws_id: &str, repo_id: &str) {
+        conn.execute(
+            "INSERT INTO workspaces (id, repository_id, name, branch_name)
+             VALUES (?1, ?2, ?1, ?1)",
+            [ws_id, repo_id],
+        )
+        .unwrap();
+    }
+
+    fn exec(conn: &Connection, sql: &str) {
+        conn.execute_batch(sql).unwrap();
+    }
+
+    #[test]
+    fn dashboard_empty_db_returns_zeros_with_correct_lengths() {
+        let (_dir, path) = setup_db();
+        let m = dashboard_metrics(&path).unwrap();
+        assert_eq!(m.active_sessions, 0);
+        assert_eq!(m.sessions_today, 0);
+        assert_eq!(m.commits_today, 0);
+        assert_eq!(m.additions_7d, 0);
+        assert_eq!(m.deletions_7d, 0);
+        assert_eq!(m.cost_30d_usd, 0.0);
+        assert_eq!(m.success_rate_30d, 0.0);
+        assert_eq!(m.commits_daily_14d.len(), 14);
+        assert!(m.commits_daily_14d.iter().all(|&n| n == 0));
+        assert_eq!(m.cost_daily_30d.len(), 30);
+        assert!(m.cost_daily_30d.iter().all(|&n| n == 0.0));
+    }
+
+    #[test]
+    fn dashboard_with_active_and_today_sessions_and_commits() {
+        let (_dir, path) = setup_db();
+        let conn = Connection::open(&path).unwrap();
+        insert_repo(&conn, "repo1");
+        insert_workspace(&conn, "ws1", "repo1");
+        exec(
+            &conn,
+            "INSERT INTO agent_sessions (id, workspace_id, repository_id, started_at, last_message_at, turn_count)
+             VALUES ('s1', 'ws1', 'repo1', datetime('now'), datetime('now'), 3)",
+        );
+        exec(
+            &conn,
+            "INSERT INTO agent_commits (commit_hash, workspace_id, repository_id, additions, deletions, files_changed, committed_at)
+             VALUES ('abc', 'ws1', 'repo1', 10, 2, 1, datetime('now'))",
+        );
+
+        let m = dashboard_metrics(&path).unwrap();
+        assert_eq!(m.active_sessions, 1);
+        assert_eq!(m.sessions_today, 1);
+        assert_eq!(m.commits_today, 1);
+        assert_eq!(m.additions_7d, 10);
+        assert_eq!(m.deletions_7d, 2);
+        assert_eq!(*m.commits_daily_14d.last().unwrap(), 1);
+        assert_eq!(m.commits_daily_14d[..13].iter().sum::<u32>(), 0);
+    }
+
+    #[test]
+    fn dashboard_success_rate_computes_avg_of_completed_ok() {
+        let (_dir, path) = setup_db();
+        let conn = Connection::open(&path).unwrap();
+        insert_repo(&conn, "r");
+        for (id, ok) in [("s1", 1), ("s2", 1), ("s3", 0)] {
+            conn.execute(
+                "INSERT INTO agent_sessions (id, repository_id, started_at, last_message_at, ended_at, completed_ok)
+                 VALUES (?1, 'r', datetime('now','-1 days'), datetime('now','-1 days'), datetime('now'), ?2)",
+                rusqlite::params![id, ok],
+            ).unwrap();
+        }
+        // An un-ended session must be ignored.
+        exec(
+            &conn,
+            "INSERT INTO agent_sessions (id, repository_id, started_at, last_message_at, completed_ok)
+             VALUES ('s4', 'r', datetime('now'), datetime('now'), 0)",
+        );
+        let m = dashboard_metrics(&path).unwrap();
+        assert!((m.success_rate_30d - 2.0 / 3.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn dashboard_cost_merges_live_messages_with_deleted_summaries() {
+        let (_dir, path) = setup_db();
+        let conn = Connection::open(&path).unwrap();
+        insert_repo(&conn, "r");
+        insert_workspace(&conn, "ws1", "r");
+        exec(
+            &conn,
+            "INSERT INTO chat_messages (id, workspace_id, role, content, cost_usd)
+             VALUES ('m1', 'ws1', 'assistant', 'hi', 1.25)",
+        );
+        exec(
+            &conn,
+            "INSERT INTO deleted_workspace_summaries (id, workspace_id, workspace_name, repository_id, workspace_created_at, total_cost_usd, last_message_at)
+             VALUES ('d1', 'wsdel', 'dead', 'r', datetime('now','-10 days'), 3.75, datetime('now','-5 days'))",
+        );
+        let m = dashboard_metrics(&path).unwrap();
+        assert!((m.cost_30d_usd - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn workspace_metrics_batch_aggregates_per_workspace() {
+        let (_dir, path) = setup_db();
+        let conn = Connection::open(&path).unwrap();
+        insert_repo(&conn, "r");
+        insert_workspace(&conn, "ws1", "r");
+        insert_workspace(&conn, "ws2", "r");
+        exec(
+            &conn,
+            "INSERT INTO agent_commits (commit_hash, workspace_id, repository_id, additions, deletions, files_changed, committed_at)
+             VALUES ('c1', 'ws1', 'r', 10, 2, 1, datetime('now')),
+                    ('c2', 'ws1', 'r',  5, 1, 1, datetime('now')),
+                    ('c3', 'ws2', 'r',  3, 0, 1, datetime('now'))",
+        );
+        exec(
+            &conn,
+            "INSERT INTO agent_sessions (id, workspace_id, repository_id, started_at, last_message_at, turn_count)
+             VALUES ('s_old', 'ws1', 'r', datetime('now','-2 days'), datetime('now','-2 days'), 3),
+                    ('s_new', 'ws1', 'r', datetime('now'),           datetime('now'),           7)",
+        );
+
+        let ids = vec!["ws1".to_string(), "ws2".to_string(), "missing".to_string()];
+        let m = workspace_metrics_batch(&path, &ids).unwrap();
+
+        let ws1 = m.get("ws1").unwrap();
+        assert_eq!(ws1.commits_count, 2);
+        assert_eq!(ws1.additions, 15);
+        assert_eq!(ws1.deletions, 3);
+        assert_eq!(ws1.latest_session_turns, 7);
+
+        let ws2 = m.get("ws2").unwrap();
+        assert_eq!(ws2.commits_count, 1);
+        assert_eq!(ws2.latest_session_turns, 0);
+
+        let missing = m.get("missing").unwrap();
+        assert_eq!(missing.commits_count, 0);
+        assert_eq!(missing.latest_session_turns, 0);
+    }
+
+    #[test]
+    fn analytics_leaderboard_merges_live_and_deleted_by_repo() {
+        let (_dir, path) = setup_db();
+        let conn = Connection::open(&path).unwrap();
+        insert_repo(&conn, "repoA");
+        insert_repo(&conn, "repoB");
+        insert_workspace(&conn, "wsA", "repoA");
+        exec(
+            &conn,
+            "INSERT INTO agent_sessions (id, workspace_id, repository_id, started_at, last_message_at)
+             VALUES ('s1', 'wsA', 'repoA', datetime('now'), datetime('now')),
+                    ('s2', 'wsA', 'repoA', datetime('now'), datetime('now'))",
+        );
+        exec(
+            &conn,
+            "INSERT INTO agent_commits (commit_hash, workspace_id, repository_id, committed_at)
+             VALUES ('c1', 'wsA', 'repoA', datetime('now'))",
+        );
+        exec(
+            &conn,
+            "INSERT INTO chat_messages (id, workspace_id, role, content, cost_usd)
+             VALUES ('m1', 'wsA', 'assistant', 'hi', 2.0)",
+        );
+        exec(
+            &conn,
+            "INSERT INTO deleted_workspace_summaries (id, workspace_id, workspace_name, repository_id, workspace_created_at, sessions_started, commits_made, total_cost_usd)
+             VALUES ('d1', 'wsGone', 'gone', 'repoA', datetime('now'), 3, 2, 4.0)",
+        );
+        exec(
+            &conn,
+            "INSERT INTO deleted_workspace_summaries (id, workspace_id, workspace_name, repository_id, workspace_created_at, sessions_started, commits_made, total_cost_usd)
+             VALUES ('d2', 'wsOld', 'old', 'repoB', datetime('now'), 1, 0, 0.5)",
+        );
+
+        let a = analytics_metrics(&path).unwrap();
+        let a_row = a
+            .repo_leaderboard
+            .iter()
+            .find(|r| r.repository_id == "repoA")
+            .unwrap();
+        assert_eq!(a_row.sessions, 5);
+        assert_eq!(a_row.commits, 3);
+        assert!((a_row.total_cost_usd - 6.0).abs() < 1e-6);
+
+        let b_row = a
+            .repo_leaderboard
+            .iter()
+            .find(|r| r.repository_id == "repoB")
+            .unwrap();
+        assert_eq!(b_row.sessions, 1);
+        assert_eq!(b_row.commits, 0);
+        assert!((b_row.total_cost_usd - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn analytics_heatmap_has_91_cells_and_buckets_by_week() {
+        let (_dir, path) = setup_db();
+        let conn = Connection::open(&path).unwrap();
+        insert_repo(&conn, "r");
+        insert_workspace(&conn, "w", "r");
+        exec(
+            &conn,
+            "INSERT INTO agent_sessions (id, workspace_id, repository_id, started_at, last_message_at)
+             VALUES ('s1', 'w', 'r', datetime('now'),           datetime('now')),
+                    ('s2', 'w', 'r', datetime('now'),           datetime('now')),
+                    ('s3', 'w', 'r', datetime('now','-10 days'), datetime('now','-10 days'))",
+        );
+        let a = analytics_metrics(&path).unwrap();
+        assert_eq!(a.heatmap.len(), 91);
+        let total: u32 = a.heatmap.iter().map(|c| c.count).sum();
+        assert_eq!(total, 3);
+        let older: u32 = a.heatmap.iter().filter(|c| c.week > 0).map(|c| c.count).sum();
+        assert_eq!(older, 1);
+    }
+
+    #[test]
+    fn analytics_turn_histogram_buckets_correctly() {
+        let (_dir, path) = setup_db();
+        let conn = Connection::open(&path).unwrap();
+        insert_repo(&conn, "r");
+        for (id, turns) in [
+            ("s1", 1),
+            ("s2", 3),
+            ("s3", 5),
+            ("s4", 9),
+            ("s5", 17),
+            ("s6", 33),
+            ("s7", 65),
+            ("s8", 200),
+        ] {
+            conn.execute(
+                "INSERT INTO agent_sessions (id, repository_id, started_at, last_message_at, turn_count)
+                 VALUES (?1, 'r', datetime('now'), datetime('now'), ?2)",
+                rusqlite::params![id, turns],
+            ).unwrap();
+        }
+        // Zero-turn sessions should be excluded from the histogram.
+        exec(
+            &conn,
+            "INSERT INTO agent_sessions (id, repository_id, started_at, last_message_at, turn_count)
+             VALUES ('s0', 'r', datetime('now'), datetime('now'), 0)",
+        );
+        let a = analytics_metrics(&path).unwrap();
+        assert_eq!(a.turn_histogram, vec![1, 1, 1, 1, 1, 1, 1, 1]);
+    }
+
+    #[test]
+    fn analytics_top_slash_commands_sums_use_count() {
+        let (_dir, path) = setup_db();
+        let conn = Connection::open(&path).unwrap();
+        insert_repo(&conn, "r");
+        insert_workspace(&conn, "ws1", "r");
+        insert_workspace(&conn, "ws2", "r");
+        exec(
+            &conn,
+            "INSERT INTO slash_command_usage (workspace_id, command_name, use_count)
+             VALUES ('ws1', 'commit', 3),
+                    ('ws2', 'commit', 2),
+                    ('ws1', 'review', 4)",
+        );
+        let a = analytics_metrics(&path).unwrap();
+        assert_eq!(
+            a.top_slash_commands,
+            vec![("commit".to_string(), 5), ("review".to_string(), 4)]
+        );
+    }
+
+    #[test]
+    fn analytics_recent_sessions_24h_filters_and_orders() {
+        let (_dir, path) = setup_db();
+        let conn = Connection::open(&path).unwrap();
+        insert_repo(&conn, "r");
+        insert_workspace(&conn, "w", "r");
+        exec(
+            &conn,
+            "INSERT INTO agent_sessions (id, workspace_id, repository_id, started_at, last_message_at, ended_at, completed_ok)
+             VALUES ('old',   'w', 'r', datetime('now','-2 days'),  datetime('now','-2 days'),  datetime('now','-2 days'),     1),
+                    ('fresh', 'w', 'r', datetime('now','-1 hours'), datetime('now','-1 hours'), datetime('now','-30 minutes'), 1),
+                    ('fail',  'w', 'r', datetime('now','-3 hours'), datetime('now','-3 hours'), datetime('now','-2 hours'),    0)",
+        );
+        let a = analytics_metrics(&path).unwrap();
+        assert_eq!(a.recent_sessions_24h.len(), 2);
+        assert_eq!(a.recent_sessions_24h[0].workspace_id, "w");
+        assert!(a.recent_sessions_24h[0].completed_ok);
+        assert!(!a.recent_sessions_24h[1].completed_ok);
+    }
+}

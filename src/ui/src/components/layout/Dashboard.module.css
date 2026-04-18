@@ -30,14 +30,20 @@
   font-variant-numeric: tabular-nums;
 }
 
+.scrollBody {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   align-content: start;
   gap: 12px;
-  padding: 28px 32px;
-  overflow-y: auto;
-  flex: 1;
+  padding: 20px 32px;
 }
 
 /* Workspace card */

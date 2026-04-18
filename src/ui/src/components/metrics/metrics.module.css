@@ -1,0 +1,312 @@
+/* Shared styles for metrics widgets and primitives. */
+
+.statsStrip {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--divider);
+  background: transparent;
+}
+
+.tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-height: 76px;
+  padding: 10px 14px;
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  background: var(--hover-bg-subtle);
+  overflow: hidden;
+}
+
+.tileLabel {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+.tileValue {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  color: var(--text-primary);
+  line-height: 1;
+  margin-top: 4px;
+}
+
+.tileValueAccent {
+  color: var(--accent-primary);
+}
+
+.tileSub {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.tileChart {
+  margin-top: 6px;
+  display: flex;
+  align-items: flex-end;
+}
+
+.tileRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pulseGlow {
+  animation: pulse-glow 2.4s ease-in-out infinite;
+}
+
+@keyframes pulse-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(var(--accent-primary-rgb), 0);
+  }
+  50% {
+    box-shadow: 0 0 14px 0 rgba(var(--accent-primary-rgb), 0.35);
+  }
+}
+
+/* Analytics section ------------------------------------------------------- */
+
+.analyticsSection {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 20px 28px;
+  border-top: 1px solid var(--divider);
+}
+
+.analyticsHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.analyticsTitle {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.analyticsGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 1100px) {
+  .analyticsGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .statsStrip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.panel {
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: var(--hover-bg-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 160px;
+}
+
+.panelTitle {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+.panelFull {
+  grid-column: 1 / -1;
+}
+
+/* Empty / placeholder variants ------------------------------------------- */
+
+.empty {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--hover-bg-subtle) 0%,
+    rgba(255, 255, 255, 0.06) 50%,
+    var(--hover-bg-subtle) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.6s linear infinite;
+  border-radius: 4px;
+  min-height: 16px;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* Primitive shared styles ------------------------------------------------- */
+
+.svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.axis {
+  stroke: var(--divider);
+  stroke-dasharray: 2 3;
+  stroke-width: 1;
+}
+
+.mark {
+  stroke: var(--accent-primary);
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.markFill {
+  fill: rgba(var(--accent-primary-rgb), 0.12);
+}
+
+.bar {
+  fill: var(--accent-primary);
+}
+
+.barMuted {
+  fill: rgb(200, 72, 72);
+}
+
+.barTrack {
+  fill: var(--divider);
+}
+
+.ringTrack {
+  stroke: var(--divider);
+  fill: none;
+}
+
+.ringArc {
+  stroke: var(--accent-primary);
+  fill: none;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 500ms ease-out;
+}
+
+.ringCenter {
+  font-family: var(--font-mono);
+  fill: var(--text-primary);
+  font-size: 13px;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+
+.heatCell {
+  stroke: transparent;
+}
+
+.dotOk {
+  fill: var(--accent-primary);
+}
+
+.dotFail {
+  fill: rgb(200, 72, 72);
+}
+
+.dotPending {
+  fill: var(--text-dim);
+}
+
+/* Micro-stats chip on WorkspaceCard -------------------------------------- */
+
+.microChip {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+  margin-top: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.microAdd {
+  color: var(--accent-primary);
+}
+
+.microDel {
+  color: rgb(200, 110, 110);
+}
+
+.microSep {
+  color: var(--text-dim);
+}
+
+/* Row components --------------------------------------------------------- */
+
+.leaderRow,
+.slashRow,
+.histRow {
+  display: grid;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+}
+
+.leaderRow {
+  grid-template-columns: 1fr auto auto auto;
+}
+
+.slashRow {
+  grid-template-columns: 110px 1fr auto;
+}
+
+.histRow {
+  grid-template-columns: 48px 1fr 44px;
+}
+
+.rowLabel {
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowMuted {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.rowValue {
+  color: var(--accent-primary);
+  font-family: var(--font-mono);
+  text-align: right;
+}

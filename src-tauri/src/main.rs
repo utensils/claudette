@@ -371,6 +371,10 @@ fn main() {
             commands::chat::load_completed_turns,
             // Plan
             commands::plan::read_plan_file,
+            // Metrics
+            commands::metrics::get_dashboard_metrics,
+            commands::metrics::get_workspace_metrics_batch,
+            commands::metrics::get_analytics_metrics,
             // Diff
             commands::diff::load_diff_files,
             commands::diff::load_file_diff,

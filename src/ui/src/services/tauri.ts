@@ -21,6 +21,11 @@ import type {
 import type { DetectedApp } from "../types/apps";
 import type { ClaudeCodeUsage } from "../types/usage";
 import type {
+  AnalyticsMetrics,
+  DashboardMetrics,
+  WorkspaceMetrics,
+} from "../types/metrics";
+import type {
   BulkPluginUpdateResult,
   EditablePluginScope,
   InstalledPlugin,
@@ -796,6 +801,22 @@ export function openUsageSettings(): Promise<void> {
 
 export function openReleaseNotes(): Promise<void> {
   return invoke("open_release_notes");
+}
+
+// -- Metrics --
+
+export function getDashboardMetrics(): Promise<DashboardMetrics> {
+  return invoke("get_dashboard_metrics");
+}
+
+export function getWorkspaceMetricsBatch(
+  ids: string[]
+): Promise<Record<string, WorkspaceMetrics>> {
+  return invoke("get_workspace_metrics_batch", { ids });
+}
+
+export function getAnalyticsMetrics(): Promise<AnalyticsMetrics> {
+  return invoke("get_analytics_metrics");
 }
 
 // -- SCM Plugins --

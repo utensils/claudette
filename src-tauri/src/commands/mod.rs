@@ -6,6 +6,7 @@ pub mod debug;
 pub mod diff;
 pub mod files;
 pub mod mcp;
+pub mod metrics;
 pub mod plan;
 pub mod plugin;
 pub mod remote;

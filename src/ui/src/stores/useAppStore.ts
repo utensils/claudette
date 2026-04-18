@@ -20,6 +20,16 @@ import type { McpStatusSnapshot } from "../types/mcp";
 import type { RemoteInitialData } from "../types/remote";
 import type { DetectedApp } from "../types/apps";
 import type { ClaudeCodeUsage } from "../types/usage";
+import type {
+  AnalyticsMetrics,
+  DashboardMetrics,
+  WorkspaceMetrics,
+} from "../types/metrics";
+import {
+  getAnalyticsMetrics,
+  getDashboardMetrics,
+  getWorkspaceMetricsBatch,
+} from "../services/tauri";
 import type { SlashCommand } from "../services/tauri";
 import type {
   PluginSettingsIntent,
@@ -371,6 +381,19 @@ interface AppState {
   setClaudeCodeUsage: (usage: ClaudeCodeUsage | null) => void;
   setClaudeCodeUsageLoading: (loading: boolean) => void;
   setClaudeCodeUsageError: (error: string | null) => void;
+
+  // -- Metrics --
+  dashboardMetrics: DashboardMetrics | null;
+  analyticsMetrics: AnalyticsMetrics | null;
+  workspaceMetrics: Record<string, WorkspaceMetrics>;
+  metricsLoading: boolean;
+  metricsError: string | null;
+  setDashboardMetrics: (metrics: DashboardMetrics | null) => void;
+  setAnalyticsMetrics: (metrics: AnalyticsMetrics | null) => void;
+  setWorkspaceMetrics: (metrics: Record<string, WorkspaceMetrics>) => void;
+  fetchDashboardMetrics: () => Promise<void>;
+  fetchAnalyticsMetrics: () => Promise<void>;
+  fetchWorkspaceMetricsBatch: (ids: string[]) => Promise<void>;
 
   // -- Updater --
   updateAvailable: boolean;
@@ -1218,6 +1241,46 @@ export const useAppStore = create<AppState>((set) => ({
     set({ claudeCodeUsageLoading: loading }),
   setClaudeCodeUsageError: (error) =>
     set({ claudeCodeUsageError: error, claudeCodeUsageLoading: false }),
+
+  // -- Metrics --
+  dashboardMetrics: null,
+  analyticsMetrics: null,
+  workspaceMetrics: {},
+  metricsLoading: false,
+  metricsError: null,
+  setDashboardMetrics: (metrics) =>
+    set({ dashboardMetrics: metrics, metricsError: null }),
+  setAnalyticsMetrics: (metrics) =>
+    set({ analyticsMetrics: metrics, metricsError: null }),
+  setWorkspaceMetrics: (metrics) => set({ workspaceMetrics: metrics }),
+  fetchDashboardMetrics: async () => {
+    try {
+      const metrics = await getDashboardMetrics();
+      set({ dashboardMetrics: metrics, metricsError: null });
+    } catch (e) {
+      set({ metricsError: String(e) });
+    }
+  },
+  fetchAnalyticsMetrics: async () => {
+    try {
+      const metrics = await getAnalyticsMetrics();
+      set({ analyticsMetrics: metrics, metricsError: null });
+    } catch (e) {
+      set({ metricsError: String(e) });
+    }
+  },
+  fetchWorkspaceMetricsBatch: async (ids) => {
+    if (ids.length === 0) {
+      set({ workspaceMetrics: {} });
+      return;
+    }
+    try {
+      const metrics = await getWorkspaceMetricsBatch(ids);
+      set({ workspaceMetrics: metrics });
+    } catch (e) {
+      set({ metricsError: String(e) });
+    }
+  },
 
   // -- Updater --
   updateAvailable: false,
