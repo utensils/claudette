@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.13.0](https://github.com/utensils/claudette/compare/v0.12.0...v0.13.0) (2026-04-18)
+
+
+### Features
+
+* **chat:** per-turn footer with elapsed, copy, fork, and rollback ([#277](https://github.com/utensils/claudette/issues/277)) ([55a8ec2](https://github.com/utensils/claudette/commit/55a8ec20702f58f592401937c4a3c370da21b99b))
+* SCM provider plugins, git-status file groups, and PR status UI ([#238](https://github.com/utensils/claudette/issues/238)) ([7ca9145](https://github.com/utensils/claudette/commit/7ca91459c4273779a8949deae5a9f721670e7fd2))
+
+
+### Bug Fixes
+
+* **ui:** remove visible gap between left sidebar and main panel ([#276](https://github.com/utensils/claudette/issues/276)) ([13d0ff8](https://github.com/utensils/claudette/commit/13d0ff815e1f64b2c084004a136d89331662c31c))
+
 ## [0.12.0](https://github.com/utensils/claudette/compare/v0.11.0...v0.12.0) (2026-04-17)
 
 
