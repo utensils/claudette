@@ -271,7 +271,7 @@ export function Dashboard() {
     return (
       <div className={styles.dashboard}>
         <div className={styles.toolbar} data-tauri-drag-region>
-          <div className={styles.header}>Active Workspaces</div>
+          <div className={styles.header}>Dashboard</div>
           <PanelToggles />
         </div>
         <div className={styles.scrollBody}>
@@ -297,47 +297,48 @@ export function Dashboard() {
   return (
     <div className={styles.dashboard}>
       <div className={styles.toolbar} data-tauri-drag-region>
-        <button
-          type="button"
-          className={styles.headerToggle}
-          onClick={() => setWorkspacesOpen((v) => !v)}
-          aria-expanded={workspacesOpen}
-        >
-          <span className={styles.headerChevron}>
-            {workspacesOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-          </span>
-          Active Workspaces
-          {runningCount > 0 && (
-            <span className={styles.headerCount}>
-              {runningCount} running
-            </span>
-          )}
-        </button>
+        <div className={styles.header}>Dashboard</div>
         <PanelToggles />
       </div>
       <div className={styles.scrollBody}>
         <StatsStrip />
-        {workspacesOpen && (
-          <div className={styles.grid}>
-            {sortedWorkspaces.map(({ ws, badge }, i) => {
-              const repo = repoMap.get(ws.repository_id);
-              return (
-                <WorkspaceCard
-                  key={ws.id}
-                  ws={ws}
-                  repo={repo}
-                  baseBranch={repo ? defaultBranches[repo.id] : undefined}
-                  lastMsg={lastMessages[ws.id]}
-                  remoteName={ws.remote_connection_id ? remoteNameMap.get(ws.remote_connection_id) : undefined}
-                  badge={badge}
-                  spinnerChar={ws.agent_status === "Running" ? spinnerChar : ""}
-                  onClick={selectWorkspace}
-                  index={i}
-                />
-              );
-            })}
-          </div>
-        )}
+        <div className={styles.workspacesSection}>
+          <button
+            type="button"
+            className={styles.workspacesHeader}
+            onClick={() => setWorkspacesOpen((v) => !v)}
+            aria-expanded={workspacesOpen}
+          >
+            {workspacesOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            <span className={styles.workspacesTitle}>Active Workspaces</span>
+            {runningCount > 0 && (
+              <span className={styles.headerCount}>
+                {runningCount} running
+              </span>
+            )}
+          </button>
+          {workspacesOpen && (
+            <div className={styles.grid}>
+              {sortedWorkspaces.map(({ ws, badge }, i) => {
+                const repo = repoMap.get(ws.repository_id);
+                return (
+                  <WorkspaceCard
+                    key={ws.id}
+                    ws={ws}
+                    repo={repo}
+                    baseBranch={repo ? defaultBranches[repo.id] : undefined}
+                    lastMsg={lastMessages[ws.id]}
+                    remoteName={ws.remote_connection_id ? remoteNameMap.get(ws.remote_connection_id) : undefined}
+                    badge={badge}
+                    spinnerChar={ws.agent_status === "Running" ? spinnerChar : ""}
+                    onClick={selectWorkspace}
+                    index={i}
+                  />
+                );
+              })}
+            </div>
+          )}
+        </div>
         <AnalyticsSection />
       </div>
     </div>

@@ -25,33 +25,6 @@
   gap: 8px;
 }
 
-.headerToggle {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  user-select: none;
-  background: transparent;
-  border: none;
-  padding: 0;
-  font-family: inherit;
-}
-
-.headerToggle:hover .headerChevron {
-  color: var(--text-muted);
-}
-
-.headerChevron {
-  color: var(--text-faint);
-  display: inline-flex;
-  align-items: center;
-}
-
 .headerCount {
   color: var(--accent-primary);
   font-variant-numeric: tabular-nums;
@@ -65,12 +38,47 @@
   min-height: 0;
 }
 
+/* Active-workspaces section — mirrors the Analytics section treatment so
+   both collapsible areas read as peer children of the Dashboard. */
+.workspacesSection {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 20px 8px;
+  border-top: 1px solid var(--divider);
+}
+
+.workspacesHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--text-faint);
+  font-family: inherit;
+}
+
+.workspacesHeader:hover {
+  color: var(--text-muted);
+}
+
+.workspacesTitle {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   align-content: start;
   gap: 12px;
-  padding: 20px 32px;
+  padding: 0;
 }
 
 /* Workspace card */
