@@ -378,14 +378,15 @@ impl Database {
                 CREATE INDEX idx_agent_sessions_started   ON agent_sessions(started_at);
 
                 CREATE TABLE agent_commits (
-                    commit_hash     TEXT PRIMARY KEY,
-                    workspace_id    TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
+                    commit_hash     TEXT NOT NULL,
+                    workspace_id    TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
                     repository_id   TEXT NOT NULL,
                     session_id      TEXT,
                     additions       INTEGER NOT NULL DEFAULT 0,
                     deletions       INTEGER NOT NULL DEFAULT 0,
                     files_changed   INTEGER NOT NULL DEFAULT 0,
-                    committed_at    TEXT NOT NULL
+                    committed_at    TEXT NOT NULL,
+                    PRIMARY KEY (workspace_id, commit_hash)
                 );
                 CREATE INDEX idx_agent_commits_workspace ON agent_commits(workspace_id);
                 CREATE INDEX idx_agent_commits_committed ON agent_commits(committed_at);
@@ -793,8 +794,10 @@ impl Database {
 
     // --- Metrics: agent commits ---
 
-    /// Insert commits observed during an agent session. Idempotent on
-    /// `commit_hash` — re-scraping the same session is safe.
+    /// Insert commits observed during an agent session. Idempotent per
+    /// `(workspace_id, commit_hash)` — re-scraping the same session is safe,
+    /// and the same hash observed in a different workspace is recorded
+    /// separately so per-workspace attribution is preserved.
     pub fn insert_agent_commits_batch(
         &self,
         workspace_id: &str,
@@ -3286,6 +3289,39 @@ mod tests {
         db.insert_agent_commits_batch("w1", "r1", Some("s1"), &[commit])
             .unwrap();
         assert_eq!(count_rows(&db, "SELECT COUNT(*) FROM agent_commits"), 1);
+    }
+
+    #[test]
+    fn test_agent_commits_same_hash_across_workspaces() {
+        let db = setup_db_with_workspace();
+        db.insert_workspace(&make_workspace("w2", "r1", "other"))
+            .unwrap();
+        let shared_hash = "deadbeef".to_string();
+        let commit_w1 = crate::model::AgentCommit {
+            commit_hash: shared_hash.clone(),
+            workspace_id: Some("w1".into()),
+            repository_id: "r1".into(),
+            session_id: Some("s1".into()),
+            additions: 1,
+            deletions: 0,
+            files_changed: 1,
+            committed_at: "2026-04-17T12:00:00Z".into(),
+        };
+        let commit_w2 = crate::model::AgentCommit {
+            commit_hash: shared_hash,
+            workspace_id: Some("w2".into()),
+            repository_id: "r1".into(),
+            session_id: Some("s2".into()),
+            additions: 1,
+            deletions: 0,
+            files_changed: 1,
+            committed_at: "2026-04-17T12:00:00Z".into(),
+        };
+        db.insert_agent_commits_batch("w1", "r1", Some("s1"), &[commit_w1])
+            .unwrap();
+        db.insert_agent_commits_batch("w2", "r1", Some("s2"), &[commit_w2])
+            .unwrap();
+        assert_eq!(count_rows(&db, "SELECT COUNT(*) FROM agent_commits"), 2);
     }
 
     #[test]

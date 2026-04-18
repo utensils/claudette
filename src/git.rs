@@ -377,7 +377,8 @@ pub async fn current_branch(repo_path: &str) -> Result<String, GitError> {
 
 /// A commit observed in a worktree, with line-change stats.
 ///
-/// Parsed from `git log --pretty=format:"%H|%aI" --numstat`.
+/// `committed_at` is the committer date in RFC3339 form (from `%cI`).
+/// Parsed from `git log --pretty=format:"%H|%cI" --numstat`.
 #[derive(Debug, Clone)]
 pub struct CommitInfo {
     pub hash: String,
@@ -387,22 +388,27 @@ pub struct CommitInfo {
     pub files_changed: i64,
 }
 
-/// List commits in a worktree authored since `since_iso` (ISO-8601 UTC),
-/// with per-commit aggregated additions/deletions/files_changed from numstat.
+/// List commits in a worktree whose committer date is after `since`, with
+/// per-commit aggregated additions/deletions/files_changed from numstat.
 ///
-/// Used for post-turn metric scraping in the agent lifecycle. Binary files
-/// (numstat emits "-\t-\t") contribute 0 additions/deletions but still count
-/// toward `files_changed`.
-pub async fn commits_since(
-    worktree_path: &str,
-    since_iso: &str,
-) -> Result<Vec<CommitInfo>, GitError> {
+/// `since` is passed to `git log --since` and accepts any format git's
+/// approxidate understands — RFC3339, ISO-8601, or SQLite's
+/// `datetime('now')` output (`YYYY-MM-DD HH:MM:SS` UTC) all work. The
+/// returned `committed_at` is always RFC3339.
+///
+/// Used for post-turn metric scraping in the agent lifecycle. Committer
+/// date (not author date) is used so commits that were cherry-picked or
+/// rebased into the worktree during the session are attributed to the
+/// session that landed them, not the one that originally wrote them.
+/// Binary files (numstat emits "-\t-\t") contribute 0 additions/deletions
+/// but still count toward `files_changed`.
+pub async fn commits_since(worktree_path: &str, since: &str) -> Result<Vec<CommitInfo>, GitError> {
     let raw = run_git(
         worktree_path,
         &[
             "log",
-            &format!("--since={since_iso}"),
-            "--pretty=format:COMMIT|%H|%aI",
+            &format!("--since={since}"),
+            "--pretty=format:COMMIT|%H|%cI",
             "--numstat",
         ],
     )
