@@ -66,6 +66,6 @@ If a build fails mid-way, the previous nightly release is already deleted. Users
 
 **"Old nightly download link returns 404"** — Expected. The rolling tag was updated by a newer build. Use the `nightly` tag URL above to always get the latest.
 
-**"App won't auto-update from nightly to stable"** — The Tauri updater only offers upgrades within the configured channel. To switch back to stable, download and install the stable release manually.
+**"App won't auto-update from nightly to stable"** — Stable and nightly use different updater manifests, and a nightly build may also compare higher than the current stable release (for example, `0.14.0-dev.*` is higher than any `0.13.*` stable). In that case, the stable feed will not appear as an upgrade. To switch back to stable, download and install the stable release manually.
 
 **"Version looks wrong / shows old version"** — The version is computed from the `Cargo.toml` version on `main` at build time. If release-please hasn't merged a version bump yet, the "next minor" component may look stale. The commit SHA in the version string is always accurate.

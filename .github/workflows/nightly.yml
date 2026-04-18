@@ -28,6 +28,7 @@ env:
 jobs:
   compute-version:
     name: Compute Version
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
