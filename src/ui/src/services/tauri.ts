@@ -449,9 +449,11 @@ export function clearAttention(workspaceId: string): Promise<void> {
   return invoke("clear_attention", { workspaceId });
 }
 
-/// Send the user's answers for a pending AskUserQuestion tool_use, keyed by
-/// question text. The Rust side layers them onto the tool's original input as
-/// `updatedInput.answers` and writes a `control_response` to the CLI.
+/**
+ * Send the user's answers for a pending AskUserQuestion tool_use, keyed by
+ * question text. The Rust side layers them onto the tool's original input as
+ * `updatedInput.answers` and writes a `control_response` to the CLI.
+ */
 export function submitAgentAnswer(
   workspaceId: string,
   toolUseId: string,
@@ -465,8 +467,10 @@ export function submitAgentAnswer(
   });
 }
 
-/// Approve or reject a pending ExitPlanMode tool_use. On approve the CLI
-/// runs the tool's `call()` and emits the normal "Plan approved" tool_result.
+/**
+ * Approve or reject a pending ExitPlanMode tool_use. On approve the CLI
+ * runs the tool's `call()` and emits the normal "Plan approved" tool_result.
+ */
 export function submitPlanApproval(
   workspaceId: string,
   toolUseId: string,

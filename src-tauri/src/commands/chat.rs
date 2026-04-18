@@ -1379,33 +1379,36 @@ pub async fn submit_agent_answer(
     annotations: Option<serde_json::Value>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    // Validate everything BEFORE removing the pending entry: if the session
+    // has been torn down or the entry maps to the wrong tool, the entry must
+    // stay so the user (or the correct submit_* command) can still see it.
     let (pending, ps) = {
         let mut agents = state.agents.write().await;
         let session = agents.get_mut(&workspace_id).ok_or("Session not found")?;
-        let pending = session
-            .pending_permissions
-            .remove(&tool_use_id)
-            .ok_or("No pending permission request for that tool_use_id")?;
+        // 1. Persistent session must be alive — otherwise nobody is reading
+        //    stdin and the response would be discarded.
         let ps = session
             .persistent_session
             .clone()
             .ok_or("Agent session is not active")?;
+        // 2. Tool kind must match — peek by reference.
+        match session.pending_permissions.get(&tool_use_id) {
+            None => return Err("No pending permission request for that tool_use_id".to_string()),
+            Some(p) if p.tool_name != "AskUserQuestion" => {
+                return Err(format!(
+                    "Pending tool is {}, not AskUserQuestion",
+                    p.tool_name
+                ));
+            }
+            _ => {}
+        }
+        // 3. All checks passed — now it is safe to remove.
+        let pending = session
+            .pending_permissions
+            .remove(&tool_use_id)
+            .expect("checked above");
         (pending, ps)
     };
-
-    if pending.tool_name != "AskUserQuestion" {
-        // Re-insert so the correct command can resolve it.
-        let mut agents = state.agents.write().await;
-        if let Some(session) = agents.get_mut(&workspace_id) {
-            session
-                .pending_permissions
-                .insert(tool_use_id, pending.clone());
-        }
-        return Err(format!(
-            "Pending tool is {}, not AskUserQuestion",
-            pending.tool_name
-        ));
-    }
 
     // Layer answers (and annotations, if any) onto the original input.
     let mut updated_input = pending.original_input.clone();
@@ -1441,32 +1444,28 @@ pub async fn submit_plan_approval(
     reason: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    // Same validate-before-remove pattern as submit_agent_answer — see that
+    // function for the rationale.
     let (pending, ps) = {
         let mut agents = state.agents.write().await;
         let session = agents.get_mut(&workspace_id).ok_or("Session not found")?;
-        let pending = session
-            .pending_permissions
-            .remove(&tool_use_id)
-            .ok_or("No pending permission request for that tool_use_id")?;
         let ps = session
             .persistent_session
             .clone()
             .ok_or("Agent session is not active")?;
+        match session.pending_permissions.get(&tool_use_id) {
+            None => return Err("No pending permission request for that tool_use_id".to_string()),
+            Some(p) if p.tool_name != "ExitPlanMode" => {
+                return Err(format!("Pending tool is {}, not ExitPlanMode", p.tool_name));
+            }
+            _ => {}
+        }
+        let pending = session
+            .pending_permissions
+            .remove(&tool_use_id)
+            .expect("checked above");
         (pending, ps)
     };
-
-    if pending.tool_name != "ExitPlanMode" {
-        let mut agents = state.agents.write().await;
-        if let Some(session) = agents.get_mut(&workspace_id) {
-            session
-                .pending_permissions
-                .insert(tool_use_id, pending.clone());
-        }
-        return Err(format!(
-            "Pending tool is {}, not ExitPlanMode",
-            pending.tool_name
-        ));
-    }
 
     let response = if approved {
         serde_json::json!({
