@@ -631,9 +631,11 @@ pub async fn send_chat_message(
 
             // Handle control_request: can_use_tool from the CLI's stdio permission
             // prompt protocol. For AskUserQuestion / ExitPlanMode we remember the
-            // request and surface it to the UI (the existing content_block_start
-            // handler populated the AgentQuestion / PlanApproval card); the UI
-            // then calls submit_agent_answer / submit_plan_approval to resolve.
+            // request and emit `agent-permission-prompt` so the UI shows the card
+            // ONLY after the Rust side is ready to receive the answer — the
+            // previous content_block_stop-driven approach raced the still-
+            // in-flight control_request and produced "No pending permission
+            // request" errors when the user clicked too quickly.
             // For every OTHER tool, immediately deny — Claudette relies on
             // --allowedTools for normal approvals, so reaching this path means
             // a plan-mode or unknown-tool block we should report to the model.
@@ -660,6 +662,14 @@ pub async fn send_chat_message(
                             },
                         );
                     }
+                    drop(agents);
+                    let payload = serde_json::json!({
+                        "workspace_id": &ws_id,
+                        "tool_use_id": tool_use_id,
+                        "tool_name": tool_name,
+                        "input": input,
+                    });
+                    let _ = app.emit("agent-permission-prompt", &payload);
                 } else {
                     // Auto-deny any other tool that reaches the permission-prompt
                     // path — current Claudette behaviour is no interactive approval
@@ -1393,10 +1403,16 @@ pub async fn submit_agent_answer(
             .ok_or("Agent session is not active")?;
         // 2. Tool kind must match — peek by reference.
         match session.pending_permissions.get(&tool_use_id) {
-            None => return Err("No pending permission request for that tool_use_id".to_string()),
+            None => {
+                let pending_ids: Vec<String> =
+                    session.pending_permissions.keys().cloned().collect();
+                return Err(format!(
+                    "No pending permission request for tool_use_id {tool_use_id} (pending: {pending_ids:?})"
+                ));
+            }
             Some(p) if p.tool_name != "AskUserQuestion" => {
                 return Err(format!(
-                    "Pending tool is {}, not AskUserQuestion",
+                    "Pending tool for {tool_use_id} is {}, not AskUserQuestion",
                     p.tool_name
                 ));
             }
@@ -1454,9 +1470,18 @@ pub async fn submit_plan_approval(
             .clone()
             .ok_or("Agent session is not active")?;
         match session.pending_permissions.get(&tool_use_id) {
-            None => return Err("No pending permission request for that tool_use_id".to_string()),
+            None => {
+                let pending_ids: Vec<String> =
+                    session.pending_permissions.keys().cloned().collect();
+                return Err(format!(
+                    "No pending permission request for tool_use_id {tool_use_id} (pending: {pending_ids:?})"
+                ));
+            }
             Some(p) if p.tool_name != "ExitPlanMode" => {
-                return Err(format!("Pending tool is {}, not ExitPlanMode", p.tool_name));
+                return Err(format!(
+                    "Pending tool for {tool_use_id} is {}, not ExitPlanMode",
+                    p.tool_name
+                ));
             }
             _ => {}
         }

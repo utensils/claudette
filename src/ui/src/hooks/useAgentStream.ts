@@ -213,75 +213,13 @@ export function useAgentStream() {
                     }
                   }
 
-                  // Handle AskUserQuestion specifically.
-                  if (
-                    entry.toolName === ASK_USER_QUESTION_TOOL &&
-                    activity?.inputJson
-                  ) {
-                    try {
-                      const parsed = JSON.parse(activity.inputJson);
-                      const questions = parseAskUserQuestion(parsed);
-                      if (questions.length > 0) {
-                        setAgentQuestion({
-                          workspaceId: wsId,
-                          toolUseId: entry.toolUseId,
-                          questions,
-                        });
-                      }
-                    } catch {
-                      // Malformed JSON — ignore, question won't show
-                    }
-                  }
-
-                  // Handle ExitPlanMode — show approval card.
-                  if (entry.toolName === "ExitPlanMode") {
-                    let allowedPrompts: Array<{ tool: string; prompt: string }> = [];
-                    if (activity?.inputJson) {
-                      try {
-                        const parsed = JSON.parse(activity.inputJson);
-                        if (Array.isArray(parsed.allowedPrompts)) {
-                          allowedPrompts = parsed.allowedPrompts;
-                        }
-                      } catch { /* ignore */ }
-                    }
-
-                    // Extract absolute plan file path from ALL messages (the
-                    // path is typically mentioned when entering plan mode,
-                    // which may be many messages back). Search newest-first.
-                    const planPathRe = /(\/[^\s)"`]+\/\.claude\/plans\/[^\s)"`]+\.md)/;
-                    const messages = useAppStore.getState().chatMessages[wsId] || [];
-                    let planFilePath: string | null = null;
-                    for (let i = messages.length - 1; i >= 0; i--) {
-                      const m = messages[i].content.match(planPathRe);
-                      if (m) { planFilePath = m[1]; break; }
-                    }
-
-                    // Also check current streaming content and tool activity
-                    // input (the plan path may appear in tool results).
-                    if (!planFilePath) {
-                      const streaming = useAppStore.getState().streamingContent[wsId] || "";
-                      const m = streaming.match(planPathRe);
-                      if (m) planFilePath = m[1];
-                    }
-                    if (!planFilePath) {
-                      const allActivities = useAppStore.getState().toolActivities[wsId] || [];
-                      for (const act of allActivities) {
-                        const m = (act.inputJson + act.resultText).match(planPathRe);
-                        if (m) { planFilePath = m[1]; break; }
-                      }
-                    }
-                    // Fall back to cached path from EnterPlanMode tool result.
-                    if (!planFilePath && planFilePathRef.current[wsId]) {
-                      planFilePath = planFilePathRef.current[wsId];
-                    }
-
-                    setPlanApproval({
-                      workspaceId: wsId,
-                      toolUseId: entry.toolUseId,
-                      planFilePath,
-                      allowedPrompts,
-                    });
-                  }
+                  // NOTE: AskUserQuestion / ExitPlanMode card-showing is no
+                  // longer driven by content_block_stop. The Rust bridge emits
+                  // an `agent-permission-prompt` event the moment the CLI's
+                  // `control_request` is captured (and pending_permissions is
+                  // populated). The listener below handles those tools — that
+                  // way the card cannot be clicked before the Rust side is
+                  // ready to receive the answer.
                   break;
                 }
               }
@@ -384,6 +322,74 @@ export function useAgentStream() {
     finalizeTurn,
     setPlanMode,
   ]);
+
+  // Listen for `agent-permission-prompt` — emitted by the Rust bridge the
+  // moment a CLI `control_request: can_use_tool` is captured for
+  // AskUserQuestion / ExitPlanMode and the corresponding pending_permissions
+  // entry exists. Driving the card from this event (instead of the much
+  // earlier `content_block_stop`) eliminates the race where the user could
+  // click before the Rust side was ready to receive the answer.
+  useEffect(() => {
+    let active = true;
+    const unlisten = listen<{
+      workspace_id: string;
+      tool_use_id: string;
+      tool_name: string;
+      input: unknown;
+    }>("agent-permission-prompt", (event) => {
+      if (!active) return;
+      const { workspace_id: wsId, tool_use_id: toolUseId, tool_name: toolName, input } = event.payload;
+      if (toolName === ASK_USER_QUESTION_TOOL) {
+        try {
+          const questions = parseAskUserQuestion(input);
+          if (questions.length > 0) {
+            setAgentQuestion({ workspaceId: wsId, toolUseId, questions });
+          }
+        } catch {
+          // Malformed input — ignore (CLI will eventually time out and we
+          // auto-deny on session cleanup).
+        }
+      } else if (toolName === "ExitPlanMode") {
+        let allowedPrompts: Array<{ tool: string; prompt: string }> = [];
+        if (input && typeof input === "object" && "allowedPrompts" in input) {
+          const ap = (input as { allowedPrompts?: unknown }).allowedPrompts;
+          if (Array.isArray(ap)) {
+            allowedPrompts = ap as Array<{ tool: string; prompt: string }>;
+          }
+        }
+        // Reuse the same plan-file-path discovery the old content_block_stop
+        // path used: assistant text, then streaming text, then tool inputs/
+        // results, then the cached EnterPlanMode result path.
+        const planPathRe = /(\/[^\s)"`]+\/\.claude\/plans\/[^\s)"`]+\.md)/;
+        const messages = useAppStore.getState().chatMessages[wsId] || [];
+        let planFilePath: string | null = null;
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const m = messages[i].content.match(planPathRe);
+          if (m) { planFilePath = m[1]; break; }
+        }
+        if (!planFilePath) {
+          const streaming = useAppStore.getState().streamingContent[wsId] || "";
+          const m = streaming.match(planPathRe);
+          if (m) planFilePath = m[1];
+        }
+        if (!planFilePath) {
+          const allActivities = useAppStore.getState().toolActivities[wsId] || [];
+          for (const act of allActivities) {
+            const m = (act.inputJson + act.resultText).match(planPathRe);
+            if (m) { planFilePath = m[1]; break; }
+          }
+        }
+        if (!planFilePath && planFilePathRef.current[wsId]) {
+          planFilePath = planFilePathRef.current[wsId];
+        }
+        setPlanApproval({ workspaceId: wsId, toolUseId, planFilePath, allowedPrompts });
+      }
+    });
+    return () => {
+      active = false;
+      unlisten.then((fn) => fn());
+    };
+  }, [setAgentQuestion, setPlanApproval]);
 
   // Listen for checkpoint-created events from the backend.
   const addCheckpoint = useAppStore((s) => s.addCheckpoint);
