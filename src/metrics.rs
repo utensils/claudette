@@ -179,7 +179,9 @@ fn daily_cost_30d(conn: &Connection) -> Result<Vec<f64>, rusqlite::Error> {
          GROUP BY d",
     )?;
     let costs: HashMap<String, f64> = stmt
-        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?)))?
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+        })?
         .collect::<Result<_, _>>()?;
     fill_last_n_days(conn, 30, |d| costs.get(d).copied().unwrap_or(0.0))
 }
@@ -622,7 +624,12 @@ mod tests {
         assert_eq!(a.heatmap.len(), 91);
         let total: u32 = a.heatmap.iter().map(|c| c.count).sum();
         assert_eq!(total, 3);
-        let older: u32 = a.heatmap.iter().filter(|c| c.week > 0).map(|c| c.count).sum();
+        let older: u32 = a
+            .heatmap
+            .iter()
+            .filter(|c| c.week > 0)
+            .map(|c| c.count)
+            .sum();
         assert_eq!(older, 1);
     }
 
