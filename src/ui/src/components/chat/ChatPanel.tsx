@@ -1047,7 +1047,7 @@ function TurnSummary({
    *  When empty, the copy button is not rendered. */
   assistantText: string;
   /** Called when the user clicks fork. When undefined the fork button is not
-   *  rendered (e.g. remote workspaces or missing commit hash). */
+   *  rendered (e.g. remote workspaces, where the fork command cannot run). */
   onFork?: () => void;
   /** Called when the user clicks rollback. Undefined hides the button
    *  (e.g. turn is running, or no checkpoint exists for this turn). */

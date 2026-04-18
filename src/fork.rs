@@ -18,7 +18,8 @@ use std::path::{Path, PathBuf};
 use crate::db::Database;
 use crate::git;
 use crate::model::{
-    AgentStatus, ChatMessage, ConversationCheckpoint, TurnToolActivity, Workspace, WorkspaceStatus,
+    AgentStatus, ChatMessage, CheckpointFile, ConversationCheckpoint, TurnToolActivity, Workspace,
+    WorkspaceStatus,
 };
 use crate::snapshot;
 
@@ -158,6 +159,38 @@ pub async fn fork_workspace_at_checkpoint(
         git::create_worktree_from_ref(&repo.path, &new_branch_name, &worktree_path_str, &base_ref)
             .await?;
 
+    // From here on we own a worktree + branch on disk. If any subsequent step
+    // fails, roll them back best-effort so we don't leave orphan state.
+    let outcome = fork_after_worktree(
+        db,
+        &inputs,
+        &source_ws,
+        &checkpoint,
+        new_name,
+        new_branch_name.clone(),
+        actual_path.clone(),
+    )
+    .await;
+
+    if outcome.is_err() {
+        let _ = git::remove_worktree(&repo.path, &actual_path, true).await;
+        let _ = git::branch_delete(&repo.path, &new_branch_name).await;
+    }
+
+    outcome
+}
+
+/// Steps that run after a successful `create_worktree_from_ref`. Split out so
+/// the caller can funnel all failures through a single cleanup path.
+async fn fork_after_worktree(
+    db: &mut Database,
+    inputs: &ForkInputs<'_>,
+    source_ws: &Workspace,
+    checkpoint: &ConversationCheckpoint,
+    new_name: String,
+    new_branch_name: String,
+    actual_path: String,
+) -> Result<ForkOutcome, ForkError> {
     // Restore the checkpoint's file snapshot (if present) onto the new
     // worktree so its files match the selected turn, not the base commit.
     if checkpoint.has_file_state {
@@ -179,7 +212,7 @@ pub async fn fork_workspace_at_checkpoint(
     };
     db.insert_workspace(&new_ws)?;
 
-    copy_history(db, &source_ws.id, &new_ws.id, &checkpoint)?;
+    copy_history(db, &source_ws.id, &new_ws.id, checkpoint)?;
 
     let session_resumed = if let Some(src_wt) = source_ws.worktree_path.as_deref() {
         copy_claude_session(db, &source_ws.id, &new_ws.id, src_wt, &actual_path)?
@@ -280,14 +313,36 @@ fn copy_history(
             workspace_id: new_ws_id.to_string(),
             message_id: new_msg_id.clone(),
             commit_hash: cp.commit_hash.clone(),
-            // The fork's worktree is already at the checkpoint commit — we
-            // don't also need file-level snapshots in checkpoint_files.
-            has_file_state: false,
+            // `has_file_state` is derived by the DB from the presence of
+            // `checkpoint_files` rows, so this field is informational on
+            // insert; the real source of truth is the rows we copy below.
+            has_file_state: cp.has_file_state,
             turn_index: cp.turn_index,
             message_count: cp.message_count,
             created_at: String::new(),
         };
         db.insert_checkpoint(&new_cp)?;
+
+        // Copy snapshot files so rollback in the fork can restore to this
+        // checkpoint. Without this, snapshot-only checkpoints (the norm
+        // since Claudette migrated away from git-commit checkpoints) would
+        // have neither a commit nor file data to restore from in the fork.
+        if cp.has_file_state {
+            let files = db.get_checkpoint_files(&cp.id)?;
+            let remapped_files: Vec<CheckpointFile> = files
+                .into_iter()
+                .map(|f| CheckpointFile {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    checkpoint_id: new_cp_id.clone(),
+                    file_path: f.file_path,
+                    content: f.content,
+                    file_mode: f.file_mode,
+                })
+                .collect();
+            if !remapped_files.is_empty() {
+                db.insert_checkpoint_files(&remapped_files)?;
+            }
+        }
 
         if let Some(acts) = activities_by_cp.get(&cp.id) {
             let remapped: Vec<TurnToolActivity> = acts
@@ -352,9 +407,10 @@ fn copy_claude_session(
 /// Convert an absolute filesystem path to Claude CLI's project slug
 /// convention (used as the directory name under `~/.claude/projects/`).
 ///
-/// Claude CLI replaces path separators with `-` to form the slug.
+/// Claude CLI replaces path separators with `-` to form the slug. Handle
+/// both `/` and `\` so Windows paths produce the correct slug.
 fn claude_project_slug(path: &str) -> String {
-    path.replace('/', "-")
+    path.replace(['/', '\\'], "-")
 }
 
 #[cfg(test)]

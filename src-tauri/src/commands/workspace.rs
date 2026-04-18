@@ -125,7 +125,7 @@ pub async fn create_workspace(
         id: uuid::Uuid::new_v4().to_string(),
         repository_id: repo_id,
         name,
-        branch_name,
+        branch_name: branch_name.clone(),
         worktree_path: Some(actual_path.clone()),
         status: WorkspaceStatus::Active,
         agent_status: AgentStatus::Idle,
@@ -133,7 +133,13 @@ pub async fn create_workspace(
         created_at: now_iso(),
     };
 
-    db.insert_workspace(&ws).map_err(|e| e.to_string())?;
+    // If the DB insert fails, roll back the worktree + branch we just created
+    // so we don't leave orphan git state pointing to nothing.
+    if let Err(e) = db.insert_workspace(&ws) {
+        let _ = git::remove_worktree(&repo_path, &actual_path, true).await;
+        let _ = git::branch_delete(&repo_path, &branch_name).await;
+        return Err(e.to_string());
+    }
 
     // Resolve and execute setup script (unless caller requested skip).
     let setup_result = if skip_setup.unwrap_or(false) {
