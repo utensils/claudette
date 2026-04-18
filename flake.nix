@@ -125,14 +125,17 @@
           # Used by buildDepsOnly so UI/asset changes don't rebuild deps.
           cargoSrc = craneLib.cleanCargoSource ./.;
 
-          # Full source: Cargo files + src-tauri config + assets (logo for tauri-codegen).
+          # Full source: Cargo files + src-tauri config + assets (logo for
+          # tauri-codegen) + plugins (seeded into the binary via include_str!
+          # from src/scm_provider/seed.rs).
           src = lib.cleanSourceWith {
             src = ./.;
             filter =
               path: type:
               (craneLib.filterCargoSources path type)
               || (builtins.match ".*src-tauri/.*" path != null)
-              || (builtins.match ".*assets/.*" path != null);
+              || (builtins.match ".*assets/.*" path != null)
+              || (builtins.match ".*plugins/.*" path != null);
           };
 
           # Platform-specific build dependencies
@@ -226,6 +229,13 @@
                 mkdir -p src/ui/dist
                 cp -r ${frontend}/* src/ui/dist/
               '';
+
+              # claudette-tauri's pty/usage tests spawn real shells and hit
+              # the network — neither works in the Nix sandbox. CI (GitHub
+              # Actions) runs `cargo test -p claudette -p claudette-server`
+              # against a regular Linux runner to cover the logic under
+              # test; skip tests here to keep `nix build` reproducible.
+              doCheck = false;
 
               meta = commonMeta // {
                 description = "Cross-platform desktop orchestrator for parallel Claude Code agents";
@@ -399,6 +409,33 @@
                 # mismatches (e.g. -mmacosx-version-min=26.4) that break aws-lc-sys
                 name = "CC";
                 value = "/usr/bin/cc";
+              }
+              {
+                # Pin the C++ compiler to Apple's clang++ too. Without this
+                # override, `cc-rs` (used by mlua-sys to build Luau and by
+                # libsqlite3-sys/objc2 for their C++ shims) resolves `c++`
+                # from PATH. On a nix-darwin system that's typically a
+                # /run/current-system/sw/bin/c++ symlink into the GCC
+                # wrapper, which compiles against libstdc++ (producing
+                # `std::__cxx11::...` and `std::__glibcxx_assert_fail`
+                # references). The final link uses Apple clang which pulls
+                # in libc++ (`std::__1::...`), so the libstdc++ symbols go
+                # undefined. Forcing CXX to Apple's clang++ keeps the
+                # whole toolchain on libc++.
+                name = "CXX";
+                value = "/usr/bin/c++";
+              }
+              {
+                # `cc-rs` reads the HOST_ variants for build-script-side
+                # compilation. Set them too so build scripts (e.g. tauri
+                # codegen, proc macros that shell out) don't fall back to
+                # the nix-darwin GCC wrapper either.
+                name = "HOST_CC";
+                value = "/usr/bin/cc";
+              }
+              {
+                name = "HOST_CXX";
+                value = "/usr/bin/c++";
               }
               {
                 name = "CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER";
