@@ -880,15 +880,21 @@ export function ChatPanel() {
               {pendingQuestion && (
                 <AgentQuestionCard
                   question={pendingQuestion}
-                  onRespond={(answers) => {
+                  onRespond={async (answers) => {
                     if (!selectedWorkspaceId) return;
                     const wsId = selectedWorkspaceId;
                     const toolUseId = pendingQuestion.toolUseId;
-                    clearAgentQuestion(wsId);
-                    submitAgentAnswer(wsId, toolUseId, answers).catch((e) => {
+                    // Send first; only clear the card on success. If the
+                    // invoke fails (IPC error, session reset, …) the card
+                    // stays visible so the user can retry instead of leaving
+                    // the CLI blocked on an unanswerable can_use_tool.
+                    try {
+                      await submitAgentAnswer(wsId, toolUseId, answers);
+                      clearAgentQuestion(wsId);
+                    } catch (e) {
                       console.error("Failed to submit agent answer:", e);
                       setError(String(e));
-                    });
+                    }
                   }}
                 />
               )}
@@ -897,15 +903,17 @@ export function ChatPanel() {
                 <PlanApprovalCard
                   approval={pendingPlan}
                   remoteConnectionId={ws?.remote_connection_id ?? undefined}
-                  onRespond={(approved, reason) => {
+                  onRespond={async (approved, reason) => {
                     if (!selectedWorkspaceId) return;
                     const wsId = selectedWorkspaceId;
                     const toolUseId = pendingPlan.toolUseId;
-                    clearPlanApproval(wsId);
-                    submitPlanApproval(wsId, toolUseId, approved, reason).catch((e) => {
+                    try {
+                      await submitPlanApproval(wsId, toolUseId, approved, reason);
+                      clearPlanApproval(wsId);
+                    } catch (e) {
                       console.error("Failed to submit plan approval:", e);
                       setError(String(e));
-                    });
+                    }
                   }}
                 />
               )}

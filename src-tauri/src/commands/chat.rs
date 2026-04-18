@@ -263,8 +263,9 @@ pub async fn send_chat_message(
     // Clear any unresolved permission requests so the CLI doesn't hang when
     // we send the next turn. This replaces the old behaviour where the
     // AgentQuestionCard dismissed on a new user message — the CLI is actually
-    // blocked mid-turn and needs an explicit control_response.
-    cancel_pending_permissions(session, "User sent a new message instead of answering.").await;
+    // blocked mid-turn and needs an explicit control_response. The drain is
+    // synchronous (under the lock); the deny sends happen after we drop it.
+    let to_deny_new_turn = drain_pending_permissions(session);
 
     // If a previous turn is still running and there's no persistent session,
     // stop the stale process. With a persistent session, the process is shared
@@ -274,11 +275,22 @@ pub async fn send_chat_message(
     {
         eprintln!("[chat] Stopping stale process {old_pid} before new turn");
         drop(agents); // release lock while waiting
+        if let Some((ref ps, drained)) = to_deny_new_turn {
+            deny_drained_permissions(drained, ps, "User sent a new message instead of answering.")
+                .await;
+        }
         let _ = agent::stop_agent(old_pid).await;
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         agents = state.agents.write().await;
         let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
         session.active_pid = None;
+    } else if let Some((ref ps, drained)) = to_deny_new_turn {
+        // No stale-pid teardown — release the lock just for the deny sends,
+        // then re-acquire so the rest of this function can mutate the session.
+        drop(agents);
+        deny_drained_permissions(drained, ps, "User sent a new message instead of answering.")
+            .await;
+        agents = state.agents.write().await;
     }
     let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
 
@@ -287,7 +299,7 @@ pub async fn send_chat_message(
     // The session is idle between turns so a graceful SIGTERM is sufficient.
     if session.mcp_config_dirty {
         eprintln!("[chat] MCP config dirty — tearing down persistent session for {workspace_id}");
-        cancel_pending_permissions(session, "Session restarted with new MCP config.").await;
+        let to_deny_mcp = drain_pending_permissions(session);
         let stale_pid = session.persistent_session.as_ref().map(|ps| ps.pid());
         session.persistent_session = None;
         // Clear active_pid alongside persistent_session so a failed respawn
@@ -295,9 +307,15 @@ pub async fn send_chat_message(
         // have recycled (would get SIGKILLed by the stale-process branch).
         session.active_pid = None;
         session.mcp_config_dirty = false;
-        if let Some(pid) = stale_pid {
+        if stale_pid.is_some() || to_deny_mcp.is_some() {
             drop(agents);
-            let _ = agent::stop_agent_graceful(pid).await;
+            if let Some((ref ps, drained)) = to_deny_mcp {
+                deny_drained_permissions(drained, ps, "Session restarted with new MCP config.")
+                    .await;
+            }
+            if let Some(pid) = stale_pid {
+                let _ = agent::stop_agent_graceful(pid).await;
+            }
             agents = state.agents.write().await;
         }
     }
@@ -343,7 +361,7 @@ pub async fn send_chat_message(
         );
         // Resolve any pending permission requests against the doomed process
         // before we kill it, so the next turn doesn't carry stale tool_use_ids.
-        cancel_pending_permissions(session, "Session restarted with new flags.").await;
+        let to_deny_drift = drain_pending_permissions(session);
         let stale_pid = session.persistent_session.as_ref().map(|ps| ps.pid());
         session.persistent_session = None;
         // Clear active_pid alongside persistent_session. A concurrent turn
@@ -351,9 +369,14 @@ pub async fn send_chat_message(
         // without this clear, a failed respawn + next turn would SIGKILL a
         // potentially recycled PID via the stale-process teardown branch.
         session.active_pid = None;
-        if let Some(pid) = stale_pid {
+        if stale_pid.is_some() || to_deny_drift.is_some() {
             drop(agents);
-            let _ = agent::stop_agent_graceful(pid).await;
+            if let Some((ref ps, drained)) = to_deny_drift {
+                deny_drained_permissions(drained, ps, "Session restarted with new flags.").await;
+            }
+            if let Some(pid) = stale_pid {
+                let _ = agent::stop_agent_graceful(pid).await;
+            }
             agents = state.agents.write().await;
         }
     }
@@ -993,21 +1016,30 @@ pub async fn stop_agent(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let mut agents = state.agents.write().await;
-    if let Some(session) = agents.get_mut(&workspace_id) {
-        // Unblock the CLI on any pending can_use_tool requests before we kill
-        // the process so the deny is recorded in the transcript cleanly.
-        cancel_pending_permissions(session, "Session stopped by user.").await;
-        // Clear persistent session and reset session state so the next
-        // turn starts completely fresh (not --resume with a stale ID).
-        session.persistent_session = None;
-        session.turn_count = 0;
-        session.session_id = String::new();
-        if let Some(pid) = session.active_pid.take() {
-            agent::stop_agent(pid).await?;
+    // Drain pending permissions and snapshot the cleanup state synchronously
+    // under the lock; deny sends + the kill happen after we release it.
+    let (to_deny_stop, pid_to_kill) = {
+        let mut agents = state.agents.write().await;
+        match agents.get_mut(&workspace_id) {
+            Some(session) => {
+                let drained = drain_pending_permissions(session);
+                // Clear persistent session and reset session state so the next
+                // turn starts completely fresh (not --resume with a stale ID).
+                session.persistent_session = None;
+                session.turn_count = 0;
+                session.session_id = String::new();
+                (drained, session.active_pid.take())
+            }
+            None => (None, None),
         }
+    };
+
+    if let Some((ref ps, drained)) = to_deny_stop {
+        deny_drained_permissions(drained, ps, "Session stopped by user.").await;
     }
-    drop(agents);
+    if let Some(pid) = pid_to_kill {
+        agent::stop_agent(pid).await?;
+    }
 
     // Clear persisted session from DB too.
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
@@ -1037,12 +1069,19 @@ pub async fn reset_agent_session(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let mut agents = state.agents.write().await;
-    if let Some(session) = agents.get_mut(&workspace_id) {
-        cancel_pending_permissions(session, "Session reset.").await;
+    // Drain pending permissions under the lock; deny sends happen after release.
+    let to_deny_reset = {
+        let mut agents = state.agents.write().await;
+        let drained = agents
+            .get_mut(&workspace_id)
+            .and_then(drain_pending_permissions);
+        agents.remove(&workspace_id);
+        drained
+    };
+
+    if let Some((ref ps, drained)) = to_deny_reset {
+        deny_drained_permissions(drained, ps, "Session reset.").await;
     }
-    agents.remove(&workspace_id);
-    drop(agents);
 
     // Clear persisted session so the next turn starts fresh.
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
@@ -1444,22 +1483,40 @@ pub async fn submit_plan_approval(
         .await
 }
 
-/// Cancel any pending permission requests for a workspace by sending a deny
-/// `control_response` for each. Called when the session is being torn down
-/// (stop_agent / reset_agent_session / stale-process cleanup) to prevent the
-/// CLI from hanging waiting for a response that will never come.
-async fn cancel_pending_permissions(session: &mut AgentSessionState, reason: &str) {
+/// Synchronously drain any pending permission requests from `session` and
+/// snapshot the [`PersistentSession`] needed to deny them. Designed to be
+/// called while holding the agents write lock — does no async work itself.
+///
+/// Returns `None` when there is nothing to do (no pending entries) or when
+/// there is no live `PersistentSession` to receive the denies (entries are
+/// dropped in that case, since nobody could read the response anyway).
+fn drain_pending_permissions(
+    session: &mut AgentSessionState,
+) -> Option<(Arc<PersistentSession>, Vec<PendingPermission>)> {
     if session.pending_permissions.is_empty() {
-        return;
+        return None;
     }
     let Some(ps) = session.persistent_session.clone() else {
-        // Without an active process nothing will read the response, so just drop
-        // the pending entries.
         session.pending_permissions.clear();
-        return;
+        return None;
     };
-    let drained: Vec<(String, PendingPermission)> = session.pending_permissions.drain().collect();
-    for (_tool_use_id, pending) in drained {
+    let drained: Vec<PendingPermission> = session
+        .pending_permissions
+        .drain()
+        .map(|(_, p)| p)
+        .collect();
+    Some((ps, drained))
+}
+
+/// Send a deny `control_response` for each drained permission. Caller must
+/// have already released the agents lock — this performs async I/O against
+/// the CLI's stdin and would otherwise serialize all other agent-state ops.
+async fn deny_drained_permissions(
+    drained: Vec<PendingPermission>,
+    ps: &PersistentSession,
+    reason: &str,
+) {
+    for pending in drained {
         let deny = serde_json::json!({
             "behavior": "deny",
             "message": reason,

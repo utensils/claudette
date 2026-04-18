@@ -279,14 +279,14 @@ pub fn build_claude_args(
         "stream-json".to_string(),
         "--verbose".to_string(),
         "--include-partial-messages".to_string(),
-        // Route permission "ask" decisions through the stream-json control
-        // protocol so the host (Claudette) can collect user answers and return
-        // them via `control_response`. Required for AskUserQuestion /
-        // ExitPlanMode round-trip — their `checkPermissions` short-circuits to
-        // `ask` regardless of --allowedTools or --permission-mode.
-        "--permission-prompt-tool".to_string(),
-        "stdio".to_string(),
     ];
+    // NOTE: `--permission-prompt-tool stdio` is intentionally NOT added here.
+    // `run_turn` runs with stdin closed (or only used for image upload), so
+    // there's nobody to answer a `can_use_tool` control_request — advertising
+    // the protocol would let the CLI hang waiting for AskUserQuestion /
+    // ExitPlanMode approval that no consumer is listening for. The flag is
+    // added in `build_persistent_args` instead, where the Tauri bridge owns
+    // the stdin and handles control_request → control_response.
 
     // Check if we should bypass permissions (full access with wildcard)
     let bypass_permissions = allowed_tools.len() == 1 && allowed_tools[0] == "*";
@@ -2579,7 +2579,11 @@ mod tests {
     // --- control_request parsing + stdio permission prompt flag ---
 
     #[test]
-    fn build_claude_args_includes_stdio_permission_prompt() {
+    fn build_claude_args_omits_stdio_permission_prompt() {
+        // run_turn doesn't keep stdin open for control_response, so the flag
+        // must NOT appear here — otherwise the CLI would block on
+        // AskUserQuestion / ExitPlanMode forever in non-persistent flows
+        // (used by the WebSocket server in src-server/src/handler.rs).
         let args = build_claude_args(
             "sid",
             "hi",
@@ -2589,12 +2593,10 @@ mod tests {
             &AgentSettings::default(),
             false,
         );
-        // Must appear as a pair so the CLI interprets it correctly.
-        let idx = args
-            .iter()
-            .position(|a| a == "--permission-prompt-tool")
-            .expect("--permission-prompt-tool missing");
-        assert_eq!(args.get(idx + 1).map(String::as_str), Some("stdio"));
+        assert!(
+            !args.iter().any(|a| a == "--permission-prompt-tool"),
+            "build_claude_args must not enable the stdio permission prompt"
+        );
     }
 
     #[test]

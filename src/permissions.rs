@@ -71,7 +71,9 @@ mod tests {
     }
 
     #[test]
-    fn ask_user_question_is_allowed_at_every_level() {
+    fn ask_user_question_is_allowed_at_readonly_and_standard_levels() {
+        // `full` returns the wildcard sentinel `["*"]`, so the explicit
+        // names only need to be present at the more restricted levels.
         for level in ["readonly", "standard"] {
             let tools = tools_for_level(level);
             assert!(
