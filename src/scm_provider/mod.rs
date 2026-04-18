@@ -236,8 +236,12 @@ impl PluginRegistry {
 }
 
 /// Check if all required CLI tools are available on PATH.
+///
+/// Uses the enriched PATH (login-shell probed) so Homebrew-installed CLIs
+/// like `gh`/`glab` resolve correctly when the app is launched from Finder.
 fn check_clis_available(clis: &[String]) -> bool {
-    clis.iter().all(|cli| which::which(cli).is_ok())
+    clis.iter()
+        .all(|cli| crate::env::which_in_enriched_path(cli).is_ok())
 }
 
 #[cfg(test)]

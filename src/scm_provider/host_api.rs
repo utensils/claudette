@@ -156,6 +156,11 @@ async fn host_exec(
     let mut command = Command::new(cmd);
     command.args(&args);
     command.current_dir(&ctx.workspace_info.worktree_path);
+    // macOS GUI apps inherit a minimal launchd PATH, so binaries like
+    // `gh`/`glab` (typically in /opt/homebrew/bin) wouldn't be found.
+    // Pass the enriched PATH so the child — and anything it shells out
+    // to (git, credential helpers, editors) — can resolve them.
+    command.env("PATH", crate::env::enriched_path());
     command.kill_on_drop(true);
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::piped());
