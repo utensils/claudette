@@ -206,14 +206,17 @@ function App() {
     });
 
     // Listen for workspace auto-archived events (e.g. PR merged with archive_on_merge).
-    const unlistenAutoArchived = listen<{ workspace_id: string; workspace_name: string }>("workspace-auto-archived", (event) => {
-      const { workspace_id } = event.payload;
+    const unlistenAutoArchived = listen<{ workspace_id: string; workspace_name: string; pr_number?: number }>("workspace-auto-archived", (event) => {
+      const { workspace_id, workspace_name, pr_number } = event.payload;
       const store = useAppStore.getState();
       store.updateWorkspace(workspace_id, { status: "Archived" as const });
-      // If the archived workspace was selected, deselect it
       if (store.selectedWorkspaceId === workspace_id) {
         store.selectWorkspace(null);
       }
+      const msg = pr_number
+        ? `Workspace \u201c${workspace_name}\u201d archived \u2014 PR #${pr_number} merged`
+        : `Workspace \u201c${workspace_name}\u201d archived \u2014 PR merged`;
+      store.addToast(msg);
     });
 
     return () => {

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useAppStore } from "../../../stores/useAppStore";
-import { updateRepositorySettings, getRepoConfig } from "../../../services/tauri";
+import { updateRepositorySettings, getRepoConfig, getAppSetting, setAppSetting } from "../../../services/tauri";
 import {
   loadRepositoryMcps,
   detectMcpServers,
@@ -45,6 +45,7 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
   const [error, setError] = useState<string | null>(null);
   const [repoConfig, setRepoConfig] = useState<RepoConfigInfo | null>(null);
   const [mcpServers, setMcpServers] = useState<SavedMcpServer[]>([]);
+  const [archiveOnMerge, setArchiveOnMerge] = useState<"inherit" | "true" | "false">("inherit");
   const iconPopoverRef = useRef<HTMLDivElement>(null);
 
   // Reset local state only when switching to a different repo
@@ -64,6 +65,16 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
     getRepoConfig(repoId)
       .then(setRepoConfig)
       .catch(() => setRepoConfig(null));
+  }, [repoId]);
+
+  useEffect(() => {
+    getAppSetting(`repo:${repoId}:archive_on_merge`)
+      .then((val) => {
+        if (val === "true") setArchiveOnMerge("true");
+        else if (val === "false") setArchiveOnMerge("false");
+        else setArchiveOnMerge("inherit");
+      })
+      .catch(() => setArchiveOnMerge("inherit"));
   }, [repoId]);
 
   const refreshMcpServers = useCallback(() => {
@@ -501,6 +512,41 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
               Refresh status
             </button>
           )}
+        </div>
+      </div>
+
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>Archive on merge</div>
+          <div className={styles.settingDescription}>
+            Automatically archive workspaces when their PR is merged. Overrides
+            the global setting for this repository.
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          <select
+            className={styles.select}
+            value={archiveOnMerge}
+            onChange={async (e) => {
+              const val = e.target.value as "inherit" | "true" | "false";
+              const prev = archiveOnMerge;
+              setArchiveOnMerge(val);
+              try {
+                setError(null);
+                await setAppSetting(
+                  `repo:${repoId}:archive_on_merge`,
+                  val === "inherit" ? "" : val,
+                );
+              } catch (err) {
+                setArchiveOnMerge(prev);
+                setError(String(err));
+              }
+            }}
+          >
+            <option value="inherit">Use global default</option>
+            <option value="true">Enabled</option>
+            <option value="false">Disabled</option>
+          </select>
         </div>
       </div>
 

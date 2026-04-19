@@ -525,8 +525,10 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
         loop {
             let app_state = handle.state::<AppState>();
 
-            // All DB reads for this poll cycle in one block
-            let (workspace_ids, archive_on_merge) = {
+            // All DB reads for this poll cycle in one block.
+            // Collect workspace IDs with their repo IDs so we can resolve
+            // per-repo archive_on_merge overrides after polling.
+            let (workspace_ids, global_archive, per_repo_archive) = {
                 let db = match Database::open(&app_state.db_path) {
                     Ok(db) => db,
                     Err(_) => {
@@ -534,47 +536,69 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                         continue;
                     }
                 };
-                let ids: Vec<String> = db
+                let active: Vec<(String, String)> = db
                     .list_workspaces()
                     .unwrap_or_default()
                     .into_iter()
                     .filter(|ws| ws.status == claudette::model::WorkspaceStatus::Active)
-                    .map(|ws| ws.id)
+                    .map(|ws| (ws.id, ws.repository_id))
                     .collect();
-                let merge_setting = db
+                let global = db
                     .get_app_setting("archive_on_merge")
                     .ok()
                     .flatten()
                     .as_deref()
                     == Some("true");
-                (ids, merge_setting)
+                let repo_ids: std::collections::HashSet<&str> =
+                    active.iter().map(|(_, rid)| rid.as_str()).collect();
+                let per_repo: std::collections::HashMap<String, bool> = repo_ids
+                    .into_iter()
+                    .filter_map(|rid| {
+                        let key = format!("repo:{rid}:archive_on_merge");
+                        let val = db.get_app_setting(&key).ok().flatten()?;
+                        if val.is_empty() {
+                            return None;
+                        }
+                        Some((rid.to_string(), val == "true"))
+                    })
+                    .collect();
+                (active, global, per_repo)
             };
 
             // Poll all workspaces concurrently. The semaphore inside
             // poll_workspace_scm limits actual CLI invocations to 4 at a time.
-            let results: Vec<(String, Option<ScmDetail>)> = stream::iter(workspace_ids)
-                .map(|ws_id| {
+            let results: Vec<((String, String), Option<ScmDetail>)> = stream::iter(workspace_ids)
+                .map(|(ws_id, repo_id)| {
                     let state = &*app_state;
                     async move {
                         let detail = poll_workspace_scm(state, &ws_id).await;
-                        (ws_id, detail)
+                        ((ws_id, repo_id), detail)
                     }
                 })
                 .buffer_unordered(8)
                 .collect()
                 .await;
 
-            for (ws_id, detail) in results {
+            for ((ws_id, repo_id), detail) in results {
                 if let Some(detail) = detail {
                     let _ = handle.emit("scm-data-updated", &detail);
 
-                    if archive_on_merge
+                    let should_archive = per_repo_archive
+                        .get(&repo_id)
+                        .copied()
+                        .unwrap_or(global_archive);
+
+                    if should_archive
                         && detail.pull_request.as_ref().is_some_and(|pr| {
                             pr.state == claudette::scm_provider::scm::PrState::Merged
                         })
                     {
                         eprintln!("[scm] PR merged for workspace {} — auto-archiving", ws_id);
-                        auto_archive_workspace(&handle, &app_state, &ws_id).await;
+                        let pr_info = detail
+                            .pull_request
+                            .as_ref()
+                            .map(|pr| (pr.number, pr.title.clone()));
+                        auto_archive_workspace(&handle, &app_state, &ws_id, pr_info).await;
                     }
                 }
             }
@@ -593,9 +617,10 @@ async fn auto_archive_workspace(
     handle: &tauri::AppHandle,
     app_state: &AppState,
     workspace_id: &str,
+    pr_info: Option<(u64, String)>,
 ) {
     // All DB work in a block (Database is not Send — must not hold across .await)
-    let archive_info: Option<(String, String, Option<String>, Option<String>)> = {
+    let archive_info: Option<(String, String, Option<String>, Option<String>, String)> = {
         let db = match Database::open(&app_state.db_path) {
             Ok(db) => db,
             Err(e) => {
@@ -618,6 +643,12 @@ async fn auto_archive_workspace(
             .flatten()
             .map(|r| r.path);
 
+        let sound = db
+            .get_app_setting("notification_sound")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "Default".to_string());
+
         // Update DB status
         let _ = db.delete_terminal_tabs_for_workspace(workspace_id);
         let _ = db.update_workspace_status(
@@ -631,10 +662,11 @@ async fn auto_archive_workspace(
             ws.name.clone(),
             ws.worktree_path.clone(),
             repo_path,
+            sound,
         ))
     };
 
-    let Some((ws_id, ws_name, wt_path, repo_path)) = archive_info else {
+    let Some((ws_id, ws_name, wt_path, repo_path, sound)) = archive_info else {
         return;
     };
 
@@ -655,11 +687,22 @@ async fn auto_archive_workspace(
 
     // Rebuild tray and notify frontend
     crate::tray::rebuild_tray(handle);
+
+    let pr_number = pr_info.as_ref().map(|(n, _)| *n);
+    let body = match &pr_info {
+        Some((num, _)) => {
+            format!("Workspace \u{2018}{ws_name}\u{2019} archived \u{2014} PR #{num} merged")
+        }
+        None => format!("Workspace \u{2018}{ws_name}\u{2019} archived \u{2014} PR merged"),
+    };
+    crate::tray::send_notification(handle, "", "Claudette", &body, &sound);
+
     let _ = handle.emit(
         "workspace-auto-archived",
         serde_json::json!({
             "workspace_id": ws_id,
             "workspace_name": ws_name,
+            "pr_number": pr_number,
         }),
     );
     eprintln!("[scm] Auto-archived workspace '{ws_name}' ({ws_id})");

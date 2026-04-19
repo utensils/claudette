@@ -175,6 +175,11 @@ interface AppState {
   markWorkspaceAsUnread: (wsId: string) => void;
   clearUnreadCompletion: (wsId: string) => void;
 
+  // -- Toasts --
+  toasts: { id: string; message: string }[];
+  addToast: (message: string) => void;
+  removeToast: (id: string) => void;
+
   // -- Permissions --
   permissionLevel: Record<string, PermissionLevel>;
   setPermissionLevel: (wsId: string, level: PermissionLevel) => void;
@@ -784,6 +789,18 @@ export const useAppStore = create<AppState>((set) => ({
       newSet.delete(wsId);
       return { unreadCompletions: newSet };
     }),
+
+  // -- Toasts --
+  toasts: [],
+  addToast: (message) => {
+    const id = crypto.randomUUID();
+    set((s) => ({ toasts: [...s.toasts, { id, message }] }));
+    setTimeout(() => {
+      set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
+    }, 5000);
+  },
+  removeToast: (id) =>
+    set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
 
   // -- Permissions --
   permissionLevel: {},

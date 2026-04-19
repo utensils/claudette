@@ -11,6 +11,7 @@ import { Dashboard } from "./Dashboard";
 import { ModalRouter } from "../modals/ModalRouter";
 import { SettingsPage } from "../settings/SettingsPage";
 import { ResizeHandle } from "./ResizeHandle";
+import { ToastContainer } from "./Toast";
 import { useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
 import { useBranchRefresh } from "../../hooks/useBranchRefresh";
 import { useAutoUpdater } from "../../hooks/useAutoUpdater";
@@ -165,6 +166,7 @@ export function AppLayout() {
       <ModalRouter />
       {fuzzyFinderOpen && <FuzzyFinder />}
       {commandPaletteOpen && <CommandPalette />}
+      <ToastContainer />
     </div>
   );
 }

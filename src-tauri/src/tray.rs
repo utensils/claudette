@@ -543,7 +543,13 @@ fn build_tray_menu_with_db(app: &AppHandle, db: &Database) -> Result<Menu<tauri:
     Menu::with_items(app, &item_refs).map_err(|e| e.to_string())
 }
 
-fn send_notification(app: &AppHandle, workspace_id: &str, title: &str, body: &str, sound: &str) {
+pub(crate) fn send_notification(
+    app: &AppHandle,
+    workspace_id: &str,
+    title: &str,
+    body: &str,
+    sound: &str,
+) {
     // On macOS, use mac-notification-sys directly so we can block for the
     // click response. When the user clicks the notification, show the window
     // and navigate to the session — even if the window was hidden (close-to-tray).
