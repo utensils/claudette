@@ -8,65 +8,10 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use rusqlite::Connection;
-use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DashboardMetrics {
-    pub active_sessions: u32,
-    pub sessions_today: u32,
-    pub commits_today: u32,
-    pub additions_7d: u64,
-    pub deletions_7d: u64,
-    pub cost_30d_usd: f64,
-    pub success_rate_30d: f32,
-    pub commits_daily_14d: Vec<u32>,
-    pub cost_daily_30d: Vec<f64>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkspaceMetrics {
-    pub commits_count: u32,
-    pub additions: u64,
-    pub deletions: u64,
-    pub latest_session_turns: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RepoLeaderRow {
-    pub repository_id: String,
-    pub sessions: u32,
-    pub commits: u32,
-    pub total_cost_usd: f64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HeatmapCell {
-    pub dow: u8,
-    pub week: u8,
-    pub count: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionDot {
-    pub ended_at: String,
-    pub completed_ok: bool,
-    pub workspace_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AnalyticsMetrics {
-    pub repo_leaderboard: Vec<RepoLeaderRow>,
-    pub heatmap: Vec<HeatmapCell>,
-    pub turn_histogram: Vec<u32>,
-    pub top_slash_commands: Vec<(String, u32)>,
-    pub recent_sessions_24h: Vec<SessionDot>,
-}
+use crate::model::{
+    AnalyticsMetrics, DashboardMetrics, HeatmapCell, RepoLeaderRow, SessionDot, WorkspaceMetrics,
+};
 
 /// 8 turn-count buckets: [1,2], [3,4], [5,8], [9,16], [17,32], [33,64], [65,128], [129+].
 const TURN_BUCKET_UPPER_BOUNDS: [i64; 7] = [2, 4, 8, 16, 32, 64, 128];
@@ -87,6 +32,72 @@ pub fn workspace_metrics_batch(
 pub fn analytics_metrics(db_path: &Path) -> Result<AnalyticsMetrics, rusqlite::Error> {
     let conn = Connection::open(db_path)?;
     analytics_metrics_with(&conn)
+}
+
+/// Scrape git for any new commits in `worktree_path` made since the agent
+/// session started, and append them to `agent_commits`. Idempotent on
+/// `(workspace_id, commit_hash)`.
+///
+/// Called from the chat command layer after every `Result` event (turn
+/// boundary) so persistent sessions — whose `claude` subprocess stays alive
+/// across turns and therefore never triggers `ProcessExited` — still get
+/// their commits captured. Also called from the `ProcessExited` handler as
+/// a final cleanup pass.
+///
+/// Failures are swallowed: this runs off the critical path and a git parse
+/// failure should be logged rather than surfaced to the user. Returns the
+/// number of newly-inserted commit rows (0 on any error).
+pub async fn capture_session_commits(
+    db_path: &Path,
+    workspace_id: &str,
+    session_id: &str,
+    repository_id: &str,
+    worktree_path: &str,
+) -> usize {
+    if session_id.is_empty() {
+        return 0;
+    }
+    let Ok(db) = crate::db::Database::open(db_path) else {
+        return 0;
+    };
+    let Some(since) = db.get_agent_session_started_at(session_id).ok().flatten() else {
+        return 0;
+    };
+    match crate::git::commits_since(worktree_path, &since).await {
+        Ok(new_commits) if !new_commits.is_empty() => {
+            let models: Vec<crate::model::AgentCommit> = new_commits
+                .into_iter()
+                .map(|c| crate::model::AgentCommit {
+                    commit_hash: c.hash,
+                    workspace_id: Some(workspace_id.to_string()),
+                    repository_id: repository_id.to_string(),
+                    session_id: Some(session_id.to_string()),
+                    additions: c.additions,
+                    deletions: c.deletions,
+                    files_changed: c.files_changed,
+                    committed_at: c.committed_at,
+                })
+                .collect();
+            let count = models.len();
+            match db.insert_agent_commits_batch(
+                workspace_id,
+                repository_id,
+                Some(session_id),
+                &models,
+            ) {
+                Ok(()) => count,
+                Err(e) => {
+                    eprintln!("[metrics] insert_agent_commits_batch failed: {e}");
+                    0
+                }
+            }
+        }
+        Ok(_) => 0,
+        Err(e) => {
+            eprintln!("[metrics] commits_since failed: {e}");
+            0
+        }
+    }
 }
 
 fn dashboard_metrics_with(conn: &Connection) -> Result<DashboardMetrics, rusqlite::Error> {
@@ -253,15 +264,19 @@ fn workspace_metrics_batch_with(
         }
     }
 
-    // Latest session per workspace via correlated MAX(started_at) — one
-    // pass over agent_sessions instead of one query per id.
+    // Latest session per workspace — one pass over agent_sessions instead of
+    // one query per id. `started_at` has 1-second resolution, so the inner
+    // `ORDER BY started_at DESC, rowid DESC` disambiguates same-second ties
+    // deterministically (tie-break wins the later-inserted row).
     let turn_sql = format!(
         "SELECT s.workspace_id, s.turn_count
          FROM agent_sessions s
          WHERE s.workspace_id IN ({placeholders})
-           AND s.started_at = (
-               SELECT MAX(s2.started_at) FROM agent_sessions s2
+           AND s.rowid = (
+               SELECT s2.rowid FROM agent_sessions s2
                WHERE s2.workspace_id = s.workspace_id
+               ORDER BY s2.started_at DESC, s2.rowid DESC
+               LIMIT 1
            )"
     );
     let mut turn_stmt = conn.prepare(&turn_sql)?;
@@ -409,8 +424,15 @@ fn recent_sessions_24h(conn: &Connection) -> Result<Vec<SessionDot>, rusqlite::E
     // workspace_id is nullable in the schema; cascade-delete usually drops the
     // session row, but a defensive filter keeps empty IDs out of the timeline
     // so the click-to-select handler never receives "".
+    //
+    // `ended_at` is formatted as RFC3339 UTC (`YYYY-MM-DDTHH:MM:SSZ`) rather
+    // than the raw `datetime('now')` output so V8's `Date.parse` on the
+    // frontend interprets it as UTC. The naive SQLite form is parsed as
+    // local time by V8, which would shift every dot by the user's UTC
+    // offset — mirroring the backend's `ensure_utc_tz` treatment of
+    // SQLite timestamps elsewhere.
     let mut stmt = conn.prepare(
-        "SELECT ended_at, completed_ok, workspace_id
+        "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', ended_at), completed_ok, workspace_id
          FROM agent_sessions
          WHERE ended_at IS NOT NULL
            AND workspace_id IS NOT NULL

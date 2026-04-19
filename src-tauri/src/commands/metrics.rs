@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use claudette::metrics::{self, AnalyticsMetrics, DashboardMetrics, WorkspaceMetrics};
+use claudette::metrics;
+use claudette::model::{AnalyticsMetrics, DashboardMetrics, WorkspaceMetrics};
 use tauri::State;
 
 use crate::state::AppState;

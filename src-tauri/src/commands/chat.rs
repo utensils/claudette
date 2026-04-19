@@ -842,14 +842,19 @@ pub async fn send_chat_message(
             // for the next turn — only active_pid is cleared, not persistent_session.
             if let AgentEvent::Stream(StreamEvent::Result { .. }) = &event {
                 let app_state = app.state::<AppState>();
-                let mut agents = app_state.agents.write().await;
-                if let Some(session) = agents.get_mut(&ws_id)
-                    && session.active_pid == Some(spawned_pid)
-                    && session.persistent_session.is_some()
-                {
-                    session.active_pid = None;
-                }
-                drop(agents);
+                let session_id_for_capture = {
+                    let mut agents = app_state.agents.write().await;
+                    if let Some(session) = agents.get_mut(&ws_id)
+                        && session.active_pid == Some(spawned_pid)
+                        && session.persistent_session.is_some()
+                    {
+                        session.active_pid = None;
+                    }
+                    agents
+                        .get(&ws_id)
+                        .map(|s| s.session_id.clone())
+                        .unwrap_or_default()
+                };
                 // Rebuild tray so it reflects the idle state. Without this,
                 // the tray stays stuck on "Running" because the persistent
                 // process doesn't exit (only ProcessExited triggered rebuild).
@@ -858,6 +863,17 @@ pub async fn send_chat_message(
                 // consumed (e.g. a thinking-only final message with no text to persist).
                 // Ensures the next turn starts with a clean slate.
                 let _ = latest_usage.take();
+                // Metrics: persistent sessions never trigger ProcessExited
+                // between turns, so per-session commit scraping must run on
+                // every Result event. Idempotent on (workspace_id, commit_hash).
+                claudette::metrics::capture_session_commits(
+                    &db_path,
+                    &ws_id,
+                    &session_id_for_capture,
+                    &repo_id_for_mcp,
+                    &wt_path,
+                )
+                .await;
             }
 
             // Track per-assistant-message cumulative usage as the CLI streams it.
@@ -871,13 +887,19 @@ pub async fn send_chat_message(
                 latest_usage = Some(u.clone());
             }
 
-            if let AgentEvent::ProcessExited(_code) = &event {
+            if let AgentEvent::ProcessExited(code) = &event {
+                let exit_code = *code;
                 let app_state = app.state::<AppState>();
                 let mut agents = app_state.agents.write().await;
                 // Snapshot session_id before any mutation so metrics hooks
                 // below can reference the session we just finished.
                 let ended_session_id: Option<String> =
                     agents.get(&ws_id).map(|s| s.session_id.clone());
+                // Track whether this exit actually belongs to the live session
+                // in `agents` — if a newer turn has replaced `active_pid`, the
+                // old exit is stale and we must not end the (now-new) session
+                // row. Only set when we own the exit.
+                let mut ended_own_session = false;
                 if !got_init {
                     // Failed to initialize — clear the entire session so the
                     // next attempt starts fresh instead of trying --resume.
@@ -897,47 +919,36 @@ pub async fn send_chat_message(
                     // Process died — clear persistent session so the next turn
                     // spawns a fresh one.
                     session.persistent_session = None;
+                    ended_own_session = true;
                 }
-                // Metrics: scrape git for any new commits since this session
-                // started and append them (idempotent on commit_hash). Runs
-                // after the stream has fully exited so it never blocks user
-                // output. Note: ProcessExited is NOT session end — the user
-                // may resume on the next turn and produce more commits; the
-                // session row is only closed via rollback/clear/archive or
-                // when init fails (handled above via end_agent_session).
+                // Close out the agent_sessions row for post-init exits too, so
+                // `active_sessions` doesn't inflate and `success_rate_30d`
+                // doesn't silently drop crashed sessions. Only done when our
+                // PID still owned the session (stale exits are left alone).
                 if got_init
-                    && let Some(sid) = ended_session_id.as_deref()
+                    && ended_own_session
+                    && let Some(ref sid) = ended_session_id
+                    && !sid.is_empty()
                     && let Ok(db) = Database::open(&db_path)
                 {
-                    let started_at: Option<String> =
-                        db.get_agent_session_started_at(sid).ok().flatten();
-                    if let Some(since) = started_at {
-                        match claudette::git::commits_since(&wt_path, &since).await {
-                            Ok(new_commits) if !new_commits.is_empty() => {
-                                let models: Vec<claudette::model::AgentCommit> = new_commits
-                                    .into_iter()
-                                    .map(|c| claudette::model::AgentCommit {
-                                        commit_hash: c.hash,
-                                        workspace_id: Some(ws_id.clone()),
-                                        repository_id: repo_id_for_mcp.clone(),
-                                        session_id: Some(sid.to_string()),
-                                        additions: c.additions,
-                                        deletions: c.deletions,
-                                        files_changed: c.files_changed,
-                                        committed_at: c.committed_at,
-                                    })
-                                    .collect();
-                                let _ = db.insert_agent_commits_batch(
-                                    &ws_id,
-                                    &repo_id_for_mcp,
-                                    Some(sid),
-                                    &models,
-                                );
-                            }
-                            Ok(_) => {}
-                            Err(e) => eprintln!("[metrics] commits_since failed: {e}"),
-                        }
-                    }
+                    let completed_ok = exit_code == Some(0);
+                    let _ = db.end_agent_session(sid, completed_ok);
+                }
+                // Metrics: final commit scrape on process exit. This catches
+                // anything that wasn't captured by the per-turn `Result`-event
+                // capture below — e.g. when the process dies mid-turn before
+                // emitting a `Result`. Persistent sessions normally capture
+                // via the `Result` path, since their subprocess never exits
+                // between turns.
+                if got_init && let Some(sid) = ended_session_id.as_deref() {
+                    claudette::metrics::capture_session_commits(
+                        &db_path,
+                        &ws_id,
+                        sid,
+                        &repo_id_for_mcp,
+                        &wt_path,
+                    )
+                    .await;
                 }
                 // Play notification sound + run command if the window is not focused.
                 // This runs on the Rust side so it works even when the webview
@@ -1195,11 +1206,13 @@ pub async fn stop_agent(
         agent::stop_agent(pid).await?;
     }
 
-    // Clear persisted session from DB too.
+    // Clear persisted session from DB too. `stop_agent` aborts an in-flight
+    // turn (SIGTERM on the live pid + deny mid-turn permission prompts), so
+    // the session did not complete successfully — record it as a failure.
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let _ = db.clear_agent_session(&workspace_id);
     if let Some(sid) = ended_sid.as_deref().filter(|s| !s.is_empty()) {
-        let _ = db.end_agent_session(sid, true);
+        let _ = db.end_agent_session(sid, false);
     }
 
     crate::tray::rebuild_tray(&app);
@@ -1245,12 +1258,14 @@ pub async fn reset_agent_session(
         deny_drained_permissions(drained, ps, "Session reset.").await;
     }
 
-    // Clear persisted session so the next turn starts fresh.
+    // Clear persisted session so the next turn starts fresh. Reset discards
+    // in-flight state (pending permissions denied with "Session reset."), so
+    // any interrupted turn did not complete — record as a failure.
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     db.clear_agent_session(&workspace_id)
         .map_err(|e| e.to_string())?;
     if let Some(sid) = ended_sid.as_deref().filter(|s| !s.is_empty()) {
-        let _ = db.end_agent_session(sid, true);
+        let _ = db.end_agent_session(sid, false);
     }
 
     crate::tray::rebuild_tray(&app);
@@ -1329,13 +1344,15 @@ pub async fn rollback_to_checkpoint(
     db.delete_checkpoints_after(&workspace_id, checkpoint.turn_index)
         .map_err(|e| e.to_string())?;
 
-    // Reset agent session so the next turn starts fresh.
+    // Reset agent session so the next turn starts fresh. Rollback discards
+    // the session's prior work, so it did not run to completion — record as
+    // a failure.
     let ended_sid = {
         let mut agents = state.agents.write().await;
         agents.remove(&workspace_id).map(|s| s.session_id)
     };
     if let Some(sid) = ended_sid.as_deref() {
-        let _ = db.end_agent_session(sid, true);
+        let _ = db.end_agent_session(sid, false);
     }
     db.clear_agent_session(&workspace_id)
         .map_err(|e| e.to_string())?;
@@ -1399,13 +1416,14 @@ pub async fn clear_conversation(
     db.delete_checkpoints_after(&workspace_id, -1)
         .map_err(|e| e.to_string())?;
 
-    // Reset agent session.
+    // Reset agent session. Clearing the conversation discards the session's
+    // prior work, so it did not run to completion — record as a failure.
     let ended_sid = {
         let mut agents = state.agents.write().await;
         agents.remove(&workspace_id).map(|s| s.session_id)
     };
     if let Some(sid) = ended_sid.as_deref() {
-        let _ = db.end_agent_session(sid, true);
+        let _ = db.end_agent_session(sid, false);
     }
     db.clear_agent_session(&workspace_id)
         .map_err(|e| e.to_string())?;
