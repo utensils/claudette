@@ -161,6 +161,7 @@ export const Sidebar = memo(function Sidebar() {
     } catch (e) {
       console.error("Failed to create workspace:", e);
       setCreatingWorkspace(null);
+      alert(`Failed to create workspace: ${e}`);
     } finally {
       creatingRef.current = false;
     }
