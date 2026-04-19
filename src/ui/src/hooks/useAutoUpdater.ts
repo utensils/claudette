@@ -108,10 +108,14 @@ export function useAutoUpdater() {
     let unlisten: UnlistenFn | undefined;
     listen<number>("updater://progress", (event) => {
       useAppStore.getState().setUpdateProgress(event.payload);
-    }).then((fn) => {
-      if (cancelled) fn();
-      else unlisten = fn;
-    });
+    })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch((e) => {
+        console.error("[updater] Failed to subscribe to progress events:", e);
+      });
     return () => {
       cancelled = true;
       unlisten?.();

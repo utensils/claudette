@@ -12,7 +12,15 @@ export function GeneralSettings() {
   const setWorktreeBaseDir = useAppStore((s) => s.setWorktreeBaseDir);
   const updateAvailable = useAppStore((s) => s.updateAvailable);
   const updateChannel = useAppStore((s) => s.updateChannel);
+  const updateDownloading = useAppStore((s) => s.updateDownloading);
+  const updateInstallWhenIdle = useAppStore((s) => s.updateInstallWhenIdle);
   const openModal = useAppStore((s) => s.openModal);
+
+  // While an install is in flight (downloading, or queued to install when
+  // agents go idle), changing the channel would silently swap the endpoint
+  // for an update that's already on its way. Lock the dropdown until that
+  // resolves (the app restarts after install, so this is short-lived).
+  const channelLocked = updateDownloading || updateInstallWhenIdle;
 
   const [path, setPath] = useState(worktreeBaseDir);
   const [trayEnabled, setTrayEnabled] = useState(true);
@@ -173,8 +181,9 @@ export function GeneralSettings() {
         <div className={styles.settingInfo}>
           <div className={styles.settingLabel}>Update channel</div>
           <div className={styles.settingDescription}>
-            Nightly builds include the latest features and fixes but may be
-            unstable.
+            {channelLocked
+              ? "Locked while an update is installing. Available again after restart."
+              : "Nightly builds include the latest features and fixes but may be unstable."}
           </div>
         </div>
         <div className={styles.settingControl}>
@@ -182,6 +191,7 @@ export function GeneralSettings() {
             className={styles.select}
             value={updateChannel}
             aria-label="Update channel"
+            disabled={channelLocked}
             onChange={(e) => {
               const value = e.target.value;
               if (value === "stable" || value === "nightly") {
