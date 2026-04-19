@@ -152,6 +152,25 @@
   transition: opacity 0.15s ease;
 }
 
+.statusGroup {
+  margin-bottom: 4px;
+}
+
+.statusGroupHeader {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  gap: 6px;
+  transition: background var(--transition-fast);
+}
+
+.statusGroupHeader:hover {
+  background: var(--hover-bg);
+}
+
 .repoGroup.dragging {
   opacity: 0.35;
   cursor: grabbing;

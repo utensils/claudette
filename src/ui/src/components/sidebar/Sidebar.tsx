@@ -182,6 +182,7 @@ export const Sidebar = memo(function Sidebar() {
 
   const filteredWorkspaces = useMemo(
     () => workspaces.filter((ws) => {
+      if (ws.remote_connection_id) return false;
       if (!sidebarShowArchived && ws.status === "Archived") return false;
       if (sidebarRepoFilter !== "all" && ws.repository_id !== sidebarRepoFilter) return false;
       return true;
@@ -401,14 +402,14 @@ export const Sidebar = memo(function Sidebar() {
               onClick={() => setFilterMenuOpen((open) => !open)}
               title="Filter workspaces"
               aria-label="Filter workspaces"
-              aria-haspopup="menu"
+              aria-haspopup="dialog"
               aria-expanded={filterMenuOpen}
               aria-controls="workspace-filter-menu"
             >
               <Filter size={12} />
             </button>
           {filterMenuOpen && (
-            <div className={styles.filterMenu} id="workspace-filter-menu" role="group" aria-label="Workspace filters">
+            <div className={styles.filterMenu} id="workspace-filter-menu" role="dialog" aria-label="Workspace filters">
               <label className={styles.filterRow}>
                 <span className={styles.filterLabel}>Group by</span>
                 <select
@@ -459,9 +460,9 @@ export const Sidebar = memo(function Sidebar() {
           const collapsed = statusGroupCollapsed[groupKey];
           const runningCount = bucketWorkspaces.filter((ws) => ws.agent_status === "Running").length;
           return (
-            <div key={groupKey} className={styles.repoGroup}>
+            <div key={groupKey} className={styles.statusGroup}>
               <div
-                className={styles.repoHeader}
+                className={styles.statusGroupHeader}
                 onClick={() => toggleStatusGroupCollapsed(groupKey)}
               >
                 <span className={styles.chevron}>{collapsed ? "›" : "⌄"}</span>
