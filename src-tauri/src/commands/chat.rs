@@ -464,41 +464,17 @@ pub async fn send_chat_message(
     // workspace id is carried alongside so tray/notification code can group
     // per workspace.
     let mut agents = state.agents.write().await;
-    let session = agents
-        .entry(chat_session_id.clone())
-        .or_insert_with(|| {
-            // Try restoring a persisted session from the chat_sessions row.
-            if let Ok(Some(chat_session)) = db.get_chat_session(&chat_session_id)
-                && let Some(claude_sid) = chat_session.claude_session_id.clone()
-            {
-                return AgentSessionState {
-                    workspace_id: workspace_id.clone(),
-                    session_id: claude_sid,
-                    turn_count: chat_session.turn_count,
-                    active_pid: None,
-                    custom_instructions: instructions.clone(),
-                    needs_attention: false,
-                    attention_kind: None,
-                    attention_notification_sent: false,
-                    persistent_session: None,
-                    mcp_config_dirty: false,
-                    session_plan_mode: false,
-                    session_allowed_tools: Vec::new(),
-                    session_disable_1m_context: false,
-                    pending_permissions: std::collections::HashMap::new(),
-                    session_exited_plan: false,
-                    session_resolved_env: Default::default(),
-                    mcp_bridge: None,
-                    last_user_msg_id: None,
-                };
-            }
-
-            AgentSessionState {
+    let session = agents.entry(chat_session_id.clone()).or_insert_with(|| {
+        // Try restoring a persisted session from the chat_sessions row.
+        if let Ok(Some(chat_session)) = db.get_chat_session(&chat_session_id)
+            && let Some(claude_sid) = chat_session.claude_session_id.clone()
+        {
+            return AgentSessionState {
                 workspace_id: workspace_id.clone(),
-                session_id: uuid::Uuid::new_v4().to_string(),
-                turn_count: 0,
+                session_id: claude_sid,
+                turn_count: chat_session.turn_count,
                 active_pid: None,
-                custom_instructions: instructions,
+                custom_instructions: instructions.clone(),
                 needs_attention: false,
                 attention_kind: None,
                 attention_notification_sent: false,
@@ -512,8 +488,31 @@ pub async fn send_chat_message(
                 session_resolved_env: Default::default(),
                 mcp_bridge: None,
                 last_user_msg_id: None,
-            }
-        });
+            };
+        }
+
+        AgentSessionState {
+            workspace_id: workspace_id.clone(),
+            session_id: uuid::Uuid::new_v4().to_string(),
+            turn_count: 0,
+            active_pid: None,
+            custom_instructions: instructions,
+            needs_attention: false,
+            attention_kind: None,
+            attention_notification_sent: false,
+            persistent_session: None,
+            mcp_config_dirty: false,
+            session_plan_mode: false,
+            session_allowed_tools: Vec::new(),
+            session_disable_1m_context: false,
+            pending_permissions: std::collections::HashMap::new(),
+            session_exited_plan: false,
+            session_resolved_env: Default::default(),
+            mcp_bridge: None,
+            last_user_msg_id: None,
+        }
+    });
+>>>>>>> 9d4ea4d (fix(chat): remove sync setState in SessionTab edit effect + fmt)
 
     // Clear any unresolved permission requests so the CLI doesn't hang when
     // we send the next turn. This replaces the old behaviour where the
@@ -1084,15 +1083,8 @@ pub async fn send_chat_message(
             let app2 = app.clone();
             let ws_env2 = rename_ws_env.clone();
             tokio::spawn(async move {
-                try_generate_session_name(
-                    &sid2,
-                    &wt_path2,
-                    &prompt2,
-                    &db_path2,
-                    &app2,
-                    &ws_env2,
-                )
-                .await;
+                try_generate_session_name(&sid2, &wt_path2, &prompt2, &db_path2, &app2, &ws_env2)
+                    .await;
             });
         }
 

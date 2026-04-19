@@ -1202,10 +1202,7 @@ impl Database {
     }
 
     /// Insert a new active session. Returns the inserted row.
-    pub fn create_chat_session(
-        &self,
-        workspace_id: &str,
-    ) -> Result<ChatSession, rusqlite::Error> {
+    pub fn create_chat_session(&self, workspace_id: &str) -> Result<ChatSession, rusqlite::Error> {
         // New sessions land at the end of the tab list.
         let sort_order: i32 = self
             .conn
@@ -1270,11 +1267,7 @@ impl Database {
 
     /// Rename a session. Sets `name_edited = 1` so Haiku auto-naming never
     /// overwrites the new name.
-    pub fn rename_chat_session(
-        &self,
-        session_id: &str,
-        name: &str,
-    ) -> Result<(), rusqlite::Error> {
+    pub fn rename_chat_session(&self, session_id: &str, name: &str) -> Result<(), rusqlite::Error> {
         self.conn.execute(
             "UPDATE chat_sessions SET name = ?1, name_edited = 1 WHERE id = ?2",
             params![name, session_id],
@@ -1313,10 +1306,7 @@ impl Database {
     }
 
     /// Clear Claude CLI state (e.g. after a reset or failed init).
-    pub fn clear_chat_session_claude_state(
-        &self,
-        session_id: &str,
-    ) -> Result<(), rusqlite::Error> {
+    pub fn clear_chat_session_claude_state(&self, session_id: &str) -> Result<(), rusqlite::Error> {
         self.conn.execute(
             "UPDATE chat_sessions
              SET claude_session_id = NULL, turn_count = 0 WHERE id = ?1",
@@ -2604,8 +2594,14 @@ mod tests {
         let db = setup_db_with_workspace();
         db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "hello"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg(&db, "m2", "w1", ChatRole::Assistant, "hi there"))
-            .unwrap();
+        db.insert_chat_message(&make_chat_msg(
+            &db,
+            "m2",
+            "w1",
+            ChatRole::Assistant,
+            "hi there",
+        ))
+        .unwrap();
         let msgs = db.list_chat_messages("w1").unwrap();
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].content, "hello");
@@ -2629,8 +2625,14 @@ mod tests {
     #[test]
     fn test_update_chat_message_content() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "partial"))
-            .unwrap();
+        db.insert_chat_message(&make_chat_msg(
+            &db,
+            "m1",
+            "w1",
+            ChatRole::Assistant,
+            "partial",
+        ))
+        .unwrap();
         db.update_chat_message_content("m1", "partial response complete")
             .unwrap();
         let msgs = db.list_chat_messages("w1").unwrap();
@@ -2677,8 +2679,14 @@ mod tests {
         let db = setup_db_with_workspace();
         db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "user msg"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg(&db, "m2", "w1", ChatRole::Assistant, "asst msg"))
-            .unwrap();
+        db.insert_chat_message(&make_chat_msg(
+            &db,
+            "m2",
+            "w1",
+            ChatRole::Assistant,
+            "asst msg",
+        ))
+        .unwrap();
         db.insert_chat_message(&make_chat_msg(&db, "m3", "w1", ChatRole::System, "sys msg"))
             .unwrap();
         let msgs = db.list_chat_messages("w1").unwrap();
@@ -2740,8 +2748,14 @@ mod tests {
     #[test]
     fn test_insert_and_list_attachments() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "look at this"))
-            .unwrap();
+        db.insert_chat_message(&make_chat_msg(
+            &db,
+            "m1",
+            "w1",
+            ChatRole::User,
+            "look at this",
+        ))
+        .unwrap();
         db.insert_attachment(&make_attachment("a1", "m1", "screenshot.png"))
             .unwrap();
 
@@ -3189,8 +3203,14 @@ mod tests {
             .unwrap();
         db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "first"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg(&db, "m2", "w1", ChatRole::Assistant, "second"))
-            .unwrap();
+        db.insert_chat_message(&make_chat_msg(
+            &db,
+            "m2",
+            "w1",
+            ChatRole::Assistant,
+            "second",
+        ))
+        .unwrap();
         db.insert_chat_message(&make_chat_msg(
             &db,
             "m3",
@@ -3606,13 +3626,13 @@ mod tests {
     #[test]
     fn test_list_messages_up_to_includes_boundary() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "a"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "a"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m2", "w1", ChatRole::Assistant, "b"))
+        db.insert_chat_message(&make_chat_msg(&db, "m2", "w1", ChatRole::Assistant, "b"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m3", "w1", ChatRole::User, "c"))
+        db.insert_chat_message(&make_chat_msg(&db, "m3", "w1", ChatRole::User, "c"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m4", "w1", ChatRole::Assistant, "d"))
+        db.insert_chat_message(&make_chat_msg(&db, "m4", "w1", ChatRole::Assistant, "d"))
             .unwrap();
 
         let msgs = db.list_messages_up_to("w1", "m2").unwrap();
@@ -3623,7 +3643,7 @@ mod tests {
     #[test]
     fn test_list_messages_up_to_missing_returns_empty() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "a"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "a"))
             .unwrap();
         let msgs = db.list_messages_up_to("w1", "nonexistent").unwrap();
         assert!(msgs.is_empty());
@@ -3632,17 +3652,17 @@ mod tests {
     #[test]
     fn test_list_checkpoints_up_to() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::Assistant, "a"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m2", "w1", ChatRole::Assistant, "b"))
+        db.insert_chat_message(&make_chat_msg(&db, "m2", "w1", ChatRole::Assistant, "b"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m3", "w1", ChatRole::Assistant, "c"))
+        db.insert_chat_message(&make_chat_msg(&db, "m3", "w1", ChatRole::Assistant, "c"))
             .unwrap();
-        db.insert_checkpoint(&make_checkpoint("cp1", "w1", "m1", 0))
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
             .unwrap();
-        db.insert_checkpoint(&make_checkpoint("cp2", "w1", "m2", 1))
+        db.insert_checkpoint(&make_checkpoint(&db, "cp2", "w1", "m2", 1))
             .unwrap();
-        db.insert_checkpoint(&make_checkpoint("cp3", "w1", "m3", 2))
+        db.insert_checkpoint(&make_checkpoint(&db, "cp3", "w1", "m3", 2))
             .unwrap();
 
         let up_to_1 = db.list_checkpoints_up_to("w1", 1).unwrap();

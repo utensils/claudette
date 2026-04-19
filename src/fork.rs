@@ -468,10 +468,21 @@ mod tests {
         }
     }
 
-    fn make_chat_msg(id: &str, ws: &str, role: ChatRole, content: &str) -> ChatMessage {
+    fn make_chat_msg(
+        db: &Database,
+        id: &str,
+        ws: &str,
+        role: ChatRole,
+        content: &str,
+    ) -> ChatMessage {
+        let session_id = db
+            .default_session_id_for_workspace(ws)
+            .unwrap()
+            .expect("workspace must have a default session for tests");
         ChatMessage {
             id: id.into(),
             workspace_id: ws.into(),
+            session_id,
             role,
             content: content.into(),
             cost_usd: None,
@@ -486,15 +497,21 @@ mod tests {
     }
 
     fn make_checkpoint(
+        db: &Database,
         id: &str,
         ws: &str,
         msg: &str,
         turn: i32,
         commit: Option<&str>,
     ) -> ConversationCheckpoint {
+        let session_id = db
+            .default_session_id_for_workspace(ws)
+            .unwrap()
+            .expect("workspace must have a default session for tests");
         ConversationCheckpoint {
             id: id.into(),
             workspace_id: ws.into(),
+            session_id,
             message_id: msg.into(),
             commit_hash: commit.map(String::from),
             has_file_state: false,
@@ -509,17 +526,23 @@ mod tests {
         db.insert_repository(&make_repo("r1")).unwrap();
         db.insert_workspace(&make_workspace("w1", "r1", "source"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "hi"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "hi"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m2", "w1", ChatRole::Assistant, "hello"))
+        db.insert_chat_message(&make_chat_msg(
+            &db,
+            "m2",
+            "w1",
+            ChatRole::Assistant,
+            "hello",
+        ))
+        .unwrap();
+        db.insert_chat_message(&make_chat_msg(&db, "m3", "w1", ChatRole::User, "more"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m3", "w1", ChatRole::User, "more"))
+        db.insert_chat_message(&make_chat_msg(&db, "m4", "w1", ChatRole::Assistant, "ok"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m4", "w1", ChatRole::Assistant, "ok"))
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m2", 0, Some("abc")))
             .unwrap();
-        db.insert_checkpoint(&make_checkpoint("cp1", "w1", "m2", 0, Some("abc")))
-            .unwrap();
-        db.insert_checkpoint(&make_checkpoint("cp2", "w1", "m4", 1, Some("def")))
+        db.insert_checkpoint(&make_checkpoint(&db, "cp2", "w1", "m4", 1, Some("def")))
             .unwrap();
         db.insert_turn_tool_activities(&[TurnToolActivity {
             id: "a1".into(),
