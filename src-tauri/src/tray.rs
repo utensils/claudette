@@ -596,10 +596,17 @@ fn build_tray_menu_with_db(app: &AppHandle, db: &Database) -> Result<Menu<tauri:
         items.push(Box::new(header));
 
         for ws in ws_list {
-            let session = agents.get(&ws.id);
-            let is_running = session.is_some_and(|s| s.active_pid.is_some());
-            let needs_input = session.is_some_and(|s| s.needs_attention);
-            let attention_kind = session.and_then(|s| s.attention_kind);
+            // Aggregate across all sessions in this workspace.
+            let ws_sessions: Vec<_> = agents
+                .values()
+                .filter(|s| s.workspace_id == ws.id)
+                .collect();
+            let is_running = ws_sessions.iter().any(|s| s.active_pid.is_some());
+            let needs_input = ws_sessions.iter().any(|s| s.needs_attention);
+            let attention_kind = ws_sessions
+                .iter()
+                .find(|s| s.needs_attention)
+                .and_then(|s| s.attention_kind);
             let status = if needs_input {
                 match attention_kind {
                     Some(crate::state::AttentionKind::Plan) => "ℹ️ Needs Input",
@@ -715,9 +722,9 @@ pub(crate) fn show_and_focus(app: &AppHandle) {
 pub fn navigate_to_attention(app: &AppHandle) {
     let state = app.state::<AppState>();
     if let Ok(agents) = state.agents.try_read()
-        && let Some((ws_id, _)) = agents.iter().find(|(_, s)| s.needs_attention)
+        && let Some(session) = agents.values().find(|s| s.needs_attention)
     {
-        let _ = app.emit("tray-select-workspace", ws_id.clone());
+        let _ = app.emit("tray-select-workspace", session.workspace_id.clone());
     }
 }
 
@@ -729,6 +736,7 @@ mod tests {
 
     fn session(pid: Option<u32>, attention: bool) -> AgentSessionState {
         AgentSessionState {
+            workspace_id: "ws1".to_string(),
             session_id: "test".to_string(),
             turn_count: 1,
             active_pid: pid,

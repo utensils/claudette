@@ -35,6 +35,7 @@ impl std::str::FromStr for ChatRole {
 pub struct ChatMessage {
     pub id: String,
     pub workspace_id: String,
+    pub session_id: String,
     pub role: ChatRole,
     pub content: String,
     pub cost_usd: Option<f64>,

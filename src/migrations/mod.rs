@@ -149,4 +149,9 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("20260425003451_attachments_origin_and_tool_use.sql"),
         legacy_version: None,
     },
+    Migration {
+        id: "20260422000000_chat_sessions",
+        sql: include_str!("20260422000000_chat_sessions.sql"),
+        legacy_version: None,
+    },
 ];

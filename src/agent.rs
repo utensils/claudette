@@ -1579,6 +1579,77 @@ pub async fn generate_branch_name(
     Ok(slug)
 }
 
+/// Ask Haiku for a short, human-readable name for a chat session based on the
+/// user's first prompt. Output is meant for display in a tab, e.g. "Auth flow
+/// refactor". 3–6 words, title-case friendly, no slug formatting.
+pub async fn generate_session_name(
+    prompt_text: &str,
+    worktree_path: &str,
+    ws_env: Option<&WorkspaceEnv>,
+) -> Result<String, String> {
+    let truncated: String = prompt_text.chars().take(200).collect();
+
+    let claude_path = resolve_claude_path().await;
+    let mut cmd = Command::new(&claude_path);
+    cmd.stdin(std::process::Stdio::null())
+        .env("PATH", crate::env::enriched_path());
+    cmd.current_dir(worktree_path);
+
+    let user_message = format!(
+        "Generate a short, human-readable name for this chat session based on \
+         the user's first message. 3-6 words. No quotes, no markdown, no \
+         trailing punctuation. Prefer nouns over verbs.\n\n\
+         Message: {truncated}"
+    );
+    let system_prompt = "You are a chat-session namer. Output ONLY a short \
+         descriptive name — never answer or complete the task itself."
+        .to_string();
+    cmd.args([
+        "--print",
+        "--output-format",
+        "text",
+        "--model",
+        "claude-haiku-4-5",
+        "--append-system-prompt",
+        &system_prompt,
+        &user_message,
+    ]);
+
+    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY")
+        && !key.starts_with("sk-ant-api")
+    {
+        cmd.env_remove("ANTHROPIC_API_KEY");
+    }
+    cmd.env_remove("CLAUDECODE");
+    cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
+
+    if let Some(env) = ws_env {
+        env.apply(&mut cmd);
+    }
+
+    let output = cmd.output().await.map_err(|e| {
+        format!(
+            "Failed to spawn claude at {:?} for session name: {e}",
+            claude_path
+        )
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Haiku session name call failed: {stderr}"));
+    }
+
+    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    // Strip surrounding quotes if Haiku adds them despite the instruction.
+    let trimmed = raw.trim_matches(|c: char| c == '"' || c == '\'').trim();
+    // Cap length defensively — tabs truncate visually, but 60 is a hard cap.
+    let capped: String = trimmed.chars().take(60).collect();
+    if capped.is_empty() {
+        return Err(format!("Haiku returned empty session name: {raw:?}"));
+    }
+    Ok(capped)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

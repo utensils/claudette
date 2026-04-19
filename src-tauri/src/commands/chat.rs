@@ -12,7 +12,8 @@ use claudette::env::WorkspaceEnv;
 use claudette::git;
 use claudette::mcp_supervisor::McpSupervisor;
 use claudette::model::{
-    Attachment, ChatMessage, ChatRole, CompletedTurnData, ConversationCheckpoint, TurnToolActivity,
+    Attachment, ChatMessage, ChatRole, ChatSession, CompletedTurnData, ConversationCheckpoint,
+    TurnToolActivity,
 };
 use claudette::snapshot;
 use claudette::{base64_decode, base64_encode};
@@ -291,11 +292,26 @@ pub async fn send_chat_message(
         .ok_or("Workspace has no worktree")?
         .clone();
 
+    // Resolve the default active session for this workspace. The Tauri
+    // command surface still takes workspace_id for this release — the full
+    // session_id migration happens in a follow-up task.
+    let chat_session_id = db
+        .default_session_id_for_workspace(&workspace_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Workspace has no active session")?;
+    let chat_session = db
+        .get_chat_session(&chat_session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Session row vanished after lookup")?;
+    let is_first_session = chat_session.sort_order == 0;
+    let session_name_already_edited = chat_session.name_edited;
+
     // Save user message to DB. Use the frontend-provided ID so optimistic
     // UI state (attachments keyed by message ID) stays consistent.
     let user_msg = ChatMessage {
         id: message_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         workspace_id: workspace_id.clone(),
+        session_id: chat_session_id.clone(),
         role: ChatRole::User,
         content: content.clone(),
         cost_usd: None,
@@ -444,15 +460,45 @@ pub async fn send_chat_message(
         from_config.or_else(|| repo.as_ref().and_then(|r| r.custom_instructions.clone()))
     };
 
+    // Agents are keyed by the `chat_sessions.id` of the target tab. The
+    // workspace id is carried alongside so tray/notification code can group
+    // per workspace.
     let mut agents = state.agents.write().await;
-    let session = agents.entry(workspace_id.clone()).or_insert_with(|| {
-        // Try restoring a persisted session from the database first.
-        if let Ok(Some((sid, tc))) = db.get_agent_session(&workspace_id) {
-            return AgentSessionState {
-                session_id: sid,
-                turn_count: tc,
+    let session = agents
+        .entry(chat_session_id.clone())
+        .or_insert_with(|| {
+            // Try restoring a persisted session from the chat_sessions row.
+            if let Ok(Some(chat_session)) = db.get_chat_session(&chat_session_id)
+                && let Some(claude_sid) = chat_session.claude_session_id.clone()
+            {
+                return AgentSessionState {
+                    workspace_id: workspace_id.clone(),
+                    session_id: claude_sid,
+                    turn_count: chat_session.turn_count,
+                    active_pid: None,
+                    custom_instructions: instructions.clone(),
+                    needs_attention: false,
+                    attention_kind: None,
+                    attention_notification_sent: false,
+                    persistent_session: None,
+                    mcp_config_dirty: false,
+                    session_plan_mode: false,
+                    session_allowed_tools: Vec::new(),
+                    session_disable_1m_context: false,
+                    pending_permissions: std::collections::HashMap::new(),
+                    session_exited_plan: false,
+                    session_resolved_env: Default::default(),
+                    mcp_bridge: None,
+                    last_user_msg_id: None,
+                };
+            }
+
+            AgentSessionState {
+                workspace_id: workspace_id.clone(),
+                session_id: uuid::Uuid::new_v4().to_string(),
+                turn_count: 0,
                 active_pid: None,
-                custom_instructions: instructions.clone(),
+                custom_instructions: instructions,
                 needs_attention: false,
                 attention_kind: None,
                 attention_notification_sent: false,
@@ -466,29 +512,8 @@ pub async fn send_chat_message(
                 session_resolved_env: Default::default(),
                 mcp_bridge: None,
                 last_user_msg_id: None,
-            };
-        }
-
-        AgentSessionState {
-            session_id: uuid::Uuid::new_v4().to_string(),
-            turn_count: 0,
-            active_pid: None,
-            custom_instructions: instructions,
-            needs_attention: false,
-            attention_kind: None,
-            attention_notification_sent: false,
-            persistent_session: None,
-            mcp_config_dirty: false,
-            session_plan_mode: false,
-            session_allowed_tools: Vec::new(),
-            session_disable_1m_context: false,
-            pending_permissions: std::collections::HashMap::new(),
-            session_exited_plan: false,
-            session_resolved_env: Default::default(),
-            mcp_bridge: None,
-            last_user_msg_id: None,
-        }
-    });
+            }
+        });
 
     // Clear any unresolved permission requests so the CLI doesn't hang when
     // we send the next turn. This replaces the old behaviour where the
@@ -512,7 +537,7 @@ pub async fn send_chat_message(
         let _ = agent::stop_agent(old_pid).await;
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         agents = state.agents.write().await;
-        let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
+        let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
         session.active_pid = None;
     } else if let Some((ref ps, drained)) = to_deny_new_turn {
         // No stale-pid teardown — release the lock just for the deny sends,
@@ -522,7 +547,7 @@ pub async fn send_chat_message(
             .await;
         agents = state.agents.write().await;
     }
-    let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
+    let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
 
     // The user message has been persisted; record its id as the FK anchor
     // for any agent-authored attachments produced during this turn (see
@@ -557,7 +582,7 @@ pub async fn send_chat_message(
             agents = state.agents.write().await;
         }
     }
-    let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
+    let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
 
     // The `send_to_user` built-in plugin is user-toggleable in Settings →
     // Plugins. When disabled we skip both the synthetic MCP injection
@@ -654,7 +679,7 @@ pub async fn send_chat_message(
             agents = state.agents.write().await;
         }
     }
-    let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
+    let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
 
     // Expand @-file mentions into inline file content for the agent prompt.
     let prompt = claudette::file_expand::expand_file_mentions(
@@ -847,7 +872,7 @@ pub async fn send_chat_message(
                 let handle = ps.send_turn(&prompt, &image_attachments).await?;
 
                 agents = state.agents.write().await;
-                let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
+                let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
                 session.persistent_session = Some(ps);
                 session.mcp_bridge = bridge;
                 session.session_id = final_sid;
@@ -928,7 +953,7 @@ pub async fn send_chat_message(
                 // next attempt doesn't try --resume with a dead session ID.
                 let _ = db.clear_agent_session(&workspace_id);
                 agents = state.agents.write().await;
-                if let Some(session) = agents.get_mut(&workspace_id) {
+                if let Some(session) = agents.get_mut(&chat_session_id) {
                     session.turn_count = 0;
                     session.session_id = String::new();
                 }
@@ -940,7 +965,7 @@ pub async fn send_chat_message(
         let handle = ps.send_turn(&prompt, &image_attachments).await?;
 
         agents = state.agents.write().await;
-        let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
+        let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
         session.persistent_session = Some(ps);
         session.mcp_bridge = bridge;
         session.session_id = final_sid.clone();
@@ -956,7 +981,7 @@ pub async fn send_chat_message(
 
     let spawned_pid = turn_handle.pid;
     {
-        let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
+        let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
         session.active_pid = Some(spawned_pid);
         let _ = db.save_agent_session(&workspace_id, &session.session_id, session.turn_count);
         // Metrics: register session on first turn (idempotent via INSERT OR
@@ -1014,6 +1039,7 @@ pub async fn send_chat_message(
 
     // Bridge: read from mpsc receiver, emit Tauri events.
     let ws_id = workspace_id.clone();
+    let chat_session_id_for_stream = chat_session_id.clone();
     let db_path = state.db_path.clone();
     let wt_path = worktree_path.clone();
     let user_msg_id = user_msg.id.clone();
@@ -1038,6 +1064,30 @@ pub async fn send_chat_message(
                     &old_branch2,
                     &prompt2,
                     prefs2.as_deref(),
+                    &db_path2,
+                    &app2,
+                    &ws_env2,
+                )
+                .await;
+            });
+        }
+
+        // Also spawn a background task to generate a human-readable session
+        // name for the tab. Fires on every new session's first turn (not just
+        // the first session of the workspace). Skipped if the user already
+        // renamed the session manually.
+        if saved_turn_count <= 1 && !session_name_already_edited {
+            let sid2 = chat_session_id_for_stream.clone();
+            let wt_path2 = wt_path.clone();
+            let prompt2 = rename_prompt.clone();
+            let db_path2 = db_path.clone();
+            let app2 = app.clone();
+            let ws_env2 = rename_ws_env.clone();
+            tokio::spawn(async move {
+                try_generate_session_name(
+                    &sid2,
+                    &wt_path2,
+                    &prompt2,
                     &db_path2,
                     &app2,
                     &ws_env2,
@@ -1268,7 +1318,7 @@ pub async fn send_chat_message(
                 };
                 let app_state = app.state::<AppState>();
                 let mut agents = app_state.agents.write().await;
-                if let Some(session) = agents.get_mut(&ws_id) {
+                if let Some(session) = agents.get_mut(&chat_session_id_for_stream) {
                     session.needs_attention = true;
                     session.attention_kind = Some(kind);
                     // Observed ExitPlanMode — the plan phase is ending. Mark
@@ -1361,14 +1411,14 @@ pub async fn send_chat_message(
                 let app_state = app.state::<AppState>();
                 let (session_id_for_capture, needs_attention) = {
                     let mut agents = app_state.agents.write().await;
-                    if let Some(session) = agents.get_mut(&ws_id)
+                    if let Some(session) = agents.get_mut(&chat_session_id_for_stream)
                         && session.active_pid == Some(spawned_pid)
                         && session.persistent_session.is_some()
                     {
                         session.active_pid = None;
                     }
                     let sid = agents
-                        .get(&ws_id)
+                        .get(&chat_session_id_for_stream)
                         .map(|s| s.session_id.clone())
                         .unwrap_or_default();
                     let attn = agents.get(&ws_id).is_some_and(|s| s.needs_attention);
@@ -1432,14 +1482,14 @@ pub async fn send_chat_message(
                 if !got_init {
                     // Failed to initialize — clear the entire session so the
                     // next attempt starts fresh instead of trying --resume.
-                    agents.remove(&ws_id);
+                    agents.remove(&chat_session_id_for_stream);
                     if let Ok(db) = Database::open(&db_path) {
                         let _ = db.clear_agent_session(&ws_id);
                         if let Some(ref sid) = ended_session_id {
                             let _ = db.end_agent_session(sid, false);
                         }
                     }
-                } else if let Some(session) = agents.get_mut(&ws_id)
+                } else if let Some(session) = agents.get_mut(&chat_session_id_for_stream)
                     && session.active_pid == Some(spawned_pid)
                 {
                     // Only clear active_pid if it still matches the process that
@@ -1483,7 +1533,7 @@ pub async fn send_chat_message(
                     )
                     .await;
                 }
-                let needs_attention_now = agents.get(&ws_id).is_some_and(|s| s.needs_attention);
+                let needs_attention_now = agents.get(&chat_session_id_for_stream).is_some_and(|s| s.needs_attention);
                 let app_state = app.state::<crate::state::AppState>();
                 if !needs_attention_now && !notified_via_result {
                     let event = if exit_code == Some(0) {
@@ -1556,6 +1606,7 @@ pub async fn send_chat_message(
                     let msg = ChatMessage {
                         id: msg_id.clone(),
                         workspace_id: ws_id.clone(),
+                        session_id: chat_session_id_for_stream.clone(),
                         role: ChatRole::Assistant,
                         content: full_text,
                         cost_usd: None,
@@ -1606,6 +1657,7 @@ pub async fn send_chat_message(
                 let checkpoint = ConversationCheckpoint {
                     id: uuid::Uuid::new_v4().to_string(),
                     workspace_id: ws_id.clone(),
+                    session_id: chat_session_id_for_stream.clone(),
                     message_id: anchor_msg_id.to_string(),
                     commit_hash: None,
                     has_file_state: false, // Updated after snapshot succeeds
@@ -1683,12 +1735,20 @@ pub async fn stop_agent(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    // Operate on the workspace's default session until the frontend is
+    // migrated to pass session_id directly.
+    let chat_session_id = db
+        .default_session_id_for_workspace(&workspace_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Workspace has no active session")?;
+
     // Drain pending permissions and snapshot the cleanup state synchronously
     // under the lock; deny sends, the kill, and the DB session-end happen
     // after we release it.
     let (to_deny_stop, pid_to_kill, ended_sid) = {
         let mut agents = state.agents.write().await;
-        match agents.get_mut(&workspace_id) {
+        match agents.get_mut(&chat_session_id) {
             Some(session) => take_stop_snapshot(session),
             None => (None, None, None),
         }
@@ -1701,20 +1761,20 @@ pub async fn stop_agent(
         agent::stop_agent(pid).await?;
     }
 
-    // Record the interrupted turn as a failure for analytics, but leave the
-    // workspace's session_id / turn_count rows intact so an app restart after
-    // stop still resumes via --resume.
-    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    // Clear persisted session state for this chat session. Stop aborts an
+    // in-flight turn, so the session did not complete — record as failure.
+    let _ = db.clear_chat_session_claude_state(&chat_session_id);
     if let Some(sid) = ended_sid.as_deref().filter(|s| !s.is_empty()) {
         let _ = db.end_agent_session(sid, false);
     }
 
     crate::tray::rebuild_tray(&app);
 
-    // Log stop message.
+    // Log stop message on this chat session.
     let msg = ChatMessage {
         id: uuid::Uuid::new_v4().to_string(),
         workspace_id,
+        session_id: chat_session_id,
         role: ChatRole::System,
         content: "Agent stopped".to_string(),
         cost_usd: None,
@@ -1737,14 +1797,20 @@ pub async fn reset_agent_session(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let chat_session_id = db
+        .default_session_id_for_workspace(&workspace_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Workspace has no active session")?;
+
     // Drain pending permissions under the lock, then remove the session and
     // capture its id; deny sends + the DB session-end happen after release.
     let (to_deny_reset, ended_sid) = {
         let mut agents = state.agents.write().await;
         let drained = agents
-            .get_mut(&workspace_id)
+            .get_mut(&chat_session_id)
             .and_then(drain_pending_permissions);
-        let ended_sid = agents.remove(&workspace_id).map(|s| s.session_id);
+        let ended_sid = agents.remove(&chat_session_id).map(|s| s.session_id);
         (drained, ended_sid)
     };
 
@@ -1752,11 +1818,9 @@ pub async fn reset_agent_session(
         deny_drained_permissions(drained, ps, "Session reset.").await;
     }
 
-    // Clear persisted session so the next turn starts fresh. Reset discards
-    // in-flight state (pending permissions denied with "Session reset."), so
-    // any interrupted turn did not complete — record as a failure.
-    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    db.clear_agent_session(&workspace_id)
+    // Clear persisted claude state so the next turn starts fresh. Reset
+    // discards in-flight state, so record as a failure.
+    db.clear_chat_session_claude_state(&chat_session_id)
         .map_err(|e| e.to_string())?;
     if let Some(sid) = ended_sid.as_deref().filter(|s| !s.is_empty()) {
         let _ = db.end_agent_session(sid, false);
@@ -1783,16 +1847,6 @@ pub async fn rollback_to_checkpoint(
     restore_files: bool,
     state: State<'_, AppState>,
 ) -> Result<Vec<ChatMessage>, String> {
-    // Guard: reject if agent is running.
-    {
-        let agents = state.agents.read().await;
-        if let Some(session) = agents.get(&workspace_id)
-            && session.active_pid.is_some()
-        {
-            return Err("Cannot rollback while the agent is running".into());
-        }
-    }
-
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
 
     // Load the target checkpoint and verify ownership.
@@ -1802,6 +1856,26 @@ pub async fn rollback_to_checkpoint(
         .ok_or("Checkpoint not found")?;
     if checkpoint.workspace_id != workspace_id {
         return Err("Checkpoint does not belong to this workspace".into());
+    }
+
+    // The chat session this checkpoint belongs to. Falls back to the
+    // workspace's default session for checkpoints recorded before v20.
+    let chat_session_id = if checkpoint.session_id.is_empty() {
+        db.default_session_id_for_workspace(&workspace_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("Workspace has no active session")?
+    } else {
+        checkpoint.session_id.clone()
+    };
+
+    // Guard: reject if agent is running.
+    {
+        let agents = state.agents.read().await;
+        if let Some(session) = agents.get(&chat_session_id)
+            && session.active_pid.is_some()
+        {
+            return Err("Cannot rollback while the agent is running".into());
+        }
     }
 
     // Attempt file restore BEFORE any destructive DB writes so that a
@@ -1835,24 +1909,23 @@ pub async fn rollback_to_checkpoint(
     // operation (if requested) has already succeeded above.
     db.delete_messages_after(&workspace_id, &checkpoint.message_id)
         .map_err(|e| e.to_string())?;
-    db.delete_checkpoints_after(&workspace_id, checkpoint.turn_index)
+    db.delete_session_checkpoints_after(&chat_session_id, checkpoint.turn_index)
         .map_err(|e| e.to_string())?;
 
-    // Reset agent session so the next turn starts fresh. Rollback discards
-    // the session's prior work, so it did not run to completion — record as
-    // a failure.
+    // Reset the per-session agent state so the next turn starts fresh.
+    // Rollback discards the session's prior work — record as a failure.
     let ended_sid = {
         let mut agents = state.agents.write().await;
-        agents.remove(&workspace_id).map(|s| s.session_id)
+        agents.remove(&chat_session_id).map(|s| s.session_id)
     };
     if let Some(sid) = ended_sid.as_deref() {
         let _ = db.end_agent_session(sid, false);
     }
-    db.clear_agent_session(&workspace_id)
+    db.clear_chat_session_claude_state(&chat_session_id)
         .map_err(|e| e.to_string())?;
 
-    // Return the truncated message list.
-    db.list_chat_messages(&workspace_id)
+    // Return the truncated message list for this session.
+    db.list_chat_messages_for_session(&chat_session_id)
         .map_err(|e| e.to_string())
 }
 
@@ -1864,17 +1937,21 @@ pub async fn clear_conversation(
     restore_files: bool,
     state: State<'_, AppState>,
 ) -> Result<Vec<ChatMessage>, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let chat_session_id = db
+        .default_session_id_for_workspace(&workspace_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Workspace has no active session")?;
+
     // Guard: reject if agent is running.
     {
         let agents = state.agents.read().await;
-        if let Some(session) = agents.get(&workspace_id)
+        if let Some(session) = agents.get(&chat_session_id)
             && session.active_pid.is_some()
         {
             return Err("Cannot clear conversation while the agent is running".into());
         }
     }
-
-    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
 
     // Optionally restore files to the merge-base before clearing.
     if restore_files {
@@ -1906,27 +1983,27 @@ pub async fn clear_conversation(
             .map_err(|e| e.to_string())?;
     }
 
-    // Delete all messages and checkpoints.
-    db.delete_chat_messages_for_workspace(&workspace_id)
+    // Delete all messages and checkpoints for this session.
+    db.delete_chat_messages_for_session(&chat_session_id)
         .map_err(|e| e.to_string())?;
     // Checkpoints cascade via FK, but delete explicitly for clarity.
-    db.delete_checkpoints_after(&workspace_id, -1)
+    db.delete_session_checkpoints_after(&chat_session_id, -1)
         .map_err(|e| e.to_string())?;
 
     // Reset agent session. Clearing the conversation discards the session's
     // prior work, so it did not run to completion — record as a failure.
     let ended_sid = {
         let mut agents = state.agents.write().await;
-        agents.remove(&workspace_id).map(|s| s.session_id)
+        agents.remove(&chat_session_id).map(|s| s.session_id)
     };
     if let Some(sid) = ended_sid.as_deref() {
         let _ = db.end_agent_session(sid, false);
     }
-    db.clear_agent_session(&workspace_id)
+    db.clear_chat_session_claude_state(&chat_session_id)
         .map_err(|e| e.to_string())?;
 
     // Return empty list.
-    db.list_chat_messages(&workspace_id)
+    db.list_chat_messages_for_session(&chat_session_id)
         .map_err(|e| e.to_string())
 }
 
@@ -2035,14 +2112,55 @@ async fn try_auto_rename(
     }
 }
 
+/// Background task: ask Haiku for a short session name and persist it. All
+/// failures are non-fatal — if Haiku is unavailable or the user has already
+/// renamed the session, the `New chat` default stays in place.
+async fn try_generate_session_name(
+    session_id: &str,
+    worktree_path: &str,
+    prompt: &str,
+    db_path: &std::path::Path,
+    app: &AppHandle,
+    ws_env: &WorkspaceEnv,
+) {
+    let name = match agent::generate_session_name(prompt, worktree_path, Some(ws_env)).await {
+        Ok(n) => n,
+        Err(_) => return,
+    };
+
+    let db = match Database::open(db_path) {
+        Ok(db) => db,
+        Err(_) => return,
+    };
+
+    // The helper only writes when `name_edited == 0`, so a concurrent user
+    // rename between spawn and write is handled correctly — we become a no-op.
+    if let Ok(true) = db.set_session_name_from_haiku(session_id, &name) {
+        let payload = serde_json::json!({
+            "session_id": session_id,
+            "name": name,
+        });
+        let _ = app.emit("session-renamed", &payload);
+    }
+}
+
 #[tauri::command]
 pub async fn clear_attention(
     workspace_id: String,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let chat_session_id = match db
+        .default_session_id_for_workspace(&workspace_id)
+        .map_err(|e| e.to_string())?
+    {
+        Some(id) => id,
+        None => return Ok(()),
+    };
+
     let mut agents = state.agents.write().await;
-    if let Some(session) = agents.get_mut(&workspace_id)
+    if let Some(session) = agents.get_mut(&chat_session_id)
         && session.needs_attention
     {
         session.needs_attention = false;
@@ -2430,6 +2548,136 @@ fn now_iso() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
     format!("{}", dur.as_secs())
+}
+
+/// Overlay live runtime fields (agent_status, needs_attention, attention_kind)
+/// from `AppState.agents` onto a `ChatSession` loaded from the DB. The DB
+/// defaults are `Idle`/`false`/`None`; this replaces them with whatever the
+/// running agent map reports.
+fn hydrate_session(
+    mut session: ChatSession,
+    agents: &std::collections::HashMap<String, AgentSessionState>,
+) -> ChatSession {
+    if let Some(agent) = agents.get(&session.id) {
+        session.agent_status = if agent.active_pid.is_some() {
+            claudette::model::AgentStatus::Running
+        } else {
+            claudette::model::AgentStatus::Idle
+        };
+        session.needs_attention = agent.needs_attention;
+        session.attention_kind = agent.attention_kind.map(|k| match k {
+            crate::state::AttentionKind::Ask => claudette::model::AttentionKind::Ask,
+            crate::state::AttentionKind::Plan => claudette::model::AttentionKind::Plan,
+        });
+    }
+    session
+}
+
+#[tauri::command]
+pub async fn list_chat_sessions(
+    workspace_id: String,
+    include_archived: Option<bool>,
+    state: State<'_, AppState>,
+) -> Result<Vec<ChatSession>, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let sessions = db
+        .list_chat_sessions_for_workspace(&workspace_id, include_archived.unwrap_or(false))
+        .map_err(|e| e.to_string())?;
+    let agents = state.agents.read().await;
+    Ok(sessions
+        .into_iter()
+        .map(|s| hydrate_session(s, &agents))
+        .collect())
+}
+
+#[tauri::command]
+pub async fn get_chat_session(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<ChatSession, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let session = db
+        .get_chat_session(&session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Session not found")?;
+    let agents = state.agents.read().await;
+    Ok(hydrate_session(session, &agents))
+}
+
+#[tauri::command]
+pub async fn create_chat_session(
+    workspace_id: String,
+    state: State<'_, AppState>,
+) -> Result<ChatSession, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let session = db
+        .create_chat_session(&workspace_id)
+        .map_err(|e| e.to_string())?;
+    let agents = state.agents.read().await;
+    Ok(hydrate_session(session, &agents))
+}
+
+#[tauri::command]
+pub async fn rename_chat_session(
+    session_id: String,
+    name: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("Name cannot be empty".into());
+    }
+    // Cap at 60 chars to match the Haiku-generated cap.
+    let capped: String = trimmed.chars().take(60).collect();
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    db.rename_chat_session(&session_id, &capped)
+        .map_err(|e| e.to_string())
+}
+
+/// Archive a chat session (soft-delete). Stops its running agent first, then
+/// marks the row archived. If this was the workspace's last active session,
+/// a fresh `New chat` session is created so every workspace always has ≥1
+/// active session. Returns the newly created session in that case, `None`
+/// otherwise — the frontend uses the return value to select the new tab.
+#[tauri::command]
+pub async fn archive_chat_session(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<Option<ChatSession>, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let session = db
+        .get_chat_session(&session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Session not found")?;
+    let workspace_id = session.workspace_id.clone();
+
+    // Stop and remove the live agent for this session.
+    {
+        let mut agents = state.agents.write().await;
+        if let Some(mut agent) = agents.remove(&session_id)
+            && let Some(pid) = agent.active_pid.take()
+        {
+            let _ = claudette::agent::stop_agent(pid).await;
+        }
+    }
+
+    db.archive_chat_session(&session_id)
+        .map_err(|e| e.to_string())?;
+
+    // If no active sessions remain, auto-create a fresh one so the workspace
+    // always has at least one tab.
+    let remaining = db
+        .list_chat_sessions_for_workspace(&workspace_id, false)
+        .map_err(|e| e.to_string())?;
+    if remaining.is_empty() {
+        let fresh = db
+            .create_chat_session(&workspace_id)
+            .map_err(|e| e.to_string())?;
+        let agents = state.agents.read().await;
+        return Ok(Some(hydrate_session(fresh, &agents)));
+    }
+
+    Ok(None)
 }
 
 #[cfg(test)]

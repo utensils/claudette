@@ -272,6 +272,17 @@ fn copy_history(
 ) -> Result<(), ForkError> {
     let source_messages = db.list_messages_up_to(source_ws_id, &checkpoint.message_id)?;
 
+    // The new workspace was just created and always has exactly one default
+    // session. Anchor every copied message/checkpoint to it so the forked
+    // conversation is reachable from the new workspace's initial tab.
+    let new_session_id = db
+        .default_session_id_for_workspace(new_ws_id)?
+        .ok_or_else(|| {
+            ForkError::InconsistentHistory(format!(
+                "new workspace {new_ws_id} has no default session"
+            ))
+        })?;
+
     let mut msg_id_map: std::collections::HashMap<String, String> =
         std::collections::HashMap::with_capacity(source_messages.len());
 
@@ -281,6 +292,7 @@ fn copy_history(
         let copied = ChatMessage {
             id: new_id,
             workspace_id: new_ws_id.to_string(),
+            session_id: new_session_id.clone(),
             role: msg.role.clone(),
             content: msg.content.clone(),
             cost_usd: msg.cost_usd,
@@ -315,6 +327,7 @@ fn copy_history(
         let new_cp = ConversationCheckpoint {
             id: new_cp_id.clone(),
             workspace_id: new_ws_id.to_string(),
+            session_id: new_session_id.clone(),
             message_id: new_msg_id.clone(),
             commit_hash: cp.commit_hash.clone(),
             // `has_file_state` is derived by the DB from the presence of

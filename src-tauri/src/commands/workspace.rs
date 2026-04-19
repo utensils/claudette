@@ -532,19 +532,28 @@ pub async fn archive_workspace(
         let _ = git::branch_delete(&repo.path, &ws.branch_name).await;
     }
 
-    // Stop any running agent and clear session so tray state stays consistent.
-    let ended_sid = {
+    // Stop any running agents and clear sessions so tray state stays consistent.
+    let ended_sids: Vec<String> = {
         let mut agents = state.agents.write().await;
-        if let Some(session) = agents.remove(&id) {
-            if let Some(pid) = session.active_pid {
-                let _ = claudette::agent::stop_agent(pid).await;
+        let to_remove: Vec<String> = agents
+            .iter()
+            .filter(|(_, s)| s.workspace_id == id)
+            .map(|(k, _)| k.clone())
+            .collect();
+        let mut sids = Vec::new();
+        for key in to_remove {
+            if let Some(session) = agents.remove(&key) {
+                if !session.session_id.is_empty() {
+                    sids.push(session.session_id);
+                }
+                if let Some(pid) = session.active_pid {
+                    let _ = claudette::agent::stop_agent(pid).await;
+                }
             }
-            Some(session.session_id)
-        } else {
-            None
         }
+        sids
     };
-    if let Some(sid) = ended_sid.as_deref().filter(|s| !s.is_empty()) {
+    for sid in &ended_sids {
         let _ = db.end_agent_session(sid, true);
     }
 
@@ -631,13 +640,20 @@ pub async fn delete_workspace(
     let repos = db.list_repositories().map_err(|e| e.to_string())?;
     let repo = repos.iter().find(|r| r.id == repo_id);
 
-    // Stop any running agent and clear session so tray state stays consistent.
+    // Stop any running agents and clear sessions so tray state stays consistent.
     {
         let mut agents = state.agents.write().await;
-        if let Some(session) = agents.remove(&id)
-            && let Some(pid) = session.active_pid
-        {
-            let _ = claudette::agent::stop_agent(pid).await;
+        let to_remove: Vec<String> = agents
+            .iter()
+            .filter(|(_, s)| s.workspace_id == id)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in to_remove {
+            if let Some(session) = agents.remove(&key)
+                && let Some(pid) = session.active_pid
+            {
+                let _ = claudette::agent::stop_agent(pid).await;
+            }
         }
     }
 

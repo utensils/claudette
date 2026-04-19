@@ -97,6 +97,7 @@ import {
   parseSyntheticSummarySentinel,
 } from "../../utils/compactionSentinel";
 import { PanelToggles } from "../shared/PanelToggles";
+import { SessionTabs } from "./SessionTabs";
 import { deriveTasks, processActivities, turnHasTaskActivity, hasTaskActivity } from "../../hooks/useTaskTracker";
 import type { TaskTrackerResult, TrackedTask } from "../../hooks/useTaskTracker";
 import { ScrollToBottomPill } from "./ScrollToBottomPill";
@@ -992,6 +993,7 @@ export function ChatPanel() {
 
   return (
     <div className={styles.panel}>
+      {selectedWorkspaceId && <SessionTabs workspaceId={selectedWorkspaceId} />}
       <div className={styles.header} data-tauri-drag-region>
         <div className={styles.headerLeft}>
           {repo ? (

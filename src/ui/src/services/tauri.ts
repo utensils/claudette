@@ -5,6 +5,7 @@ import type {
   ChatMessage,
   ChatAttachment,
   AttachmentInput,
+  ChatSession,
   DiffFile,
   FileDiff,
   TerminalTab,
@@ -565,6 +566,41 @@ export function loadCompletedTurns(
   workspaceId: string,
 ): Promise<CompletedTurnData[]> {
   return invoke("load_completed_turns", { workspaceId });
+}
+
+// -- Chat sessions (tabs) --
+
+export function listChatSessions(
+  workspaceId: string,
+  includeArchived: boolean = false,
+): Promise<ChatSession[]> {
+  return invoke("list_chat_sessions", { workspaceId, includeArchived });
+}
+
+export function getChatSession(sessionId: string): Promise<ChatSession> {
+  return invoke("get_chat_session", { sessionId });
+}
+
+export function createChatSession(workspaceId: string): Promise<ChatSession> {
+  return invoke("create_chat_session", { workspaceId });
+}
+
+export function renameChatSession(
+  sessionId: string,
+  name: string,
+): Promise<void> {
+  return invoke("rename_chat_session", { sessionId, name });
+}
+
+/**
+ * Archive a chat session. Returns the freshly auto-created session if this
+ * was the workspace's last active session (so the frontend can select it),
+ * otherwise null.
+ */
+export function archiveChatSession(
+  sessionId: string,
+): Promise<ChatSession | null> {
+  return invoke("archive_chat_session", { sessionId });
 }
 
 // -- Plan --

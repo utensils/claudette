@@ -39,6 +39,8 @@ pub struct ServerState {
 }
 
 pub struct AgentSessionState {
+    /// The workspace this session belongs to.
+    pub workspace_id: String,
     pub session_id: String,
     pub turn_count: u32,
     pub active_pid: Option<u32>,

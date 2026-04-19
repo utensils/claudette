@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub struct ConversationCheckpoint {
     pub id: String,
     pub workspace_id: String,
+    pub session_id: String,
     pub message_id: String,
     pub commit_hash: Option<String>,
     /// Whether this checkpoint has file snapshot data in the `checkpoint_files`

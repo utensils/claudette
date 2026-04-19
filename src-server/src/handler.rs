@@ -75,9 +75,19 @@ pub async fn handle_request(
         }
         "reset_agent_session" => {
             let workspace_id = param_str(&params, "workspace_id");
-            let mut agents = state.agents.write().await;
-            agents.remove(&workspace_id);
-            Ok(json!(null))
+            let db_result = open_db(state).map_err(|e| e.to_string());
+            match db_result {
+                Ok(db) => match db.default_session_id_for_workspace(&workspace_id) {
+                    Ok(Some(chat_session_id)) => {
+                        let mut agents = state.agents.write().await;
+                        agents.remove(&chat_session_id);
+                        Ok(json!(null))
+                    }
+                    Ok(None) => Ok(json!(null)),
+                    Err(e) => Err(e.to_string()),
+                },
+                Err(e) => Err(e),
+            }
         }
         "list_repositories" => {
             let db = open_db(state).map_err(|e| e.to_string());
@@ -166,6 +176,31 @@ pub async fn handle_request(
             let key = param_str(&params, "key");
             let value = param_str(&params, "value");
             handle_set_app_setting(state, &key, &value).await
+        }
+        "list_chat_sessions" => {
+            let workspace_id = param_str(&params, "workspace_id");
+            let include_archived = params
+                .get("include_archived")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            handle_list_chat_sessions(state, &workspace_id, include_archived)
+        }
+        "get_chat_session" => {
+            let session_id = param_str(&params, "session_id");
+            handle_get_chat_session(state, &session_id)
+        }
+        "create_chat_session" => {
+            let workspace_id = param_str(&params, "workspace_id");
+            handle_create_chat_session(state, &workspace_id)
+        }
+        "rename_chat_session" => {
+            let session_id = param_str(&params, "session_id");
+            let name = param_str(&params, "name");
+            handle_rename_chat_session(state, &session_id, &name)
+        }
+        "archive_chat_session" => {
+            let session_id = param_str(&params, "session_id");
+            handle_archive_chat_session(state, &session_id).await
         }
         _ => Err(format!("Unknown method: {method}")),
     };
@@ -406,10 +441,19 @@ async fn handle_send_chat_message(
         .ok_or("Workspace has no worktree")?
         .clone();
 
+    // Resolve the default active session for this workspace. The remote
+    // server pre-dates multi-session support, so it always targets whichever
+    // session is first/active.
+    let chat_session_id = db
+        .default_session_id_for_workspace(workspace_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Workspace has no active session")?;
+
     // Save user message.
     let user_msg = ChatMessage {
         id: uuid::Uuid::new_v4().to_string(),
         workspace_id: workspace_id.to_string(),
+        session_id: chat_session_id.clone(),
         role: ChatRole::User,
         content: content.to_string(),
         cost_usd: None,
@@ -473,7 +517,8 @@ async fn handle_send_chat_message(
     .await;
 
     let mut agents = state.agents.write().await;
-    let session = agents.entry(workspace_id.to_string()).or_insert_with(|| {
+    let workspace_id_owned = workspace_id.to_string();
+    let session = agents.entry(chat_session_id.clone()).or_insert_with(|| {
         let instructions = {
             let from_config = repo.as_ref().and_then(|r| {
                 let path = r.path.clone();
@@ -485,6 +530,7 @@ async fn handle_send_chat_message(
             from_config.or_else(|| repo.as_ref().and_then(|r| r.custom_instructions.clone()))
         };
         AgentSessionState {
+            workspace_id: workspace_id_owned,
             session_id: uuid::Uuid::new_v4().to_string(),
             turn_count: 0,
             active_pid: None,
@@ -561,6 +607,7 @@ async fn handle_send_chat_message(
 
     // Bridge agent events to WebSocket.
     let ws_id = workspace_id.to_string();
+    let chat_session_id_for_stream = chat_session_id.clone();
     let db_path = state.db_path.clone();
     let state = Arc::clone(state);
     let writer = Arc::clone(writer);
@@ -579,7 +626,7 @@ async fn handle_send_chat_message(
                 && (!got_init || *code != Some(0))
             {
                 let mut agents = state.agents.write().await;
-                agents.remove(&ws_id);
+                agents.remove(&chat_session_id_for_stream);
             }
 
             // Persist assistant messages. The CLI may fire multiple assistant
@@ -638,6 +685,7 @@ async fn handle_send_chat_message(
                     let msg = ChatMessage {
                         id: uuid::Uuid::new_v4().to_string(),
                         workspace_id: ws_id.clone(),
+                        session_id: chat_session_id_for_stream.clone(),
                         role: ChatRole::Assistant,
                         content: full_text,
                         cost_usd: None,
@@ -686,17 +734,24 @@ async fn handle_stop_agent(
     state: &ServerState,
     workspace_id: &str,
 ) -> Result<serde_json::Value, String> {
+    let db = open_db(state)?;
+    let chat_session_id = db
+        .default_session_id_for_workspace(workspace_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Workspace has no active session")?;
+
     let mut agents = state.agents.write().await;
-    if let Some(session) = agents.get_mut(workspace_id)
+    if let Some(session) = agents.get_mut(&chat_session_id)
         && let Some(pid) = session.active_pid.take()
     {
         agent::stop_agent(pid).await?;
     }
+    drop(agents);
 
-    let db = open_db(state)?;
     let msg = ChatMessage {
         id: uuid::Uuid::new_v4().to_string(),
         workspace_id: workspace_id.to_string(),
+        session_id: chat_session_id,
         role: ChatRole::System,
         content: "Agent stopped".to_string(),
         cost_usd: None,
@@ -758,15 +813,21 @@ async fn handle_archive_workspace(
     state: &ServerState,
     workspace_id: &str,
 ) -> Result<serde_json::Value, String> {
-    // Stop any running agent before removing the worktree.
+    // Stop any running agents for sessions in this workspace.
     {
         let mut agents = state.agents.write().await;
-        if let Some(session) = agents.get_mut(workspace_id)
-            && let Some(pid) = session.active_pid.take()
-        {
-            let _ = agent::stop_agent(pid).await;
+        let to_remove: Vec<String> = agents
+            .iter()
+            .filter(|(_, s)| s.workspace_id == workspace_id)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in to_remove {
+            if let Some(mut session) = agents.remove(&key)
+                && let Some(pid) = session.active_pid.take()
+            {
+                let _ = agent::stop_agent(pid).await;
+            }
         }
-        agents.remove(workspace_id);
     }
 
     let db = open_db(state)?;
@@ -1010,5 +1071,93 @@ async fn handle_set_app_setting(
         let mut dir = state.worktree_base_dir.write().await;
         *dir = std::path::PathBuf::from(value);
     }
+    Ok(json!(null))
+}
+
+fn handle_list_chat_sessions(
+    state: &ServerState,
+    workspace_id: &str,
+    include_archived: bool,
+) -> Result<serde_json::Value, String> {
+    let db = open_db(state)?;
+    let sessions = db
+        .list_chat_sessions_for_workspace(workspace_id, include_archived)
+        .map_err(|e| e.to_string())?;
+    Ok(serde_json::to_value(sessions).unwrap_or_default())
+}
+
+fn handle_get_chat_session(
+    state: &ServerState,
+    session_id: &str,
+) -> Result<serde_json::Value, String> {
+    let db = open_db(state)?;
+    let session = db
+        .get_chat_session(session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Session not found")?;
+    Ok(serde_json::to_value(session).unwrap_or_default())
+}
+
+fn handle_create_chat_session(
+    state: &ServerState,
+    workspace_id: &str,
+) -> Result<serde_json::Value, String> {
+    let db = open_db(state)?;
+    let session = db
+        .create_chat_session(workspace_id)
+        .map_err(|e| e.to_string())?;
+    Ok(serde_json::to_value(session).unwrap_or_default())
+}
+
+fn handle_rename_chat_session(
+    state: &ServerState,
+    session_id: &str,
+    name: &str,
+) -> Result<serde_json::Value, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("Name cannot be empty".into());
+    }
+    let capped: String = trimmed.chars().take(60).collect();
+    let db = open_db(state)?;
+    db.rename_chat_session(session_id, &capped)
+        .map_err(|e| e.to_string())?;
+    Ok(json!(null))
+}
+
+async fn handle_archive_chat_session(
+    state: &ServerState,
+    session_id: &str,
+) -> Result<serde_json::Value, String> {
+    let db = open_db(state)?;
+    let session = db
+        .get_chat_session(session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Session not found")?;
+    let workspace_id = session.workspace_id.clone();
+
+    // Stop and remove the live agent for this session.
+    {
+        let mut agents = state.agents.write().await;
+        if let Some(mut agent) = agents.remove(session_id)
+            && let Some(pid) = agent.active_pid.take()
+        {
+            let _ = agent::stop_agent(pid).await;
+        }
+    }
+
+    db.archive_chat_session(session_id)
+        .map_err(|e| e.to_string())?;
+
+    let remaining = db
+        .list_chat_sessions_for_workspace(&workspace_id, false)
+        .map_err(|e| e.to_string())?;
+    if remaining.is_empty() {
+        let fresh = db
+            .create_chat_session(&workspace_id)
+            .map_err(|e| e.to_string())?;
+        return Ok(serde_json::to_value(fresh).unwrap_or_default());
+    }
+
     Ok(json!(null))
 }

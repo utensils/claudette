@@ -312,11 +312,14 @@ async fn mark_plugin_sessions_dirty(
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let repo_ids = affected_local_repo_ids(&db, repo_id, scope)?;
     let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
+    let affected_workspace_ids: HashSet<String> = workspaces
+        .into_iter()
+        .filter(|w| repo_ids.contains(&w.repository_id))
+        .map(|w| w.id)
+        .collect();
     let mut agents = state.agents.write().await;
-    for workspace in workspaces {
-        if repo_ids.contains(&workspace.repository_id)
-            && let Some(session) = agents.get_mut(&workspace.id)
-        {
+    for session in agents.values_mut() {
+        if affected_workspace_ids.contains(&session.workspace_id) {
             session.mcp_config_dirty = true;
         }
     }

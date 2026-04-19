@@ -257,7 +257,7 @@ pub async fn set_mcp_server_enabled(
     // normally and the config change takes effect on the next
     // `send_chat_message` command.
     let workspaces = db.list_workspaces().unwrap_or_default();
-    let repo_workspace_ids: Vec<String> = workspaces
+    let repo_workspace_ids: std::collections::HashSet<String> = workspaces
         .iter()
         .filter(|w| w.repository_id == repo_id)
         .map(|w| w.id.clone())
@@ -265,8 +265,8 @@ pub async fn set_mcp_server_enabled(
 
     {
         let mut agents = state.agents.write().await;
-        for ws_id in &repo_workspace_ids {
-            if let Some(session) = agents.get_mut(ws_id) {
+        for session in agents.values_mut() {
+            if repo_workspace_ids.contains(&session.workspace_id) {
                 session.mcp_config_dirty = true;
             }
         }
