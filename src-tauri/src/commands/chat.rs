@@ -841,6 +841,10 @@ pub async fn send_chat_message(
                 // the tray stays stuck on "Running" because the persistent
                 // process doesn't exit (only ProcessExited triggered rebuild).
                 crate::tray::rebuild_tray(&app);
+                // Clear any per-message usage that survived this turn without being
+                // consumed (e.g. a thinking-only final message with no text to persist).
+                // Ensures the next turn starts with a clean slate.
+                let _ = latest_usage.take();
             }
 
             // Track per-assistant-message cumulative usage as the CLI streams it.
