@@ -164,6 +164,7 @@
 .select {
   composes: input;
   cursor: pointer;
+  padding-right: 26px;
 }
 
 /* ── Font picker (custom dropdown with font previews) ── */

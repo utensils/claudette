@@ -113,7 +113,10 @@ textarea {
 /* WebKit ignores padding/height on native <select>, so dropdowns render
    shorter than inputs despite identical CSS. appearance:none hands the box
    model back to CSS; chevron is a pair of linear-gradients so it tracks
-   theme colors without an SVG asset. */
+   theme colors without an SVG asset. Component-level rules that style a
+   <select> must use `background-color:` (not the `background:` shorthand,
+   which resets background-image and wipes the chevron) and reserve
+   >= 26px of right padding so option text doesn't overlap the chevron. */
 select {
   appearance: none;
   -webkit-appearance: none;
