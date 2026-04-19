@@ -210,7 +210,10 @@ pub async fn create_worktree(
 
     // Verify the base ref points to a real commit (symbolic-ref HEAD returns
     // a branch name even on unborn branches with zero commits).
-    if run_git(repo_path, &["rev-parse", "--verify", &base]).await.is_err() {
+    if run_git(repo_path, &["rev-parse", "--verify", &base])
+        .await
+        .is_err()
+    {
         return Err(GitError::CommandFailed(
             "Repository has no commits — create at least one commit before creating a workspace"
                 .into(),
