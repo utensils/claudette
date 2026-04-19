@@ -20,8 +20,16 @@ export function ConfirmNightlyChannelModal() {
     }
   };
 
+  // Block backdrop dismiss while the channel switch is in flight — matches
+  // the disabled Cancel button below, and avoids the catch handler trying to
+  // setError on an unmounted component if the request later fails.
+  const handleClose = () => {
+    if (loading) return;
+    closeModal();
+  };
+
   return (
-    <Modal title="Switch to Nightly Channel?" onClose={closeModal}>
+    <Modal title="Switch to Nightly Channel?" onClose={handleClose}>
       <div className={shared.warning}>
         Nightly builds are untested pre-releases built from the latest{" "}
         <strong>main</strong> branch. They may contain bugs or break features.
