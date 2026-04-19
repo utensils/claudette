@@ -9,8 +9,12 @@ export function UpdateBanner() {
   const updateInstallWhenIdle = useAppStore((s) => s.updateInstallWhenIdle);
   const updateDownloading = useAppStore((s) => s.updateDownloading);
   const updateProgress = useAppStore((s) => s.updateProgress);
+  const updateChannel = useAppStore((s) => s.updateChannel);
 
   if (!updateAvailable || updateDismissed) return null;
+
+  const productLabel =
+    updateChannel === "nightly" ? "Claudette Nightly" : "Claudette";
 
   return (
     <div className={styles.banner}>
@@ -44,8 +48,9 @@ export function UpdateBanner() {
       ) : (
         <>
           <span className={styles.message}>
-            Claudette <span className={styles.version}>v{updateVersion}</span>{" "}
-            is available
+            {productLabel}{" "}
+            <span className={styles.version}>v{updateVersion}</span> is
+            available
           </span>
           <div className={styles.actions}>
             <button className={styles.btnPrimary} onClick={installNow}>

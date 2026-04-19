@@ -1,26 +1,38 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // ── Mocks (vi.hoisted runs before vi.mock factories) ────────────────
-const { mockCheck, mockSetUpdateAvailable } = vi.hoisted(() => ({
-  mockCheck: vi.fn(),
+const {
+  mockCheckForUpdatesWithChannel,
+  mockSetUpdateAvailable,
+  storeState,
+} = vi.hoisted(() => ({
+  mockCheckForUpdatesWithChannel: vi.fn(),
   mockSetUpdateAvailable: vi.fn(),
+  storeState: {
+    setUpdateAvailable: vi.fn(),
+    updateDownloading: false,
+    workspaces: [] as { agent_status: string }[],
+    updateChannel: "stable" as "stable" | "nightly",
+  },
 }));
 
-vi.mock("@tauri-apps/plugin-updater", () => ({
-  check: mockCheck,
+// Wire the hoisted helpers into the store mock.
+storeState.setUpdateAvailable = mockSetUpdateAvailable;
+
+vi.mock("../services/tauri", () => ({
+  checkForUpdatesWithChannel: mockCheckForUpdatesWithChannel,
+  installPendingUpdate: vi.fn(),
+  getAppSetting: vi.fn().mockResolvedValue(null),
+  setAppSetting: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("@tauri-apps/plugin-process", () => ({
-  relaunch: vi.fn(),
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn().mockResolvedValue(() => {}),
 }));
 
 vi.mock("../stores/useAppStore", () => ({
   useAppStore: Object.assign(() => null, {
-    getState: () => ({
-      setUpdateAvailable: mockSetUpdateAvailable,
-      updateDownloading: false,
-      workspaces: [],
-    }),
+    getState: () => storeState,
   }),
 }));
 
@@ -30,19 +42,21 @@ import { checkForUpdate } from "./useAutoUpdater";
 describe("checkForUpdate", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    storeState.updateChannel = "stable";
   });
 
   it('returns "available" and sets store when an update exists', async () => {
-    mockCheck.mockResolvedValue({ version: "2.0.0" });
+    mockCheckForUpdatesWithChannel.mockResolvedValue({ version: "2.0.0" });
 
     const result = await checkForUpdate();
 
     expect(result).toBe("available");
+    expect(mockCheckForUpdatesWithChannel).toHaveBeenCalledWith("stable");
     expect(mockSetUpdateAvailable).toHaveBeenCalledWith(true, "2.0.0");
   });
 
   it('returns "up-to-date" and clears store when no update exists', async () => {
-    mockCheck.mockResolvedValue(null);
+    mockCheckForUpdatesWithChannel.mockResolvedValue(null);
 
     const result = await checkForUpdate();
 
@@ -51,11 +65,20 @@ describe("checkForUpdate", () => {
   });
 
   it('returns "error" and does not touch store when check throws', async () => {
-    mockCheck.mockRejectedValue(new Error("network failure"));
+    mockCheckForUpdatesWithChannel.mockRejectedValue(new Error("network failure"));
 
     const result = await checkForUpdate();
 
     expect(result).toBe("error");
     expect(mockSetUpdateAvailable).not.toHaveBeenCalled();
+  });
+
+  it("passes the active channel through to the Rust command", async () => {
+    storeState.updateChannel = "nightly";
+    mockCheckForUpdatesWithChannel.mockResolvedValue(null);
+
+    await checkForUpdate();
+
+    expect(mockCheckForUpdatesWithChannel).toHaveBeenCalledWith("nightly");
   });
 });

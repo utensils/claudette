@@ -4,13 +4,15 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { getVersion } from "@tauri-apps/api/app";
 import { useAppStore } from "../../../stores/useAppStore";
 import { getAppSetting, setAppSetting } from "../../../services/tauri";
-import { checkForUpdate } from "../../../hooks/useAutoUpdater";
+import { applyUpdateChannel, checkForUpdate } from "../../../hooks/useAutoUpdater";
 import styles from "../Settings.module.css";
 
 export function GeneralSettings() {
   const worktreeBaseDir = useAppStore((s) => s.worktreeBaseDir);
   const setWorktreeBaseDir = useAppStore((s) => s.setWorktreeBaseDir);
   const updateAvailable = useAppStore((s) => s.updateAvailable);
+  const updateChannel = useAppStore((s) => s.updateChannel);
+  const openModal = useAppStore((s) => s.openModal);
 
   const [path, setPath] = useState(worktreeBaseDir);
   const [trayEnabled, setTrayEnabled] = useState(true);
@@ -123,6 +125,22 @@ export function GeneralSettings() {
     }
   };
 
+  const handleUpdateChannelChange = async (next: "stable" | "nightly") => {
+    if (next === updateChannel) return;
+    if (next === "nightly") {
+      // Nightly opt-in is gated behind a confirmation modal; the modal owns
+      // the persist + store update on confirm.
+      openModal("confirmNightlyChannel");
+      return;
+    }
+    try {
+      setError(null);
+      await applyUpdateChannel(next);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
   return (
     <div>
       <h2 className={styles.sectionTitle}>General</h2>
@@ -148,6 +166,32 @@ export function GeneralSettings() {
                 ? "Up to date"
                 : "Check for Updates"}
           </button>
+        </div>
+      </div>
+
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>Update channel</div>
+          <div className={styles.settingDescription}>
+            Nightly builds include the latest features and fixes but may be
+            unstable.
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          <select
+            className={styles.select}
+            value={updateChannel}
+            aria-label="Update channel"
+            onChange={(e) => {
+              const value = e.target.value;
+              if (value === "stable" || value === "nightly") {
+                handleUpdateChannelChange(value);
+              }
+            }}
+          >
+            <option value="stable">Stable (recommended)</option>
+            <option value="nightly">Nightly (latest main)</option>
+          </select>
         </div>
       </div>
 

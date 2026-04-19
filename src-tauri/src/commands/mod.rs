@@ -15,5 +15,6 @@ pub mod settings;
 pub mod shell;
 pub mod slash_commands;
 pub mod terminal;
+pub mod updater;
 pub mod usage;
 pub mod workspace;

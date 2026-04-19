@@ -367,11 +367,13 @@ interface AppState {
   updateInstallWhenIdle: boolean;
   updateDownloading: boolean;
   updateProgress: number;
+  updateChannel: "stable" | "nightly";
   setUpdateAvailable: (available: boolean, version: string | null) => void;
   setUpdateDismissed: (dismissed: boolean) => void;
   setUpdateInstallWhenIdle: (enabled: boolean) => void;
   setUpdateDownloading: (downloading: boolean) => void;
   setUpdateProgress: (progress: number) => void;
+  setUpdateChannel: (channel: "stable" | "nightly") => void;
 
   // -- App info --
   appVersion: string | null;
@@ -1210,6 +1212,7 @@ export const useAppStore = create<AppState>((set) => ({
   updateInstallWhenIdle: false,
   updateDownloading: false,
   updateProgress: 0,
+  updateChannel: "stable",
   setUpdateAvailable: (available, version) =>
     set((state) => ({
       updateAvailable: available,
@@ -1223,6 +1226,14 @@ export const useAppStore = create<AppState>((set) => ({
   setUpdateDownloading: (downloading) =>
     set({ updateDownloading: downloading }),
   setUpdateProgress: (progress) => set({ updateProgress: progress }),
+  setUpdateChannel: (channel) =>
+    set({
+      updateChannel: channel,
+      updateAvailable: false,
+      updateVersion: null,
+      updateDismissed: false,
+      updateInstallWhenIdle: false,
+    }),
 
   // -- App info --
   appVersion: null,

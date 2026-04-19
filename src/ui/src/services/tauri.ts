@@ -644,6 +644,27 @@ export function setAppSetting(key: string, value: string): Promise<void> {
   return invoke("set_app_setting", { key, value });
 }
 
+// -- Updater --
+
+export type UpdateChannel = "stable" | "nightly";
+
+export interface UpdateInfo {
+  version: string;
+  current_version: string;
+  body: string | null;
+  date: string | null;
+}
+
+export function checkForUpdatesWithChannel(
+  channel: UpdateChannel,
+): Promise<UpdateInfo | null> {
+  return invoke("check_for_updates_with_channel", { channel });
+}
+
+export function installPendingUpdate(): Promise<void> {
+  return invoke("install_pending_update");
+}
+
 import type { ThemeDefinition } from "../types/theme";
 
 export function listUserThemes(): Promise<ThemeDefinition[]> {
