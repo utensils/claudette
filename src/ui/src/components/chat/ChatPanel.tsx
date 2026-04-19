@@ -1006,7 +1006,6 @@ export function ChatPanel() {
 
   return (
     <div className={styles.panel}>
-      {selectedWorkspaceId && <SessionTabs workspaceId={selectedWorkspaceId} />}
       <div className={styles.header} data-tauri-drag-region>
         <div className={styles.headerLeft}>
           {repo ? (
@@ -1033,6 +1032,7 @@ export function ChatPanel() {
           <PanelToggles />
         </div>
       </div>
+      {selectedWorkspaceId && <SessionTabs workspaceId={selectedWorkspaceId} />}
 
       <div className={styles.messagesWrapper}>
         {selectedWorkspaceId && (
