@@ -41,8 +41,14 @@ pub struct ChatMessage {
     pub duration_ms: Option<i64>,
     pub created_at: String,
     pub thinking: Option<String>,
+    /// Per-message input tokens reported by the CLI. NULL for historical rows.
     pub input_tokens: Option<i64>,
+    /// Per-message output tokens reported by the CLI. NULL for historical rows.
     pub output_tokens: Option<i64>,
+    /// Per-message cache-read input tokens (maps to `cache_read_input_tokens`
+    /// in the Anthropic API). NULL for historical rows.
     pub cache_read_tokens: Option<i64>,
+    /// Per-message cache-creation input tokens (maps to
+    /// `cache_creation_input_tokens` in the Anthropic API). NULL for historical rows.
     pub cache_creation_tokens: Option<i64>,
 }
