@@ -9,13 +9,10 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--sidebar-border);
+  padding: 10px 20px;
   background: var(--chat-header-bg);
-}
-
-[data-platform="mac"] .header {
-  padding-left: 78px;
+  border-bottom: 1px solid var(--divider);
+  box-shadow: var(--shadow-sm);
 }
 
 .headerLeft {
