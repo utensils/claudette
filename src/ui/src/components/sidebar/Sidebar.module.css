@@ -76,39 +76,68 @@
   margin-top: 4px;
   background: var(--chat-input-bg);
   border: 1px solid var(--divider);
-  border-radius: 6px;
+  border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  min-width: 120px;
+  min-width: 240px;
   z-index: 100;
-  overflow: hidden;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.filterMenuItem {
-  width: 100%;
-  background: none;
-  border: none;
-  color: var(--text-primary);
-  font-size: 13px;
-  padding: 8px 12px;
+.filterRow {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  cursor: pointer;
-  transition: background var(--transition-fast);
-  text-align: left;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--text-primary);
 }
 
-.filterMenuItem:hover {
-  background: var(--hover-bg);
-}
-
-.filterMenuItem span {
-  flex: 1;
-}
-
-.filterMenuItem svg {
-  color: var(--accent-primary);
+.filterLabel {
+  color: var(--text-muted);
   flex-shrink: 0;
+  min-width: 70px;
+}
+
+.filterSelect {
+  flex: 1;
+  background: var(--input-bg, var(--hover-bg));
+  color: var(--text-primary);
+  border: 1px solid var(--divider);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 13px;
+  cursor: pointer;
+  outline: none;
+  transition: border-color var(--transition-fast);
+}
+
+.filterSelect:hover,
+.filterSelect:focus {
+  border-color: var(--accent-primary);
+}
+
+.filterCheckboxRow {
+  gap: 8px;
+  cursor: pointer;
+}
+
+.filterCheckboxRow input[type="checkbox"] {
+  cursor: pointer;
+  accent-color: var(--accent-primary);
+  margin: 0;
+}
+
+.filterCheckboxRow .filterLabel {
+  min-width: 0;
+}
+
+.statusGroupCount {
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-weight: 500;
 }
 
 .list {
@@ -121,6 +150,25 @@
   margin-bottom: 4px;
   touch-action: none;
   transition: opacity 0.15s ease;
+}
+
+.statusGroup {
+  margin-bottom: 4px;
+}
+
+.statusGroupHeader {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  gap: 6px;
+  transition: background var(--transition-fast);
+}
+
+.statusGroupHeader:hover {
+  background: var(--hover-bg);
 }
 
 .repoGroup.dragging {

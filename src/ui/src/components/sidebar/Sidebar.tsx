@@ -15,21 +15,37 @@ import {
   pairWithServer,
   startLocalServer,
 } from "../../services/tauri";
-import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, BadgeCheck, BadgeInfo, BadgeQuestionMark, Cog, Filter, Check, LayoutDashboard, CircleDashed, GitPullRequestArrow, GitPullRequestDraft, GitMerge, GitPullRequestClosed } from "lucide-react";
+import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, BadgeCheck, BadgeInfo, BadgeQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, GitPullRequestArrow, GitPullRequestDraft, GitMerge, GitPullRequestClosed } from "lucide-react";
 import { RepoIcon } from "../shared/RepoIcon";
 import { UpdateBanner } from "../layout/UpdateBanner";
 import { useSpinnerFrame } from "../../hooks/useSpinnerFrame";
 import styles from "./Sidebar.module.css";
+
+type StatusBucketKey = "in-progress" | "in-review" | "draft" | "merged" | "closed" | "archived";
+const STATUS_BUCKET_ORDER: { key: StatusBucketKey; label: string }[] = [
+  { key: "merged", label: "Merged" },
+  { key: "in-review", label: "In review" },
+  { key: "draft", label: "Draft" },
+  { key: "in-progress", label: "In progress" },
+  { key: "closed", label: "Closed" },
+  { key: "archived", label: "Archived" },
+];
 
 export const Sidebar = memo(function Sidebar() {
   const repositories = useAppStore((s) => s.repositories);
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
-  const sidebarFilter = useAppStore((s) => s.sidebarFilter);
-  const setSidebarFilter = useAppStore((s) => s.setSidebarFilter);
+  const sidebarGroupBy = useAppStore((s) => s.sidebarGroupBy);
+  const setSidebarGroupBy = useAppStore((s) => s.setSidebarGroupBy);
+  const sidebarRepoFilter = useAppStore((s) => s.sidebarRepoFilter);
+  const setSidebarRepoFilter = useAppStore((s) => s.setSidebarRepoFilter);
+  const sidebarShowArchived = useAppStore((s) => s.sidebarShowArchived);
+  const setSidebarShowArchived = useAppStore((s) => s.setSidebarShowArchived);
   const repoCollapsed = useAppStore((s) => s.repoCollapsed);
   const toggleRepoCollapsed = useAppStore((s) => s.toggleRepoCollapsed);
+  const statusGroupCollapsed = useAppStore((s) => s.statusGroupCollapsed);
+  const toggleStatusGroupCollapsed = useAppStore((s) => s.toggleStatusGroupCollapsed);
   const addWorkspace = useAppStore((s) => s.addWorkspace);
   const addChatMessage = useAppStore((s) => s.addChatMessage);
   const openModal = useAppStore((s) => s.openModal);
@@ -41,8 +57,6 @@ export const Sidebar = memo(function Sidebar() {
   const scmSummary = useAppStore((s) => s.scmSummary);
   const setRepositories = useAppStore((s) => s.setRepositories);
   const metaKeyHeld = useAppStore((s) => s.metaKeyHeld);
-  const remoteConnections = useAppStore((s) => s.remoteConnections);
-  const discoveredServers = useAppStore((s) => s.discoveredServers);
   const isMac = navigator.platform.startsWith("Mac");
 
   // Filter dropdown state
@@ -168,12 +182,39 @@ export const Sidebar = memo(function Sidebar() {
 
   const filteredWorkspaces = useMemo(
     () => workspaces.filter((ws) => {
-      if (sidebarFilter === "active") return ws.status === "Active";
-      if (sidebarFilter === "archived") return ws.status === "Archived";
+      if (ws.remote_connection_id) return false;
+      if (!sidebarShowArchived && ws.status === "Archived") return false;
+      if (sidebarRepoFilter !== "all" && ws.repository_id !== sidebarRepoFilter) return false;
       return true;
     }),
-    [workspaces, sidebarFilter]
+    [workspaces, sidebarShowArchived, sidebarRepoFilter]
   );
+
+  const statusBuckets = useMemo(() => {
+    const buckets = new Map<StatusBucketKey, typeof workspaces>();
+    for (const { key } of STATUS_BUCKET_ORDER) buckets.set(key, []);
+    for (const ws of filteredWorkspaces) {
+      let key: StatusBucketKey;
+      if (ws.status === "Archived") {
+        key = "archived";
+      } else {
+        const summary = scmSummary[ws.id];
+        if (!summary?.hasPr) {
+          key = "in-progress";
+        } else if (summary.prState === "merged") {
+          key = "merged";
+        } else if (summary.prState === "closed") {
+          key = "closed";
+        } else if (summary.prState === "draft") {
+          key = "draft";
+        } else {
+          key = "in-review";
+        }
+      }
+      buckets.get(key)!.push(ws);
+    }
+    return buckets;
+  }, [filteredWorkspaces, scmSummary]);
 
   const handleArchive = useCallback(async (wsId: string) => {
     if (archivingRef.current.has(wsId)) return;
@@ -206,6 +247,142 @@ export const Sidebar = memo(function Sidebar() {
     }
   }, [updateWorkspace]);
 
+  const renderWorkspace = (ws: typeof workspaces[number]) => {
+    const badge: "ask" | "plan" | "done" | null =
+      agentQuestions[ws.id] ? "ask" :
+      planApprovals[ws.id] ? "plan" :
+      unreadCompletions.has(ws.id) && ws.agent_status !== "Running" ? "done" :
+      null;
+    return (
+      <div
+        key={ws.id}
+        className={`${styles.wsItem} ${selectedWorkspaceId === ws.id ? styles.wsSelected : ""} ${badge ? styles.wsUnread : ""}`}
+        onClick={() => {
+          selectWorkspace(ws.id);
+        }}
+      >
+        {badge === "done" ? (
+          <span className={styles.badgeDone} title="Completed" aria-label="Completed" role="img">
+            <BadgeCheck size={14} />
+          </span>
+        ) : badge === "plan" ? (
+          <span className={styles.badgePlan} title="Plan approval needed" aria-label="Plan approval needed" role="img">
+            <BadgeInfo size={14} />
+          </span>
+        ) : badge === "ask" ? (
+          <span className={styles.badgeAsk} title="Question requires attention" aria-label="Question requires attention" role="img">
+            <BadgeQuestionMark size={14} />
+          </span>
+        ) : ws.agent_status === "Running" ? (
+          <span className={styles.statusSpinner} aria-hidden="true">
+            {spinnerChar}
+          </span>
+        ) : (() => {
+          const summary = scmSummary[ws.id];
+          if (summary?.hasPr) {
+            const prState = summary.prState;
+            const ciState = summary.ciState;
+            const Icon = prState === "merged" ? GitMerge
+              : prState === "closed" ? GitPullRequestClosed
+              : prState === "draft" ? GitPullRequestDraft
+              : GitPullRequestArrow;
+            const color = prState === "merged" ? "var(--purple, #a855f7)"
+              : prState === "closed" ? "var(--red, #ef4444)"
+              : prState === "draft" ? "var(--text-dim)"
+              : ciState === "failure" ? "var(--red, #ef4444)"
+              : ciState === "pending" ? "var(--yellow, #eab308)"
+              : "var(--green, #22c55e)";
+            const titleText = `PR: ${prState}${ciState ? `, CI: ${ciState}` : ""}`;
+            return (
+              <span className={styles.statusIcon} title={titleText}>
+                <Icon size={14} style={{ color }} />
+              </span>
+            );
+          }
+          return (
+            <span className={styles.statusIcon} title={ws.agent_status === "Stopped" ? "Stopped" : "Idle"}>
+              <CircleDashed size={14} style={{ color: ws.agent_status === "Stopped" ? "var(--status-stopped)" : "var(--text-dim)" }} />
+            </span>
+          );
+        })()}
+        <div className={styles.wsInfo}>
+          <span className={styles.wsName}>
+            {ws.name}
+          </span>
+          <span className={styles.wsBranch}>{ws.branch_name}</span>
+          {(() => {
+            const commandState = workspaceTerminalCommands[ws.id];
+            if (!commandState?.command) return null;
+
+            const truncateCommand = (cmd: string, maxLen: number) => {
+              if (cmd.length <= maxLen) return cmd;
+              return cmd.slice(0, maxLen - 3) + "...";
+            };
+
+            return (
+              <div className={styles.terminalCommand}>
+                {commandState.isRunning ? (
+                  <span title="Running" aria-label="Running">
+                    <Cog size={12} className={styles.runningIcon} />
+                  </span>
+                ) : commandState.exitCode === 0 ? (
+                  <span className={styles.successIcon} title="Exited successfully">✓</span>
+                ) : commandState.exitCode !== null ? (
+                  <span className={styles.errorIcon} title={`Exit code: ${commandState.exitCode}`}>✗</span>
+                ) : (
+                  <span className={styles.commandIcon}>▸</span>
+                )}
+                <span className={styles.commandText} title={commandState.command}>
+                  {truncateCommand(commandState.command, 40)}
+                </span>
+              </div>
+            );
+          })()}
+        </div>
+        <div className={styles.wsActions}>
+          {ws.status === "Active" ? (
+            <button
+              className={styles.iconBtn}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleArchive(ws.id);
+              }}
+              title="Archive"
+            >
+              <Archive size={12} />
+            </button>
+          ) : (
+            <>
+              <button
+                className={styles.iconBtn}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleRestore(ws.id);
+                }}
+                title="Restore"
+              >
+                ↺
+              </button>
+              <button
+                className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openModal("deleteWorkspace", {
+                    wsId: ws.id,
+                    wsName: ws.name,
+                  });
+                }}
+                title="Delete"
+              >
+                <Trash2 size={12} />
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className={styles.sidebar}>
       <div className={styles.header} data-tauri-drag-region>
@@ -225,60 +402,50 @@ export const Sidebar = memo(function Sidebar() {
               onClick={() => setFilterMenuOpen((open) => !open)}
               title="Filter workspaces"
               aria-label="Filter workspaces"
-              aria-haspopup="menu"
+              aria-haspopup="dialog"
               aria-expanded={filterMenuOpen}
               aria-controls="workspace-filter-menu"
             >
               <Filter size={12} />
             </button>
           {filterMenuOpen && (
-            <div className={styles.filterMenu} id="workspace-filter-menu" role="menu">
-              <button
-                className={styles.filterMenuItem}
-                onClick={() => {
-                  setSidebarFilter("all");
-                  setFilterMenuOpen(false);
-                }}
-                role="menuitem"
-              >
-                <span>All</span>
-                {sidebarFilter === "all" && <Check size={14} />}
-              </button>
-              <button
-                className={styles.filterMenuItem}
-                onClick={() => {
-                  setSidebarFilter("active");
-                  setFilterMenuOpen(false);
-                }}
-                role="menuitem"
-              >
-                <span>Active</span>
-                {sidebarFilter === "active" && <Check size={14} />}
-              </button>
-              <button
-                className={styles.filterMenuItem}
-                onClick={() => {
-                  setSidebarFilter("archived");
-                  setFilterMenuOpen(false);
-                }}
-                role="menuitem"
-              >
-                <span>Archived</span>
-                {sidebarFilter === "archived" && <Check size={14} />}
-              </button>
-              {(remoteConnections.length > 0 || discoveredServers.length > 0) && (
-                <button
-                  className={styles.filterMenuItem}
-                  onClick={() => {
-                    setSidebarFilter("remote");
-                    setFilterMenuOpen(false);
-                  }}
-                  role="menuitem"
+            <div className={styles.filterMenu} id="workspace-filter-menu" role="dialog" aria-label="Workspace filters">
+              <label className={styles.filterRow}>
+                <span className={styles.filterLabel}>Group by</span>
+                <select
+                  className={styles.filterSelect}
+                  value={sidebarGroupBy}
+                  onChange={(e) => setSidebarGroupBy(e.target.value as "status" | "repo")}
                 >
-                  <span>Remote</span>
-                  {sidebarFilter === "remote" && <Check size={14} />}
-                </button>
-              )}
+                  <option value="status">Status</option>
+                  <option value="repo">Repo</option>
+                </select>
+              </label>
+              <label className={styles.filterRow}>
+                <span className={styles.filterLabel}>Repo</span>
+                <select
+                  className={styles.filterSelect}
+                  value={sidebarRepoFilter}
+                  onChange={(e) => setSidebarRepoFilter(e.target.value)}
+                >
+                  <option value="all">All repos</option>
+                  {repositories
+                    .filter((r) => !r.remote_connection_id)
+                    .map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className={`${styles.filterRow} ${styles.filterCheckboxRow}`}>
+                <input
+                  type="checkbox"
+                  checked={sidebarShowArchived}
+                  onChange={(e) => setSidebarShowArchived(e.target.checked)}
+                />
+                <span className={styles.filterLabel}>Show archived</span>
+              </label>
             </div>
           )}
           </div>
@@ -286,7 +453,36 @@ export const Sidebar = memo(function Sidebar() {
       </div>
 
       <div className={styles.list}>
-        {sidebarFilter !== "remote" && repositories.filter((r) => !r.remote_connection_id).map((repo, repoIdx) => {
+        {sidebarGroupBy === "status" && STATUS_BUCKET_ORDER.map(({ key, label }) => {
+          const bucketWorkspaces = statusBuckets.get(key) ?? [];
+          if (bucketWorkspaces.length === 0) return null;
+          const groupKey = `status:${key}`;
+          const collapsed = statusGroupCollapsed[groupKey];
+          const runningCount = bucketWorkspaces.filter((ws) => ws.agent_status === "Running").length;
+          return (
+            <div key={groupKey} className={styles.statusGroup}>
+              <div
+                className={styles.statusGroupHeader}
+                onClick={() => toggleStatusGroupCollapsed(groupKey)}
+              >
+                <span className={styles.chevron}>{collapsed ? "›" : "⌄"}</span>
+                <span className={styles.repoName}>
+                  {label}
+                  {runningCount > 0 && (
+                    <span className={styles.runningBadge}>{runningCount}</span>
+                  )}
+                  <span className={styles.statusGroupCount}>{bucketWorkspaces.length}</span>
+                </span>
+              </div>
+              {!collapsed && bucketWorkspaces.map(renderWorkspace)}
+            </div>
+          );
+        })}
+
+        {sidebarGroupBy === "repo" && repositories
+          .filter((r) => !r.remote_connection_id)
+          .filter((r) => sidebarRepoFilter === "all" || r.id === sidebarRepoFilter)
+          .map((repo, repoIdx) => {
           const collapsed = repoCollapsed[repo.id];
           const repoWorkspaces = filteredWorkspaces.filter(
             (ws) => ws.repository_id === repo.id
@@ -469,142 +665,7 @@ export const Sidebar = memo(function Sidebar() {
                 )}
               </div>
 
-              {!collapsed &&
-                repoWorkspaces.map((ws) => {
-                  const badge: "ask" | "plan" | "done" | null =
-                    agentQuestions[ws.id] ? "ask" :
-                    planApprovals[ws.id] ? "plan" :
-                    unreadCompletions.has(ws.id) && ws.agent_status !== "Running" ? "done" :
-                    null;
-                  return (
-                  <div
-                    key={ws.id}
-                    className={`${styles.wsItem} ${selectedWorkspaceId === ws.id ? styles.wsSelected : ""} ${badge ? styles.wsUnread : ""}`}
-                    onClick={() => {
-                      selectWorkspace(ws.id);
-                    }}
-                  >
-                    {badge === "done" ? (
-                      <span className={styles.badgeDone} title="Completed" aria-label="Completed" role="img">
-                        <BadgeCheck size={14} />
-                      </span>
-                    ) : badge === "plan" ? (
-                      <span className={styles.badgePlan} title="Plan approval needed" aria-label="Plan approval needed" role="img">
-                        <BadgeInfo size={14} />
-                      </span>
-                    ) : badge === "ask" ? (
-                      <span className={styles.badgeAsk} title="Question requires attention" aria-label="Question requires attention" role="img">
-                        <BadgeQuestionMark size={14} />
-                      </span>
-                    ) : ws.agent_status === "Running" ? (
-                      <span className={styles.statusSpinner} aria-hidden="true">
-                        {spinnerChar}
-                      </span>
-                    ) : (() => {
-                      const summary = scmSummary[ws.id];
-                      if (summary?.hasPr) {
-                        const prState = summary.prState;
-                        const ciState = summary.ciState;
-                        const Icon = prState === "merged" ? GitMerge
-                          : prState === "closed" ? GitPullRequestClosed
-                          : prState === "draft" ? GitPullRequestDraft
-                          : GitPullRequestArrow;
-                        const color = prState === "merged" ? "var(--purple, #a855f7)"
-                          : prState === "closed" ? "var(--red, #ef4444)"
-                          : prState === "draft" ? "var(--text-dim)"
-                          : ciState === "failure" ? "var(--red, #ef4444)"
-                          : ciState === "pending" ? "var(--yellow, #eab308)"
-                          : "var(--green, #22c55e)";
-                        const titleText = `PR: ${prState}${ciState ? `, CI: ${ciState}` : ""}`;
-                        return (
-                          <span className={styles.statusIcon} title={titleText}>
-                            <Icon size={14} style={{ color }} />
-                          </span>
-                        );
-                      }
-                      return (
-                        <span className={styles.statusIcon} title={ws.agent_status === "Stopped" ? "Stopped" : "Idle"}>
-                          <CircleDashed size={14} style={{ color: ws.agent_status === "Stopped" ? "var(--status-stopped)" : "var(--text-dim)" }} />
-                        </span>
-                      );
-                    })()}
-                    <div className={styles.wsInfo}>
-                      <span className={styles.wsName}>
-                        {ws.name}
-                      </span>
-                      <span className={styles.wsBranch}>{ws.branch_name}</span>
-                      {(() => {
-                        const commandState = workspaceTerminalCommands[ws.id];
-                        if (!commandState?.command) return null;
-
-                        const truncateCommand = (cmd: string, maxLen: number) => {
-                          if (cmd.length <= maxLen) return cmd;
-                          return cmd.slice(0, maxLen - 3) + "...";
-                        };
-
-                        return (
-                          <div className={styles.terminalCommand}>
-                            {commandState.isRunning ? (
-                              <span title="Running" aria-label="Running">
-                                <Cog size={12} className={styles.runningIcon} />
-                              </span>
-                            ) : commandState.exitCode === 0 ? (
-                              <span className={styles.successIcon} title="Exited successfully">✓</span>
-                            ) : commandState.exitCode !== null ? (
-                              <span className={styles.errorIcon} title={`Exit code: ${commandState.exitCode}`}>✗</span>
-                            ) : (
-                              <span className={styles.commandIcon}>▸</span>
-                            )}
-                            <span className={styles.commandText} title={commandState.command}>
-                              {truncateCommand(commandState.command, 40)}
-                            </span>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                    <div className={styles.wsActions}>
-                      {ws.status === "Active" ? (
-                        <button
-                          className={styles.iconBtn}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleArchive(ws.id);
-                          }}
-                          title="Archive"
-                        >
-                          <Archive size={12} />
-                        </button>
-                      ) : (
-                        <>
-                          <button
-                            className={styles.iconBtn}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleRestore(ws.id);
-                            }}
-                            title="Restore"
-                          >
-                            ↺
-                          </button>
-                          <button
-                            className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openModal("deleteWorkspace", {
-                                wsId: ws.id,
-                                wsName: ws.name,
-                              });
-                            }}
-                            title="Delete"
-                          >
-                            <Trash2 size={12} />
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                  );
-                })}
+              {!collapsed && repoWorkspaces.map(renderWorkspace)}
               {/* Show loading workspace while creating */}
               {!collapsed && creatingWorkspace && creatingWorkspace.repoId === repo.id && (
                 <div className={`${styles.wsItem} ${styles.wsItemLoading}`}>
@@ -621,11 +682,11 @@ export const Sidebar = memo(function Sidebar() {
             </div>
           );
         })}
-        {sidebarFilter !== "remote" && draggedRepoId && dropTargetIdx === repositories.filter((r) => !r.remote_connection_id).length && (
+        {sidebarGroupBy === "repo" && draggedRepoId && dropTargetIdx === repositories.filter((r) => !r.remote_connection_id).length && (
           <div className={styles.dropIndicator} />
         )}
 
-        {sidebarFilter === "all" || sidebarFilter === "remote" ? <RemoteSections /> : null}
+        <RemoteSections />
       </div>
 
       <UpdateBanner />

@@ -104,8 +104,11 @@ All actions are on `window.__CLAUDETTE_STORE__.getState()`.
 - `setSidebarWidth(w)` -- set left sidebar width
 - `setRightSidebarWidth(w)` -- set right sidebar width
 - `setTerminalHeight(h)` -- set terminal panel height
-- `setSidebarFilter(f)` -- "all", "active", or "archived"
+- `setSidebarGroupBy(g)` -- "status" or "repo"
+- `setSidebarRepoFilter(id)` -- repo ID or "all"
+- `setSidebarShowArchived(show)` -- bool
 - `toggleRepoCollapsed(id)` -- toggle repository collapse
+- `toggleStatusGroupCollapsed(key)` -- toggle status-bucket collapse
 - `toggleFuzzyFinder()` -- show/hide fuzzy finder
 - `toggleCommandPalette()` -- show/hide command palette
 - `setMetaKeyHeld(held)` -- track meta key state

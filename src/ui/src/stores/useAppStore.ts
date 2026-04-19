@@ -248,8 +248,11 @@ interface AppState {
   rightSidebarWidth: number;
   terminalHeight: number;
   rightSidebarTab: "changes" | "tasks" | "scm";
-  sidebarFilter: "all" | "active" | "archived" | "remote";
+  sidebarGroupBy: "status" | "repo";
+  sidebarRepoFilter: string; // repo ID or "all"
+  sidebarShowArchived: boolean;
   repoCollapsed: Record<string, boolean>;
+  statusGroupCollapsed: Record<string, boolean>;
   fuzzyFinderOpen: boolean;
   commandPaletteOpen: boolean;
   toggleSidebar: () => void;
@@ -258,8 +261,11 @@ interface AppState {
   setSidebarWidth: (w: number) => void;
   setRightSidebarWidth: (w: number) => void;
   setTerminalHeight: (h: number) => void;
-  setSidebarFilter: (f: "all" | "active" | "archived" | "remote") => void;
+  setSidebarGroupBy: (g: "status" | "repo") => void;
+  setSidebarRepoFilter: (id: string) => void;
+  setSidebarShowArchived: (show: boolean) => void;
   toggleRepoCollapsed: (id: string) => void;
+  toggleStatusGroupCollapsed: (id: string) => void;
   toggleFuzzyFinder: () => void;
   toggleCommandPalette: () => void;
 
@@ -927,8 +933,11 @@ export const useAppStore = create<AppState>((set) => ({
   rightSidebarWidth: 250,
   terminalHeight: 300,
   rightSidebarTab: "changes",
-  sidebarFilter: "all",
+  sidebarGroupBy: "status",
+  sidebarRepoFilter: "all",
+  sidebarShowArchived: false,
   repoCollapsed: {},
+  statusGroupCollapsed: {},
   fuzzyFinderOpen: false,
   toggleSidebar: () => set((s) => ({ sidebarVisible: !s.sidebarVisible })),
   toggleRightSidebar: () =>
@@ -937,12 +946,21 @@ export const useAppStore = create<AppState>((set) => ({
   setSidebarWidth: (w) => set({ sidebarWidth: w }),
   setRightSidebarWidth: (w) => set({ rightSidebarWidth: w }),
   setTerminalHeight: (h) => set({ terminalHeight: h }),
-  setSidebarFilter: (f) => set({ sidebarFilter: f }),
+  setSidebarGroupBy: (g) => set({ sidebarGroupBy: g }),
+  setSidebarRepoFilter: (id) => set({ sidebarRepoFilter: id }),
+  setSidebarShowArchived: (show) => set({ sidebarShowArchived: show }),
   toggleRepoCollapsed: (id) =>
     set((s) => ({
       repoCollapsed: {
         ...s.repoCollapsed,
         [id]: !s.repoCollapsed[id],
+      },
+    })),
+  toggleStatusGroupCollapsed: (id) =>
+    set((s) => ({
+      statusGroupCollapsed: {
+        ...s.statusGroupCollapsed,
+        [id]: !s.statusGroupCollapsed[id],
       },
     })),
   toggleFuzzyFinder: () =>
