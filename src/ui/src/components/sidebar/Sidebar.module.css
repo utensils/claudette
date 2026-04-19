@@ -102,15 +102,18 @@
 
 .filterSelect {
   flex: 1;
-  background: var(--input-bg, var(--hover-bg));
+  background-color: var(--input-bg, var(--hover-bg));
   color: var(--text-primary);
   border: 1px solid var(--divider);
   border-radius: 4px;
-  padding: 4px 8px;
+  padding: 4px 22px 4px 8px;
   font-size: 13px;
   cursor: pointer;
   outline: none;
   transition: border-color var(--transition-fast);
+  background-position:
+    calc(100% - 10px) 50%,
+    calc(100% - 6px) 50%;
 }
 
 .filterSelect:hover,
