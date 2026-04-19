@@ -1,19 +1,25 @@
 import { useState } from "react";
 import { Brain } from "lucide-react";
+import { useTypewriter } from "../../hooks/useTypewriter";
 import styles from "./ThinkingBlock.module.css";
+import caretStyles from "./caret.module.css";
 
 interface ThinkingBlockProps {
   content: string;
   isStreaming: boolean;
-  showCaret?: boolean;
+  enableTypewriter?: boolean;
 }
 
-export function ThinkingBlock({ content, isStreaming, showCaret }: ThinkingBlockProps) {
+export function ThinkingBlock({ content, isStreaming, enableTypewriter }: ThinkingBlockProps) {
   const [expanded, setExpanded] = useState(false);
+  const { displayed, showCaret } = useTypewriter(content, isStreaming, {
+    enabled: enableTypewriter && expanded,
+  });
 
   if (!content) return null;
 
   const label = isStreaming ? "Thinking\u2026" : "Thinking";
+  const visibleContent = enableTypewriter ? displayed : content;
 
   return (
     <div className={styles.container}>
@@ -30,8 +36,8 @@ export function ThinkingBlock({ content, isStreaming, showCaret }: ThinkingBlock
       </button>
       {expanded && (
         <div className={styles.content}>
-          {content}
-          {showCaret && <span className={styles.caret} aria-hidden="true" />}
+          {visibleContent}
+          {showCaret && <span className={caretStyles.caret} aria-hidden="true" />}
         </div>
       )}
     </div>

@@ -8,6 +8,10 @@ export interface UseTypewriterOptions {
   baseRate?: number;
   /** Max lag in ms before we accelerate. Default 200. */
   maxLagMs?: number;
+  /** When false, the RAF loop is paused and fullText is returned as-is.
+   *  Transitioning to true snaps revealed to fullText.length so only new
+   *  text arriving after enable gets the typewriter effect. Default true. */
+  enabled?: boolean;
 }
 
 export interface UseTypewriterResult {
@@ -69,6 +73,7 @@ export function useTypewriter(
 ): UseTypewriterResult {
   const baseRate = opts?.baseRate ?? TYPEWRITER_BASE_RATE;
   const maxLagMs = opts?.maxLagMs ?? TYPEWRITER_MAX_LAG_MS;
+  const enabled = opts?.enabled ?? true;
 
   const [reducedMotion, setReducedMotion] = useState<boolean>(
     prefersReducedMotion,
@@ -90,6 +95,7 @@ export function useTypewriter(
   const rafRef = useRef<number | null>(null);
   const lastTimeRef = useRef<number | null>(null);
   const frameCountRef = useRef(0);
+  const enabledRef = useRef(enabled);
 
   // Keep refs in sync with the latest props so the RAF loop (which reads refs,
   // not captured values) always sees the current fullText/isStreaming.
@@ -99,7 +105,17 @@ export function useTypewriter(
   });
 
   useEffect(() => {
-    if (reducedMotion) return;
+    if (enabled && !enabledRef.current) {
+      const snapTo = fullTextRef.current;
+      stateRef.current = { revealed: snapTo.length, target: snapTo };
+      setDisplayed(snapTo);
+      setShowCaret(isStreamingRef.current);
+    }
+    enabledRef.current = enabled;
+  }, [enabled]);
+
+  useEffect(() => {
+    if (reducedMotion || !enabled) return;
     const tick = (now: number) => {
       const last = lastTimeRef.current;
       const deltaMs = last === null ? 0 : now - last;
@@ -134,10 +150,16 @@ export function useTypewriter(
       }
       lastTimeRef.current = null;
     };
-  }, [reducedMotion, baseRate, maxLagMs]);
+  }, [reducedMotion, baseRate, maxLagMs, enabled]);
 
   if (reducedMotion) {
     return { displayed: fullText, showCaret: false };
+  }
+  if (!enabled) {
+    return { displayed: fullText, showCaret: false };
+  }
+  if (!enabledRef.current) {
+    return { displayed: fullText, showCaret: isStreaming };
   }
   return { displayed: displayedState, showCaret: showCaretState };
 }

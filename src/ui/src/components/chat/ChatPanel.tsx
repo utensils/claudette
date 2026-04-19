@@ -66,6 +66,7 @@ import { ScrollToBottomPill } from "./ScrollToBottomPill";
 import { useStickyScroll } from "../../hooks/useStickyScroll";
 import { debugChat } from "../../utils/chatDebug";
 import styles from "./ChatPanel.module.css";
+import caretStyles from "./caret.module.css";
 
 import { SPINNER_FRAMES, SPINNER_INTERVAL_MS } from "../../utils/spinnerFrames";
 
@@ -996,9 +997,8 @@ const StreamingThinkingBlock = memo(function StreamingThinkingBlock({
   const thinking = useAppStore(
     (s) => s.streamingThinking[workspaceId] || ""
   );
-  const { displayed, showCaret } = useTypewriter(thinking, isStreaming);
-  if (!displayed) return null;
-  return <ThinkingBlock content={displayed} isStreaming={isStreaming} showCaret={showCaret} />;
+  if (!thinking) return null;
+  return <ThinkingBlock content={thinking} isStreaming={isStreaming} enableTypewriter />;
 });
 
 /**
@@ -1056,7 +1056,7 @@ const StreamingMessage = memo(function StreamingMessage({
         >
           {preprocessContent(displayed)}
         </Markdown>
-        {showCaret && <span className={styles.caret} aria-hidden="true" />}
+        {showCaret && <span className={caretStyles.caret} aria-hidden="true" />}
       </div>
     </div>
   );

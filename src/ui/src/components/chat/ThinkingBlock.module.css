@@ -62,23 +62,3 @@
   font-style: italic;
   opacity: 0.85;
 }
-
-.caret {
-  display: inline-block;
-  width: 1px;
-  height: 1em;
-  vertical-align: -0.15em;
-  margin-left: 1px;
-  background: currentColor;
-  animation: claudette-thinking-caret-blink 0.9s steps(2, end) infinite;
-}
-
-@keyframes claudette-thinking-caret-blink {
-  50% { opacity: 0; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .caret {
-    animation: none;
-  }
-}
