@@ -81,7 +81,7 @@ export async function applyUpdateChannel(channel: UpdateChannel): Promise<void> 
 }
 
 /** Read the persisted channel into the store. Returns the resolved channel. */
-async function loadUpdateChannel(): Promise<UpdateChannel> {
+export async function loadUpdateChannel(): Promise<UpdateChannel> {
   let channel: UpdateChannel = "stable";
   try {
     const stored = await getAppSetting("update_channel");

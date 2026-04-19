@@ -5,9 +5,9 @@ use tauri_plugin_updater::UpdaterExt;
 use crate::state::AppState;
 
 const STABLE_URL: &str =
-    "https://github.com/utensils/Claudette/releases/latest/download/latest.json";
+    "https://github.com/utensils/claudette/releases/latest/download/latest.json";
 const NIGHTLY_URL: &str =
-    "https://github.com/utensils/Claudette/releases/download/nightly/latest.json";
+    "https://github.com/utensils/claudette/releases/download/nightly/latest.json";
 
 /// Subset of [`tauri_plugin_updater::Update`] that we expose across the IPC boundary.
 #[derive(Serialize)]
@@ -20,8 +20,12 @@ pub struct UpdateInfo {
 
 fn endpoint_for(channel: &str) -> &'static str {
     match channel {
+        "stable" => STABLE_URL,
         "nightly" => NIGHTLY_URL,
-        _ => STABLE_URL,
+        other => {
+            eprintln!("[updater] Unknown channel {other:?}, falling back to stable");
+            STABLE_URL
+        }
     }
 }
 
@@ -109,5 +113,7 @@ pub async fn install_pending_update(
         .await
         .map_err(|e| e.to_string())?;
 
+    // `AppHandle::restart` returns `!` (it ends the process), so it satisfies
+    // the `Result<(), String>` signature without an explicit `Ok(())`.
     app.restart();
 }
