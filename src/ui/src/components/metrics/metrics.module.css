@@ -297,9 +297,13 @@
   gap: 4px;
 }
 
-/* Inline icon prefix for repo names. */
+/* Inline icon prefix for repo names — aligns the Lucide SVG with the
+   text baseline so the name sits flush with the icon. */
 .repoIcon {
   margin-right: 6px;
+  vertical-align: -2px;
+  color: var(--text-muted);
+  flex-shrink: 0;
 }
 
 /* Inline progress bars (slash command share, histogram bars) ------------- */

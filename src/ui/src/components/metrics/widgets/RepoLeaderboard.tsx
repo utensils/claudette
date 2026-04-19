@@ -1,5 +1,6 @@
 import styles from "../metrics.module.css";
 import { useAppStore } from "../../../stores/useAppStore";
+import { RepoIcon } from "../../shared/RepoIcon";
 
 function formatUsd(n: number): string {
   if (n >= 1000) return `$${(n / 1000).toFixed(1)}k`;
@@ -21,11 +22,13 @@ export function RepoLeaderboard() {
           {rows.map((row) => {
             const repo = repoMap.get(row.repositoryId);
             const name = repo?.name ?? "unknown repo";
-            const icon = repo?.icon ?? "";
+            const icon = repo?.icon;
             return (
               <div key={row.repositoryId} className={styles.leaderRow}>
                 <span className={styles.rowLabel}>
-                  {icon ? <span className={styles.repoIcon}>{icon}</span> : null}
+                  {icon ? (
+                    <RepoIcon icon={icon} size={12} className={styles.repoIcon} />
+                  ) : null}
                   {name}
                 </span>
                 <span className={styles.rowMuted}>{row.sessions}s</span>
