@@ -933,7 +933,7 @@ export const useAppStore = create<AppState>((set) => ({
   rightSidebarWidth: 250,
   terminalHeight: 300,
   rightSidebarTab: "changes",
-  sidebarGroupBy: "status",
+  sidebarGroupBy: "repo",
   sidebarRepoFilter: "all",
   sidebarShowArchived: false,
   repoCollapsed: {},
