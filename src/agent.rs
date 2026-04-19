@@ -1307,7 +1307,7 @@ mod tests {
 
     #[test]
     fn test_parse_message_delta() {
-        let line = r#"{"type":"stream_event","event":{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{}}}"#;
+        let line = r#"{"type":"stream_event","event":{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":0,"output_tokens":0}}}"#;
         let event = parse_stream_line(line).unwrap();
         match event {
             StreamEvent::Stream { event } => {
