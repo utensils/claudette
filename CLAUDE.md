@@ -103,7 +103,6 @@ src-tauri/              — Tauri binary crate
   src/tray.rs           — system tray: icon/menu/tooltip, notifications
   src/transport/        — Remote transport trait + WebSocket client
 src-server/             — Standalone + embeddable remote server
-docs/                   — Technical design documents (TDDs)
 ```
 
 ### Guidelines for new code
@@ -138,7 +137,6 @@ docs/                   — Technical design documents (TDDs)
 
 - See GitHub Issue #5 for the full MVP PRD
 - See GitHub Issue #11 for the Workspace Management TDD
-- Design documents live in `docs/` — covers migration rationale, MCP detection, remote terminals, shell integration, permission handling, and more
 - P0 features: workspace management, agent chat, diff viewer, integrated terminal, checkpoints, git/GitHub integration, scripts, repo settings
 - Target platforms: macOS (Apple Silicon + Intel) and Linux (x86_64, Wayland + X11)
 

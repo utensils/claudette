@@ -86,7 +86,7 @@ Common types: `feat`, `fix`, `docs`, `refactor`, `test`, `ci`, `chore`
 
 ## Architecture Overview
 
-Claudette is a Tauri 2 desktop app with a Rust backend and React/TypeScript frontend. See `CLAUDE.md` for the full architecture guide and the `docs/` directory for technical design documents.
+Claudette is a Tauri 2 desktop app with a Rust backend and React/TypeScript frontend. See `CLAUDE.md` for the full architecture guide.
 
 Key principles:
 

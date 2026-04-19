@@ -251,7 +251,6 @@ Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md)
 - The project uses Rust edition 2024 and Bun as the frontend package manager.
 - The backend (`src/`) is a library crate consumed by the Tauri binary (`src-tauri/`).
 - See `CLAUDE.md` for detailed architecture and contribution guidelines.
-- See `docs/tauri-migration-tdd.md` for the technical design document.
 
 ## License
 
