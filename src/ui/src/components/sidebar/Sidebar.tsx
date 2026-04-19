@@ -491,24 +491,22 @@ export const Sidebar = memo(function Sidebar() {
                 (sidebarRepoFilter === "all" || ws.repository_id === sidebarRepoFilter)
             );
           const repoFilterActive = sidebarRepoFilter !== "all";
-          const hasNoWorkspaces =
-            workspaces.filter((ws) => !ws.remote_connection_id).length === 0;
-          const targetRepo =
-            (repoFilterActive
-              ? localRepos.find((r) => r.id === sidebarRepoFilter && r.path_valid)
-              : undefined) ?? localRepos.find((r) => r.path_valid);
+          const hasNoWorkspaces = !workspaces.some((ws) => !ws.remote_connection_id);
+          const targetRepo = repoFilterActive
+            ? localRepos.find((r) => r.id === sidebarRepoFilter && r.path_valid)
+            : localRepos.find((r) => r.path_valid);
 
           let message: string;
           if (hasHiddenArchived && repoFilterActive) {
             message = "No matching workspaces — all workspaces for this repo are archived.";
           } else if (hasHiddenArchived) {
             message = "All workspaces are archived.";
-          } else if (repoFilterActive) {
-            message = "No workspaces match this repo filter.";
           } else if (hasNoWorkspaces && localRepos.length === 0) {
             message = "No repositories yet — add one from the toolbar below.";
           } else if (hasNoWorkspaces) {
             message = "No workspaces yet.";
+          } else if (repoFilterActive) {
+            message = "No workspaces match this repo filter.";
           } else {
             message = "Nothing to show.";
           }
