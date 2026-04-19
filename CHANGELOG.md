@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.14.0](https://github.com/utensils/claudette/compare/v0.13.1...v0.14.0) (2026-04-19)
+
+
+### Features
+
+* **chat:** apply typewriter-style streaming reveal to thinking blocks ([#296](https://github.com/utensils/claudette/issues/296)) ([0af15d8](https://github.com/utensils/claudette/commit/0af15d841cfc8864e42ddfc81e9d2c83580f7505))
+* **chat:** typewriter-style streaming reveal for assistant messages ([#291](https://github.com/utensils/claudette/issues/291)) ([02b6f90](https://github.com/utensils/claudette/commit/02b6f90432458275cda19b7a264d91c534d7c48d))
+* **ci:** add nightly build workflow for continuous pre-release artifacts ([#294](https://github.com/utensils/claudette/issues/294)) ([bf851c5](https://github.com/utensils/claudette/commit/bf851c598bce183178fa2482c2a0e89d2053d530))
+* New default themes ([#289](https://github.com/utensils/claudette/issues/289)) ([8bbc9df](https://github.com/utensils/claudette/commit/8bbc9df2b303b61b4247376cd195e68a7cf2087a))
+
+
+### Bug Fixes
+
+* **site:** use lowercase /claudette/ base path for internal URLs ([#292](https://github.com/utensils/claudette/issues/292)) ([f2d485a](https://github.com/utensils/claudette/commit/f2d485af047b98ebd48015bd15bde562906d1266))
+* **ui:** remove stale macOS left padding from diff viewer header ([#298](https://github.com/utensils/claudette/issues/298)) ([a6046f3](https://github.com/utensils/claudette/commit/a6046f30b831883f5114aa9a27ca1d080ddc9f73))
+
 ## [0.13.1](https://github.com/utensils/claudette/compare/v0.13.0...v0.13.1) (2026-04-18)
 
 
