@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Plus, X } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
-import { useShallow } from "zustand/react/shallow";
 import {
   listChatSessions,
   createChatSession,
@@ -24,26 +23,24 @@ function statusFor(session: ChatSession): SessionStatusKind {
   return { kind: "idle" };
 }
 
+// Stable empty array so the selector doesn't return a new `[]` each call when
+// this workspace has no sessions loaded yet. `useSyncExternalStore` compares
+// consecutive snapshots with `Object.is` and forces a re-render on mismatch;
+// a fresh `[]` every call turns that into an infinite render loop.
+const EMPTY_SESSIONS: ChatSession[] = [];
+
 export function SessionTabs({ workspaceId }: Props) {
-  const {
-    sessions,
-    selectedSessionId,
-    setSessionsForWorkspace,
-    addChatSession,
-    updateChatSession,
-    removeChatSession,
-    selectSession,
-  } = useAppStore(
-    useShallow((s) => ({
-      sessions: s.sessionsByWorkspace[workspaceId] ?? [],
-      selectedSessionId: s.selectedSessionIdByWorkspaceId[workspaceId] ?? null,
-      setSessionsForWorkspace: s.setSessionsForWorkspace,
-      addChatSession: s.addChatSession,
-      updateChatSession: s.updateChatSession,
-      removeChatSession: s.removeChatSession,
-      selectSession: s.selectSession,
-    })),
+  const sessions = useAppStore(
+    (s) => s.sessionsByWorkspace[workspaceId] ?? EMPTY_SESSIONS,
   );
+  const selectedSessionId = useAppStore(
+    (s) => s.selectedSessionIdByWorkspaceId[workspaceId] ?? null,
+  );
+  const setSessionsForWorkspace = useAppStore((s) => s.setSessionsForWorkspace);
+  const addChatSession = useAppStore((s) => s.addChatSession);
+  const updateChatSession = useAppStore((s) => s.updateChatSession);
+  const removeChatSession = useAppStore((s) => s.removeChatSession);
+  const selectSession = useAppStore((s) => s.selectSession);
 
   // Load sessions for this workspace on mount / workspace change.
   useEffect(() => {
