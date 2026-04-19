@@ -1,13 +1,12 @@
 .tabBar {
   display: flex;
-  align-items: stretch;
+  align-items: center;
   flex-wrap: nowrap;
   overflow-x: auto;
   overflow-y: hidden;
-  gap: 2px;
-  padding: 4px 6px 0 6px;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border-subtle);
+  gap: 4px;
+  padding: 0 8px;
+  background: transparent;
   scrollbar-width: thin;
   scrollbar-color: var(--border-subtle) transparent;
 }
@@ -24,37 +23,42 @@
 .tab {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  min-width: 100px;
+  gap: 8px;
+  padding: 8px 14px;
+  min-width: 0;
   max-width: 220px;
   font-size: 12px;
   color: var(--text-dim);
   background: transparent;
   border: none;
-  border-top: 1px solid transparent;
-  border-left: 1px solid transparent;
-  border-right: 1px solid transparent;
-  border-radius: 6px 6px 0 0;
   cursor: pointer;
   white-space: nowrap;
   user-select: none;
   position: relative;
-  transition: background 80ms ease, color 80ms ease;
+  transition: color 80ms ease;
+}
+
+.tab::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 0;
+  height: 1px;
+  background: transparent;
+  transition: background 80ms ease;
 }
 
 .tab:hover:not(.active) {
-  background: var(--bg-hover);
   color: var(--text-primary);
 }
 
 .active {
-  background: var(--bg-primary);
   color: var(--text-primary);
-  border-color: var(--border-subtle);
-  border-bottom-color: var(--bg-primary);
-  margin-bottom: -1px;
-  z-index: 1;
+}
+
+.active::after {
+  background: var(--accent-primary);
 }
 
 .icon {
@@ -64,6 +68,11 @@
   flex-shrink: 0;
   width: 14px;
   height: 14px;
+  opacity: 0.75;
+}
+
+.active .icon {
+  opacity: 1;
 }
 
 .name {
@@ -98,11 +107,10 @@
   color: var(--text-dim);
   cursor: pointer;
   opacity: 0;
-  transition: opacity 80ms ease, background 80ms ease;
+  transition: opacity 80ms ease, background 80ms ease, color 80ms ease;
 }
 
-.tab:hover .closeBtn,
-.active .closeBtn {
+.tab:hover .closeBtn {
   opacity: 1;
 }
 
@@ -115,7 +123,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   margin-left: 2px;
   background: transparent;
@@ -123,12 +132,11 @@
   border-radius: 4px;
   color: var(--text-dim);
   cursor: pointer;
-  transition: background 80ms ease, color 80ms ease;
+  transition: color 80ms ease;
   flex-shrink: 0;
 }
 
 .addBtn:hover {
-  background: var(--bg-hover);
   color: var(--text-primary);
 }
 
