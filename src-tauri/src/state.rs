@@ -269,6 +269,10 @@ pub struct AppState {
     pub scm_cache: ScmCache,
     /// Limits concurrent SCM CLI invocations.
     pub scm_semaphore: Arc<Semaphore>,
+    /// Pending updater handle from the most recent `check_for_updates_with_channel`
+    /// call. The Update struct holds the downloaded payload + signature context
+    /// and is not Serialize, so it lives here instead of crossing the IPC boundary.
+    pub pending_update: tokio::sync::Mutex<Option<tauri_plugin_updater::Update>>,
 }
 
 impl AppState {
@@ -288,6 +292,7 @@ impl AppState {
             plugins: RwLock::new(plugins),
             scm_cache: ScmCache::new(),
             scm_semaphore: Arc::new(Semaphore::new(4)),
+            pending_update: tokio::sync::Mutex::new(None),
         }
     }
 

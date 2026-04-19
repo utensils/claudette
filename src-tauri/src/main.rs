@@ -387,6 +387,9 @@ fn main() {
             commands::settings::play_notification_sound,
             commands::settings::run_notification_command,
             commands::settings::get_git_username,
+            // Updater
+            commands::updater::check_for_updates_with_channel,
+            commands::updater::install_pending_update,
             // Plugins
             commands::plugin::list_plugins,
             commands::plugin::list_plugin_catalog,
