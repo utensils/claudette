@@ -497,6 +497,45 @@
   white-space: nowrap;
 }
 
+.emptyState {
+  padding: 24px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  text-align: center;
+}
+
+.emptyStateMessage {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.emptyStateActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+}
+
+.emptyStateAction {
+  background: var(--hover-bg);
+  border: 1px solid var(--divider);
+  color: var(--text-primary);
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.emptyStateAction:hover {
+  color: var(--accent-primary);
+  background: var(--accent-bg);
+  border-color: rgba(var(--accent-primary-rgb), 0.25);
+}
+
 .footer {
   display: flex;
   align-items: center;

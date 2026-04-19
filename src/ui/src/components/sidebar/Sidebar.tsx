@@ -480,6 +480,70 @@ export const Sidebar = memo(function Sidebar() {
           );
         })}
 
+        {sidebarGroupBy === "status" && filteredWorkspaces.length === 0 && (() => {
+          const localRepos = repositories.filter((r) => !r.remote_connection_id);
+          const hasHiddenArchived =
+            !sidebarShowArchived &&
+            workspaces.some(
+              (ws) =>
+                !ws.remote_connection_id &&
+                ws.status === "Archived" &&
+                (sidebarRepoFilter === "all" || ws.repository_id === sidebarRepoFilter)
+            );
+          const repoFilterActive = sidebarRepoFilter !== "all";
+          const hasNoWorkspaces = !workspaces.some((ws) => !ws.remote_connection_id);
+          const targetRepo = repoFilterActive
+            ? localRepos.find((r) => r.id === sidebarRepoFilter && r.path_valid)
+            : localRepos.find((r) => r.path_valid);
+
+          let message: string;
+          if (hasHiddenArchived && repoFilterActive) {
+            message = "No matching workspaces — all workspaces for this repo are archived.";
+          } else if (hasHiddenArchived) {
+            message = "All workspaces are archived.";
+          } else if (hasNoWorkspaces && localRepos.length === 0) {
+            message = "No local repositories yet — add one from the toolbar below.";
+          } else if (hasNoWorkspaces) {
+            message = "No workspaces yet.";
+          } else if (repoFilterActive) {
+            message = "No workspaces match this repo filter.";
+          } else {
+            message = "Nothing to show.";
+          }
+
+          return (
+            <div className={styles.emptyState}>
+              <div className={styles.emptyStateMessage}>{message}</div>
+              <div className={styles.emptyStateActions}>
+                {hasHiddenArchived && (
+                  <button
+                    className={styles.emptyStateAction}
+                    onClick={() => setSidebarShowArchived(true)}
+                  >
+                    Show archived
+                  </button>
+                )}
+                {repoFilterActive && (
+                  <button
+                    className={styles.emptyStateAction}
+                    onClick={() => setSidebarRepoFilter("all")}
+                  >
+                    Clear repo filter
+                  </button>
+                )}
+                {hasNoWorkspaces && targetRepo && (
+                  <button
+                    className={styles.emptyStateAction}
+                    onClick={() => handleCreateWorkspace(targetRepo.id)}
+                  >
+                    New workspace
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
         {sidebarGroupBy === "repo" && repositories
           .filter((r) => !r.remote_connection_id)
           .filter((r) => sidebarRepoFilter === "all" || r.id === sidebarRepoFilter)
