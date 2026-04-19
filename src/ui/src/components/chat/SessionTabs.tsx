@@ -150,9 +150,10 @@ function SessionTab({ session, isActive, onSelect, onClose, onRename }: TabProps
     }
   }, [editing]);
 
-  useEffect(() => {
-    if (!editing) setDraft(session.name);
-  }, [session.name, editing]);
+  const startEditing = () => {
+    setDraft(session.name);
+    setEditing(true);
+  };
 
   const commit = async () => {
     const next = draft.trim();
@@ -185,7 +186,7 @@ function SessionTab({ session, isActive, onSelect, onClose, onRename }: TabProps
       }}
       onDoubleClick={(e) => {
         e.stopPropagation();
-        setEditing(true);
+        startEditing();
       }}
     >
       <span className={styles.icon}>
