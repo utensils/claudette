@@ -610,7 +610,10 @@ pub async fn send_chat_message(
             .flatten()
             .is_none()
         {
-            let _ = db.set_app_setting("first_session_at", &now_iso());
+            // RFC3339 UTC to match `install_date` — both share `app_settings`
+            // and will be compared/displayed side-by-side. `now_iso` (despite
+            // the name) returns UNIX seconds, which would diverge.
+            let _ = db.set_app_setting("first_session_at", &chrono::Utc::now().to_rfc3339());
         }
     }
     drop(agents);

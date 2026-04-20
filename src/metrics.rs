@@ -1,7 +1,8 @@
 //! Aggregation queries for the dashboard metrics widgets.
 //!
-//! Queries run against the v20 schema: `agent_sessions`, `agent_commits`, and
-//! `deleted_workspace_summaries`. Frozen summaries are merged with live rows so
+//! Queries run against the v21+ schema: `agent_sessions`, `agent_commits`, and
+//! `deleted_workspace_summaries` (introduced in migration v21; `repository_id`
+//! indexes added in v22). Frozen summaries are merged with live rows so
 //! lifetime stats survive workspace hard-deletes.
 
 use std::collections::HashMap;
