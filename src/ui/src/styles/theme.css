@@ -55,7 +55,9 @@
 
   /* ---- Agent status ---- */
   --status-running:      #e07850;
-  --status-idle:         #908880;
+  /* Derived so idle status dots follow each theme's text ramp instead
+     of always rendering the default-dark gray. */
+  --status-idle:         var(--text-dim);
   --status-stopped:      #e85050;
 
   /* ---- Context meter (chat toolbar) — mapped to palette ---- */
@@ -111,10 +113,14 @@
   --overlay-bg:          rgba(0, 0, 0, 0.50);
   --overlay-bg-heavy:    rgba(0, 0, 0, 0.65);
 
-  /* ---- Terminal ---- */
-  --terminal-fg:         #f0ebe5;
-  --terminal-cursor:     #e07850;
-  --terminal-selection:  rgba(224, 120, 80, 0.25);
+  /* ---- Terminal ----
+     Derived from the text ramp and accent so the terminal tracks each
+     active theme. Per-theme blocks override only when they want the
+     terminal to diverge (e.g. a different cursor hue or selection
+     alpha). */
+  --terminal-fg:         var(--text-primary);
+  --terminal-cursor:     var(--accent-primary);
+  --terminal-selection:  rgba(var(--accent-primary-rgb), 0.25);
 
   /* ---- Elevation ---- */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
@@ -245,8 +251,9 @@
   --chat-system-bg: rgba(196, 90, 53, 0.05);
   --toolbar-active: rgba(196, 90, 53, 0.10);
 
-  --terminal-cursor: #c45a35;
-  --terminal-selection: rgba(196, 90, 53, 0.18);
+  /* Cursor inherits from :root (derived from --accent-primary). Selection
+     uses a lighter alpha on cream paper for legibility. */
+  --terminal-selection: rgba(var(--accent-primary-rgb), 0.18);
 
   --error-bg:     rgba(196, 32, 32, 0.08);
   --error-border: rgba(196, 32, 32, 0.25);

@@ -597,7 +597,7 @@
 }
 
 .remoteStatusDot {
-  margin-right: 4px;
+  margin-right: var(--space-1);
 }
 
 .remoteStatusIdle {
@@ -613,7 +613,7 @@
 }
 
 .remoteRepoHeader {
-  padding-left: 12px;
+  padding-left: var(--space-3);
 }
 
 .remotePlaceholder {
@@ -625,7 +625,7 @@
 }
 
 .connectError {
-  padding: 4px 12px;
+  padding: var(--space-1) var(--space-3);
   font-size: var(--fs-xs);
   color: var(--status-stopped);
   line-height: 1.3;
