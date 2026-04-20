@@ -1,6 +1,23 @@
 import { describe, it, expect } from "vitest";
 import { bandForRatio, buildMeterTooltip, computeMeterState } from "./contextMeterLogic";
+import type { MeterState } from "./contextMeterLogic";
 import type { CompletedTurn } from "../../stores/useAppStore";
+
+function makeState(overrides: Partial<MeterState> = {}): MeterState {
+  const totalTokens = overrides.totalTokens ?? 0;
+  const capacity = overrides.capacity ?? 1;
+  return {
+    totalTokens,
+    capacity,
+    input: overrides.input ?? 0,
+    output: overrides.output ?? 0,
+    cacheRead: overrides.cacheRead ?? 0,
+    cacheCreation: overrides.cacheCreation ?? 0,
+    fillPercent: overrides.fillPercent ?? Math.min(totalTokens / capacity, 1) * 100,
+    percentRounded: overrides.percentRounded ?? Math.round((totalTokens / capacity) * 100),
+    band: overrides.band ?? "normal",
+  };
+}
 
 function makeTurn(overrides: Partial<CompletedTurn> = {}): CompletedTurn {
   return {
@@ -42,14 +59,16 @@ describe("bandForRatio", () => {
 
 describe("buildMeterTooltip", () => {
   it("formats thousand-separated breakdown with percentage", () => {
-    const tooltip = buildMeterTooltip({
-      totalTokens: 62_450,
-      capacity: 200_000,
-      input: 48_200,
-      output: 1_000,
-      cacheRead: 12_000,
-      cacheCreation: 1_250,
-    });
+    const tooltip = buildMeterTooltip(
+      makeState({
+        totalTokens: 62_450,
+        capacity: 200_000,
+        input: 48_200,
+        output: 1_000,
+        cacheRead: 12_000,
+        cacheCreation: 1_250,
+      }),
+    );
     expect(tooltip).toContain("Context: 62,450 / 200,000 tokens (31%)");
     expect(tooltip).toContain("Input: 48,200");
     expect(tooltip).toContain("Cache read: 12,000");
@@ -58,16 +77,27 @@ describe("buildMeterTooltip", () => {
   });
 
   it("rounds percentage to nearest integer", () => {
-    const tooltip = buildMeterTooltip({
-      totalTokens: 1000,
-      capacity: 3000,
-      input: 1000,
-      output: 0,
-      cacheRead: 0,
-      cacheCreation: 0,
-    });
+    const tooltip = buildMeterTooltip(
+      makeState({
+        totalTokens: 1000,
+        capacity: 3000,
+        input: 1000,
+      }),
+    );
     // 1000/3000 = 0.3333... → 33%
     expect(tooltip).toContain("(33%)");
+  });
+
+  it("reports >100% for over-capacity inputs without clamping", () => {
+    const tooltip = buildMeterTooltip(
+      makeState({
+        totalTokens: 300_000,
+        capacity: 200_000,
+        input: 300_000,
+      }),
+    );
+    // 300000 / 200000 = 1.5 → 150%
+    expect(tooltip).toContain("(150%)");
   });
 });
 
@@ -118,12 +148,19 @@ describe("computeMeterState", () => {
     expect(state!.cacheCreation).toBe(0);
   });
 
-  it("caps fillPercent at 100 when over capacity", () => {
+  it("caps fillPercent at 100 but leaves percentRounded uncapped when over capacity", () => {
     const turn = makeTurn({ inputTokens: 300_000, outputTokens: 1_000 });
     const state = computeMeterState(turn, 200_000);
     expect(state).not.toBeNull();
     expect(state!.fillPercent).toBe(100);
+    // 301_000 / 200_000 = 1.505 → rounded to 151
+    expect(state!.percentRounded).toBe(151);
     expect(state!.band).toBe("critical");
+  });
+
+  it("rejects NaN token values (treats them as missing)", () => {
+    const turn = makeTurn({ inputTokens: Number.NaN, outputTokens: 100 });
+    expect(computeMeterState(turn, 200_000)).toBeNull();
   });
 
   it("computes fillPercent as ratio * 100 when under capacity", () => {

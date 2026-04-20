@@ -9,8 +9,10 @@ export interface MeterState {
   output: number;
   cacheRead: number;
   cacheCreation: number;
-  ratio: number;
+  /** Bar fill width, capped at 100. Use for the fill element's CSS width. */
   fillPercent: number;
+  /** Displayed percentage, uncapped — can exceed 100 when a turn goes over
+   *  the context window. Use for text labels / tooltip (e.g. "105%"). */
   percentRounded: number;
   band: Band;
 }
@@ -28,61 +30,59 @@ export function bandForRatio(ratio: number): Band {
  * if the meter should be hidden. Returning null (rather than throwing)
  * covers: no turn yet, pre-migration turn missing token metadata, and
  * stale model ids with zero/undefined capacity.
+ *
+ * Uses `Number.isFinite` for the token guards so `NaN` values from
+ * unexpected deserialization paths are treated the same as missing data.
  */
 export function computeMeterState(
   turn: CompletedTurn | undefined,
   capacity: number | undefined,
 ): MeterState | null {
   if (!turn) return null;
-  if (typeof turn.inputTokens !== "number") return null;
-  if (typeof turn.outputTokens !== "number") return null;
-  if (typeof capacity !== "number" || capacity <= 0) return null;
+  if (!Number.isFinite(turn.inputTokens)) return null;
+  if (!Number.isFinite(turn.outputTokens)) return null;
+  if (!Number.isFinite(capacity) || (capacity as number) <= 0) return null;
 
-  const input = turn.inputTokens;
-  const output = turn.outputTokens;
+  const cap = capacity as number;
+  const input = turn.inputTokens as number;
+  const output = turn.outputTokens as number;
   const cacheRead = turn.cacheReadTokens ?? 0;
   const cacheCreation = turn.cacheCreationTokens ?? 0;
   const totalTokens = input + cacheRead + cacheCreation + output;
-  const ratio = totalTokens / capacity;
+  const ratio = totalTokens / cap;
   const fillPercent = Math.min(ratio, 1) * 100;
   const percentRounded = Math.round(ratio * 100);
   const band = bandForRatio(ratio);
 
   return {
     totalTokens,
-    capacity,
+    capacity: cap,
     input,
     output,
     cacheRead,
     cacheCreation,
-    ratio,
     fillPercent,
     percentRounded,
     band,
   };
 }
 
-interface TooltipInput {
-  totalTokens: number;
-  capacity: number;
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheCreation: number;
-}
+const LOCALE = "en-US";
 
 /**
- * Build the multi-line tooltip string shown on hover. Uses toLocaleString()
- * for thousand separators so numbers read cleanly (e.g. "62,450").
+ * Build the multi-line tooltip string shown on hover. Accepts a `MeterState`
+ * directly (no re-derivation) so the tooltip can never disagree with what
+ * the meter shows. Uses `en-US` locale explicitly so the thousand separator
+ * is a comma regardless of the user's system locale — matches the readout
+ * style and keeps tests deterministic.
  */
-export function buildMeterTooltip(state: TooltipInput): string {
-  const percentRounded = Math.round((state.totalTokens / state.capacity) * 100);
+export function buildMeterTooltip(state: MeterState): string {
   return [
-    `Context: ${state.totalTokens.toLocaleString()} / ${state.capacity.toLocaleString()} tokens (${percentRounded}%)`,
+    `Context: ${state.totalTokens.toLocaleString(LOCALE)} / ${state.capacity.toLocaleString(LOCALE)} tokens (${state.percentRounded}%)`,
     "",
-    `Input: ${state.input.toLocaleString()}`,
-    `Cache read: ${state.cacheRead.toLocaleString()}`,
-    `Cache creation: ${state.cacheCreation.toLocaleString()}`,
-    `Output: ${state.output.toLocaleString()}`,
+    `Input: ${state.input.toLocaleString(LOCALE)}`,
+    `Cache read: ${state.cacheRead.toLocaleString(LOCALE)}`,
+    `Cache creation: ${state.cacheCreation.toLocaleString(LOCALE)}`,
+    `Output: ${state.output.toLocaleString(LOCALE)}`,
   ].join("\n");
 }
