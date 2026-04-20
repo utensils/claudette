@@ -46,8 +46,11 @@ export function computeMeterState(
   const cap = capacity as number;
   const input = turn.inputTokens as number;
   const output = turn.outputTokens as number;
-  const cacheRead = turn.cacheReadTokens ?? 0;
-  const cacheCreation = turn.cacheCreationTokens ?? 0;
+  // `?? 0` only replaces null/undefined — NaN would pass through and
+  // poison totalTokens / fillPercent / the tooltip. Number.isFinite
+  // treats undefined, null, and NaN uniformly as "missing".
+  const cacheRead = Number.isFinite(turn.cacheReadTokens) ? (turn.cacheReadTokens as number) : 0;
+  const cacheCreation = Number.isFinite(turn.cacheCreationTokens) ? (turn.cacheCreationTokens as number) : 0;
   const totalTokens = input + cacheRead + cacheCreation + output;
   const ratio = totalTokens / cap;
   const fillPercent = Math.min(ratio, 1) * 100;

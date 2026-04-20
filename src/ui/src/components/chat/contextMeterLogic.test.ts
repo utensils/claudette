@@ -163,6 +163,24 @@ describe("computeMeterState", () => {
     expect(computeMeterState(turn, 200_000)).toBeNull();
   });
 
+  it("treats NaN cache tokens as zero, not NaN", () => {
+    // `?? 0` would NOT replace NaN (it only catches null/undefined), so
+    // a stray NaN in a cache field must be caught by Number.isFinite to
+    // avoid poisoning totalTokens / fillPercent.
+    const turn = makeTurn({
+      inputTokens: 1_000,
+      outputTokens: 200,
+      cacheReadTokens: Number.NaN,
+      cacheCreationTokens: Number.NaN,
+    });
+    const state = computeMeterState(turn, 200_000);
+    expect(state).not.toBeNull();
+    expect(state!.cacheRead).toBe(0);
+    expect(state!.cacheCreation).toBe(0);
+    expect(state!.totalTokens).toBe(1_200);
+    expect(Number.isFinite(state!.fillPercent)).toBe(true);
+  });
+
   it("computes fillPercent as ratio * 100 when under capacity", () => {
     const turn = makeTurn({ inputTokens: 50_000, outputTokens: 1_000 });
     const state = computeMeterState(turn, 200_000);
