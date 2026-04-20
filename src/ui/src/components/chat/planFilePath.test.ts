@@ -15,6 +15,7 @@ function msg(
   return {
     id,
     workspace_id: WS,
+    session_id: WS,
     role,
     content,
     cost_usd: null,
@@ -151,7 +152,7 @@ describe("findLatestPlanFilePath", () => {
     useAppStore.setState({
       planApprovals: {
         [WS]: {
-          workspaceId: WS,
+          sessionId: WS,
           toolUseId: "tu-approval",
           planFilePath: "/repo/.claude/plans/approval-fallback.md",
           allowedPrompts: [],

@@ -31,6 +31,7 @@ function makeContext(overrides: Partial<CommandContext> = {}): CommandContext {
     enterModelMode: vi.fn(),
     enterEffortMode: vi.fn(),
     selectedWorkspaceId: null,
+    selectedSessionId: null,
     currentRepoId: null,
     createWorkspace: vi.fn(),
     thinkingEnabled: false,

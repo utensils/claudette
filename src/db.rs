@@ -1352,13 +1352,11 @@ impl Database {
             |row| row.get(0),
         )?;
         let fresh = if remaining == 0 {
-            let sort_order: i32 = tx
-                .query_row(
-                    "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM chat_sessions WHERE workspace_id = ?1",
-                    params![workspace_id],
-                    |row| row.get(0),
-                )
-                .unwrap_or(0);
+            let sort_order: i32 = tx.query_row(
+                "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM chat_sessions WHERE workspace_id = ?1",
+                params![workspace_id],
+                |row| row.get(0),
+            )?;
             let id = uuid::Uuid::new_v4().to_string();
             tx.execute(
                 "INSERT INTO chat_sessions
@@ -1569,7 +1567,7 @@ impl Database {
         Ok(ConversationCheckpoint {
             id: row.get(0)?,
             workspace_id: row.get(1)?,
-            session_id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+            session_id: row.get::<_, String>(2)?,
             message_id: row.get(3)?,
             commit_hash: row.get(4)?,
             has_file_state: row.get(5)?,
@@ -2594,7 +2592,7 @@ mod tests {
             .unwrap();
         db.insert_workspace(&make_workspace("w2", "r1", "never-talked"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "hi"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "hi"))
             .unwrap();
         db.conn
             .execute_batch(

@@ -13,6 +13,7 @@ export function ConfirmSetupScriptModal() {
   const [alwaysRun, setAlwaysRun] = useState(false);
 
   const workspaceId = modalData.workspaceId as string;
+  const sessionId = modalData.sessionId as string;
   const script = modalData.script as string;
   const source = modalData.source as string;
   const repoId = modalData.repoId as string;
@@ -32,9 +33,10 @@ export function ConfirmSetupScriptModal() {
           : sr.timed_out
             ? "timed out"
             : "failed";
-        addChatMessage(workspaceId, {
+        addChatMessage(sessionId, {
           id: crypto.randomUUID(),
           workspace_id: workspaceId,
+          session_id: sessionId,
           role: "System",
           content: `Setup script (${label}) ${status}${sr.output ? `:\n${sr.output}` : ""}`,
           cost_usd: null,
@@ -49,9 +51,10 @@ export function ConfirmSetupScriptModal() {
       }
       closeModal();
     } catch (e) {
-      addChatMessage(workspaceId, {
+      addChatMessage(sessionId, {
         id: crypto.randomUUID(),
         workspace_id: workspaceId,
+        session_id: sessionId,
         role: "System",
         content: `Setup script failed: ${e}`,
         cost_usd: null,

@@ -202,8 +202,17 @@ function App() {
 
     // Listen for tray workspace selection events.
     const unlistenTray = listen<string>("tray-select-workspace", (event) => {
-      useAppStore.getState().selectWorkspace(event.payload);
-      clearAttention(event.payload).catch(() => {});
+      const wsId = event.payload;
+      useAppStore.getState().selectWorkspace(wsId);
+      // Tray attention is a workspace-level aggregate — clear attention on
+      // every session in the workspace that currently needs it, since we
+      // don't know from the event which session triggered the badge.
+      const sessions = useAppStore.getState().sessionsByWorkspace[wsId] ?? [];
+      for (const s of sessions) {
+        if (s.status === "Active" && s.needs_attention) {
+          clearAttention(s.id).catch(() => {});
+        }
+      }
     });
 
     // Listen for open-settings events from app menu / tray.

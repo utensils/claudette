@@ -87,10 +87,14 @@ export interface CommandContext {
 
   // Workspace context
   selectedWorkspaceId: string | null;
+  // Active chat session within the selected workspace. Agent commands
+  // (stop/reset) run against a session, so this must be resolved before
+  // any agent-scoped entry is rendered.
+  selectedSessionId: string | null;
   currentRepoId: string | null;
   createWorkspace: (repoId: string) => Promise<void>;
 
-  // Agent (workspace-specific)
+  // Agent (workspace-specific toolbar state; session-specific lifecycle)
   thinkingEnabled: boolean;
   setThinkingEnabled: (wsId: string, enabled: boolean) => void;
   planMode: boolean;
@@ -101,10 +105,10 @@ export interface CommandContext {
   setEffortLevel: (wsId: string, level: string) => void;
   selectedModel: string;
   persistSetting: (key: string, value: string) => void;
-  stopAgent: (wsId: string) => Promise<void>;
-  resetAgentSession: (wsId: string) => Promise<void>;
-  clearAgentQuestion: (wsId: string) => void;
-  clearPlanApproval: (wsId: string) => void;
+  stopAgent: (sessionId: string) => Promise<void>;
+  resetAgentSession: (sessionId: string) => Promise<void>;
+  clearAgentQuestion: (sessionId: string) => void;
+  clearPlanApproval: (sessionId: string) => void;
   updateWorkspace: (id: string, updates: Record<string, unknown>) => void;
 }
 
@@ -300,27 +304,30 @@ export function buildCommands(ctx: CommandContext): Command[] {
         execute: () => { ctx.enterEffortMode(); },
       });
     }
-    cmds.push({
-      id: "stop-agent",
-      name: "Stop Agent",
-      description: "Kill the running agent process",
-      category: "agent",
-      icon: Square,
-      keywords: ["kill", "cancel", "abort"],
-      execute: () => {
-        ctx.stopAgent(wsId).then(() => ctx.updateWorkspace(wsId, { agent_status: "Stopped" }));
-        ctx.close();
-      },
-    });
-    cmds.push({
-      id: "reset-session",
-      name: "Reset Agent Session",
-      description: "Start a fresh session",
-      category: "agent",
-      icon: RotateCcw,
-      keywords: ["restart", "new", "clear"],
-      execute: () => { ctx.resetAgentSession(wsId); ctx.clearAgentQuestion(wsId); ctx.clearPlanApproval(wsId); ctx.close(); },
-    });
+    const sid = ctx.selectedSessionId;
+    if (sid) {
+      cmds.push({
+        id: "stop-agent",
+        name: "Stop Agent",
+        description: "Kill the running agent process",
+        category: "agent",
+        icon: Square,
+        keywords: ["kill", "cancel", "abort"],
+        execute: () => {
+          ctx.stopAgent(sid).then(() => ctx.updateWorkspace(wsId, { agent_status: "Stopped" }));
+          ctx.close();
+        },
+      });
+      cmds.push({
+        id: "reset-session",
+        name: "Reset Agent Session",
+        description: "Start a fresh session",
+        category: "agent",
+        icon: RotateCcw,
+        keywords: ["restart", "new", "clear"],
+        execute: () => { ctx.resetAgentSession(sid); ctx.clearAgentQuestion(sid); ctx.clearPlanApproval(sid); ctx.close(); },
+      });
+    }
   }
 
   // -- Theme (single entry → opens sub-menu) --

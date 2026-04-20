@@ -55,6 +55,28 @@ import type {
 
 export type PermissionLevel = "readonly" | "standard" | "full";
 
+/** Return a new sessionsByWorkspace map with `needs_attention` / `attention_kind`
+ *  cleared for the given session id. Returns the original map when the session
+ *  isn't found so callers can compare referential equality. */
+function clearSessionAttention(
+  map: Record<string, ChatSession[]>,
+  sessionId: string,
+): Record<string, ChatSession[]> {
+  for (const [wsId, sessions] of Object.entries(map)) {
+    const idx = sessions.findIndex((s) => s.id === sessionId);
+    if (idx >= 0) {
+      const updated = [...sessions];
+      updated[idx] = {
+        ...updated[idx],
+        needs_attention: false,
+        attention_kind: null,
+      };
+      return { ...map, [wsId]: updated };
+    }
+  }
+  return map;
+}
+
 export interface ToolActivity {
   toolUseId: string;
   toolName: string;
@@ -1035,7 +1057,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   clearAgentQuestion: (sessionId) =>
     set((s) => {
       const { [sessionId]: _, ...rest } = s.agentQuestions;
-      return { agentQuestions: rest };
+      // Also clear the corresponding ChatSession attention flag so the tab
+      // icon + sidebar aggregate update immediately, without waiting for a
+      // list_chat_sessions refresh.
+      const nextSessions = clearSessionAttention(s.sessionsByWorkspace, sessionId);
+      return { agentQuestions: rest, sessionsByWorkspace: nextSessions };
     }),
 
   // -- Plan Approvals (per-session) --
@@ -1047,7 +1073,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   clearPlanApproval: (sessionId) =>
     set((s) => {
       const { [sessionId]: _, ...rest } = s.planApprovals;
-      return { planApprovals: rest };
+      const nextSessions = clearSessionAttention(s.sessionsByWorkspace, sessionId);
+      return { planApprovals: rest, sessionsByWorkspace: nextSessions };
     }),
 
   // -- Queued Messages --

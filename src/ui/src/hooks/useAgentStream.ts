@@ -27,6 +27,7 @@ export function useAgentStream() {
     (s) => s.appendToolActivityInput
   );
   const updateWorkspace = useAppStore((s) => s.updateWorkspace);
+  const updateChatSession = useAppStore((s) => s.updateChatSession);
   const setAgentQuestion = useAppStore((s) => s.setAgentQuestion);
   const setPlanApproval = useAppStore((s) => s.setPlanApproval);
   const finalizeTurn = useAppStore((s) => s.finalizeTurn);
@@ -44,6 +45,22 @@ export function useAgentStream() {
   const turnCheckpointIdRef = useRef<Record<string, string | undefined>>({});
   const planFilePathRef = useRef<Record<string, string>>({});
   const thinkingBlocksRef = useRef<Record<string, Set<number>>>({});
+
+  // Recompute the workspace-level `agent_status` from the current
+  // per-session statuses. A workspace is Running if ANY active session in
+  // it is Running; otherwise Idle. Called whenever a session transitions
+  // between Running and Idle so the workspace aggregate (sidebar badges,
+  // tray) stays accurate even when sessions run concurrently.
+  const syncWorkspaceAgentStatus = (wsId: string) => {
+    const sessions =
+      useAppStore.getState().sessionsByWorkspace[wsId] ?? [];
+    const anyRunning = sessions.some(
+      (s) => s.status === "Active" && s.agent_status === "Running",
+    );
+    useAppStore.getState().updateWorkspace(wsId, {
+      agent_status: anyRunning ? "Running" : "Idle",
+    });
+  };
 
   useEffect(() => {
     // Guard against StrictMode double-mount: the async unlisten() promise
@@ -79,7 +96,8 @@ export function useAgentStream() {
         turnCheckpointIdRef.current[sessionId] = undefined;
         // Natural completion emits a `result` event (wasFinalized=true) → Idle.
         // User stop or crash has no prior `result` → Stopped.
-        updateWorkspace(wsId, { agent_status: wasFinalized ? "Idle" : "Stopped" });
+        updateChatSession(sessionId, { agent_status: wasFinalized ? "Idle" : "Stopped" });
+        syncWorkspaceAgentStatus(wsId);
         useAppStore.getState().clearPromptStartTime(wsId);
         setStreamingContent(sessionId, "");
         clearStreamingThinking(sessionId);
@@ -399,7 +417,8 @@ export function useAgentStream() {
             else clearLatestTurnUsage(wsId);
             turnMessageCountRef.current[sessionId] = 0;
             turnFinalizedRef.current[sessionId] = true;
-            updateWorkspace(wsId, { agent_status: "Idle" });
+            updateChatSession(sessionId, { agent_status: "Idle" });
+            syncWorkspaceAgentStatus(wsId);
             useAppStore.getState().clearPromptStartTime(wsId);
             useAppStore.getState().markWorkspaceAsUnread(wsId);
             break;
@@ -450,6 +469,7 @@ export function useAgentStream() {
     finalizeTurn,
     setPlanMode,
     addCompactionEvent,
+    updateChatSession,
   ]);
 
   // Listen for `agent-permission-prompt` — emitted by the Rust bridge the
@@ -482,6 +502,12 @@ export function useAgentStream() {
             const questions = parseAskUserQuestion(input as Record<string, unknown>);
             if (questions.length > 0) {
               setAgentQuestion({ sessionId, toolUseId, questions });
+              // Keep the ChatSession row in sync so the tab icon + sidebar
+              // aggregate reflect the pending attention without a reload.
+              updateChatSession(sessionId, {
+                needs_attention: true,
+                attention_kind: "Ask",
+              });
             }
           } catch {
             // Malformed input — ignore (CLI will eventually time out and we
@@ -527,13 +553,17 @@ export function useAgentStream() {
           planFilePath = planFilePathRef.current[sessionId];
         }
         setPlanApproval({ sessionId, toolUseId, planFilePath, allowedPrompts });
+        updateChatSession(sessionId, {
+          needs_attention: true,
+          attention_kind: "Plan",
+        });
       }
     });
     return () => {
       active = false;
       unlisten.then((fn) => fn());
     };
-  }, [setAgentQuestion, setPlanApproval, setPlanMode]);
+  }, [setAgentQuestion, setPlanApproval, setPlanMode, updateChatSession]);
 
   // Listen for checkpoint-created events from the backend.
   const addCheckpoint = useAppStore((s) => s.addCheckpoint);

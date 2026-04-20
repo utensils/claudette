@@ -116,10 +116,12 @@ export const Sidebar = memo(function Sidebar() {
 
       addWorkspace(result.workspace);
       selectWorkspace(result.workspace.id);
+      const sessionId = result.default_session_id;
       if (generated.message) {
-        addChatMessage(result.workspace.id, {
+        addChatMessage(sessionId, {
           id: crypto.randomUUID(),
           workspace_id: result.workspace.id,
+          session_id: sessionId,
           role: "System",
           content: generated.message,
           cost_usd: null,
@@ -142,9 +144,10 @@ export const Sidebar = memo(function Sidebar() {
               if (sr) {
                 const lbl = sr.source === "repo" ? ".claudette.json" : "settings";
                 const status = sr.success ? "completed" : sr.timed_out ? "timed out" : "failed";
-                addChatMessage(wsId, {
+                addChatMessage(sessionId, {
                   id: crypto.randomUUID(),
                   workspace_id: wsId,
+                  session_id: sessionId,
                   role: "System",
                   content: `Setup script (${lbl}) ${status}${sr.output ? `:\n${sr.output}` : ""}`,
                   cost_usd: null, duration_ms: null,
@@ -154,9 +157,10 @@ export const Sidebar = memo(function Sidebar() {
                 });
               }
             }).catch((err) => {
-              addChatMessage(wsId, {
+              addChatMessage(sessionId, {
                 id: crypto.randomUUID(),
                 workspace_id: wsId,
+                session_id: sessionId,
                 role: "System",
                 content: `Setup script failed: ${err}`,
                 cost_usd: null, duration_ms: null,
@@ -168,6 +172,7 @@ export const Sidebar = memo(function Sidebar() {
           } else {
             openModal("confirmSetupScript", {
               workspaceId: result.workspace.id,
+              sessionId,
               repoId,
               script,
               source,

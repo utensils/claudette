@@ -32,6 +32,12 @@ pub struct SetupResult {
 #[derive(Serialize)]
 pub struct CreateWorkspaceResult {
     pub workspace: Workspace,
+    /// The id of the chat session auto-created alongside the workspace. All
+    /// per-conversation state (messages, streaming, tool activities) is keyed
+    /// by session id after the multi-session refactor, so callers need this
+    /// to post initial system messages (setup script status, etc.) to the
+    /// new workspace's chat.
+    pub default_session_id: String,
     pub setup_result: Option<SetupResult>,
 }
 
@@ -178,8 +184,16 @@ pub async fn create_workspace(
         crate::commands::settings::play_notification_sound(resolved.sound, Some(resolved.volume));
     }
 
+    // `insert_workspace` auto-creates one active chat session; fetch its id
+    // so the caller can post initial system messages to the new chat.
+    let default_session_id = db
+        .default_session_id_for_workspace(&ws.id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Workspace insert did not create a default chat session")?;
+
     Ok(CreateWorkspaceResult {
         workspace: ws,
+        default_session_id,
         setup_result,
     })
 }

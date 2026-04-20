@@ -922,8 +922,14 @@ export function ChatPanel() {
       }));
       useAppStore.getState().addChatAttachments(sessionId, optimisticAtts);
     }
+    // Keep both the workspace aggregate AND the per-session status fresh.
+    // The tab icon, sidebar badge, and ChatToolbar disable-state all read
+    // session-level status; the workspace row still drives tray + unread.
     updateWorkspace(selectedWorkspaceId, { agent_status: "Running" });
     useAppStore.getState().setPromptStartTime(selectedWorkspaceId, Date.now());
+    useAppStore.getState().updateChatSession(sessionId, {
+      agent_status: "Running",
+    });
     useAppStore.getState().clearUnreadCompletion(selectedWorkspaceId);
 
     try {
@@ -1040,10 +1046,11 @@ export function ChatPanel() {
             </div>
           ) : (
             <>
-              {activeSessionId && (
+              {activeSessionId && selectedWorkspaceId && (
                 <MessagesWithTurns
                   messages={messages}
-                  workspaceId={activeSessionId}
+                  workspaceId={selectedWorkspaceId}
+                  sessionId={activeSessionId}
                   isRunning={isRunning}
                   onForkTurn={isRemote ? undefined : handleFork}
                   onAttachmentContextMenu={openAttachmentMenu}
@@ -1615,13 +1622,20 @@ type RollbackModalData = {
 const MessagesWithTurns = memo(function MessagesWithTurns({
   messages,
   workspaceId,
+  sessionId,
   isRunning,
   onForkTurn,
   onAttachmentContextMenu,
   onAttachmentClick,
 }: {
   messages: ChatMessage[];
+  /** The enclosing workspace id — forwarded into rollback data so the modal
+   *  can target the correct workspace (distinct from the session id after
+   *  the multi-session refactor). */
   workspaceId: string;
+  /** The active chat session id. All per-conversation store reads (turns,
+   *  checkpoints, attachments, etc.) are now keyed by session id. */
+  sessionId: string;
   isRunning: boolean;
   /** Handler invoked when the user forks a turn. Undefined disables the fork
    *  button (e.g. for remote workspaces where the command cannot run). */
@@ -1642,24 +1656,24 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
   ) => void;
 }) {
   const completedTurns = useAppStore(
-    (s) => s.completedTurns[workspaceId] ?? EMPTY_COMPLETED_TURNS
+    (s) => s.completedTurns[sessionId] ?? EMPTY_COMPLETED_TURNS
   );
   const toggleCompletedTurn = useAppStore((s) => s.toggleCompletedTurn);
   const checkpoints = useAppStore(
-    (s) => s.checkpoints[workspaceId] ?? EMPTY_CHECKPOINTS
+    (s) => s.checkpoints[sessionId] ?? EMPTY_CHECKPOINTS
   );
   const openModal = useAppStore((s) => s.openModal);
   const showThinkingBlocks = useAppStore(
-    (s) => s.showThinkingBlocks[workspaceId] === true
+    (s) => s.showThinkingBlocks[sessionId] === true
   );
   // While the typewriter is finishing the drain after streamingContent cleared,
   // hide the just-added completed assistant message — StreamingMessage renders
   // it in-place, so showing both would duplicate the text.
   const pendingMessageId = useAppStore(
-    (s) => s.pendingTypewriter[workspaceId]?.messageId ?? null
+    (s) => s.pendingTypewriter[sessionId]?.messageId ?? null
   );
   const chatAttachments = useAppStore(
-    (s) => s.chatAttachments[workspaceId] ?? EMPTY_ATTACHMENTS
+    (s) => s.chatAttachments[sessionId] ?? EMPTY_ATTACHMENTS
   );
 
   // Pre-build a Map keyed by message_id for O(1) lookup in the render loop.
@@ -1863,6 +1877,7 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
   useEffect(() => {
     debugChat("MessagesWithTurns", "layout", {
       workspaceId,
+      sessionId,
       messageIds: messages.map((msg) => msg.id),
       turnLayout: completedTurns.map((turn) => ({
         id: turn.id,
@@ -1871,7 +1886,7 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
         toolCount: turn.activities.length,
       })),
     });
-  }, [workspaceId, messages, completedTurns]);
+  }, [workspaceId, sessionId, messages, completedTurns]);
 
   const renderTurns = (position: number) => {
     const entries = turnsByPosition[position];
@@ -1881,7 +1896,7 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
         key={turn.id}
         turn={turn}
         collapsed={turn.collapsed}
-        onToggle={() => toggleCompletedTurn(workspaceId, globalIdx)}
+        onToggle={() => toggleCompletedTurn(sessionId, globalIdx)}
         taskProgress={taskProgressByTurn.get(globalIdx)}
         assistantText={assistantTextByTurnId.get(turn.id) ?? ""}
         onFork={onForkTurn ? () => onForkTurn(turn.id) : undefined}

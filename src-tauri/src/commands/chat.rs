@@ -1465,8 +1465,9 @@ pub async fn send_chat_message(
                 let mut agents = app_state.agents.write().await;
                 // Snapshot session_id before any mutation so metrics hooks
                 // below can reference the session we just finished.
-                let ended_session_id: Option<String> =
-                    agents.get(&chat_session_id_for_stream).map(|s| s.claude_session_id.clone());
+                let ended_session_id: Option<String> = agents
+                    .get(&chat_session_id_for_stream)
+                    .map(|s| s.claude_session_id.clone());
                 // Track whether this exit actually belongs to the live session
                 // in `agents` — if a newer turn has replaced `active_pid`, the
                 // old exit is stale and we must not end the (now-new) session
@@ -2629,6 +2630,7 @@ pub async fn rename_chat_session(
 /// otherwise — the frontend uses the return value to select the new tab.
 #[tauri::command]
 pub async fn archive_chat_session(
+    app: AppHandle,
     session_id: String,
     state: State<'_, AppState>,
 ) -> Result<Option<ChatSession>, String> {
@@ -2652,6 +2654,13 @@ pub async fn archive_chat_session(
     let fresh = db
         .archive_chat_session_ensuring_active(&session_id, &workspace_id)
         .map_err(|e| e.to_string())?;
+
+    // Rebuild the tray so per-workspace running/attention aggregates reflect
+    // the removed agent (and, if this was the last session, the auto-created
+    // replacement). Without this, the tray can keep showing stale state until
+    // another action triggers a rebuild.
+    crate::tray::rebuild_tray(&app);
+
     if let Some(fresh) = fresh {
         let agents = state.agents.read().await;
         return Ok(Some(hydrate_session(fresh, &agents)));

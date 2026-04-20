@@ -28,6 +28,12 @@ export interface SetupResult {
 
 export interface CreateWorkspaceResult {
   workspace: import("./workspace").Workspace;
+  /**
+   * Id of the chat session auto-created alongside the workspace. Use this
+   * when posting initial system messages — after the multi-session refactor,
+   * chat state is keyed by session id, not workspace id.
+   */
+  default_session_id: string;
   setup_result: SetupResult | null;
 }
 

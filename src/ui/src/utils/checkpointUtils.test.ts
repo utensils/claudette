@@ -163,7 +163,7 @@ describe("clearAllHasFileChanges", () => {
 });
 
 function msg(id: string, role: "User" | "Assistant" | "System"): ChatMessage {
-  return { id, workspace_id: "ws", role, content: "", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null };
+  return { id, workspace_id: "ws", session_id: "ws", role, content: "", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null };
 }
 
 describe("buildRollbackMap", () => {
