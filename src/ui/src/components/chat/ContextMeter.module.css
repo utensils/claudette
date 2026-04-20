@@ -1,0 +1,49 @@
+.meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  user-select: none;
+}
+
+.track {
+  position: relative;
+  width: 80px;
+  height: 4px;
+  background: var(--divider);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  border-radius: 2px;
+  transition: width 200ms ease-out, background-color 200ms ease-out;
+}
+
+.fillNormal {
+  background: var(--context-meter-normal);
+}
+
+.fillWarn {
+  background: var(--context-meter-warn);
+}
+
+.fillNearFull {
+  background: var(--context-meter-near-full);
+}
+
+.fillCritical {
+  background: var(--context-meter-critical);
+}
+
+.readout {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}

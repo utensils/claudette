@@ -164,6 +164,56 @@ describe("reconstructCompletedTurns", () => {
     expect(result[1].outputTokens).toBe(300);
   });
 
+  it("takes the max of assistant message cache tokens per turn (not sum)", () => {
+    // Cache tokens are cumulative-per-API-call — summing would double-count
+    // the shared prompt prefix each call re-reads. Max approximates the
+    // turn's actual cache footprint to match live Result.usage.
+    const m1: ChatMessage = { ...makeMsg("m1", "User") };
+    const m2: ChatMessage = {
+      ...makeMsg("m2", "Assistant"),
+      cache_read_tokens: 50_000,
+      cache_creation_tokens: 1_000,
+    };
+    const m3: ChatMessage = {
+      ...makeMsg("m3", "Assistant"),
+      cache_read_tokens: 10_000,
+      cache_creation_tokens: 200,
+    };
+    const m4: ChatMessage = { ...makeMsg("m4", "User") };
+    const m5: ChatMessage = {
+      ...makeMsg("m5", "Assistant"),
+      cache_read_tokens: 100_000,
+      cache_creation_tokens: 500,
+    };
+    const messages = [m1, m2, m3, m4, m5];
+    const turnData = [makeTurnData("cp1", "m3"), makeTurnData("cp2", "m5")];
+
+    const result = reconstructCompletedTurns(messages, turnData);
+
+    expect(result).toHaveLength(2);
+    // Turn 1: max(m2.cache_read=50_000, m3.cache_read=10_000) = 50_000
+    //         max(m2.cache_creation=1_000, m3.cache_creation=200) = 1_000
+    expect(result[0].cacheReadTokens).toBe(50_000);
+    expect(result[0].cacheCreationTokens).toBe(1_000);
+    // Turn 2: m5 only → 100_000 cache read, 500 cache creation
+    expect(result[1].cacheReadTokens).toBe(100_000);
+    expect(result[1].cacheCreationTokens).toBe(500);
+  });
+
+  it("leaves cacheReadTokens/cacheCreationTokens undefined when no assistant message has cache data", () => {
+    const messages = [
+      makeMsg("m1", "User"),
+      makeMsg("m2", "Assistant"),
+    ];
+    const turnData = [makeTurnData("cp1", "m2")];
+
+    const result = reconstructCompletedTurns(messages, turnData);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].cacheReadTokens).toBeUndefined();
+    expect(result[0].cacheCreationTokens).toBeUndefined();
+  });
+
   it("leaves inputTokens/outputTokens undefined for legacy turns with no token data", () => {
     const messages = [makeMsg("m1", "User"), makeMsg("m2", "Assistant")];
     const turnData = [makeTurnData("cp1", "m2")];

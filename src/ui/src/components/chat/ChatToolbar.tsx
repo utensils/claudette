@@ -7,6 +7,7 @@ import { EffortSelector, EFFORT_LEVELS } from "./EffortSelector";
 import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "./modelCapabilities";
 import { applySelectedModel } from "./applySelectedModel";
 import { applyPlanModeMountDefault } from "./applyPlanModeMountDefault";
+import { ContextMeter } from "./ContextMeter";
 import styles from "./ChatToolbar.module.css";
 
 interface ChatToolbarProps {
@@ -171,6 +172,8 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
         <span className={styles.chipLabel}>{modelLabel}</span>
         {isExtraUsage && <BadgeDollarSign size={14} className={styles.extraUsage} />}
       </button>
+
+      <ContextMeter workspaceId={workspaceId} />
 
       {isFastSupported(selectedModel) && (
         <button

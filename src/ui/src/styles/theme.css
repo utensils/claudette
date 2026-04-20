@@ -34,6 +34,14 @@
   --status-idle: rgb(110, 110, 120);
   --status-stopped: #f04848;
 
+  /* Context meter (used by the chat toolbar's ContextMeter component).
+   * Theme JSONs can override these keys to match their palette; missing
+   * overrides fall through to these defaults. */
+  --context-meter-normal: var(--accent-primary);
+  --context-meter-warn: #d4a84a;
+  --context-meter-near-full: #e07030;
+  --context-meter-critical: var(--status-stopped);
+
   /* Attention badges */
   --badge-done: #00e5cc;
   --badge-plan: rgb(100, 160, 240);

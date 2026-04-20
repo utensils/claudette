@@ -849,20 +849,158 @@ describe("finalizeTurn token counts", () => {
     });
   });
 
-  it("records input/output tokens on the completed turn", () => {
-    useAppStore.getState().finalizeTurn("ws1", 1, "turn-1", 1234, 1500, 240);
+  it("records input/output AND cache tokens on the completed turn", () => {
+    useAppStore.getState().finalizeTurn(
+      "ws1", 1, "turn-1", 1234, 1500, 240, 80_000, 1_200,
+    );
     const turns = useAppStore.getState().completedTurns.ws1 || [];
     expect(turns).toHaveLength(1);
     expect(turns[0].durationMs).toBe(1234);
     expect(turns[0].inputTokens).toBe(1500);
     expect(turns[0].outputTokens).toBe(240);
+    expect(turns[0].cacheReadTokens).toBe(80_000);
+    expect(turns[0].cacheCreationTokens).toBe(1_200);
   });
 
-  it("leaves token counts undefined when omitted", () => {
-    useAppStore.getState().finalizeTurn("ws1", 1, "turn-2", 500);
+  it("leaves cache tokens undefined when omitted", () => {
+    useAppStore.getState().finalizeTurn(
+      "ws1", 1, "turn-2", 500, 100, 50,
+    );
+    const turns = useAppStore.getState().completedTurns.ws1 || [];
+    expect(turns).toHaveLength(1);
+    expect(turns[0].inputTokens).toBe(100);
+    expect(turns[0].outputTokens).toBe(50);
+    expect(turns[0].cacheReadTokens).toBeUndefined();
+    expect(turns[0].cacheCreationTokens).toBeUndefined();
+  });
+
+  it("leaves all token fields undefined when none provided", () => {
+    useAppStore.getState().finalizeTurn("ws1", 1, "turn-3", 500);
     const turns = useAppStore.getState().completedTurns.ws1 || [];
     expect(turns).toHaveLength(1);
     expect(turns[0].inputTokens).toBeUndefined();
     expect(turns[0].outputTokens).toBeUndefined();
+    expect(turns[0].cacheReadTokens).toBeUndefined();
+    expect(turns[0].cacheCreationTokens).toBeUndefined();
+  });
+
+  it("writes latestTurnUsage alongside the CompletedTurn when tokens are provided", () => {
+    useAppStore.getState().finalizeTurn(
+      "ws1", 1, "turn-4", 1000, 1500, 240, 80_000, 1_200,
+    );
+    const usage = useAppStore.getState().latestTurnUsage.ws1;
+    expect(usage).toEqual({
+      inputTokens: 1500,
+      outputTokens: 240,
+      cacheReadTokens: 80_000,
+      cacheCreationTokens: 1_200,
+    });
+  });
+});
+
+describe("finalizeTurn tool-free turn (no activities)", () => {
+  beforeEach(() => {
+    // NO toolActivities → finalizeTurn will early-return for the timeline,
+    // but the meter's latestTurnUsage slice must still refresh.
+    useAppStore.setState({
+      completedTurns: {},
+      toolActivities: {},
+      latestTurnUsage: {},
+    });
+  });
+
+  it("updates latestTurnUsage even when no tool activities exist", () => {
+    useAppStore.getState().finalizeTurn(
+      "ws1", 1, "turn-x", 800, 500, 60, 20_000, 300,
+    );
+    // No CompletedTurn was appended — the timeline stays unchanged.
+    expect(useAppStore.getState().completedTurns.ws1).toBeUndefined();
+    // But latestTurnUsage IS updated so the ContextMeter can re-render.
+    expect(useAppStore.getState().latestTurnUsage.ws1).toEqual({
+      inputTokens: 500,
+      outputTokens: 60,
+      cacheReadTokens: 20_000,
+      cacheCreationTokens: 300,
+    });
+  });
+
+  it("preserves existing latestTurnUsage when finalizeTurn has no token data", () => {
+    // Seed a previous turn's usage.
+    useAppStore.setState({
+      latestTurnUsage: {
+        ws1: {
+          inputTokens: 100,
+          outputTokens: 50,
+          cacheReadTokens: 10_000,
+          cacheCreationTokens: 200,
+        },
+      },
+    });
+    // Finalize a turn with no usage payload (rare but possible on a broken stream).
+    useAppStore.getState().finalizeTurn("ws1", 1, "turn-y", 500);
+    // Previous usage stays intact — we never want to stomp a real value with
+    // an all-undefined record.
+    expect(useAppStore.getState().latestTurnUsage.ws1).toEqual({
+      inputTokens: 100,
+      outputTokens: 50,
+      cacheReadTokens: 10_000,
+      cacheCreationTokens: 200,
+    });
+  });
+});
+
+describe("hydrateCompletedTurns seeds latestTurnUsage", () => {
+  beforeEach(() => {
+    useAppStore.setState({
+      completedTurns: {},
+      latestTurnUsage: {},
+    });
+  });
+
+  it("copies the latest hydrated turn's token fields into latestTurnUsage", () => {
+    useAppStore.getState().hydrateCompletedTurns("ws1", [
+      {
+        id: "cp1",
+        activities: [],
+        messageCount: 1,
+        collapsed: true,
+        afterMessageIndex: 2,
+        durationMs: 1000,
+        inputTokens: 500,
+        outputTokens: 100,
+      },
+      {
+        id: "cp2",
+        activities: [],
+        messageCount: 1,
+        collapsed: true,
+        afterMessageIndex: 4,
+        durationMs: 2000,
+        inputTokens: 2000,
+        outputTokens: 150,
+        cacheReadTokens: 50_000,
+        cacheCreationTokens: 800,
+      },
+    ]);
+    // cp2 is the most recent — its tokens should seed the meter.
+    expect(useAppStore.getState().latestTurnUsage.ws1).toEqual({
+      inputTokens: 2000,
+      outputTokens: 150,
+      cacheReadTokens: 50_000,
+      cacheCreationTokens: 800,
+    });
+  });
+
+  it("leaves latestTurnUsage untouched when hydrated turns have no token data", () => {
+    useAppStore.getState().hydrateCompletedTurns("ws1", [
+      {
+        id: "cp1",
+        activities: [],
+        messageCount: 1,
+        collapsed: true,
+        afterMessageIndex: 2,
+      },
+    ]);
+    expect(useAppStore.getState().latestTurnUsage.ws1).toBeUndefined();
   });
 });
