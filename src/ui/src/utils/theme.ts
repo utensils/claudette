@@ -144,9 +144,13 @@ function updateHljsStylesheet(scheme: string): void {
   link.href = isLight ? hljsLightUrl : hljsDarkUrl;
 }
 
-function cacheThemeId(id: string): void {
+function cacheDataTheme(attr: string): void {
+  // Mirror the data-theme attribute we just wrote so the pre-hydration
+  // script in index.html can restore it before React mounts. For user JSON
+  // themes this is DEFAULT_THEME_ID (the baseline they layer on top of) —
+  // not the user theme id, which has no matching [data-theme] block.
   try {
-    localStorage.setItem(THEME_CACHE_KEY, id);
+    localStorage.setItem(THEME_CACHE_KEY, attr);
   } catch {
     // localStorage may be blocked in some sandboxes; the pre-hydration
     // script simply falls back to the default attribute.
@@ -163,15 +167,18 @@ export function applyTheme(theme: ThemeDefinition): void {
   const root = document.documentElement;
   const isBuiltin = BUILTIN_THEME_IDS.has(theme.id);
 
+  let dataThemeAttr: string;
   if (isBuiltin) {
     clearThemeableInlineVars();
-    root.setAttribute("data-theme", theme.id);
+    dataThemeAttr = theme.id;
+    root.setAttribute("data-theme", dataThemeAttr);
     const meta = BUILTIN_THEME_META.find((m) => m.id === theme.id);
     updateHljsStylesheet(meta?.colorScheme ?? "dark");
   } else {
     // User-provided JSON theme. Mark data-theme so any default-dark rules
     // still apply as a baseline; inline vars override.
-    root.setAttribute("data-theme", DEFAULT_THEME_ID);
+    dataThemeAttr = DEFAULT_THEME_ID;
+    root.setAttribute("data-theme", dataThemeAttr);
     for (const varName of THEMEABLE_VARS) {
       const value = theme.colors[varName];
       if (value) {
@@ -185,7 +192,7 @@ export function applyTheme(theme: ThemeDefinition): void {
     updateHljsStylesheet(scheme);
   }
 
-  cacheThemeId(theme.id);
+  cacheDataTheme(dataThemeAttr);
 }
 
 export async function loadAllThemes(): Promise<ThemeDefinition[]> {
@@ -196,13 +203,18 @@ export async function loadAllThemes(): Promise<ThemeDefinition[]> {
     console.error("Failed to load user themes:", e);
   }
   const themesById = new Map<string, ThemeDefinition>();
-  // Built-ins: minimal definitions (ids + names) since palette lives in CSS.
+  // Built-ins: the full palette lives in CSS, but CommandPalette renders a
+  // per-theme accent swatch from theme.colors, so seed the two preview
+  // fields from metadata. Everything else resolves via the stylesheet.
   for (const meta of BUILTIN_THEME_META) {
     themesById.set(meta.id, {
       id: meta.id,
       name: meta.name,
       description: meta.description,
-      colors: {},
+      colors: {
+        "accent-primary": meta.accentPreview,
+        "color-scheme": meta.colorScheme,
+      },
     });
   }
   for (const theme of userThemes) {
