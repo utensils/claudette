@@ -19,8 +19,29 @@ use crate::env::WorkspaceEnv;
 /// cumulative) and `result` (turn total) events. Matches the shape of
 /// Anthropic's `usage` block; cache fields are independently optional to
 /// tolerate CLI responses that omit them.
+///
+/// On `result` events the top-level fields are AGGREGATED across internal
+/// tool-use iterations. For the final iteration's per-call usage (what the
+/// ContextMeter needs to reflect actual end-of-turn context size), use
+/// `iterations[0]` — the CLI emits a single-entry array with the final
+/// iteration's own usage block.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct TokenUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub cache_creation_input_tokens: Option<u64>,
+    #[serde(default)]
+    pub cache_read_input_tokens: Option<u64>,
+    #[serde(default)]
+    pub iterations: Option<Vec<TokenUsageIteration>>,
+}
+
+/// Per-iteration usage snapshot, emitted by the CLI inside `result.usage`.
+/// Same shape as `TokenUsage`'s aggregate fields — but values are scoped
+/// to one internal API call instead of summed across all iterations.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct TokenUsageIteration {
     pub input_tokens: u64,
     pub output_tokens: u64,
     #[serde(default)]
@@ -2773,5 +2794,78 @@ mod token_usage_tests {
             } => {}
             other => panic!("expected Stream(MessageDelta) no usage, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn deserializes_result_iterations() {
+        // Real shape from CLI: result.usage.iterations contains the final
+        // iteration's per-call usage. Without this, the ContextMeter has
+        // no way to distinguish the aggregate from the last call's actual
+        // context size on tool-use chains.
+        let line = r#"{
+            "type": "result",
+            "subtype": "success",
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 200,
+                "cache_read_input_tokens": 9999,
+                "cache_creation_input_tokens": 55,
+                "iterations": [
+                    {
+                        "input_tokens": 1,
+                        "output_tokens": 611,
+                        "cache_read_input_tokens": 131890,
+                        "cache_creation_input_tokens": 573
+                    }
+                ]
+            }
+        }"#;
+        let ev: StreamEvent = serde_json::from_str(line).unwrap();
+        match ev {
+            StreamEvent::Result { usage: Some(u), .. } => {
+                let iters = u.iterations.expect("iterations should parse");
+                assert_eq!(iters.len(), 1);
+                assert_eq!(iters[0].input_tokens, 1);
+                assert_eq!(iters[0].output_tokens, 611);
+                assert_eq!(iters[0].cache_read_input_tokens, Some(131_890));
+                assert_eq!(iters[0].cache_creation_input_tokens, Some(573));
+            }
+            other => panic!("expected Result with iterations, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deserializes_result_without_iterations() {
+        let line = r#"{
+            "type": "result",
+            "subtype": "success",
+            "usage": { "input_tokens": 10, "output_tokens": 20 }
+        }"#;
+        let ev: StreamEvent = serde_json::from_str(line).unwrap();
+        match ev {
+            StreamEvent::Result { usage: Some(u), .. } => {
+                assert!(u.iterations.is_none());
+            }
+            other => panic!("expected Result, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn round_trip_preserves_iterations() {
+        // The Rust bridge deserializes CLI JSON then re-serializes to the
+        // frontend via the AgentEvent Tauri emission. If iterations is
+        // lost in this round trip, the ContextMeter fix is dead code.
+        let line = r#"{"type":"result","subtype":"success","usage":{"input_tokens":1,"output_tokens":2,"iterations":[{"input_tokens":3,"output_tokens":4}]}}"#;
+        let ev: StreamEvent = serde_json::from_str(line).unwrap();
+        let re_encoded = serde_json::to_string(&ev).unwrap();
+        // The new JSON must still contain the iterations key + inner values.
+        assert!(
+            re_encoded.contains("\"iterations\""),
+            "iterations dropped during round trip: {re_encoded}"
+        );
+        assert!(
+            re_encoded.contains("\"input_tokens\":3"),
+            "iteration[0].input_tokens dropped: {re_encoded}"
+        );
     }
 }

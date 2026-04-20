@@ -9,6 +9,7 @@ import { extractToolSummary } from "./toolSummary";
 import { parseAskUserQuestion } from "./parseAgentQuestion";
 import { debugChat } from "../utils/chatDebug";
 import { extractLatestCallUsage } from "../utils/extractLatestCallUsage";
+import { pickMeterUsageFromResult } from "./pickMeterUsageFromResult";
 
 const ASK_USER_QUESTION_TOOL = "AskUserQuestion";
 
@@ -281,23 +282,30 @@ export function useAgentStream() {
               pendingMessageCount: turnMessageCountRef.current[wsId] || 0,
               pendingToolCount: (useAppStore.getState().toolActivities[wsId] || []).length,
             });
-            // The top-level `result.usage.*` aggregates across all inner
-            // tool-use iterations. For the meter we want the FINAL call's
-            // per-call usage; the CLI emits that in `iterations[0]`. Fall
-            // back to the aggregate if the CLI doesn't emit iterations
-            // (older versions). See Phase 2.5 spec.
-            const lastCall =
-              streamEvent.usage?.iterations?.[0] ?? streamEvent.usage;
+            // CompletedTurn / TurnFooter keep aggregate semantics — the
+            // top-level `result.usage.*` is the total cost/work across
+            // all inner tool-use iterations in this Claudette-level turn.
             finalizeTurn(
               wsId,
               turnMessageCountRef.current[wsId] || 0,
               turnCheckpointIdRef.current[wsId],
               streamEvent.duration_ms,
-              lastCall?.input_tokens,
-              lastCall?.output_tokens,
-              lastCall?.cache_read_input_tokens ?? undefined,
-              lastCall?.cache_creation_input_tokens ?? undefined,
+              streamEvent.usage?.input_tokens,
+              streamEvent.usage?.output_tokens,
+              streamEvent.usage?.cache_read_input_tokens ?? undefined,
+              streamEvent.usage?.cache_creation_input_tokens ?? undefined,
             );
+            // Meter gets the FINAL iteration's per-call usage instead
+            // (via iterations[0], falling back to aggregate on older CLI
+            // versions). This keeps live values consistent with what the
+            // reconstructed path reads from the last assistant message's
+            // per-call DB fields. See pickMeterUsageFromResult for the
+            // precedence contract.
+            const meterUsage = pickMeterUsageFromResult(streamEvent);
+            const { setLatestTurnUsage, clearLatestTurnUsage } =
+              useAppStore.getState();
+            if (meterUsage) setLatestTurnUsage(wsId, meterUsage);
+            else clearLatestTurnUsage(wsId);
             turnMessageCountRef.current[wsId] = 0;
             turnFinalizedRef.current[wsId] = true;
             updateWorkspace(wsId, { agent_status: "Idle" });

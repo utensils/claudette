@@ -669,24 +669,12 @@ export const useAppStore = create<AppState>((set) => ({
     cacheCreationTokens,
   ) =>
     set((s) => {
-      // Always refresh the meter's latestTurnUsage — even for tool-free
-      // turns that don't produce a CompletedTurn. Only write when the
-      // caller actually provided input/output tokens (avoids stomping the
-      // previous value with an all-undefined record on rare empty Results).
-      const hasUsage =
-        typeof inputTokens === "number" || typeof outputTokens === "number";
-      const nextLatestTurnUsage = hasUsage
-        ? {
-            ...s.latestTurnUsage,
-            [wsId]: {
-              inputTokens,
-              outputTokens,
-              cacheReadTokens,
-              cacheCreationTokens,
-            },
-          }
-        : s.latestTurnUsage;
-
+      // Phase 2.5: finalizeTurn no longer writes latestTurnUsage. The
+      // meter needs per-call values, not the turn-aggregate we receive
+      // here — useAgentStream's result handler calls setLatestTurnUsage
+      // separately with the correct per-call data. The tokens we DO
+      // receive here stay as CompletedTurn aggregate fields for the
+      // TurnFooter's "turn-total work" view.
       const activities = s.toolActivities[wsId] || [];
       if (activities.length === 0) {
         debugChat("store", "finalizeTurn skipped", {
@@ -697,7 +685,7 @@ export const useAppStore = create<AppState>((set) => ({
             (turn) => turn.id,
           ),
         });
-        return { latestTurnUsage: nextLatestTurnUsage };
+        return {};
       }
       const turn: CompletedTurn = {
         id: turnId ?? crypto.randomUUID(),
@@ -735,7 +723,6 @@ export const useAppStore = create<AppState>((set) => ({
           [wsId]: [...(s.completedTurns[wsId] || []), turn],
         },
         toolActivities: { ...s.toolActivities, [wsId]: [] },
-        latestTurnUsage: nextLatestTurnUsage,
       };
     }),
   hydrateCompletedTurns: (wsId, turns) =>

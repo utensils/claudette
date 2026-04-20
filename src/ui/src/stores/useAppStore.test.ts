@@ -885,24 +885,39 @@ describe("finalizeTurn token counts", () => {
     expect(turns[0].cacheCreationTokens).toBeUndefined();
   });
 
-  it("writes latestTurnUsage alongside the CompletedTurn when tokens are provided", () => {
+  it("does not write latestTurnUsage — caller is responsible for that", () => {
+    // Phase 2.5: finalizeTurn stores aggregate values on CompletedTurn
+    // (for TurnFooter's turn-total view) but does NOT write the meter's
+    // latestTurnUsage slice. The meter's per-call values come via a
+    // separate setLatestTurnUsage call in useAgentStream.
+    useAppStore.setState({
+      latestTurnUsage: {
+        ws1: {
+          inputTokens: 999,
+          outputTokens: 42,
+          cacheReadTokens: 12_345,
+          cacheCreationTokens: 67,
+        },
+      },
+    });
     useAppStore.getState().finalizeTurn(
       "ws1", 1, "turn-4", 1000, 1500, 240, 80_000, 1_200,
     );
-    const usage = useAppStore.getState().latestTurnUsage.ws1;
-    expect(usage).toEqual({
-      inputTokens: 1500,
-      outputTokens: 240,
-      cacheReadTokens: 80_000,
-      cacheCreationTokens: 1_200,
+    // The pre-existing meter slice is untouched.
+    expect(useAppStore.getState().latestTurnUsage.ws1).toEqual({
+      inputTokens: 999,
+      outputTokens: 42,
+      cacheReadTokens: 12_345,
+      cacheCreationTokens: 67,
     });
   });
 });
 
 describe("finalizeTurn tool-free turn (no activities)", () => {
   beforeEach(() => {
-    // NO toolActivities → finalizeTurn will early-return for the timeline,
-    // but the meter's latestTurnUsage slice must still refresh.
+    // NO toolActivities → finalizeTurn early-returns without producing
+    // a CompletedTurn. Under Phase 2.5 it also doesn't touch
+    // latestTurnUsage — that's purely the caller's responsibility now.
     useAppStore.setState({
       completedTurns: {},
       toolActivities: {},
@@ -910,23 +925,15 @@ describe("finalizeTurn tool-free turn (no activities)", () => {
     });
   });
 
-  it("updates latestTurnUsage even when no tool activities exist", () => {
+  it("does not create a CompletedTurn and does not touch latestTurnUsage", () => {
     useAppStore.getState().finalizeTurn(
       "ws1", 1, "turn-x", 800, 500, 60, 20_000, 300,
     );
-    // No CompletedTurn was appended — the timeline stays unchanged.
     expect(useAppStore.getState().completedTurns.ws1).toBeUndefined();
-    // But latestTurnUsage IS updated so the ContextMeter can re-render.
-    expect(useAppStore.getState().latestTurnUsage.ws1).toEqual({
-      inputTokens: 500,
-      outputTokens: 60,
-      cacheReadTokens: 20_000,
-      cacheCreationTokens: 300,
-    });
+    expect(useAppStore.getState().latestTurnUsage.ws1).toBeUndefined();
   });
 
-  it("preserves existing latestTurnUsage when finalizeTurn has no token data", () => {
-    // Seed a previous turn's usage.
+  it("leaves existing latestTurnUsage untouched", () => {
     useAppStore.setState({
       latestTurnUsage: {
         ws1: {
@@ -937,10 +944,7 @@ describe("finalizeTurn tool-free turn (no activities)", () => {
         },
       },
     });
-    // Finalize a turn with no usage payload (rare but possible on a broken stream).
     useAppStore.getState().finalizeTurn("ws1", 1, "turn-y", 500);
-    // Previous usage stays intact — we never want to stomp a real value with
-    // an all-undefined record.
     expect(useAppStore.getState().latestTurnUsage.ws1).toEqual({
       inputTokens: 100,
       outputTokens: 50,
