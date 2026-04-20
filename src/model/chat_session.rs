@@ -46,6 +46,22 @@ impl AttentionKind {
     }
 }
 
+/// Maximum length of a session name in characters. Matches the cap the
+/// Haiku auto-namer applies so user-entered names and auto-generated names
+/// share the same bound.
+pub const SESSION_NAME_MAX_CHARS: usize = 60;
+
+/// Normalize a user-supplied session name. Trims surrounding whitespace,
+/// rejects the empty string, and caps at `SESSION_NAME_MAX_CHARS`
+/// characters (not bytes) so we can't split a multi-byte codepoint.
+pub fn validate_session_name(name: &str) -> Result<String, &'static str> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("Name cannot be empty");
+    }
+    Ok(trimmed.chars().take(SESSION_NAME_MAX_CHARS).collect())
+}
+
 /// A conversation within a workspace. Each session has its own Claude CLI
 /// subprocess, its own message history, and its own checkpoint timeline.
 /// A workspace always has at least one active session.

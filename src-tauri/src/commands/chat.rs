@@ -156,6 +156,7 @@ pub struct AttachmentResponse {
 #[derive(Clone, Serialize)]
 struct AgentStreamPayload {
     workspace_id: String,
+    session_id: String,
     event: AgentEvent,
 }
 
@@ -251,18 +252,18 @@ fn build_permission_response(
 
 #[tauri::command]
 pub async fn load_chat_history(
-    workspace_id: String,
+    session_id: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<ChatMessage>, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    db.list_chat_messages(&workspace_id)
+    db.list_chat_messages_for_session(&session_id)
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn send_chat_message(
-    workspace_id: String,
+    session_id: String,
     message_id: Option<String>,
     content: String,
     mentioned_files: Option<Vec<String>>,
@@ -280,6 +281,15 @@ pub async fn send_chat_message(
 ) -> Result<(), String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
 
+    let chat_session_id = session_id;
+    let chat_session = db
+        .get_chat_session(&chat_session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Chat session not found")?;
+    let workspace_id = chat_session.workspace_id.clone();
+    let is_first_session = chat_session.sort_order == 0;
+    let session_name_already_edited = chat_session.name_edited;
+
     // Look up workspace for worktree path.
     let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
     let ws = workspaces
@@ -291,20 +301,6 @@ pub async fn send_chat_message(
         .as_ref()
         .ok_or("Workspace has no worktree")?
         .clone();
-
-    // Resolve the default active session for this workspace. The Tauri
-    // command surface still takes workspace_id for this release — the full
-    // session_id migration happens in a follow-up task.
-    let chat_session_id = db
-        .default_session_id_for_workspace(&workspace_id)
-        .map_err(|e| e.to_string())?
-        .ok_or("Workspace has no active session")?;
-    let chat_session = db
-        .get_chat_session(&chat_session_id)
-        .map_err(|e| e.to_string())?
-        .ok_or("Session row vanished after lookup")?;
-    let is_first_session = chat_session.sort_order == 0;
-    let session_name_already_edited = chat_session.name_edited;
 
     // Save user message to DB. Use the frontend-provided ID so optimistic
     // UI state (attachments keyed by message ID) stays consistent.
@@ -974,7 +970,7 @@ pub async fn send_chat_message(
         // See the sibling reset above — fresh process, fresh latch.
         session.session_exited_plan = false;
         session.session_resolved_env = resolved_env.vars.clone();
-        let _ = db.save_agent_session(&workspace_id, &final_sid, session.turn_count);
+        let _ = db.save_chat_session_state(&chat_session_id, &final_sid, session.turn_count);
         handle
     };
 
@@ -982,10 +978,8 @@ pub async fn send_chat_message(
     {
         let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
         session.active_pid = Some(spawned_pid);
-        let _ = db.save_agent_session(&workspace_id, &session.session_id, session.turn_count);
-        // Metrics: register session on first turn (idempotent via INSERT OR
-        // IGNORE), then bump turn_count + last_message_at. Runs for every
-        // turn so resumed-from-DB sessions get their row lazily created too.
+        let _ =
+            db.save_chat_session_state(&chat_session_id, &session.session_id, session.turn_count);
         let _ = db.insert_agent_session(&session.session_id, &workspace_id, &ws.repository_id);
         let _ = db.reopen_agent_session(&session.session_id);
         let _ = db.update_agent_session_turn(&session.session_id, session.turn_count);
@@ -995,9 +989,6 @@ pub async fn send_chat_message(
             .flatten()
             .is_none()
         {
-            // RFC3339 UTC to match `install_date` — both share `app_settings`
-            // and will be compared/displayed side-by-side. `now_iso` (despite
-            // the name) returns UNIX seconds, which would diverge.
             let _ = db.set_app_setting("first_session_at", &chrono::Utc::now().to_rfc3339());
         }
     }
@@ -1177,7 +1168,7 @@ pub async fn send_chat_message(
                 if matches!(tool_name.as_str(), "AskUserQuestion" | "ExitPlanMode") {
                     let app_state = app.state::<AppState>();
                     let mut agents = app_state.agents.write().await;
-                    if let Some(session) = agents.get_mut(&ws_id) {
+                    if let Some(session) = agents.get_mut(&chat_session_id_for_stream) {
                         session.pending_permissions.insert(
                             tool_use_id.clone(),
                             PendingPermission {
@@ -1190,6 +1181,7 @@ pub async fn send_chat_message(
                     drop(agents);
                     let payload = serde_json::json!({
                         "workspace_id": &ws_id,
+                        "session_id": &chat_session_id_for_stream,
                         "tool_use_id": tool_use_id,
                         "tool_name": tool_name,
                         "input": input,
@@ -1261,7 +1253,7 @@ pub async fn send_chat_message(
                     let agents = app_state.agents.read().await;
                     let (ps, session_allowed_tools, session_plan_mode, session_exited_plan) =
                         agents
-                            .get(&ws_id)
+                            .get(&chat_session_id_for_stream)
                             .map(|s| {
                                 (
                                     s.persistent_session.clone(),
@@ -1676,6 +1668,7 @@ pub async fn send_chat_message(
                     cp_payload.has_file_state = has_files;
                     let payload = serde_json::json!({
                         "workspace_id": &ws_id,
+                        "session_id": &chat_session_id_for_stream,
                         "checkpoint": &cp_payload,
                     });
                     let _ = app.emit("checkpoint-created", &payload);
@@ -1684,6 +1677,7 @@ pub async fn send_chat_message(
 
             let payload = AgentStreamPayload {
                 workspace_id: ws_id.clone(),
+                session_id: chat_session_id_for_stream.clone(),
                 event,
             };
             let _ = app.emit("agent-stream", &payload);
@@ -1723,17 +1717,17 @@ fn take_stop_snapshot(session: &mut AgentSessionState) -> StopSnapshot {
 
 #[tauri::command]
 pub async fn stop_agent(
-    workspace_id: String,
+    session_id: String,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    // Operate on the workspace's default session until the frontend is
-    // migrated to pass session_id directly.
-    let chat_session_id = db
-        .default_session_id_for_workspace(&workspace_id)
+    let chat_session_id = session_id;
+    let chat_session = db
+        .get_chat_session(&chat_session_id)
         .map_err(|e| e.to_string())?
-        .ok_or("Workspace has no active session")?;
+        .ok_or("Chat session not found")?;
+    let workspace_id = chat_session.workspace_id.clone();
 
     // Drain pending permissions and snapshot the cleanup state synchronously
     // under the lock; deny sends, the kill, and the DB session-end happen
@@ -1785,15 +1779,12 @@ pub async fn stop_agent(
 
 #[tauri::command]
 pub async fn reset_agent_session(
-    workspace_id: String,
+    session_id: String,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    let chat_session_id = db
-        .default_session_id_for_workspace(&workspace_id)
-        .map_err(|e| e.to_string())?
-        .ok_or("Workspace has no active session")?;
+    let chat_session_id = session_id;
 
     // Drain pending permissions under the lock, then remove the session and
     // capture its id; deny sends + the DB session-end happen after release.
@@ -1824,41 +1815,43 @@ pub async fn reset_agent_session(
 
 #[tauri::command]
 pub async fn list_checkpoints(
-    workspace_id: String,
+    session_id: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<ConversationCheckpoint>, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    db.list_checkpoints(&workspace_id)
+    db.list_checkpoints_for_session(&session_id)
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn rollback_to_checkpoint(
-    workspace_id: String,
+    session_id: String,
     checkpoint_id: String,
     restore_files: bool,
     state: State<'_, AppState>,
 ) -> Result<Vec<ChatMessage>, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let chat_session_id = session_id;
 
     // Load the target checkpoint and verify ownership.
     let checkpoint = db
         .get_checkpoint(&checkpoint_id)
         .map_err(|e| e.to_string())?
         .ok_or("Checkpoint not found")?;
-    if checkpoint.workspace_id != workspace_id {
-        return Err("Checkpoint does not belong to this workspace".into());
+    // Scope the rollback to the given session — prevents a rollback in tab A
+    // from pruning messages in tab B. For pre-v20 checkpoints (empty
+    // session_id) we accept the caller's session_id as authoritative, since
+    // the backfill would have assigned all such messages to a single session.
+    if !checkpoint.session_id.is_empty() && checkpoint.session_id != chat_session_id {
+        return Err("Checkpoint does not belong to this session".into());
     }
 
-    // The chat session this checkpoint belongs to. Falls back to the
-    // workspace's default session for checkpoints recorded before v20.
-    let chat_session_id = if checkpoint.session_id.is_empty() {
-        db.default_session_id_for_workspace(&workspace_id)
-            .map_err(|e| e.to_string())?
-            .ok_or("Workspace has no active session")?
-    } else {
-        checkpoint.session_id.clone()
-    };
+    // Look up the workspace for the file-restore branch below.
+    let chat_session = db
+        .get_chat_session(&chat_session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Chat session not found")?;
+    let workspace_id = chat_session.workspace_id.clone();
 
     // Guard: reject if agent is running.
     {
@@ -1898,8 +1891,9 @@ pub async fn rollback_to_checkpoint(
     }
 
     // Now perform the destructive DB writes — safe because the risky git
-    // operation (if requested) has already succeeded above.
-    db.delete_messages_after(&workspace_id, &checkpoint.message_id)
+    // operation (if requested) has already succeeded above. Scoped to this
+    // session so sibling tabs are untouched.
+    db.delete_session_messages_after(&chat_session_id, &checkpoint.message_id)
         .map_err(|e| e.to_string())?;
     db.delete_session_checkpoints_after(&chat_session_id, checkpoint.turn_index)
         .map_err(|e| e.to_string())?;
@@ -1925,15 +1919,17 @@ pub async fn rollback_to_checkpoint(
 /// to the merge-base (initial state before any agent work).
 #[tauri::command]
 pub async fn clear_conversation(
-    workspace_id: String,
+    session_id: String,
     restore_files: bool,
     state: State<'_, AppState>,
 ) -> Result<Vec<ChatMessage>, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    let chat_session_id = db
-        .default_session_id_for_workspace(&workspace_id)
+    let chat_session_id = session_id;
+    let chat_session = db
+        .get_chat_session(&chat_session_id)
         .map_err(|e| e.to_string())?
-        .ok_or("Workspace has no active session")?;
+        .ok_or("Chat session not found")?;
+    let workspace_id = chat_session.workspace_id.clone();
 
     // Guard: reject if agent is running.
     {
@@ -2014,11 +2010,11 @@ pub async fn save_turn_tool_activities(
 
 #[tauri::command]
 pub async fn load_completed_turns(
-    workspace_id: String,
+    session_id: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<CompletedTurnData>, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    db.list_completed_turns(&workspace_id)
+    db.list_completed_turns_for_session(&session_id)
         .map_err(|e| e.to_string())
 }
 
@@ -2138,18 +2134,11 @@ async fn try_generate_session_name(
 
 #[tauri::command]
 pub async fn clear_attention(
-    workspace_id: String,
+    session_id: String,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    let chat_session_id = match db
-        .default_session_id_for_workspace(&workspace_id)
-        .map_err(|e| e.to_string())?
-    {
-        Some(id) => id,
-        None => return Ok(()),
-    };
+    let chat_session_id = session_id;
 
     let mut agents = state.agents.write().await;
     if let Some(session) = agents.get_mut(&chat_session_id)
@@ -2169,7 +2158,7 @@ pub async fn clear_attention(
 /// `call(updatedInput)` which produces the real tool_result.
 #[tauri::command]
 pub async fn submit_agent_answer(
-    workspace_id: String,
+    session_id: String,
     tool_use_id: String,
     answers: std::collections::HashMap<String, String>,
     annotations: Option<serde_json::Value>,
@@ -2180,7 +2169,7 @@ pub async fn submit_agent_answer(
     // stay so the user (or the correct submit_* command) can still see it.
     let (pending, ps) = {
         let mut agents = state.agents.write().await;
-        let session = agents.get_mut(&workspace_id).ok_or("Session not found")?;
+        let session = agents.get_mut(&session_id).ok_or("Session not found")?;
         // 1. Persistent session must be alive — otherwise nobody is reading
         //    stdin and the response would be discarded.
         let ps = session
@@ -2243,7 +2232,7 @@ pub async fn submit_agent_answer(
 /// `approved=false` → deny with the given reason (or a sensible default).
 #[tauri::command]
 pub async fn submit_plan_approval(
-    workspace_id: String,
+    session_id: String,
     tool_use_id: String,
     approved: bool,
     reason: Option<String>,
@@ -2253,7 +2242,7 @@ pub async fn submit_plan_approval(
     // function for the rationale.
     let (pending, ps) = {
         let mut agents = state.agents.write().await;
-        let session = agents.get_mut(&workspace_id).ok_or("Session not found")?;
+        let session = agents.get_mut(&session_id).ok_or("Session not found")?;
         let ps = session
             .persistent_session
             .clone()
@@ -2346,19 +2335,19 @@ async fn deny_drained_permissions(
     }
 }
 
-/// Load attachment metadata for a workspace's chat history.
+/// Load attachment metadata for a single session's chat history.
 ///
 /// Images (< ~5 MB base64) include inline data for immediate rendering.
 /// Documents (PDFs, potentially 20+ MB) omit the body — use
 /// [`load_attachment_data`] to fetch on demand.
 #[tauri::command]
-pub async fn load_attachments_for_workspace(
-    workspace_id: String,
+pub async fn load_attachments_for_session(
+    session_id: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<AttachmentResponse>, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let messages = db
-        .list_chat_messages(&workspace_id)
+        .list_chat_messages_for_session(&session_id)
         .map_err(|e| e.to_string())?;
     let message_ids: Vec<String> = messages.iter().map(|m| m.id.clone()).collect();
     let att_map = db
@@ -2615,12 +2604,7 @@ pub async fn rename_chat_session(
     name: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let trimmed = name.trim();
-    if trimmed.is_empty() {
-        return Err("Name cannot be empty".into());
-    }
-    // Cap at 60 chars to match the Haiku-generated cap.
-    let capped: String = trimmed.chars().take(60).collect();
+    let capped = claudette::model::validate_session_name(&name).map_err(String::from)?;
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     db.rename_chat_session(&session_id, &capped)
         .map_err(|e| e.to_string())
@@ -2653,18 +2637,10 @@ pub async fn archive_chat_session(
         }
     }
 
-    db.archive_chat_session(&session_id)
+    let fresh = db
+        .archive_chat_session_ensuring_active(&session_id, &workspace_id)
         .map_err(|e| e.to_string())?;
-
-    // If no active sessions remain, auto-create a fresh one so the workspace
-    // always has at least one tab.
-    let remaining = db
-        .list_chat_sessions_for_workspace(&workspace_id, false)
-        .map_err(|e| e.to_string())?;
-    if remaining.is_empty() {
-        let fresh = db
-            .create_chat_session(&workspace_id)
-            .map_err(|e| e.to_string())?;
+    if let Some(fresh) = fresh {
         let agents = state.agents.read().await;
         return Ok(Some(hydrate_session(fresh, &agents)));
     }

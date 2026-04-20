@@ -468,7 +468,7 @@ fn main() {
             commands::files::open_attachment_with_default_app,
             // Chat
             commands::chat::load_chat_history,
-            commands::chat::load_attachments_for_workspace,
+            commands::chat::load_attachments_for_session,
             commands::chat::load_attachment_data,
             commands::chat::read_file_as_base64,
             commands::chat::send_chat_message,

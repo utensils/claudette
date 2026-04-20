@@ -1327,6 +1327,58 @@ impl Database {
         Ok(())
     }
 
+    /// Archive a session while preserving the "workspace has ≥1 active
+    /// session" invariant. Runs archive + remaining-count + conditional
+    /// replacement create as a single transaction so observers never see a
+    /// transient zero-sessions window and a crash mid-sequence can't persist
+    /// a tab-less workspace. Returns the newly created session if a
+    /// replacement was needed, `None` otherwise.
+    pub fn archive_chat_session_ensuring_active(
+        &self,
+        session_id: &str,
+        workspace_id: &str,
+    ) -> Result<Option<ChatSession>, rusqlite::Error> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE chat_sessions
+             SET status = 'archived', archived_at = datetime('now')
+             WHERE id = ?1",
+            params![session_id],
+        )?;
+        let remaining: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM chat_sessions
+             WHERE workspace_id = ?1 AND status = 'active'",
+            params![workspace_id],
+            |row| row.get(0),
+        )?;
+        let fresh = if remaining == 0 {
+            let sort_order: i32 = tx
+                .query_row(
+                    "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM chat_sessions WHERE workspace_id = ?1",
+                    params![workspace_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+            let id = uuid::Uuid::new_v4().to_string();
+            tx.execute(
+                "INSERT INTO chat_sessions
+                    (id, workspace_id, claude_session_id, name, name_edited,
+                     turn_count, sort_order, status)
+                 VALUES (?1, ?2, NULL, 'New chat', 0, 0, ?3, 'active')",
+                params![id, workspace_id, sort_order],
+            )?;
+            let sql = format!(
+                "SELECT {} FROM chat_sessions WHERE id = ?1",
+                Self::CHAT_SESSION_COLS
+            );
+            Some(tx.query_row(&sql, params![id], Self::parse_chat_session_row)?)
+        } else {
+            None
+        };
+        tx.commit()?;
+        Ok(fresh)
+    }
+
     /// Return the "default" session id for a workspace: the first active
     /// session, ordered by sort_order. Returns `None` when no active session
     /// exists (caller can create one to enforce the ≥1 invariant).
@@ -1874,6 +1926,81 @@ impl Database {
             params![workspace_id, after_message_id],
         )?;
         Ok(deleted)
+    }
+
+    /// Delete all messages inserted after `after_message_id` *within the
+    /// given session*. The rowid-ordering match is scoped to that session so
+    /// a rollback in tab A cannot prune messages in tab B.
+    pub fn delete_session_messages_after(
+        &self,
+        session_id: &str,
+        after_message_id: &str,
+    ) -> Result<usize, rusqlite::Error> {
+        let deleted = self.conn.execute(
+            "DELETE FROM chat_messages
+             WHERE session_id = ?1
+               AND rowid > (SELECT rowid FROM chat_messages WHERE id = ?2)",
+            params![session_id, after_message_id],
+        )?;
+        Ok(deleted)
+    }
+
+    /// Session-scoped variant of [`Self::list_completed_turns`].
+    pub fn list_completed_turns_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<CompletedTurnData>, rusqlite::Error> {
+        let checkpoints = self.list_checkpoints_for_session(session_id)?;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT ta.id, ta.checkpoint_id, ta.tool_use_id, ta.tool_name,
+                    ta.input_json, ta.result_text, ta.summary, ta.sort_order
+             FROM turn_tool_activities ta
+             JOIN conversation_checkpoints cp ON ta.checkpoint_id = cp.id
+             WHERE cp.session_id = ?1
+             ORDER BY cp.turn_index, ta.sort_order",
+        )?;
+        let activities: Vec<TurnToolActivity> = stmt
+            .query_map(params![session_id], |row| {
+                Ok(TurnToolActivity {
+                    id: row.get(0)?,
+                    checkpoint_id: row.get(1)?,
+                    tool_use_id: row.get(2)?,
+                    tool_name: row.get(3)?,
+                    input_json: row.get(4)?,
+                    result_text: row.get(5)?,
+                    summary: row.get(6)?,
+                    sort_order: row.get(7)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut activity_map: std::collections::HashMap<String, Vec<TurnToolActivity>> =
+            std::collections::HashMap::new();
+        for a in activities {
+            activity_map
+                .entry(a.checkpoint_id.clone())
+                .or_default()
+                .push(a);
+        }
+
+        Ok(checkpoints
+            .into_iter()
+            .filter_map(|cp| {
+                let acts = activity_map.remove(&cp.id).unwrap_or_default();
+                if acts.is_empty() {
+                    return None;
+                }
+                Some(CompletedTurnData {
+                    checkpoint_id: cp.id,
+                    message_id: cp.message_id,
+                    turn_index: cp.turn_index,
+                    message_count: cp.message_count,
+                    commit_hash: cp.commit_hash,
+                    activities: acts,
+                })
+            })
+            .collect())
     }
 
     // --- Terminal Tabs ---
@@ -4742,5 +4869,74 @@ mod tests {
             )
             .unwrap();
         assert_eq!(cp_session.as_deref(), Some(w1_session_id.as_str()));
+    }
+
+    #[test]
+    fn test_save_chat_session_state_persists_claude_session_id() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w1", "r1", "ws"))
+            .unwrap();
+        let sess = db.create_chat_session("w1").unwrap();
+        assert!(sess.claude_session_id.is_none());
+
+        db.save_chat_session_state(&sess.id, "claude-sid-1", 3)
+            .unwrap();
+        let reloaded = db.get_chat_session(&sess.id).unwrap().unwrap();
+        assert_eq!(reloaded.claude_session_id.as_deref(), Some("claude-sid-1"));
+        assert_eq!(reloaded.turn_count, 3);
+    }
+
+    #[test]
+    fn test_archive_chat_session_ensuring_active_creates_replacement() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w1", "r1", "ws"))
+            .unwrap();
+        // insert_workspace auto-creates one active session — archive it.
+        let only = db
+            .list_chat_sessions_for_workspace("w1", false)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+
+        let fresh = db
+            .archive_chat_session_ensuring_active(&only.id, "w1")
+            .unwrap();
+        let fresh = fresh.expect("replacement session must be created");
+        assert_ne!(fresh.id, only.id);
+
+        let actives = db.list_chat_sessions_for_workspace("w1", false).unwrap();
+        assert_eq!(actives.len(), 1);
+        assert_eq!(actives[0].id, fresh.id);
+    }
+
+    #[test]
+    fn test_archive_chat_session_ensuring_active_skips_when_siblings_exist() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w1", "r1", "ws"))
+            .unwrap();
+        let first = db
+            .list_chat_sessions_for_workspace("w1", false)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        let _second = db.create_chat_session("w1").unwrap();
+
+        let fresh = db
+            .archive_chat_session_ensuring_active(&first.id, "w1")
+            .unwrap();
+        assert!(
+            fresh.is_none(),
+            "should not create a replacement when siblings remain",
+        );
+        let actives = db.list_chat_sessions_for_workspace("w1", false).unwrap();
+        assert_eq!(actives.len(), 1);
     }
 }

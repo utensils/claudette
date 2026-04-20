@@ -107,13 +107,13 @@ export interface AgentQuestionItem {
 }
 
 export interface AgentQuestion {
-  workspaceId: string;
+  sessionId: string;
   toolUseId: string;
   questions: AgentQuestionItem[];
 }
 
 export interface PlanApproval {
-  workspaceId: string;
+  sessionId: string;
   toolUseId: string;
   planFilePath: string | null;
   allowedPrompts: Array<{ tool: string; prompt: string }>;
@@ -236,15 +236,15 @@ interface AppState {
     partialJson: string,
   ) => void;
 
-  // -- Agent Questions (per-workspace) --
+  // -- Agent Questions (per-session) --
   agentQuestions: Record<string, AgentQuestion>;
   setAgentQuestion: (q: AgentQuestion) => void;
-  clearAgentQuestion: (wsId: string) => void;
+  clearAgentQuestion: (sessionId: string) => void;
 
-  // -- Plan Approvals (per-workspace) --
+  // -- Plan Approvals (per-session) --
   planApprovals: Record<string, PlanApproval>;
   setPlanApproval: (p: PlanApproval) => void;
-  clearPlanApproval: (wsId: string) => void;
+  clearPlanApproval: (sessionId: string) => void;
 
   // -- Queued Messages (sent while agent is running, dispatched when idle) --
   queuedMessages: Record<
@@ -268,7 +268,8 @@ interface AppState {
   setCheckpoints: (wsId: string, cps: ConversationCheckpoint[]) => void;
   addCheckpoint: (wsId: string, cp: ConversationCheckpoint) => void;
   rollbackConversation: (
-    wsId: string,
+    sessionId: string,
+    workspaceId: string,
     checkpointId: string,
     messages: ChatMessage[],
   ) => void;
@@ -1025,27 +1026,27 @@ export const useAppStore = create<AppState>((set, get) => ({
       },
     })),
 
-  // -- Agent Questions (per-workspace) --
+  // -- Agent Questions (per-session) --
   agentQuestions: {},
   setAgentQuestion: (q) =>
     set((s) => ({
-      agentQuestions: { ...s.agentQuestions, [q.workspaceId]: q },
+      agentQuestions: { ...s.agentQuestions, [q.sessionId]: q },
     })),
-  clearAgentQuestion: (wsId) =>
+  clearAgentQuestion: (sessionId) =>
     set((s) => {
-      const { [wsId]: _, ...rest } = s.agentQuestions;
+      const { [sessionId]: _, ...rest } = s.agentQuestions;
       return { agentQuestions: rest };
     }),
 
-  // -- Plan Approvals (per-workspace) --
+  // -- Plan Approvals (per-session) --
   planApprovals: {},
   setPlanApproval: (p) =>
     set((s) => ({
-      planApprovals: { ...s.planApprovals, [p.workspaceId]: p },
+      planApprovals: { ...s.planApprovals, [p.sessionId]: p },
     })),
-  clearPlanApproval: (wsId) =>
+  clearPlanApproval: (sessionId) =>
     set((s) => {
-      const { [wsId]: _, ...rest } = s.planApprovals;
+      const { [sessionId]: _, ...rest } = s.planApprovals;
       return { planApprovals: rest };
     }),
 
@@ -1077,16 +1078,16 @@ export const useAppStore = create<AppState>((set, get) => ({
         [wsId]: [...(s.checkpoints[wsId] || []), cp],
       },
     })),
-  rollbackConversation: (wsId, checkpointId, messages) =>
+  rollbackConversation: (sessionId, workspaceId, checkpointId, messages) =>
     set((s) => {
-      const { [wsId]: _q, ...restQuestions } = s.agentQuestions;
-      const { [wsId]: _p, ...restApprovals } = s.planApprovals;
+      const { [sessionId]: _q, ...restQuestions } = s.agentQuestions;
+      const { [sessionId]: _p, ...restApprovals } = s.planApprovals;
       // Update lastMessages so workspace preview cards stay in sync.
       const lastMsg =
         messages.length > 0 ? messages[messages.length - 1] : undefined;
-      const { [wsId]: _lm, ...restLastMessages } = s.lastMessages;
+      const { [workspaceId]: _lm, ...restLastMessages } = s.lastMessages;
       const updatedLastMessages = lastMsg
-        ? { ...s.lastMessages, [wsId]: lastMsg }
+        ? { ...s.lastMessages, [workspaceId]: lastMsg }
         : restLastMessages;
       // Recompute the meter's latestTurnUsage from the rolled-back message
       // list. Write if the last assistant message has token data; delete
@@ -1108,18 +1109,18 @@ export const useAppStore = create<AppState>((set, get) => ({
         [wsId]: extractCompactionEvents(messages),
       };
       return {
-        chatMessages: { ...s.chatMessages, [wsId]: messages },
+        chatMessages: { ...s.chatMessages, [sessionId]: messages },
         lastMessages: updatedLastMessages,
-        completedTurns: { ...s.completedTurns, [wsId]: [] },
-        toolActivities: { ...s.toolActivities, [wsId]: [] },
-        streamingContent: { ...s.streamingContent, [wsId]: "" },
-        streamingThinking: { ...s.streamingThinking, [wsId]: "" },
+        completedTurns: { ...s.completedTurns, [sessionId]: [] },
+        toolActivities: { ...s.toolActivities, [sessionId]: [] },
+        streamingContent: { ...s.streamingContent, [sessionId]: "" },
+        streamingThinking: { ...s.streamingThinking, [sessionId]: "" },
         agentQuestions: restQuestions,
         planApprovals: restApprovals,
         checkpoints: {
           ...s.checkpoints,
-          [wsId]: (() => {
-            const current = s.checkpoints[wsId] || [];
+          [sessionId]: (() => {
+            const current = s.checkpoints[sessionId] || [];
             const target = current.find((c) => c.id === checkpointId);
             // If target not found (e.g. clear-all sentinel), clear everything.
             if (!target) return [];

@@ -26,11 +26,11 @@ pub async fn handle_request(
     let result = match method {
         "load_initial_data" => handle_load_initial_data(state).await,
         "load_chat_history" => {
-            let workspace_id = param_str(&params, "workspace_id");
-            handle_load_chat_history(state, &workspace_id).await
+            let session_id = param_str(&params, "session_id");
+            handle_load_chat_history(state, &session_id).await
         }
         "send_chat_message" => {
-            let workspace_id = param_str(&params, "workspace_id");
+            let session_id = param_str(&params, "session_id");
             let content = param_str(&params, "content");
             let permission_level = params
                 .get("permission_level")
@@ -55,7 +55,7 @@ pub async fn handle_request(
             handle_send_chat_message(
                 state,
                 writer,
-                &workspace_id,
+                &session_id,
                 &content,
                 permission_level.as_deref(),
                 model,
@@ -70,24 +70,14 @@ pub async fn handle_request(
             .await
         }
         "stop_agent" => {
-            let workspace_id = param_str(&params, "workspace_id");
-            handle_stop_agent(state, &workspace_id).await
+            let session_id = param_str(&params, "session_id");
+            handle_stop_agent(state, &session_id).await
         }
         "reset_agent_session" => {
-            let workspace_id = param_str(&params, "workspace_id");
-            let db_result = open_db(state).map_err(|e| e.to_string());
-            match db_result {
-                Ok(db) => match db.default_session_id_for_workspace(&workspace_id) {
-                    Ok(Some(chat_session_id)) => {
-                        let mut agents = state.agents.write().await;
-                        agents.remove(&chat_session_id);
-                        Ok(json!(null))
-                    }
-                    Ok(None) => Ok(json!(null)),
-                    Err(e) => Err(e.to_string()),
-                },
-                Err(e) => Err(e),
-            }
+            let session_id = param_str(&params, "session_id");
+            let mut agents = state.agents.write().await;
+            agents.remove(&session_id);
+            Ok(json!(null))
         }
         "list_repositories" => {
             let db = open_db(state).map_err(|e| e.to_string());
@@ -403,11 +393,11 @@ async fn handle_load_initial_data(state: &ServerState) -> Result<serde_json::Val
 
 async fn handle_load_chat_history(
     state: &ServerState,
-    workspace_id: &str,
+    session_id: &str,
 ) -> Result<serde_json::Value, String> {
     let db = open_db(state)?;
     let messages = db
-        .list_chat_messages(workspace_id)
+        .list_chat_messages_for_session(session_id)
         .map_err(|e| e.to_string())?;
     Ok(serde_json::to_value(messages).unwrap_or_default())
 }
@@ -416,7 +406,7 @@ async fn handle_load_chat_history(
 async fn handle_send_chat_message(
     state: &Arc<ServerState>,
     writer: &Arc<Writer>,
-    workspace_id: &str,
+    session_id: &str,
     content: &str,
     permission_level: Option<&str>,
     model: Option<String>,
@@ -430,6 +420,13 @@ async fn handle_send_chat_message(
 ) -> Result<serde_json::Value, String> {
     let db = open_db(state)?;
 
+    let chat_session_id = session_id.to_string();
+    let chat_session = db
+        .get_chat_session(&chat_session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Chat session not found")?;
+    let workspace_id = chat_session.workspace_id.clone();
+
     let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
     let ws = workspaces
         .iter()
@@ -441,18 +438,10 @@ async fn handle_send_chat_message(
         .ok_or("Workspace has no worktree")?
         .clone();
 
-    // Resolve the default active session for this workspace. The remote
-    // server pre-dates multi-session support, so it always targets whichever
-    // session is first/active.
-    let chat_session_id = db
-        .default_session_id_for_workspace(workspace_id)
-        .map_err(|e| e.to_string())?
-        .ok_or("Workspace has no active session")?;
-
     // Save user message.
     let user_msg = ChatMessage {
         id: uuid::Uuid::new_v4().to_string(),
-        workspace_id: workspace_id.to_string(),
+        workspace_id: workspace_id.clone(),
         session_id: chat_session_id.clone(),
         role: ChatRole::User,
         content: content.to_string(),
@@ -517,7 +506,7 @@ async fn handle_send_chat_message(
     .await;
 
     let mut agents = state.agents.write().await;
-    let workspace_id_owned = workspace_id.to_string();
+    let workspace_id_owned = workspace_id.clone();
     let session = agents.entry(chat_session_id.clone()).or_insert_with(|| {
         let instructions = {
             let from_config = repo.as_ref().and_then(|r| {
@@ -606,7 +595,7 @@ async fn handle_send_chat_message(
     drop(agents);
 
     // Bridge agent events to WebSocket.
-    let ws_id = workspace_id.to_string();
+    let ws_id = workspace_id.clone();
     let chat_session_id_for_stream = chat_session_id.clone();
     let db_path = state.db_path.clone();
     let state = Arc::clone(state);
@@ -709,7 +698,7 @@ async fn handle_send_chat_message(
             }) = event
                 && let (Some(cost), Some(dur)) = (total_cost_usd, duration_ms)
                 && let Ok(db) = Database::open(&db_path)
-                && let Ok(msgs) = db.list_chat_messages(&ws_id)
+                && let Ok(msgs) = db.list_chat_messages_for_session(&chat_session_id_for_stream)
                 && let Some(last) = msgs.iter().rfind(|m| m.role == ChatRole::Assistant)
             {
                 let _ = db.update_chat_message_cost(&last.id, *cost, *dur);
@@ -720,6 +709,7 @@ async fn handle_send_chat_message(
                 "event": "agent-stream",
                 "payload": {
                     "workspace_id": ws_id,
+                    "session_id": chat_session_id_for_stream,
                     "event": event,
                 }
             });
@@ -732,13 +722,15 @@ async fn handle_send_chat_message(
 
 async fn handle_stop_agent(
     state: &ServerState,
-    workspace_id: &str,
+    session_id: &str,
 ) -> Result<serde_json::Value, String> {
     let db = open_db(state)?;
-    let chat_session_id = db
-        .default_session_id_for_workspace(workspace_id)
+    let chat_session_id = session_id.to_string();
+    let chat_session = db
+        .get_chat_session(&chat_session_id)
         .map_err(|e| e.to_string())?
-        .ok_or("Workspace has no active session")?;
+        .ok_or("Chat session not found")?;
+    let workspace_id = chat_session.workspace_id.clone();
 
     let mut agents = state.agents.write().await;
     if let Some(session) = agents.get_mut(&chat_session_id)
@@ -750,7 +742,7 @@ async fn handle_stop_agent(
 
     let msg = ChatMessage {
         id: uuid::Uuid::new_v4().to_string(),
-        workspace_id: workspace_id.to_string(),
+        workspace_id,
         session_id: chat_session_id,
         role: ChatRole::System,
         content: "Agent stopped".to_string(),
@@ -1114,11 +1106,7 @@ fn handle_rename_chat_session(
     session_id: &str,
     name: &str,
 ) -> Result<serde_json::Value, String> {
-    let trimmed = name.trim();
-    if trimmed.is_empty() {
-        return Err("Name cannot be empty".into());
-    }
-    let capped: String = trimmed.chars().take(60).collect();
+    let capped = claudette::model::validate_session_name(name).map_err(String::from)?;
     let db = open_db(state)?;
     db.rename_chat_session(session_id, &capped)
         .map_err(|e| e.to_string())?;
@@ -1146,16 +1134,10 @@ async fn handle_archive_chat_session(
         }
     }
 
-    db.archive_chat_session(session_id)
+    let fresh = db
+        .archive_chat_session_ensuring_active(session_id, &workspace_id)
         .map_err(|e| e.to_string())?;
-
-    let remaining = db
-        .list_chat_sessions_for_workspace(&workspace_id, false)
-        .map_err(|e| e.to_string())?;
-    if remaining.is_empty() {
-        let fresh = db
-            .create_chat_session(&workspace_id)
-            .map_err(|e| e.to_string())?;
+    if let Some(fresh) = fresh {
         return Ok(serde_json::to_value(fresh).unwrap_or_default());
     }
 

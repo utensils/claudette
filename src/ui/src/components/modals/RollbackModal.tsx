@@ -5,7 +5,7 @@ import {
   clearConversation,
   loadDiffFiles,
   loadCompletedTurns,
-  loadAttachmentsForWorkspace,
+  loadAttachmentsForSession,
   loadAttachmentData,
 } from "../../services/tauri";
 import { reconstructCompletedTurns } from "../../utils/reconstructTurns";
@@ -24,6 +24,7 @@ export function RollbackModal() {
   const [restoreFiles, setRestoreFiles] = useState(false);
 
   const workspaceId = modalData.workspaceId as string;
+  const sessionId = modalData.sessionId as string;
   const checkpointId = (modalData.checkpointId as string) ?? null;
   const messageId = (modalData.messageId as string) ?? null;
   const messagePreview = modalData.messagePreview as string;
@@ -38,20 +39,25 @@ export function RollbackModal() {
       // deletes them from the DB (FK cascade). We'll prefill them into the
       // input so the user can re-send with the same files.
       const rolledBackAtts = messageId
-        ? (useAppStore.getState().chatAttachments[workspaceId] ?? []).filter(
+        ? (useAppStore.getState().chatAttachments[sessionId] ?? []).filter(
             (a) => a.message_id === messageId,
           )
         : [];
 
       const messages = isClearAll
-        ? await clearConversation(workspaceId, restoreFiles)
-        : await rollbackToCheckpoint(workspaceId, checkpointId, restoreFiles);
-      rollbackConversation(workspaceId, checkpointId ?? "__clear__", messages);
+        ? await clearConversation(sessionId, restoreFiles)
+        : await rollbackToCheckpoint(sessionId, checkpointId, restoreFiles);
+      rollbackConversation(
+        sessionId,
+        workspaceId,
+        checkpointId ?? "__clear__",
+        messages,
+      );
       // Reload surviving completed turns so tool sections persist.
-      loadCompletedTurns(workspaceId)
+      loadCompletedTurns(sessionId)
         .then((turnData) => {
           const turns = reconstructCompletedTurns(messages, turnData);
-          useAppStore.getState().setCompletedTurns(workspaceId, turns);
+          useAppStore.getState().setCompletedTurns(sessionId, turns);
         })
         .catch((e) => console.error("Failed to reload turns after rollback:", e));
       // Prefill the input with the rolled-back prompt so the user can re-send
@@ -82,10 +88,11 @@ export function RollbackModal() {
       }
       // Reload attachments to reflect the rolled-back state (FK cascade
       // deletes attachments for removed messages).
-      loadAttachmentsForWorkspace(workspaceId)
-        .then((atts) => useAppStore.getState().setChatAttachments(workspaceId, atts))
+      loadAttachmentsForSession(sessionId)
+        .then((atts) => useAppStore.getState().setChatAttachments(sessionId, atts))
         .catch((e) => console.error("Failed to reload attachments after rollback:", e));
       // Refresh the changed files view to reflect the rolled-back file state.
+      // Diff is workspace-scoped (one worktree per workspace), not per-session.
       clearDiff();
       loadDiffFiles(workspaceId)
         .then((result) => setDiffFiles(result.files, result.merge_base))

@@ -416,12 +416,12 @@ export function listWorkspaceFiles(
 
 // -- Chat --
 
-export function loadChatHistory(workspaceId: string): Promise<ChatMessage[]> {
-  return invoke("load_chat_history", { workspaceId });
+export function loadChatHistory(sessionId: string): Promise<ChatMessage[]> {
+  return invoke("load_chat_history", { sessionId });
 }
 
 export function sendChatMessage(
-  workspaceId: string,
+  sessionId: string,
   content: string,
   mentionedFiles?: string[],
   permissionLevel?: string,
@@ -436,7 +436,7 @@ export function sendChatMessage(
   messageId?: string,
 ): Promise<void> {
   return invoke("send_chat_message", {
-    workspaceId,
+    sessionId,
     messageId: messageId ?? null,
     content,
     mentionedFiles: mentionedFiles ?? null,
@@ -452,10 +452,10 @@ export function sendChatMessage(
   });
 }
 
-export function loadAttachmentsForWorkspace(
-  workspaceId: string,
+export function loadAttachmentsForSession(
+  sessionId: string,
 ): Promise<ChatAttachment[]> {
-  return invoke("load_attachments_for_workspace", { workspaceId });
+  return invoke("load_attachments_for_session", { sessionId });
 }
 
 export function loadAttachmentData(
@@ -468,16 +468,16 @@ export function readFileAsBase64(path: string): Promise<ChatAttachment> {
   return invoke("read_file_as_base64", { path });
 }
 
-export function stopAgent(workspaceId: string): Promise<void> {
-  return invoke("stop_agent", { workspaceId });
+export function stopAgent(sessionId: string): Promise<void> {
+  return invoke("stop_agent", { sessionId });
 }
 
-export function resetAgentSession(workspaceId: string): Promise<void> {
-  return invoke("reset_agent_session", { workspaceId });
+export function resetAgentSession(sessionId: string): Promise<void> {
+  return invoke("reset_agent_session", { sessionId });
 }
 
-export function clearAttention(workspaceId: string): Promise<void> {
-  return invoke("clear_attention", { workspaceId });
+export function clearAttention(sessionId: string): Promise<void> {
+  return invoke("clear_attention", { sessionId });
 }
 
 /**
@@ -486,12 +486,12 @@ export function clearAttention(workspaceId: string): Promise<void> {
  * `updatedInput.answers` and writes a `control_response` to the CLI.
  */
 export function submitAgentAnswer(
-  workspaceId: string,
+  sessionId: string,
   toolUseId: string,
   answers: Record<string, string>,
 ): Promise<void> {
   return invoke("submit_agent_answer", {
-    workspaceId,
+    sessionId,
     toolUseId,
     answers,
     annotations: null,
@@ -503,13 +503,13 @@ export function submitAgentAnswer(
  * runs the tool's `call()` and emits the normal "Plan approved" tool_result.
  */
 export function submitPlanApproval(
-  workspaceId: string,
+  sessionId: string,
   toolUseId: string,
   approved: boolean,
   reason?: string,
 ): Promise<void> {
   return invoke("submit_plan_approval", {
-    workspaceId,
+    sessionId,
     toolUseId,
     approved,
     reason: reason ?? null,
@@ -521,29 +521,29 @@ export function submitPlanApproval(
 import type { ConversationCheckpoint } from "../types/checkpoint";
 
 export function listCheckpoints(
-  workspaceId: string,
+  sessionId: string,
 ): Promise<ConversationCheckpoint[]> {
-  return invoke("list_checkpoints", { workspaceId });
+  return invoke("list_checkpoints", { sessionId });
 }
 
 export function rollbackToCheckpoint(
-  workspaceId: string,
+  sessionId: string,
   checkpointId: string,
   restoreFiles: boolean,
 ): Promise<ChatMessage[]> {
   return invoke("rollback_to_checkpoint", {
-    workspaceId,
+    sessionId,
     checkpointId,
     restoreFiles,
   });
 }
 
 export function clearConversation(
-  workspaceId: string,
+  sessionId: string,
   restoreFiles: boolean,
 ): Promise<ChatMessage[]> {
   return invoke("clear_conversation", {
-    workspaceId,
+    sessionId,
     restoreFiles,
   });
 }
@@ -563,9 +563,9 @@ export function saveTurnToolActivities(
 }
 
 export function loadCompletedTurns(
-  workspaceId: string,
+  sessionId: string,
 ): Promise<CompletedTurnData[]> {
-  return invoke("load_completed_turns", { workspaceId });
+  return invoke("load_completed_turns", { sessionId });
 }
 
 // -- Chat sessions (tabs) --

@@ -38,17 +38,11 @@ export function useAgentStream() {
   const blockToolMapRef = useRef<
     Record<number, { toolUseId: string; toolName: string }>
   >({});
-  // Count assistant messages in the current turn for the summary.
+  // Per-session turn-state bookkeeping (keyed by session_id).
   const turnMessageCountRef = useRef<Record<string, number>>({});
-  // Track whether the current turn has already been finalized (by the
-  // `result` event) so that `ProcessExited` doesn't double-finalize.
   const turnFinalizedRef = useRef<Record<string, boolean>>({});
-  // Checkpoint IDs arrive before the `result` event; reuse them as the
-  // completed turn IDs so later DB hydration can merge without duplication.
   const turnCheckpointIdRef = useRef<Record<string, string | undefined>>({});
-  // Plan file path extracted from EnterPlanMode tool results, keyed by wsId.
   const planFilePathRef = useRef<Record<string, string>>({});
-  // Track content block indices that are thinking blocks, keyed by workspace.
   const thinkingBlocksRef = useRef<Record<string, Set<number>>>({});
 
   useEffect(() => {
@@ -59,36 +53,38 @@ export function useAgentStream() {
     let active = true;
     const unlisten = listen<AgentStreamPayload>("agent-stream", (event) => {
       if (!active) return;
-      const { workspace_id: wsId, event: agentEvent } = event.payload;
+      const { workspace_id: wsId, session_id: sessionId, event: agentEvent } =
+        event.payload;
 
       if ("ProcessExited" in agentEvent) {
         debugChat("stream", "ProcessExited", {
           wsId,
-          alreadyFinalized: !!turnFinalizedRef.current[wsId],
-          checkpointId: turnCheckpointIdRef.current[wsId] ?? null,
-          pendingMessageCount: turnMessageCountRef.current[wsId] || 0,
-          pendingToolCount: (useAppStore.getState().toolActivities[wsId] || []).length,
+          sessionId,
+          alreadyFinalized: !!turnFinalizedRef.current[sessionId],
+          checkpointId: turnCheckpointIdRef.current[sessionId] ?? null,
+          pendingMessageCount: turnMessageCountRef.current[sessionId] || 0,
+          pendingToolCount: (useAppStore.getState().toolActivities[sessionId] || []).length,
         });
         // Only finalize if the `result` event hasn't already done so.
-        const wasFinalized = turnFinalizedRef.current[wsId];
+        const wasFinalized = turnFinalizedRef.current[sessionId];
         if (!wasFinalized) {
           finalizeTurn(
-            wsId,
-            turnMessageCountRef.current[wsId] || 0,
-            turnCheckpointIdRef.current[wsId]
+            sessionId,
+            turnMessageCountRef.current[sessionId] || 0,
+            turnCheckpointIdRef.current[sessionId]
           );
         }
-        turnMessageCountRef.current[wsId] = 0;
-        turnFinalizedRef.current[wsId] = false;
-        turnCheckpointIdRef.current[wsId] = undefined;
+        turnMessageCountRef.current[sessionId] = 0;
+        turnFinalizedRef.current[sessionId] = false;
+        turnCheckpointIdRef.current[sessionId] = undefined;
         // Natural completion emits a `result` event (wasFinalized=true) → Idle.
         // User stop or crash has no prior `result` → Stopped.
         updateWorkspace(wsId, { agent_status: wasFinalized ? "Idle" : "Stopped" });
         useAppStore.getState().clearPromptStartTime(wsId);
-        setStreamingContent(wsId, "");
-        clearStreamingThinking(wsId);
+        setStreamingContent(sessionId, "");
+        clearStreamingThinking(sessionId);
         blockToolMapRef.current = {};
-        delete thinkingBlocksRef.current[wsId];
+        delete thinkingBlocksRef.current[sessionId];
         // NOTE: Do NOT clear agentQuestion here. In --print mode the CLI
         // exits immediately after emitting AskUserQuestion, so ProcessExited
         // fires before the user has a chance to answer. The question is
@@ -210,7 +206,7 @@ export function useAgentStream() {
                 case "content_block_delta": {
                   const delta = inner.delta;
                   if ("type" in delta && delta.type === "text_delta") {
-                    appendStreamingContent(wsId, delta.text);
+                    appendStreamingContent(sessionId, delta.text);
                   }
                   if (
                     "type" in delta &&
@@ -220,7 +216,7 @@ export function useAgentStream() {
                     const entry = blockToolMapRef.current[inner.index];
                     if (entry) {
                       appendToolActivityInput(
-                        wsId,
+                        sessionId,
                         entry.toolUseId,
                         delta.partial_json
                       );
@@ -234,7 +230,7 @@ export function useAgentStream() {
                     const entry = blockToolMapRef.current[inner.index];
                     if (entry) {
                       appendToolActivityInput(
-                        wsId,
+                        sessionId,
                         entry.toolUseId,
                         delta.partial_json
                       );
@@ -246,7 +242,7 @@ export function useAgentStream() {
                     "thinking" in delta &&
                     delta.thinking
                   ) {
-                    appendStreamingThinking(wsId, delta.thinking);
+                    appendStreamingThinking(sessionId, delta.thinking);
                   }
                   break;
                 }
@@ -256,9 +252,9 @@ export function useAgentStream() {
                     "type" in inner.content_block &&
                     inner.content_block.type === "thinking"
                   ) {
-                    (thinkingBlocksRef.current[wsId] ??= new Set()).add(inner.index);
+                    (thinkingBlocksRef.current[sessionId] ??= new Set()).add(inner.index);
                     // Clear previous thinking — new turn's thinking replaces old.
-                    clearStreamingThinking(wsId);
+                    clearStreamingThinking(sessionId);
                   }
                   if (
                     inner.content_block &&
@@ -269,7 +265,7 @@ export function useAgentStream() {
                       toolUseId: inner.content_block.id,
                       toolName: inner.content_block.name,
                     };
-                    addToolActivity(wsId, {
+                    addToolActivity(sessionId, {
                       toolUseId: inner.content_block.id,
                       toolName: inner.content_block.name,
                       inputJson: "",
@@ -279,17 +275,17 @@ export function useAgentStream() {
                     });
                     // Detect plan mode changes from agent tool calls.
                     if (inner.content_block.name === "EnterPlanMode") {
-                      setPlanMode(wsId, true);
+                      setPlanMode(sessionId, true);
                     } else if (inner.content_block.name === "ExitPlanMode") {
-                      debugChat("plan-mode", "ExitPlanMode → setPlanMode(false)", { wsId, origin: "content_block_start" });
-                      setPlanMode(wsId, false);
+                      debugChat("plan-mode", "ExitPlanMode → setPlanMode(false)", { sessionId, origin: "content_block_start" });
+                      setPlanMode(sessionId, false);
                     }
                   }
                   break;
                 }
                 case "content_block_stop": {
-                  if (thinkingBlocksRef.current[wsId]?.has(inner.index)) {
-                    thinkingBlocksRef.current[wsId].delete(inner.index);
+                  if (thinkingBlocksRef.current[sessionId]?.has(inner.index)) {
+                    thinkingBlocksRef.current[sessionId].delete(inner.index);
                     break;
                   }
                   const entry = blockToolMapRef.current[inner.index];
@@ -297,7 +293,7 @@ export function useAgentStream() {
 
                   // Read accumulated input JSON from the tool activity.
                   const activities =
-                    useAppStore.getState().toolActivities[wsId] || [];
+                    useAppStore.getState().toolActivities[sessionId] || [];
                   const activity = activities.find(
                     (a) => a.toolUseId === entry.toolUseId
                   );
@@ -309,7 +305,7 @@ export function useAgentStream() {
                       activity.inputJson
                     );
                     if (summary) {
-                      updateToolActivity(wsId, entry.toolUseId, { summary });
+                      updateToolActivity(sessionId, entry.toolUseId, { summary });
                     }
                   }
 
@@ -338,28 +334,30 @@ export function useAgentStream() {
               .map((b) => b.text)
               .join("");
             if (text) {
-              turnMessageCountRef.current[wsId] =
-                (turnMessageCountRef.current[wsId] || 0) + 1;
+              turnMessageCountRef.current[sessionId] =
+                (turnMessageCountRef.current[sessionId] || 0) + 1;
               debugChat("stream", "assistant", {
-                wsId,
+                sessionId,
                 textLength: text.length,
-                turnMessageCount: turnMessageCountRef.current[wsId],
+                turnMessageCount: turnMessageCountRef.current[sessionId],
               });
               const messageId = crypto.randomUUID();
               // Latch the final text for the typewriter so StreamingMessage
               // can keep draining after streamingContent clears. The matching
               // messageId tells MessagesWithTurns to hide the just-added
               // completed message until drain finishes.
-              setPendingTypewriter(wsId, messageId, text);
-              addChatMessage(wsId, {
+              setPendingTypewriter(sessionId, messageId, text);
+              addChatMessage(sessionId, {
                 id: messageId,
                 workspace_id: wsId,
+                session_id: sessionId,
                 role: "Assistant",
                 content: text,
                 cost_usd: null,
                 duration_ms: null,
                 created_at: new Date().toISOString(),
-                thinking: useAppStore.getState().streamingThinking[wsId] || null,
+                thinking:
+                  useAppStore.getState().streamingThinking[sessionId] || null,
                 input_tokens: null,
                 output_tokens: null,
                 cache_read_tokens: null,
@@ -371,42 +369,36 @@ export function useAgentStream() {
               // completed message unhiding. It's cleared atomically with
               // pendingTypewriter at drain-complete via finishTypewriterDrain.
             }
-            setStreamingContent(wsId, "");
+            setStreamingContent(sessionId, "");
             break;
           }
           case "result": {
             debugChat("stream", "result", {
-              wsId,
-              checkpointId: turnCheckpointIdRef.current[wsId] ?? null,
-              pendingMessageCount: turnMessageCountRef.current[wsId] || 0,
-              pendingToolCount: (useAppStore.getState().toolActivities[wsId] || []).length,
+              sessionId,
+              checkpointId: turnCheckpointIdRef.current[sessionId] ?? null,
+              pendingMessageCount: turnMessageCountRef.current[sessionId] || 0,
+              pendingToolCount: (useAppStore.getState().toolActivities[sessionId] || []).length,
             });
             // CompletedTurn / TurnFooter keep aggregate semantics — the
             // top-level `result.usage.*` is the total cost/work across
             // all inner tool-use iterations in this Claudette-level turn.
             finalizeTurn(
-              wsId,
-              turnMessageCountRef.current[wsId] || 0,
-              turnCheckpointIdRef.current[wsId],
+              sessionId,
+              turnMessageCountRef.current[sessionId] || 0,
+              turnCheckpointIdRef.current[sessionId],
               streamEvent.duration_ms,
               streamEvent.usage?.input_tokens,
               streamEvent.usage?.output_tokens,
               streamEvent.usage?.cache_read_input_tokens ?? undefined,
               streamEvent.usage?.cache_creation_input_tokens ?? undefined,
             );
-            // Meter gets the FINAL iteration's per-call usage instead
-            // (via iterations[0], falling back to aggregate on older CLI
-            // versions). This keeps live values consistent with what the
-            // reconstructed path reads from the last assistant message's
-            // per-call DB fields. See pickMeterUsageFromResult for the
-            // precedence contract.
             const meterUsage = pickMeterUsageFromResult(streamEvent);
             const { setLatestTurnUsage, clearLatestTurnUsage } =
               useAppStore.getState();
             if (meterUsage) setLatestTurnUsage(wsId, meterUsage);
             else clearLatestTurnUsage(wsId);
-            turnMessageCountRef.current[wsId] = 0;
-            turnFinalizedRef.current[wsId] = true;
+            turnMessageCountRef.current[sessionId] = 0;
+            turnFinalizedRef.current[sessionId] = true;
             updateWorkspace(wsId, { agent_status: "Idle" });
             useAppStore.getState().clearPromptStartTime(wsId);
             useAppStore.getState().markWorkspaceAsUnread(wsId);
@@ -425,12 +417,12 @@ export function useAgentStream() {
                   typeof block.content === "string"
                     ? block.content
                     : JSON.stringify(block.content);
-                updateToolActivity(wsId, block.tool_use_id, {
+                updateToolActivity(sessionId, block.tool_use_id, {
                   resultText: text,
                 });
                 // Capture plan file path from tool results (e.g. EnterPlanMode).
                 const pm = text.match(planPathRe);
-                if (pm) planFilePathRef.current[wsId] = pm[1];
+                if (pm) planFilePathRef.current[sessionId] = pm[1];
               }
             }
             break;
@@ -470,12 +462,18 @@ export function useAgentStream() {
     let active = true;
     const unlisten = listen<{
       workspace_id: string;
+      session_id: string;
       tool_use_id: string;
       tool_name: string;
       input: unknown;
     }>("agent-permission-prompt", (event) => {
       if (!active) return;
-      const { workspace_id: wsId, tool_use_id: toolUseId, tool_name: toolName, input } = event.payload;
+      const {
+        session_id: sessionId,
+        tool_use_id: toolUseId,
+        tool_name: toolName,
+        input,
+      } = event.payload;
       if (toolName === ASK_USER_QUESTION_TOOL) {
         // The CLI guarantees `input` is the validated tool-input object —
         // narrow before handing it to the parser.
@@ -483,7 +481,7 @@ export function useAgentStream() {
           try {
             const questions = parseAskUserQuestion(input as Record<string, unknown>);
             if (questions.length > 0) {
-              setAgentQuestion({ workspaceId: wsId, toolUseId, questions });
+              setAgentQuestion({ sessionId, toolUseId, questions });
             }
           } catch {
             // Malformed input — ignore (CLI will eventually time out and we
@@ -494,8 +492,8 @@ export function useAgentStream() {
         // Mirror the content_block_start clear at the control_request boundary
         // in case that event arrived without the tool `name` populated.
         // Idempotent — setting to the same value is a no-op.
-        debugChat("plan-mode", "ExitPlanMode → setPlanMode(false)", { wsId, origin: "agent-permission-prompt" });
-        setPlanMode(wsId, false);
+        debugChat("plan-mode", "ExitPlanMode → setPlanMode(false)", { sessionId, origin: "agent-permission-prompt" });
+        setPlanMode(sessionId, false);
         let allowedPrompts: Array<{ tool: string; prompt: string }> = [];
         if (input && typeof input === "object" && "allowedPrompts" in input) {
           const ap = (input as { allowedPrompts?: unknown }).allowedPrompts;
@@ -507,28 +505,28 @@ export function useAgentStream() {
         // path used: assistant text, then streaming text, then tool inputs/
         // results, then the cached EnterPlanMode result path.
         const planPathRe = /(\/[^\s)"`]+\/\.claude\/plans\/[^\s)"`]+\.md)/;
-        const messages = useAppStore.getState().chatMessages[wsId] || [];
+        const messages = useAppStore.getState().chatMessages[sessionId] || [];
         let planFilePath: string | null = null;
         for (let i = messages.length - 1; i >= 0; i--) {
           const m = messages[i].content.match(planPathRe);
           if (m) { planFilePath = m[1]; break; }
         }
         if (!planFilePath) {
-          const streaming = useAppStore.getState().streamingContent[wsId] || "";
+          const streaming = useAppStore.getState().streamingContent[sessionId] || "";
           const m = streaming.match(planPathRe);
           if (m) planFilePath = m[1];
         }
         if (!planFilePath) {
-          const allActivities = useAppStore.getState().toolActivities[wsId] || [];
+          const allActivities = useAppStore.getState().toolActivities[sessionId] || [];
           for (const act of allActivities) {
             const m = (act.inputJson + act.resultText).match(planPathRe);
             if (m) { planFilePath = m[1]; break; }
           }
         }
-        if (!planFilePath && planFilePathRef.current[wsId]) {
-          planFilePath = planFilePathRef.current[wsId];
+        if (!planFilePath && planFilePathRef.current[sessionId]) {
+          planFilePath = planFilePathRef.current[sessionId];
         }
-        setPlanApproval({ workspaceId: wsId, toolUseId, planFilePath, allowedPrompts });
+        setPlanApproval({ sessionId, toolUseId, planFilePath, allowedPrompts });
       }
     });
     return () => {
@@ -544,12 +542,13 @@ export function useAgentStream() {
     let active = true;
     const unlisten = listen<{
       workspace_id: string;
+      session_id: string;
       checkpoint: ConversationCheckpoint;
     }>("checkpoint-created", (event) => {
       if (!active) return;
-      const { workspace_id: wsId, checkpoint } = event.payload;
-      addCheckpoint(wsId, checkpoint);
-      turnCheckpointIdRef.current[wsId] = checkpoint.id;
+      const { session_id: sessionId, checkpoint } = event.payload;
+      addCheckpoint(sessionId, checkpoint);
+      turnCheckpointIdRef.current[sessionId] = checkpoint.id;
 
       // Persist tool activities for the just-completed turn, then reload
       // messages so the store has DB-persisted IDs. The save MUST complete
@@ -558,18 +557,18 @@ export function useAgentStream() {
       // NOTE: checkpoint-created fires BEFORE the agent-stream result event,
       // so finalizeTurn() hasn't run yet. Read from toolActivities (pre-
       // finalization) and turnMessageCountRef instead of completedTurns.
-      const currentActivities = useAppStore.getState().toolActivities[wsId] || [];
+      const currentActivities = useAppStore.getState().toolActivities[sessionId] || [];
       debugChat("stream", "checkpoint-created", {
-        wsId,
+        sessionId,
         checkpointId: checkpoint.id,
         checkpointMessageId: checkpoint.message_id,
         turnIndex: checkpoint.turn_index,
         currentToolCount: currentActivities.length,
-        pendingMessageCount: turnMessageCountRef.current[wsId] || 0,
+        pendingMessageCount: turnMessageCountRef.current[sessionId] || 0,
       });
       const savePromise = currentActivities.length > 0
         ? (() => {
-            const messageCount = turnMessageCountRef.current[wsId] || 0;
+            const messageCount = turnMessageCountRef.current[sessionId] || 0;
             const activities = currentActivities.map((a, i) => ({
               id: crypto.randomUUID(),
               checkpoint_id: checkpoint.id,
@@ -590,31 +589,31 @@ export function useAgentStream() {
       savePromise
         .then(() => {
           debugChat("stream", "checkpoint-save-complete", {
-            wsId,
+            sessionId,
             checkpointId: checkpoint.id,
           });
         })
         .catch((e) => {
           console.error("Failed to save turn tool activities:", e);
           debugChat("stream", "checkpoint-save-failed", {
-            wsId,
+            sessionId,
             checkpointId: checkpoint.id,
             error: String(e),
           });
         })
-        .then(() => loadChatHistory(wsId))
+        .then(() => loadChatHistory(sessionId))
         .then((msgs) => {
           if (!msgs) return;
           const filtered = msgs.filter(
             (m: ChatMessage) => m.role !== "Assistant" || m.content.trim() !== "" || !!m.thinking,
           );
           debugChat("stream", "checkpoint-reload-chat-history", {
-            wsId,
+            sessionId,
             checkpointId: checkpoint.id,
             messageCount: filtered.length,
             messageIds: filtered.map((msg) => msg.id),
           });
-          setChatMessages(wsId, filtered);
+          setChatMessages(sessionId, filtered);
           const callUsage = extractLatestCallUsage(filtered);
           const { setLatestTurnUsage, clearLatestTurnUsage } =
             useAppStore.getState();
