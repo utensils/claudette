@@ -65,5 +65,6 @@ jobs:
           bun-version: "latest"
       - run: bun install --frozen-lockfile
       - run: bunx tsc --noEmit
+      - run: bun run lint:css
       - run: bun run build
       - run: bun run test
