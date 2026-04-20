@@ -87,16 +87,23 @@ fn persistent_session_flags_drifted(
 /// Decide how to respond to a `can_use_tool` control_request that reached the
 /// handler for a tool other than AskUserQuestion / ExitPlanMode.
 ///
-/// Bypass mode + plan mode off → allow (echo `updatedInput` — required by the
-/// CLI's `PermissionPromptToolResultSchema`). This is the fix for "full"
+/// Bypass mode + plan not active → allow (echo `updatedInput` — required by
+/// the CLI's `PermissionPromptToolResultSchema`). This is the fix for "full"
 /// sessions seeing spurious denials: the CLI still routes certain tools
 /// (MCP servers, Skills, some built-in edge paths) through
 /// `--permission-prompt-tool stdio` even under `--permission-mode
 /// bypassPermissions`, so we must answer allow rather than fall through.
 ///
-/// Otherwise (standard/readonly, or plan-mode active) → deny with a message
-/// that names the escalation path; the model paraphrases this string to the
-/// user.
+/// Plan mode is considered **inactive** once the agent has emitted
+/// `ExitPlanMode` (`session_exited_plan = true`) — even though the
+/// subprocess still runs with `--permission-mode plan` until the drift
+/// detector respawns it on the next turn. Without this, a bypass session
+/// that just had its plan approved would still deny every mutating tool
+/// for the remainder of the current turn.
+///
+/// Otherwise (standard/readonly, or plan-mode genuinely active) → deny with
+/// a message that names the escalation path; the model paraphrases this
+/// string to the user.
 ///
 /// Auto-allow in bypass mode does not bypass an MCP server's own
 /// authorization — servers refuse at their layer via a normal tool_result,
@@ -104,10 +111,13 @@ fn persistent_session_flags_drifted(
 fn build_permission_response(
     session_allowed_tools: &[String],
     session_plan_mode: bool,
+    session_exited_plan: bool,
     tool_name: &str,
     original_input: &serde_json::Value,
 ) -> serde_json::Value {
-    if is_bypass_tools(session_allowed_tools) && !session_plan_mode {
+    let bypass = is_bypass_tools(session_allowed_tools);
+    let plan_active = session_plan_mode && !session_exited_plan;
+    if bypass && !plan_active {
         serde_json::json!({
             "behavior": "allow",
             "updatedInput": original_input,
@@ -783,21 +793,24 @@ pub async fn send_chat_message(
                 } else {
                     let app_state = app.state::<AppState>();
                     let agents = app_state.agents.read().await;
-                    let (ps, session_allowed_tools, session_plan_mode) = agents
-                        .get(&ws_id)
-                        .map(|s| {
-                            (
-                                s.persistent_session.clone(),
-                                s.session_allowed_tools.clone(),
-                                s.session_plan_mode,
-                            )
-                        })
-                        .unwrap_or_else(|| (None, Vec::new(), false));
+                    let (ps, session_allowed_tools, session_plan_mode, session_exited_plan) =
+                        agents
+                            .get(&ws_id)
+                            .map(|s| {
+                                (
+                                    s.persistent_session.clone(),
+                                    s.session_allowed_tools.clone(),
+                                    s.session_plan_mode,
+                                    s.session_exited_plan,
+                                )
+                            })
+                            .unwrap_or_else(|| (None, Vec::new(), false, false));
                     drop(agents);
                     if let Some(ps) = ps {
                         let response = build_permission_response(
                             &session_allowed_tools,
                             session_plan_mode,
+                            session_exited_plan,
                             tool_name,
                             input,
                         );
@@ -2071,24 +2084,35 @@ mod tests {
     #[test]
     fn permission_response_allows_bypass_session_non_plan() {
         let input = json!({ "path": "/tmp/foo" });
-        let response = build_permission_response(&s(&["*"]), false, "Skill", &input);
+        let response = build_permission_response(&s(&["*"]), false, false, "Skill", &input);
         assert_eq!(response["behavior"], "allow");
         assert_eq!(response["updatedInput"], input);
     }
 
     #[test]
-    fn permission_response_denies_bypass_session_during_plan_mode() {
-        // Plan mode deliberately gates mutating tools even when the session's
-        // allowed_tools is the bypass sentinel.
+    fn permission_response_denies_bypass_session_during_active_plan() {
         let input = json!({});
-        let response = build_permission_response(&s(&["*"]), true, "Edit", &input);
+        let response = build_permission_response(&s(&["*"]), true, false, "Edit", &input);
         assert_eq!(response["behavior"], "deny");
+    }
+
+    #[test]
+    fn permission_response_allows_bypass_session_after_plan_exit() {
+        // The agent emitted ExitPlanMode and the user approved, so the plan
+        // phase is over. The subprocess still has --permission-mode plan
+        // until the next turn's drift detection respawns it, but within
+        // this turn we should auto-allow because the user chose bypass.
+        let input = json!({ "file_path": "/tmp/fib.py", "content": "..." });
+        let response = build_permission_response(&s(&["*"]), true, true, "Write", &input);
+        assert_eq!(response["behavior"], "allow");
+        assert_eq!(response["updatedInput"], input);
     }
 
     #[test]
     fn permission_response_denies_standard_session() {
         let input = json!({});
-        let response = build_permission_response(&s(&["Read", "Write"]), false, "Edit", &input);
+        let response =
+            build_permission_response(&s(&["Read", "Write"]), false, false, "Edit", &input);
         assert_eq!(response["behavior"], "deny");
         let msg = response["message"].as_str().expect("message");
         assert!(
@@ -2102,21 +2126,28 @@ mod tests {
     }
 
     #[test]
-    fn permission_response_denies_empty_session() {
-        // Pre-spawn or cleared state — defensive deny so we never silently
-        // approve a tool on a session whose flags we can't confirm.
+    fn permission_response_denies_standard_session_after_plan_exit() {
+        // Non-bypass sessions should still deny after ExitPlanMode — they
+        // need the drift-triggered respawn to pick up the concrete
+        // --allowedTools list, and auto-allowing any tool would exceed the
+        // user's chosen permission scope.
         let input = json!({});
-        let response = build_permission_response(&[], false, "Edit", &input);
+        let response =
+            build_permission_response(&s(&["Read", "Write"]), true, true, "Bash", &input);
+        assert_eq!(response["behavior"], "deny");
+    }
+
+    #[test]
+    fn permission_response_denies_empty_session() {
+        let input = json!({});
+        let response = build_permission_response(&[], false, false, "Edit", &input);
         assert_eq!(response["behavior"], "deny");
     }
 
     #[test]
     fn permission_response_rejects_multi_element_wildcard() {
-        // The bypass sentinel is exactly ["*"]. ["*", "Read"] is a concrete
-        // list (the "*" is not special outside the singleton form) and must
-        // not auto-allow.
         let input = json!({});
-        let response = build_permission_response(&s(&["*", "Read"]), false, "Edit", &input);
+        let response = build_permission_response(&s(&["*", "Read"]), false, false, "Edit", &input);
         assert_eq!(response["behavior"], "deny");
     }
 }
