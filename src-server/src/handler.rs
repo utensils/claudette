@@ -520,7 +520,7 @@ async fn handle_send_chat_message(
         };
         AgentSessionState {
             workspace_id: workspace_id_owned,
-            session_id: uuid::Uuid::new_v4().to_string(),
+            claude_session_id: uuid::Uuid::new_v4().to_string(),
             turn_count: 0,
             active_pid: None,
             custom_instructions: instructions,
@@ -551,7 +551,7 @@ async fn handle_send_chat_message(
     }
 
     let is_resume = session.turn_count > 0;
-    let session_id = session.session_id.clone();
+    let claude_session_id = session.claude_session_id.clone();
     let custom_instructions = session.custom_instructions.clone();
     session.turn_count += 1;
 
@@ -578,7 +578,7 @@ async fn handle_send_chat_message(
 
     let turn_handle = agent::run_turn(
         std::path::Path::new(&worktree_path),
-        &session_id,
+        &claude_session_id,
         &prompt,
         is_resume,
         &allowed_tools,
@@ -1075,7 +1075,7 @@ fn handle_list_chat_sessions(
     let sessions = db
         .list_chat_sessions_for_workspace(workspace_id, include_archived)
         .map_err(|e| e.to_string())?;
-    Ok(serde_json::to_value(sessions).unwrap_or_default())
+    serde_json::to_value(sessions).map_err(|e| e.to_string())
 }
 
 fn handle_get_chat_session(
@@ -1087,7 +1087,7 @@ fn handle_get_chat_session(
         .get_chat_session(session_id)
         .map_err(|e| e.to_string())?
         .ok_or("Session not found")?;
-    Ok(serde_json::to_value(session).unwrap_or_default())
+    serde_json::to_value(session).map_err(|e| e.to_string())
 }
 
 fn handle_create_chat_session(
@@ -1098,7 +1098,7 @@ fn handle_create_chat_session(
     let session = db
         .create_chat_session(workspace_id)
         .map_err(|e| e.to_string())?;
-    Ok(serde_json::to_value(session).unwrap_or_default())
+    serde_json::to_value(session).map_err(|e| e.to_string())
 }
 
 fn handle_rename_chat_session(
@@ -1138,7 +1138,7 @@ async fn handle_archive_chat_session(
         .archive_chat_session_ensuring_active(session_id, &workspace_id)
         .map_err(|e| e.to_string())?;
     if let Some(fresh) = fresh {
-        return Ok(serde_json::to_value(fresh).unwrap_or_default());
+        return serde_json::to_value(fresh).map_err(|e| e.to_string());
     }
 
     Ok(json!(null))

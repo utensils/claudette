@@ -42,19 +42,24 @@ export function SessionTabs({ workspaceId }: Props) {
   const removeChatSession = useAppStore((s) => s.removeChatSession);
   const selectSession = useAppStore((s) => s.selectSession);
 
+  // Monotonic version token: each local mutation (create/archive) bumps this so
+  // an in-flight `listChatSessions` response can detect it's stale and skip the
+  // overwrite. Without this, a create+archive that races with the initial load
+  // can get stomped by the older snapshot.
+  const loadVersionRef = useRef(0);
+
   // Load sessions for this workspace on mount / workspace change.
   useEffect(() => {
-    let cancelled = false;
+    const version = ++loadVersionRef.current;
     listChatSessions(workspaceId, false)
       .then((sessions) => {
-        if (!cancelled) setSessionsForWorkspace(workspaceId, sessions);
+        if (version === loadVersionRef.current) {
+          setSessionsForWorkspace(workspaceId, sessions);
+        }
       })
       .catch((err) => {
         console.error("[SessionTabs] Failed to load sessions:", err);
       });
-    return () => {
-      cancelled = true;
-    };
   }, [workspaceId, setSessionsForWorkspace]);
 
   const activeSessions = sessions.filter((s) => s.status === "Active");
@@ -65,6 +70,8 @@ export function SessionTabs({ workspaceId }: Props) {
   const handleCreate = async () => {
     try {
       const session = await createChatSession(workspaceId);
+      // Invalidate any in-flight load — our local addChatSession is authoritative.
+      loadVersionRef.current += 1;
       addChatSession(session);
       selectSession(workspaceId, session.id);
     } catch (err) {
@@ -81,6 +88,7 @@ export function SessionTabs({ workspaceId }: Props) {
     }
     try {
       const autoCreated = await archiveChatSession(session.id);
+      loadVersionRef.current += 1;
       removeChatSession(session.id);
       if (autoCreated) {
         addChatSession(autoCreated);
@@ -177,6 +185,7 @@ function SessionTab({ session, isActive, onSelect, onClose, onRename }: TabProps
     <div
       role="tab"
       aria-selected={isActive}
+      tabIndex={isActive ? 0 : -1}
       className={`${styles.tab} ${isActive ? styles.active : ""}`}
       onClick={() => {
         if (!editing) onSelect();
@@ -184,6 +193,16 @@ function SessionTab({ session, isActive, onSelect, onClose, onRename }: TabProps
       onDoubleClick={(e) => {
         e.stopPropagation();
         startEditing();
+      }}
+      onKeyDown={(e) => {
+        if (editing) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        } else if (e.key === "F2") {
+          e.preventDefault();
+          startEditing();
+        }
       }}
     >
       <span className={styles.icon}>

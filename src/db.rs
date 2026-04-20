@@ -1049,9 +1049,10 @@ impl Database {
 
     fn parse_chat_message_row(row: &rusqlite::Row) -> rusqlite::Result<ChatMessage> {
         let role_str: String = row.get(3)?;
-        // `session_id` must be non-NULL after migration v21. A NULL would
-        // mean a pre-backfill row slipped through, which is a bug we want
-        // to surface rather than paper over with an empty string.
+        // session_id is non-null after migration v21 backfills every row. A
+        // NULL here means either migration skipped a row or a later INSERT
+        // violated the invariant — fail loudly instead of returning a
+        // message that can't be addressed by the per-session APIs.
         let session_id: String = row.get(2)?;
         Ok(ChatMessage {
             id: row.get(0)?,
@@ -1203,15 +1204,14 @@ impl Database {
 
     /// Insert a new active session. Returns the inserted row.
     pub fn create_chat_session(&self, workspace_id: &str) -> Result<ChatSession, rusqlite::Error> {
-        // New sessions land at the end of the tab list.
-        let sort_order: i32 = self
-            .conn
-            .query_row(
-                "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM chat_sessions WHERE workspace_id = ?1",
-                params![workspace_id],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
+        // New sessions land at the end of the tab list. Surface DB errors so
+        // a transient lock/read failure doesn't collapse the next sort_order
+        // to 0 and produce duplicate tab-order values.
+        let sort_order: i32 = self.conn.query_row(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM chat_sessions WHERE workspace_id = ?1",
+            params![workspace_id],
+            |row| row.get(0),
+        )?;
         let id = uuid::Uuid::new_v4().to_string();
         self.conn.execute(
             "INSERT INTO chat_sessions
@@ -2825,7 +2825,7 @@ mod tests {
     #[test]
     fn test_chat_message_tokens_round_trip() {
         let db = setup_db_with_workspace();
-        let mut msg = make_chat_msg("mt1", "w1", ChatRole::Assistant, "hello");
+        let mut msg = make_chat_msg(&db, "mt1", "w1", ChatRole::Assistant, "hello");
         msg.input_tokens = Some(1234);
         msg.output_tokens = Some(56);
         msg.cache_read_tokens = Some(100_000);
@@ -2843,7 +2843,7 @@ mod tests {
     #[test]
     fn test_chat_message_tokens_null_round_trip() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("mt2", "w1", ChatRole::Assistant, "hi"))
+        db.insert_chat_message(&make_chat_msg(&db, "mt2", "w1", ChatRole::Assistant, "hi"))
             .unwrap();
 
         let msgs = db.list_chat_messages("w1").unwrap();

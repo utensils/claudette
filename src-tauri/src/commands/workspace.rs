@@ -543,8 +543,8 @@ pub async fn archive_workspace(
         let mut sids = Vec::new();
         for key in to_remove {
             if let Some(session) = agents.remove(&key) {
-                if !session.session_id.is_empty() {
-                    sids.push(session.session_id);
+                if !session.claude_session_id.is_empty() {
+                    sids.push(session.claude_session_id);
                 }
                 if let Some(pid) = session.active_pid {
                     let _ = claudette::agent::stop_agent(pid).await;

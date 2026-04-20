@@ -467,7 +467,7 @@ pub async fn send_chat_message(
         {
             return AgentSessionState {
                 workspace_id: workspace_id.clone(),
-                session_id: claude_sid,
+                claude_session_id: claude_sid,
                 turn_count: chat_session.turn_count,
                 active_pid: None,
                 custom_instructions: instructions.clone(),
@@ -489,7 +489,7 @@ pub async fn send_chat_message(
 
         AgentSessionState {
             workspace_id: workspace_id.clone(),
-            session_id: uuid::Uuid::new_v4().to_string(),
+            claude_session_id: uuid::Uuid::new_v4().to_string(),
             turn_count: 0,
             active_pid: None,
             custom_instructions: instructions,
@@ -771,7 +771,7 @@ pub async fn send_chat_message(
     // First turn or after restart: start a PersistentSession.
     // Subsequent turns in same session: reuse the existing process via stdin.
     let existing_persistent = session.persistent_session.clone();
-    let saved_session_id = session.session_id.clone();
+    let saved_session_id = session.claude_session_id.clone();
     let saved_turn_count = session.turn_count;
 
     // Helper: start a persistent session, using --resume for restored sessions.
@@ -860,7 +860,7 @@ pub async fn send_chat_message(
                         (ps, fresh)
                     }
                     Err(e2) => {
-                        let _ = db.clear_agent_session(&workspace_id);
+                        let _ = db.clear_chat_session_claude_state(&chat_session_id);
                         return Err(e2);
                     }
                 };
@@ -870,7 +870,7 @@ pub async fn send_chat_message(
                 let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
                 session.persistent_session = Some(ps);
                 session.mcp_bridge = bridge;
-                session.session_id = final_sid;
+                session.claude_session_id = final_sid;
                 session.session_plan_mode = agent_settings.plan_mode;
                 session.session_allowed_tools = allowed_tools.clone();
                 session.session_disable_1m_context = agent_settings.disable_1m_context;
@@ -891,7 +891,7 @@ pub async fn send_chat_message(
             saved_session_id.clone()
         } else {
             let fresh = uuid::Uuid::new_v4().to_string();
-            session.session_id = fresh.clone();
+            session.claude_session_id = fresh.clone();
             fresh
         };
         // Drop lock before async process spawn.
@@ -944,13 +944,15 @@ pub async fn send_chat_message(
                 (ps, fresh_sid)
             }
             Err(e) => {
-                // Spawn failed entirely — clear stale session from DB so the
-                // next attempt doesn't try --resume with a dead session ID.
-                let _ = db.clear_agent_session(&workspace_id);
+                // Spawn failed entirely — clear the per-session Claude state
+                // so the next attempt doesn't try --resume with a dead
+                // session ID. Must be per-session (not workspace-scoped)
+                // because other tabs in this workspace may still be live.
+                let _ = db.clear_chat_session_claude_state(&chat_session_id);
                 agents = state.agents.write().await;
                 if let Some(session) = agents.get_mut(&chat_session_id) {
                     session.turn_count = 0;
-                    session.session_id = String::new();
+                    session.claude_session_id = String::new();
                 }
                 drop(agents);
                 let e = crate::missing_cli::handle_err(&app, &e).unwrap_or(e);
@@ -963,7 +965,7 @@ pub async fn send_chat_message(
         let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
         session.persistent_session = Some(ps);
         session.mcp_bridge = bridge;
-        session.session_id = final_sid.clone();
+        session.claude_session_id = final_sid.clone();
         session.session_plan_mode = agent_settings.plan_mode;
         session.session_allowed_tools = allowed_tools.clone();
         session.session_disable_1m_context = agent_settings.disable_1m_context;
@@ -978,11 +980,18 @@ pub async fn send_chat_message(
     {
         let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
         session.active_pid = Some(spawned_pid);
-        let _ =
-            db.save_chat_session_state(&chat_session_id, &session.session_id, session.turn_count);
-        let _ = db.insert_agent_session(&session.session_id, &workspace_id, &ws.repository_id);
-        let _ = db.reopen_agent_session(&session.session_id);
-        let _ = db.update_agent_session_turn(&session.session_id, session.turn_count);
+        let _ = db.save_chat_session_state(
+            &chat_session_id,
+            &session.claude_session_id,
+            session.turn_count,
+        );
+        let _ = db.insert_agent_session(
+            &session.claude_session_id,
+            &workspace_id,
+            &ws.repository_id,
+        );
+        let _ = db.reopen_agent_session(&session.claude_session_id);
+        let _ = db.update_agent_session_turn(&session.claude_session_id, session.turn_count);
         if db
             .get_app_setting("first_session_at")
             .ok()
@@ -1403,9 +1412,9 @@ pub async fn send_chat_message(
                     }
                     let sid = agents
                         .get(&chat_session_id_for_stream)
-                        .map(|s| s.session_id.clone())
+                        .map(|s| s.claude_session_id.clone())
                         .unwrap_or_default();
-                    let attn = agents.get(&ws_id).is_some_and(|s| s.needs_attention);
+                    let attn = agents.get(&chat_session_id_for_stream).is_some_and(|s| s.needs_attention);
                     (sid, attn)
                 };
                 // Rebuild tray so it reflects the idle state. Without this,
@@ -1457,18 +1466,21 @@ pub async fn send_chat_message(
                 // Snapshot session_id before any mutation so metrics hooks
                 // below can reference the session we just finished.
                 let ended_session_id: Option<String> =
-                    agents.get(&ws_id).map(|s| s.session_id.clone());
+                    agents.get(&chat_session_id_for_stream).map(|s| s.claude_session_id.clone());
                 // Track whether this exit actually belongs to the live session
                 // in `agents` — if a newer turn has replaced `active_pid`, the
                 // old exit is stale and we must not end the (now-new) session
                 // row. Only set when we own the exit.
                 let mut ended_own_session = false;
                 if !got_init {
-                    // Failed to initialize — clear the entire session so the
-                    // next attempt starts fresh instead of trying --resume.
+                    // Failed to initialize — clear the per-session Claude
+                    // state so the next attempt starts fresh instead of
+                    // trying --resume. Must be per-session (not
+                    // workspace-scoped) because other tabs in this
+                    // workspace may still be live.
                     agents.remove(&chat_session_id_for_stream);
                     if let Ok(db) = Database::open(&db_path) {
-                        let _ = db.clear_agent_session(&ws_id);
+                        let _ = db.clear_chat_session_claude_state(&chat_session_id_for_stream);
                         if let Some(ref sid) = ended_session_id {
                             let _ = db.end_agent_session(sid, false);
                         }
@@ -1708,7 +1720,7 @@ type StopSnapshot = (
 /// `--resume <session_id>`.
 fn take_stop_snapshot(session: &mut AgentSessionState) -> StopSnapshot {
     let drained = drain_pending_permissions(session);
-    let ended_sid = Some(session.session_id.clone());
+    let ended_sid = Some(session.claude_session_id.clone());
     let pid = session.active_pid.take();
     session.needs_attention = false;
     session.attention_kind = None;
@@ -1793,7 +1805,7 @@ pub async fn reset_agent_session(
         let drained = agents
             .get_mut(&chat_session_id)
             .and_then(drain_pending_permissions);
-        let ended_sid = agents.remove(&chat_session_id).map(|s| s.session_id);
+        let ended_sid = agents.remove(&chat_session_id).map(|s| s.claude_session_id);
         (drained, ended_sid)
     };
 
@@ -1902,7 +1914,7 @@ pub async fn rollback_to_checkpoint(
     // Rollback discards the session's prior work — record as a failure.
     let ended_sid = {
         let mut agents = state.agents.write().await;
-        agents.remove(&chat_session_id).map(|s| s.session_id)
+        agents.remove(&chat_session_id).map(|s| s.claude_session_id)
     };
     if let Some(sid) = ended_sid.as_deref() {
         let _ = db.end_agent_session(sid, false);
@@ -1982,7 +1994,7 @@ pub async fn clear_conversation(
     // prior work, so it did not run to completion — record as a failure.
     let ended_sid = {
         let mut agents = state.agents.write().await;
-        agents.remove(&chat_session_id).map(|s| s.session_id)
+        agents.remove(&chat_session_id).map(|s| s.claude_session_id)
     };
     if let Some(sid) = ended_sid.as_deref() {
         let _ = db.end_agent_session(sid, false);
@@ -2991,7 +3003,8 @@ mod tests {
 
     fn fresh_session(session_id: &str, turn_count: u32, pid: Option<u32>) -> AgentSessionState {
         AgentSessionState {
-            session_id: session_id.to_string(),
+            workspace_id: String::new(),
+            claude_session_id: session_id.to_string(),
             turn_count,
             active_pid: pid,
             custom_instructions: None,
@@ -3027,7 +3040,7 @@ mod tests {
         assert_eq!(ended_sid.as_deref(), Some("sess-abc"));
 
         // Session identity is preserved — this is the fix.
-        assert_eq!(session.session_id, "sess-abc");
+        assert_eq!(session.claude_session_id, "sess-abc");
         assert_eq!(session.turn_count, 7);
         assert!(session.persistent_session.is_none());
 
@@ -3044,7 +3057,7 @@ mod tests {
 
         assert!(pid.is_none());
         assert_eq!(ended_sid.as_deref(), Some("sess-abc"));
-        assert_eq!(session.session_id, "sess-abc");
+        assert_eq!(session.claude_session_id, "sess-abc");
         assert_eq!(session.turn_count, 7);
     }
 

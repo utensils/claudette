@@ -50,7 +50,9 @@ pub struct AgentSessionState {
     /// worktree path for spawning, tray grouping, notification routing.
     pub workspace_id: String,
     /// Claude CLI `--resume` UUID. Empty until the first turn completes.
-    pub session_id: String,
+    /// Named `claude_session_id` (not `session_id`) to avoid ambiguity with
+    /// the `chat_sessions.id` that keys `AppState.agents`.
+    pub claude_session_id: String,
     pub turn_count: u32,
     /// PID of the currently running agent process, if any.
     pub active_pid: Option<u32>,

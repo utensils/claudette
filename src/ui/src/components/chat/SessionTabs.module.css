@@ -107,11 +107,16 @@
   color: var(--text-dim);
   cursor: pointer;
   opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
   transition: opacity 80ms ease, background 80ms ease, color 80ms ease;
 }
 
-.tab:hover .closeBtn {
+.tab:hover .closeBtn,
+.tab:focus-within .closeBtn {
   opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
 }
 
 .closeBtn:hover {
