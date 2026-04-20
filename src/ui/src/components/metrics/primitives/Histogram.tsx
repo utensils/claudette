@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import styles from "../metrics.module.css";
 
 interface HistogramProps {
@@ -16,7 +17,10 @@ export function Histogram({ buckets, labels }: HistogramProps) {
           <div key={i} className={styles.histRow}>
             <span className={styles.rowMuted}>{labels[i] ?? ""}</span>
             <div className={`${styles.progressTrack} ${styles.progressTrackThick}`}>
-              <div className={fillClass} style={{ width: `${pct}%` }} />
+              <div
+                className={fillClass}
+                style={{ "--p": `${pct}%` } as CSSProperties}
+              />
             </div>
             <span className={styles.rowValue}>{count}</span>
           </div>

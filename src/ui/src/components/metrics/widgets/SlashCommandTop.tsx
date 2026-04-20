@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import styles from "../metrics.module.css";
 import { useAppStore } from "../../../stores/useAppStore";
 
@@ -22,7 +23,7 @@ export function SlashCommandTop() {
                 >
                   <div
                     className={styles.progressFill}
-                    style={{ width: `${pct}%` }}
+                    style={{ "--p": `${pct}%` } as CSSProperties}
                   />
                 </div>
                 <span className={styles.rowValue}>{count}</span>

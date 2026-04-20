@@ -46,7 +46,9 @@ pub fn analytics_metrics(db_path: &Path) -> Result<AnalyticsMetrics, rusqlite::E
 ///
 /// Failures are swallowed: this runs off the critical path and a git parse
 /// failure should be logged rather than surfaced to the user. Returns the
-/// number of newly-inserted commit rows (0 on any error).
+/// number of commits scraped from git for this session — `INSERT OR IGNORE`
+/// means some may already exist, so this is an upper bound on newly-inserted
+/// rows. 0 on any error.
 pub async fn capture_session_commits(
     db_path: &Path,
     workspace_id: &str,

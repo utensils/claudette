@@ -1269,12 +1269,12 @@ export const useAppStore = create<AppState>((set) => ({
   },
   fetchWorkspaceMetricsBatch: async (ids) => {
     if (ids.length === 0) {
-      set({ workspaceMetrics: {} });
+      set({ workspaceMetrics: {}, metricsError: null });
       return;
     }
     try {
       const metrics = await getWorkspaceMetricsBatch(ids);
-      set({ workspaceMetrics: metrics });
+      set({ workspaceMetrics: metrics, metricsError: null });
     } catch (e) {
       set({ metricsError: String(e) });
     }

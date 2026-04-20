@@ -420,6 +420,19 @@ impl Database {
             )?;
         }
 
+        if version < 22 {
+            // Leaderboard and per-repo aggregations do correlated subquery
+            // lookups like `WHERE s.repository_id = r.repository_id` and
+            // `GROUP BY repository_id`. Without these indexes those scans are
+            // full-table, which the 30s dashboard poll amplifies.
+            self.conn.execute_batch(
+                "CREATE INDEX idx_agent_sessions_repo ON agent_sessions(repository_id);
+                 CREATE INDEX idx_agent_commits_repo  ON agent_commits(repository_id);
+
+                 PRAGMA user_version = 22;",
+            )?;
+        }
+
         Ok(())
     }
 
