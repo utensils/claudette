@@ -1,9 +1,9 @@
 ---
 title: Theming
-description: 12 built-in themes plus custom theme support for Claudette.
+description: 14 built-in themes plus custom theme support for Claudette.
 ---
 
-Claudette ships with 12 built-in themes and supports custom themes you can create and share.
+Claudette ships with 14 built-in themes — built on the Claude Design token system — and supports custom themes you can create and share.
 
 ## Switching Themes
 
@@ -18,18 +18,20 @@ A screenshot of the theme picker dropdown will be added here.
 
 | Theme | Style |
 |-------|-------|
-| **Default Dark** | Teal accents on a dark background (default) |
-| **Default Light** | Light theme based on GitHub Primer |
-| **Midnight Blue** | Deep blue tones |
+| **Default Dark** | Claudette's signature theme — coral on warm charcoal (default) |
+| **Default Light** | Cream paper with deep coral accents |
+| **Jellybeans** | Dark Vim-inspired palette with cool slate accent |
+| **High Contrast** | Maximum legibility with cyan accent |
+| **Rosé Pine** | Soho-vibes dark with iris accent |
+| **Rosé Pine Moon** | Rosé Pine on warmer navy base |
+| **Rosé Pine Dawn** | Rosé Pine light — cream parchment with iris accent |
+| **Solarized Dark** | Schoonover's canonical dark with blue accent |
+| **Solarized Light** | Solarized inverted monotones with identical accents |
+| **Brink** | Mid-tone warm chrome with Ristretto-style gold accent |
+| **Jellybeans Muted** | Softer, desaturated take on Jellybeans |
+| **Midnight Blue** | Cool blue-tinted dark theme |
 | **Warm Ember** | Warm amber-toned dark theme |
-| **High Contrast** | Maximum contrast for accessibility |
-| **Rosé Pine** | Soho vibes for dark theme lovers |
-| **Rosé Pine Moon** | Rosé Pine's softer dark variant |
-| **Rosé Pine Dawn** | Rosé Pine's light variant |
-| **Solarized Dark** | Ethan Schoonover's classic dark palette |
-| **Solarized Light** | Ethan Schoonover's classic light palette |
-| **Jellybeans** | Vibrant dark theme |
-| **Jellybeans Muted** | Softer variant of Jellybeans |
+| **Sidekick** | Ship Sidekick brand — deep navy with electric violet |
 
 ## Custom Themes
 
@@ -49,10 +51,10 @@ Each file must be valid JSON with the following structure:
   "description": "A brief description of the theme",
   "colors": {
     "color-scheme": "dark",
-    "accent-primary": "#f0a050",
-    "accent-primary-rgb": "240, 160, 80",
-    "app-bg": "rgb(18, 15, 12)",
-    "text-primary": "rgb(240, 232, 220)"
+    "accent-primary": "#e07850",
+    "accent-primary-rgb": "224, 120, 80",
+    "app-bg": "rgb(28, 24, 21)",
+    "text-primary": "rgb(240, 235, 229)"
   }
 }
 ```
@@ -78,9 +80,13 @@ Each file must be valid JSON with the following structure:
 - File format: **JSON** (`.json` extension)
 - Custom themes with the same `id` as a built-in theme will override the built-in
 
+### Fallbacks
+
+Any property you omit inherits the value from the **Default Dark** theme. You only need to specify the tokens you want to change — a theme file containing a single accent override is valid and will render correctly, with every other surface falling back to the default palette.
+
 ## Color Properties Reference
 
-You can customize any of the following 47 CSS custom properties. Properties you don't specify will use the default theme's values.
+You can customize any of the following 57 CSS custom properties.
 
 ### Scheme
 
@@ -92,12 +98,14 @@ You can customize any of the following 47 CSS custom properties. Properties you 
 
 | Property | Description |
 |----------|-------------|
-| `accent-primary` | Primary accent color (e.g., `#f0a050`) |
-| `accent-primary-rgb` | RGB values for opacity variants (e.g., `240, 160, 80`) |
+| `accent-primary` | Primary accent color (e.g., `#e07850`) |
+| `accent-primary-rgb` | RGB values for opacity variants (e.g., `224, 120, 80`) |
 | `accent-dim` | Dimmed accent for less prominent elements |
-| `accent-bg` | Transparent accent background (e.g., `rgba(240, 160, 80, 0.08)`) |
+| `accent-bg` | Transparent accent background (e.g., `rgba(224, 120, 80, 0.08)`) |
 | `accent-bg-strong` | Stronger accent background |
-| `accent-glow` | Glow/shadow effect (e.g., `0 0 12px rgba(240, 160, 80, 0.25)`) |
+| `accent-glow` | Glow/shadow effect (e.g., `0 0 12px rgba(224, 120, 80, 0.25)`) |
+| `mascot-pink` | Secondary brand pink used for the mascot and highlight accents |
+| `mascot-pink-dim` | Dimmed mascot pink for subtler highlights |
 
 ### Text
 
@@ -152,9 +160,9 @@ You can customize any of the following 47 CSS custom properties. Properties you 
 
 | Property | Description |
 |----------|-------------|
-| `badge-done` | Agent finished badge color (teal family) |
-| `badge-plan` | Plan awaiting review badge color (blue family) |
-| `badge-ask` | Agent question badge color (amber family) |
+| `badge-done` | Agent finished badge color |
+| `badge-plan` | Plan awaiting review badge color |
+| `badge-ask` | Agent question badge color |
 
 ### Diff View
 
@@ -174,10 +182,25 @@ You can customize any of the following 47 CSS custom properties. Properties you 
 | `divider` | Divider/separator lines |
 | `toolbar-active` | Active toolbar button background |
 | `toolbar-active-text` | Active toolbar button text |
+| `error-bg` | Error surface background |
+| `error-border` | Error surface border |
+| `error-hover` | Error surface hover state |
+| `overlay-bg` | Scrim behind modals and popovers |
+| `overlay-bg-heavy` | Stronger scrim for opaque overlays |
 | `shadow-sm` | Small box shadow |
 | `shadow-md` | Medium box shadow |
 | `shadow-lg` | Large box shadow |
 | `shadow-card-hover` | Card hover shadow |
+
+### Typography
+
+Typography tokens are themeable but most themes leave them at the Default Dark stacks. Override them to ship a theme with its own typographic voice — user-level font preferences set in `Settings > Appearance` still take precedence over whatever a theme specifies.
+
+| Property | Description |
+|----------|-------------|
+| `font-sans` | UI sans-serif font stack (e.g., `"Inter", system-ui, sans-serif`) |
+| `font-mono` | Monospace font stack used by code blocks and terminal tabs |
+| `font-display` | Display font stack for headings and brand surfaces |
 
 ## Example: Creating a Theme
 
@@ -241,4 +264,4 @@ Here's a complete example based on the built-in Warm Ember theme:
 }
 ```
 
-Save this file to `~/.claudette/themes/warm-ember.json`, then select it from `Settings > Appearance`.
+Save this file to `~/.claudette/themes/warm-ember.json`, then select it from `Settings > Appearance`. Most custom themes are much shorter — only the tokens you want to change need to appear.
