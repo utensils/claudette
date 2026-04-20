@@ -779,32 +779,11 @@ export const useAppStore = create<AppState>((set) => ({
         nextIds: nextTurns.map((turn) => turn.id),
       });
 
-      // Seed latestTurnUsage from the most recent hydrated turn so the
-      // meter renders correctly on workspace reload, without needing a
-      // new turn to land. Only write if the hydrated turn has live tokens
-      // (legacy turns without token metadata leave the field unset).
-      const lastTurn = nextTurns[nextTurns.length - 1];
-      const nextLatestTurnUsage =
-        lastTurn &&
-        (typeof lastTurn.inputTokens === "number" ||
-          typeof lastTurn.outputTokens === "number")
-          ? {
-              ...s.latestTurnUsage,
-              [wsId]: {
-                inputTokens: lastTurn.inputTokens,
-                outputTokens: lastTurn.outputTokens,
-                cacheReadTokens: lastTurn.cacheReadTokens,
-                cacheCreationTokens: lastTurn.cacheCreationTokens,
-              },
-            }
-          : s.latestTurnUsage;
-
       return {
         completedTurns: {
           ...s.completedTurns,
           [wsId]: nextTurns,
         },
-        latestTurnUsage: nextLatestTurnUsage,
       };
     }),
   setCompletedTurns: (wsId, turns) =>

@@ -949,7 +949,7 @@ describe("finalizeTurn tool-free turn (no activities)", () => {
   });
 });
 
-describe("hydrateCompletedTurns seeds latestTurnUsage", () => {
+describe("hydrateCompletedTurns leaves latestTurnUsage untouched", () => {
   beforeEach(() => {
     useAppStore.setState({
       completedTurns: {},
@@ -957,7 +957,18 @@ describe("hydrateCompletedTurns seeds latestTurnUsage", () => {
     });
   });
 
-  it("copies the latest hydrated turn's token fields into latestTurnUsage", () => {
+  it("does not modify latestTurnUsage when hydrating turns with tokens", () => {
+    // Seed an existing meter value from a prior live turn.
+    useAppStore.setState({
+      latestTurnUsage: {
+        ws1: {
+          inputTokens: 999,
+          outputTokens: 42,
+          cacheReadTokens: 12_345,
+          cacheCreationTokens: 67,
+        },
+      },
+    });
     useAppStore.getState().hydrateCompletedTurns("ws1", [
       {
         id: "cp1",
@@ -968,30 +979,21 @@ describe("hydrateCompletedTurns seeds latestTurnUsage", () => {
         durationMs: 1000,
         inputTokens: 500,
         outputTokens: 100,
-      },
-      {
-        id: "cp2",
-        activities: [],
-        messageCount: 1,
-        collapsed: true,
-        afterMessageIndex: 4,
-        durationMs: 2000,
-        inputTokens: 2000,
-        outputTokens: 150,
         cacheReadTokens: 50_000,
         cacheCreationTokens: 800,
       },
     ]);
-    // cp2 is the most recent — its tokens should seed the meter.
+    // Hydration should not stomp the existing meter value — the meter
+    // is now seeded by extractLatestCallUsage at the caller.
     expect(useAppStore.getState().latestTurnUsage.ws1).toEqual({
-      inputTokens: 2000,
-      outputTokens: 150,
-      cacheReadTokens: 50_000,
-      cacheCreationTokens: 800,
+      inputTokens: 999,
+      outputTokens: 42,
+      cacheReadTokens: 12_345,
+      cacheCreationTokens: 67,
     });
   });
 
-  it("leaves latestTurnUsage untouched when hydrated turns have no token data", () => {
+  it("does not create latestTurnUsage for a workspace that had none", () => {
     useAppStore.getState().hydrateCompletedTurns("ws1", [
       {
         id: "cp1",
@@ -999,6 +1001,8 @@ describe("hydrateCompletedTurns seeds latestTurnUsage", () => {
         messageCount: 1,
         collapsed: true,
         afterMessageIndex: 2,
+        inputTokens: 500,
+        outputTokens: 100,
       },
     ]);
     expect(useAppStore.getState().latestTurnUsage.ws1).toBeUndefined();
