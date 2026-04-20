@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.15.0](https://github.com/utensils/claudette/compare/v0.14.0...v0.15.0) (2026-04-20)
+
+
+### Features
+
+* **sidebar:** group by SCM status and filter by repo ([#301](https://github.com/utensils/claudette/issues/301)) ([c2ce309](https://github.com/utensils/claudette/commit/c2ce3093613b0846d374556954960985954a57c3))
+* **updater:** add stable/nightly update channel toggle ([#307](https://github.com/utensils/claudette/issues/307)) ([6508014](https://github.com/utensils/claudette/commit/65080141327b54a87635ea11064484ae2a3e2c75))
+
+
+### Bug Fixes
+
+* **git:** support local-only repos without a remote ([#295](https://github.com/utensils/claudette/issues/295)) ([1fd7de1](https://github.com/utensils/claudette/commit/1fd7de169b2f105ec3f33843ae9328910ca02970))
+* **sidebar:** show empty state when status grouping renders nothing ([#310](https://github.com/utensils/claudette/issues/310)) ([8291688](https://github.com/utensils/claudette/commit/829168876e45368b3ee17e673ca2b04bac431165))
+* **ui:** match dropdown height to text input height ([#309](https://github.com/utensils/claudette/issues/309)) ([1e147a2](https://github.com/utensils/claudette/commit/1e147a2d1b55c08913d22aa962dfede24426aeb1))
+
 ## [0.14.0](https://github.com/utensils/claudette/compare/v0.13.1...v0.14.0) (2026-04-19)
 
 
