@@ -8,6 +8,7 @@ import type { ConversationCheckpoint } from "../types/checkpoint";
 import { extractToolSummary } from "./toolSummary";
 import { parseAskUserQuestion } from "./parseAgentQuestion";
 import { debugChat } from "../utils/chatDebug";
+import { extractLatestCallUsage } from "../utils/extractLatestCallUsage";
 
 const ASK_USER_QUESTION_TOOL = "AskUserQuestion";
 
@@ -501,6 +502,11 @@ export function useAgentStream() {
             messageIds: filtered.map((msg) => msg.id),
           });
           setChatMessages(wsId, filtered);
+          const callUsage = extractLatestCallUsage(filtered);
+          const { setLatestTurnUsage, clearLatestTurnUsage } =
+            useAppStore.getState();
+          if (callUsage) setLatestTurnUsage(wsId, callUsage);
+          else clearLatestTurnUsage(wsId);
         })
         .catch((e) => console.error("Failed to reload messages after checkpoint:", e));
     });

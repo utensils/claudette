@@ -33,6 +33,7 @@ import { findLatestPlanFilePath } from "./planFilePath";
 import type { PermissionLevel } from "../../stores/useAppStore";
 import { open } from "@tauri-apps/plugin-dialog";
 import { reconstructCompletedTurns } from "../../utils/reconstructTurns";
+import { extractLatestCallUsage } from "../../utils/extractLatestCallUsage";
 import type { SlashCommand, FileEntry } from "../../services/tauri";
 import type { ChatMessage, ChatAttachment, AttachmentInput, PendingAttachment } from "../../types/chat";
 import { base64ToBytes } from "../../utils/base64";
@@ -354,6 +355,13 @@ export function ChatPanel() {
         historyRef.current[wsId] = filtered
           .filter((m) => m.role === "User")
           .map((m) => m.content);
+        // Seed the ContextMeter from the last assistant message's per-call
+        // token data. If none is available (fresh / pre-migration workspace),
+        // clear any stale value so the meter hides.
+        const callUsage = extractLatestCallUsage(filtered);
+        const { setLatestTurnUsage, clearLatestTurnUsage } = useAppStore.getState();
+        if (callUsage) setLatestTurnUsage(wsId, callUsage);
+        else clearLatestTurnUsage(wsId);
 
         // Load attachments for this workspace's messages.
         if (isLocal) {
