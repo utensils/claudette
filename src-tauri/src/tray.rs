@@ -60,7 +60,7 @@ enum TrayIconStyle {
     Light,
     /// Always render as a black shape; macOS does not tint it.
     Dark,
-    /// Render in the logo's brand orange (#e3704e).
+    /// Render in the logo's brand coral (#e07850).
     Color,
 }
 
