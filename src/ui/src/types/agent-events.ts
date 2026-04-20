@@ -22,12 +22,25 @@ export type StreamEvent =
       // `skip_serializing_if`), so the wire payload can carry either
       // `{ usage: null }` or `usage` omitted entirely. The cache fields
       // can likewise be `null` when the CLI doesn't emit them.
-      usage?: {
-        input_tokens: number;
-        output_tokens: number;
-        cache_creation_input_tokens?: number | null;
-        cache_read_input_tokens?: number | null;
-      } | null;
+      usage?:
+        | {
+            input_tokens: number;
+            output_tokens: number;
+            cache_creation_input_tokens?: number | null;
+            cache_read_input_tokens?: number | null;
+            // Per-iteration breakdown. The CLI emits a single-entry array
+            // containing the FINAL iteration's per-call usage, regardless
+            // of how many backend API calls the Claudette-level turn
+            // contained. The ContextMeter uses this (not the top-level
+            // aggregate) to reflect actual end-of-turn context size.
+            iterations?: Array<{
+              input_tokens: number;
+              output_tokens: number;
+              cache_read_input_tokens?: number | null;
+              cache_creation_input_tokens?: number | null;
+            }>;
+          }
+        | null;
     }
   | { type: "user"; message: UserEventMessage }
   | { type: "Unknown" };
