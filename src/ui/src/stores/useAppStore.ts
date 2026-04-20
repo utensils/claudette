@@ -161,7 +161,6 @@ interface AppState {
   setStreamingContent: (wsId: string, content: string) => void;
   appendStreamingContent: (wsId: string, text: string) => void;
   setPendingTypewriter: (wsId: string, messageId: string, text: string) => void;
-  clearPendingTypewriter: (wsId: string) => void;
   /** Atomic drain-end handoff: clears both `pendingTypewriter` and
    *  `streamingThinking` in a single store update so the streaming thinking
    *  block and the draining assistant text hand off to the completed message
@@ -603,10 +602,6 @@ export const useAppStore = create<AppState>((set) => ({
         ...s.pendingTypewriter,
         [wsId]: { messageId, text },
       },
-    })),
-  clearPendingTypewriter: (wsId) =>
-    set((s) => ({
-      pendingTypewriter: { ...s.pendingTypewriter, [wsId]: null },
     })),
   finishTypewriterDrain: (wsId) =>
     set((s) => ({

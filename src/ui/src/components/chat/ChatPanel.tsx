@@ -225,6 +225,7 @@ export function ChatPanel() {
     (s) => (selectedWorkspaceId ? s.agentQuestions[selectedWorkspaceId] ?? null : null)
   );
   const clearAgentQuestion = useAppStore((s) => s.clearAgentQuestion);
+  const finishTypewriterDrainTop = useAppStore((s) => s.finishTypewriterDrain);
   const pendingPlan = useAppStore(
     (s) => (selectedWorkspaceId ? s.planApprovals[selectedWorkspaceId] ?? null : null)
   );
@@ -723,10 +724,14 @@ export function ChatPanel() {
     }
 
     // Clear any pending agent question or plan approval — the user is sending
-    // a new message (answer from a card or manual override).
+    // a new message (answer from a card or manual override). Also release any
+    // stuck typewriter drain from the previous turn so the completed message
+    // doesn't stay hidden behind pendingTypewriter across turns (the
+    // drain-complete effect cannot fire while isStreaming flips back to true).
     if (selectedWorkspaceId) {
       clearAgentQuestion(selectedWorkspaceId);
       clearPlanApproval(selectedWorkspaceId);
+      finishTypewriterDrainTop(selectedWorkspaceId);
     }
 
     setError(null);

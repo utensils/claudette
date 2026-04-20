@@ -99,6 +99,41 @@ describe("streamingThinking (per-workspace)", () => {
   });
 });
 
+describe("finishTypewriterDrain (per-workspace)", () => {
+  beforeEach(() => {
+    useAppStore.setState({ pendingTypewriter: {}, streamingThinking: {} });
+  });
+
+  it("clears pendingTypewriter and streamingThinking in one update", () => {
+    useAppStore.getState().setPendingTypewriter(WS_ID, "msg-1", "hello world");
+    useAppStore.getState().appendStreamingThinking(WS_ID, "hm...");
+    useAppStore.getState().finishTypewriterDrain(WS_ID);
+    expect(useAppStore.getState().pendingTypewriter[WS_ID]).toBeNull();
+    expect(useAppStore.getState().streamingThinking[WS_ID]).toBe("");
+  });
+
+  it("is isolated per workspace — other workspaces are unaffected", () => {
+    useAppStore.getState().setPendingTypewriter("ws-a", "msg-a", "alpha");
+    useAppStore.getState().appendStreamingThinking("ws-a", "think-a");
+    useAppStore.getState().setPendingTypewriter("ws-b", "msg-b", "beta");
+    useAppStore.getState().appendStreamingThinking("ws-b", "think-b");
+    useAppStore.getState().finishTypewriterDrain("ws-a");
+    expect(useAppStore.getState().pendingTypewriter["ws-a"]).toBeNull();
+    expect(useAppStore.getState().streamingThinking["ws-a"]).toBe("");
+    expect(useAppStore.getState().pendingTypewriter["ws-b"]).toEqual({
+      messageId: "msg-b",
+      text: "beta",
+    });
+    expect(useAppStore.getState().streamingThinking["ws-b"]).toBe("think-b");
+  });
+
+  it("is a no-op when called with no prior state", () => {
+    useAppStore.getState().finishTypewriterDrain(WS_ID);
+    expect(useAppStore.getState().pendingTypewriter[WS_ID]).toBeNull();
+    expect(useAppStore.getState().streamingThinking[WS_ID]).toBe("");
+  });
+});
+
 describe("plugin settings routing", () => {
   beforeEach(() => {
     useAppStore.setState({
