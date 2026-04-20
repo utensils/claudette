@@ -92,6 +92,21 @@ export interface PlanApproval {
   allowedPrompts: Array<{ tool: string; prompt: string }>;
 }
 
+/**
+ * Token usage from the most recent completed turn for a workspace.
+ * Lives as its own slice (`latestTurnUsage`) rather than being derived from
+ * `completedTurns` because `finalizeTurn` early-returns for tool-free turns
+ * — so a Q&A turn without tool calls doesn't add a CompletedTurn but should
+ * still refresh the ContextMeter. The shape matches the `result.usage` block
+ * the CLI emits on every turn end.
+ */
+export interface TurnUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
+}
+
 interface AppState {
   // -- Repositories --
   repositories: Repository[];
@@ -120,6 +135,12 @@ interface AppState {
   showThinkingBlocks: Record<string, boolean>;
   toolActivities: Record<string, ToolActivity[]>;
   completedTurns: Record<string, CompletedTurn[]>;
+  /** Latest `result.usage` values per workspace — kept in sync with every
+   *  turn end, including tool-free turns that don't produce a CompletedTurn.
+   *  The ContextMeter reads from here so it reflects the latest turn even
+   *  when the timeline doesn't record one. */
+  latestTurnUsage: Record<string, TurnUsage>;
+  setLatestTurnUsage: (wsId: string, usage: TurnUsage) => void;
   setChatMessages: (wsId: string, messages: ChatMessage[]) => void;
   addChatMessage: (wsId: string, message: ChatMessage) => void;
   setStreamingContent: (wsId: string, content: string) => void;
@@ -509,6 +530,11 @@ export const useAppStore = create<AppState>((set) => ({
   showThinkingBlocks: {},
   toolActivities: {},
   completedTurns: {},
+  latestTurnUsage: {},
+  setLatestTurnUsage: (wsId, usage) =>
+    set((s) => ({
+      latestTurnUsage: { ...s.latestTurnUsage, [wsId]: usage },
+    })),
   setChatMessages: (wsId, messages) =>
     set((s) => ({
       chatMessages: { ...s.chatMessages, [wsId]: messages },
@@ -609,6 +635,24 @@ export const useAppStore = create<AppState>((set) => ({
     cacheCreationTokens,
   ) =>
     set((s) => {
+      // Always refresh the meter's latestTurnUsage — even for tool-free
+      // turns that don't produce a CompletedTurn. Only write when the
+      // caller actually provided input/output tokens (avoids stomping the
+      // previous value with an all-undefined record on rare empty Results).
+      const hasUsage =
+        typeof inputTokens === "number" || typeof outputTokens === "number";
+      const nextLatestTurnUsage = hasUsage
+        ? {
+            ...s.latestTurnUsage,
+            [wsId]: {
+              inputTokens,
+              outputTokens,
+              cacheReadTokens,
+              cacheCreationTokens,
+            },
+          }
+        : s.latestTurnUsage;
+
       const activities = s.toolActivities[wsId] || [];
       if (activities.length === 0) {
         debugChat("store", "finalizeTurn skipped", {
@@ -619,7 +663,7 @@ export const useAppStore = create<AppState>((set) => ({
             (turn) => turn.id,
           ),
         });
-        return {};
+        return { latestTurnUsage: nextLatestTurnUsage };
       }
       const turn: CompletedTurn = {
         id: turnId ?? crypto.randomUUID(),
@@ -657,6 +701,7 @@ export const useAppStore = create<AppState>((set) => ({
           [wsId]: [...(s.completedTurns[wsId] || []), turn],
         },
         toolActivities: { ...s.toolActivities, [wsId]: [] },
+        latestTurnUsage: nextLatestTurnUsage,
       };
     }),
   hydrateCompletedTurns: (wsId, turns) =>
@@ -701,11 +746,32 @@ export const useAppStore = create<AppState>((set) => ({
         nextIds: nextTurns.map((turn) => turn.id),
       });
 
+      // Seed latestTurnUsage from the most recent hydrated turn so the
+      // meter renders correctly on workspace reload, without needing a
+      // new turn to land. Only write if the hydrated turn has live tokens
+      // (legacy turns without token metadata leave the field unset).
+      const lastTurn = nextTurns[nextTurns.length - 1];
+      const nextLatestTurnUsage =
+        lastTurn &&
+        (typeof lastTurn.inputTokens === "number" ||
+          typeof lastTurn.outputTokens === "number")
+          ? {
+              ...s.latestTurnUsage,
+              [wsId]: {
+                inputTokens: lastTurn.inputTokens,
+                outputTokens: lastTurn.outputTokens,
+                cacheReadTokens: lastTurn.cacheReadTokens,
+                cacheCreationTokens: lastTurn.cacheCreationTokens,
+              },
+            }
+          : s.latestTurnUsage;
+
       return {
         completedTurns: {
           ...s.completedTurns,
           [wsId]: nextTurns,
         },
+        latestTurnUsage: nextLatestTurnUsage,
       };
     }),
   setCompletedTurns: (wsId, turns) =>
