@@ -2,6 +2,10 @@ import { create } from "zustand";
 import { DEFAULT_THEME_ID } from "../styles/themes";
 import { debugChat } from "../utils/chatDebug";
 import { extractLatestCallUsage } from "../utils/extractLatestCallUsage";
+import {
+  extractCompactionEvents,
+  type CompactionEvent,
+} from "../utils/compactionSentinel";
 import type {
   Repository,
   Workspace,
@@ -156,6 +160,13 @@ interface AppState {
    *  rollback or empty load leaves no assistant message with token data —
    *  clearing hides the meter rather than leaving a stale value. */
   clearLatestTurnUsage: (wsId: string) => void;
+  /** Per-workspace compaction history, re-derived from the persisted
+   *  COMPACTION:* sentinel messages on workspace load and updated live
+   *  on compact_boundary events. The ChatPanel renders a divider at
+   *  each event's afterMessageIndex. */
+  compactionEvents: Record<string, CompactionEvent[]>;
+  setCompactionEvents: (wsId: string, events: CompactionEvent[]) => void;
+  addCompactionEvent: (wsId: string, event: CompactionEvent) => void;
   setChatMessages: (wsId: string, messages: ChatMessage[]) => void;
   addChatMessage: (wsId: string, message: ChatMessage) => void;
   setStreamingContent: (wsId: string, content: string) => void;
@@ -580,6 +591,18 @@ export const useAppStore = create<AppState>((set) => ({
       delete next[wsId];
       return { latestTurnUsage: next };
     }),
+  compactionEvents: {},
+  setCompactionEvents: (wsId, events) =>
+    set((s) => ({
+      compactionEvents: { ...s.compactionEvents, [wsId]: events },
+    })),
+  addCompactionEvent: (wsId, event) =>
+    set((s) => ({
+      compactionEvents: {
+        ...s.compactionEvents,
+        [wsId]: [...(s.compactionEvents[wsId] ?? []), event],
+      },
+    })),
   setChatMessages: (wsId, messages) =>
     set((s) => ({
       chatMessages: { ...s.chatMessages, [wsId]: messages },
@@ -882,6 +905,13 @@ export const useAppStore = create<AppState>((set) => ({
         delete next[wsId];
         latestTurnUsage = next;
       }
+      // Re-derive compactionEvents too — rollback's message truncation
+      // might drop compactions. Empty array for rolled-back-to-empty is
+      // fine (the slice is additive; empty == no dividers to render).
+      const nextCompactionEvents = {
+        ...s.compactionEvents,
+        [wsId]: extractCompactionEvents(messages),
+      };
       return {
         chatMessages: { ...s.chatMessages, [wsId]: messages },
         lastMessages: updatedLastMessages,
@@ -902,6 +932,7 @@ export const useAppStore = create<AppState>((set) => ({
           })(),
         },
         latestTurnUsage,
+        compactionEvents: nextCompactionEvents,
       };
     }),
 
