@@ -120,13 +120,14 @@ impl Database {
     /// `schema_migrations`. Each migration's SQL and its tracking-row insert
     /// run inside a single transaction, so a failure leaves no partial state.
     fn run_migrations(conn: &Connection, migrations: &[Migration]) -> Result<(), rusqlite::Error> {
-        debug_assert!(
-            {
-                let mut seen = HashSet::new();
-                migrations.iter().all(|m| seen.insert(m.id))
-            },
-            "duplicate migration id in MIGRATIONS",
-        );
+        let mut seen: HashSet<&str> = HashSet::with_capacity(migrations.len());
+        for m in migrations {
+            assert!(
+                seen.insert(m.id),
+                "duplicate migration id in MIGRATIONS: {}",
+                m.id,
+            );
+        }
 
         let applied: HashSet<String> = conn
             .prepare("SELECT id FROM schema_migrations")?
