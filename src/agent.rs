@@ -54,6 +54,18 @@ pub struct TokenUsageIteration {
     pub cache_read_input_tokens: Option<u64>,
 }
 
+/// Payload the CLI emits on `subtype: "compact_boundary"` after context
+/// compaction completes. Shape verified against captured stream-json
+/// in a live session. `trigger` is a `String` (not enum) so unexpected
+/// future values don't crash parsing.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct CompactMetadata {
+    pub trigger: String,
+    pub pre_tokens: u64,
+    pub post_tokens: u64,
+    pub duration_ms: u64,
+}
+
 /// Top-level JSON line from Claude CLI stdout.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -63,6 +75,18 @@ pub enum StreamEvent {
         subtype: String,
         #[serde(default)]
         session_id: Option<String>,
+        /// Only present on `subtype: "status"` events. Values observed:
+        /// `"requesting"` (normal API call), `"compacting"` (compaction in
+        /// flight), or `null` (compaction complete).
+        #[serde(default)]
+        status: Option<String>,
+        /// Only present on the end-of-compaction `status` event. Value
+        /// observed: `"success"`.
+        #[serde(default)]
+        compact_result: Option<String>,
+        /// Only present on `subtype: "compact_boundary"` events.
+        #[serde(default)]
+        compact_metadata: Option<CompactMetadata>,
     },
 
     #[serde(rename = "stream_event")]
@@ -1281,6 +1305,7 @@ mod tests {
             StreamEvent::System {
                 subtype,
                 session_id,
+                ..
             } => {
                 assert_eq!(subtype, "init");
                 assert_eq!(session_id.unwrap(), "abc-123");
@@ -1297,6 +1322,7 @@ mod tests {
             StreamEvent::System {
                 subtype,
                 session_id,
+                ..
             } => {
                 assert_eq!(subtype, "init");
                 assert!(session_id.is_none());
@@ -2885,5 +2911,125 @@ mod token_usage_tests {
             !re_encoded.contains("\"iterations\""),
             "iterations key should be omitted when absent: {re_encoded}"
         );
+    }
+}
+
+#[cfg(test)]
+mod compaction_tests {
+    use super::*;
+
+    #[test]
+    fn deserializes_compact_boundary_with_metadata() {
+        let line = r#"{
+            "type": "system",
+            "subtype": "compact_boundary",
+            "session_id": "sess-abc",
+            "compact_metadata": {
+                "trigger": "manual",
+                "pre_tokens": 174144,
+                "post_tokens": 8782,
+                "duration_ms": 94167
+            }
+        }"#;
+        let ev: StreamEvent = serde_json::from_str(line).unwrap();
+        match ev {
+            StreamEvent::System {
+                subtype,
+                compact_metadata: Some(meta),
+                ..
+            } => {
+                assert_eq!(subtype, "compact_boundary");
+                assert_eq!(meta.trigger, "manual");
+                assert_eq!(meta.pre_tokens, 174144);
+                assert_eq!(meta.post_tokens, 8782);
+                assert_eq!(meta.duration_ms, 94167);
+            }
+            other => panic!("expected System(compact_boundary) with metadata, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deserializes_status_compacting() {
+        let line = r#"{
+            "type": "system",
+            "subtype": "status",
+            "status": "compacting",
+            "session_id": "sess-abc"
+        }"#;
+        let ev: StreamEvent = serde_json::from_str(line).unwrap();
+        match ev {
+            StreamEvent::System {
+                subtype,
+                status: Some(s),
+                ..
+            } => {
+                assert_eq!(subtype, "status");
+                assert_eq!(s, "compacting");
+            }
+            other => panic!("expected System(status:compacting), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deserializes_status_null_with_compact_result() {
+        // End-of-compaction event: status is explicitly null, compact_result is "success".
+        let line = r#"{
+            "type": "system",
+            "subtype": "status",
+            "status": null,
+            "compact_result": "success",
+            "session_id": "sess-abc"
+        }"#;
+        let ev: StreamEvent = serde_json::from_str(line).unwrap();
+        match ev {
+            StreamEvent::System {
+                subtype,
+                status,
+                compact_result: Some(r),
+                ..
+            } => {
+                assert_eq!(subtype, "status");
+                assert!(status.is_none());
+                assert_eq!(r, "success");
+            }
+            other => panic!("expected System(status:null + compact_result), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deserializes_system_init_without_new_fields() {
+        // Existing events without the new fields must still parse cleanly.
+        let line = r#"{"type":"system","subtype":"init","session_id":"sess-abc"}"#;
+        let ev: StreamEvent = serde_json::from_str(line).unwrap();
+        match ev {
+            StreamEvent::System {
+                subtype,
+                status,
+                compact_result,
+                compact_metadata,
+                ..
+            } => {
+                assert_eq!(subtype, "init");
+                assert!(status.is_none());
+                assert!(compact_result.is_none());
+                assert!(compact_metadata.is_none());
+            }
+            other => panic!("expected System(init), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn compact_boundary_round_trip() {
+        // Rust bridge deserializes CLI JSON then re-serializes to the
+        // frontend via Tauri. compact_metadata must survive the round-trip.
+        let line = r#"{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":1,"post_tokens":2,"duration_ms":3}}"#;
+        let ev: StreamEvent = serde_json::from_str(line).unwrap();
+        let re = serde_json::to_string(&ev).unwrap();
+        assert!(
+            re.contains("\"compact_metadata\""),
+            "compact_metadata dropped: {re}"
+        );
+        assert!(re.contains("\"trigger\":\"auto\""), "trigger dropped: {re}");
+        assert!(re.contains("\"pre_tokens\":1"), "pre_tokens dropped: {re}");
     }
 }
