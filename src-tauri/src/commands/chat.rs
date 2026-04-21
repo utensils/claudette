@@ -445,11 +445,13 @@ pub async fn send_chat_message(
         )
     {
         eprintln!(
-            "[chat] session flags drifted (plan_mode {} -> {}, allowed_tools changed: {}, exited_plan: {}) — tearing down persistent session for {workspace_id}",
+            "[chat] session flags drifted (plan_mode {} -> {}, allowed_tools changed: {}, exited_plan: {}, disable_1m_context {} -> {}) — tearing down persistent session for {workspace_id}",
             session.session_plan_mode,
             agent_settings.plan_mode,
             session.session_allowed_tools != allowed_tools,
             session.session_exited_plan,
+            session.session_disable_1m_context,
+            agent_settings.disable_1m_context,
         );
         // Resolve any pending permission requests against the doomed process
         // before we kill it, so the next turn doesn't carry stale tool_use_ids.
@@ -2167,6 +2169,58 @@ mod tests {
         assert!(!persistent_session_flags_drifted(
             session(false, &tools, true),
             requested(false, &tools),
+        ));
+    }
+
+    #[test]
+    fn drift_when_disable_1m_context_flips() {
+        // Switching between a 200k model SKU (disable_1m_context=true) and a
+        // 1M SKU (false) must respawn: CLAUDE_CODE_DISABLE_1M_CONTEXT is baked
+        // into the subprocess env at spawn and cannot be changed per-turn.
+        let tools = s(&["Read", "Write"]);
+        assert!(persistent_session_flags_drifted(
+            SessionFlags {
+                plan_mode: false,
+                allowed_tools: &tools,
+                exited_plan: false,
+                disable_1m_context: false,
+            },
+            RequestedFlags {
+                plan_mode: false,
+                allowed_tools: &tools,
+                disable_1m_context: true,
+            },
+        ));
+        assert!(persistent_session_flags_drifted(
+            SessionFlags {
+                plan_mode: false,
+                allowed_tools: &tools,
+                exited_plan: false,
+                disable_1m_context: true,
+            },
+            RequestedFlags {
+                plan_mode: false,
+                allowed_tools: &tools,
+                disable_1m_context: false,
+            },
+        ));
+    }
+
+    #[test]
+    fn no_drift_when_disable_1m_context_matches() {
+        let tools = s(&["Read"]);
+        assert!(!persistent_session_flags_drifted(
+            SessionFlags {
+                plan_mode: false,
+                allowed_tools: &tools,
+                exited_plan: false,
+                disable_1m_context: true,
+            },
+            RequestedFlags {
+                plan_mode: false,
+                allowed_tools: &tools,
+                disable_1m_context: true,
+            },
         ));
     }
 
