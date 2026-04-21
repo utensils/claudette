@@ -5,7 +5,6 @@ import { RepoLeaderboard } from "./RepoLeaderboard";
 import { SessionHeatmap } from "./SessionHeatmap";
 import { TurnHistogram } from "./TurnHistogram";
 import { SlashCommandTop } from "./SlashCommandTop";
-import { SessionTimeline } from "./SessionTimeline";
 
 export function AnalyticsSection() {
   const [open, setOpen] = useState(true);
@@ -22,15 +21,12 @@ export function AnalyticsSection() {
         <span className={styles.analyticsTitle}>Analytics</span>
       </button>
       {open ? (
-        <>
-          <div className={styles.analyticsGrid}>
-            <RepoLeaderboard />
-            <SessionHeatmap />
-            <TurnHistogram />
-            <SlashCommandTop />
-          </div>
-          <SessionTimeline />
-        </>
+        <div className={styles.analyticsGrid}>
+          <RepoLeaderboard />
+          <SessionHeatmap />
+          <TurnHistogram />
+          <SlashCommandTop />
+        </div>
       ) : null}
     </div>
   );

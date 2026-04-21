@@ -10,6 +10,12 @@ export interface DashboardMetrics {
   commitsDaily14d: number[];
   /** 30 entries, oldest first. */
   costDaily30d: number[];
+  totalInputTokens30d: number;
+  totalOutputTokens30d: number;
+  /** Cache hit rate [0, 1] over 30 days (live data only). */
+  cacheHitRate30d: number;
+  /** 30 entries, oldest first. Input + output tokens per day. */
+  tokensDaily30d: number[];
 }
 
 export interface WorkspaceMetrics {
@@ -24,6 +30,8 @@ export interface RepoLeaderRow {
   sessions: number;
   commits: number;
   totalCostUsd: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
 }
 
 export interface HeatmapCell {
