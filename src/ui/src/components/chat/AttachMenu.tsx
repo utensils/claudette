@@ -135,7 +135,7 @@ export function AttachMenu({
           <span className={styles.menuIcon}>
             <Paperclip size={14} />
           </span>
-          Add files or images
+          Add files
         </button>
 
         {/* Connectors — servers grouped by source with toggle switches */}

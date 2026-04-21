@@ -2,11 +2,14 @@ import { describe, it, expect } from "vitest";
 import {
   SUPPORTED_IMAGE_TYPES,
   SUPPORTED_DOCUMENT_TYPES,
+  SUPPORTED_TEXT_TYPES,
   SUPPORTED_ATTACHMENT_TYPES,
   MAX_IMAGE_SIZE,
   MAX_PDF_SIZE,
+  MAX_TEXT_SIZE,
   MAX_ATTACHMENTS,
   maxSizeFor,
+  isTextFile,
 } from "../../utils/attachmentValidation";
 
 function isSupported(mimeType: string): boolean {
@@ -26,7 +29,8 @@ function validateSize(mimeType: string, sizeBytes: number): boolean {
 }
 
 /** Mirrors the content block type selection in build_stdin_message. */
-function contentBlockType(mimeType: string): "image" | "document" {
+function contentBlockType(mimeType: string): "image" | "document" | "text" {
+  if (isTextFile(mimeType)) return "text";
   return mimeType === "application/pdf" ? "document" : "image";
 }
 
@@ -42,20 +46,28 @@ describe("attachment type validation", () => {
     expect(isSupported("application/pdf")).toBe(true);
   });
 
+  it("accepts text/plain files", () => {
+    expect(isSupported("text/plain")).toBe(true);
+  });
+
   it("rejects unsupported file types", () => {
     expect(isSupported("image/svg+xml")).toBe(false);
-    expect(isSupported("text/plain")).toBe(false);
     expect(isSupported("image/bmp")).toBe(false);
     expect(isSupported("video/mp4")).toBe(false);
     expect(isSupported("application/json")).toBe(false);
     expect(isSupported("application/zip")).toBe(false);
   });
 
-  it("classifies images vs documents", () => {
+  it("classifies images vs documents vs text", () => {
     expect(isImage("image/png")).toBe(true);
     expect(isDocument("image/png")).toBe(false);
+    expect(isTextFile("image/png")).toBe(false);
     expect(isImage("application/pdf")).toBe(false);
     expect(isDocument("application/pdf")).toBe(true);
+    expect(isTextFile("application/pdf")).toBe(false);
+    expect(isImage("text/plain")).toBe(false);
+    expect(isDocument("text/plain")).toBe(false);
+    expect(isTextFile("text/plain")).toBe(true);
   });
 });
 
@@ -75,10 +87,17 @@ describe("attachment size validation", () => {
     expect(validateSize("application/pdf", MAX_PDF_SIZE + 1)).toBe(false);
   });
 
+  it("enforces text file size limit at 500 KB", () => {
+    expect(validateSize("text/plain", 100 * 1024)).toBe(true);
+    expect(validateSize("text/plain", MAX_TEXT_SIZE)).toBe(true);
+    expect(validateSize("text/plain", MAX_TEXT_SIZE + 1)).toBe(false);
+  });
+
   it("applies correct limit per type", () => {
     const size = 10 * 1024 * 1024; // 10 MB — valid for PDF, invalid for image
     expect(validateSize("application/pdf", size)).toBe(true);
     expect(validateSize("image/png", size)).toBe(false);
+    expect(validateSize("text/plain", size)).toBe(false);
   });
 });
 
@@ -100,6 +119,28 @@ describe("content block type mapping", () => {
 
   it("uses document blocks for PDFs", () => {
     expect(contentBlockType("application/pdf")).toBe("document");
+  });
+
+  it("uses text blocks for text files", () => {
+    expect(contentBlockType("text/plain")).toBe("text");
+  });
+});
+
+describe("text file helpers", () => {
+  it("isTextFile identifies text MIME types", () => {
+    expect(isTextFile("text/plain")).toBe(true);
+    expect(isTextFile("image/png")).toBe(false);
+    expect(isTextFile("application/pdf")).toBe(false);
+    expect(isTextFile("application/json")).toBe(false);
+  });
+
+  it("maxSizeFor returns 500 KB for text files", () => {
+    expect(maxSizeFor("text/plain")).toBe(500 * 1024);
+  });
+
+  it("SUPPORTED_TEXT_TYPES contains text/plain", () => {
+    expect(SUPPORTED_TEXT_TYPES.has("text/plain")).toBe(true);
+    expect(SUPPORTED_TEXT_TYPES.size).toBe(1);
   });
 });
 

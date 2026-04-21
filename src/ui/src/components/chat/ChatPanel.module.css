@@ -1087,3 +1087,31 @@
   color: var(--text-muted);
   font-size: 13px;
 }
+
+.textFileBadge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  gap: 2px;
+  background: var(--hover-bg-subtle);
+  color: var(--text-muted);
+  padding: 4px;
+  text-align: center;
+  overflow: hidden;
+}
+
+.textFileName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+  font-size: 9px;
+}
+
+.textFileSize {
+  font-size: 9px;
+  color: var(--text-faint);
+}

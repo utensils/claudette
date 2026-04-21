@@ -39,10 +39,12 @@ import type { SlashCommand, FileEntry } from "../../services/tauri";
 import type { ChatMessage, ChatAttachment, AttachmentInput, PendingAttachment } from "../../types/chat";
 import { base64ToBytes } from "../../utils/base64";
 import {
+  SUPPORTED_IMAGE_TYPES,
   SUPPORTED_DOCUMENT_TYPES,
   SUPPORTED_ATTACHMENT_TYPES,
   MAX_ATTACHMENTS,
   maxSizeFor,
+  isTextFile,
 } from "../../utils/attachmentValidation";
 import { useAgentStream } from "../../hooks/useAgentStream";
 import { useTypewriter } from "../../hooks/useTypewriter";
@@ -1614,6 +1616,16 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
                         filename={att.filename}
                         className={styles.messageImage}
                       />
+                    ) : att.media_type === "text/plain" ? (
+                      <div key={att.id} className={styles.messagePdf}>
+                        <FileText size={14} />
+                        <span>{att.filename}</span>
+                        <span className={styles.textFileSize}>
+                          {att.size_bytes < 1024
+                            ? `${att.size_bytes} B`
+                            : `${(att.size_bytes / 1024).toFixed(0)} KB`}
+                        </span>
+                      </div>
                     ) : (
                       <img
                         key={att.id}
@@ -2010,13 +2022,15 @@ function ChatInputArea({
 
   // -- Attachment helpers --
 
-  const addAttachment = useCallback(async (file: Blob, filename: string) => {
+  const addAttachment = useCallback(async (file: Blob, filename: string, textContent?: string) => {
     if (isRemote) return; // Attachments not supported over remote transport
     if (!SUPPORTED_ATTACHMENT_TYPES.has(file.type)) {
       console.warn(`Unsupported file type: ${file.type}`);
       return;
     }
     const isPdf = SUPPORTED_DOCUMENT_TYPES.has(file.type);
+    const isImage = SUPPORTED_IMAGE_TYPES.has(file.type);
+    const isText = isTextFile(file.type);
     const sizeLimit = maxSizeFor(file.type);
     if (file.size > sizeLimit) {
       console.warn(
@@ -2025,15 +2039,16 @@ function ChatInputArea({
       return;
     }
     const data_base64 = await fileToBase64(file);
-    // PDFs get a rendered first-page thumbnail; images use a blob URL.
     let preview_url: string;
     if (isPdf) {
       const { generatePdfThumbnail } = await import("../../utils/pdfThumbnail");
       preview_url = await generatePdfThumbnail(await file.arrayBuffer()).catch(() => "");
-    } else {
+      if (!preview_url) return;
+    } else if (isImage) {
       preview_url = URL.createObjectURL(file);
+    } else {
+      preview_url = "";
     }
-    if (!preview_url) return; // PDF thumbnail generation failed
     const att: PendingAttachment = {
       id: crypto.randomUUID(),
       filename,
@@ -2041,6 +2056,7 @@ function ChatInputArea({
       data_base64,
       preview_url,
       size_bytes: file.size,
+      text_content: isText ? (textContent ?? null) : null,
     };
     setPendingAttachments((prev) => {
       if (prev.length >= MAX_ATTACHMENTS) {
@@ -2083,7 +2099,7 @@ function ChatInputArea({
       for (const a of attachmentsPrefill) {
         const bytes = base64ToBytes(a.data_base64);
         const blob = new Blob([bytes], { type: a.media_type });
-        await addAttachment(blob, a.filename);
+        await addAttachment(blob, a.filename, a.text_content ?? undefined);
       }
     })().catch((e) => console.error("Failed to restore attachment prefill:", e));
   }, [attachmentsPrefill, setAttachmentsPrefill, addAttachment]);
@@ -2094,6 +2110,9 @@ function ChatInputArea({
       if (!items) return;
 
       for (const item of items) {
+        // Skip text/plain — pasting text should insert into the textarea,
+        // not create a file attachment.
+        if (item.type === "text/plain") continue;
         if (SUPPORTED_ATTACHMENT_TYPES.has(item.type)) {
           e.preventDefault();
           const file = item.getAsFile();
@@ -2144,7 +2163,7 @@ function ChatInputArea({
                   if (cancelled) return;
                   const bytes = base64ToBytes(result.data_base64);
                   const blob = new Blob([bytes], { type: result.media_type });
-                  addAttachmentRef.current(blob, result.filename);
+                  addAttachmentRef.current(blob, result.filename, result.text_content ?? undefined);
                 })
                 .catch((err) =>
                   console.warn("Skipped dropped file:", err),
@@ -2171,15 +2190,7 @@ function ChatInputArea({
   }, [isRemote]); // Stable dep — no re-registration on callback changes
 
   const handleAttachClick = useCallback(async () => {
-    const selected = await open({
-      multiple: true,
-      filters: [
-        {
-          name: "Images & Documents",
-          extensions: ["png", "jpg", "jpeg", "gif", "webp", "pdf"],
-        },
-      ],
-    });
+    const selected = await open({ multiple: true });
     if (!selected) return;
     const paths = Array.isArray(selected) ? selected : [selected];
     for (const filePath of paths) {
@@ -2187,7 +2198,7 @@ function ChatInputArea({
         const result = await readFileAsBase64(filePath);
         const bytes = base64ToBytes(result.data_base64);
         const blob = new Blob([bytes], { type: result.media_type });
-        await addAttachment(blob, result.filename);
+        await addAttachment(blob, result.filename, result.text_content ?? undefined);
       } catch (err) {
         console.error("Failed to read file:", err);
       }
@@ -2210,6 +2221,7 @@ function ChatInputArea({
             filename: a.filename,
             media_type: a.media_type,
             data_base64: a.data_base64,
+            text_content: a.text_content ?? undefined,
           }))
         : undefined;
     onSend(chatInput, files, attachmentPayload);
@@ -2379,7 +2391,19 @@ function ChatInputArea({
         <div className={styles.attachmentStrip}>
           {pendingAttachments.map((att) => (
             <div key={att.id} className={styles.attachmentThumb} title={att.filename}>
-              <img src={att.preview_url} alt={att.filename} />
+              {att.text_content != null ? (
+                <div className={styles.textFileBadge}>
+                  <FileText size={16} />
+                  <span className={styles.textFileName}>{att.filename}</span>
+                  <span className={styles.textFileSize}>
+                    {att.size_bytes < 1024
+                      ? `${att.size_bytes} B`
+                      : `${(att.size_bytes / 1024).toFixed(0)} KB`}
+                  </span>
+                </div>
+              ) : (
+                <img src={att.preview_url} alt={att.filename} />
+              )}
               <button
                 className={styles.attachmentRemove}
                 onClick={() => removeAttachment(att.id)}

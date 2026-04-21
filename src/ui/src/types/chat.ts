@@ -15,13 +15,14 @@ export interface ChatMessage {
   cache_creation_tokens: number | null;
 }
 
-/** A persisted image attachment returned from the backend (base64-encoded). */
+/** A persisted attachment returned from the backend (base64-encoded). */
 export interface ChatAttachment {
   id: string;
   message_id: string;
   filename: string;
   media_type: string;
   data_base64: string;
+  text_content: string | null;
   width: number | null;
   height: number | null;
   size_bytes: number;
@@ -32,6 +33,7 @@ export interface AttachmentInput {
   filename: string;
   media_type: string;
   data_base64: string;
+  text_content?: string;
 }
 
 /** A staged attachment in the frontend before the message is sent. */
@@ -42,4 +44,5 @@ export interface PendingAttachment {
   data_base64: string;
   preview_url: string; // blob: URL for thumbnail display
   size_bytes: number;
+  text_content: string | null;
 }

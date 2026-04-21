@@ -306,14 +306,17 @@ pub enum AgentEvent {
 // Per-turn agent settings
 // ---------------------------------------------------------------------------
 
-/// An attachment (image or document) to send alongside the prompt via stream-json stdin.
+/// An attachment to send alongside the prompt via stream-json stdin.
 ///
-/// Images use `"type": "image"` content blocks; PDFs use `"type": "document"`.
-/// The block type is determined by [`media_type`] in [`build_stdin_message`].
+/// Images use `"type": "image"` content blocks; PDFs use `"type": "document"`;
+/// text files (when [`text_content`] is `Some`) use `"type": "text"`.
+/// The block type is determined in [`build_stdin_message`].
 #[derive(Debug, Clone)]
-pub struct ImageAttachment {
+pub struct FileAttachment {
     pub media_type: String,
     pub data_base64: String,
+    pub text_content: Option<String>,
+    pub filename: Option<String>,
 }
 
 /// Per-turn settings that control CLI flags for the agent subprocess.
@@ -476,9 +479,9 @@ pub fn build_claude_args(
 /// Build a single-line JSON payload for stdin when using `--input-format stream-json`.
 ///
 /// Produces an `SDKUserMessage` with content blocks: one text block for the
-/// prompt, then one `image` or `document` block per attachment (PDFs use the
-/// `document` block type; all other supported formats use `image`).
-pub fn build_stdin_message(prompt: &str, attachments: &[ImageAttachment]) -> String {
+/// prompt, then one block per attachment — text files become `"text"` blocks,
+/// PDFs become `"document"` blocks, and images become `"image"` blocks.
+pub fn build_stdin_message(prompt: &str, attachments: &[FileAttachment]) -> String {
     let mut content_blocks = Vec::new();
 
     // Only add a text block if the prompt is non-empty — the API rejects
@@ -488,19 +491,29 @@ pub fn build_stdin_message(prompt: &str, attachments: &[ImageAttachment]) -> Str
     }
 
     for att in attachments {
-        let block_type = if att.media_type == "application/pdf" {
-            "document"
+        if let Some(ref text) = att.text_content {
+            let label = att.filename.as_deref().unwrap_or("file");
+            let block_text = format!("Content of `{label}`:\n```\n{text}\n```");
+            content_blocks.push(serde_json::json!({"type": "text", "text": block_text}));
+        } else if att.media_type == "application/pdf" {
+            content_blocks.push(serde_json::json!({
+                "type": "document",
+                "source": {
+                    "type": "base64",
+                    "media_type": att.media_type,
+                    "data": att.data_base64,
+                }
+            }));
         } else {
-            "image"
-        };
-        content_blocks.push(serde_json::json!({
-            "type": block_type,
-            "source": {
-                "type": "base64",
-                "media_type": att.media_type,
-                "data": att.data_base64,
-            }
-        }));
+            content_blocks.push(serde_json::json!({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": att.media_type,
+                    "data": att.data_base64,
+                }
+            }));
+        }
     }
 
     serde_json::json!({
@@ -677,7 +690,7 @@ pub async fn run_turn(
     allowed_tools: &[String],
     custom_instructions: Option<&str>,
     settings: &AgentSettings,
-    attachments: &[ImageAttachment],
+    attachments: &[FileAttachment],
     ws_env: Option<&WorkspaceEnv>,
 ) -> Result<TurnHandle, String> {
     let has_attachments = !attachments.is_empty();
@@ -998,7 +1011,7 @@ impl PersistentSession {
     pub async fn send_turn(
         &self,
         prompt: &str,
-        attachments: &[ImageAttachment],
+        attachments: &[FileAttachment],
     ) -> Result<TurnHandle, String> {
         use tokio::io::AsyncWriteExt;
 
@@ -2356,9 +2369,11 @@ mod tests {
 
     #[test]
     fn test_build_stdin_message_empty_prompt_omits_text_block() {
-        let attachments = vec![ImageAttachment {
+        let attachments = vec![FileAttachment {
             media_type: "image/png".into(),
             data_base64: "data".into(),
+            text_content: None,
+            filename: None,
         }];
         let msg = build_stdin_message("", &attachments);
         let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
@@ -2370,9 +2385,11 @@ mod tests {
 
     #[test]
     fn test_build_stdin_message_whitespace_prompt_omits_text_block() {
-        let attachments = vec![ImageAttachment {
+        let attachments = vec![FileAttachment {
             media_type: "image/png".into(),
             data_base64: "data".into(),
+            text_content: None,
+            filename: None,
         }];
         let msg = build_stdin_message("   ", &attachments);
         let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
@@ -2383,9 +2400,11 @@ mod tests {
 
     #[test]
     fn test_build_stdin_message_with_image() {
-        let attachments = vec![ImageAttachment {
+        let attachments = vec![FileAttachment {
             media_type: "image/png".into(),
             data_base64: "iVBORw0KGgo=".into(),
+            text_content: None,
+            filename: None,
         }];
         let msg = build_stdin_message("describe this", &attachments);
         let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
@@ -2402,17 +2421,23 @@ mod tests {
     #[test]
     fn test_build_stdin_message_multiple_images() {
         let attachments = vec![
-            ImageAttachment {
+            FileAttachment {
                 media_type: "image/png".into(),
                 data_base64: "png_data".into(),
+                text_content: None,
+                filename: None,
             },
-            ImageAttachment {
+            FileAttachment {
                 media_type: "image/jpeg".into(),
                 data_base64: "jpg_data".into(),
+                text_content: None,
+                filename: None,
             },
-            ImageAttachment {
+            FileAttachment {
                 media_type: "image/webp".into(),
                 data_base64: "webp_data".into(),
+                text_content: None,
+                filename: None,
             },
         ];
         let msg = build_stdin_message("compare these", &attachments);
@@ -2426,9 +2451,11 @@ mod tests {
 
     #[test]
     fn test_build_stdin_message_pdf_uses_document_block() {
-        let attachments = vec![ImageAttachment {
+        let attachments = vec![FileAttachment {
             media_type: "application/pdf".into(),
             data_base64: "JVBERi0xLjQ=".into(),
+            text_content: None,
+            filename: None,
         }];
         let msg = build_stdin_message("review this doc", &attachments);
         let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
@@ -2445,13 +2472,17 @@ mod tests {
     #[test]
     fn test_build_stdin_message_mixed_images_and_pdf() {
         let attachments = vec![
-            ImageAttachment {
+            FileAttachment {
                 media_type: "image/png".into(),
                 data_base64: "png_data".into(),
+                text_content: None,
+                filename: None,
             },
-            ImageAttachment {
+            FileAttachment {
                 media_type: "application/pdf".into(),
                 data_base64: "pdf_data".into(),
+                text_content: None,
+                filename: None,
             },
         ];
         let msg = build_stdin_message("here are files", &attachments);
@@ -2460,6 +2491,76 @@ mod tests {
         assert_eq!(content.len(), 3); // 1 text + 1 image + 1 document
         assert_eq!(content[1]["type"], "image");
         assert_eq!(content[2]["type"], "document");
+    }
+
+    #[test]
+    fn test_build_stdin_message_text_file() {
+        let attachments = vec![FileAttachment {
+            media_type: "text/plain".into(),
+            data_base64: String::new(),
+            text_content: Some("fn main() {}".into()),
+            filename: Some("main.rs".into()),
+        }];
+        let msg = build_stdin_message("review this", &attachments);
+        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+        let content = parsed["message"]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "review this");
+        assert_eq!(content[1]["type"], "text");
+        let text = content[1]["text"].as_str().unwrap();
+        assert!(text.contains("main.rs"));
+        assert!(text.contains("fn main() {}"));
+    }
+
+    #[test]
+    fn test_build_stdin_message_mixed_all_types() {
+        let attachments = vec![
+            FileAttachment {
+                media_type: "text/plain".into(),
+                data_base64: String::new(),
+                text_content: Some("hello world".into()),
+                filename: Some("readme.txt".into()),
+            },
+            FileAttachment {
+                media_type: "image/png".into(),
+                data_base64: "png_data".into(),
+                text_content: None,
+                filename: None,
+            },
+            FileAttachment {
+                media_type: "application/pdf".into(),
+                data_base64: "pdf_data".into(),
+                text_content: None,
+                filename: None,
+            },
+        ];
+        let msg = build_stdin_message("check these", &attachments);
+        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+        let content = parsed["message"]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 4); // 1 prompt + 1 text file + 1 image + 1 document
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "check these");
+        assert_eq!(content[1]["type"], "text");
+        assert!(content[1]["text"].as_str().unwrap().contains("readme.txt"));
+        assert_eq!(content[2]["type"], "image");
+        assert_eq!(content[3]["type"], "document");
+    }
+
+    #[test]
+    fn test_build_stdin_message_text_file_no_filename_uses_default() {
+        let attachments = vec![FileAttachment {
+            media_type: "text/plain".into(),
+            data_base64: String::new(),
+            text_content: Some("data".into()),
+            filename: None,
+        }];
+        let msg = build_stdin_message("", &attachments);
+        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+        let content = parsed["message"]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 1);
+        let text = content[0]["text"].as_str().unwrap();
+        assert!(text.contains("`file`"));
     }
 
     // -- Persistent session args --
