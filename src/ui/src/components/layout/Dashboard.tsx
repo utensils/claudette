@@ -1,6 +1,8 @@
 import { memo, useMemo, useEffect, useState } from "react";
 import { GitBranch, Layers, Globe, BadgeCheck, BadgeInfo, BadgeQuestionMark, ChevronDown, ChevronRight } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
+import type { AgentStatus } from "../../types/workspace";
+import { isAgentBusy } from "../../utils/agentStatus";
 import { useSpinnerFrame } from "../../hooks/useSpinnerFrame";
 import { RepoIcon } from "../shared/RepoIcon";
 import { PanelToggles } from "../shared/PanelToggles";
@@ -60,7 +62,7 @@ const WorkspaceCard = memo(function WorkspaceCard({
   onClick,
   index,
 }: {
-  ws: { id: string; branch_name: string; agent_status: string | { Error: string } };
+  ws: { id: string; branch_name: string; agent_status: AgentStatus };
   repo: { name: string; icon: string | null } | undefined;
   baseBranch: string | undefined;
   lastMsg: { role: string; content: string } | undefined;
@@ -70,7 +72,7 @@ const WorkspaceCard = memo(function WorkspaceCard({
   onClick: (id: string | null) => void;
   index: number;
 }) {
-  const isRunning = ws.agent_status === "Running";
+  const isRunning = isAgentBusy(ws.agent_status);
   const elapsed = useElapsed(isRunning);
 
   const statusColor =
@@ -244,7 +246,7 @@ export function Dashboard() {
   }, [workspaceIdsKey, fetchWorkspaceMetricsBatch]);
 
   const anyRunning = useMemo(
-    () => activeWorkspaces.some((ws) => ws.agent_status === "Running"),
+    () => activeWorkspaces.some((ws) => isAgentBusy(ws.agent_status)),
     [activeWorkspaces],
   );
   const spinnerChar = useSpinnerFrame(anyRunning);
@@ -254,9 +256,9 @@ export function Dashboard() {
       const badge: "ask" | "plan" | "done" | null =
         agentQuestions[ws.id] ? "ask" :
         planApprovals[ws.id] ? "plan" :
-        unreadCompletions.has(ws.id) && ws.agent_status !== "Running" ? "done" :
+        unreadCompletions.has(ws.id) && !isAgentBusy(ws.agent_status) ? "done" :
         null;
-      const groupKey = badge ? 0 : ws.agent_status === "Running" ? 1 : 2;
+      const groupKey = badge ? 0 : isAgentBusy(ws.agent_status) ? 1 : 2;
       const lastUsed = lastMessages[ws.id]?.created_at ?? ws.created_at;
       return { ws, badge, groupKey, lastUsed };
     });
@@ -291,7 +293,7 @@ export function Dashboard() {
   }
 
   const runningCount = activeWorkspaces.filter(
-    (ws) => ws.agent_status === "Running"
+    (ws) => isAgentBusy(ws.agent_status)
   ).length;
 
   return (
@@ -331,7 +333,7 @@ export function Dashboard() {
                     lastMsg={lastMessages[ws.id]}
                     remoteName={ws.remote_connection_id ? remoteNameMap.get(ws.remote_connection_id) : undefined}
                     badge={badge}
-                    spinnerChar={ws.agent_status === "Running" ? spinnerChar : ""}
+                    spinnerChar={isAgentBusy(ws.agent_status) ? spinnerChar : ""}
                     onClick={selectWorkspace}
                     index={i}
                   />

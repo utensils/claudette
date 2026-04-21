@@ -9,7 +9,27 @@ export type AgentEvent =
   | { ProcessExited: number | null };
 
 export type StreamEvent =
-  | { type: "system"; subtype: string; session_id?: string }
+  | {
+      type: "system";
+      subtype: string;
+      /** Rust serializes `Option<String>` as `null` (no `skip_serializing_if`),
+       * so the wire payload carries `null` when absent. */
+      session_id?: string | null;
+      /** Only present on `subtype: "status"` events. */
+      status?: string | null;
+      /** Only present on the end-of-compaction status event. Rust
+       * serializes `Option<String>` as `null` (no `skip_serializing_if`),
+       * so the wire payload carries `null` when absent. */
+      compact_result?: string | null;
+      /** Only present on `subtype: "compact_boundary"` events. Rust
+       * serializes `Option<CompactMetadata>` as `null` when absent. */
+      compact_metadata?: {
+        trigger: string;
+        pre_tokens: number;
+        post_tokens: number;
+        duration_ms: number;
+      } | null;
+    }
   | { type: "stream_event"; event: InnerStreamEvent }
   | { type: "assistant"; message: AssistantMessage }
   | {
@@ -42,7 +62,7 @@ export type StreamEvent =
           }
         | null;
     }
-  | { type: "user"; message: UserEventMessage }
+  | { type: "user"; message: UserEventMessage; isSynthetic?: boolean }
   | { type: "Unknown" };
 
 export type InnerStreamEvent =
@@ -94,7 +114,7 @@ export type ContentBlock =
   | { type: "Unknown" };
 
 export interface UserEventMessage {
-  content: UserContentBlock[];
+  content: string | UserContentBlock[];
 }
 
 export type UserContentBlock =

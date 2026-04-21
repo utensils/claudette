@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { isAgentBusy } from "../../utils/agentStatus";
 import { ChevronRight } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import { useTaskTracker } from "../../hooks/useTaskTracker";
@@ -27,7 +28,7 @@ export const RightSidebar = memo(function RightSidebar() {
   const setActiveTab = useAppStore((s) => s.setRightSidebarTab);
 
   const ws = workspaces.find((w) => w.id === selectedWorkspaceId);
-  const isRunning = ws?.agent_status === "Running";
+  const isRunning = isAgentBusy(ws?.agent_status);
   const remoteConnectionId = ws?.remote_connection_id ?? null;
   const prevIsRunning = useRef<boolean | undefined>(undefined);
 

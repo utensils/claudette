@@ -4,6 +4,7 @@ export type AgentStatus =
   | "Running"
   | "Idle"
   | "Stopped"
+  | "Compacting"
   | { Error: string };
 
 export interface Workspace {

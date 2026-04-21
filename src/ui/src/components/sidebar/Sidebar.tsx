@@ -87,7 +87,11 @@ export const Sidebar = memo(function Sidebar() {
   const workspaceTerminalCommands = useAppStore((s) => s.workspaceTerminalCommands);
 
   const anyRunning = useMemo(
-    () => workspaces.some((ws) => ws.agent_status === "Running"),
+    () =>
+      workspaces.some(
+        (ws) =>
+          ws.agent_status === "Running" || ws.agent_status === "Compacting",
+      ),
     [workspaces],
   );
   const spinnerChar = useSpinnerFrame(anyRunning);
@@ -277,8 +281,12 @@ export const Sidebar = memo(function Sidebar() {
           <span className={styles.badgeAsk} title="Question requires attention" aria-label="Question requires attention" role="img">
             <BadgeQuestionMark size={14} />
           </span>
-        ) : ws.agent_status === "Running" ? (
-          <span className={styles.statusSpinner} aria-hidden="true">
+        ) : ws.agent_status === "Running" || ws.agent_status === "Compacting" ? (
+          <span
+            className={styles.statusSpinner}
+            aria-hidden="true"
+            title={ws.agent_status === "Compacting" ? "Compacting context…" : "Running"}
+          >
             {spinnerChar}
           </span>
         ) : (() => {

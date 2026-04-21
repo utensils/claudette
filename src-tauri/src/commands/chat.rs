@@ -745,6 +745,41 @@ pub async fn send_chat_message(
                 got_init = true;
             }
 
+            // Compaction boundary event: the CLI emits this after context
+            // compaction completes. Persist a structured sentinel system
+            // message so the timeline renders a divider on live + reload,
+            // and set the sentinel's cache_read_tokens to post_tokens so
+            // Phase 2.5's extractLatestCallUsage picks up the new meter
+            // baseline on workspace reload.
+            if let AgentEvent::Stream(StreamEvent::System {
+                subtype,
+                compact_metadata: Some(meta),
+                ..
+            }) = &event
+                && subtype == "compact_boundary"
+                && let Ok(db) = Database::open(&db_path)
+            {
+                let sentinel = format!(
+                    "COMPACTION:{}:{}:{}:{}",
+                    meta.trigger, meta.pre_tokens, meta.post_tokens, meta.duration_ms
+                );
+                let msg = ChatMessage {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    workspace_id: ws_id.clone(),
+                    role: ChatRole::System,
+                    content: sentinel,
+                    cost_usd: None,
+                    duration_ms: None,
+                    created_at: now_iso(),
+                    thinking: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    cache_read_tokens: Some(meta.post_tokens as i64),
+                    cache_creation_tokens: None,
+                };
+                let _ = db.insert_chat_message(&msg);
+            }
+
             // Handle control_request: can_use_tool from the CLI's stdio
             // permission prompt protocol. Three branches:
             //   1. AskUserQuestion / ExitPlanMode — stash a pending record and
@@ -875,9 +910,45 @@ pub async fn send_chat_message(
                 mcp_tool_names.insert(id.clone(), name.clone());
             }
 
+            // Synthetic user messages (post-compaction continuation). The
+            // CLI sets isSynthetic: true at the top level of the user
+            // event (sibling of `message`, not inside it). Persist as a
+            // system-role message with a SYNTHETIC_SUMMARY sentinel so
+            // the frontend can render a collapsed-by-default summary
+            // block instead of a spurious user bubble.
+            if let AgentEvent::Stream(StreamEvent::User {
+                message,
+                is_synthetic: true,
+            }) = &event
+                && let claudette::agent::UserMessageContent::Text(body) = &message.content
+                && let Ok(db) = Database::open(&db_path)
+            {
+                let sentinel = format!("SYNTHETIC_SUMMARY:\n{body}");
+                let msg = ChatMessage {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    workspace_id: ws_id.clone(),
+                    role: ChatRole::System,
+                    content: sentinel,
+                    cost_usd: None,
+                    duration_ms: None,
+                    created_at: now_iso(),
+                    thinking: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    cache_read_tokens: None,
+                    cache_creation_tokens: None,
+                };
+                let _ = db.insert_chat_message(&msg);
+            }
+
             // MCP monitoring: check tool results for connection failure patterns.
-            if let AgentEvent::Stream(StreamEvent::User { message }) = &event {
-                for block in &message.content {
+            // Text-content user events (local-command-stdout, synthetic
+            // continuations) skip this block — they're handled by Task 4's
+            // bridge logic and have no tool_result shape to monitor.
+            if let AgentEvent::Stream(StreamEvent::User { message, .. }) = &event
+                && let claudette::agent::UserMessageContent::Blocks(blocks) = &message.content
+            {
+                for block in blocks {
                     if let claudette::agent::UserContentBlock::ToolResult {
                         tool_use_id,
                         content,

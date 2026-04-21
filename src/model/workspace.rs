@@ -6,6 +6,9 @@ pub enum AgentStatus {
     Running,
     Idle,
     Stopped,
+    /// Set while the CLI is context-compacting (~90s). Visually treated
+    /// like Running (spinner + disabled input) but with a distinct label.
+    Compacting,
     Error(String),
 }
 
@@ -15,6 +18,7 @@ impl AgentStatus {
             Self::Running => "Running",
             Self::Idle => "Idle",
             Self::Stopped => "Stopped",
+            Self::Compacting => "Compacting",
             Self::Error(_) => "Error",
         }
     }

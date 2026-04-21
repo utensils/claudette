@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useAppStore } from "../stores/useAppStore";
 import { stopAgent, sendRemoteCommand } from "../services/tauri";
+import { isAgentBusy } from "../utils/agentStatus";
 import {
   focusActiveTerminal,
   focusChatPrompt,
@@ -62,7 +63,7 @@ export function useKeyboardShortcuts() {
           const ws = useAppStore.getState().workspaces.find(
             (w) => w.id === selectedWorkspaceId,
           );
-          if (ws?.agent_status === "Running") {
+          if (ws && isAgentBusy(ws.agent_status)) {
             // Clear queued message — user is taking manual control.
             useAppStore.getState().clearQueuedMessage(selectedWorkspaceId);
             // Route through remote or local stop path.

@@ -121,4 +121,106 @@ describe("extractLatestCallUsage", () => {
     expect(result?.cacheReadTokens).toBeUndefined();
     expect(result?.cacheCreationTokens).toBeUndefined();
   });
+
+  // --- COMPACTION sentinel tests ---
+
+  it("returns postTokens as cacheReadTokens when the last message is a compaction sentinel", () => {
+    const result = extractLatestCallUsage([
+      msg({ id: "1", role: "User", content: "hello" }),
+      msg({
+        id: "2",
+        role: "System",
+        content: "COMPACTION:auto:95000:12000:3400",
+      }),
+    ]);
+    expect(result).toEqual({
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 12000,
+      cacheCreationTokens: undefined,
+    });
+  });
+
+  it("sentinel wins over an earlier assistant message when sentinel is more recent", () => {
+    const result = extractLatestCallUsage([
+      msg({
+        id: "1",
+        role: "Assistant",
+        input_tokens: 500,
+        output_tokens: 100,
+        cache_read_tokens: 80000,
+      }),
+      msg({
+        id: "2",
+        role: "System",
+        content: "COMPACTION:auto:95000:12000:3400",
+      }),
+    ]);
+    expect(result).toEqual({
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 12000,
+      cacheCreationTokens: undefined,
+    });
+  });
+
+  it("assistant message wins over an earlier sentinel when assistant is more recent", () => {
+    const result = extractLatestCallUsage([
+      msg({
+        id: "1",
+        role: "System",
+        content: "COMPACTION:auto:95000:12000:3400",
+      }),
+      msg({
+        id: "2",
+        role: "Assistant",
+        input_tokens: 200,
+        output_tokens: 80,
+        cache_read_tokens: 15000,
+      }),
+    ]);
+    expect(result).toEqual({
+      inputTokens: 200,
+      outputTokens: 80,
+      cacheReadTokens: 15000,
+      cacheCreationTokens: undefined,
+    });
+  });
+
+  it("skips a non-sentinel system message and falls through to an assistant message", () => {
+    const result = extractLatestCallUsage([
+      msg({
+        id: "1",
+        role: "Assistant",
+        input_tokens: 100,
+        output_tokens: 50,
+      }),
+      msg({ id: "2", role: "System", content: "some-other-system-content" }),
+    ]);
+    expect(result).toEqual({
+      inputTokens: 100,
+      outputTokens: 50,
+      cacheReadTokens: undefined,
+      cacheCreationTokens: undefined,
+    });
+  });
+
+  it("treats a malformed COMPACTION prefix as a non-match and keeps looking", () => {
+    // "COMPACTION:" with nothing after — parseCompactionSentinel returns null.
+    const result = extractLatestCallUsage([
+      msg({
+        id: "1",
+        role: "Assistant",
+        input_tokens: 300,
+        output_tokens: 60,
+      }),
+      msg({ id: "2", role: "System", content: "COMPACTION:" }),
+    ]);
+    expect(result).toEqual({
+      inputTokens: 300,
+      outputTokens: 60,
+      cacheReadTokens: undefined,
+      cacheCreationTokens: undefined,
+    });
+  });
 });

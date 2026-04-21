@@ -9,6 +9,7 @@ import { extractToolSummary } from "./toolSummary";
 import { parseAskUserQuestion } from "./parseAgentQuestion";
 import { debugChat } from "../utils/chatDebug";
 import { extractLatestCallUsage } from "../utils/extractLatestCallUsage";
+import { buildCompactionSentinel } from "../utils/compactionSentinel";
 import { pickMeterUsageFromResult } from "./pickMeterUsageFromResult";
 
 const ASK_USER_QUESTION_TOOL = "AskUserQuestion";
@@ -30,6 +31,7 @@ export function useAgentStream() {
   const setPlanApproval = useAppStore((s) => s.setPlanApproval);
   const finalizeTurn = useAppStore((s) => s.finalizeTurn);
   const setPlanMode = useAppStore((s) => s.setPlanMode);
+  const addCompactionEvent = useAppStore((s) => s.addCompactionEvent);
 
   // Map content block index → { toolUseId, toolName } for the current turn.
   // Reset on process exit.
@@ -107,6 +109,80 @@ export function useAgentStream() {
       // Handle different stream event types based on the Rust enum serialization
       if ("type" in streamEvent) {
         switch (streamEvent.type) {
+          case "system": {
+            // Compaction lifecycle: status -> "compacting" marks start;
+            // compact_boundary marks end.
+            if (
+              streamEvent.subtype === "status" &&
+              streamEvent.status === "compacting"
+            ) {
+              updateWorkspace(wsId, { agent_status: "Compacting" });
+              break;
+            }
+            if (
+              streamEvent.subtype === "compact_boundary" &&
+              streamEvent.compact_metadata
+            ) {
+              const m = streamEvent.compact_metadata;
+              const store = useAppStore.getState();
+              const afterMessageIndex = (store.chatMessages[wsId] ?? []).length;
+
+              addCompactionEvent(wsId, {
+                timestamp: new Date().toISOString(),
+                trigger: m.trigger,
+                preTokens: m.pre_tokens,
+                postTokens: m.post_tokens,
+                durationMs: m.duration_ms,
+                afterMessageIndex,
+              });
+
+              // The Tauri bridge persists a COMPACTION sentinel
+              // ChatMessage to the DB but does NOT emit it as a live
+              // stream event. Synthesize a matching message locally so
+              // ChatPanel's sentinel dispatch renders the divider
+              // immediately. The DB row uses a different UUID; on
+              // workspace reload the DB version replaces this live
+              // copy transparently.
+              const sentinel = buildCompactionSentinel({
+                trigger: m.trigger,
+                preTokens: m.pre_tokens,
+                postTokens: m.post_tokens,
+                durationMs: m.duration_ms,
+              });
+              const liveSentinel: ChatMessage = {
+                id: crypto.randomUUID(),
+                workspace_id: wsId,
+                role: "System",
+                content: sentinel,
+                cost_usd: null,
+                duration_ms: null,
+                created_at: new Date().toISOString(),
+                thinking: null,
+                input_tokens: null,
+                output_tokens: null,
+                cache_read_tokens: m.post_tokens,
+                cache_creation_tokens: null,
+              };
+              store.addChatMessage(wsId, liveSentinel);
+
+              // Drop the ContextMeter to the post-compaction baseline
+              // during the live session. Zeros (not undefined) keep
+              // `computeMeterState` from hiding the meter — the CLI has
+              // reset the working context, so showing 0+postTokens+0
+              // reflects the actual post-compaction state.
+              store.setLatestTurnUsage(wsId, {
+                inputTokens: 0,
+                outputTokens: 0,
+                cacheReadTokens: m.post_tokens,
+                cacheCreationTokens: undefined,
+              });
+
+              updateWorkspace(wsId, { agent_status: "Running" });
+              break;
+            }
+            // Other system subtypes (init, hook_*, etc.) — no action.
+            break;
+          }
           case "stream_event": {
             const inner = streamEvent.event;
             if ("type" in inner) {
@@ -318,7 +394,10 @@ export function useAgentStream() {
             // Tool results — update matching tool activities and extract
             // plan file path from EnterPlanMode results.
             const planPathRe = /(\/[^\s)"`]+\/\.claude\/plans\/[^\s)"`]+\.md)/;
-            for (const block of streamEvent.message.content) {
+            const blocks = Array.isArray(streamEvent.message.content)
+              ? streamEvent.message.content
+              : [];
+            for (const block of blocks) {
               if (block.type === "tool_result") {
                 const text =
                   typeof block.content === "string"
@@ -356,6 +435,7 @@ export function useAgentStream() {
     setPlanApproval,
     finalizeTurn,
     setPlanMode,
+    addCompactionEvent,
   ]);
 
   // Listen for `agent-permission-prompt` — emitted by the Rust bridge the

@@ -1081,6 +1081,120 @@ describe("clearLatestTurnUsage", () => {
   });
 });
 
+describe("compactionEvents slice", () => {
+  beforeEach(() => {
+    useAppStore.setState({ compactionEvents: {} });
+  });
+
+  it("setCompactionEvents replaces the per-workspace list", () => {
+    useAppStore.getState().setCompactionEvents("ws1", [
+      {
+        timestamp: "2026-04-20T00:00:00Z",
+        trigger: "manual",
+        preTokens: 100,
+        postTokens: 10,
+        durationMs: 1000,
+        afterMessageIndex: 5,
+      },
+    ]);
+    expect(useAppStore.getState().compactionEvents.ws1).toHaveLength(1);
+  });
+
+  it("addCompactionEvent appends", () => {
+    const e1 = {
+      timestamp: "2026-04-20T00:00:00Z",
+      trigger: "manual",
+      preTokens: 100,
+      postTokens: 10,
+      durationMs: 1000,
+      afterMessageIndex: 5,
+    };
+    const e2 = {
+      timestamp: "2026-04-20T00:01:00Z",
+      trigger: "auto",
+      preTokens: 200,
+      postTokens: 20,
+      durationMs: 2000,
+      afterMessageIndex: 12,
+    };
+    useAppStore.getState().addCompactionEvent("ws1", e1);
+    useAppStore.getState().addCompactionEvent("ws1", e2);
+    expect(useAppStore.getState().compactionEvents.ws1).toEqual([e1, e2]);
+  });
+});
+
+describe("rollbackConversation re-derives compactionEvents", () => {
+  beforeEach(() => {
+    useAppStore.setState({
+      chatMessages: {},
+      completedTurns: {},
+      toolActivities: {},
+      latestTurnUsage: {},
+      lastMessages: {},
+      agentQuestions: {},
+      planApprovals: {},
+      streamingContent: {},
+      streamingThinking: {},
+      checkpoints: {},
+      compactionEvents: {
+        ws1: [
+          {
+            timestamp: "t",
+            trigger: "manual",
+            preTokens: 1,
+            postTokens: 1,
+            durationMs: 1,
+            afterMessageIndex: 0,
+          },
+        ],
+      },
+    });
+  });
+
+  it("clears compactionEvents when rollback has no COMPACTION sentinels", () => {
+    useAppStore.getState().rollbackConversation("ws1", "cp1", []);
+    expect(useAppStore.getState().compactionEvents.ws1).toEqual([]);
+  });
+
+  it("re-derives compactionEvents from a rolled-back message list", () => {
+    const msgs: ChatMessage[] = [
+      {
+        id: "m1",
+        workspace_id: "ws1",
+        role: "User",
+        content: "hi",
+        cost_usd: null,
+        duration_ms: null,
+        created_at: "2026-04-20T00:00:00Z",
+        thinking: null,
+        input_tokens: null,
+        output_tokens: null,
+        cache_read_tokens: null,
+        cache_creation_tokens: null,
+      },
+      {
+        id: "m2",
+        workspace_id: "ws1",
+        role: "System",
+        content: "COMPACTION:manual:100:10:1000",
+        cost_usd: null,
+        duration_ms: null,
+        created_at: "2026-04-20T00:00:05Z",
+        thinking: null,
+        input_tokens: null,
+        output_tokens: null,
+        cache_read_tokens: null,
+        cache_creation_tokens: null,
+      },
+    ];
+    useAppStore.getState().rollbackConversation("ws1", "cp1", msgs);
+    const evts = useAppStore.getState().compactionEvents.ws1;
+    expect(evts).toHaveLength(1);
+    expect(evts[0].trigger).toBe("manual");
+    expect(evts[0].afterMessageIndex).toBe(1);
+  });
+});
+
 describe("rollbackConversation updates latestTurnUsage", () => {
   beforeEach(() => {
     useAppStore.setState({

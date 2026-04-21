@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useAppStore } from "../stores/useAppStore";
+import { isAgentBusy } from "../utils/agentStatus";
 import {
   checkForUpdatesWithChannel,
   installPendingUpdate,
@@ -54,7 +55,7 @@ export async function installNow(): Promise<void> {
 
 export function installWhenIdle(): void {
   const hasRunning = useAppStore.getState().workspaces.some(
-    (ws) => ws.agent_status === "Running"
+    (ws) => isAgentBusy(ws.agent_status)
   );
   if (!hasRunning) {
     installNow();
@@ -99,7 +100,7 @@ export function useAutoUpdater() {
   const updateInstallWhenIdle = useAppStore((s) => s.updateInstallWhenIdle);
   const updateAvailable = useAppStore((s) => s.updateAvailable);
   const hasRunningAgents = useAppStore(
-    (s) => s.workspaces.some((ws) => ws.agent_status === "Running")
+    (s) => s.workspaces.some((ws) => isAgentBusy(ws.agent_status))
   );
 
   // Subscribe to the Rust-side download progress event.
