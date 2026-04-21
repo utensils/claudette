@@ -34,21 +34,24 @@ impl From<AttentionKind> for NotificationEvent {
     }
 }
 
+fn resolve_notification_sound_with<F>(mut get_setting: F, event: NotificationEvent) -> String
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    get_setting(event.setting_key())
+        .or_else(|| get_setting("notification_sound"))
+        .or_else(|| match get_setting("audio_notifications") {
+            Some(v) if v == "false" => Some("None".to_string()),
+            _ => None,
+        })
+        .unwrap_or_else(|| "Default".to_string())
+}
+
 /// Resolve the notification sound for a given event.
 ///
 /// Fallback: per-event key -> global `notification_sound` -> legacy `audio_notifications` -> "Default"
 pub fn resolve_notification_sound(db: &Database, event: NotificationEvent) -> String {
-    db.get_app_setting(event.setting_key())
-        .ok()
-        .flatten()
-        .or_else(|| db.get_app_setting("notification_sound").ok().flatten())
-        .or_else(
-            || match db.get_app_setting("audio_notifications").ok().flatten() {
-                Some(v) if v == "false" => Some("None".to_string()),
-                _ => None,
-            },
-        )
-        .unwrap_or_else(|| "Default".to_string())
+    resolve_notification_sound_with(|key| db.get_app_setting(key).ok().flatten(), event)
 }
 
 // Baseline tray icons (the ones shipped for the Auto style).
@@ -1046,5 +1049,49 @@ mod tests {
             color_bytes.as_ptr(),
             "light and color idle icons must be distinct PNGs"
         );
+    }
+
+    #[test]
+    fn resolve_sound_uses_per_event_override() {
+        let settings = HashMap::from([
+            ("notification_sound_ask".to_string(), "Bell".to_string()),
+            ("notification_sound".to_string(), "Chime".to_string()),
+            ("audio_notifications".to_string(), "false".to_string()),
+        ]);
+        let resolved = resolve_notification_sound_with(
+            |key| settings.get(key).cloned(),
+            NotificationEvent::Ask,
+        );
+        assert_eq!(resolved, "Bell");
+    }
+
+    #[test]
+    fn resolve_sound_falls_back_to_global() {
+        let settings = HashMap::from([("notification_sound".to_string(), "Chime".to_string())]);
+        let resolved = resolve_notification_sound_with(
+            |key| settings.get(key).cloned(),
+            NotificationEvent::Plan,
+        );
+        assert_eq!(resolved, "Chime");
+    }
+
+    #[test]
+    fn resolve_sound_legacy_audio_false_means_none() {
+        let settings = HashMap::from([("audio_notifications".to_string(), "false".to_string())]);
+        let resolved = resolve_notification_sound_with(
+            |key| settings.get(key).cloned(),
+            NotificationEvent::Finished,
+        );
+        assert_eq!(resolved, "None");
+    }
+
+    #[test]
+    fn resolve_sound_defaults_when_no_settings() {
+        let settings = HashMap::<String, String>::new();
+        let resolved = resolve_notification_sound_with(
+            |key| settings.get(key).cloned(),
+            NotificationEvent::Finished,
+        );
+        assert_eq!(resolved, "Default");
     }
 }
