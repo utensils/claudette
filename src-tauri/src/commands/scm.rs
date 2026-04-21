@@ -640,19 +640,8 @@ async fn auto_archive_workspace(
             .flatten()
             .map(|r| r.path);
 
-        // Match the legacy fallback chain from notify_attention in tray.rs:
-        // notification_sound → audio_notifications=false → "Default"
-        let sound = db
-            .get_app_setting("notification_sound")
-            .ok()
-            .flatten()
-            .or_else(
-                || match db.get_app_setting("audio_notifications").ok().flatten() {
-                    Some(v) if v == "false" => Some("None".to_string()),
-                    _ => None,
-                },
-            )
-            .unwrap_or_else(|| "Default".to_string());
+        let sound =
+            crate::tray::resolve_notification_sound(&db, crate::tray::NotificationEvent::Finished);
 
         // Update DB status
         let _ = db.delete_terminal_tabs_for_workspace(workspace_id);

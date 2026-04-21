@@ -735,9 +735,9 @@ pub async fn send_chat_message(
         // to None after each persistence so per-message counts stay distinct
         // across multi-message turns.
         let mut latest_usage: Option<claudette::agent::TokenUsage> = None;
-        let mut pending_attention_notify: bool;
+        let mut pending_attention_kind: Option<crate::state::AttentionKind>;
         while let Some(event) = rx.recv().await {
-            pending_attention_notify = false;
+            pending_attention_kind = None;
             // Track whether the CLI initialized successfully.
             if let AgentEvent::Stream(StreamEvent::System { subtype, .. }) = &event
                 && subtype == "init"
@@ -893,7 +893,7 @@ pub async fn send_chat_message(
                 // Only send notification once per attention cycle — skip if
                 // we already notified the user about this workspace.
                 if !already_notified {
-                    pending_attention_notify = true;
+                    pending_attention_kind = Some(kind);
                 }
             }
 
@@ -1098,19 +1098,10 @@ pub async fn send_chat_message(
                     && !needs_attention_now
                     && let Ok(db) = Database::open(&db_path)
                 {
-                    let sound = db
-                        .get_app_setting("notification_sound")
-                        .ok()
-                        .flatten()
-                        .or_else(|| {
-                            // Honour legacy setting for users who disabled
-                            // audio before the new notification_sound key existed.
-                            match db.get_app_setting("audio_notifications").ok().flatten() {
-                                Some(v) if v == "false" => Some("None".to_string()),
-                                _ => None,
-                            }
-                        })
-                        .unwrap_or_else(|| "Default".to_string());
+                    let sound = crate::tray::resolve_notification_sound(
+                        &db,
+                        crate::tray::NotificationEvent::Finished,
+                    );
                     if sound != "None" {
                         crate::commands::settings::play_notification_sound(sound);
                     }
@@ -1298,8 +1289,8 @@ pub async fn send_chat_message(
             // frontend — this gives the UI time to update before the system
             // notification / sound fires, so the badge is already visible
             // when the user sees the notification.
-            if pending_attention_notify {
-                crate::tray::notify_attention(&app, &ws_id);
+            if let Some(kind) = pending_attention_kind {
+                crate::tray::notify_attention(&app, &ws_id, kind);
             }
         }
     });

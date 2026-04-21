@@ -8,8 +8,46 @@ import {
 } from "../../../services/tauri";
 import styles from "../Settings.module.css";
 
+interface SoundEvent {
+  key: string;
+  label: string;
+  description: string;
+}
+
+const SOUND_EVENTS: SoundEvent[] = [
+  {
+    key: "notification_sound_ask",
+    label: "Agent question",
+    description: "Sound when an agent needs your input",
+  },
+  {
+    key: "notification_sound_plan",
+    label: "Plan ready",
+    description: "Sound when an agent has a plan for review",
+  },
+  {
+    key: "notification_sound_finished",
+    label: "Work complete",
+    description: "Sound when an agent finishes its task",
+  },
+];
+
+async function resolveSound(eventKey: string): Promise<string> {
+  const perEvent = await getAppSetting(eventKey);
+  if (perEvent) return perEvent;
+  const global = await getAppSetting("notification_sound");
+  if (global) return global;
+  const legacy = await getAppSetting("audio_notifications");
+  if (legacy === "false") return "None";
+  return "Default";
+}
+
 export function NotificationsSettings() {
-  const [notificationSound, setNotificationSound] = useState("Default");
+  const [sounds, setSounds] = useState<Record<string, string>>({
+    notification_sound_ask: "Default",
+    notification_sound_plan: "Default",
+    notification_sound_finished: "Default",
+  });
   const [availableSounds, setAvailableSounds] = useState<string[]>([
     "Default",
     "None",
@@ -19,17 +57,13 @@ export function NotificationsSettings() {
 
   useEffect(() => {
     listNotificationSounds().then(setAvailableSounds).catch(() => {});
-    getAppSetting("notification_sound")
-      .then(async (val) => {
-        if (val) {
-          setNotificationSound(val);
-        } else {
-          const legacy = await getAppSetting("audio_notifications");
-          if (legacy === "false") setNotificationSound("None");
-          else setNotificationSound("Default");
-        }
-      })
-      .catch(() => {});
+    for (const event of SOUND_EVENTS) {
+      resolveSound(event.key)
+        .then((val) =>
+          setSounds((prev) => ({ ...prev, [event.key]: val })),
+        )
+        .catch(() => {});
+    }
     getAppSetting("notification_command")
       .then((val) => {
         if (val) setNotificationCommand(val);
@@ -37,14 +71,14 @@ export function NotificationsSettings() {
       .catch(() => {});
   }, []);
 
-  const handleSoundChange = async (sound: string) => {
-    const prev = notificationSound;
-    setNotificationSound(sound);
+  const handleSoundChange = async (key: string, sound: string) => {
+    const prev = sounds[key];
+    setSounds((s) => ({ ...s, [key]: sound }));
     try {
       setError(null);
-      await setAppSetting("notification_sound", sound);
+      await setAppSetting(key, sound);
     } catch (e) {
-      setNotificationSound(prev);
+      setSounds((s) => ({ ...s, [key]: prev }));
       setError(String(e));
     }
   };
@@ -68,7 +102,7 @@ export function NotificationsSettings() {
         "",
         "",
         "main",
-        "claudette/test-workspace"
+        "claudette/test-workspace",
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Command failed");
@@ -79,37 +113,41 @@ export function NotificationsSettings() {
     <div>
       <h2 className={styles.sectionTitle}>Notifications</h2>
 
-      <div className={styles.settingRow}>
-        <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>Notification sound</div>
-          <div className={styles.settingDescription}>
-            Sound played when an agent needs input or finishes in the background
+      {SOUND_EVENTS.map((event) => (
+        <div key={event.key} className={styles.settingRow}>
+          <div className={styles.settingInfo}>
+            <div className={styles.settingLabel}>{event.label}</div>
+            <div className={styles.settingDescription}>
+              {event.description}
+            </div>
+          </div>
+          <div className={styles.settingControl}>
+            <div className={styles.inlineControl}>
+              <select
+                className={styles.select}
+                value={sounds[event.key]}
+                onChange={(e) =>
+                  handleSoundChange(event.key, e.target.value)
+                }
+              >
+                {availableSounds.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+              <button
+                className={styles.iconBtn}
+                onClick={() => playNotificationSound(sounds[event.key])}
+                title="Preview sound"
+                aria-label={`Preview ${event.label} sound`}
+              >
+                &#9654;
+              </button>
+            </div>
           </div>
         </div>
-        <div className={styles.settingControl}>
-          <div className={styles.inlineControl}>
-            <select
-              className={styles.select}
-              value={notificationSound}
-              onChange={(e) => handleSoundChange(e.target.value)}
-            >
-              {availableSounds.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-            <button
-              className={styles.iconBtn}
-              onClick={() => playNotificationSound(notificationSound)}
-              title="Preview sound"
-              aria-label="Preview sound"
-            >
-              &#9654;
-            </button>
-          </div>
-        </div>
-      </div>
+      ))}
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
