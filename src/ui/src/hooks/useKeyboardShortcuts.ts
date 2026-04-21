@@ -52,10 +52,10 @@ export function useKeyboardShortcuts() {
           toggleCommandPalette();
         } else if (activeModal) {
           closeModal();
-        } else if (useAppStore.getState().settingsOpen) {
-          return;
         } else if (fuzzyFinderOpen) {
           toggleFuzzyFinder();
+        } else if (useAppStore.getState().settingsOpen) {
+          return;
         } else if (diffSelectedFile) {
           setDiffSelectedFile(null);
         } else if (selectedWorkspaceId) {
