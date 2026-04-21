@@ -2057,7 +2057,7 @@ function ChatInputArea({
       data_base64,
       preview_url,
       size_bytes: file.size,
-      text_content: isText ? (textContent ?? null) : null,
+      text_content: isText ? (textContent ?? await file.text()) : null,
     };
     setPendingAttachments((prev) => {
       if (prev.length >= MAX_ATTACHMENTS) {
@@ -2392,7 +2392,7 @@ function ChatInputArea({
         <div className={styles.attachmentStrip}>
           {pendingAttachments.map((att) => (
             <div key={att.id} className={styles.attachmentThumb} title={att.filename}>
-              {att.text_content != null ? (
+              {isTextFile(att.media_type) ? (
                 <div className={styles.textFileBadge}>
                   <FileText size={16} />
                   <span className={styles.textFileName}>{att.filename}</span>

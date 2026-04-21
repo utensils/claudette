@@ -235,12 +235,20 @@ pub async fn send_chat_message(
                 return Err("Invalid PDF: missing %PDF- header".to_string());
             }
             let text_content = if input.media_type == "text/plain" {
+                let check_len = data.len().min(8192);
+                if data[..check_len].contains(&0) {
+                    return Err(
+                        "Invalid text/plain attachment: binary content detected".to_string()
+                    );
+                }
+                let decoded = std::str::from_utf8(&data).map_err(|_| {
+                    "Invalid text/plain attachment: payload is not valid UTF-8".to_string()
+                })?;
                 Some(
                     input
                         .text_content
                         .clone()
-                        .or_else(|| String::from_utf8(data.clone()).ok())
-                        .unwrap_or_default(),
+                        .unwrap_or_else(|| decoded.to_owned()),
                 )
             } else {
                 None
@@ -1908,7 +1916,7 @@ pub async fn load_attachments_for_workspace(
                 String::new()
             };
             let text_content = if is_text {
-                String::from_utf8(a.data.clone()).ok()
+                std::str::from_utf8(&a.data).ok().map(str::to_owned)
             } else {
                 None
             };
@@ -1979,35 +1987,39 @@ pub async fn read_file_as_base64(path: String) -> Result<AttachmentResponse, Str
         _ => None,
     };
 
+    // Check file size via metadata before reading to avoid loading huge
+    // files into memory only to reject them.
+    let metadata = tokio::fs::metadata(&path)
+        .await
+        .map_err(|e| format!("Failed to read file: {e}"))?;
+    let file_len = metadata.len() as usize;
+    if file_len == 0 {
+        return Err("File is empty".to_string());
+    }
+    let max_for_read = if known_media_type == Some("application/pdf") {
+        MAX_PDF_SIZE
+    } else if known_media_type.is_some() {
+        MAX_IMAGE_SIZE
+    } else {
+        MAX_TEXT_SIZE
+    };
+    if file_len > max_for_read {
+        return Err(format!(
+            "File too large: {} (max {})",
+            humanize_size(file_len),
+            humanize_size(max_for_read)
+        ));
+    }
+
     let data = tokio::fs::read(&path)
         .await
         .map_err(|e| format!("Failed to read file: {e}"))?;
 
-    if data.is_empty() {
-        return Err("File is empty".to_string());
-    }
-
     let size_bytes = data.len() as i64;
 
     if let Some(media_type) = known_media_type {
-        // Known binary type — enforce per-type size limits.
-        if media_type == "application/pdf" {
-            if data.len() > MAX_PDF_SIZE {
-                return Err(format!(
-                    "PDF too large: {:.1} MB (max {} MB)",
-                    data.len() as f64 / 1_048_576.0,
-                    MAX_PDF_SIZE / 1_048_576
-                ));
-            }
-            if !data.starts_with(b"%PDF-") {
-                return Err("Invalid PDF file: missing %PDF- header".to_string());
-            }
-        } else if data.len() > MAX_IMAGE_SIZE {
-            return Err(format!(
-                "Image too large: {:.1} MB (max {:.1} MB)",
-                data.len() as f64 / 1_048_576.0,
-                MAX_IMAGE_SIZE as f64 / 1_048_576.0
-            ));
+        if media_type == "application/pdf" && !data.starts_with(b"%PDF-") {
+            return Err("Invalid PDF file: missing %PDF- header".to_string());
         }
 
         let data_base64 = base64_encode(&data);
@@ -2024,13 +2036,6 @@ pub async fn read_file_as_base64(path: String) -> Result<AttachmentResponse, Str
         })
     } else {
         // Unknown extension — attempt to read as text.
-        if data.len() > MAX_TEXT_SIZE {
-            return Err(format!(
-                "Text file too large: {} KB (max {} KB)",
-                data.len() / 1024,
-                MAX_TEXT_SIZE / 1024
-            ));
-        }
         let check_len = data.len().min(8192);
         if data[..check_len].contains(&0) {
             return Err(format!("Unsupported binary file type: .{ext}"));
@@ -2052,6 +2057,14 @@ pub async fn read_file_as_base64(path: String) -> Result<AttachmentResponse, Str
             }
             Err(_) => Err(format!("Unsupported binary file type: .{ext}")),
         }
+    }
+}
+
+fn humanize_size(bytes: usize) -> String {
+    if bytes >= 1_048_576 {
+        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+    } else {
+        format!("{} KB", bytes / 1024)
     }
 }
 
