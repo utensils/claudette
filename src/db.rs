@@ -433,6 +433,28 @@ impl Database {
             )?;
         }
 
+        if version < 23 {
+            // Gate the first-turn auto-rename on a persistent per-workspace
+            // flag. The previous gate (`session.turn_count <= 1`) tripped
+            // spuriously whenever the in-memory session was wiped — on
+            // `stop_agent`, spawn failure, or `!got_init` CLI exits — letting
+            // a later prompt rename a workspace that had already had its
+            // first-prompt rename. The flag tracks the one-shot *claim*, not
+            // the rename outcome: it's set on the prompt that reserves the
+            // slot, so a Haiku/git failure leaves the workspace with its
+            // original name but doesn't retry on later prompts. Backfill
+            // existing workspaces with prior chat history so an upgrade
+            // doesn't rename them on the next turn.
+            self.conn.execute_batch(
+                "ALTER TABLE workspaces ADD COLUMN branch_auto_rename_claimed INTEGER NOT NULL DEFAULT 0;
+
+                 UPDATE workspaces SET branch_auto_rename_claimed = 1
+                   WHERE id IN (SELECT DISTINCT workspace_id FROM chat_messages);
+
+                 PRAGMA user_version = 23;",
+            )?;
+        }
+
         Ok(())
     }
 
@@ -1029,6 +1051,41 @@ impl Database {
             return Err(rusqlite::Error::StatementChangedRows(rows_affected));
         }
         Ok(())
+    }
+
+    /// Atomically claim the one-shot branch auto-rename for this workspace.
+    /// Returns `true` iff this call set the flag from `0` to `1` (i.e. the
+    /// caller should proceed with the rename); `false` if the flag was already
+    /// set or the workspace doesn't exist. The conditional UPDATE is the
+    /// race-safe primitive that prevents two concurrent turns from both firing
+    /// a Haiku rename on the same workspace. The flag tracks the claim, not
+    /// the outcome — a later rename failure intentionally does not "release"
+    /// it, matching the product rule that rename is a first-prompt-only event.
+    pub fn claim_branch_auto_rename(&self, id: &str) -> Result<bool, rusqlite::Error> {
+        let rows = self.conn.execute(
+            "UPDATE workspaces SET branch_auto_rename_claimed = 1
+             WHERE id = ?1 AND branch_auto_rename_claimed = 0",
+            params![id],
+        )?;
+        Ok(rows == 1)
+    }
+
+    /// Peek at whether the first-turn auto-rename slot has already been
+    /// claimed for this workspace. Returns `false` for nonexistent workspaces
+    /// so callers can treat missing rows as "nothing to do".
+    pub fn is_branch_auto_rename_claimed(&self, id: &str) -> Result<bool, rusqlite::Error> {
+        match self.conn.query_row(
+            "SELECT branch_auto_rename_claimed FROM workspaces WHERE id = ?1",
+            params![id],
+            |row| {
+                let v: i64 = row.get(0)?;
+                Ok(v != 0)
+            },
+        ) {
+            Ok(v) => Ok(v),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 
     /// Reconcile the stored branch name with the worktree's actual branch.
@@ -2067,6 +2124,75 @@ mod tests {
         // Renaming a workspace that doesn't exist should fail.
         let result = db.rename_workspace("no-such-id", "new-name", "claudette/new-name");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_is_branch_auto_rename_claimed_defaults_false() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w1", "r1", "fresh"))
+            .unwrap();
+        assert!(!db.is_branch_auto_rename_claimed("w1").unwrap());
+    }
+
+    #[test]
+    fn test_is_branch_auto_rename_claimed_missing_returns_false() {
+        // Nonexistent workspaces should read as "not claimed" rather than
+        // erroring so callers can treat the missing row as a no-op.
+        let db = Database::open_in_memory().unwrap();
+        assert!(!db.is_branch_auto_rename_claimed("no-such-id").unwrap());
+    }
+
+    #[test]
+    fn test_claim_branch_auto_rename_is_one_shot() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w1", "r1", "fresh"))
+            .unwrap();
+        // First claim wins, flag flips to 1.
+        assert!(db.claim_branch_auto_rename("w1").unwrap());
+        assert!(db.is_branch_auto_rename_claimed("w1").unwrap());
+        // Second claim is rejected — this is the property that prevents a
+        // session restart from re-triggering rename.
+        assert!(!db.claim_branch_auto_rename("w1").unwrap());
+    }
+
+    #[test]
+    fn test_claim_branch_auto_rename_nonexistent_workspace() {
+        let db = Database::open_in_memory().unwrap();
+        // No row to update, so nothing is claimed. Must not error.
+        assert!(!db.claim_branch_auto_rename("no-such-id").unwrap());
+    }
+
+    #[test]
+    fn test_migration_23_backfill_sql_marks_workspaces_with_chat_history() {
+        // Verifies the backfill UPDATE the migration runs: workspaces that
+        // already have chat messages at upgrade time get
+        // `branch_auto_rename_claimed = 1` so a later turn won't rename them,
+        // while chatless workspaces stay at 0 so their first-prompt rename
+        // still fires. We exercise the exact UPDATE statement embedded in the
+        // version-23 migration against a seeded DB — `open_in_memory` runs
+        // migrations on an empty schema, so the only way to observe the
+        // backfill path is to re-run its statement after seeding.
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w1", "r1", "talked"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w2", "r1", "never-talked"))
+            .unwrap();
+        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "hi"))
+            .unwrap();
+        db.conn
+            .execute_batch(
+                "UPDATE workspaces SET branch_auto_rename_claimed = 1
+                   WHERE id IN (SELECT DISTINCT workspace_id FROM chat_messages);",
+            )
+            .unwrap();
+        assert!(db.is_branch_auto_rename_claimed("w1").unwrap());
+        assert!(!db.is_branch_auto_rename_claimed("w2").unwrap());
     }
 
     #[test]

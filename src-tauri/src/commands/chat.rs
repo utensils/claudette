@@ -677,6 +677,27 @@ pub async fn send_chat_message(
         .and_then(|r| r.branch_rename_preferences.clone());
     let rename_ws_env = ws_env.clone();
 
+    // Atomically claim the one-shot auto-rename slot here — on the calling
+    // task's existing DB handle — so the spawned bridge doesn't need to
+    // reopen the database just to flip a flag, and so any SQLite error
+    // surfaces as a visible log rather than silently skipping the rename.
+    // The flag is a persistent per-workspace marker; a session that restarts
+    // for any reason (app reopen, stop_agent, spawn failure, `!got_init`
+    // early exit) can't re-trigger a rename on a later prompt because the
+    // claim has already been taken. The flag tracks the claim, not the
+    // outcome: a Haiku/git failure below intentionally does not release it.
+    let claimed_rename = if has_repo {
+        match db.claim_branch_auto_rename(&workspace_id) {
+            Ok(claimed) => claimed,
+            Err(e) => {
+                eprintln!("[chat] claim_branch_auto_rename failed for {workspace_id}: {e}");
+                false
+            }
+        }
+    } else {
+        false
+    };
+
     crate::tray::rebuild_tray(&app);
 
     // Bridge: read from mpsc receiver, emit Tauri events.
@@ -687,11 +708,7 @@ pub async fn send_chat_message(
     let repo_id_for_mcp = ws.repository_id.clone();
     drop(ws_env); // consumed by rename_ws_env; notification path rebuilds from DB
     tokio::spawn(async move {
-        // On the first turn, spawn a background task to auto-rename the branch
-        // using Haiku. Gate on turn count (not persistent_session) because
-        // persistent_session is in-memory only and is None after app restart
-        // even for resumed sessions.
-        if saved_turn_count <= 1 && has_repo {
+        if claimed_rename {
             let ws_id2 = ws_id.clone();
             let wt_path2 = wt_path.clone();
             let old_branch2 = rename_old_branch.clone();
