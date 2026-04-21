@@ -162,8 +162,10 @@ interface AppState {
   clearLatestTurnUsage: (wsId: string) => void;
   /** Per-workspace compaction history, re-derived from the persisted
    *  COMPACTION:* sentinel messages on workspace load and updated live
-   *  on compact_boundary events. The ChatPanel renders a divider at
-   *  each event's afterMessageIndex. */
+   *  on compact_boundary events. This slice stores derived metadata
+   *  for future consumers (e.g. a compaction counter); ChatPanel's
+   *  divider rendering dispatches on persisted sentinel System messages
+   *  in `chatMessages[wsId]` rather than reading this slice directly. */
   compactionEvents: Record<string, CompactionEvent[]>;
   setCompactionEvents: (wsId: string, events: CompactionEvent[]) => void;
   addCompactionEvent: (wsId: string, event: CompactionEvent) => void;

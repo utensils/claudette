@@ -9,6 +9,7 @@ import { extractToolSummary } from "./toolSummary";
 import { parseAskUserQuestion } from "./parseAgentQuestion";
 import { debugChat } from "../utils/chatDebug";
 import { extractLatestCallUsage } from "../utils/extractLatestCallUsage";
+import { buildCompactionSentinel } from "../utils/compactionSentinel";
 import { pickMeterUsageFromResult } from "./pickMeterUsageFromResult";
 
 const ASK_USER_QUESTION_TOOL = "AskUserQuestion";
@@ -110,9 +111,7 @@ export function useAgentStream() {
         switch (streamEvent.type) {
           case "system": {
             // Compaction lifecycle: status -> "compacting" marks start;
-            // compact_boundary marks end. The divider renders via the
-            // existing addChatMessage path when the sentinel system
-            // message from Task 4's bridge arrives.
+            // compact_boundary marks end.
             if (
               streamEvent.subtype === "status" &&
               streamEvent.status === "compacting"
@@ -125,19 +124,59 @@ export function useAgentStream() {
               streamEvent.compact_metadata
             ) {
               const m = streamEvent.compact_metadata;
+              const store = useAppStore.getState();
+              const afterMessageIndex = (store.chatMessages[wsId] ?? []).length;
+
               addCompactionEvent(wsId, {
                 timestamp: new Date().toISOString(),
                 trigger: m.trigger,
                 preTokens: m.pre_tokens,
                 postTokens: m.post_tokens,
                 durationMs: m.duration_ms,
-                // afterMessageIndex is set to the current end-of-list;
-                // the Task 4 bridge inserts the sentinel system message
-                // which will land via the existing addChatMessage path
-                // right after.
-                afterMessageIndex:
-                  (useAppStore.getState().chatMessages[wsId] ?? []).length,
+                afterMessageIndex,
               });
+
+              // The Tauri bridge persists a COMPACTION sentinel
+              // ChatMessage to the DB but does NOT emit it as a live
+              // stream event. Synthesize a matching message locally so
+              // ChatPanel's sentinel dispatch renders the divider
+              // immediately. The DB row uses a different UUID; on
+              // workspace reload the DB version replaces this live
+              // copy transparently.
+              const sentinel = buildCompactionSentinel({
+                trigger: m.trigger,
+                preTokens: m.pre_tokens,
+                postTokens: m.post_tokens,
+                durationMs: m.duration_ms,
+              });
+              const liveSentinel: ChatMessage = {
+                id: crypto.randomUUID(),
+                workspace_id: wsId,
+                role: "System",
+                content: sentinel,
+                cost_usd: null,
+                duration_ms: null,
+                created_at: new Date().toISOString(),
+                thinking: null,
+                input_tokens: null,
+                output_tokens: null,
+                cache_read_tokens: m.post_tokens,
+                cache_creation_tokens: null,
+              };
+              store.addChatMessage(wsId, liveSentinel);
+
+              // Drop the ContextMeter to the post-compaction baseline
+              // during the live session. Zeros (not undefined) keep
+              // `computeMeterState` from hiding the meter — the CLI has
+              // reset the working context, so showing 0+postTokens+0
+              // reflects the actual post-compaction state.
+              store.setLatestTurnUsage(wsId, {
+                inputTokens: 0,
+                outputTokens: 0,
+                cacheReadTokens: m.post_tokens,
+                cacheCreationTokens: undefined,
+              });
+
               updateWorkspace(wsId, { agent_status: "Running" });
               break;
             }

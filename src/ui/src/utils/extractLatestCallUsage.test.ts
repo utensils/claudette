@@ -134,8 +134,8 @@ describe("extractLatestCallUsage", () => {
       }),
     ]);
     expect(result).toEqual({
-      inputTokens: undefined,
-      outputTokens: undefined,
+      inputTokens: 0,
+      outputTokens: 0,
       cacheReadTokens: 12000,
       cacheCreationTokens: undefined,
     });
@@ -157,8 +157,8 @@ describe("extractLatestCallUsage", () => {
       }),
     ]);
     expect(result).toEqual({
-      inputTokens: undefined,
-      outputTokens: undefined,
+      inputTokens: 0,
+      outputTokens: 0,
       cacheReadTokens: 12000,
       cacheCreationTokens: undefined,
     });

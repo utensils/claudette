@@ -19,6 +19,9 @@ import { parseCompactionSentinel } from "./compactionSentinel";
  *   After compaction the summary becomes the cached context, so it will be
  *   read as `cache_read_tokens` on the next API call — mapping it here keeps
  *   the meter formula `(input + cache_read + cache_creation) / 200k` correct.
+ *   `inputTokens` and `outputTokens` are set to `0` rather than `undefined`
+ *   because `computeMeterState` hides the meter entirely if either field is
+ *   non-finite — zeros are explicit "known to be reset" values.
  *
  * Used by the ContextMeter's reconstructed-path hydration.
  */
@@ -31,8 +34,8 @@ export function extractLatestCallUsage(
       const parsed = parseCompactionSentinel(m.content);
       if (parsed !== null) {
         return {
-          inputTokens: undefined,
-          outputTokens: undefined,
+          inputTokens: 0,
+          outputTokens: 0,
           cacheReadTokens: parsed.postTokens,
           cacheCreationTokens: undefined,
         };

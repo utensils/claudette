@@ -12,7 +12,9 @@ export type StreamEvent =
   | {
       type: "system";
       subtype: string;
-      session_id?: string;
+      /** Rust serializes `Option<String>` as `null` (no `skip_serializing_if`),
+       * so the wire payload carries `null` when absent. */
+      session_id?: string | null;
       /** Only present on `subtype: "status"` events. */
       status?: string | null;
       /** Only present on the end-of-compaction status event. Rust
