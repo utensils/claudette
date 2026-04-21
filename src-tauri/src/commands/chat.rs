@@ -55,6 +55,7 @@ struct SessionFlags<'a> {
     plan_mode: bool,
     allowed_tools: &'a [String],
     exited_plan: bool,
+    disable_1m_context: bool,
 }
 
 /// Flags the next turn is asking for. Compared against [`SessionFlags`] to
@@ -62,6 +63,7 @@ struct SessionFlags<'a> {
 struct RequestedFlags<'a> {
     plan_mode: bool,
     allowed_tools: &'a [String],
+    disable_1m_context: bool,
 }
 
 /// Detect whether the persistent session's spawn-time flags have drifted
@@ -81,6 +83,7 @@ fn persistent_session_flags_drifted(
 ) -> bool {
     session.plan_mode != requested.plan_mode
         || session.allowed_tools != requested.allowed_tools
+        || session.disable_1m_context != requested.disable_1m_context
         || (session.plan_mode && session.exited_plan)
 }
 
@@ -157,6 +160,7 @@ pub async fn send_chat_message(
     plan_mode: Option<bool>,
     effort: Option<String>,
     chrome_enabled: Option<bool>,
+    disable_1m_context: Option<bool>,
     attachments: Option<Vec<AttachmentInput>>,
     app: AppHandle,
     state: State<'_, AppState>,
@@ -316,6 +320,7 @@ pub async fn send_chat_message(
                 mcp_config_dirty: false,
                 session_plan_mode: false,
                 session_allowed_tools: Vec::new(),
+                session_disable_1m_context: false,
                 pending_permissions: std::collections::HashMap::new(),
                 session_exited_plan: false,
             };
@@ -332,6 +337,7 @@ pub async fn send_chat_message(
             mcp_config_dirty: false,
             session_plan_mode: false,
             session_allowed_tools: Vec::new(),
+            session_disable_1m_context: false,
             pending_permissions: std::collections::HashMap::new(),
             session_exited_plan: false,
         }
@@ -412,6 +418,7 @@ pub async fn send_chat_message(
         effort,
         chrome_enabled: chrome_enabled.unwrap_or(false),
         mcp_config,
+        disable_1m_context: disable_1m_context.unwrap_or(false),
     };
 
     // `--permission-mode` and `--allowedTools` are baked into the persistent
@@ -428,10 +435,12 @@ pub async fn send_chat_message(
                 plan_mode: session.session_plan_mode,
                 allowed_tools: &session.session_allowed_tools,
                 exited_plan: session.session_exited_plan,
+                disable_1m_context: session.session_disable_1m_context,
             },
             RequestedFlags {
                 plan_mode: agent_settings.plan_mode,
                 allowed_tools: &allowed_tools,
+                disable_1m_context: agent_settings.disable_1m_context,
             },
         )
     {
@@ -568,6 +577,7 @@ pub async fn send_chat_message(
                 session.session_id = final_sid;
                 session.session_plan_mode = agent_settings.plan_mode;
                 session.session_allowed_tools = allowed_tools.clone();
+                session.session_disable_1m_context = agent_settings.disable_1m_context;
                 // Fresh process — any prior ExitPlanMode observation belongs
                 // to the dead session. Keep this in lockstep with the
                 // spawn-time flags above so the latch can't leak across
@@ -637,6 +647,7 @@ pub async fn send_chat_message(
         session.session_id = final_sid.clone();
         session.session_plan_mode = agent_settings.plan_mode;
         session.session_allowed_tools = allowed_tools.clone();
+        session.session_disable_1m_context = agent_settings.disable_1m_context;
         // See the sibling reset above — fresh process, fresh latch.
         session.session_exited_plan = false;
         let _ = db.save_agent_session(&workspace_id, &final_sid, session.turn_count);
@@ -2035,6 +2046,7 @@ mod tests {
             plan_mode,
             allowed_tools,
             exited_plan,
+            disable_1m_context: false,
         }
     }
 
@@ -2042,6 +2054,7 @@ mod tests {
         RequestedFlags {
             plan_mode,
             allowed_tools,
+            disable_1m_context: false,
         }
     }
 

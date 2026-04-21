@@ -403,6 +403,7 @@ async fn handle_send_chat_message(
         effort,
         chrome_enabled: chrome_enabled.unwrap_or(false),
         mcp_config,
+        disable_1m_context: false,
     };
 
     // Expand @-file mentions into inline file content for the agent prompt.

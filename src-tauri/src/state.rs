@@ -69,6 +69,11 @@ pub struct AgentSessionState {
     /// A mismatch on the next turn (e.g. permission level changed, or plan
     /// approval elevates access) forces a teardown + respawn.
     pub session_allowed_tools: Vec<String>,
+    /// `CLAUDE_CODE_DISABLE_1M_CONTEXT` value baked into the current
+    /// `persistent_session` at spawn. A mismatch on the next turn (user
+    /// switched from 200k to 1M model variant, or vice versa) forces a
+    /// teardown + respawn so the env var matches the new selection.
+    pub session_disable_1m_context: bool,
     /// Outstanding `can_use_tool` control requests awaiting a `control_response`,
     /// keyed by tool_use_id. See [`PendingPermission`].
     pub pending_permissions: HashMap<String, PendingPermission>,

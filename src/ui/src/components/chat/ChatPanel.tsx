@@ -29,6 +29,7 @@ import {
   forkWorkspaceAtCheckpoint,
 } from "../../services/tauri";
 import { applySelectedModel } from "./applySelectedModel";
+import { MODELS } from "./modelRegistry";
 import { roleClassKey, shouldRenderAsMarkdown } from "./messageRendering";
 import { findLatestPlanFilePath } from "./planFilePath";
 import type { PermissionLevel } from "../../stores/useAppStore";
@@ -81,6 +82,12 @@ import { SPINNER_FRAMES, SPINNER_INTERVAL_MS } from "../../utils/spinnerFrames";
 import { formatTokens } from "./formatTokens";
 
 /** Format a duration in seconds as "15s" or "2m 34s". */
+function shouldDisable1mContext(modelId: string | null): boolean {
+  if (!modelId) return false;
+  const entry = MODELS.find((m) => m.id === modelId);
+  return entry ? entry.contextWindowTokens < 1_000_000 : false;
+}
+
 function formatElapsedSeconds(secs: number): string {
   if (secs < 60) return `${secs}s`;
   const m = Math.floor(secs / 60);
@@ -787,17 +794,20 @@ export function ChatPanel() {
       if (ws?.remote_connection_id) {
         // Route to remote server via WebSocket.
         const state = useAppStore.getState();
+        const selectedModel = state.selectedModel[selectedWorkspaceId] || null;
+        const disable1mContext = shouldDisable1mContext(selectedModel);
         await sendRemoteCommand(ws.remote_connection_id, "send_chat_message", {
           workspace_id: selectedWorkspaceId,
           content: trimmed,
           mentioned_files: mentionedFilesArray,
           permission_level: permissionLevel,
-          model: state.selectedModel[selectedWorkspaceId] || null,
+          model: selectedModel,
           fast_mode: state.fastMode[selectedWorkspaceId] || false,
           thinking_enabled: state.thinkingEnabled[selectedWorkspaceId] || false,
           plan_mode: state.planMode[selectedWorkspaceId] || false,
           effort: state.effortLevel[selectedWorkspaceId] || null,
           chrome_enabled: state.chromeEnabled[selectedWorkspaceId] || false,
+          disable_1m_context: disable1mContext,
         });
       } else {
         const state = useAppStore.getState();
@@ -807,6 +817,7 @@ export function ChatPanel() {
         const planMode = state.planMode[selectedWorkspaceId] || false;
         const effort = state.effortLevel[selectedWorkspaceId] || undefined;
         const chromeEnabled = state.chromeEnabled[selectedWorkspaceId] || false;
+        const disable1mContext = shouldDisable1mContext(model ?? null);
         await sendChatMessage(
           selectedWorkspaceId,
           trimmed,
@@ -818,6 +829,7 @@ export function ChatPanel() {
           planMode || undefined,
           effort,
           chromeEnabled || undefined,
+          disable1mContext || undefined,
           attachments,
           optimisticMsgId,
         );

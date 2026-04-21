@@ -676,6 +676,7 @@ mod tests {
             mcp_config_dirty: false,
             session_plan_mode: false,
             session_allowed_tools: Vec::new(),
+            session_disable_1m_context: false,
             pending_permissions: HashMap::new(),
             session_exited_plan: false,
         }

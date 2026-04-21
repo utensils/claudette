@@ -407,6 +407,7 @@ export function sendChatMessage(
   planMode?: boolean,
   effort?: string,
   chromeEnabled?: boolean,
+  disable1mContext?: boolean,
   attachments?: AttachmentInput[],
   messageId?: string,
 ): Promise<void> {
@@ -422,6 +423,7 @@ export function sendChatMessage(
     planMode: planMode ?? null,
     effort: effort ?? null,
     chromeEnabled: chromeEnabled ?? null,
+    disable1mContext: disable1mContext ?? null,
     attachments: attachments ?? null,
   });
 }

@@ -339,6 +339,11 @@ pub struct AgentSettings {
     /// turn since each `claude` process is independent and doesn't inherit
     /// MCP connections from previous turns.
     pub mcp_config: Option<String>,
+    /// When true, set `CLAUDE_CODE_DISABLE_1M_CONTEXT=1` on the spawned CLI
+    /// process so the Max-plan auto-upgrade to 1M is suppressed and the
+    /// selected model runs at its 200k window. Derived frontend-side from
+    /// the model registry's `contextWindowTokens`.
+    pub disable_1m_context: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -717,6 +722,10 @@ pub async fn run_turn(
     cmd.env_remove("CLAUDECODE");
     cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
 
+    if settings.disable_1m_context {
+        cmd.env("CLAUDE_CODE_DISABLE_1M_CONTEXT", "1");
+    }
+
     if let Some(env) = ws_env {
         env.apply(&mut cmd);
     }
@@ -904,6 +913,10 @@ impl PersistentSession {
         }
         cmd.env_remove("CLAUDECODE");
         cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
+
+        if settings.disable_1m_context {
+            cmd.env("CLAUDE_CODE_DISABLE_1M_CONTEXT", "1");
+        }
 
         if let Some(env) = ws_env {
             env.apply(&mut cmd);
@@ -2595,6 +2608,7 @@ mod tests {
             effort: Some("high".to_string()),
             chrome_enabled: true,
             mcp_config: Some(r#"{"mcpServers":{}}"#.to_string()),
+            disable_1m_context: false,
         };
         let args = build_persistent_args(
             "sess-1",
