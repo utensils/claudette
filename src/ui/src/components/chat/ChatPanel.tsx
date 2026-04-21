@@ -81,13 +81,13 @@ import caretStyles from "./caret.module.css";
 import { SPINNER_FRAMES, SPINNER_INTERVAL_MS } from "../../utils/spinnerFrames";
 import { formatTokens } from "./formatTokens";
 
-/** Format a duration in seconds as "15s" or "2m 34s". */
 function shouldDisable1mContext(modelId: string | null): boolean {
   if (!modelId) return false;
   const entry = MODELS.find((m) => m.id === modelId);
   return entry ? entry.contextWindowTokens < 1_000_000 : false;
 }
 
+/** Format a duration in seconds as "15s" or "2m 34s". */
 function formatElapsedSeconds(secs: number): string {
   if (secs < 60) return `${secs}s`;
   const m = Math.floor(secs / 60);

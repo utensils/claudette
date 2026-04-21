@@ -722,6 +722,7 @@ pub async fn run_turn(
     cmd.env_remove("CLAUDECODE");
     cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
 
+    cmd.env_remove("CLAUDE_CODE_DISABLE_1M_CONTEXT");
     if settings.disable_1m_context {
         cmd.env("CLAUDE_CODE_DISABLE_1M_CONTEXT", "1");
     }
@@ -914,6 +915,7 @@ impl PersistentSession {
         cmd.env_remove("CLAUDECODE");
         cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
 
+        cmd.env_remove("CLAUDE_CODE_DISABLE_1M_CONTEXT");
         if settings.disable_1m_context {
             cmd.env("CLAUDE_CODE_DISABLE_1M_CONTEXT", "1");
         }
