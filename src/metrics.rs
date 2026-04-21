@@ -159,8 +159,48 @@ fn dashboard_metrics_with(conn: &Connection) -> Result<DashboardMetrics, rusqlit
         )?
         .unwrap_or(0.0) as f32;
 
+    let (live_input_30d, live_output_30d): (u64, u64) = conn.query_row(
+        "SELECT COALESCE(SUM(COALESCE(input_tokens, 0)), 0),
+                COALESCE(SUM(COALESCE(output_tokens, 0)), 0)
+         FROM chat_messages
+         WHERE created_at >= date('now','-29 days')",
+        [],
+        |row| Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64)),
+    )?;
+    let (deleted_input_30d, deleted_output_30d): (u64, u64) = conn.query_row(
+        "SELECT COALESCE(SUM(total_input_tokens), 0),
+                COALESCE(SUM(total_output_tokens), 0)
+         FROM deleted_workspace_summaries
+         WHERE last_message_at IS NOT NULL
+           AND last_message_at >= date('now','-29 days')",
+        [],
+        |row| Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64)),
+    )?;
+    let total_input_tokens_30d = live_input_30d + deleted_input_30d;
+    let total_output_tokens_30d = live_output_30d + deleted_output_30d;
+
+    let (cache_reads_30d, cache_denom_30d): (u64, u64) = conn.query_row(
+        "SELECT COALESCE(SUM(COALESCE(cache_read_tokens, 0)), 0),
+                COALESCE(SUM(
+                    COALESCE(input_tokens, 0)
+                    + COALESCE(cache_creation_tokens, 0)
+                    + COALESCE(cache_read_tokens, 0)
+                ), 0)
+         FROM chat_messages
+         WHERE role = 'assistant'
+           AND created_at >= date('now','-29 days')",
+        [],
+        |row| Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64)),
+    )?;
+    let cache_hit_rate_30d = if cache_denom_30d > 0 {
+        cache_reads_30d as f32 / cache_denom_30d as f32
+    } else {
+        0.0
+    };
+
     let commits_daily_14d = daily_counts_14d(conn)?;
     let cost_daily_30d = daily_cost_30d(conn)?;
+    let tokens_daily_30d = daily_tokens_30d(conn)?;
 
     Ok(DashboardMetrics {
         active_sessions,
@@ -172,6 +212,10 @@ fn dashboard_metrics_with(conn: &Connection) -> Result<DashboardMetrics, rusqlit
         success_rate_30d,
         commits_daily_14d,
         cost_daily_30d,
+        total_input_tokens_30d,
+        total_output_tokens_30d,
+        cache_hit_rate_30d,
+        tokens_daily_30d,
     })
 }
 
@@ -201,6 +245,22 @@ fn daily_cost_30d(conn: &Connection) -> Result<Vec<f64>, rusqlite::Error> {
         })?
         .collect::<Result<_, _>>()?;
     fill_last_n_days(conn, 30, |d| costs.get(d).copied().unwrap_or(0.0))
+}
+
+fn daily_tokens_30d(conn: &Connection) -> Result<Vec<u64>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT date(created_at) AS d,
+                COALESCE(SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)), 0)
+         FROM chat_messages
+         WHERE created_at >= date('now','-29 days')
+         GROUP BY d",
+    )?;
+    let tokens: HashMap<String, u64> = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
+        })?
+        .collect::<Result<_, _>>()?;
+    fill_last_n_days(conn, 30, |d| tokens.get(d).copied().unwrap_or(0))
 }
 
 fn fill_last_n_days<T, F>(conn: &Connection, n: i64, mut f: F) -> Result<Vec<T>, rusqlite::Error>
@@ -307,8 +367,6 @@ fn analytics_metrics_with(conn: &Connection) -> Result<AnalyticsMetrics, rusqlit
 }
 
 fn repo_leaderboard(conn: &Connection) -> Result<Vec<RepoLeaderRow>, rusqlite::Error> {
-    // Merge live sessions + commits + chat cost with frozen deleted-workspace summaries,
-    // then re-aggregate per repository.
     let sql = "
         WITH repo_ids AS (
             SELECT DISTINCT repository_id FROM agent_sessions
@@ -322,26 +380,38 @@ fn repo_leaderboard(conn: &Connection) -> Result<Vec<RepoLeaderRow>, rusqlite::E
                 (SELECT COUNT(*) FROM agent_commits  c WHERE c.repository_id = r.repository_id) AS commits,
                 (SELECT COALESCE(SUM(m.cost_usd),0) FROM chat_messages m
                  JOIN workspaces w ON w.id = m.workspace_id
-                 WHERE w.repository_id = r.repository_id) AS total_cost_usd
+                 WHERE w.repository_id = r.repository_id) AS total_cost_usd,
+                (SELECT COALESCE(SUM(COALESCE(m.input_tokens, 0)), 0) FROM chat_messages m
+                 JOIN workspaces w ON w.id = m.workspace_id
+                 WHERE w.repository_id = r.repository_id) AS total_input_tokens,
+                (SELECT COALESCE(SUM(COALESCE(m.output_tokens, 0)), 0) FROM chat_messages m
+                 JOIN workspaces w ON w.id = m.workspace_id
+                 WHERE w.repository_id = r.repository_id) AS total_output_tokens
             FROM repo_ids r
         ),
         deleted AS (
             SELECT repository_id,
                 COALESCE(SUM(sessions_started), 0) AS sessions,
                 COALESCE(SUM(commits_made),    0) AS commits,
-                COALESCE(SUM(total_cost_usd),  0) AS total_cost_usd
+                COALESCE(SUM(total_cost_usd),  0) AS total_cost_usd,
+                COALESCE(SUM(total_input_tokens),  0) AS total_input_tokens,
+                COALESCE(SUM(total_output_tokens), 0) AS total_output_tokens
             FROM deleted_workspace_summaries
             GROUP BY repository_id
         ),
         merged AS (
-            SELECT repository_id, sessions, commits, total_cost_usd FROM live
+            SELECT repository_id, sessions, commits, total_cost_usd,
+                   total_input_tokens, total_output_tokens FROM live
             UNION ALL
-            SELECT repository_id, sessions, commits, total_cost_usd FROM deleted
+            SELECT repository_id, sessions, commits, total_cost_usd,
+                   total_input_tokens, total_output_tokens FROM deleted
         )
         SELECT repository_id,
                CAST(COALESCE(SUM(sessions), 0) AS INTEGER) AS sessions,
                CAST(COALESCE(SUM(commits),  0) AS INTEGER) AS commits,
-               COALESCE(SUM(total_cost_usd), 0) AS total_cost_usd
+               COALESCE(SUM(total_cost_usd), 0) AS total_cost_usd,
+               CAST(COALESCE(SUM(total_input_tokens),  0) AS INTEGER) AS total_input_tokens,
+               CAST(COALESCE(SUM(total_output_tokens), 0) AS INTEGER) AS total_output_tokens
         FROM merged
         GROUP BY repository_id
         ORDER BY sessions DESC, commits DESC, total_cost_usd DESC
@@ -354,6 +424,8 @@ fn repo_leaderboard(conn: &Connection) -> Result<Vec<RepoLeaderRow>, rusqlite::E
             sessions: row.get::<_, i64>(1)? as u32,
             commits: row.get::<_, i64>(2)? as u32,
             total_cost_usd: row.get(3)?,
+            total_input_tokens: row.get::<_, i64>(4)? as u64,
+            total_output_tokens: row.get::<_, i64>(5)? as u64,
         })
     })?
     .collect()
@@ -500,6 +572,11 @@ mod tests {
         assert!(m.commits_daily_14d.iter().all(|&n| n == 0));
         assert_eq!(m.cost_daily_30d.len(), 30);
         assert!(m.cost_daily_30d.iter().all(|&n| n == 0.0));
+        assert_eq!(m.total_input_tokens_30d, 0);
+        assert_eq!(m.total_output_tokens_30d, 0);
+        assert_eq!(m.cache_hit_rate_30d, 0.0);
+        assert_eq!(m.tokens_daily_30d.len(), 30);
+        assert!(m.tokens_daily_30d.iter().all(|&n| n == 0));
     }
 
     #[test]
@@ -630,18 +707,18 @@ mod tests {
         );
         exec(
             &conn,
-            "INSERT INTO chat_messages (id, workspace_id, role, content, cost_usd)
-             VALUES ('m1', 'wsA', 'assistant', 'hi', 2.0)",
+            "INSERT INTO chat_messages (id, workspace_id, role, content, cost_usd, input_tokens, output_tokens)
+             VALUES ('m1', 'wsA', 'assistant', 'hi', 2.0, 5000, 1000)",
         );
         exec(
             &conn,
-            "INSERT INTO deleted_workspace_summaries (id, workspace_id, workspace_name, repository_id, workspace_created_at, sessions_started, commits_made, total_cost_usd)
-             VALUES ('d1', 'wsGone', 'gone', 'repoA', datetime('now'), 3, 2, 4.0)",
+            "INSERT INTO deleted_workspace_summaries (id, workspace_id, workspace_name, repository_id, workspace_created_at, sessions_started, commits_made, total_cost_usd, total_input_tokens, total_output_tokens)
+             VALUES ('d1', 'wsGone', 'gone', 'repoA', datetime('now'), 3, 2, 4.0, 20000, 4000)",
         );
         exec(
             &conn,
-            "INSERT INTO deleted_workspace_summaries (id, workspace_id, workspace_name, repository_id, workspace_created_at, sessions_started, commits_made, total_cost_usd)
-             VALUES ('d2', 'wsOld', 'old', 'repoB', datetime('now'), 1, 0, 0.5)",
+            "INSERT INTO deleted_workspace_summaries (id, workspace_id, workspace_name, repository_id, workspace_created_at, sessions_started, commits_made, total_cost_usd, total_input_tokens, total_output_tokens)
+             VALUES ('d2', 'wsOld', 'old', 'repoB', datetime('now'), 1, 0, 0.5, 3000, 500)",
         );
 
         let a = analytics_metrics(&path).unwrap();
@@ -653,6 +730,8 @@ mod tests {
         assert_eq!(a_row.sessions, 5);
         assert_eq!(a_row.commits, 3);
         assert!((a_row.total_cost_usd - 6.0).abs() < 1e-6);
+        assert_eq!(a_row.total_input_tokens, 25000);
+        assert_eq!(a_row.total_output_tokens, 5000);
 
         let b_row = a
             .repo_leaderboard
@@ -662,6 +741,8 @@ mod tests {
         assert_eq!(b_row.sessions, 1);
         assert_eq!(b_row.commits, 0);
         assert!((b_row.total_cost_usd - 0.5).abs() < 1e-6);
+        assert_eq!(b_row.total_input_tokens, 3000);
+        assert_eq!(b_row.total_output_tokens, 500);
     }
 
     #[test]
@@ -760,5 +841,77 @@ mod tests {
         assert_eq!(a.recent_sessions_24h[0].workspace_id, "w");
         assert!(a.recent_sessions_24h[0].completed_ok);
         assert!(!a.recent_sessions_24h[1].completed_ok);
+    }
+
+    #[test]
+    fn dashboard_tokens_merges_live_and_deleted() {
+        let (_dir, path) = setup_db();
+        let conn = Connection::open(&path).unwrap();
+        insert_repo(&conn, "r");
+        insert_workspace(&conn, "ws1", "r");
+        exec(
+            &conn,
+            "INSERT INTO chat_messages (id, workspace_id, role, content, input_tokens, output_tokens)
+             VALUES ('m1', 'ws1', 'assistant', 'hi', 10000, 2000),
+                    ('m2', 'ws1', 'assistant', 'bye', 8000, 1500)",
+        );
+        exec(
+            &conn,
+            "INSERT INTO deleted_workspace_summaries (id, workspace_id, workspace_name, repository_id, workspace_created_at, total_input_tokens, total_output_tokens, last_message_at)
+             VALUES ('d1', 'wsDel', 'dead', 'r', datetime('now','-10 days'), 50000, 7000, datetime('now','-5 days'))",
+        );
+        let m = dashboard_metrics(&path).unwrap();
+        assert_eq!(m.total_input_tokens_30d, 68000);
+        assert_eq!(m.total_output_tokens_30d, 10500);
+    }
+
+    #[test]
+    fn dashboard_cache_hit_rate_computes_correctly() {
+        let (_dir, path) = setup_db();
+        let conn = Connection::open(&path).unwrap();
+        insert_repo(&conn, "r");
+        insert_workspace(&conn, "ws1", "r");
+        exec(
+            &conn,
+            "INSERT INTO chat_messages (id, workspace_id, role, content, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens)
+             VALUES ('m1', 'ws1', 'assistant', 'hi', 1000, 500, 9000, 0)",
+        );
+        let m = dashboard_metrics(&path).unwrap();
+        // cache_reads=9000, denom=1000+0+9000=10000, rate=0.9
+        assert!((m.cache_hit_rate_30d - 0.9).abs() < 1e-5);
+    }
+
+    #[test]
+    fn dashboard_cache_hit_rate_excludes_system_messages() {
+        let (_dir, path) = setup_db();
+        let conn = Connection::open(&path).unwrap();
+        insert_repo(&conn, "r");
+        insert_workspace(&conn, "ws1", "r");
+        exec(
+            &conn,
+            "INSERT INTO chat_messages (id, workspace_id, role, content, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens)
+             VALUES ('m1', 'ws1', 'assistant', 'hi', 2000, 500, 8000, 0),
+                    ('m2', 'ws1', 'system', 'COMPACTION:auto:200000:80000:5000', NULL, NULL, 80000, NULL)",
+        );
+        let m = dashboard_metrics(&path).unwrap();
+        // Only the assistant message counts: cache_reads=8000, denom=2000+0+8000=10000
+        assert!((m.cache_hit_rate_30d - 0.8).abs() < 1e-5);
+    }
+
+    #[test]
+    fn dashboard_tokens_daily_30d_has_30_entries() {
+        let (_dir, path) = setup_db();
+        let conn = Connection::open(&path).unwrap();
+        insert_repo(&conn, "r");
+        insert_workspace(&conn, "ws1", "r");
+        exec(
+            &conn,
+            "INSERT INTO chat_messages (id, workspace_id, role, content, input_tokens, output_tokens)
+             VALUES ('m1', 'ws1', 'assistant', 'hi', 5000, 1000)",
+        );
+        let m = dashboard_metrics(&path).unwrap();
+        assert_eq!(m.tokens_daily_30d.len(), 30);
+        assert_eq!(*m.tokens_daily_30d.last().unwrap(), 6000);
+        assert_eq!(m.tokens_daily_30d[..29].iter().sum::<u64>(), 0);
     }
 }

@@ -455,6 +455,15 @@ impl Database {
             )?;
         }
 
+        if version < 24 {
+            self.conn.execute_batch(
+                "ALTER TABLE deleted_workspace_summaries ADD COLUMN total_input_tokens INTEGER NOT NULL DEFAULT 0;
+                 ALTER TABLE deleted_workspace_summaries ADD COLUMN total_output_tokens INTEGER NOT NULL DEFAULT 0;
+
+                 PRAGMA user_version = 24;",
+            )?;
+        }
+
         Ok(())
     }
 
@@ -965,6 +974,15 @@ impl Database {
             |r| r.get(0),
         )?;
 
+        // Token aggregates.
+        let (total_input_tokens, total_output_tokens): (i64, i64) = tx.query_row(
+            "SELECT COALESCE(SUM(COALESCE(input_tokens, 0)), 0),
+                    COALESCE(SUM(COALESCE(output_tokens, 0)), 0)
+             FROM chat_messages WHERE workspace_id = ?1",
+            params![workspace_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+
         let id = uuid::Uuid::new_v4().to_string();
         tx.execute(
             "INSERT INTO deleted_workspace_summaries (
@@ -972,13 +990,15 @@ impl Database {
                 sessions_started, sessions_completed, total_turns, total_session_duration_ms,
                 commits_made, total_additions, total_deletions, total_files_changed,
                 messages_user, messages_assistant, messages_system, total_cost_usd,
-                first_message_at, last_message_at, slash_commands_used
+                first_message_at, last_message_at, slash_commands_used,
+                total_input_tokens, total_output_tokens
              ) VALUES (
                 ?1, ?2, ?3, ?4, ?5,
                 ?6, ?7, ?8, ?9,
                 ?10, ?11, ?12, ?13,
                 ?14, ?15, ?16, ?17,
-                ?18, ?19, ?20
+                ?18, ?19, ?20,
+                ?21, ?22
              )",
             params![
                 id,
@@ -1001,6 +1021,8 @@ impl Database {
                 first_msg,
                 last_msg,
                 slash_commands_used,
+                total_input_tokens,
+                total_output_tokens,
             ],
         )?;
         Ok(())
@@ -3484,12 +3506,7 @@ mod tests {
         db.insert_agent_commits_batch("w1", "r1", Some("s1"), &[commit])
             .unwrap();
 
-        for (id, role) in [
-            ("m1", "user"),
-            ("m2", "assistant"),
-            ("m3", "user"),
-            ("m4", "system"),
-        ] {
+        for (id, role) in [("m1", "user"), ("m3", "user"), ("m4", "system")] {
             db.conn
                 .execute(
                     "INSERT INTO chat_messages (id, workspace_id, role, content, cost_usd)
@@ -3498,6 +3515,13 @@ mod tests {
                 )
                 .unwrap();
         }
+        db.conn
+            .execute(
+                "INSERT INTO chat_messages (id, workspace_id, role, content, cost_usd, input_tokens, output_tokens)
+                 VALUES ('m2', 'w1', 'assistant', 'x', 0.01, 12000, 3000)",
+                [],
+            )
+            .unwrap();
         db.conn
             .execute(
                 "INSERT INTO slash_command_usage (workspace_id, command_name, use_count)
@@ -3568,6 +3592,18 @@ mod tests {
         assert_eq!(msgs_a, 1);
         assert_eq!(msgs_s, 1);
         assert_eq!(slash_used, 7);
+
+        let (total_in, total_out): (i64, i64) = db
+            .conn
+            .query_row(
+                "SELECT total_input_tokens, total_output_tokens
+                 FROM deleted_workspace_summaries WHERE workspace_id = 'w1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(total_in, 12000);
+        assert_eq!(total_out, 3000);
     }
 
     #[test]

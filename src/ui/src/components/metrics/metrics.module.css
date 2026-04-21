@@ -2,7 +2,7 @@
 
 .statsStrip {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 12px;
   padding: 12px 20px;
   border-bottom: 1px solid var(--divider);
@@ -123,6 +123,12 @@
   .statsStrip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  .hideNarrow {
+    display: none;
+  }
+  .leaderRow {
+    grid-template-columns: 1fr auto;
+  }
 }
 
 .panel {
@@ -146,6 +152,7 @@
 
 .panelFull {
   grid-column: 1 / -1;
+  min-height: auto;
 }
 
 /* Empty / placeholder variants ------------------------------------------- */
@@ -349,7 +356,7 @@
 }
 
 .leaderRow {
-  grid-template-columns: 1fr auto auto auto;
+  grid-template-columns: 1fr auto auto auto auto;
 }
 
 .slashRow {

@@ -57,6 +57,8 @@ pub struct DeletedWorkspaceSummary {
     pub first_message_at: Option<String>,
     pub last_message_at: Option<String>,
     pub slash_commands_used: i64,
+    pub total_input_tokens: i64,
+    pub total_output_tokens: i64,
 }
 
 /// Aggregated metrics for the top-of-dashboard `StatsStrip`.
@@ -72,6 +74,10 @@ pub struct DashboardMetrics {
     pub success_rate_30d: f32,
     pub commits_daily_14d: Vec<u32>,
     pub cost_daily_30d: Vec<f64>,
+    pub total_input_tokens_30d: u64,
+    pub total_output_tokens_30d: u64,
+    pub cache_hit_rate_30d: f32,
+    pub tokens_daily_30d: Vec<u64>,
 }
 
 /// Per-workspace metrics shown in the workspace-card `MicroStats` chip.
@@ -92,6 +98,8 @@ pub struct RepoLeaderRow {
     pub sessions: u32,
     pub commits: u32,
     pub total_cost_usd: f64,
+    pub total_input_tokens: u64,
+    pub total_output_tokens: u64,
 }
 
 /// One cell in the 13-week session heatmap.

@@ -1,6 +1,7 @@
 import styles from "../metrics.module.css";
 import { useAppStore } from "../../../stores/useAppStore";
 import { RepoIcon } from "../../shared/RepoIcon";
+import { formatTokens } from "../../chat/formatTokens";
 
 function formatUsd(n: number): string {
   if (n >= 1000) return `$${(n / 1000).toFixed(1)}k`;
@@ -31,9 +32,12 @@ export function RepoLeaderboard() {
                   ) : null}
                   {name}
                 </span>
-                <span className={styles.rowMuted}>{row.sessions}s</span>
-                <span className={styles.rowMuted}>{row.commits}c</span>
-                <span className={styles.rowValue}>
+                <span className={`${styles.rowMuted} ${styles.hideNarrow}`} title="sessions">{row.sessions}s</span>
+                <span className={`${styles.rowMuted} ${styles.hideNarrow}`} title="commits">{row.commits}c</span>
+                <span className={`${styles.rowMuted} ${styles.hideNarrow}`} title="tokens (in + out)">
+                  {formatTokens(row.totalInputTokens + row.totalOutputTokens)}t
+                </span>
+                <span className={styles.rowValue} title="cost">
                   {formatUsd(row.totalCostUsd)}
                 </span>
               </div>

@@ -4,6 +4,7 @@ import { CommitsSparkline } from "./CommitsSparkline";
 import { ChurnBar } from "./ChurnBar";
 import { SuccessRing } from "./SuccessRing";
 import { CostCard } from "./CostCard";
+import { TokenUsageTile } from "./TokenUsageTile";
 
 export function StatsStrip() {
   return (
@@ -13,6 +14,7 @@ export function StatsStrip() {
       <ChurnBar />
       <SuccessRing />
       <CostCard />
+      <TokenUsageTile />
     </div>
   );
 }
