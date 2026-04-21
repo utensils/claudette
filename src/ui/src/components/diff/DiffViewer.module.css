@@ -121,6 +121,11 @@
   padding-left: 4px;
 }
 
+.sbsCell .lineContent {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
 /* ---- Side-by-Side Mode ---- */
 
 .sideBySide {
