@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.16.0](https://github.com/utensils/claudette/compare/v0.15.0...v0.16.0) (2026-04-21)
+
+
+### Features
+
+* **chat:** Phase 3 — compaction detection and timeline divider ([#321](https://github.com/utensils/claudette/issues/321)) ([934a793](https://github.com/utensils/claudette/commit/934a793ec120f16d7504a456529190e04b935d36))
+* context window tracking, phase 1 — token usage plumbing (refs [#300](https://github.com/utensils/claudette/issues/300)) ([#311](https://github.com/utensils/claudette/issues/311)) ([f624b42](https://github.com/utensils/claudette/commit/f624b42678b8bddd46d9fe852bea65c9b0f0155f))
+* context window tracking, phase 2 — utilization meter (refs [#300](https://github.com/utensils/claudette/issues/300)) ([#315](https://github.com/utensils/claudette/issues/315)) ([e394ce5](https://github.com/utensils/claudette/commit/e394ce5d307fb8da0e0f1724e887b90c6f5fb24c))
+* **metrics:** capture agent sessions, commits, and deleted-workspace summaries ([#283](https://github.com/utensils/claudette/issues/283)) ([a0e9ae0](https://github.com/utensils/claudette/commit/a0e9ae06b9d4d72081a3481c91ad80c37fd9d058))
+* **scm:** auto-archive notifications and per-repo settings ([#297](https://github.com/utensils/claudette/issues/297)) ([60889f2](https://github.com/utensils/claudette/commit/60889f232d15ea3e845a9c95a6ff31351840eb62))
+* **ui:** canonical design-system migration ([#320](https://github.com/utensils/claudette/issues/320)) ([d9f7c09](https://github.com/utensils/claudette/commit/d9f7c09236e33c534b4ff3e832ca738a43ea8935))
+
+
+### Bug Fixes
+
+* **chat:** keep thinking block visible through typewriter drain ([#318](https://github.com/utensils/claudette/issues/318)) ([b342e83](https://github.com/utensils/claudette/commit/b342e832d4fcc79e7b5d32b25a61a4ceeb209e93))
+* context meter uses per-call usage, not turn aggregate (refs [#300](https://github.com/utensils/claudette/issues/300)) ([#317](https://github.com/utensils/claudette/issues/317)) ([b7a2f14](https://github.com/utensils/claudette/commit/b7a2f146935882296d2b857de4f42752ebf60255))
+* **permissions:** auto-allow stray control_request in bypass mode ([#319](https://github.com/utensils/claudette/issues/319)) ([52d39a9](https://github.com/utensils/claudette/commit/52d39a9d52c6a6e368d46412d41dbd3bf977a120))
+* **ui:** use shadow token for Toast to satisfy design-system check ([#330](https://github.com/utensils/claudette/issues/330)) ([ffcba14](https://github.com/utensils/claudette/commit/ffcba1488320ff332812752b7b2702989e37ccd5))
+
 ## [0.15.0](https://github.com/utensils/claudette/compare/v0.14.0...v0.15.0) (2026-04-20)
 
 
