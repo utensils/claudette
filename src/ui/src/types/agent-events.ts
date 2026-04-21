@@ -15,15 +15,18 @@ export type StreamEvent =
       session_id?: string;
       /** Only present on `subtype: "status"` events. */
       status?: string | null;
-      /** Only present on the end-of-compaction status event. */
-      compact_result?: string;
-      /** Only present on `subtype: "compact_boundary"` events. */
+      /** Only present on the end-of-compaction status event. Rust
+       * serializes `Option<String>` as `null` (no `skip_serializing_if`),
+       * so the wire payload carries `null` when absent. */
+      compact_result?: string | null;
+      /** Only present on `subtype: "compact_boundary"` events. Rust
+       * serializes `Option<CompactMetadata>` as `null` when absent. */
       compact_metadata?: {
         trigger: string;
         pre_tokens: number;
         post_tokens: number;
         duration_ms: number;
-      };
+      } | null;
     }
   | { type: "stream_event"; event: InnerStreamEvent }
   | { type: "assistant"; message: AssistantMessage }
