@@ -460,6 +460,8 @@ impl Database {
                 "ALTER TABLE deleted_workspace_summaries ADD COLUMN total_input_tokens INTEGER NOT NULL DEFAULT 0;
                  ALTER TABLE deleted_workspace_summaries ADD COLUMN total_output_tokens INTEGER NOT NULL DEFAULT 0;
 
+                 CREATE INDEX idx_chat_messages_created ON chat_messages(created_at);
+
                  PRAGMA user_version = 24;",
             )?;
         }
@@ -937,22 +939,26 @@ impl Database {
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )?;
 
-        // Message aggregates by role + cost + date range.
-        let (msgs_user, msgs_assistant, msgs_system, total_cost_usd, first_msg, last_msg): (
-            i64,
-            i64,
-            i64,
-            f64,
-            Option<String>,
-            Option<String>,
-        ) = tx.query_row(
+        // Message aggregates by role + cost + date range + tokens.
+        let (
+            msgs_user,
+            msgs_assistant,
+            msgs_system,
+            total_cost_usd,
+            first_msg,
+            last_msg,
+            total_input_tokens,
+            total_output_tokens,
+        ): (i64, i64, i64, f64, Option<String>, Option<String>, i64, i64) = tx.query_row(
             "SELECT
                 SUM(CASE WHEN role = 'user' THEN 1 ELSE 0 END),
                 SUM(CASE WHEN role = 'assistant' THEN 1 ELSE 0 END),
                 SUM(CASE WHEN role = 'system' THEN 1 ELSE 0 END),
                 COALESCE(SUM(cost_usd), 0),
                 MIN(created_at),
-                MAX(created_at)
+                MAX(created_at),
+                COALESCE(SUM(COALESCE(input_tokens, 0)), 0),
+                COALESCE(SUM(COALESCE(output_tokens, 0)), 0)
              FROM chat_messages WHERE workspace_id = ?1",
             params![workspace_id],
             |r| {
@@ -963,6 +969,8 @@ impl Database {
                     r.get(3)?,
                     r.get(4)?,
                     r.get(5)?,
+                    r.get(6)?,
+                    r.get(7)?,
                 ))
             },
         )?;
@@ -972,15 +980,6 @@ impl Database {
             "SELECT COALESCE(SUM(use_count), 0) FROM slash_command_usage WHERE workspace_id = ?1",
             params![workspace_id],
             |r| r.get(0),
-        )?;
-
-        // Token aggregates.
-        let (total_input_tokens, total_output_tokens): (i64, i64) = tx.query_row(
-            "SELECT COALESCE(SUM(COALESCE(input_tokens, 0)), 0),
-                    COALESCE(SUM(COALESCE(output_tokens, 0)), 0)
-             FROM chat_messages WHERE workspace_id = ?1",
-            params![workspace_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
 
         let id = uuid::Uuid::new_v4().to_string();

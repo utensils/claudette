@@ -374,20 +374,24 @@ fn repo_leaderboard(conn: &Connection) -> Result<Vec<RepoLeaderRow>, rusqlite::E
             UNION SELECT DISTINCT repository_id FROM deleted_workspace_summaries
             UNION SELECT DISTINCT w.repository_id FROM chat_messages m JOIN workspaces w ON w.id = m.workspace_id
         ),
+        chat_agg AS (
+            SELECT w.repository_id,
+                   COALESCE(SUM(m.cost_usd), 0) AS total_cost_usd,
+                   COALESCE(SUM(COALESCE(m.input_tokens, 0)), 0) AS total_input_tokens,
+                   COALESCE(SUM(COALESCE(m.output_tokens, 0)), 0) AS total_output_tokens
+            FROM chat_messages m
+            JOIN workspaces w ON w.id = m.workspace_id
+            GROUP BY w.repository_id
+        ),
         live AS (
             SELECT r.repository_id,
                 (SELECT COUNT(*) FROM agent_sessions s WHERE s.repository_id = r.repository_id) AS sessions,
                 (SELECT COUNT(*) FROM agent_commits  c WHERE c.repository_id = r.repository_id) AS commits,
-                (SELECT COALESCE(SUM(m.cost_usd),0) FROM chat_messages m
-                 JOIN workspaces w ON w.id = m.workspace_id
-                 WHERE w.repository_id = r.repository_id) AS total_cost_usd,
-                (SELECT COALESCE(SUM(COALESCE(m.input_tokens, 0)), 0) FROM chat_messages m
-                 JOIN workspaces w ON w.id = m.workspace_id
-                 WHERE w.repository_id = r.repository_id) AS total_input_tokens,
-                (SELECT COALESCE(SUM(COALESCE(m.output_tokens, 0)), 0) FROM chat_messages m
-                 JOIN workspaces w ON w.id = m.workspace_id
-                 WHERE w.repository_id = r.repository_id) AS total_output_tokens
+                COALESCE(ca.total_cost_usd, 0) AS total_cost_usd,
+                COALESCE(ca.total_input_tokens, 0) AS total_input_tokens,
+                COALESCE(ca.total_output_tokens, 0) AS total_output_tokens
             FROM repo_ids r
+            LEFT JOIN chat_agg ca ON ca.repository_id = r.repository_id
         ),
         deleted AS (
             SELECT repository_id,
