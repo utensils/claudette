@@ -1122,10 +1122,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       const nextCall = extractLatestCallUsage(messages);
       let latestTurnUsage = s.latestTurnUsage;
       if (nextCall) {
-        latestTurnUsage = { ...s.latestTurnUsage, [wsId]: nextCall };
-      } else if (wsId in s.latestTurnUsage) {
+        latestTurnUsage = { ...s.latestTurnUsage, [workspaceId]: nextCall };
+      } else if (workspaceId in s.latestTurnUsage) {
         const next = { ...s.latestTurnUsage };
-        delete next[wsId];
+        delete next[workspaceId];
         latestTurnUsage = next;
       }
       // Re-derive compactionEvents too — rollback's message truncation
@@ -1133,7 +1133,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       // fine (the slice is additive; empty == no dividers to render).
       const nextCompactionEvents = {
         ...s.compactionEvents,
-        [wsId]: extractCompactionEvents(messages),
+        [workspaceId]: extractCompactionEvents(messages),
       };
       return {
         chatMessages: { ...s.chatMessages, [sessionId]: messages },

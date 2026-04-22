@@ -1209,7 +1209,7 @@ describe("rollbackConversation re-derives compactionEvents", () => {
   });
 
   it("clears compactionEvents when rollback has no COMPACTION sentinels", () => {
-    useAppStore.getState().rollbackConversation("ws1", "cp1", []);
+    useAppStore.getState().rollbackConversation("ws1", "ws1", "cp1", []);
     expect(useAppStore.getState().compactionEvents.ws1).toEqual([]);
   });
 
@@ -1218,6 +1218,7 @@ describe("rollbackConversation re-derives compactionEvents", () => {
       {
         id: "m1",
         workspace_id: "ws1",
+        session_id: "ws1",
         role: "User",
         content: "hi",
         cost_usd: null,
@@ -1232,6 +1233,7 @@ describe("rollbackConversation re-derives compactionEvents", () => {
       {
         id: "m2",
         workspace_id: "ws1",
+        session_id: "ws1",
         role: "System",
         content: "COMPACTION:manual:100:10:1000",
         cost_usd: null,
@@ -1244,7 +1246,7 @@ describe("rollbackConversation re-derives compactionEvents", () => {
         cache_creation_tokens: null,
       },
     ];
-    useAppStore.getState().rollbackConversation("ws1", "cp1", msgs);
+    useAppStore.getState().rollbackConversation("ws1", "ws1", "cp1", msgs);
     const evts = useAppStore.getState().compactionEvents.ws1;
     expect(evts).toHaveLength(1);
     expect(evts[0].trigger).toBe("manual");
@@ -1280,6 +1282,7 @@ describe("rollbackConversation updates latestTurnUsage", () => {
       {
         id: "m1",
         workspace_id: "ws1",
+        session_id: "ws1",
         role: "User",
         content: "hi",
         cost_usd: null,
@@ -1294,6 +1297,7 @@ describe("rollbackConversation updates latestTurnUsage", () => {
       {
         id: "m2",
         workspace_id: "ws1",
+        session_id: "ws1",
         role: "Assistant",
         content: "hello",
         cost_usd: null,
@@ -1306,7 +1310,7 @@ describe("rollbackConversation updates latestTurnUsage", () => {
         cache_creation_tokens: 200,
       },
     ];
-    useAppStore.getState().rollbackConversation("ws1", "cp1", msgs);
+    useAppStore.getState().rollbackConversation("ws1", "ws1", "cp1", msgs);
     expect(useAppStore.getState().latestTurnUsage.ws1).toEqual({
       inputTokens: 300,
       outputTokens: 80,
@@ -1316,7 +1320,7 @@ describe("rollbackConversation updates latestTurnUsage", () => {
   });
 
   it("clears latestTurnUsage when rollback produces no assistant messages", () => {
-    useAppStore.getState().rollbackConversation("ws1", "cp1", []);
+    useAppStore.getState().rollbackConversation("ws1", "ws1", "cp1", []);
     expect(useAppStore.getState().latestTurnUsage.ws1).toBeUndefined();
   });
 
@@ -1325,6 +1329,7 @@ describe("rollbackConversation updates latestTurnUsage", () => {
       {
         id: "m1",
         workspace_id: "ws1",
+        session_id: "ws1",
         role: "Assistant",
         content: "legacy",
         cost_usd: null,
@@ -1337,7 +1342,7 @@ describe("rollbackConversation updates latestTurnUsage", () => {
         cache_creation_tokens: null,
       },
     ];
-    useAppStore.getState().rollbackConversation("ws1", "cp1", msgs);
+    useAppStore.getState().rollbackConversation("ws1", "ws1", "cp1", msgs);
     expect(useAppStore.getState().latestTurnUsage.ws1).toBeUndefined();
   });
 });

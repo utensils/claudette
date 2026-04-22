@@ -507,10 +507,10 @@ export function ChatPanel() {
         // clear any stale value so the meter hides.
         const callUsage = extractLatestCallUsage(filtered);
         const store = useAppStore.getState();
-        if (callUsage) store.setLatestTurnUsage(wsId, callUsage);
-        else store.clearLatestTurnUsage(wsId);
+        if (callUsage) store.setLatestTurnUsage(selectedWorkspaceId, callUsage);
+        else store.clearLatestTurnUsage(selectedWorkspaceId);
         // Phase 3: seed compactionEvents by scanning for COMPACTION: sentinels.
-        store.setCompactionEvents(wsId, extractCompactionEvents(filtered));
+        store.setCompactionEvents(selectedWorkspaceId, extractCompactionEvents(filtered));
 
         // Load attachments for this session's messages.
         if (isLocal) {
