@@ -1,8 +1,9 @@
+import type { ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
 import styles from "./ToolbarPill.module.css";
 
 interface ToolbarPillProps {
-  icon?: React.ReactNode;
+  icon?: ReactNode;
   label?: string;
   active?: boolean;
   disabled?: boolean;
@@ -13,7 +14,7 @@ interface ToolbarPillProps {
   ariaExpanded?: boolean;
   ariaLabel?: string;
   className?: string;
-  children?: React.ReactNode;
+  children?: ReactNode;
 }
 
 export function ToolbarPill({

@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Zap, Globe } from "lucide-react";
 import { useAppStore } from "../../../stores/useAppStore";
@@ -110,7 +111,7 @@ function MenuItem({
   meta,
   onClick,
 }: {
-  icon: React.ReactNode;
+  icon: ReactNode;
   label: string;
   active: boolean;
   meta: string;

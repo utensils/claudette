@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { useAppStore } from "../../../stores/useAppStore";
 import { MODELS } from "../modelRegistry";
 import { computeMeterState } from "../contextMeterLogic";
@@ -52,7 +53,7 @@ export function SegmentedMeter({ workspaceId, onClick }: SegmentedMeterProps) {
                 "--cell-color": color,
                 "--breath-duration": urgent ? "0.9s" : "1.8s",
                 "--lead-duration": urgent ? "1.2s" : "2.2s",
-              } as React.CSSProperties}
+              } as CSSProperties}
             >
               {isLeading && (
                 <span
@@ -72,9 +73,9 @@ export function SegmentedMeter({ workspaceId, onClick }: SegmentedMeterProps) {
             className={styles.edgePulse}
             aria-hidden
             style={{
-              left: `calc(${filled * 7}px)`,
+              left: `calc(${Math.min(filled, CELL_COUNT - 1) * 7}px)`,
               "--cell-color": color,
-            } as React.CSSProperties}
+            } as CSSProperties}
           />
         )}
       </div>
