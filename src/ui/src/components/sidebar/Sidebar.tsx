@@ -19,6 +19,7 @@ import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, BadgeCheck, Ba
 import { RepoIcon } from "../shared/RepoIcon";
 import { UpdateBanner } from "../layout/UpdateBanner";
 import { useSpinnerFrame } from "../../hooks/useSpinnerFrame";
+import { getScmSortPriority } from "../../utils/scmSortPriority";
 import styles from "./Sidebar.module.css";
 
 type StatusBucketKey = "in-progress" | "in-review" | "draft" | "merged" | "closed" | "archived";
@@ -560,9 +561,9 @@ export const Sidebar = memo(function Sidebar() {
           .filter((r) => sidebarRepoFilter === "all" || r.id === sidebarRepoFilter)
           .map((repo, repoIdx) => {
           const collapsed = repoCollapsed[repo.id];
-          const repoWorkspaces = filteredWorkspaces.filter(
-            (ws) => ws.repository_id === repo.id
-          );
+          const repoWorkspaces = filteredWorkspaces
+            .filter((ws) => ws.repository_id === repo.id)
+            .sort((a, b) => getScmSortPriority(scmSummary[a.id]) - getScmSortPriority(scmSummary[b.id]));
           const runningCount = repoWorkspaces.filter(
             (ws) => ws.agent_status === "Running"
           ).length;
