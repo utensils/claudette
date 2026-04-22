@@ -1693,15 +1693,17 @@ const ToolActivitiesSection = memo(function ToolActivitiesSection({
     (s) => s.toolActivities[workspaceId] ?? EMPTY_ACTIVITIES
   );
   const [collapsed, setCollapsed] = useState(true);
+  const [prevActivitiesLength, setPrevActivitiesLength] = useState(0);
 
-  // Auto-collapse when a new turn starts (activities goes from 0 to non-zero)
-  const prevLengthRef = useRef(0);
-  useEffect(() => {
-    if (isRunning && activities.length > 0 && prevLengthRef.current === 0) {
+  // Auto-collapse when a new turn starts (activities goes from 0 to non-zero).
+  // Done during render (not in an effect) so React re-renders immediately without
+  // committing the intermediate state, avoiding cascading renders.
+  if (prevActivitiesLength !== activities.length) {
+    setPrevActivitiesLength(activities.length);
+    if (isRunning && activities.length > 0 && prevActivitiesLength === 0) {
       setCollapsed(true);
     }
-    prevLengthRef.current = activities.length;
-  }, [isRunning, activities.length]);
+  }
 
   if (activities.length === 0) return null;
 
@@ -1834,7 +1836,14 @@ function ChatInputArea({
   historyIndexRef: React.MutableRefObject<number>;
   draftRef: React.MutableRefObject<string>;
 }) {
-  const [chatInput, setChatInput] = useState("");
+  const chatInput = useAppStore(
+    (s) => s.chatDrafts[selectedWorkspaceId] ?? "",
+  );
+  const setChatDraftInStore = useAppStore((s) => s.setChatDraft);
+  const setChatInput = useCallback(
+    (value: string) => setChatDraftInStore(selectedWorkspaceId, value),
+    [selectedWorkspaceId, setChatDraftInStore],
+  );
   const [cursorPos, setCursorPos] = useState(0);
   const [slashPickerIndex, setSlashPickerIndex] = useState(0);
   const [slashPickerDismissed, setSlashPickerDismissed] = useState(false);
@@ -1857,33 +1866,18 @@ function ChatInputArea({
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const [dragActive, setDragActive] = useState(false);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
-  const pluginRefreshToken = useAppStore((s) => s.pluginRefreshToken);
 
-  // Per-workspace draft storage: save input when switching away,
-  // restore when switching back.
-  const draftsRef = useRef<Record<string, string>>({});
-  const prevWorkspaceRef = useRef(selectedWorkspaceId);
   useEffect(() => {
-    const prev = prevWorkspaceRef.current;
-    if (prev !== selectedWorkspaceId) {
-      // Save draft for the workspace we're leaving.
-      draftsRef.current[prev] = chatInput;
-      // Restore draft for the workspace we're entering.
-      setChatInput(draftsRef.current[selectedWorkspaceId] ?? "");
-      prevWorkspaceRef.current = selectedWorkspaceId;
-      // Reset file picker and attachment state for new workspace.
-      setFilesLoaded(false);
-      setWorkspaceFiles([]);
-      mentionedFilesRef.current = new Set();
-      // Clear staged attachments so they don't leak across workspaces.
-      setPendingAttachments((prev) => {
-        for (const a of prev) {
-          if (a.preview_url.startsWith("blob:")) URL.revokeObjectURL(a.preview_url);
-        }
-        return [];
-      });
-    }
-  }, [selectedWorkspaceId]); // eslint-disable-line react-hooks/exhaustive-deps
+    setFilesLoaded(false);
+    setWorkspaceFiles([]);
+    mentionedFilesRef.current = new Set();
+    setPendingAttachments((prev) => {
+      for (const a of prev) {
+        if (a.preview_url.startsWith("blob:")) URL.revokeObjectURL(a.preview_url);
+      }
+      return [];
+    });
+  }, [selectedWorkspaceId]);
 
   // Auto-focus the textarea when switching or creating workspaces.
   useEffect(() => {
@@ -1906,13 +1900,13 @@ function ChatInputArea({
         }
       });
     }
-  }, [chatInputPrefill, setChatInputPrefill]);
+  }, [setChatInput, chatInputPrefill, setChatInputPrefill]);
 
   const refreshSlashCommands = useCallback(() => {
     listSlashCommands(projectPath, selectedWorkspaceId)
       .then(setSlashCommands)
       .catch((e) => console.error("Failed to load slash commands:", e));
-  }, [pluginRefreshToken, projectPath, selectedWorkspaceId]);
+  }, [projectPath, selectedWorkspaceId, setSlashCommands]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1924,7 +1918,7 @@ function ChatInputArea({
     return () => {
       cancelled = true;
     };
-  }, [projectPath, selectedWorkspaceId]);
+  }, [projectPath, selectedWorkspaceId, setSlashCommands]);
 
   // Filter by the command-name token (text before the first whitespace) so the
   // picker stays open while the user types arguments. This keeps the argument
