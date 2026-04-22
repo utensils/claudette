@@ -1331,7 +1331,7 @@ describe("selectWorkspace diff selection persistence", () => {
       diffContent: null,
       diffError: null,
       diffSelectionByWorkspace: {},
-      rightSidebarTab: "chat",
+      rightSidebarTab: "changes",
     });
   });
 
@@ -1340,17 +1340,15 @@ describe("selectWorkspace diff selection persistence", () => {
       selectedWorkspaceId: "ws-a",
       diffSelectedFile: "src/main.rs",
       diffSelectedLayer: "staged",
-      diffContent: "some content",
     });
     const before = useAppStore.getState();
     useAppStore.getState().selectWorkspace("ws-a");
     const after = useAppStore.getState();
-    // State object reference is unchanged — Zustand bails out.
-    expect(after.diffContent).toBe("some content");
+    // Zustand bails out — state object reference is unchanged.
     expect(after.diffSelectedFile).toBe("src/main.rs");
     expect(after.selectedWorkspaceId).toBe("ws-a");
     // Prove the set updater returned the same state object.
-    expect(after.diffContent).toBe(before.diffContent);
+    expect(after.diffSelectedFile).toBe(before.diffSelectedFile);
   });
 
   it("saves outgoing workspace diff selection and restores the incoming one", () => {
@@ -1410,7 +1408,7 @@ describe("clearDiff per-workspace cleanup", () => {
       diffFiles: [],
       diffMergeBase: null,
       diffStagedFiles: null,
-      diffContent: "content",
+      diffContent: null,
       diffError: null,
     });
   });
