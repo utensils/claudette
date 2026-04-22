@@ -63,8 +63,12 @@ export function ContextPopover({ workspaceId, onClose, onCompact, onClear }: Con
   const remaining = state.capacity - state.totalTokens;
   const cost = estimateCost(state.totalTokens);
 
-  const systemShare = 0.08;
-  const filesShare = 0.07;
+  const baseSystemShare = 0.08;
+  const baseFilesShare = 0.07;
+  const fixedTotal = baseSystemShare + baseFilesShare;
+  const scale = fixedTotal > 0 ? Math.min(1, ratio / fixedTotal) : 0;
+  const systemShare = baseSystemShare * scale;
+  const filesShare = baseFilesShare * scale;
   const convShare = Math.max(0, ratio - systemShare - filesShare);
   const shares = [systemShare, convShare, filesShare];
 
@@ -104,7 +108,7 @@ export function ContextPopover({ workspaceId, onClose, onCompact, onClear }: Con
               <span>{seg.label}</span>
             </div>
             <span className={styles.segmentValue}>
-              {formatTokens(shares[i] * state.capacity)}
+              {formatTokens(Math.trunc(shares[i] * state.capacity))}
             </span>
           </div>
         ))}

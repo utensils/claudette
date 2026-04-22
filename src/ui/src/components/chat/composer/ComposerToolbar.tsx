@@ -29,7 +29,6 @@ export function ComposerToolbar({ workspaceId, disabled }: ComposerToolbarProps)
   const setChromeEnabled = useAppStore((s) => s.setChromeEnabled);
   const setShowThinkingBlocks = useAppStore((s) => s.setShowThinkingBlocks);
   const setModelSelectorOpen = useAppStore((s) => s.setModelSelectorOpen);
-  const metaKeyHeld = useAppStore((s) => s.metaKeyHeld);
 
   const [loaded, setLoaded] = useState(false);
 

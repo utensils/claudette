@@ -95,8 +95,9 @@ export function ReasoningPill({ workspaceId, disabled }: ReasoningPillProps) {
           className={styles.segment}
           onClick={openDropdown}
           disabled={disabled}
-          title={`${thinkingEnabled ? "Disable" : "Enable"} extended thinking`}
+          title="Reasoning settings"
           aria-expanded={dropdownOpen}
+          aria-label="Reasoning settings"
         >
           <Brain size={14} />
           <span className={styles.segmentLabel}>Thinking</span>
@@ -112,7 +113,7 @@ export function ReasoningPill({ workspaceId, disabled }: ReasoningPillProps) {
           className={styles.segment}
           onClick={openDropdown}
           disabled={disabled}
-          title={`${showThinkingBlocks ? "Hide" : "Show"} thinking traces`}
+          title="Reasoning settings"
           aria-expanded={dropdownOpen}
         >
           {showThinkingBlocks ? <Eye size={13} /> : <EyeOff size={13} />}
