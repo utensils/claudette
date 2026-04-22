@@ -13,6 +13,10 @@ pub enum NotificationEvent {
     Ask,
     Plan,
     Finished,
+    #[allow(dead_code)]
+    Error,
+    #[allow(dead_code)]
+    SessionStart,
 }
 
 impl NotificationEvent {
@@ -21,6 +25,8 @@ impl NotificationEvent {
             Self::Ask => "notification_sound_ask",
             Self::Plan => "notification_sound_plan",
             Self::Finished => "notification_sound_finished",
+            Self::Error => "notification_sound_error",
+            Self::SessionStart => "notification_sound_session_start",
         }
     }
 }
@@ -375,12 +381,42 @@ pub fn notify_attention(app: &AppHandle, workspace_id: &str, kind: AttentionKind
         .map(|w| w.name.clone())
         .unwrap_or_else(|| "An agent".to_string());
 
-    let sound = resolve_notification_sound(&db, NotificationEvent::from(kind));
+    let muted = db
+        .get_app_setting("cesp_muted")
+        .ok()
+        .flatten()
+        .is_some_and(|v| v == "true");
+    let volume: f64 = db
+        .get_app_setting("cesp_volume")
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1.0);
+
+    let sound_source = db
+        .get_app_setting("sound_source")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "system".to_string());
+    let sound = if muted || volume <= 0.0 {
+        "None".to_string()
+    } else if sound_source == "openpeon" {
+        let event_name = match kind {
+            AttentionKind::Ask => "ask",
+            AttentionKind::Plan => "plan",
+        };
+        claudette::cesp::play_cesp_sound_for_event(event_name, &|key| {
+            db.get_app_setting(key).ok().flatten()
+        });
+        "None".to_string()
+    } else {
+        resolve_notification_sound(&db, NotificationEvent::from(kind))
+    };
 
     let title = "Claudette — Input Required";
     let body = format!("{ws_name} is waiting for your response");
 
-    send_notification(app, workspace_id, title, &body, &sound);
+    send_notification(app, workspace_id, title, &body, &sound, volume);
 
     // Run user-configured notification command (if set).
     // Build a best-effort WorkspaceEnv even when the workspace lookup fails
@@ -583,6 +619,7 @@ pub(crate) fn send_notification(
     title: &str,
     body: &str,
     sound: &str,
+    #[cfg_attr(target_os = "macos", allow(unused))] volume: f64,
 ) {
     // On macOS, use mac-notification-sys directly so we can block for the
     // click response. When the user clicks the notification, show the window
@@ -631,7 +668,7 @@ pub(crate) fn send_notification(
         use tauri_plugin_notification::NotificationExt;
         let _ = app.notification().builder().title(title).body(body).show();
         if sound != "None" {
-            crate::commands::settings::play_notification_sound(sound.to_string());
+            crate::commands::settings::play_notification_sound(sound.to_string(), Some(volume));
         }
     }
 }

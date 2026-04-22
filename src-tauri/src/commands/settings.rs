@@ -175,8 +175,12 @@ pub async fn list_system_fonts() -> Vec<String> {
 
 /// Play a notification sound by name (for settings preview and agent-finished events).
 #[tauri::command]
-pub fn play_notification_sound(sound: String) {
+pub fn play_notification_sound(sound: String, volume: Option<f64>) {
     if sound == "None" {
+        return;
+    }
+    let vol = volume.unwrap_or(1.0).clamp(0.0, 1.0);
+    if vol <= 0.0 {
         return;
     }
     #[cfg(target_os = "macos")]
@@ -186,26 +190,31 @@ pub fn play_notification_sound(sound: String) {
         } else {
             format!("/System/Library/Sounds/{sound}.aiff")
         };
-        if let Ok(child) = std::process::Command::new("afplay").arg(&path).spawn() {
+        if let Ok(child) = std::process::Command::new("afplay")
+            .arg("-v")
+            .arg(format!("{vol}"))
+            .arg(&path)
+            .spawn()
+        {
             spawn_and_reap(child);
         }
     }
     #[cfg(target_os = "linux")]
     {
-        // On Linux, play the system "bell" or "message" sound via paplay/canberra.
-        // "Default" maps to the desktop notification sound; named sounds are
-        // looked up via the XDG sound theme.
         let sound_name = if sound == "Default" {
             "bell".to_string()
         } else {
             sound.to_lowercase()
         };
+        let pa_volume = (vol * 65536.0) as u32;
         if let Ok(child) = std::process::Command::new("canberra-gtk-play")
             .arg("-i")
             .arg(&sound_name)
             .spawn()
             .or_else(|_| {
                 std::process::Command::new("paplay")
+                    .arg("--volume")
+                    .arg(pa_volume.to_string())
                     .arg(format!(
                         "/usr/share/sounds/freedesktop/stereo/{sound_name}.oga"
                     ))
@@ -217,7 +226,7 @@ pub fn play_notification_sound(sound: String) {
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
-        let _ = sound;
+        let _ = (sound, vol);
     }
 }
 
@@ -378,7 +387,7 @@ mod tests {
     #[test]
     fn test_play_notification_sound_none_is_noop() {
         // Should not panic or spawn any process.
-        play_notification_sound("None".to_string());
+        play_notification_sound("None".to_string(), None);
     }
 
     // --- Notification command tests ---

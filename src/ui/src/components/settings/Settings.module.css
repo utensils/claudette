@@ -429,6 +429,7 @@
   border-radius: 10px;
   background: color-mix(in srgb, var(--sidebar-bg) 78%, transparent);
   overflow: hidden;
+  flex-shrink: 0;
 }
 
 .pluginCardSelected {
@@ -454,6 +455,17 @@
   align-items: center;
   color: var(--text-primary);
   font-weight: 500;
+}
+
+.packNameLink {
+  cursor: pointer;
+  text-decoration: none;
+  color: inherit;
+}
+
+.packNameLink:hover {
+  text-decoration: underline;
+  color: var(--accent-primary);
 }
 
 .pluginBadge {
@@ -1022,6 +1034,45 @@
 
 .mcpToggleOn .mcpToggleKnob {
   transform: translateX(16px);
+}
+
+/* ── Sound pack browser list (scrollable) ── */
+
+.packBrowserList {
+  composes: pluginList;
+  max-height: 480px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* ── Volume slider ── */
+
+.volumeSlider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 140px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--divider);
+  outline: none;
+  cursor: pointer;
+}
+
+.volumeSlider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  cursor: pointer;
+}
+
+.volumeValue {
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  color: var(--text-dim);
+  min-width: 36px;
+  text-align: right;
 }
 
 /* ── Placeholder ── */

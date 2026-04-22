@@ -617,7 +617,8 @@ async fn auto_archive_workspace(
     pr_number: Option<u64>,
 ) {
     // All DB work in a block (Database is not Send — must not hold across .await)
-    let archive_info: Option<(String, String, Option<String>, Option<String>, String)> = {
+    #[allow(clippy::type_complexity)]
+    let archive_info: Option<(String, String, Option<String>, Option<String>, String, f64)> = {
         let db = match Database::open(&app_state.db_path) {
             Ok(db) => db,
             Err(e) => {
@@ -640,8 +641,32 @@ async fn auto_archive_workspace(
             .flatten()
             .map(|r| r.path);
 
-        let sound =
-            crate::tray::resolve_notification_sound(&db, crate::tray::NotificationEvent::Finished);
+        let muted = db
+            .get_app_setting("cesp_muted")
+            .ok()
+            .flatten()
+            .is_some_and(|v| v == "true");
+        let volume: f64 = db
+            .get_app_setting("cesp_volume")
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1.0);
+        let sound_source = db
+            .get_app_setting("sound_source")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "system".to_string());
+        let sound = if muted || volume <= 0.0 {
+            "None".to_string()
+        } else if sound_source == "openpeon" {
+            claudette::cesp::play_cesp_sound_for_event("finished", &|key| {
+                db.get_app_setting(key).ok().flatten()
+            });
+            "None".to_string()
+        } else {
+            crate::tray::resolve_notification_sound(&db, crate::tray::NotificationEvent::Finished)
+        };
 
         // Update DB status
         let _ = db.delete_terminal_tabs_for_workspace(workspace_id);
@@ -657,10 +682,11 @@ async fn auto_archive_workspace(
             ws.worktree_path.clone(),
             repo_path,
             sound,
+            volume,
         ))
     };
 
-    let Some((ws_id, ws_name, wt_path, repo_path, sound)) = archive_info else {
+    let Some((ws_id, ws_name, wt_path, repo_path, sound, volume)) = archive_info else {
         return;
     };
 
@@ -688,7 +714,7 @@ async fn auto_archive_workspace(
         }
         None => format!("Workspace \u{2018}{ws_name}\u{2019} archived \u{2014} PR merged"),
     };
-    crate::tray::send_notification(handle, "", "Claudette", &body, &sound);
+    crate::tray::send_notification(handle, "", "Claudette", &body, &sound, volume);
 
     let mut payload = serde_json::json!({
         "workspace_id": ws_id,

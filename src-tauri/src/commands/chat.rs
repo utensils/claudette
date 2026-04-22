@@ -1098,12 +1098,39 @@ pub async fn send_chat_message(
                     && !needs_attention_now
                     && let Ok(db) = Database::open(&db_path)
                 {
-                    let sound = crate::tray::resolve_notification_sound(
-                        &db,
-                        crate::tray::NotificationEvent::Finished,
-                    );
-                    if sound != "None" {
-                        crate::commands::settings::play_notification_sound(sound);
+                    let muted = db
+                        .get_app_setting("cesp_muted")
+                        .ok()
+                        .flatten()
+                        .is_some_and(|v| v == "true");
+                    let volume: f64 = db
+                        .get_app_setting("cesp_volume")
+                        .ok()
+                        .flatten()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(1.0);
+                    if !muted && volume > 0.0 {
+                        let sound_source = db
+                            .get_app_setting("sound_source")
+                            .ok()
+                            .flatten()
+                            .unwrap_or_else(|| "system".to_string());
+                        if sound_source == "openpeon" {
+                            claudette::cesp::play_cesp_sound_for_event("finished", &|key| {
+                                db.get_app_setting(key).ok().flatten()
+                            });
+                        } else {
+                            let sound = crate::tray::resolve_notification_sound(
+                                &db,
+                                crate::tray::NotificationEvent::Finished,
+                            );
+                            if sound != "None" {
+                                crate::commands::settings::play_notification_sound(
+                                    sound,
+                                    Some(volume),
+                                );
+                            }
+                        }
                     }
                     // Run notification command if configured — uses the same
                     // tested helper as the settings test button and tray path.

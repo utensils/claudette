@@ -273,6 +273,8 @@ pub struct AppState {
     /// call. The Update struct holds the downloaded payload + signature context
     /// and is not Serialize, so it lives here instead of crossing the IPC boundary.
     pub pending_update: tokio::sync::Mutex<Option<tauri_plugin_updater::Update>>,
+    /// CESP sound pack playback state (no-repeat + debounce tracking).
+    pub cesp_playback: Mutex<claudette::cesp::SoundPlaybackState>,
 }
 
 impl AppState {
@@ -293,6 +295,7 @@ impl AppState {
             scm_cache: ScmCache::new(),
             scm_semaphore: Arc::new(Semaphore::new(4)),
             pending_update: tokio::sync::Mutex::new(None),
+            cesp_playback: Mutex::new(claudette::cesp::SoundPlaybackState::new()),
         }
     }
 

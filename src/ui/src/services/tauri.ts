@@ -692,8 +692,11 @@ export function listSystemFonts(): Promise<string[]> {
   return invoke("list_system_fonts");
 }
 
-export function playNotificationSound(sound: string): Promise<void> {
-  return invoke("play_notification_sound", { sound });
+export function playNotificationSound(
+  sound: string,
+  volume?: number,
+): Promise<void> {
+  return invoke("play_notification_sound", { sound, volume });
 }
 
 export function runNotificationCommand(
@@ -712,6 +715,47 @@ export function runNotificationCommand(
     defaultBranch,
     branchName,
   });
+}
+
+// -- Sound Packs (CESP) --
+
+import type { RegistryPack, InstalledSoundPack } from "../types/soundpacks";
+
+export function cespFetchRegistry(): Promise<RegistryPack[]> {
+  return invoke("cesp_fetch_registry");
+}
+
+export function cespListInstalled(): Promise<InstalledSoundPack[]> {
+  return invoke("cesp_list_installed");
+}
+
+export function cespInstallPack(
+  name: string,
+  sourceRepo: string,
+  sourceRef: string,
+  sourcePath: string,
+): Promise<InstalledSoundPack> {
+  return invoke("cesp_install_pack", { name, sourceRepo, sourceRef, sourcePath });
+}
+
+export function cespUpdatePack(
+  name: string,
+  sourceRepo: string,
+  sourceRef: string,
+  sourcePath: string,
+): Promise<InstalledSoundPack> {
+  return invoke("cesp_update_pack", { name, sourceRepo, sourceRef, sourcePath });
+}
+
+export function cespDeletePack(name: string): Promise<void> {
+  return invoke("cesp_delete_pack", { name });
+}
+
+export function cespPreviewSound(
+  packName: string,
+  category: string,
+): Promise<void> {
+  return invoke("cesp_preview_sound", { packName, category });
 }
 
 // -- Remote --
