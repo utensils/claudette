@@ -1075,11 +1075,14 @@ export const useAppStore = create<AppState>((set) => ({
     set((s) => {
       const tabs = (s.terminalTabs[wsId] || []).filter((t) => t.id !== tabId);
       const wasActive = s.activeTerminalTabId[wsId] === tabId;
+      const hidePane =
+        tabs.length === 0 && wsId === s.selectedWorkspaceId && s.terminalPanelVisible;
       return {
         terminalTabs: { ...s.terminalTabs, [wsId]: tabs },
         activeTerminalTabId: wasActive
           ? { ...s.activeTerminalTabId, [wsId]: tabs[0]?.id ?? null }
           : s.activeTerminalTabId,
+        ...(hidePane ? { terminalPanelVisible: false } : {}),
       };
     }),
   setActiveTerminalTab: (wsId, id) =>

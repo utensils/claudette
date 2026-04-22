@@ -130,6 +130,43 @@ describe("terminal slice: removeTerminalTab", () => {
 
     expect(useAppStore.getState().activeTerminalTabId[WS_B]).toBe(99);
   });
+
+  it("auto-hides the pane when the selected workspace's last tab is closed", () => {
+    useAppStore.setState({
+      selectedWorkspaceId: WS_A,
+      terminalPanelVisible: true,
+    });
+    useAppStore.getState().setTerminalTabs(WS_A, [makeTab(1, WS_A)]);
+    useAppStore.getState().setActiveTerminalTab(WS_A, 1);
+
+    useAppStore.getState().removeTerminalTab(WS_A, 1);
+
+    expect(useAppStore.getState().terminalPanelVisible).toBe(false);
+  });
+
+  it("does not hide the pane when tabs remain in the selected workspace", () => {
+    useAppStore.setState({
+      selectedWorkspaceId: WS_A,
+      terminalPanelVisible: true,
+    });
+    useAppStore.getState().setTerminalTabs(WS_A, [makeTab(1, WS_A), makeTab(2, WS_A)]);
+
+    useAppStore.getState().removeTerminalTab(WS_A, 1);
+
+    expect(useAppStore.getState().terminalPanelVisible).toBe(true);
+  });
+
+  it("does not hide the pane when the affected workspace is not selected", () => {
+    useAppStore.setState({
+      selectedWorkspaceId: WS_B,
+      terminalPanelVisible: true,
+    });
+    useAppStore.getState().setTerminalTabs(WS_A, [makeTab(1, WS_A)]);
+
+    useAppStore.getState().removeTerminalTab(WS_A, 1);
+
+    expect(useAppStore.getState().terminalPanelVisible).toBe(true);
+  });
 });
 
 describe("workspace removal cascades to terminal state", () => {
