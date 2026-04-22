@@ -1155,44 +1155,17 @@ pub async fn send_chat_message(
                     && !needs_attention_now
                     && let Ok(db) = Database::open(&db_path)
                 {
-                    let muted = db
-                        .get_app_setting("cesp_muted")
-                        .ok()
-                        .flatten()
-                        .is_some_and(|v| v == "true");
-                    let volume: f64 = db
-                        .get_app_setting("cesp_volume")
-                        .ok()
-                        .flatten()
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(1.0);
-                    if !muted && volume > 0.0 {
-                        let sound_source = db
-                            .get_app_setting("sound_source")
-                            .ok()
-                            .flatten()
-                            .unwrap_or_else(|| "system".to_string());
-                        if sound_source == "openpeon" {
-                            let app_state = app_handle.state::<crate::state::AppState>();
-                            if let Ok(mut playback) = app_state.cesp_playback.lock() {
-                                claudette::cesp::play_cesp_sound_for_event_with_state(
-                                    "finished",
-                                    &mut playback,
-                                    &|key| db.get_app_setting(key).ok().flatten(),
-                                );
-                            }
-                        } else {
-                            let sound = crate::tray::resolve_notification_sound(
-                                &db,
-                                crate::tray::NotificationEvent::Finished,
-                            );
-                            if sound != "None" {
-                                crate::commands::settings::play_notification_sound(
-                                    sound,
-                                    Some(volume),
-                                );
-                            }
-                        }
+                    let app_state = app_handle.state::<crate::state::AppState>();
+                    let resolved = crate::tray::resolve_notification(
+                        &db,
+                        &app_state.cesp_playback,
+                        crate::tray::NotificationEvent::Finished,
+                    );
+                    if resolved.sound != "None" {
+                        crate::commands::settings::play_notification_sound(
+                            resolved.sound,
+                            Some(resolved.volume),
+                        );
                     }
                     // Run notification command if configured — uses the same
                     // tested helper as the settings test button and tray path.

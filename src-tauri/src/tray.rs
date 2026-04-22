@@ -29,6 +29,16 @@ impl NotificationEvent {
             Self::SessionStart => "notification_sound_session_start",
         }
     }
+
+    fn cesp_event_name(&self) -> &'static str {
+        match self {
+            Self::Ask => "ask",
+            Self::Plan => "plan",
+            Self::Finished => "finished",
+            Self::Error => "error",
+            Self::SessionStart => "session_start",
+        }
+    }
 }
 
 impl From<AttentionKind> for NotificationEvent {
@@ -58,6 +68,44 @@ where
 /// Fallback: per-event key -> global `notification_sound` -> legacy `audio_notifications` -> "Default"
 pub fn resolve_notification_sound(db: &Database, event: NotificationEvent) -> String {
     resolve_notification_sound_with(|key| db.get_app_setting(key).ok().flatten(), event)
+}
+
+pub struct ResolvedSound {
+    pub sound: String,
+    pub volume: f64,
+}
+
+/// Read muted/volume/source settings from the DB, play a CESP sound if that
+/// source is active (via the shared playback state), or return the system
+/// sound name. Callers only need to handle the system-sound path.
+pub fn resolve_notification(
+    db: &Database,
+    cesp_playback: &std::sync::Mutex<claudette::cesp::SoundPlaybackState>,
+    event: NotificationEvent,
+) -> ResolvedSound {
+    let db_get = |key: &str| db.get_app_setting(key).ok().flatten();
+
+    let muted = db_get("cesp_muted").is_some_and(|v| v == "true");
+    let volume: f64 = db_get("cesp_volume")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1.0);
+
+    let sound = if muted || volume <= 0.0 {
+        "None".to_string()
+    } else if db_get("sound_source").as_deref() == Some("openpeon") {
+        if let Ok(mut playback) = cesp_playback.lock() {
+            claudette::cesp::play_cesp_sound_for_event_with_state(
+                event.cesp_event_name(),
+                &mut playback,
+                &db_get,
+            );
+        }
+        "None".to_string()
+    } else {
+        resolve_notification_sound(db, event)
+    };
+
+    ResolvedSound { sound, volume }
 }
 
 // Baseline tray icons (the ones shipped for the Auto style).
@@ -381,47 +429,21 @@ pub fn notify_attention(app: &AppHandle, workspace_id: &str, kind: AttentionKind
         .map(|w| w.name.clone())
         .unwrap_or_else(|| "An agent".to_string());
 
-    let muted = db
-        .get_app_setting("cesp_muted")
-        .ok()
-        .flatten()
-        .is_some_and(|v| v == "true");
-    let volume: f64 = db
-        .get_app_setting("cesp_volume")
-        .ok()
-        .flatten()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1.0);
-
-    let sound_source = db
-        .get_app_setting("sound_source")
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "system".to_string());
-    let sound = if muted || volume <= 0.0 {
-        "None".to_string()
-    } else if sound_source == "openpeon" {
-        let event_name = match kind {
-            AttentionKind::Ask => "ask",
-            AttentionKind::Plan => "plan",
-        };
-        let app_state = app.state::<AppState>();
-        if let Ok(mut playback) = app_state.cesp_playback.lock() {
-            claudette::cesp::play_cesp_sound_for_event_with_state(
-                event_name,
-                &mut playback,
-                &|key| db.get_app_setting(key).ok().flatten(),
-            );
-        }
-        "None".to_string()
-    } else {
-        resolve_notification_sound(&db, NotificationEvent::from(kind))
-    };
+    let app_state = app.state::<AppState>();
+    let resolved =
+        resolve_notification(&db, &app_state.cesp_playback, NotificationEvent::from(kind));
 
     let title = "Claudette — Input Required";
     let body = format!("{ws_name} is waiting for your response");
 
-    send_notification(app, workspace_id, title, &body, &sound, volume);
+    send_notification(
+        app,
+        workspace_id,
+        title,
+        &body,
+        &resolved.sound,
+        resolved.volume,
+    );
 
     // Run user-configured notification command (if set).
     // Build a best-effort WorkspaceEnv even when the workspace lookup fails
