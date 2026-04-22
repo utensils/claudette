@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use claudette::agent::{
-    self, AgentEvent, AgentSettings, ControlRequestInner, ImageAttachment, InnerStreamEvent,
+    self, AgentEvent, AgentSettings, ControlRequestInner, FileAttachment, InnerStreamEvent,
     PersistentSession, StartContentBlock, StreamEvent,
 };
 use claudette::db::Database;
@@ -19,12 +19,13 @@ use claudette::{base64_decode, base64_encode};
 
 use crate::state::{AgentSessionState, AppState, PendingPermission};
 
-/// Frontend-facing input for an image attachment (base64-encoded).
+/// Frontend-facing input for a file attachment (base64-encoded).
 #[derive(Clone, Deserialize)]
 pub struct AttachmentInput {
     pub filename: String,
     pub media_type: String,
     pub data_base64: String,
+    pub text_content: Option<String>,
 }
 
 /// Frontend-facing response for a stored attachment (base64-encoded data).
@@ -35,6 +36,7 @@ pub struct AttachmentResponse {
     pub filename: String,
     pub media_type: String,
     pub data_base64: String,
+    pub text_content: Option<String>,
     pub width: Option<i32>,
     pub height: Option<i32>,
     pub size_bytes: i64,
@@ -204,12 +206,14 @@ pub async fn send_chat_message(
         "image/gif",
         "image/webp",
         "application/pdf",
+        "text/plain",
     ];
     const MAX_IMAGE_BYTES: usize = 3_932_160; // 3.75 MB
     const MAX_PDF_BYTES: usize = 20_971_520; // 20 MB
+    const MAX_TEXT_BYTES: usize = 512_000; // 500 KB
 
     let mut att_models: Vec<Attachment> = Vec::new();
-    let mut cli_atts: Vec<ImageAttachment> = Vec::new();
+    let mut cli_atts: Vec<FileAttachment> = Vec::new();
 
     if let Some(ref inputs) = attachments {
         for input in inputs {
@@ -219,6 +223,8 @@ pub async fn send_chat_message(
             let data = base64_decode(&input.data_base64).map_err(|e| format!("Bad base64: {e}"))?;
             let max = if input.media_type == "application/pdf" {
                 MAX_PDF_BYTES
+            } else if input.media_type == "text/plain" {
+                MAX_TEXT_BYTES
             } else {
                 MAX_IMAGE_BYTES
             };
@@ -232,6 +238,25 @@ pub async fn send_chat_message(
             if input.media_type == "application/pdf" && !data.starts_with(b"%PDF-") {
                 return Err("Invalid PDF: missing %PDF- header".to_string());
             }
+            let text_content = if input.media_type == "text/plain" {
+                let check_len = data.len().min(8192);
+                if data[..check_len].contains(&0) {
+                    return Err(
+                        "Invalid text/plain attachment: binary content detected".to_string()
+                    );
+                }
+                let decoded = std::str::from_utf8(&data).map_err(|_| {
+                    "Invalid text/plain attachment: payload is not valid UTF-8".to_string()
+                })?;
+                Some(
+                    input
+                        .text_content
+                        .clone()
+                        .unwrap_or_else(|| decoded.to_owned()),
+                )
+            } else {
+                None
+            };
             let size_bytes = data.len() as i64;
             att_models.push(Attachment {
                 id: uuid::Uuid::new_v4().to_string(),
@@ -244,9 +269,11 @@ pub async fn send_chat_message(
                 data,
                 created_at: now_iso(),
             });
-            cli_atts.push(ImageAttachment {
+            cli_atts.push(FileAttachment {
                 media_type: input.media_type.clone(),
                 data_base64: input.data_base64.clone(),
+                text_content,
+                filename: Some(input.filename.clone()),
             });
         }
     }
@@ -1910,12 +1937,18 @@ pub async fn load_attachments_for_workspace(
     let mut result = Vec::new();
     for (_, atts) in att_map {
         for a in atts {
-            // Only inline base64 data for images — PDFs are too large to
-            // push through IPC eagerly and would stall the renderer.
-            let data_base64 = if a.media_type.starts_with("image/") {
+            // Inline base64 data for images and text files — PDFs are too
+            // large to push through IPC eagerly and would stall the renderer.
+            let is_text = a.media_type == "text/plain";
+            let data_base64 = if a.media_type.starts_with("image/") || is_text {
                 base64_encode(&a.data)
             } else {
                 String::new()
+            };
+            let text_content = if is_text {
+                std::str::from_utf8(&a.data).ok().map(str::to_owned)
+            } else {
+                None
             };
             result.push(AttachmentResponse {
                 id: a.id,
@@ -1923,6 +1956,7 @@ pub async fn load_attachments_for_workspace(
                 filename: a.filename,
                 media_type: a.media_type,
                 data_base64,
+                text_content,
                 width: a.width,
                 height: a.height,
                 size_bytes: a.size_bytes,
@@ -1950,15 +1984,16 @@ pub async fn load_attachment_data(
 /// Read a file from disk and return it as base64 with metadata.
 /// Used by the frontend file picker — avoids needing the `plugin-fs` dependency.
 ///
-/// Supported types: PNG, JPEG, GIF, WebP (images), PDF (documents).
-/// Images are capped at ~3.75 MB (encodes to ~5 MB base64).
-/// PDFs are capped at 20 MB (the Anthropic API raw-PDF limit).
+/// Known types (images, PDFs) use their specific MIME types and size limits.
+/// Unknown extensions are tested for UTF-8 validity — valid text files are
+/// returned as `text/plain` with the content in `text_content`.
 #[tauri::command]
 pub async fn read_file_as_base64(path: String) -> Result<AttachmentResponse, String> {
     use std::path::Path;
 
     const MAX_IMAGE_SIZE: usize = 3_932_160; // 3.75 MB
     const MAX_PDF_SIZE: usize = 20_971_520; // 20 MB
+    const MAX_TEXT_SIZE: usize = 512_000; // 500 KB
 
     let file_path = Path::new(&path);
     let filename = file_path
@@ -1973,15 +2008,38 @@ pub async fn read_file_as_base64(path: String) -> Result<AttachmentResponse, Str
         .unwrap_or("")
         .to_lowercase();
 
-    let media_type = match ext.as_str() {
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "pdf" => "application/pdf",
-        other => return Err(format!("Unsupported file type: .{other}")),
+    let known_media_type = match ext.as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        "pdf" => Some("application/pdf"),
+        _ => None,
+    };
+
+    // Check file size via metadata before reading to avoid loading huge
+    // files into memory only to reject them.
+    let metadata = tokio::fs::metadata(&path)
+        .await
+        .map_err(|e| format!("Failed to read file: {e}"))?;
+    let file_len = metadata.len() as usize;
+    if file_len == 0 {
+        return Err("File is empty".to_string());
     }
-    .to_string();
+    let max_for_read = if known_media_type == Some("application/pdf") {
+        MAX_PDF_SIZE
+    } else if known_media_type.is_some() {
+        MAX_IMAGE_SIZE
+    } else {
+        MAX_TEXT_SIZE
+    };
+    if file_len > max_for_read {
+        return Err(format!(
+            "File too large: {} (max {})",
+            humanize_size(file_len),
+            humanize_size(max_for_read)
+        ));
+    }
 
     let data = tokio::fs::read(&path)
         .await
@@ -1989,39 +2047,55 @@ pub async fn read_file_as_base64(path: String) -> Result<AttachmentResponse, Str
 
     let size_bytes = data.len() as i64;
 
-    // Enforce size limits per content type.
-    if media_type == "application/pdf" {
-        if data.len() > MAX_PDF_SIZE {
-            return Err(format!(
-                "PDF too large: {:.1} MB (max {} MB)",
-                data.len() as f64 / 1_048_576.0,
-                MAX_PDF_SIZE / 1_048_576
-            ));
-        }
-        // Validate PDF magic bytes (%PDF-) to prevent session poisoning.
-        if !data.starts_with(b"%PDF-") {
+    if let Some(media_type) = known_media_type {
+        if media_type == "application/pdf" && !data.starts_with(b"%PDF-") {
             return Err("Invalid PDF file: missing %PDF- header".to_string());
         }
-    } else if data.len() > MAX_IMAGE_SIZE {
-        return Err(format!(
-            "Image too large: {:.1} MB (max {:.1} MB)",
-            data.len() as f64 / 1_048_576.0,
-            MAX_IMAGE_SIZE as f64 / 1_048_576.0
-        ));
+
+        let data_base64 = base64_encode(&data);
+        Ok(AttachmentResponse {
+            id: String::new(),
+            message_id: String::new(),
+            filename,
+            media_type: media_type.to_string(),
+            data_base64,
+            text_content: None,
+            width: None,
+            height: None,
+            size_bytes,
+        })
+    } else {
+        // Unknown extension — attempt to read as text.
+        let check_len = data.len().min(8192);
+        if data[..check_len].contains(&0) {
+            return Err(format!("Unsupported binary file type: .{ext}"));
+        }
+        match String::from_utf8(data.clone()) {
+            Ok(text) => {
+                let data_base64 = base64_encode(&data);
+                Ok(AttachmentResponse {
+                    id: String::new(),
+                    message_id: String::new(),
+                    filename,
+                    media_type: "text/plain".to_string(),
+                    data_base64,
+                    text_content: Some(text),
+                    width: None,
+                    height: None,
+                    size_bytes,
+                })
+            }
+            Err(_) => Err(format!("Unsupported binary file type: .{ext}")),
+        }
     }
+}
 
-    let data_base64 = base64_encode(&data);
-
-    Ok(AttachmentResponse {
-        id: String::new(),
-        message_id: String::new(),
-        filename,
-        media_type,
-        data_base64,
-        width: None,
-        height: None,
-        size_bytes,
-    })
+fn humanize_size(bytes: usize) -> String {
+    if bytes >= 1_048_576 {
+        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+    } else {
+        format!("{} KB", bytes / 1024)
+    }
 }
 
 fn now_iso() -> String {
