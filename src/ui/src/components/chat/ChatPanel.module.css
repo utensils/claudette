@@ -952,8 +952,7 @@
   cursor: pointer;
   flex-shrink: 0;
   transition: background var(--transition-fast);
-  box-shadow: 0 2px 8px rgba(var(--accent-primary-rgb), 0.35),
-              inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  box-shadow: 0 2px 8px rgba(var(--accent-primary-rgb), 0.35);
 }
 
 .sendBtn:hover:not(:disabled) {
