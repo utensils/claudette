@@ -66,7 +66,7 @@ const EXT_TO_LANGUAGE: Record<string, string> = {
 const FILENAME_TO_LANGUAGE: Record<string, string> = {
   dockerfile: "dockerfile",
   makefile: "makefile",
-  cmakelists: "cmake",
+  "cmakelists.txt": "cmake",
 };
 
 export function languageForFile(path: string | null | undefined): string | null {

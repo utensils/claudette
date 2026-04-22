@@ -280,11 +280,15 @@
 /* highlight.js themes set .hljs { background, padding } which would
    override our per-row diff backgrounds (added/removed/empty) and break
    the flex layout. Keep the text colors, drop everything else. */
-.lineContent:global(.hljs),
+.lineContent:global(.hljs) {
+  background: transparent !important;
+  padding: 0 0 0 4px;
+}
+
 .lineContent :global(.hljs-addition),
 .lineContent :global(.hljs-deletion) {
   background: transparent !important;
-  padding: 0 0 0 4px;
+  padding: 0;
 }
 
 .sbsCell .lineContent {
