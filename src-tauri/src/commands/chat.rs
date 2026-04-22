@@ -287,7 +287,7 @@ pub async fn send_chat_message(
         .map_err(|e| e.to_string())?
         .ok_or("Chat session not found")?;
     let workspace_id = chat_session.workspace_id.clone();
-    let is_first_session = chat_session.sort_order == 0;
+    let _is_first_session = chat_session.sort_order == 0;
     let session_name_already_edited = chat_session.name_edited;
 
     // Look up workspace for worktree path.
@@ -1136,6 +1136,7 @@ pub async fn send_chat_message(
                 let msg = ChatMessage {
                     id: uuid::Uuid::new_v4().to_string(),
                     workspace_id: ws_id.clone(),
+                    session_id: chat_session_id_for_stream.clone(),
                     role: ChatRole::System,
                     content: sentinel,
                     cost_usd: None,
@@ -1353,6 +1354,7 @@ pub async fn send_chat_message(
                 let msg = ChatMessage {
                     id: uuid::Uuid::new_v4().to_string(),
                     workspace_id: ws_id.clone(),
+                    session_id: chat_session_id_for_stream.clone(),
                     role: ChatRole::System,
                     content: sentinel,
                     cost_usd: None,
