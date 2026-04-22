@@ -281,6 +281,10 @@ interface AppState {
   diffMergeBase: string | null;
   diffSelectedFile: string | null;
   diffSelectedLayer: import("../types/diff").DiffLayer | null;
+  diffSelectionByWorkspace: Record<
+    string,
+    { path: string | null; layer: import("../types/diff").DiffLayer | null }
+  >;
   diffStagedFiles: import("../types/diff").StagedDiffFiles | null;
   diffContent: FileDiff | null;
   diffViewMode: DiffViewMode;
@@ -293,6 +297,14 @@ interface AppState {
   setDiffLoading: (loading: boolean) => void;
   setDiffError: (error: string | null) => void;
   clearDiff: () => void;
+
+  // -- Chat input drafts --
+  // Per-workspace unsent-message drafts. Lives in the store (not local
+  // component state) so drafts survive ChatPanel unmounting — e.g., when
+  // the user switches to the diff view (AppLayout swaps ChatPanel for
+  // DiffViewer) or switches workspaces entirely.
+  chatDrafts: Record<string, string>;
+  setChatDraft: (wsId: string, draft: string) => void;
 
   // -- Terminal --
   terminalTabs: Record<string, TerminalTab[]>;
@@ -548,6 +560,10 @@ export const useAppStore = create<AppState>((set) => ({
       delete newActiveTerminalTabId[id];
       const newWorkspaceTerminalCommands = { ...s.workspaceTerminalCommands };
       delete newWorkspaceTerminalCommands[id];
+      const newDiffSelectionByWorkspace = { ...s.diffSelectionByWorkspace };
+      delete newDiffSelectionByWorkspace[id];
+      const newChatDrafts = { ...s.chatDrafts };
+      delete newChatDrafts[id];
       return {
         workspaces: s.workspaces.filter((w) => w.id !== id),
         selectedWorkspaceId:
@@ -556,10 +572,37 @@ export const useAppStore = create<AppState>((set) => ({
         terminalTabs: newTerminalTabs,
         activeTerminalTabId: newActiveTerminalTabId,
         workspaceTerminalCommands: newWorkspaceTerminalCommands,
+        diffSelectionByWorkspace: newDiffSelectionByWorkspace,
+        chatDrafts: newChatDrafts,
       };
     }),
   selectWorkspace: (id) =>
-    set({ selectedWorkspaceId: id, rightSidebarTab: "changes" }),
+    set((s) => {
+      const prev = s.selectedWorkspaceId;
+      // Persist the outgoing workspace's diff selection so that switching
+      // back restores whichever view it was last showing.
+      const selectionMap = prev
+        ? {
+            ...s.diffSelectionByWorkspace,
+            [prev]: {
+              path: s.diffSelectedFile,
+              layer: s.diffSelectedLayer,
+            },
+          }
+        : s.diffSelectionByWorkspace;
+      const restored = id ? selectionMap[id] : undefined;
+      return {
+        selectedWorkspaceId: id,
+        rightSidebarTab: "changes",
+        diffSelectionByWorkspace: selectionMap,
+        diffSelectedFile: restored?.path ?? null,
+        diffSelectedLayer: restored?.layer ?? null,
+        // Clear stale content so DiffViewer reloads for the incoming
+        // workspace when a file is re-selected.
+        diffContent: null,
+        diffError: null,
+      };
+    }),
 
   // -- Chat --
   chatMessages: {},
@@ -1019,6 +1062,7 @@ export const useAppStore = create<AppState>((set) => ({
   diffMergeBase: null,
   diffSelectedFile: null,
   diffSelectedLayer: null,
+  diffSelectionByWorkspace: {},
   diffStagedFiles: null,
   diffContent: null,
   diffViewMode: "Unified",
@@ -1026,21 +1070,45 @@ export const useAppStore = create<AppState>((set) => ({
   diffError: null,
   setDiffFiles: (files, mergeBase, stagedFiles) =>
     set({ diffFiles: files, diffMergeBase: mergeBase, diffStagedFiles: stagedFiles ?? null }),
-  setDiffSelectedFile: (path, layer) => set({ diffSelectedFile: path, diffSelectedLayer: layer ?? null }),
+  setDiffSelectedFile: (path, layer) =>
+    set((s) => {
+      const ws = s.selectedWorkspaceId;
+      const next = { path, layer: layer ?? null };
+      return {
+        diffSelectedFile: path,
+        diffSelectedLayer: layer ?? null,
+        diffSelectionByWorkspace: ws
+          ? { ...s.diffSelectionByWorkspace, [ws]: next }
+          : s.diffSelectionByWorkspace,
+      };
+    }),
   setDiffContent: (content) => set({ diffContent: content }),
   setDiffViewMode: (mode) => set({ diffViewMode: mode }),
   setDiffLoading: (loading) => set({ diffLoading: loading }),
   setDiffError: (error) => set({ diffError: error }),
   clearDiff: () =>
-    set({
-      diffFiles: [],
-      diffMergeBase: null,
-      diffSelectedFile: null,
-      diffSelectedLayer: null,
-      diffStagedFiles: null,
-      diffContent: null,
-      diffError: null,
+    set((s) => {
+      const ws = s.selectedWorkspaceId;
+      const selectionMap = { ...s.diffSelectionByWorkspace };
+      if (ws) delete selectionMap[ws];
+      return {
+        diffFiles: [],
+        diffMergeBase: null,
+        diffSelectedFile: null,
+        diffSelectedLayer: null,
+        diffStagedFiles: null,
+        diffContent: null,
+        diffError: null,
+        diffSelectionByWorkspace: selectionMap,
+      };
     }),
+
+  // -- Chat input drafts --
+  chatDrafts: {},
+  setChatDraft: (wsId, draft) =>
+    set((s) => ({
+      chatDrafts: { ...s.chatDrafts, [wsId]: draft },
+    })),
 
   // -- SCM --
   scmSummary: {},
