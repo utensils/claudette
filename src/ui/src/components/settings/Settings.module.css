@@ -1182,15 +1182,15 @@
   padding: 20px 24px;
   margin: 8px 0;
   border-radius: var(--radius-lg);
-  background: rgba(139, 92, 246, 0.08);
-  border: 1px solid rgba(139, 92, 246, 0.20);
+  background: var(--purple-bg);
+  border: 1px solid var(--purple-border);
   cursor: pointer;
   transition: background 0.15s ease, border-color 0.15s ease;
 }
 
 .emptyStateCard:hover {
-  background: rgba(139, 92, 246, 0.13);
-  border-color: rgba(139, 92, 246, 0.35);
+  background: var(--purple-bg-hover);
+  border-color: var(--purple-border-hover);
 }
 
 .emptyStateTitle {
@@ -1212,8 +1212,8 @@
   padding: 6px 14px;
   border: none;
   border-radius: var(--radius-md);
-  background: rgba(139, 92, 246, 0.20);
-  color: #c4b5fd;
+  background: var(--purple-btn-bg);
+  color: var(--purple-text);
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
@@ -1222,7 +1222,7 @@
 }
 
 .emptyStateCta:hover {
-  background: rgba(139, 92, 246, 0.30);
+  background: var(--purple-btn-bg-hover);
 }
 
 /* ── Browse more link (Mode C: text link next to pack dropdown) ── */
