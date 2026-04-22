@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { memo, useEffect, useMemo } from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import { loadFileDiff } from "../../services/tauri";
 import { PanelToggles } from "../shared/PanelToggles";
@@ -11,14 +11,14 @@ interface SideBySideRow {
   right: DiffLine | null;
 }
 
-function LineContent({
+const LineContent = memo(function LineContent({
   content,
   language,
 }: {
   content: string;
   language: string | null;
 }) {
-  const html = highlightLine(content, language);
+  const html = useMemo(() => highlightLine(content, language), [content, language]);
   if (html !== null) {
     return (
       <span
@@ -28,7 +28,7 @@ function LineContent({
     );
   }
   return <span className={styles.lineContent}>{content}</span>;
-}
+});
 
 /** Pair unified diff lines into side-by-side rows.
  *  Consecutive Removed lines are buffered and paired 1:1 with subsequent Added lines.
