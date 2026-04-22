@@ -93,9 +93,9 @@ export function ChatInputArea({
   sessionId: string;
   repoId: string | undefined;
   projectPath: string | undefined;
-  historyRef: React.MutableRefObject<Record<string, string[]>>;
-  historyIndexRef: React.MutableRefObject<number>;
-  draftRef: React.MutableRefObject<string>;
+  historyRef: React.RefObject<Record<string, string[]>>;
+  historyIndexRef: React.RefObject<number>;
+  draftRef: React.RefObject<string>;
   onAttachmentContextMenu?: (
     e: React.MouseEvent,
     attachment: DownloadableAttachment,
