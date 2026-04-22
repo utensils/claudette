@@ -395,6 +395,23 @@ const clearHandler: NativeHandler = {
   },
 };
 
+const compactHandler: NativeHandler = {
+  name: "compact",
+  aliases: [],
+  kind: "prompt_expansion",
+  execute: (ctx, args) => {
+    if (!ctx.workspaceId) {
+      ctx.addLocalMessage("/compact: no active workspace");
+      return { kind: "handled" as const, canonicalName: "compact" };
+    }
+    if (args.trim() !== "") {
+      ctx.addLocalMessage("/compact: does not accept arguments. Usage: /compact");
+      return { kind: "handled" as const, canonicalName: "compact" };
+    }
+    return { kind: "expand" as const, canonicalName: "compact", prompt: "/compact" };
+  },
+};
+
 const planHandler: NativeHandler = {
   name: "plan",
   aliases: [],
@@ -765,6 +782,7 @@ export const NATIVE_HANDLERS: NativeHandler[] = [
   releaseNotesHandler,
   versionHandler,
   clearHandler,
+  compactHandler,
   planHandler,
   modelHandler,
   permissionsHandler,

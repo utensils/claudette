@@ -634,6 +634,53 @@ describe("/clear handler", () => {
   });
 });
 
+describe("/compact handler", () => {
+  it("is registered as prompt_expansion with no aliases", () => {
+    const handler = resolveNativeHandler("compact")!;
+    expect(handler).toBeDefined();
+    expect(handler.name).toBe("compact");
+    expect(handler.kind).toBe("prompt_expansion");
+    expect(handler.aliases).toEqual([]);
+  });
+
+  it("expands to /compact prompt text for the CLI", async () => {
+    const ctx = makeCtx();
+    const handler = resolveNativeHandler("compact")!;
+    const result = await handler.execute(ctx, "");
+    expect(result).toEqual({
+      kind: "expand",
+      canonicalName: "compact",
+      prompt: "/compact",
+    });
+  });
+
+  it("does not add a local message on success", async () => {
+    const ctx = makeCtx();
+    await resolveNativeHandler("compact")!.execute(ctx, "");
+    expect(ctx.addLocalMessage).not.toHaveBeenCalled();
+  });
+
+  it("rejects any argument without expanding", async () => {
+    const ctx = makeCtx();
+    const handler = resolveNativeHandler("compact")!;
+    const result = await handler.execute(ctx, "extra args");
+    expect(result).toEqual({ kind: "handled", canonicalName: "compact" });
+    expect(ctx.addLocalMessage).toHaveBeenCalledWith(
+      expect.stringContaining("does not accept arguments"),
+    );
+  });
+
+  it("bails out gracefully if no workspace is selected", async () => {
+    const ctx = makeCtx({ workspaceId: null });
+    const handler = resolveNativeHandler("compact")!;
+    const result = await handler.execute(ctx, "");
+    expect(result).toEqual({ kind: "handled", canonicalName: "compact" });
+    expect(ctx.addLocalMessage).toHaveBeenCalledWith(
+      expect.stringContaining("no active workspace"),
+    );
+  });
+});
+
 describe("/plan handler", () => {
   it("toggles plan mode off when invoked with no args and plan mode is currently on", async () => {
     const ctx = makeCtx({ planMode: true });

@@ -24,7 +24,6 @@ import {
   setAppSetting,
   listWorkspaceFiles,
   clearConversation,
-  resetAgentSession,
   readPlanFile,
   loadDiffFiles,
   forkWorkspaceAtCheckpoint,
@@ -2496,8 +2495,8 @@ function ChatInputArea({
             <ContextPopover
               workspaceId={selectedWorkspaceId}
               onClose={() => setContextPopoverOpen(false)}
-              onCompact={() => resetAgentSession(selectedWorkspaceId)}
-              onClear={() => clearConversation(selectedWorkspaceId, false)}
+              onCompact={() => { onSend("/compact"); }}
+              onClear={() => { onSend("/clear"); }}
             />
           )}
         </div>
