@@ -513,11 +513,15 @@ export const useAppStore = create<AppState>((set) => ({
       const newActiveTerminalTabId = { ...s.activeTerminalTabId };
       const newWorkspaceTerminalCommands = { ...s.workspaceTerminalCommands };
       const newUnreadCompletions = new Set(s.unreadCompletions);
+      const newDiffSelectionByWorkspace = { ...s.diffSelectionByWorkspace };
+      const newChatDrafts = { ...s.chatDrafts };
       for (const wsId of removedWsIds) {
         delete newTerminalTabs[wsId];
         delete newActiveTerminalTabId[wsId];
         delete newWorkspaceTerminalCommands[wsId];
         newUnreadCompletions.delete(wsId);
+        delete newDiffSelectionByWorkspace[wsId];
+        delete newChatDrafts[wsId];
       }
       return {
         repositories: s.repositories.filter((r) => r.id !== id),
@@ -532,6 +536,8 @@ export const useAppStore = create<AppState>((set) => ({
         activeTerminalTabId: newActiveTerminalTabId,
         workspaceTerminalCommands: newWorkspaceTerminalCommands,
         unreadCompletions: newUnreadCompletions,
+        diffSelectionByWorkspace: newDiffSelectionByWorkspace,
+        chatDrafts: newChatDrafts,
       };
     }),
 
@@ -578,6 +584,7 @@ export const useAppStore = create<AppState>((set) => ({
     }),
   selectWorkspace: (id) =>
     set((s) => {
+      if (id === s.selectedWorkspaceId) return s;
       const prev = s.selectedWorkspaceId;
       // Persist the outgoing workspace's diff selection so that switching
       // back restores whichever view it was last showing.

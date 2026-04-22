@@ -1919,6 +1919,8 @@ function ChatInputArea({
     }
   }, [setChatInput, chatInputPrefill, setChatInputPrefill]);
 
+  const pluginRefreshToken = useAppStore((s) => s.pluginRefreshToken);
+
   const refreshSlashCommands = useCallback(() => {
     listSlashCommands(projectPath, selectedWorkspaceId)
       .then(setSlashCommands)
@@ -1935,7 +1937,7 @@ function ChatInputArea({
     return () => {
       cancelled = true;
     };
-  }, [projectPath, selectedWorkspaceId, setSlashCommands]);
+  }, [projectPath, selectedWorkspaceId, setSlashCommands, pluginRefreshToken]);
 
   // Filter by the command-name token (text before the first whitespace) so the
   // picker stays open while the user types arguments. This keeps the argument
