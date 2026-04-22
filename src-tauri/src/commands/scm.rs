@@ -660,9 +660,13 @@ async fn auto_archive_workspace(
         let sound = if muted || volume <= 0.0 {
             "None".to_string()
         } else if sound_source == "openpeon" {
-            claudette::cesp::play_cesp_sound_for_event("finished", &|key| {
-                db.get_app_setting(key).ok().flatten()
-            });
+            if let Ok(mut playback) = app_state.cesp_playback.lock() {
+                claudette::cesp::play_cesp_sound_for_event_with_state(
+                    "finished",
+                    &mut playback,
+                    &|key| db.get_app_setting(key).ok().flatten(),
+                );
+            }
             "None".to_string()
         } else {
             crate::tray::resolve_notification_sound(&db, crate::tray::NotificationEvent::Finished)

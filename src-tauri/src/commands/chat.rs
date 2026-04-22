@@ -1173,9 +1173,14 @@ pub async fn send_chat_message(
                             .flatten()
                             .unwrap_or_else(|| "system".to_string());
                         if sound_source == "openpeon" {
-                            claudette::cesp::play_cesp_sound_for_event("finished", &|key| {
-                                db.get_app_setting(key).ok().flatten()
-                            });
+                            let app_state = app_handle.state::<crate::state::AppState>();
+                            if let Ok(mut playback) = app_state.cesp_playback.lock() {
+                                claudette::cesp::play_cesp_sound_for_event_with_state(
+                                    "finished",
+                                    &mut playback,
+                                    &|key| db.get_app_setting(key).ok().flatten(),
+                                );
+                            }
                         } else {
                             let sound = crate::tray::resolve_notification_sound(
                                 &db,

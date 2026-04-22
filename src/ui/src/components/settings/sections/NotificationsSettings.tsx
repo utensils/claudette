@@ -308,6 +308,7 @@ export function NotificationsSettings() {
               max={100}
               value={volume}
               onChange={(e) => handleVolumeChange(Number(e.target.value))}
+              aria-label="Notification volume"
             />
             <span className={styles.volumeValue}>{volume}%</span>
           </div>
@@ -329,6 +330,7 @@ export function NotificationsSettings() {
             onClick={handleMuteToggle}
             role="switch"
             aria-checked={muted}
+            aria-label="Mute all sounds"
           >
             <span className={styles.toggleKnob} />
           </button>

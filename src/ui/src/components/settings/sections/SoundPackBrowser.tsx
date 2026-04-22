@@ -77,6 +77,7 @@ export function SoundPackBrowser({ installed, onChanged }: Props) {
     return [...codes].sort((a, b) => languageLabel(a).localeCompare(languageLabel(b)));
   }, [registry]);
 
+  const installedByName = new Map(installed.map((p) => [p.name, p]));
   const installedNames = new Set(installed.map((p) => p.name));
 
   const filtered = useMemo(() => {
@@ -190,7 +191,11 @@ export function SoundPackBrowser({ installed, onChanged }: Props) {
 
         {filtered.map((pack) => {
           const isInstalled = installedNames.has(pack.name);
-          const installedPack = installed.find((p) => p.name === pack.name);
+          const installedPack = installedByName.get(pack.name);
+          const hasUpdate =
+            isInstalled &&
+            installedPack?.installed_ref != null &&
+            installedPack.installed_ref !== pack.source_ref;
           const isBusy = busy === pack.name;
 
           return (
@@ -211,7 +216,7 @@ export function SoundPackBrowser({ installed, onChanged }: Props) {
                     {isInstalled && (
                       <span className={styles.pluginBadge}>installed</span>
                     )}
-                    {installedPack?.update_available && (
+                    {hasUpdate && (
                       <span className={styles.pluginBadge}>update</span>
                     )}
                     <span className={styles.pluginBadge}>
@@ -237,7 +242,7 @@ export function SoundPackBrowser({ installed, onChanged }: Props) {
                 <div className={styles.pluginActions}>
                   {isInstalled ? (
                     <>
-                      {installedPack?.update_available && (
+                      {hasUpdate && (
                         <button
                           className={styles.iconBtn}
                           disabled={isBusy}

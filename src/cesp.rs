@@ -1,5 +1,5 @@
 use std::collections::{HashMap, VecDeque};
-use std::io::{Cursor, Read};
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -11,6 +11,18 @@ const MANIFEST_FILE: &str = "openpeon.json";
 const META_FILE: &str = "_meta.json";
 const MAX_ALIAS_DEPTH: usize = 5;
 const NO_REPEAT_WINDOW: usize = 3;
+
+fn validate_pack_name(name: &str) -> Result<(), String> {
+    if name.is_empty()
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains("..")
+        || name.starts_with('.')
+    {
+        return Err(format!("Invalid pack name: {name:?}"));
+    }
+    Ok(())
+}
 
 pub fn packs_dir() -> PathBuf {
     let base = dirs::home_dir()
@@ -68,6 +80,7 @@ pub fn list_installed() -> Result<Vec<InstalledPack>, String> {
             Ok(m) => m,
             Err(_) => continue,
         };
+        let meta = load_meta(&path);
         let sound_count: u32 = manifest
             .categories
             .values()
@@ -84,6 +97,7 @@ pub fn list_installed() -> Result<Vec<InstalledPack>, String> {
             version: manifest.version.clone(),
             categories,
             sound_count,
+            installed_ref: meta.map(|m| m.source_ref),
             update_available: false,
         });
     }
@@ -91,23 +105,43 @@ pub fn list_installed() -> Result<Vec<InstalledPack>, String> {
     Ok(packs)
 }
 
+fn load_meta(pack_dir: &Path) -> Option<InstalledPackMeta> {
+    let data = std::fs::read_to_string(pack_dir.join(META_FILE)).ok()?;
+    serde_json::from_str(&data).ok()
+}
+
 pub fn install_pack(
     registry_entry: &RegistryPack,
     tarball_bytes: &[u8],
 ) -> Result<InstalledPack, String> {
-    let pack_dir = packs_dir().join(&registry_entry.name);
-    if pack_dir.exists() {
-        std::fs::remove_dir_all(&pack_dir)
-            .map_err(|e| format!("Failed to remove existing pack: {e}"))?;
+    validate_pack_name(&registry_entry.name)?;
+
+    let base = packs_dir();
+    let pack_dir = base.join(&registry_entry.name);
+    let staging_dir = base.join(format!("_staging_{}", registry_entry.name));
+
+    if staging_dir.exists() {
+        let _ = std::fs::remove_dir_all(&staging_dir);
     }
-    std::fs::create_dir_all(&pack_dir).map_err(|e| format!("Failed to create pack dir: {e}"))?;
+    std::fs::create_dir_all(&staging_dir)
+        .map_err(|e| format!("Failed to create staging dir: {e}"))?;
 
-    extract_tarball(tarball_bytes, &pack_dir, &registry_entry.source_path)?;
+    let cleanup_staging = || {
+        let _ = std::fs::remove_dir_all(&staging_dir);
+    };
 
-    let manifest = load_manifest(&pack_dir).map_err(|e| {
-        let _ = std::fs::remove_dir_all(&pack_dir);
-        format!("Pack missing valid {MANIFEST_FILE}: {e}")
-    })?;
+    if let Err(e) = extract_tarball(tarball_bytes, &staging_dir, &registry_entry.source_path) {
+        cleanup_staging();
+        return Err(e);
+    }
+
+    let manifest = match load_manifest(&staging_dir) {
+        Ok(m) => m,
+        Err(e) => {
+            cleanup_staging();
+            return Err(format!("Pack missing valid {MANIFEST_FILE}: {e}"));
+        }
+    };
 
     let meta = InstalledPackMeta {
         source_repo: registry_entry.source_repo.clone(),
@@ -116,8 +150,19 @@ pub fn install_pack(
     };
     let meta_json = serde_json::to_string_pretty(&meta)
         .map_err(|e| format!("Failed to serialize meta: {e}"))?;
-    std::fs::write(pack_dir.join(META_FILE), meta_json)
-        .map_err(|e| format!("Failed to write {META_FILE}: {e}"))?;
+    if let Err(e) = std::fs::write(staging_dir.join(META_FILE), meta_json) {
+        cleanup_staging();
+        return Err(format!("Failed to write {META_FILE}: {e}"));
+    }
+
+    if pack_dir.exists() {
+        std::fs::remove_dir_all(&pack_dir)
+            .map_err(|e| format!("Failed to remove existing pack: {e}"))?;
+    }
+    std::fs::rename(&staging_dir, &pack_dir).map_err(|e| {
+        cleanup_staging();
+        format!("Failed to finalize pack install: {e}")
+    })?;
 
     let sound_count: u32 = manifest
         .categories
@@ -136,12 +181,20 @@ pub fn install_pack(
         version: manifest.version,
         categories,
         sound_count,
+        installed_ref: Some(registry_entry.source_ref.clone()),
         update_available: false,
     })
 }
 
 pub fn delete_pack(name: &str) -> Result<(), String> {
-    let pack_dir = packs_dir().join(name);
+    validate_pack_name(name)?;
+    let base = packs_dir();
+    let pack_dir = base.join(name);
+    let canonical_base = base.canonicalize().unwrap_or_else(|_| base.clone());
+    let canonical_pack = pack_dir.canonicalize().unwrap_or_else(|_| pack_dir.clone());
+    if !canonical_pack.starts_with(&canonical_base) {
+        return Err(format!("Invalid pack path for '{name}'"));
+    }
     if !pack_dir.exists() {
         return Err(format!("Pack '{name}' is not installed"));
     }
@@ -199,11 +252,9 @@ fn extract_tarball(data: &[u8], target_dir: &Path, source_path: &str) -> Result<
         if entry.header().entry_type().is_dir() {
             let _ = std::fs::create_dir_all(&dest);
         } else if entry.header().entry_type().is_file() {
-            let mut buf = Vec::new();
-            entry
-                .read_to_end(&mut buf)
-                .map_err(|e| format!("Failed to read entry {}: {e}", inner_str))?;
-            std::fs::write(&dest, &buf)
+            let mut out = std::fs::File::create(&dest)
+                .map_err(|e| format!("Failed to create {}: {e}", dest.display()))?;
+            std::io::copy(&mut entry, &mut out)
                 .map_err(|e| format!("Failed to write {}: {e}", dest.display()))?;
         }
     }
@@ -322,7 +373,11 @@ pub fn resolve_sound_file(pack_dir: &Path, sound: &CespSound) -> PathBuf {
 }
 
 pub fn play_audio_file(path: &Path, volume: f64) {
-    if volume <= 0.0 || !path.exists() {
+    if !volume.is_finite() || !path.exists() {
+        return;
+    }
+    let volume = volume.clamp(0.0, 1.0);
+    if volume <= 0.0 {
         return;
     }
 
@@ -402,7 +457,11 @@ fn spawn_and_reap(mut child: std::process::Child) {
     });
 }
 
-pub fn play_cesp_sound_for_event(event: &str, db_get: &dyn Fn(&str) -> Option<String>) {
+pub fn play_cesp_sound_for_event_with_state(
+    event: &str,
+    playback: &mut SoundPlaybackState,
+    db_get: &dyn Fn(&str) -> Option<String>,
+) {
     let sound_source = db_get("sound_source").unwrap_or_else(|| "system".to_string());
     if sound_source != "openpeon" {
         return;
@@ -434,11 +493,15 @@ pub fn play_cesp_sound_for_event(event: &str, db_get: &dyn Fn(&str) -> Option<St
         None => return,
     };
 
-    let mut rng = rand::thread_rng();
-    if let Some(sound) = sounds.choose(&mut rng) {
+    if let Some(sound) = playback.pick_sound(category, sounds, Duration::from_millis(500)) {
         let file_path = resolve_sound_file(&pack_dir, sound);
         play_audio_file(&file_path, volume);
     }
+}
+
+pub fn play_cesp_sound_for_event(event: &str, db_get: &dyn Fn(&str) -> Option<String>) {
+    let mut playback = SoundPlaybackState::new();
+    play_cesp_sound_for_event_with_state(event, &mut playback, db_get);
 }
 
 #[cfg(test)]
@@ -664,5 +727,20 @@ mod tests {
     fn epoch_days_to_date_known_values() {
         assert_eq!(epoch_days_to_date(0), (1970, 1, 1));
         assert_eq!(epoch_days_to_date(18627), (2020, 12, 31));
+    }
+
+    #[test]
+    fn validate_pack_name_rejects_traversal() {
+        assert!(validate_pack_name("../escape").is_err());
+        assert!(validate_pack_name("foo/bar").is_err());
+        assert!(validate_pack_name("foo\\bar").is_err());
+        assert!(validate_pack_name(".hidden").is_err());
+        assert!(validate_pack_name("").is_err());
+    }
+
+    #[test]
+    fn validate_pack_name_accepts_valid() {
+        assert!(validate_pack_name("peon-classic").is_ok());
+        assert!(validate_pack_name("glados_v2").is_ok());
     }
 }

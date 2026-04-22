@@ -405,9 +405,14 @@ pub fn notify_attention(app: &AppHandle, workspace_id: &str, kind: AttentionKind
             AttentionKind::Ask => "ask",
             AttentionKind::Plan => "plan",
         };
-        claudette::cesp::play_cesp_sound_for_event(event_name, &|key| {
-            db.get_app_setting(key).ok().flatten()
-        });
+        let app_state = app.state::<AppState>();
+        if let Ok(mut playback) = app_state.cesp_playback.lock() {
+            claudette::cesp::play_cesp_sound_for_event_with_state(
+                event_name,
+                &mut playback,
+                &|key| db.get_app_setting(key).ok().flatten(),
+            );
+        }
         "None".to_string()
     } else {
         resolve_notification_sound(&db, NotificationEvent::from(kind))

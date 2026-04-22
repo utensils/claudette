@@ -17,5 +17,6 @@ export interface InstalledSoundPack {
   version: string;
   categories: string[];
   sound_count: number;
+  installed_ref: string | null;
   update_available: boolean;
 }

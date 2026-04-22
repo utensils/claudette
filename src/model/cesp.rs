@@ -68,6 +68,8 @@ pub struct InstalledPack {
     pub version: String,
     pub categories: Vec<String>,
     pub sound_count: u32,
+    #[serde(default)]
+    pub installed_ref: Option<String>,
     pub update_available: bool,
 }
 
