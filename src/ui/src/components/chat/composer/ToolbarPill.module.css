@@ -1,0 +1,53 @@
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: var(--fs-base);
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--transition-fast),
+              color var(--transition-fast),
+              border-color var(--transition-fast);
+}
+
+.pill:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.pill:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.pillActive {
+  background: var(--toolbar-active);
+  color: var(--toolbar-active-text);
+  border-color: rgba(var(--accent-primary-rgb), 0.28);
+}
+
+.pillActive:hover:not(:disabled) {
+  color: var(--toolbar-active-text);
+  filter: brightness(1.15);
+}
+
+.icon {
+  display: flex;
+  align-items: center;
+}
+
+.label {
+  line-height: 1;
+}
+
+.chevron {
+  display: flex;
+  align-items: center;
+  opacity: 0.5;
+}

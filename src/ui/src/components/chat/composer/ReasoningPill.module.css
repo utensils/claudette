@@ -1,0 +1,193 @@
+.wrap {
+  position: relative;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.pillActive {
+  background: var(--toolbar-active);
+  border-color: rgba(var(--accent-primary-rgb), 0.28);
+}
+
+.segment {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: var(--fs-base);
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--transition-fast);
+  position: relative;
+}
+
+.pillActive .segment {
+  color: var(--toolbar-active-text);
+}
+
+.segment:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.pillActive .segment:hover:not(:disabled) {
+  filter: brightness(1.15);
+}
+
+.segment:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.segment:first-child {
+  border-radius: var(--radius-pill) 0 0 var(--radius-pill);
+}
+
+.segment:last-child {
+  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
+}
+
+.segmentLabel {
+  line-height: 1;
+}
+
+.effortLabel {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1;
+}
+
+.chevron {
+  display: flex;
+  align-items: center;
+  opacity: 0.6;
+}
+
+.divider {
+  width: 1px;
+  height: 12px;
+  background: rgba(var(--accent-primary-rgb), 0.3);
+  align-self: center;
+  flex-shrink: 0;
+}
+
+.shortcutBadge {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border: 1px solid var(--sidebar-border);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-xs);
+  background: var(--sidebar-bg);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+}
+
+/* ── Dropdown ── */
+
+.dropdown {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: 260px;
+  background: var(--sidebar-bg);
+  border: 1px solid var(--sidebar-border);
+  border-radius: var(--radius-lg);
+  padding: 6px;
+  box-shadow: var(--shadow-lg);
+  z-index: 40;
+  animation: fadeUp 160ms var(--ease-out-quick);
+}
+
+.sectionLabel {
+  padding: 8px 10px 4px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  user-select: none;
+}
+
+.sectionDivider {
+  height: 1px;
+  background: var(--sidebar-border);
+  margin: 6px 0;
+}
+
+.menuItem {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: transparent;
+  color: var(--text-muted);
+  border: none;
+  border-radius: var(--radius-md);
+  text-align: left;
+  cursor: pointer;
+  font-size: var(--fs-base);
+  font-family: inherit;
+  transition: background var(--transition-fast);
+}
+
+.menuItem:hover {
+  background: var(--hover-bg);
+}
+
+.menuItemActive {
+  background: var(--selected-bg);
+  color: var(--accent-primary);
+}
+
+.menuItemActive:hover {
+  background: var(--selected-bg);
+}
+
+.menuIcon {
+  display: flex;
+  width: 16px;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.menuLabel {
+  flex: 1;
+}
+
+.menuMeta {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+
+.effortDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}

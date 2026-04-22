@@ -1,0 +1,19 @@
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  position: relative;
+  min-width: 0;
+}
+
+.modelPillWrap {
+  position: relative;
+}
+
+.accentIcon {
+  color: var(--accent-primary);
+}
+
+.extraUsage {
+  color: var(--text-dim);
+}

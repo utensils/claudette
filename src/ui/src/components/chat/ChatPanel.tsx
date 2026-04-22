@@ -24,6 +24,7 @@ import {
   setAppSetting,
   listWorkspaceFiles,
   clearConversation,
+  resetAgentSession,
   readPlanFile,
   loadDiffFiles,
   forkWorkspaceAtCheckpoint,
@@ -50,7 +51,9 @@ import { useTypewriter } from "../../hooks/useTypewriter";
 import { extractToolSummary } from "../../hooks/toolSummary";
 import { AgentQuestionCard } from "./AgentQuestionCard";
 import { PlanApprovalCard } from "./PlanApprovalCard";
-import { ChatToolbar } from "./ChatToolbar";
+import { ComposerToolbar } from "./composer/ComposerToolbar";
+import { SegmentedMeter } from "./composer/SegmentedMeter";
+import { ContextPopover } from "./composer/ContextPopover";
 import { WorkspaceActions } from "./WorkspaceActions";
 import { SlashCommandPicker, filterSlashCommands } from "./SlashCommandPicker";
 import { AttachMenu } from "./AttachMenu";
@@ -1857,6 +1860,7 @@ function ChatInputArea({
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const [dragActive, setDragActive] = useState(false);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
+  const [contextPopoverOpen, setContextPopoverOpen] = useState(false);
   const pluginRefreshToken = useAppStore((s) => s.pluginRefreshToken);
 
   // Per-workspace draft storage: save input when switching away,
@@ -2423,39 +2427,55 @@ function ChatInputArea({
         placeholder={isRunning ? "Type to queue a message..." : "Send a message..."}
       />
       <div className={styles.inputControls}>
-        <div className={styles.attachBtnWrap}>
+        <div className={styles.inputControlsLeft}>
+          <div className={styles.attachBtnWrap}>
+            <button
+              className={`${styles.attachBtn} ${attachMenuOpen ? styles.attachBtnActive : ""}`}
+              onClick={() => setAttachMenuOpen((v) => !v)}
+              title="Add files or connectors"
+            >
+              <Plus size={16} />
+            </button>
+            {attachMenuOpen && (
+              <AttachMenu
+                repoId={repoId}
+                onAttachFiles={() => {
+                  setAttachMenuOpen(false);
+                  handleAttachClick();
+                }}
+                onClose={() => setAttachMenuOpen(false)}
+                isRemote={isRemote}
+              />
+            )}
+          </div>
+          <ComposerToolbar
+            workspaceId={selectedWorkspaceId}
+            disabled={isRunning}
+          />
+        </div>
+        <div className={styles.inputControlsRight}>
+          <SegmentedMeter
+            workspaceId={selectedWorkspaceId}
+            onClick={() => setContextPopoverOpen((v) => !v)}
+          />
           <button
-            className={`${styles.attachBtn} ${attachMenuOpen ? styles.attachBtnActive : ""}`}
-            onClick={() => setAttachMenuOpen((v) => !v)}
-            title="Add files or connectors"
+            className={`${styles.sendBtn} ${isRunning ? styles.sendBtnStop : ""}`}
+            onClick={isRunning ? onStop : handleSend}
+            disabled={!isRunning && !chatInput.trim() && pendingAttachments.length === 0}
+            title={isRunning ? "Stop agent" : "Send message"}
+            aria-label={isRunning ? "Stop agent" : "Send message"}
           >
-            <Plus size={16} />
+            {isRunning ? <Square size={16} /> : <Send size={16} />}
           </button>
-          {attachMenuOpen && (
-            <AttachMenu
-              repoId={repoId}
-              onAttachFiles={() => {
-                setAttachMenuOpen(false);
-                handleAttachClick();
-              }}
-              onClose={() => setAttachMenuOpen(false)}
-              isRemote={isRemote}
+          {contextPopoverOpen && (
+            <ContextPopover
+              workspaceId={selectedWorkspaceId}
+              onClose={() => setContextPopoverOpen(false)}
+              onCompact={() => resetAgentSession(selectedWorkspaceId)}
+              onClear={() => clearConversation(selectedWorkspaceId, false)}
             />
           )}
         </div>
-        <ChatToolbar
-          workspaceId={selectedWorkspaceId}
-          disabled={isRunning}
-        />
-        <button
-          className={`${styles.sendBtn} ${isRunning ? styles.sendBtnStop : ""}`}
-          onClick={isRunning ? onStop : handleSend}
-          disabled={!isRunning && !chatInput.trim() && pendingAttachments.length === 0}
-          title={isRunning ? "Stop agent" : "Send message"}
-          aria-label={isRunning ? "Stop agent" : "Send message"}
-        >
-          {isRunning ? <Square size={16} /> : <Send size={16} />}
-        </button>
       </div>
     </div>
   );

@@ -1,0 +1,119 @@
+.meter {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  transition: background var(--transition-fast);
+  font-family: inherit;
+}
+
+.meter:hover {
+  background: var(--hover-bg);
+}
+
+.cells {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cell {
+  position: relative;
+  width: 3px;
+  height: 14px;
+  border-radius: 1.5px;
+  background: var(--divider);
+  overflow: visible;
+  transition: background 240ms ease-out;
+  transition-delay: calc(var(--cell-index, 0) * 20ms);
+  transform-origin: center;
+}
+
+.cellFilled {
+  background: var(--cell-color);
+}
+
+.cellPartial {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border-radius: 1.5px;
+  transition: height 500ms var(--ease-out-quick);
+}
+
+.readout {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.edgePulse {
+  position: absolute;
+  top: 50%;
+  width: 20px;
+  height: 20px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+/* ── Animations (respect prefers-reduced-motion) ── */
+
+@media (prefers-reduced-motion: no-preference) {
+  .cellBreathing {
+    animation: ctx-breath var(--breath-duration, 1.8s) ease-in-out infinite;
+  }
+
+  .cellPartial {
+    animation: ctx-lead-pulse var(--lead-duration, 2.2s) ease-in-out infinite;
+  }
+
+  .cellEmpty::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: var(--hover-bg);
+    border-radius: 1.5px;
+    opacity: 0;
+    animation: ctx-shimmer 4s ease-in-out infinite;
+    animation-delay: calc(var(--cell-index, 0) * 120ms);
+  }
+
+  .meterUrgent .cellFilled {
+    box-shadow: 0 0 6px var(--cell-color);
+  }
+
+  .edgePulse {
+    background: radial-gradient(circle, color-mix(in srgb, var(--cell-color) 40%, transparent) 0%, transparent 60%);
+    animation: ctx-edge-pulse 1.2s ease-in-out infinite;
+  }
+}
+
+@keyframes ctx-breath {
+  0%, 100% { transform: scaleY(1); filter: brightness(1); }
+  50% { transform: scaleY(1.15); filter: brightness(1.35); }
+}
+
+@keyframes ctx-lead-pulse {
+  0%, 100% { opacity: 0.55; transform: scaleY(0.9); }
+  50% { opacity: 1; transform: scaleY(1); }
+}
+
+@keyframes ctx-shimmer {
+  0%, 85%, 100% { opacity: 0; }
+  90% { opacity: 0.35; }
+}
+
+@keyframes ctx-edge-pulse {
+  0%, 100% { opacity: 0.35; transform: translate(-50%, -50%) scale(0.9); }
+  50% { opacity: 0.9; transform: translate(-50%, -50%) scale(1.25); }
+}
