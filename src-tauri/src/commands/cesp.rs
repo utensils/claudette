@@ -20,6 +20,10 @@ pub async fn cesp_fetch_registry() -> Result<Vec<RegistryPack>, String> {
         .send()
         .await
         .map_err(|e| format!("Failed to fetch registry: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(format!("Registry returned HTTP {status}"));
+    }
     let index: RegistryIndex = resp
         .json()
         .await
@@ -41,11 +45,16 @@ pub async fn cesp_install_pack(
 ) -> Result<InstalledPack, String> {
     let tarball_url =
         format!("https://github.com/{source_repo}/archive/refs/tags/{source_ref}.tar.gz");
-    let bytes = http_client()
+    let resp = http_client()
         .get(&tarball_url)
         .send()
         .await
-        .map_err(|e| format!("Failed to download pack: {e}"))?
+        .map_err(|e| format!("Failed to download pack: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(format!("Failed to download pack: HTTP {status}"));
+    }
+    let bytes = resp
         .bytes()
         .await
         .map_err(|e| format!("Failed to read pack data: {e}"))?;
@@ -109,8 +118,9 @@ pub async fn cesp_preview_sound(
         .pick_sound(&preview_category, sounds, std::time::Duration::ZERO)
         .ok_or("No sound available")?;
 
-    let file_path = cesp::resolve_sound_file(&pack_dir, sound);
-    cesp::play_audio_file(&file_path, volume);
+    if let Some(file_path) = cesp::resolve_sound_file(&pack_dir, sound) {
+        cesp::play_audio_file(&file_path, volume);
+    }
     Ok(())
 }
 
@@ -161,8 +171,9 @@ pub async fn cesp_play_for_event(
     if let Some(sound) =
         playback.pick_sound(category, sounds, std::time::Duration::from_millis(500))
     {
-        let file_path = cesp::resolve_sound_file(&pack_dir, sound);
-        cesp::play_audio_file(&file_path, volume);
+        if let Some(file_path) = cesp::resolve_sound_file(&pack_dir, sound) {
+            cesp::play_audio_file(&file_path, volume);
+        }
     }
 
     Ok(())

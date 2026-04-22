@@ -233,21 +233,17 @@ fn extract_tarball(data: &[u8], target_dir: &Path, source_path: &str) -> Result<
             continue;
         }
 
-        let dest = target_dir.join(&relative);
+        // Reject any component that escapes the target directory
+        for component in relative.components() {
+            match component {
+                std::path::Component::Normal(_) => {}
+                _ => return Err(format!("Path traversal detected: {}", inner_str)),
+            }
+        }
 
-        // Path traversal guard
-        let canonical_target = target_dir
-            .canonicalize()
-            .unwrap_or_else(|_| target_dir.to_path_buf());
+        let dest = target_dir.join(&relative);
         let dest_parent = dest.parent().unwrap_or(target_dir);
         let _ = std::fs::create_dir_all(dest_parent);
-        let canonical_dest = dest
-            .parent()
-            .and_then(|p| p.canonicalize().ok())
-            .unwrap_or_else(|| dest_parent.to_path_buf());
-        if !canonical_dest.starts_with(&canonical_target) {
-            return Err(format!("Path traversal detected: {}", inner_str));
-        }
 
         if entry.header().entry_type().is_dir() {
             let _ = std::fs::create_dir_all(&dest);
@@ -363,12 +359,26 @@ impl Default for SoundPlaybackState {
     }
 }
 
-pub fn resolve_sound_file(pack_dir: &Path, sound: &CespSound) -> PathBuf {
+pub fn resolve_sound_file(pack_dir: &Path, sound: &CespSound) -> Option<PathBuf> {
     let file = &sound.file;
-    if file.contains('/') {
+    if file.is_empty() || file.contains('\\') {
+        return None;
+    }
+    let path = Path::new(file);
+    for component in path.components() {
+        if !matches!(component, std::path::Component::Normal(_)) {
+            return None;
+        }
+    }
+    let resolved = if file.contains('/') {
         pack_dir.join(file)
     } else {
         pack_dir.join("sounds").join(file)
+    };
+    if resolved.starts_with(pack_dir) {
+        Some(resolved)
+    } else {
+        None
     }
 }
 
@@ -473,7 +483,7 @@ pub fn play_cesp_sound_for_event_with_state(
     }
 
     let pack_name = match db_get("cesp_active_pack") {
-        Some(name) if !name.is_empty() => name,
+        Some(name) if !name.is_empty() && validate_pack_name(&name).is_ok() => name,
         _ => return,
     };
 
@@ -493,8 +503,9 @@ pub fn play_cesp_sound_for_event_with_state(
         None => return,
     };
 
-    if let Some(sound) = playback.pick_sound(category, sounds, Duration::from_millis(500)) {
-        let file_path = resolve_sound_file(&pack_dir, sound);
+    if let Some(sound) = playback.pick_sound(category, sounds, Duration::from_millis(500))
+        && let Some(file_path) = resolve_sound_file(&pack_dir, sound)
+    {
         play_audio_file(&file_path, volume);
     }
 }
@@ -667,7 +678,10 @@ mod tests {
             label: None,
         };
         let result = resolve_sound_file(Path::new("/packs/peon"), &sound);
-        assert_eq!(result, PathBuf::from("/packs/peon/sounds/hello.wav"));
+        assert_eq!(
+            result.unwrap(),
+            PathBuf::from("/packs/peon/sounds/hello.wav")
+        );
     }
 
     #[test]
@@ -677,7 +691,10 @@ mod tests {
             label: None,
         };
         let result = resolve_sound_file(Path::new("/packs/peon"), &sound);
-        assert_eq!(result, PathBuf::from("/packs/peon/sounds/hello.wav"));
+        assert_eq!(
+            result.unwrap(),
+            PathBuf::from("/packs/peon/sounds/hello.wav")
+        );
     }
 
     #[test]

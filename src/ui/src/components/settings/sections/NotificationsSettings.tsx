@@ -107,7 +107,12 @@ export function NotificationsSettings() {
     }
     getAppSetting("cesp_volume")
       .then((val) => {
-        if (val) setVolume(Math.round(parseFloat(val) * 100));
+        if (val) {
+          const parsed = parseFloat(val);
+          if (Number.isFinite(parsed)) {
+            setVolume(Math.round(Math.min(1, Math.max(0, parsed)) * 100));
+          }
+        }
       })
       .catch(() => {});
     getAppSetting("cesp_muted")
@@ -127,7 +132,14 @@ export function NotificationsSettings() {
   }, [loadInstalled]);
 
   useEffect(() => {
-    if (installed.length > 0 && !activePack) {
+    if (installed.length === 0) {
+      if (activePack) {
+        setActivePack("");
+        setAppSetting("cesp_active_pack", "").catch(() => {});
+      }
+      return;
+    }
+    if (!installed.some((p) => p.name === activePack)) {
       const first = installed[0].name;
       setActivePack(first);
       setAppSetting("cesp_active_pack", first).catch(() => {});
