@@ -3,6 +3,8 @@ import { useAppStore } from "./useAppStore";
 import type { AgentQuestion } from "./useAppStore";
 import type { ChatMessage } from "../types/chat";
 import type { ConversationCheckpoint } from "../types/checkpoint";
+import type { Workspace } from "../types/workspace";
+import type { Repository } from "../types/repository";
 import { applyPlanModeMountDefault } from "../components/chat/applyPlanModeMountDefault";
 
 const WS_ID = "test-workspace";
@@ -1282,5 +1284,213 @@ describe("rollbackConversation updates latestTurnUsage", () => {
     ];
     useAppStore.getState().rollbackConversation("ws1", "cp1", msgs);
     expect(useAppStore.getState().latestTurnUsage.ws1).toBeUndefined();
+  });
+});
+
+// --- Per-workspace diff selection and chat draft persistence ---
+
+function makeWorkspace(id: string, repositoryId: string): Workspace {
+  return {
+    id,
+    repository_id: repositoryId,
+    name: id,
+    branch_name: "main",
+    worktree_path: null,
+    status: "Active",
+    agent_status: "Idle",
+    status_line: "",
+    created_at: "",
+    remote_connection_id: null,
+  };
+}
+
+function makeRepository(id: string): Repository {
+  return {
+    id,
+    path: `/repos/${id}`,
+    name: id,
+    path_slug: id,
+    icon: null,
+    created_at: "",
+    setup_script: null,
+    custom_instructions: null,
+    sort_order: 0,
+    branch_rename_preferences: null,
+    setup_script_auto_run: false,
+    path_valid: true,
+    remote_connection_id: null,
+  };
+}
+
+describe("selectWorkspace diff selection persistence", () => {
+  beforeEach(() => {
+    useAppStore.setState({
+      selectedWorkspaceId: null,
+      diffSelectedFile: null,
+      diffSelectedLayer: null,
+      diffContent: null,
+      diffError: null,
+      diffSelectionByWorkspace: {},
+      rightSidebarTab: "changes",
+    });
+  });
+
+  it("no-op when called with the already-selected workspace id", () => {
+    useAppStore.setState({
+      selectedWorkspaceId: "ws-a",
+      diffSelectedFile: "src/main.rs",
+      diffSelectedLayer: "staged",
+    });
+    const before = useAppStore.getState();
+    useAppStore.getState().selectWorkspace("ws-a");
+    const after = useAppStore.getState();
+    // Zustand bails out — state object reference is unchanged.
+    expect(after.diffSelectedFile).toBe("src/main.rs");
+    expect(after.selectedWorkspaceId).toBe("ws-a");
+    // Prove the set updater returned the same state object.
+    expect(after.diffSelectedFile).toBe(before.diffSelectedFile);
+  });
+
+  it("saves outgoing workspace diff selection and restores the incoming one", () => {
+    // ws-a was previously selected with a file open; ws-b had its own prior selection.
+    useAppStore.setState({
+      selectedWorkspaceId: "ws-a",
+      diffSelectedFile: "src/lib.rs",
+      diffSelectedLayer: "unstaged",
+      diffSelectionByWorkspace: {
+        "ws-b": { path: "src/main.rs", layer: "staged" },
+      },
+    });
+
+    useAppStore.getState().selectWorkspace("ws-b");
+
+    const s = useAppStore.getState();
+    expect(s.selectedWorkspaceId).toBe("ws-b");
+    // ws-a's current view is now persisted
+    expect(s.diffSelectionByWorkspace["ws-a"]).toEqual({
+      path: "src/lib.rs",
+      layer: "unstaged",
+    });
+    // ws-b's prior selection is restored
+    expect(s.diffSelectedFile).toBe("src/main.rs");
+    expect(s.diffSelectedLayer).toBe("staged");
+    // Stale content is cleared so DiffViewer reloads
+    expect(s.diffContent).toBeNull();
+    expect(s.diffError).toBeNull();
+  });
+
+  it("clears diff selection when switching to a workspace with no prior selection", () => {
+    useAppStore.setState({
+      selectedWorkspaceId: "ws-a",
+      diffSelectedFile: "src/foo.rs",
+      diffSelectedLayer: null,
+      diffSelectionByWorkspace: {},
+    });
+
+    useAppStore.getState().selectWorkspace("ws-b");
+
+    const s = useAppStore.getState();
+    expect(s.diffSelectedFile).toBeNull();
+    expect(s.diffSelectedLayer).toBeNull();
+  });
+});
+
+describe("clearDiff per-workspace cleanup", () => {
+  beforeEach(() => {
+    useAppStore.setState({
+      selectedWorkspaceId: "ws-a",
+      diffSelectedFile: "src/lib.rs",
+      diffSelectedLayer: "unstaged",
+      diffSelectionByWorkspace: {
+        "ws-a": { path: "src/lib.rs", layer: "unstaged" },
+        "ws-b": { path: "src/main.rs", layer: "staged" },
+      },
+      diffFiles: [],
+      diffMergeBase: null,
+      diffStagedFiles: null,
+      diffContent: null,
+      diffError: null,
+    });
+  });
+
+  it("removes only the current workspace's saved selection", () => {
+    useAppStore.getState().clearDiff();
+    const s = useAppStore.getState();
+    expect(s.diffSelectionByWorkspace["ws-a"]).toBeUndefined();
+    expect(s.diffSelectionByWorkspace["ws-b"]).toEqual({
+      path: "src/main.rs",
+      layer: "staged",
+    });
+  });
+
+  it("resets diff view state", () => {
+    useAppStore.getState().clearDiff();
+    const s = useAppStore.getState();
+    expect(s.diffSelectedFile).toBeNull();
+    expect(s.diffContent).toBeNull();
+  });
+});
+
+describe("removeWorkspace cleans up diffSelectionByWorkspace and chatDrafts", () => {
+  beforeEach(() => {
+    useAppStore.setState({
+      workspaces: [makeWorkspace("ws-a", "repo-1"), makeWorkspace("ws-b", "repo-1")],
+      selectedWorkspaceId: "ws-a",
+      diffSelectionByWorkspace: {
+        "ws-a": { path: "src/lib.rs", layer: null },
+        "ws-b": { path: "src/main.rs", layer: "staged" },
+      },
+      chatDrafts: { "ws-a": "hello", "ws-b": "world" },
+    });
+  });
+
+  it("removes the removed workspace's diff selection entry", () => {
+    useAppStore.getState().removeWorkspace("ws-a");
+    const s = useAppStore.getState();
+    expect(s.diffSelectionByWorkspace["ws-a"]).toBeUndefined();
+    expect(s.diffSelectionByWorkspace["ws-b"]).toBeDefined();
+  });
+
+  it("removes the removed workspace's chat draft", () => {
+    useAppStore.getState().removeWorkspace("ws-a");
+    const s = useAppStore.getState();
+    expect(s.chatDrafts["ws-a"]).toBeUndefined();
+    expect(s.chatDrafts["ws-b"]).toBe("world");
+  });
+});
+
+describe("removeRepository cleans up diffSelectionByWorkspace and chatDrafts", () => {
+  beforeEach(() => {
+    useAppStore.setState({
+      repositories: [makeRepository("repo-1"), makeRepository("repo-2")],
+      workspaces: [
+        makeWorkspace("ws-a", "repo-1"),
+        makeWorkspace("ws-b", "repo-1"),
+        makeWorkspace("ws-c", "repo-2"),
+      ],
+      selectedWorkspaceId: "ws-a",
+      diffSelectionByWorkspace: {
+        "ws-a": { path: "src/a.rs", layer: null },
+        "ws-b": { path: "src/b.rs", layer: "staged" },
+        "ws-c": { path: "src/c.rs", layer: null },
+      },
+      chatDrafts: { "ws-a": "draft-a", "ws-b": "draft-b", "ws-c": "draft-c" },
+    });
+  });
+
+  it("removes all workspace entries for the removed repo from diffSelectionByWorkspace", () => {
+    useAppStore.getState().removeRepository("repo-1");
+    const s = useAppStore.getState();
+    expect(s.diffSelectionByWorkspace["ws-a"]).toBeUndefined();
+    expect(s.diffSelectionByWorkspace["ws-b"]).toBeUndefined();
+    expect(s.diffSelectionByWorkspace["ws-c"]).toBeDefined();
+  });
+
+  it("removes all workspace entries for the removed repo from chatDrafts", () => {
+    useAppStore.getState().removeRepository("repo-1");
+    const s = useAppStore.getState();
+    expect(s.chatDrafts["ws-a"]).toBeUndefined();
+    expect(s.chatDrafts["ws-b"]).toBeUndefined();
+    expect(s.chatDrafts["ws-c"]).toBe("draft-c");
   });
 });
