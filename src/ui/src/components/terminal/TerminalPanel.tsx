@@ -9,6 +9,7 @@ import {
   createTerminalTab,
   deleteTerminalTab,
   listTerminalTabs,
+  openUrl,
   spawnPty,
   writePty,
   resizePty,
@@ -217,7 +218,9 @@ export const TerminalPanel = memo(function TerminalPanel() {
         theme: getTerminalTheme(),
       });
       const fit = new FitAddon();
-      const links = new WebLinksAddon();
+      const links = new WebLinksAddon((_event, url) => {
+        void openUrl(url);
+      });
       term.loadAddon(fit);
       term.loadAddon(links);
 
