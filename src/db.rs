@@ -101,7 +101,8 @@ impl Database {
 
     fn migrate(&self) -> Result<(), rusqlite::Error> {
         self.bootstrap_and_backfill(MIGRATIONS)?;
-        Self::run_migrations(&self.conn, MIGRATIONS)
+        Self::run_migrations(&self.conn, MIGRATIONS)?;
+        self.heal_orphaned_sessions()
     }
 
     /// Ensure `schema_migrations` exists; seed it from `PRAGMA user_version`
@@ -200,6 +201,87 @@ impl Database {
                 Err(e) => return Err(e),
             }
         }
+        Ok(())
+    }
+
+    fn heal_orphaned_sessions(&self) -> Result<(), rusqlite::Error> {
+        let has_orphaned_ws = self
+            .conn
+            .query_row(
+                "SELECT EXISTS(
+                     SELECT 1 FROM workspaces w
+                     WHERE NOT EXISTS (
+                         SELECT 1 FROM chat_sessions cs WHERE cs.workspace_id = w.id
+                     )
+                 )",
+                [],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap_or(false);
+
+        if has_orphaned_ws {
+            let tx = self.conn.unchecked_transaction()?;
+            let orphaned: Vec<(String, Option<String>, i64)> = {
+                let mut stmt = tx.prepare(
+                    "SELECT w.id, w.session_id, w.turn_count
+                     FROM workspaces w
+                     WHERE NOT EXISTS (
+                         SELECT 1 FROM chat_sessions cs WHERE cs.workspace_id = w.id
+                     )",
+                )?;
+                stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+                    .collect::<Result<Vec<_>, _>>()?
+            };
+            for (ws_id, claude_sid, tc) in &orphaned {
+                let sid = uuid::Uuid::new_v4().to_string();
+                tx.execute(
+                    "INSERT INTO chat_sessions
+                        (id, workspace_id, claude_session_id, name, name_edited,
+                         turn_count, sort_order, status)
+                     VALUES (?1, ?2, ?3, 'Main', 0, ?4, 0, 'active')",
+                    params![sid, ws_id, claude_sid, tc],
+                )?;
+                tx.execute(
+                    "UPDATE chat_messages SET session_id = ?1
+                     WHERE workspace_id = ?2 AND session_id IS NULL",
+                    params![sid, ws_id],
+                )?;
+                tx.execute(
+                    "UPDATE conversation_checkpoints SET session_id = ?1
+                     WHERE workspace_id = ?2 AND session_id IS NULL",
+                    params![sid, ws_id],
+                )?;
+            }
+            tx.commit()?;
+        }
+
+        let has_null_sessions: bool = self
+            .conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE session_id IS NULL)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+
+        if has_null_sessions {
+            self.conn.execute_batch(
+                "UPDATE chat_messages SET session_id = (
+                     SELECT cs.id FROM chat_sessions cs
+                     WHERE cs.workspace_id = chat_messages.workspace_id
+                     ORDER BY cs.sort_order, cs.created_at LIMIT 1
+                 )
+                 WHERE session_id IS NULL;
+
+                 UPDATE conversation_checkpoints SET session_id = (
+                     SELECT cs.id FROM chat_sessions cs
+                     WHERE cs.workspace_id = conversation_checkpoints.workspace_id
+                     ORDER BY cs.sort_order, cs.created_at LIMIT 1
+                 )
+                 WHERE session_id IS NULL;",
+            )?;
+        }
+
         Ok(())
     }
 }
@@ -1049,11 +1131,11 @@ impl Database {
 
     fn parse_chat_message_row(row: &rusqlite::Row) -> rusqlite::Result<ChatMessage> {
         let role_str: String = row.get(3)?;
-        // session_id is non-null after migration v21 backfills every row. A
-        // NULL here means either migration skipped a row or a later INSERT
-        // violated the invariant — fail loudly instead of returning a
-        // message that can't be addressed by the per-session APIs.
-        let session_id: String = row.get(2)?;
+        // session_id should be non-null after the v25 backfill. Tolerate NULL
+        // gracefully (default to empty string) so a stale row inserted by a
+        // build that predates chat_sessions can't crash the entire query.
+        // The self-healing step in migrate() will repair these on next startup.
+        let session_id: String = row.get::<_, Option<String>>(2)?.unwrap_or_default();
         Ok(ChatMessage {
             id: row.get(0)?,
             workspace_id: row.get(1)?,

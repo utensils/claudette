@@ -12,15 +12,15 @@ import { OverflowMenu } from "./OverflowMenu";
 import styles from "./ComposerToolbar.module.css";
 
 interface ComposerToolbarProps {
-  workspaceId: string;
+  sessionId: string;
   disabled: boolean;
 }
 
-export function ComposerToolbar({ workspaceId, disabled }: ComposerToolbarProps) {
-  const selectedModel = useAppStore((s) => s.selectedModel[workspaceId] ?? "opus");
+export function ComposerToolbar({ sessionId, disabled }: ComposerToolbarProps) {
+  const selectedModel = useAppStore((s) => s.selectedModel[sessionId] ?? "opus");
   const disable1mContext = useAppStore((s) => s.disable1mContext);
-  const thinkingEnabled = useAppStore((s) => s.thinkingEnabled[workspaceId] ?? false);
-  const planMode = useAppStore((s) => s.planMode[workspaceId] ?? false);
+  const thinkingEnabled = useAppStore((s) => s.thinkingEnabled[sessionId] ?? false);
+  const planMode = useAppStore((s) => s.planMode[sessionId] ?? false);
   const modelSelectorOpen = useAppStore((s) => s.modelSelectorOpen);
   const setSelectedModel = useAppStore((s) => s.setSelectedModel);
   const setFastMode = useAppStore((s) => s.setFastMode);
@@ -37,12 +37,12 @@ export function ComposerToolbar({ workspaceId, disabled }: ComposerToolbarProps)
     let cancelled = false;
     async function load() {
       const [model, fast, thinking, effort, showThinking, chrome, defModel, defFast, defThinking, defPlan, defEffort, defShowThinking, defChrome] = await Promise.all([
-        getAppSetting(`model:${workspaceId}`),
-        getAppSetting(`fast_mode:${workspaceId}`),
-        getAppSetting(`thinking_enabled:${workspaceId}`),
-        getAppSetting(`effort_level:${workspaceId}`),
-        getAppSetting(`show_thinking:${workspaceId}`),
-        getAppSetting(`chrome_enabled:${workspaceId}`),
+        getAppSetting(`model:${sessionId}`),
+        getAppSetting(`fast_mode:${sessionId}`),
+        getAppSetting(`thinking_enabled:${sessionId}`),
+        getAppSetting(`effort_level:${sessionId}`),
+        getAppSetting(`show_thinking:${sessionId}`),
+        getAppSetting(`chrome_enabled:${sessionId}`),
         getAppSetting("default_model"),
         getAppSetting("default_fast_mode"),
         getAppSetting("default_thinking"),
@@ -53,12 +53,12 @@ export function ComposerToolbar({ workspaceId, disabled }: ComposerToolbarProps)
       ]);
       if (cancelled) return;
       const loadedModel = model ?? defModel ?? "opus";
-      setSelectedModel(workspaceId, loadedModel);
+      setSelectedModel(sessionId, loadedModel);
       const effectiveFast = isFastSupported(loadedModel) && (fast === "true" || (!fast && defFast === "true"));
       const effectiveThinking = thinking === "true" || (!thinking && defThinking === "true");
-      setFastMode(workspaceId, effectiveFast);
-      setThinkingEnabled(workspaceId, effectiveThinking);
-      applyPlanModeMountDefault(workspaceId, defPlan === "true");
+      setFastMode(sessionId, effectiveFast);
+      setThinkingEnabled(sessionId, effectiveThinking);
+      applyPlanModeMountDefault(sessionId, defPlan === "true");
       const effectiveEffort = effort ?? defEffort;
       if (effectiveEffort) {
         const normalized = !isEffortSupported(loadedModel)
@@ -68,35 +68,35 @@ export function ComposerToolbar({ workspaceId, disabled }: ComposerToolbarProps)
             : effectiveEffort === "max" && !isMaxEffortAllowed(loadedModel)
               ? "high"
               : effectiveEffort;
-        setEffortLevel(workspaceId, normalized);
+        setEffortLevel(sessionId, normalized);
       }
-      setShowThinkingBlocks(workspaceId, showThinking === "true" || (!showThinking && defShowThinking === "true"));
-      setChromeEnabled(workspaceId, chrome === "true" || (!chrome && defChrome === "true"));
+      setShowThinkingBlocks(sessionId, showThinking === "true" || (!showThinking && defShowThinking === "true"));
+      setChromeEnabled(sessionId, chrome === "true" || (!chrome && defChrome === "true"));
       setLoaded(true);
     }
     load();
     return () => { cancelled = true; };
-  }, [workspaceId, setSelectedModel, setFastMode, setThinkingEnabled, setEffortLevel, setShowThinkingBlocks, setChromeEnabled]);
+  }, [sessionId, setSelectedModel, setFastMode, setThinkingEnabled, setEffortLevel, setShowThinkingBlocks, setChromeEnabled]);
 
   const handleModelSelect = useCallback(
     async (model: string) => {
       if (model !== selectedModel) {
-        await applySelectedModel(workspaceId, model);
+        await applySelectedModel(sessionId, model);
       }
       setModelSelectorOpen(false);
     },
-    [workspaceId, selectedModel, setModelSelectorOpen],
+    [sessionId, selectedModel, setModelSelectorOpen],
   );
 
   const toggleThinking = useCallback(async () => {
     const next = !thinkingEnabled;
-    setThinkingEnabled(workspaceId, next);
-    await setAppSetting(`thinking_enabled:${workspaceId}`, String(next));
-  }, [workspaceId, thinkingEnabled, setThinkingEnabled]);
+    setThinkingEnabled(sessionId, next);
+    await setAppSetting(`thinking_enabled:${sessionId}`, String(next));
+  }, [sessionId, thinkingEnabled, setThinkingEnabled]);
 
   const togglePlan = useCallback(() => {
-    setPlanMode(workspaceId, !planMode);
-  }, [workspaceId, planMode, setPlanMode]);
+    setPlanMode(sessionId, !planMode);
+  }, [sessionId, planMode, setPlanMode]);
 
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
@@ -112,9 +112,9 @@ export function ComposerToolbar({ workspaceId, disabled }: ComposerToolbarProps)
   useEffect(() => {
     if (!loaded || !disable1mContext) return;
     if (is1mContextModel(selectedModel)) {
-      void applySelectedModel(workspaceId, get1mFallback(selectedModel));
+      void applySelectedModel(sessionId, get1mFallback(selectedModel));
     }
-  }, [loaded, disable1mContext, selectedModel, workspaceId]);
+  }, [loaded, disable1mContext, selectedModel, sessionId]);
 
   const currentModel = MODELS.find((m) => m.id === selectedModel);
   const modelLabel = currentModel?.label ?? selectedModel;
@@ -154,9 +154,9 @@ export function ComposerToolbar({ workspaceId, disabled }: ComposerToolbarProps)
         ariaPressed={planMode}
       />
 
-      <ReasoningPill workspaceId={workspaceId} disabled={disabled} />
+      <ReasoningPill sessionId={sessionId} disabled={disabled} />
 
-      <OverflowMenu workspaceId={workspaceId} disabled={disabled} />
+      <OverflowMenu sessionId={sessionId} disabled={disabled} />
     </div>
   );
 }

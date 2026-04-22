@@ -386,7 +386,12 @@ export function ChatPanel() {
   const clearQueuedMessage = useAppStore((s) => s.clearQueuedMessage);
   const addWorkspace = useAppStore((s) => s.addWorkspace);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
-  const isRunning = isAgentBusy(ws?.agent_status);
+  const activeSessionStatus = useAppStore((s) => {
+    if (!activeSessionId || !selectedWorkspaceId) return "Idle" as const;
+    const sessions = s.sessionsByWorkspace[selectedWorkspaceId];
+    return sessions?.find((sess) => sess.id === activeSessionId)?.agent_status ?? "Idle" as const;
+  });
+  const isRunning = activeSessionStatus === "Running";
 
   const isRemote = !!ws?.remote_connection_id;
 
@@ -936,7 +941,8 @@ export function ChatPanel() {
       if (ws?.remote_connection_id) {
         // Route to remote server via WebSocket.
         const state = useAppStore.getState();
-        const disable1mContext = shouldDisable1mContext(state.selectedModel[sessionId] || null);
+        const selectedModel = state.selectedModel[sessionId] || null;
+        const disable1mContext = shouldDisable1mContext(selectedModel);
         await sendRemoteCommand(ws.remote_connection_id, "send_chat_message", {
           session_id: sessionId,
           content: trimmed,
@@ -3001,12 +3007,13 @@ function ChatInputArea({
             )}
           </div>
           <ComposerToolbar
-            workspaceId={selectedWorkspaceId}
+            sessionId={sessionId}
             disabled={isRunning}
           />
         </div>
         <div className={styles.inputControlsRight}>
           <SegmentedMeter
+            sessionId={sessionId}
             workspaceId={selectedWorkspaceId}
             onClick={() => setContextPopoverOpen((v) => !v)}
           />
@@ -3118,6 +3125,7 @@ function ChatInputArea({
           </button>
           {contextPopoverOpen && (
             <ContextPopover
+              sessionId={sessionId}
               workspaceId={selectedWorkspaceId}
               onClose={() => setContextPopoverOpen(false)}
               onCompact={() => { onSend("/compact"); }}
@@ -3127,6 +3135,7 @@ function ChatInputArea({
         </div>
         <ChatToolbar
           sessionId={sessionId}
+          workspaceId={selectedWorkspaceId}
           disabled={isRunning}
         />
       </div>

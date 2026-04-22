@@ -7,7 +7,7 @@ import { EFFORT_LEVELS } from "../EffortSelector";
 import styles from "./ReasoningPill.module.css";
 
 interface ReasoningPillProps {
-  workspaceId: string;
+  sessionId: string;
   disabled: boolean;
 }
 
@@ -17,14 +17,14 @@ function getAvailableLevels(model: string) {
   return EFFORT_LEVELS.filter((l) => l.id !== "xhigh" && l.id !== "max");
 }
 
-export function ReasoningPill({ workspaceId, disabled }: ReasoningPillProps) {
+export function ReasoningPill({ sessionId, disabled }: ReasoningPillProps) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const selectedModel = useAppStore((s) => s.selectedModel[workspaceId] ?? "opus");
-  const thinkingEnabled = useAppStore((s) => s.thinkingEnabled[workspaceId] ?? false);
-  const showThinkingBlocks = useAppStore((s) => s.showThinkingBlocks[workspaceId] === true);
-  const effortLevel = useAppStore((s) => s.effortLevel[workspaceId] ?? "auto");
+  const selectedModel = useAppStore((s) => s.selectedModel[sessionId] ?? "opus");
+  const thinkingEnabled = useAppStore((s) => s.thinkingEnabled[sessionId] ?? false);
+  const showThinkingBlocks = useAppStore((s) => s.showThinkingBlocks[sessionId] === true);
+  const effortLevel = useAppStore((s) => s.effortLevel[sessionId] ?? "auto");
   const setThinkingEnabled = useAppStore((s) => s.setThinkingEnabled);
   const setShowThinkingBlocks = useAppStore((s) => s.setShowThinkingBlocks);
   const setEffortLevel = useAppStore((s) => s.setEffortLevel);
@@ -43,23 +43,23 @@ export function ReasoningPill({ workspaceId, disabled }: ReasoningPillProps) {
 
   const toggleThinking = useCallback(async () => {
     const next = !thinkingEnabled;
-    setThinkingEnabled(workspaceId, next);
-    await setAppSetting(`thinking_enabled:${workspaceId}`, String(next));
-  }, [workspaceId, thinkingEnabled, setThinkingEnabled]);
+    setThinkingEnabled(sessionId, next);
+    await setAppSetting(`thinking_enabled:${sessionId}`, String(next));
+  }, [sessionId, thinkingEnabled, setThinkingEnabled]);
 
   const toggleShowThinking = useCallback(async () => {
     const next = !showThinkingBlocks;
-    setShowThinkingBlocks(workspaceId, next);
-    await setAppSetting(`show_thinking:${workspaceId}`, String(next));
-  }, [workspaceId, showThinkingBlocks, setShowThinkingBlocks]);
+    setShowThinkingBlocks(sessionId, next);
+    await setAppSetting(`show_thinking:${sessionId}`, String(next));
+  }, [sessionId, showThinkingBlocks, setShowThinkingBlocks]);
 
   const handleEffortSelect = useCallback(
     async (level: string) => {
-      setEffortLevel(workspaceId, level);
-      await setAppSetting(`effort_level:${workspaceId}`, level);
+      setEffortLevel(sessionId, level);
+      await setAppSetting(`effort_level:${sessionId}`, level);
       setDropdownOpen(false);
     },
-    [workspaceId, setEffortLevel],
+    [sessionId, setEffortLevel],
   );
 
   useEffect(() => {

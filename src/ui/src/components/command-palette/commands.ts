@@ -94,15 +94,15 @@ export interface CommandContext {
   currentRepoId: string | null;
   createWorkspace: (repoId: string) => Promise<void>;
 
-  // Agent (workspace-specific toolbar state; session-specific lifecycle)
+  // Agent (session-scoped toolbar state and lifecycle)
   thinkingEnabled: boolean;
-  setThinkingEnabled: (wsId: string, enabled: boolean) => void;
+  setThinkingEnabled: (sessionId: string, enabled: boolean) => void;
   planMode: boolean;
-  setPlanMode: (wsId: string, enabled: boolean) => void;
+  setPlanMode: (sessionId: string, enabled: boolean) => void;
   fastMode: boolean;
-  setFastMode: (wsId: string, enabled: boolean) => void;
+  setFastMode: (sessionId: string, enabled: boolean) => void;
   effortLevel: string;
-  setEffortLevel: (wsId: string, level: string) => void;
+  setEffortLevel: (sessionId: string, level: string) => void;
   selectedModel: string;
   persistSetting: (key: string, value: string) => void;
   stopAgent: (sessionId: string) => Promise<void>;
@@ -244,9 +244,10 @@ export function buildCommands(ctx: CommandContext): Command[] {
     execute: () => { ctx.resetZoom(); ctx.close(); },
   });
 
-  // -- Agent (only when workspace selected) --
+  // -- Agent (only when a session is active) --
   const wsId = ctx.selectedWorkspaceId;
-  if (wsId) {
+  const sessId = ctx.selectedSessionId;
+  if (wsId && sessId) {
     cmds.push({
       id: "toggle-thinking",
       name: `${ctx.thinkingEnabled ? "Disable" : "Enable"} Thinking Mode`,
@@ -256,8 +257,8 @@ export function buildCommands(ctx: CommandContext): Command[] {
       keywords: ["think", "reasoning", "extended"],
       execute: () => {
         const next = !ctx.thinkingEnabled;
-        ctx.setThinkingEnabled(wsId, next);
-        ctx.persistSetting(`thinking_enabled:${wsId}`, String(next));
+        ctx.setThinkingEnabled(sessId, next);
+        ctx.persistSetting(`thinking_enabled:${sessId}`, String(next));
         ctx.close();
       },
     });
@@ -267,7 +268,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
       category: "agent",
       icon: BookOpen,
       keywords: ["planning", "architect"],
-      execute: () => { ctx.setPlanMode(wsId, !ctx.planMode); ctx.close(); },
+      execute: () => { ctx.setPlanMode(sessId, !ctx.planMode); ctx.close(); },
     });
     if (isFastSupported(ctx.selectedModel)) {
       cmds.push({
@@ -278,8 +279,8 @@ export function buildCommands(ctx: CommandContext): Command[] {
         keywords: ["speed", "quick"],
         execute: () => {
           const next = !ctx.fastMode;
-          ctx.setFastMode(wsId, next);
-          ctx.persistSetting(`fast_mode:${wsId}`, String(next));
+          ctx.setFastMode(sessId, next);
+          ctx.persistSetting(`fast_mode:${sessId}`, String(next));
           ctx.close();
         },
       });
@@ -304,30 +305,27 @@ export function buildCommands(ctx: CommandContext): Command[] {
         execute: () => { ctx.enterEffortMode(); },
       });
     }
-    const sid = ctx.selectedSessionId;
-    if (sid) {
-      cmds.push({
-        id: "stop-agent",
-        name: "Stop Agent",
-        description: "Kill the running agent process",
-        category: "agent",
-        icon: Square,
-        keywords: ["kill", "cancel", "abort"],
-        execute: () => {
-          ctx.stopAgent(sid).then(() => ctx.updateWorkspace(wsId, { agent_status: "Stopped" }));
-          ctx.close();
-        },
-      });
-      cmds.push({
-        id: "reset-session",
-        name: "Reset Agent Session",
-        description: "Start a fresh session",
-        category: "agent",
-        icon: RotateCcw,
-        keywords: ["restart", "new", "clear"],
-        execute: () => { ctx.resetAgentSession(sid); ctx.clearAgentQuestion(sid); ctx.clearPlanApproval(sid); ctx.close(); },
-      });
-    }
+    cmds.push({
+      id: "stop-agent",
+      name: "Stop Agent",
+      description: "Kill the running agent process",
+      category: "agent",
+      icon: Square,
+      keywords: ["kill", "cancel", "abort"],
+      execute: () => {
+        ctx.stopAgent(sessId).then(() => ctx.updateWorkspace(wsId, { agent_status: "Stopped" }));
+        ctx.close();
+      },
+    });
+    cmds.push({
+      id: "reset-session",
+      name: "Reset Agent Session",
+      description: "Start a fresh session",
+      category: "agent",
+      icon: RotateCcw,
+      keywords: ["restart", "new", "clear"],
+      execute: () => { ctx.resetAgentSession(sessId); ctx.clearAgentQuestion(sessId); ctx.clearPlanApproval(sessId); ctx.close(); },
+    });
   }
 
   // -- Theme (single entry → opens sub-menu) --

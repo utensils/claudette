@@ -7,17 +7,17 @@ import { isFastSupported } from "../modelCapabilities";
 import styles from "./OverflowMenu.module.css";
 
 interface OverflowMenuProps {
-  workspaceId: string;
+  sessionId: string;
   disabled: boolean;
 }
 
-export function OverflowMenu({ workspaceId, disabled }: OverflowMenuProps) {
+export function OverflowMenu({ sessionId, disabled }: OverflowMenuProps) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const selectedModel = useAppStore((s) => s.selectedModel[workspaceId] ?? "opus");
-  const fastMode = useAppStore((s) => s.fastMode[workspaceId] ?? false);
-  const chromeEnabled = useAppStore((s) => s.chromeEnabled[workspaceId] ?? false);
+  const selectedModel = useAppStore((s) => s.selectedModel[sessionId] ?? "opus");
+  const fastMode = useAppStore((s) => s.fastMode[sessionId] ?? false);
+  const chromeEnabled = useAppStore((s) => s.chromeEnabled[sessionId] ?? false);
   const setFastMode = useAppStore((s) => s.setFastMode);
   const setChromeEnabled = useAppStore((s) => s.setChromeEnabled);
   const clearAgentQuestion = useAppStore((s) => s.clearAgentQuestion);
@@ -51,18 +51,18 @@ export function OverflowMenu({ workspaceId, disabled }: OverflowMenuProps) {
 
   const toggleFast = useCallback(async () => {
     const next = !fastMode;
-    setFastMode(workspaceId, next);
-    await setAppSetting(`fast_mode:${workspaceId}`, String(next));
-  }, [workspaceId, fastMode, setFastMode]);
+    setFastMode(sessionId, next);
+    await setAppSetting(`fast_mode:${sessionId}`, String(next));
+  }, [sessionId, fastMode, setFastMode]);
 
   const toggleChrome = useCallback(async () => {
     const next = !chromeEnabled;
-    setChromeEnabled(workspaceId, next);
-    await setAppSetting(`chrome_enabled:${workspaceId}`, String(next));
-    await resetAgentSession(workspaceId);
-    clearAgentQuestion(workspaceId);
-    clearPlanApproval(workspaceId);
-  }, [workspaceId, chromeEnabled, setChromeEnabled, clearAgentQuestion, clearPlanApproval]);
+    setChromeEnabled(sessionId, next);
+    await setAppSetting(`chrome_enabled:${sessionId}`, String(next));
+    await resetAgentSession(sessionId);
+    clearAgentQuestion(sessionId);
+    clearPlanApproval(sessionId);
+  }, [sessionId, chromeEnabled, setChromeEnabled, clearAgentQuestion, clearPlanApproval]);
 
   return (
     <div ref={containerRef} className={styles.wrap}>
