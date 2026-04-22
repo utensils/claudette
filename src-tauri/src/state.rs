@@ -280,9 +280,6 @@ pub struct AppState {
     pub pending_update: tokio::sync::Mutex<Option<tauri_plugin_updater::Update>>,
     /// CESP sound pack playback state (no-repeat + debounce tracking).
     pub cesp_playback: Mutex<claudette::cesp::SoundPlaybackState>,
-    /// The workspace the user is currently viewing in the UI.
-    /// Updated from the frontend via the `set_viewing_workspace` command.
-    pub viewing_workspace_id: RwLock<Option<String>>,
 }
 
 impl AppState {
@@ -304,7 +301,6 @@ impl AppState {
             scm_semaphore: Arc::new(Semaphore::new(4)),
             pending_update: tokio::sync::Mutex::new(None),
             cesp_playback: Mutex::new(claudette::cesp::SoundPlaybackState::new()),
-            viewing_workspace_id: RwLock::new(None),
         }
     }
 

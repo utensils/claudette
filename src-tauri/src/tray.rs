@@ -13,7 +13,6 @@ pub enum NotificationEvent {
     Ask,
     Plan,
     Finished,
-    #[allow(dead_code)]
     Error,
     SessionStart,
 }

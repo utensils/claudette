@@ -173,17 +173,6 @@ pub async fn list_system_fonts() -> Vec<String> {
     result
 }
 
-/// Tell the backend which workspace the user is currently looking at.
-#[tauri::command]
-pub async fn set_viewing_workspace(
-    workspace_id: Option<String>,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    let mut viewing = state.viewing_workspace_id.write().await;
-    *viewing = workspace_id;
-    Ok(())
-}
-
 /// Play a notification sound by name (for settings preview and agent-finished events).
 #[tauri::command]
 pub fn play_notification_sound(sound: String, volume: Option<f64>) {

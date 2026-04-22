@@ -398,7 +398,6 @@ fn main() {
             commands::settings::play_notification_sound,
             commands::settings::run_notification_command,
             commands::settings::get_git_username,
-            commands::settings::set_viewing_workspace,
             // Updater
             commands::updater::check_for_updates_with_channel,
             commands::updater::install_pending_update,
