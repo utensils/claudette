@@ -434,14 +434,15 @@ fn repo_leaderboard(conn: &Connection) -> Result<Vec<RepoLeaderRow>, rusqlite::E
             SELECT repository_id, sessions, commits, total_cost_usd,
                    total_input_tokens, total_output_tokens FROM deleted
         )
-        SELECT repository_id,
-               CAST(COALESCE(SUM(sessions), 0) AS INTEGER) AS sessions,
-               CAST(COALESCE(SUM(commits),  0) AS INTEGER) AS commits,
-               COALESCE(SUM(total_cost_usd), 0) AS total_cost_usd,
-               CAST(COALESCE(SUM(total_input_tokens),  0) AS INTEGER) AS total_input_tokens,
-               CAST(COALESCE(SUM(total_output_tokens), 0) AS INTEGER) AS total_output_tokens
-        FROM merged
-        GROUP BY repository_id
+        SELECT m.repository_id,
+               CAST(COALESCE(SUM(m.sessions), 0) AS INTEGER) AS sessions,
+               CAST(COALESCE(SUM(m.commits),  0) AS INTEGER) AS commits,
+               COALESCE(SUM(m.total_cost_usd), 0) AS total_cost_usd,
+               CAST(COALESCE(SUM(m.total_input_tokens),  0) AS INTEGER) AS total_input_tokens,
+               CAST(COALESCE(SUM(m.total_output_tokens), 0) AS INTEGER) AS total_output_tokens
+        FROM merged m
+        INNER JOIN repositories r ON r.id = m.repository_id
+        GROUP BY m.repository_id
         ORDER BY sessions DESC, commits DESC, total_cost_usd DESC
         LIMIT 5
     ";
@@ -785,6 +786,28 @@ mod tests {
         assert!((b_row.total_cost_usd - 0.5).abs() < 1e-6);
         assert_eq!(b_row.total_input_tokens, 3000);
         assert_eq!(b_row.total_output_tokens, 500);
+    }
+
+    #[test]
+    fn analytics_leaderboard_excludes_deleted_repos() {
+        let (_dir, path) = setup_db();
+        let conn = Connection::open(&path).unwrap();
+        insert_repo(&conn, "repoA");
+        insert_workspace(&conn, "wsA", "repoA");
+        exec(
+            &conn,
+            "INSERT INTO agent_sessions (id, workspace_id, repository_id, started_at, last_message_at)
+             VALUES ('s1', 'wsA', 'repoA', datetime('now'), datetime('now'))",
+        );
+        exec(
+            &conn,
+            "INSERT INTO deleted_workspace_summaries (id, workspace_id, workspace_name, repository_id, workspace_created_at, sessions_started, commits_made, total_cost_usd, total_input_tokens, total_output_tokens)
+             VALUES ('d1', 'wsGhost', 'ghost', 'repoC', datetime('now'), 10, 5, 50.0, 100000, 20000)",
+        );
+
+        let a = analytics_metrics(&path).unwrap();
+        assert_eq!(a.repo_leaderboard.len(), 1);
+        assert_eq!(a.repo_leaderboard[0].repository_id, "repoA");
     }
 
     #[test]
