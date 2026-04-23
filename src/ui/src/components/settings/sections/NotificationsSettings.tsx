@@ -80,6 +80,7 @@ export function NotificationsSettings() {
   const [volume, setVolume] = useState(100);
   const [muted, setMuted] = useState(false);
   const [activePack, setActivePack] = useState("");
+  const [activePackLoaded, setActivePackLoaded] = useState(false);
   const [installed, setInstalled] = useState<InstalledSoundPack[]>([]);
   const [showBrowser, setShowBrowser] = useState(false);
   const [notificationCommand, setNotificationCommand] = useState("");
@@ -122,7 +123,8 @@ export function NotificationsSettings() {
       .then((val) => {
         if (val) setActivePack(val);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setActivePackLoaded(true));
     loadInstalled();
     getAppSetting("notification_command")
       .then((val) => {
@@ -132,6 +134,7 @@ export function NotificationsSettings() {
   }, [loadInstalled]);
 
   useEffect(() => {
+    if (!activePackLoaded) return;
     if (installed.length === 0) {
       if (activePack) {
         setActivePack("");
@@ -144,7 +147,7 @@ export function NotificationsSettings() {
       setActivePack(first);
       setAppSetting("cesp_active_pack", first).catch(() => {});
     }
-  }, [installed, activePack]);
+  }, [installed, activePack, activePackLoaded]);
 
   const handleSoundSourceChange = async (
     source: "system" | "openpeon",
