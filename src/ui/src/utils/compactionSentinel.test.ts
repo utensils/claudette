@@ -12,6 +12,7 @@ function sysMsg(id: string, content: string, afterIndex: number = 0): ChatMessag
   return {
     id,
     workspace_id: "ws",
+    session_id: "ws",
     role: "System",
     content,
     cost_usd: null,

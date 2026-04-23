@@ -98,6 +98,7 @@ import {
 } from "../../utils/compactionSentinel";
 import { PanelToggles } from "../shared/PanelToggles";
 import { SessionTabs } from "./SessionTabs";
+import { ChatToolbar } from "./ChatToolbar";
 import { deriveTasks, processActivities, turnHasTaskActivity, hasTaskActivity } from "../../hooks/useTaskTracker";
 import type { TaskTrackerResult, TrackedTask } from "../../hooks/useTaskTracker";
 import { ScrollToBottomPill } from "./ScrollToBottomPill";
@@ -460,7 +461,7 @@ export function ChatPanel() {
 
   // Load chat history when the active session changes, seed prompt history from it.
   useEffect(() => {
-    if (!activeSessionId) return;
+    if (!activeSessionId || !selectedWorkspaceId) return;
     let cancelled = false;
     setError(null);
     historyIndexRef.current = -1;
