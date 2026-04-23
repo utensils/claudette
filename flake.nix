@@ -47,6 +47,13 @@
             fenixPkgs.latest.rust-src
             fenixPkgs.latest.rustc
             fenixPkgs.latest.rustfmt
+            # Windows MSVC cross-compile targets (consumed via cargo-xwin in
+            # the devshell). aarch64 is the priority per project plan;
+            # x86_64 included so both Windows architectures are available.
+            # rust-std ships the Windows stdlib binaries; the MS CRT and
+            # Windows SDK headers are fetched on demand by cargo-xwin.
+            fenixPkgs.targets.aarch64-pc-windows-msvc.latest.rust-std
+            fenixPkgs.targets.x86_64-pc-windows-msvc.latest.rust-std
           ];
 
           craneLib = (inputs.crane.mkLib pkgs).overrideToolchain rustToolchain;
@@ -301,6 +308,22 @@
               pkgs.cmake
               pkgs.perl
               pkgs.cargo-llvm-cov
+              # Windows cross-compile toolchain. cargo-xwin shells out to
+              # clang-cl (the MSVC-compatible driver) and llvm-lib / llvm-ar
+              # as the archiver; rust-lld is bundled with the fenix rustc
+              # above, so no separate lld package is needed.
+              #
+              # We intentionally use clang-unwrapped here rather than
+              # llvmPackages.clang: the cc-wrapper variant only exposes the
+              # `clang` / `clang++` entry points and hides the `clang-cl`
+              # symlink that cargo-xwin looks up on PATH. llvmPackages.llvm
+              # gives the raw LLVM binaries (llvm-lib, llvm-ar, llvm-rc);
+              # we avoid llvmPackages.bintools because its wrapper symlinks
+              # (`strip`, `ar`, ...) collide with same-named symlinks
+              # elsewhere in the devshell's buildEnv.
+              pkgs.cargo-xwin
+              pkgs.llvmPackages.clang-unwrapped
+              pkgs.llvmPackages.llvm
             ]
             ++ darwinBuildInputs
             ++ linuxBuildInputs
@@ -319,6 +342,16 @@
               {
                 name = "RUST_SRC_PATH";
                 value = "${fenixPkgs.latest.rust-src}/lib/rustlib/src/rust/library";
+              }
+              {
+                # cargo-xwin downloads the Microsoft CRT + Windows SDK
+                # headers on first Windows cross-build. Setting this to "1"
+                # signals acceptance of the Microsoft Software License Terms
+                # (https://go.microsoft.com/fwlink/?LinkID=2109288) so the
+                # download is non-interactive. The cache lives under
+                # ~/.cache/cargo-xwin/xwin and is reused across builds.
+                name = "XWIN_ACCEPT_LICENSE";
+                value = "1";
               }
             ]
             ++ lib.optionals pkgs.stdenv.isLinux [
@@ -486,6 +519,42 @@
                 command = "cargo test --workspace --all-features";
                 help = "Run all Rust tests";
                 category = "quality";
+              }
+              {
+                name = "build-win-arm64";
+                command = ''
+                  # TODO(you): implement — this is the first Windows
+                  # cross-build command. arm64 is the initial test target.
+                  #
+                  # Wiring already in place:
+                  #   - cargo-xwin is on PATH and XWIN_ACCEPT_LICENSE=1 is set,
+                  #     so `cargo xwin build --target aarch64-pc-windows-msvc ...`
+                  #     will fetch MS CRT + SDK on first use (~few hundred MB,
+                  #     cached under ~/.cache/cargo-xwin) and handle linker +
+                  #     include paths automatically.
+                  #   - rust-std for aarch64-pc-windows-msvc ships in the
+                  #     fenix toolchain.
+                  #   - clang-cl, llvm-lib, llvm-ar, lld-link are on PATH
+                  #     via llvmPackages.clang + llvmPackages.bintools.
+                  #
+                  # Decisions that shape the command (5–10 lines of shell):
+                  #   - Rebuild the frontend first? tauri-build bakes
+                  #     src/ui/dist/ into the .exe via include_str!(), so a
+                  #     stale dist silently produces a stale binary. Running
+                  #     `cd src/ui && bun install --frozen-lockfile && bun run build`
+                  #     is slow but safe; skipping is fast but footgun-prone.
+                  #   - --release or leave to debug? Release matches what
+                  #     you'd ship / test, debug iterates faster.
+                  #   - Build just -p claudette-tauri, or also
+                  #     -p claudette-server (useful standalone on Windows)?
+                  #   - Echo the final .exe path at the end so it can be
+                  #     scp'd to the ARM64 Windows test box without hunting
+                  #     through target/aarch64-pc-windows-msvc/<profile>/.
+                  echo "build-win-arm64: not implemented — fill in flake.nix"
+                  exit 1
+                '';
+                help = "Cross-compile claudette.exe for aarch64-pc-windows-msvc (Windows on ARM)";
+                category = "windows";
               }
               {
                 name = "coverage";
