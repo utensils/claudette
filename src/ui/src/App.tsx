@@ -51,6 +51,21 @@ function App() {
         msgMap[msg.workspace_id] = msg;
       }
       setLastMessages(msgMap);
+      // Hydrate SCM summaries from persisted cache for instant sidebar display.
+      for (const row of data.scm_cache) {
+        if (row.pr_json == null) continue;
+        try {
+          const pr: import("./types/plugin").PullRequest | null = JSON.parse(row.pr_json);
+          useAppStore.getState().setScmSummary(row.workspace_id, {
+            hasPr: pr !== null,
+            prState: pr?.state ?? null,
+            ciState: pr?.ci_status ?? null,
+            lastUpdated: new Date(row.fetched_at + "Z").getTime(),
+          });
+        } catch {
+          // Corrupted cache entry — skip silently, will be refreshed by polling.
+        }
+      }
     });
     getAppSetting("terminal_font_size")
       .then((val) => {

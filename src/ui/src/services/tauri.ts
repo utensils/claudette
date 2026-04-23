@@ -42,6 +42,7 @@ export interface InitialData {
   worktree_base_dir: string;
   default_branches: Record<string, string>;
   last_messages: ChatMessage[];
+  scm_cache: ScmStatusCacheRow[];
 }
 
 export function loadInitialData(): Promise<InitialData> {
@@ -883,7 +884,7 @@ export function getAnalyticsMetrics(): Promise<AnalyticsMetrics> {
 
 // -- SCM Plugins --
 
-import type { PluginInfo, ScmDetail, PullRequest } from "../types/plugin";
+import type { PluginInfo, ScmDetail, PullRequest, ScmStatusCacheRow } from "../types/plugin";
 
 export function listScmProviders(): Promise<PluginInfo[]> {
   return invoke("list_scm_providers");
