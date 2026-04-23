@@ -164,6 +164,7 @@ export function useAgentStream() {
               const liveSentinel: ChatMessage = {
                 id: crypto.randomUUID(),
                 workspace_id: wsId,
+                session_id: sessionId,
                 role: "System",
                 content: sentinel,
                 cost_usd: null,
@@ -576,7 +577,7 @@ export function useAgentStream() {
       checkpoint: ConversationCheckpoint;
     }>("checkpoint-created", (event) => {
       if (!active) return;
-      const { session_id: sessionId, checkpoint } = event.payload;
+      const { workspace_id: wsId, session_id: sessionId, checkpoint } = event.payload;
       addCheckpoint(sessionId, checkpoint);
       turnCheckpointIdRef.current[sessionId] = checkpoint.id;
 
