@@ -240,7 +240,7 @@ All traffic is encrypted with TLS. The local app pins the server's certificate f
 
 ## Community
 
-Join us on [Discord](https://discord.gg/Ks9Ghnem) to ask questions, share feedback, and connect with other Claudette users.
+Join us on [Discord](https://discord.gg/aumGBKccmD) to ask questions, share feedback, and connect with other Claudette users.
 
 ## Contributing
 
