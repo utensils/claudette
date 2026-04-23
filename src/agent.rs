@@ -551,31 +551,46 @@ pub fn build_stdin_message(prompt: &str, attachments: &[FileAttachment]) -> Stri
 /// a slow shell probe that timed out on first call).
 ///
 /// The login-shell probe uses `std::process::Command` (blocking) with a
-/// 5-second timeout that kills the subprocess on expiry. We run the entire
-/// resolution inside `spawn_blocking` to avoid stalling async workers.
+/// 5-second timeout that kills the subprocess on expiry. On Unix we run
+/// the whole resolution inside `spawn_blocking` so a cold `SHELL_PATH`
+/// cache never stalls a Tokio worker — `enriched_path()` transitively
+/// calls `login_shell_path_probe()` on first use, and that probe can
+/// block for up to 5 s on slow shell-init files. (Startup also calls
+/// [`crate::env::prewarm_shell_path`] to warm the cache up front, but we
+/// keep the `spawn_blocking` wrapper as a belt-and-braces guard.)
+/// On Windows the base PATH comes from the registry — a handful of
+/// `Path::is_file` probes plus one registry read, sub-millisecond — so
+/// we run it inline.
 async fn resolve_claude_path() -> OsString {
     static RESOLVED: OnceLock<OsString> = OnceLock::new();
     if let Some(cached) = RESOLVED.get() {
         return cached.clone();
     }
-    // `enriched_path()` picks up fresh values from the Windows registry on
-    // Windows, and merges the login-shell PATH on Unix. This way an install
-    // made after claudette started (e.g. winget) is findable without a
-    // logout/restart. The work is a handful of Path::is_file probes plus one
-    // registry read, so we run it inline rather than going through
-    // spawn_blocking.
-    let resolved = resolve_claude_path_inner(
-        dirs::home_dir(),
-        Some(crate::env::enriched_path()),
-        login_shell_path,
-        is_executable_file,
-    );
+    #[cfg(unix)]
+    let resolved = tokio::task::spawn_blocking(resolve_claude_path_sync)
+        .await
+        .unwrap_or_else(|_| OsString::from("claude"));
+    #[cfg(not(unix))]
+    let resolved = resolve_claude_path_sync();
+
     // Only cache absolute paths — the bare "claude" fallback should allow
     // retries on subsequent calls in case the environment improves.
     if Path::new(&resolved).is_absolute() {
         let _ = RESOLVED.set(resolved.clone());
     }
     resolved
+}
+
+/// Synchronous core of [`resolve_claude_path`]. Extracted so it can run
+/// inside `tokio::task::spawn_blocking` on Unix without juggling async
+/// boundaries inside the resolver itself.
+fn resolve_claude_path_sync() -> OsString {
+    resolve_claude_path_inner(
+        dirs::home_dir(),
+        Some(crate::env::enriched_path()),
+        login_shell_path,
+        is_executable_file,
+    )
 }
 
 /// Check that a path is a regular file with execute permission.

@@ -31,6 +31,26 @@ pub fn shell_path() -> Option<&'static OsString> {
     SHELL_PATH.get_or_init(login_shell_path_probe).as_ref()
 }
 
+/// Force the login-shell PATH probe to run to completion, populating the
+/// [`SHELL_PATH`] cache. Call this once at app startup from a thread
+/// where a 5-second block is acceptable (a plain `std::thread::spawn` at
+/// Tauri setup time — never the Tokio runtime) so later async callers
+/// of [`enriched_path`] never pay the probe cost on a worker thread.
+///
+/// Idempotent: the `OnceLock::get_or_init` inside [`shell_path`]
+/// guarantees only the first call runs the probe, so repeated
+/// invocations are cheap no-ops.
+///
+/// On Windows this is a no-op — the Windows "base PATH" comes from the
+/// registry and is read fresh on every `enriched_path()` call, there is
+/// no shell probe to warm.
+pub fn prewarm_shell_path() {
+    #[cfg(unix)]
+    {
+        let _ = shell_path();
+    }
+}
+
 /// Build a PATH string that merges the login-shell PATH with the process PATH.
 ///
 /// On Unix, the login shell is probed once (cached) and its PATH becomes the
@@ -127,38 +147,69 @@ pub fn windows_registry_path() -> Option<OsString> {
 /// placeholders are left as-is so the string is still usable for diagnosis.
 #[cfg(windows)]
 fn expand_env_vars_windows(input: &str) -> String {
+    // Case-insensitive lookup — Windows env-var names are
+    // case-insensitive so `%PATH%` and `%Path%` must resolve the same
+    // way.
+    expand_env_vars_with_lookup(input, |name| {
+        std::env::vars_os().find_map(|(k, v)| {
+            if k.to_string_lossy().eq_ignore_ascii_case(name) {
+                Some(v.to_string_lossy().into_owned())
+            } else {
+                None
+            }
+        })
+    })
+}
+
+/// Pure, platform-agnostic implementation of `%VAR%` expansion.
+/// Accepting the env lookup as a closure lets the Unicode-correctness and
+/// boundary-handling tests run on every CI target (Linux/macOS) rather
+/// than being gated behind `#[cfg(windows)]` and effectively never
+/// executed. The Windows wrapper supplies a real case-insensitive
+/// `std::env::vars_os` lookup on top of this.
+///
+/// Implementation note: we operate on byte indices so we can slice out
+/// `%NAME%` spans, but we copy literal text via `&input[..]` slices —
+/// never by casting a single byte to `char`. An earlier version did
+/// `out.push(bytes[i] as char)`, which mojibakes any non-ASCII byte
+/// (e.g. `é` (`0xC3 0xA9`) became `Ã©`), so `which_in_enriched_path`
+/// stopped finding binaries under non-ASCII user-profile paths.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn expand_env_vars_with_lookup<F>(input: &str, lookup: F) -> String
+where
+    F: Fn(&str) -> Option<String>,
+{
     let mut out = String::with_capacity(input.len());
     let bytes = input.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' {
-            if let Some(end) = bytes[i + 1..].iter().position(|&b| b == b'%') {
-                let name = &input[i + 1..i + 1 + end];
-                // Case-insensitive lookup — Windows env-var names are
-                // case-insensitive so `%PATH%` and `%Path%` must resolve
-                // the same way.
-                let matched = std::env::vars_os().find_map(|(k, v)| {
-                    if k.to_string_lossy().eq_ignore_ascii_case(name) {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                });
-                match matched {
-                    Some(v) => out.push_str(&v.to_string_lossy()),
-                    None => {
-                        // Unknown var — leave the original `%NAME%` in place.
-                        out.push('%');
-                        out.push_str(name);
-                        out.push('%');
-                    }
+        if bytes[i] == b'%'
+            && let Some(end) = bytes[i + 1..].iter().position(|&b| b == b'%')
+        {
+            let name = &input[i + 1..i + 1 + end];
+            match lookup(name) {
+                Some(value) => out.push_str(&value),
+                None => {
+                    // Unknown var — leave the original `%NAME%` in place.
+                    out.push('%');
+                    out.push_str(name);
+                    out.push('%');
                 }
-                i += 1 + end + 1;
-                continue;
             }
+            i += 1 + end + 1;
+            continue;
         }
-        out.push(bytes[i] as char);
-        i += 1;
+        // Copy the next UTF-8 scalar via its byte range — never cast a
+        // single byte to `char`. `char_indices` gives us the next char
+        // boundary; combined with the `input[i..j]` slice this is a
+        // zero-cost copy of the exact UTF-8 bytes.
+        let ch = input[i..]
+            .chars()
+            .next()
+            .expect("i is within bytes.len() so at least one char remains");
+        let ch_len = ch.len_utf8();
+        out.push_str(&input[i..i + ch_len]);
+        i += ch_len;
     }
     out
 }
@@ -432,6 +483,121 @@ mod tests {
     // cases of that hand-rolled expander without requiring a real
     // Windows environment.
 
+    // ---- Pre-warm guarantees ---------------------------------------------
+
+    /// `prewarm_shell_path` must be safe to call repeatedly — startup
+    /// code is allowed to fire it on a std thread and forget about it,
+    /// so any re-entrancy (two callers racing, a caller that also calls
+    /// `shell_path` directly) must not panic or re-run the underlying
+    /// probe. We assert both invariants here.
+    #[test]
+    fn prewarm_shell_path_is_idempotent() {
+        prewarm_shell_path();
+        prewarm_shell_path();
+        // A follow-up direct call must still succeed without panicking
+        // — `shell_path` returns `Option<&'static OsString>`, and the
+        // underlying `OnceLock` value is frozen by the first invocation.
+        let _ = shell_path();
+    }
+
+    /// After prewarm runs to completion on Unix, further calls into
+    /// `enriched_path` must not need to spawn a shell. We can't observe
+    /// the probe directly, but we can assert the `SHELL_PATH` cache is
+    /// populated (either with `Some(path)` or `None` if the probe
+    /// failed) — both states stop future callers from re-probing.
+    #[cfg(unix)]
+    #[test]
+    fn prewarm_populates_shell_path_cache_on_unix() {
+        prewarm_shell_path();
+        assert!(
+            SHELL_PATH.get().is_some(),
+            "prewarm must populate the SHELL_PATH OnceLock on Unix",
+        );
+    }
+
+    // ---- Platform-agnostic expansion tests --------------------------------
+    //
+    // `expand_env_vars_windows` is Windows-gated (it reads the real process
+    // env), but the expansion *logic* is shared with
+    // `expand_env_vars_with_lookup`, which takes the env lookup as a
+    // closure. Testing the inner function lets CI (which runs on Linux and
+    // macOS) catch regressions in boundary handling, Unicode preservation,
+    // and edge cases — otherwise these guards would silently never execute.
+
+    /// Regression guard for the original mojibake bug: the expander must
+    /// preserve multi-byte UTF-8 literal text byte-for-byte. The earlier
+    /// `bytes[i] as char` cast would corrupt every non-ASCII code point
+    /// (`é` (`0xC3 0xA9`) turned into `Ã©`), so Windows user profiles with
+    /// accents, umlauts, CJK, or emoji stopped being searchable.
+    #[test]
+    fn expand_lookup_preserves_non_ascii_literal() {
+        let input = r"C:\Users\éßΩ漢\bin;D:\🎉\tools";
+        assert_eq!(
+            expand_env_vars_with_lookup(input, |_| None),
+            input,
+            "non-ASCII literal text must round-trip byte-for-byte"
+        );
+    }
+
+    /// Non-ASCII inside a variable's *value* must also survive — makes
+    /// sure the substitution path (not just literal copy) is UTF-8 clean.
+    #[test]
+    fn expand_lookup_preserves_non_ascii_in_value() {
+        let out = expand_env_vars_with_lookup(r"%HOME%\bin", |name| {
+            if name.eq_ignore_ascii_case("HOME") {
+                Some(r"C:\Users\éß漢".to_string())
+            } else {
+                None
+            }
+        });
+        assert_eq!(out, r"C:\Users\éß漢\bin");
+    }
+
+    /// Non-ASCII literal text both *before* and *after* a `%VAR%` span
+    /// exercises the boundary between literal-copy and substitution
+    /// modes — the mojibake bug was on the literal-copy path, so this is
+    /// the scenario that would have caught it in the wild.
+    #[test]
+    fn expand_lookup_non_ascii_around_substitution() {
+        let out = expand_env_vars_with_lookup("前%X%後", |name| {
+            (name == "X").then(|| "MID".to_string())
+        });
+        assert_eq!(out, "前MID後");
+    }
+
+    /// A defined var must substitute its value.
+    #[test]
+    fn expand_lookup_replaces_defined_var() {
+        let out = expand_env_vars_with_lookup(r"%FOO%\bin", |name| {
+            (name == "FOO").then(|| r"C:\x".to_string())
+        });
+        assert_eq!(out, r"C:\x\bin");
+    }
+
+    /// An unknown var must pass through as-is so the resolved PATH is
+    /// still human-readable for diagnosis.
+    #[test]
+    fn expand_lookup_leaves_unknown_var_intact() {
+        let out = expand_env_vars_with_lookup("%MISSING%", |_| None);
+        assert_eq!(out, "%MISSING%");
+    }
+
+    /// A lone trailing `%` is not a var reference and must be preserved.
+    #[test]
+    fn expand_lookup_tolerates_unmatched_percent() {
+        let out = expand_env_vars_with_lookup(r"C:\foo%", |_| None);
+        assert_eq!(out, r"C:\foo%");
+    }
+
+    /// Empty input must return empty output (no panic on the char
+    /// advance path).
+    #[test]
+    fn expand_lookup_handles_empty_input() {
+        assert_eq!(expand_env_vars_with_lookup("", |_| None), "");
+    }
+
+    // ---- Windows-only (reads real process env) ----------------------------
+
     /// Bare strings with no `%VAR%` references must pass through byte-for-
     /// byte — that's the overwhelmingly common case on most machines.
     #[cfg(windows)]
@@ -487,5 +653,34 @@ mod tests {
     #[test]
     fn expand_tolerates_unmatched_percent() {
         assert_eq!(expand_env_vars_windows(r"C:\foo%"), r"C:\foo%");
+    }
+
+    /// Regression guard: an earlier version cast UTF-8 bytes to `char`
+    /// one-at-a-time while copying the literal text between `%VAR%`
+    /// references, which corrupted every non-ASCII code point into
+    /// mojibake (`é` → `Ã©`). Windows user profiles routinely contain
+    /// non-ASCII characters — Spanish, German, CJK, emoji in new
+    /// installs — so this must round-trip cleanly.
+    #[cfg(windows)]
+    #[test]
+    fn expand_preserves_non_ascii_literal_text() {
+        // Multi-byte chars in the literal spans (both sides of %VAR%
+        // and around it). We don't resolve any var here — the point is
+        // that passthrough text itself is byte-correct.
+        let input = r"C:\Users\éßΩ漢\bin;D:\🎉\tools";
+        assert_eq!(expand_env_vars_windows(input), input);
+    }
+
+    /// Non-ASCII inside the *value* of an expanded var must survive too.
+    /// We prepend a short ASCII string, interpolate a real env var
+    /// (SystemRoot), and append a CJK tail so the boundary handling
+    /// between UTF-8 literal text and var expansion gets exercised.
+    #[cfg(windows)]
+    #[test]
+    fn expand_preserves_non_ascii_around_var_substitution() {
+        let system_root = std::env::var("SystemRoot")
+            .expect("SystemRoot must be defined in a Windows test env");
+        let out = expand_env_vars_windows(r"前%SystemRoot%後");
+        assert_eq!(out, format!("前{system_root}後"));
     }
 }

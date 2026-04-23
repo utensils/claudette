@@ -12,6 +12,7 @@ pub mod mcp_supervisor;
 pub mod metrics;
 pub mod model;
 pub mod names;
+pub mod path;
 pub mod permissions;
 pub mod plugin;
 pub mod process;

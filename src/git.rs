@@ -28,12 +28,34 @@ pub fn resolve_git_path_blocking() -> OsString {
     let resolved = resolve_git_path_inner(
         dirs::home_dir(),
         Some(crate::env::enriched_path()),
-        |p| p.is_file(),
+        is_executable_file,
     );
     if Path::new(&resolved).is_absolute() {
         let _ = RESOLVED.set(resolved.clone());
     }
     resolved
+}
+
+/// Regular-file + execute-permission check. Without the execute bit a
+/// PATH hit can be a package-manager placeholder (pip-installed
+/// launcher, empty `git` wrapper script dropped during a broken
+/// upgrade, etc.) — caching that path would then make every git-backed
+/// feature fail with `PermissionDenied` even though a real executable
+/// exists further down PATH. On Windows the underlying FS doesn't
+/// expose a POSIX exec bit, so we fall back to `is_file`.
+#[cfg(unix)]
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.is_file()
+        && path
+            .metadata()
+            .map(|m| m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable_file(path: &Path) -> bool {
+    path.is_file()
 }
 
 #[cfg(windows)]
@@ -360,11 +382,7 @@ pub async fn create_worktree(
     )
     .await?;
 
-    // Return the absolute worktree path
-    let abs_path = std::path::Path::new(worktree_path)
-        .canonicalize()
-        .map_err(|e| GitError::CommandFailed(e.to_string()))?;
-    Ok(abs_path.to_string_lossy().to_string())
+    canonicalize_worktree_path(worktree_path)
 }
 
 /// Create a worktree + new branch rooted at an explicit git ref (commit hash,
@@ -391,10 +409,7 @@ pub async fn create_worktree_from_ref(
     )
     .await?;
 
-    let abs_path = std::path::Path::new(worktree_path)
-        .canonicalize()
-        .map_err(|e| GitError::CommandFailed(e.to_string()))?;
-    Ok(abs_path.to_string_lossy().to_string())
+    canonicalize_worktree_path(worktree_path)
 }
 
 /// Restore a worktree for an existing branch (no -b flag).
@@ -408,10 +423,18 @@ pub async fn restore_worktree(
         &["worktree", "add", worktree_path, "--", branch_name],
     )
     .await?;
+    canonicalize_worktree_path(worktree_path)
+}
+
+/// Canonicalize a freshly-created worktree path and strip Windows verbatim
+/// `\\?\` prefixes so the result is a plain drive-letter path. The stored
+/// path is later passed to shells as a CWD; `cmd.exe` refuses verbatim
+/// paths, so we must normalize at the source.
+fn canonicalize_worktree_path(worktree_path: &str) -> Result<String, GitError> {
     let abs_path = std::path::Path::new(worktree_path)
         .canonicalize()
         .map_err(|e| GitError::CommandFailed(e.to_string()))?;
-    Ok(abs_path.to_string_lossy().to_string())
+    Ok(crate::path::strip_verbatim_prefix(&abs_path.to_string_lossy()).to_string())
 }
 
 pub async fn remove_worktree(
@@ -1304,5 +1327,82 @@ mod tests {
     fn test_resolve_git_bare_name_is_exe_on_windows() {
         let result = resolve_git_path_inner(None, None, |_| false);
         assert_eq!(result, OsString::from("git.exe"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Executable-bit check on Unix
+    //
+    // Regression guard: `is_executable_file` must reject regular files that
+    // lack the execute bit. Without this, a non-exec placeholder earlier on
+    // PATH (empty script left behind by a broken package upgrade, a build
+    // artefact like `/target/git/Cargo.toml`, etc.) would beat the real
+    // binary and poison the `OnceLock` cache — every subsequent git call
+    // would then fail with `PermissionDenied`.
+    // -----------------------------------------------------------------------
+
+    #[cfg(unix)]
+    #[test]
+    fn is_executable_file_rejects_non_exec_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let placeholder = dir.path().join("git");
+        std::fs::write(&placeholder, b"").unwrap();
+        // Readable/writable but not executable — the exact shape of a
+        // "leftover wrapper" file.
+        std::fs::set_permissions(&placeholder, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(
+            !is_executable_file(&placeholder),
+            "non-exec regular file must be rejected",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn is_executable_file_accepts_exec_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("git");
+        std::fs::write(&real, b"#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(
+            is_executable_file(&real),
+            "regular file with exec bit set must be accepted",
+        );
+    }
+
+    /// End-to-end guard: with the production `is_executable_file` predicate
+    /// wired in, a non-exec placeholder earlier in PATH must be skipped in
+    /// favour of a real binary later in PATH. Before the executability
+    /// check, `resolve_git_path_inner` returned the placeholder because
+    /// `Path::is_file` was true, which is exactly the caching hazard we
+    /// are guarding against.
+    #[cfg(unix)]
+    #[test]
+    fn resolve_git_skips_non_executable_placeholder() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+
+        let broken_dir = dir.path().join("broken");
+        let real_dir = dir.path().join("real");
+        std::fs::create_dir(&broken_dir).unwrap();
+        std::fs::create_dir(&real_dir).unwrap();
+
+        // Non-exec placeholder — what a corrupted install leaves behind.
+        let broken = broken_dir.join("git");
+        std::fs::write(&broken, b"").unwrap();
+        std::fs::set_permissions(&broken, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        // Real executable further down PATH.
+        let real = real_dir.join("git");
+        std::fs::write(&real, b"#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let path = std::env::join_paths([&broken_dir, &real_dir]).unwrap();
+        let resolved = resolve_git_path_inner(None, Some(path), is_executable_file);
+        assert_eq!(
+            resolved,
+            real.into_os_string(),
+            "resolver must skip the non-exec placeholder and pick the real binary",
+        );
     }
 }

@@ -62,6 +62,14 @@ pub async fn spawn_pty(
         })
         .map_err(|e| format!("Failed to open PTY: {e}"))?;
 
+    // On Windows, worktree paths created before the `\\?\`-stripping fix
+    // landed may still be stored in the DB as verbatim paths. `cmd.exe`
+    // refuses to chdir into a verbatim path and falls back to C:\Windows,
+    // which is exactly the symptom we just fixed at creation time. Strip
+    // here too so existing workspaces open in the right directory without
+    // a data migration.
+    let working_dir = claudette::path::strip_verbatim_prefix(&working_dir).to_string();
+
     let mut cmd = CommandBuilder::new_default_prog();
     cmd.cwd(&working_dir);
     configure_pty_env(&mut cmd);

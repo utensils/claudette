@@ -286,6 +286,14 @@ fn main() {
             // (tokio runtime may not be available during setup).
             std::thread::spawn(usage::warm_user_agent_cache_sync);
 
+            // Pre-warm the login-shell PATH cache. On Unix, `shell_path()`
+            // spawns `$SHELL -l -c 'echo $PATH'` with a 5-second timeout —
+            // fine to pay once at startup on a std thread, but lethal if
+            // it ever runs inline on a Tokio worker (stalls every async
+            // handler that touches `enriched_path` until the probe
+            // returns). On Windows this is a no-op.
+            std::thread::spawn(claudette::env::prewarm_shell_path);
+
             // Set up the system tray icon (respects tray_enabled setting).
             if let Err(e) = tray::setup_tray(app.handle()) {
                 eprintln!("[tray] Failed to setup tray: {e}");
