@@ -8,13 +8,24 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Silkscreen:wght@400;700&display=swap" rel="stylesheet" />
     <script>
-      // Pre-hydrate data-theme from a localStorage mirror written by
-      // applyTheme(). The authoritative theme is stored in SQLite but that
-      // read is async — localStorage gives us a synchronous cache so the
-      // first paint picks the right palette and skips the coral→theme flash.
+      // Pre-hydrate data-theme from localStorage mirrors written by the theme
+      // utilities. The authoritative values are in SQLite but that read is
+      // async — localStorage gives us a synchronous cache so the first paint
+      // picks the right palette and skips the flash.
       (function () {
         try {
-          var id = localStorage.getItem("claudette.theme");
+          var mode = localStorage.getItem("claudette.theme_mode");
+          var id;
+          if (mode === "system") {
+            var isDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+            id = isDark
+              ? (localStorage.getItem("claudette.theme_dark_attr") || "default-dark")
+              : (localStorage.getItem("claudette.theme_light_attr") || "default-light");
+          } else {
+            // For explicit light/dark mode (or no mode set yet), fall back to
+            // the last-applied data-theme attr written by applyTheme().
+            id = localStorage.getItem("claudette.theme");
+          }
           if (id) document.documentElement.setAttribute("data-theme", id);
         } catch (e) {}
       })();

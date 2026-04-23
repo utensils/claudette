@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { useAppStore } from "./stores/useAppStore";
 import { loadInitialData, getAppSetting, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, clearAttention, detectInstalledApps, listSystemFonts } from "./services/tauri";
-import { applyTheme, applyUserFonts, loadAllThemes, findTheme } from "./utils/theme";
+import { applyTheme, applyUserFonts, loadAllThemes, findTheme, cacheThemePreference, getThemeDataAttr } from "./utils/theme";
 import { adjustUiFontSize, resetUiFontSize } from "./utils/fontSettings";
 import { useMcpStatus } from "./hooks/useMcpStatus";
 import { AppLayout } from "./components/layout/AppLayout";
@@ -22,6 +22,9 @@ function App() {
   const setLocalServerRunning = useAppStore((s) => s.setLocalServerRunning);
   const setLocalServerConnectionString = useAppStore((s) => s.setLocalServerConnectionString);
   const setCurrentThemeId = useAppStore((s) => s.setCurrentThemeId);
+  const setThemeMode = useAppStore((s) => s.setThemeMode);
+  const setThemeDark = useAppStore((s) => s.setThemeDark);
+  const setThemeLight = useAppStore((s) => s.setThemeLight);
   const setUiFontSize = useAppStore((s) => s.setUiFontSize);
   const setFontFamilySans = useAppStore((s) => s.setFontFamilySans);
   const setFontFamilyMono = useAppStore((s) => s.setFontFamilyMono);
@@ -60,12 +63,37 @@ function App() {
         }
       })
       .catch((err) => console.error("Failed to load terminal font size:", err));
-    getAppSetting("theme")
-      .then(async (savedThemeId) => {
+    (async () => {
+      try {
         const allThemes = await loadAllThemes();
-        const theme = findTheme(allThemes, savedThemeId ?? "default-dark");
+        const [themeModeVal, darkIdVal, lightIdVal, legacyThemeVal] = await Promise.all([
+          getAppSetting("theme_mode"),
+          getAppSetting("theme_dark"),
+          getAppSetting("theme_light"),
+          getAppSetting("theme"),
+        ]);
+        const mode = (themeModeVal ?? "dark") as "light" | "dark" | "system";
+        const darkId = darkIdVal ?? legacyThemeVal ?? "default-dark";
+        const lightId = lightIdVal ?? "default-light";
+
+        setThemeMode(mode);
+        setThemeDark(darkId);
+        setThemeLight(lightId);
+
+        const systemIsDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+        const effectiveId =
+          mode === "system" ? (systemIsDark ? darkId : lightId) :
+          mode === "light" ? lightId : darkId;
+
+        const theme = findTheme(allThemes, effectiveId);
         setCurrentThemeId(theme.id);
         applyTheme(theme);
+
+        // Cache per-mode attrs for the pre-hydration script.
+        const darkTheme = findTheme(allThemes, darkId);
+        const lightTheme = findTheme(allThemes, lightId);
+        cacheThemePreference(mode, getThemeDataAttr(darkTheme), getThemeDataAttr(lightTheme));
+
         // Apply user font overrides on top of the theme.
         const [sansVal, monoVal, sizeVal] = await Promise.all([
           getAppSetting("font_family_sans"),
@@ -79,8 +107,10 @@ function App() {
         if (mono) setFontFamilyMono(mono);
         if (sizeVal && size >= 10 && size <= 20) setUiFontSize(size);
         applyUserFonts(sans, mono, size >= 10 && size <= 20 ? size : 13);
-      })
-      .catch((err) => console.error("Failed to load theme:", err));
+      } catch (err) {
+        console.error("Failed to load theme:", err);
+      }
+    })();
     getVersion()
       .then((v) => setAppVersion(v))
       .catch((err) => console.error("Failed to load app version:", err));
@@ -234,7 +264,28 @@ function App() {
       unlistenScmUpdate.then((fn) => fn());
       unlistenAutoArchived.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setPluginManagementEnabled, setAppVersion]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setPluginManagementEnabled, setAppVersion]);
+
+  // Listen for OS light/dark changes and switch theme when mode is "system".
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleChange = async (e: MediaQueryListEvent) => {
+      const state = useAppStore.getState();
+      if (state.themeMode !== "system") return;
+      const effectiveId = e.matches ? state.themeDark : state.themeLight;
+      try {
+        const themes = await loadAllThemes();
+        const theme = findTheme(themes, effectiveId);
+        applyTheme(theme);
+        applyUserFonts(state.fontFamilySans, state.fontFamilyMono, state.uiFontSize);
+        state.setCurrentThemeId(theme.id);
+      } catch (err) {
+        console.error("Failed to apply system theme change:", err);
+      }
+    };
+    mq.addEventListener("change", handleChange);
+    return () => mq.removeEventListener("change", handleChange);
+  }, []);
 
   return <AppLayout />;
 }

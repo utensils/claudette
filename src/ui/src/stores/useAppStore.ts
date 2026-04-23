@@ -398,6 +398,12 @@ interface AppState {
   setSystemFonts: (fonts: string[]) => void;
   currentThemeId: string;
   setCurrentThemeId: (id: string) => void;
+  themeMode: "light" | "dark" | "system";
+  setThemeMode: (mode: "light" | "dark" | "system") => void;
+  themeDark: string;
+  setThemeDark: (id: string) => void;
+  themeLight: string;
+  setThemeLight: (id: string) => void;
   lastMessages: Record<string, ChatMessage>;
   setLastMessages: (msgs: Record<string, ChatMessage>) => void;
 
@@ -1262,6 +1268,12 @@ export const useAppStore = create<AppState>((set) => ({
   setSystemFonts: (fonts) => set({ systemFonts: fonts }),
   currentThemeId: DEFAULT_THEME_ID,
   setCurrentThemeId: (id) => set({ currentThemeId: id }),
+  themeMode: "dark" as "light" | "dark" | "system",
+  setThemeMode: (mode) => set({ themeMode: mode }),
+  themeDark: DEFAULT_THEME_ID,
+  setThemeDark: (id) => set({ themeDark: id }),
+  themeLight: "default-light",
+  setThemeLight: (id) => set({ themeLight: id }),
   lastMessages: {},
   setLastMessages: (msgs) => set({ lastMessages: msgs }),
 
