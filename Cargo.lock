@@ -645,6 +645,7 @@ dependencies = [
  "url",
  "uuid",
  "which",
+ "winreg 0.55.0",
 ]
 
 [[package]]

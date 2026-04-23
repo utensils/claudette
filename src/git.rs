@@ -1,9 +1,142 @@
+use std::ffi::OsString;
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use serde::Serialize;
 use tokio::process::Command;
 use crate::process::CommandWindowExt as _;
+
+/// Resolve the `git` binary once and reuse the absolute path for every
+/// subsequent call. Caching matters because git is invoked dozens of times
+/// per user action (status / log / diff / branch / worktree / etc.) — doing
+/// the PATH walk each time would dominate the cost on Windows where the
+/// registry-backed PATH lookup is heavier than Unix.
+///
+/// Kept sync on purpose: the work is a handful of `Path::is_file` probes
+/// plus one Windows registry read, all sub-millisecond, so `spawn_blocking`
+/// would be more overhead than the operation itself.
+///
+/// The cache is only populated for absolute paths — a bare `"git"` (our
+/// last-resort fallback) is re-evaluated on every call so retrying after
+/// the user installs git actually works.
+pub fn resolve_git_path_blocking() -> OsString {
+    static RESOLVED: OnceLock<OsString> = OnceLock::new();
+    if let Some(cached) = RESOLVED.get() {
+        return cached.clone();
+    }
+    let resolved = resolve_git_path_inner(
+        dirs::home_dir(),
+        Some(crate::env::enriched_path()),
+        |p| p.is_file(),
+    );
+    if Path::new(&resolved).is_absolute() {
+        let _ = RESOLVED.set(resolved.clone());
+    }
+    resolved
+}
+
+#[cfg(windows)]
+fn git_binary_variants() -> &'static [&'static str] {
+    &["git.exe", "git.cmd"]
+}
+
+#[cfg(not(windows))]
+fn git_binary_variants() -> &'static [&'static str] {
+    &["git"]
+}
+
+#[cfg(windows)]
+fn git_bare_name() -> &'static str {
+    "git.exe"
+}
+
+#[cfg(not(windows))]
+fn git_bare_name() -> &'static str {
+    "git"
+}
+
+/// Well-known git install locations per platform. Checked in order after
+/// the PATH-based search misses.
+fn git_fallback_paths(home: Option<&Path>) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+
+    #[cfg(windows)]
+    {
+        // Git for Windows system installer (most common on both x64 and
+        // ARM64 — the ARM64 installer also drops here).
+        out.push(PathBuf::from(r"C:\Program Files\Git\cmd\git.exe"));
+        // 32-bit installer on 64-bit Windows — rare today but still seen.
+        out.push(PathBuf::from(r"C:\Program Files (x86)\Git\cmd\git.exe"));
+        if let Some(home) = home {
+            // Git for Windows user-scope installer.
+            out.push(
+                home.join("AppData")
+                    .join("Local")
+                    .join("Programs")
+                    .join("Git")
+                    .join("cmd")
+                    .join("git.exe"),
+            );
+            // Scoop.
+            out.push(
+                home.join("scoop")
+                    .join("apps")
+                    .join("git")
+                    .join("current")
+                    .join("cmd")
+                    .join("git.exe"),
+            );
+        }
+        // Chocolatey — default install location.
+        out.push(PathBuf::from(r"C:\ProgramData\chocolatey\bin\git.exe"));
+    }
+
+    #[cfg(not(windows))]
+    {
+        if let Some(home) = home {
+            out.push(home.join(".nix-profile/bin/git"));
+        }
+        out.push(PathBuf::from("/usr/local/bin/git"));
+        out.push(PathBuf::from("/opt/homebrew/bin/git")); // macOS Homebrew
+        out.push(PathBuf::from("/usr/bin/git"));
+        out.push(PathBuf::from("/run/current-system/sw/bin/git"));
+        out.push(PathBuf::from("/nix/var/nix/profiles/default/bin/git"));
+    }
+
+    out
+}
+
+/// Pure resolution logic — identical shape to `resolve_claude_path_inner`.
+/// 1. PATH search (enriched PATH passed by caller — registry on Windows,
+///    login-shell + process PATH on Unix).
+/// 2. Well-known install locations.
+/// 3. Bare `git` / `git.exe` as the last-resort fallback.
+fn resolve_git_path_inner(
+    home: Option<PathBuf>,
+    process_path: Option<OsString>,
+    exists: impl Fn(&Path) -> bool,
+) -> OsString {
+    if let Some(process_path) = process_path {
+        for dir in std::env::split_paths(&process_path) {
+            if !dir.is_absolute() {
+                continue;
+            }
+            for name in git_binary_variants() {
+                let candidate = dir.join(name);
+                if exists(&candidate) {
+                    return candidate.into_os_string();
+                }
+            }
+        }
+    }
+    for p in git_fallback_paths(home.as_deref()) {
+        if exists(&p) {
+            return p.into_os_string();
+        }
+    }
+    OsString::from(git_bare_name())
+}
 
 #[derive(Debug, Clone)]
 pub enum GitError {
@@ -23,7 +156,7 @@ impl fmt::Display for GitError {
 impl std::error::Error for GitError {}
 
 async fn run_git(repo_path: &str, args: &[&str]) -> Result<String, GitError> {
-    let output = Command::new("git").no_console_window()
+    let output = Command::new(&crate::git::resolve_git_path_blocking()).no_console_window()
         .args(["-C", repo_path])
         .args(args)
         .output()
@@ -41,7 +174,7 @@ async fn run_git(repo_path: &str, args: &[&str]) -> Result<String, GitError> {
 /// Read `git config user.name` from global config (no repo required).
 /// Returns `None` if not configured.
 pub async fn get_git_username() -> Result<Option<String>, GitError> {
-    let output = Command::new("git").no_console_window()
+    let output = Command::new(&crate::git::resolve_git_path_blocking()).no_console_window()
         .args(["config", "--global", "user.name"])
         .output()
         .await
@@ -169,7 +302,7 @@ pub async fn fetch_remote(repo_path: &str) -> Result<(), GitError> {
     };
 
     // Spawn with kill_on_drop so the child is terminated if the timeout fires.
-    let mut child = match Command::new("git").no_console_window()
+    let mut child = match Command::new(&crate::git::resolve_git_path_blocking()).no_console_window()
         .args(["-C", repo_path, "fetch", &remote])
         .kill_on_drop(true)
         .stdout(std::process::Stdio::null())
@@ -831,7 +964,7 @@ mod tests {
         // Clone from bare remote.
         let clone_dir = tempfile::tempdir().unwrap();
         let clone_path = clone_dir.path().to_str().unwrap();
-        let output = tokio::process::Command::new("git").no_console_window()
+        let output = tokio::process::Command::new(&crate::git::resolve_git_path_blocking()).no_console_window()
             .args(["clone", remote_path, clone_path])
             .output()
             .await
@@ -863,7 +996,7 @@ mod tests {
         // Push a new commit directly to the bare remote via a temp worktree.
         let pusher = tempfile::tempdir().unwrap();
         let pusher_path = pusher.path().to_str().unwrap();
-        let out = tokio::process::Command::new("git").no_console_window()
+        let out = tokio::process::Command::new(&crate::git::resolve_git_path_blocking()).no_console_window()
             .args(["clone", remote_path, pusher_path])
             .output()
             .await
@@ -1101,5 +1234,75 @@ mod tests {
             ensure_utc_tz("2026-04-18T03:36:10"),
             "2026-04-18T03:36:10 UTC"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // resolve_git_path_inner tests
+    // -----------------------------------------------------------------------
+
+    /// Happy path on Unix: process PATH hit wins before any fallback is
+    /// consulted.
+    #[cfg(unix)]
+    #[test]
+    fn test_resolve_git_process_path_wins_unix() {
+        let result = resolve_git_path_inner(
+            Some(PathBuf::from("/home/user")),
+            Some(OsString::from("/usr/bin:/usr/local/bin")),
+            |p| p == Path::new("/usr/bin/git"),
+        );
+        assert_eq!(result, OsString::from("/usr/bin/git"));
+    }
+
+    /// Fallback to a well-known system location when PATH misses.
+    #[cfg(unix)]
+    #[test]
+    fn test_resolve_git_falls_back_system_unix() {
+        let result = resolve_git_path_inner(None, None, |p| {
+            p == Path::new("/usr/local/bin/git")
+        });
+        assert_eq!(result, OsString::from("/usr/local/bin/git"));
+    }
+
+    /// Last resort: nothing exists anywhere — we return the bare name so
+    /// the caller can surface a legible "git not installed" error instead
+    /// of a phantom absolute path.
+    #[cfg(unix)]
+    #[test]
+    fn test_resolve_git_falls_back_bare_name_unix() {
+        let result = resolve_git_path_inner(None, None, |_| false);
+        assert_eq!(result, OsString::from("git"));
+    }
+
+    /// On Windows, Git for Windows is by far the most likely install; its
+    /// default location is `C:\Program Files\Git\cmd\git.exe` regardless
+    /// of whether the user ran the x64 or ARM64 installer.
+    #[cfg(windows)]
+    #[test]
+    fn test_resolve_git_falls_back_program_files_windows() {
+        let expected = Path::new(r"C:\Program Files\Git\cmd\git.exe");
+        let result = resolve_git_path_inner(None, None, |p| p == expected);
+        assert_eq!(result, expected.as_os_str().to_os_string());
+    }
+
+    /// Scoop installs git under `%USERPROFILE%\scoop\apps\git\current\cmd`.
+    /// Users who prefer Scoop shouldn't have to install Git for Windows
+    /// just to use claudette.
+    #[cfg(windows)]
+    #[test]
+    fn test_resolve_git_falls_back_scoop_windows() {
+        let home = PathBuf::from(r"C:\Users\user");
+        let expected = home.join(r"scoop\apps\git\current\cmd\git.exe");
+        let expected_clone = expected.clone();
+        let result = resolve_git_path_inner(Some(home), None, move |p| p == expected_clone);
+        assert_eq!(result, expected.into_os_string());
+    }
+
+    /// Last-resort on Windows must be `git.exe`, not `git` — a bare `"git"`
+    /// handed to `CreateProcessW` without PATHEXT completion would fail.
+    #[cfg(windows)]
+    #[test]
+    fn test_resolve_git_bare_name_is_exe_on_windows() {
+        let result = resolve_git_path_inner(None, None, |_| false);
+        assert_eq!(result, OsString::from("git.exe"));
     }
 }

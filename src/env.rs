@@ -33,22 +33,29 @@ pub fn shell_path() -> Option<&'static OsString> {
 
 /// Build a PATH string that merges the login-shell PATH with the process PATH.
 ///
-/// If the login shell probe succeeded, its PATH is used as the base with any
-/// additional process-PATH entries appended (deduped). If it failed, the
-/// process PATH is returned unchanged.
+/// On Unix, the login shell is probed once (cached) and its PATH becomes the
+/// base — this catches GUI-launched apps that don't inherit the user's shell
+/// profile.
 ///
-/// This ensures that both user-installed tools (from shell profile) and any
-/// extra entries set by the launching context (e.g. Tauri dev server) are
-/// available.
+/// On Windows, we instead read the current `HKCU\Environment\Path` +
+/// `HKLM\...\Environment\Path` from the registry on every call. That gives us
+/// "fresh" PATH values after a `winget` / installer update without requiring
+/// the user to log out and back in — the process env block we inherited at
+/// launch is frozen, but the registry always reflects the current truth.
+///
+/// Process PATH is then appended (deduped) so any entries the launching
+/// context added beyond the registry (e.g. Tauri dev server) are preserved.
 pub fn enriched_path() -> OsString {
     let process_path = std::env::var_os("PATH").unwrap_or_default();
-    let Some(shell) = shell_path() else {
-        return process_path;
+
+    let base = match base_path() {
+        Some(p) => p,
+        None => return process_path,
     };
 
-    // Start with shell PATH entries, then append any non-empty process-PATH
-    // entries that aren't already present.
-    let mut merged_dirs: Vec<std::path::PathBuf> = std::env::split_paths(shell)
+    // Start with the base (login-shell on Unix, registry on Windows) and
+    // append any non-empty process-PATH entries not already present.
+    let mut merged_dirs: Vec<std::path::PathBuf> = std::env::split_paths(&base)
         .filter(|dir| !dir.as_os_str().is_empty())
         .collect();
 
@@ -59,6 +66,101 @@ pub fn enriched_path() -> OsString {
     }
 
     std::env::join_paths(&merged_dirs).unwrap_or(process_path)
+}
+
+#[cfg(unix)]
+fn base_path() -> Option<OsString> {
+    shell_path().cloned()
+}
+
+#[cfg(windows)]
+fn base_path() -> Option<OsString> {
+    windows_registry_path()
+}
+
+/// Read the current `Path` value from `HKCU\Environment` +
+/// `HKLM\...\Environment`, expand any `%VAR%` references against the current
+/// process env, and return the merged string.
+///
+/// We do NOT cache this — the whole point is to see changes made after
+/// claudette started (winget installs, user edits via System Properties).
+/// The cost is two registry reads + string operations, which is
+/// sub-millisecond and only runs on subprocess-spawn paths.
+///
+/// Returns `None` only when both keys fail to open (pathological state; we
+/// fall back to the frozen process PATH in that case).
+#[cfg(windows)]
+pub fn windows_registry_path() -> Option<OsString> {
+    use winreg::RegKey;
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+
+    // Machine PATH first, user PATH after — matches how Windows itself
+    // builds the effective PATH when a new session starts.
+    let machine = hklm
+        .open_subkey(r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment")
+        .and_then(|k| k.get_value::<String, _>("Path"))
+        .ok();
+    let user = hkcu
+        .open_subkey("Environment")
+        .and_then(|k| k.get_value::<String, _>("Path"))
+        .ok();
+
+    if machine.is_none() && user.is_none() {
+        return None;
+    }
+
+    let combined = match (machine, user) {
+        (Some(m), Some(u)) if !u.is_empty() => format!("{m};{u}"),
+        (Some(m), _) => m,
+        (None, Some(u)) => u,
+        (None, None) => unreachable!(),
+    };
+
+    Some(OsString::from(expand_env_vars_windows(&combined)))
+}
+
+/// Expand `%VAR%` placeholders against the current process env.
+/// Case-insensitive match on the var name (Windows convention). Unknown
+/// placeholders are left as-is so the string is still usable for diagnosis.
+#[cfg(windows)]
+fn expand_env_vars_windows(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            if let Some(end) = bytes[i + 1..].iter().position(|&b| b == b'%') {
+                let name = &input[i + 1..i + 1 + end];
+                // Case-insensitive lookup — Windows env-var names are
+                // case-insensitive so `%PATH%` and `%Path%` must resolve
+                // the same way.
+                let matched = std::env::vars_os().find_map(|(k, v)| {
+                    if k.to_string_lossy().eq_ignore_ascii_case(name) {
+                        Some(v)
+                    } else {
+                        None
+                    }
+                });
+                match matched {
+                    Some(v) => out.push_str(&v.to_string_lossy()),
+                    None => {
+                        // Unknown var — leave the original `%NAME%` in place.
+                        out.push('%');
+                        out.push_str(name);
+                        out.push('%');
+                    }
+                }
+                i += 1 + end + 1;
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
 }
 
 /// Probe the login shell for its PATH.
@@ -317,5 +419,73 @@ mod tests {
             std::ffi::OsStr::new("CLAUDETTE_ROOT_PATH"),
             Some(std::ffi::OsStr::new("/home/user/repo"))
         )));
+    }
+
+    // -----------------------------------------------------------------------
+    // Windows env-var expansion tests
+    // -----------------------------------------------------------------------
+    //
+    // The registry stores PATH entries like `%SystemRoot%\System32`
+    // unexpanded (REG_EXPAND_SZ). Since Rust's `std::env::split_paths`
+    // does not expand `%VAR%` references, we have to do it ourselves
+    // before handing the value back. These tests exercise the corner
+    // cases of that hand-rolled expander without requiring a real
+    // Windows environment.
+
+    /// Bare strings with no `%VAR%` references must pass through byte-for-
+    /// byte — that's the overwhelmingly common case on most machines.
+    #[cfg(windows)]
+    #[test]
+    fn expand_passthrough_without_vars() {
+        assert_eq!(
+            expand_env_vars_windows(r"C:\Windows;C:\Users\user\.local\bin"),
+            r"C:\Windows;C:\Users\user\.local\bin"
+        );
+    }
+
+    /// A defined env var must be substituted. We lean on `SystemRoot`,
+    /// which is guaranteed to exist on any real Windows session that
+    /// could reach this code.
+    #[cfg(windows)]
+    #[test]
+    fn expand_replaces_defined_var() {
+        let system_root = std::env::var("SystemRoot")
+            .expect("SystemRoot must be defined in a Windows test env");
+        let expanded = expand_env_vars_windows(r"%SystemRoot%\System32");
+        assert_eq!(expanded, format!(r"{system_root}\System32"));
+    }
+
+    /// Case-insensitive match: Windows env-var names are not
+    /// case-sensitive, so `%systemroot%` and `%SystemRoot%` must resolve
+    /// to the same value.
+    #[cfg(windows)]
+    #[test]
+    fn expand_is_case_insensitive() {
+        let upper = expand_env_vars_windows(r"%SYSTEMROOT%\System32");
+        let lower = expand_env_vars_windows(r"%systemroot%\System32");
+        assert_eq!(upper, lower);
+    }
+
+    /// An unknown var must be left as-is rather than turning into an
+    /// empty string — a user reading the resolved PATH should still be
+    /// able to see *which* var failed to resolve.
+    #[cfg(windows)]
+    #[test]
+    fn expand_leaves_unknown_var_intact() {
+        let nonce = "CLAUDETTE_TEST_NONEXISTENT_VAR_XYZ_9876";
+        // Safety: the env-var name is unique to this test so clearing
+        // it is guaranteed not to race with other tests.
+        // (And we don't rely on any prior value.)
+        let out = expand_env_vars_windows(&format!(r"prefix;%{nonce}%;suffix"));
+        assert_eq!(out, format!(r"prefix;%{nonce}%;suffix"));
+    }
+
+    /// A lone `%` at end-of-string is not a var reference and must be
+    /// preserved. Without this guard the expander could read past the
+    /// input or emit empty output.
+    #[cfg(windows)]
+    #[test]
+    fn expand_tolerates_unmatched_percent() {
+        assert_eq!(expand_env_vars_windows(r"C:\foo%"), r"C:\foo%");
     }
 }

@@ -45,7 +45,7 @@ pub async fn list_workspace_files(
         .as_ref()
         .ok_or("Workspace has no worktree")?;
 
-    let output = Command::new("git").no_console_window()
+    let output = Command::new(&claudette::git::resolve_git_path_blocking()).no_console_window()
         .args(["-C", worktree_path])
         .args(["ls-files", "--cached", "--others", "--exclude-standard"])
         .output()

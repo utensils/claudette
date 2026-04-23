@@ -30,6 +30,12 @@ rand = "0.8"
 sha2 = "0.10"
 tar = "0.4"
 
+[target.'cfg(windows)'.dependencies]
+# Read fresh PATH from HKCU + HKLM Environment registry keys so we pick up
+# PATH updates made after claudette started (winget/installer edits) without
+# forcing the user to log out and back in.
+winreg = "0.55"
+
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

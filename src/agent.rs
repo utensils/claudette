@@ -558,16 +558,18 @@ async fn resolve_claude_path() -> OsString {
     if let Some(cached) = RESOLVED.get() {
         return cached.clone();
     }
-    let resolved = tokio::task::spawn_blocking(|| {
-        resolve_claude_path_inner(
-            dirs::home_dir(),
-            std::env::var_os("PATH"),
-            login_shell_path,
-            is_executable_file,
-        )
-    })
-    .await
-    .unwrap_or_else(|_| OsString::from("claude"));
+    // `enriched_path()` picks up fresh values from the Windows registry on
+    // Windows, and merges the login-shell PATH on Unix. This way an install
+    // made after claudette started (e.g. winget) is findable without a
+    // logout/restart. The work is a handful of Path::is_file probes plus one
+    // registry read, so we run it inline rather than going through
+    // spawn_blocking.
+    let resolved = resolve_claude_path_inner(
+        dirs::home_dir(),
+        Some(crate::env::enriched_path()),
+        login_shell_path,
+        is_executable_file,
+    );
     // Only cache absolute paths — the bare "claude" fallback should allow
     // retries on subsequent calls in case the environment improves.
     if Path::new(&resolved).is_absolute() {
@@ -633,20 +635,7 @@ fn resolve_claude_path_inner(
     }
 
     // 3. Well-known install locations as static fallbacks.
-    let mut fallback_candidates: Vec<PathBuf> = Vec::new();
-    if let Some(ref home) = home {
-        fallback_candidates.extend([
-            home.join(".local/bin/claude"),
-            home.join(".claude/local/claude"),
-            home.join(".nix-profile/bin/claude"), // Nix single-user
-        ]);
-    }
-    fallback_candidates.extend([
-        PathBuf::from("/usr/local/bin/claude"),
-        PathBuf::from("/opt/homebrew/bin/claude"), // macOS Homebrew
-        PathBuf::from("/run/current-system/sw/bin/claude"), // NixOS system
-        PathBuf::from("/nix/var/nix/profiles/default/bin/claude"), // Nix multi-user
-    ]);
+    let fallback_candidates = claude_fallback_paths(home.as_deref());
     for p in &fallback_candidates {
         if exists(p) {
             return p.clone().into_os_string();
@@ -654,19 +643,108 @@ fn resolve_claude_path_inner(
     }
 
     // 4. Nothing found — bare name as absolute last resort.
-    OsString::from("claude")
+    //    On Windows this is `claude.exe` so `CreateProcessW` doesn't add an
+    //    unwanted `.com`/`.bat` match from PATHEXT resolution.
+    OsString::from(claude_bare_name())
 }
 
-/// Search colon-separated PATH directories for a `claude` binary.
-/// Skips non-absolute entries to prevent repo-local execution.
+/// Binary filename variants for the `claude` CLI on the current target.
+///
+/// On Windows, the official Anthropic native installer ships `claude.exe`,
+/// while `npm i -g @anthropic-ai/claude-code` produces `.cmd` and `.ps1`
+/// launcher shims in `%APPDATA%\npm\`. We probe all three so both install
+/// flows resolve. On Unix there's only the bare `claude` executable.
+#[cfg(windows)]
+fn claude_binary_variants() -> &'static [&'static str] {
+    &["claude.exe", "claude.cmd", "claude.ps1"]
+}
+
+#[cfg(not(windows))]
+fn claude_binary_variants() -> &'static [&'static str] {
+    &["claude"]
+}
+
+#[cfg(windows)]
+fn claude_bare_name() -> &'static str {
+    "claude.exe"
+}
+
+#[cfg(not(windows))]
+fn claude_bare_name() -> &'static str {
+    "claude"
+}
+
+/// Well-known install locations for the `claude` CLI on the current target.
+/// Checked in order; first extant path wins. Pure function, no IO — takes
+/// `home` as a parameter so tests can inject a fixed path.
+fn claude_fallback_paths(home: Option<&Path>) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+
+    #[cfg(windows)]
+    {
+        if let Some(home) = home {
+            // Official Anthropic Windows installer drops here; this is the
+            // most likely hit on a fresh machine.
+            out.push(home.join(".local").join("bin").join("claude.exe"));
+            // npm global install — shims live under %APPDATA%\npm, which is
+            // `$HOME/AppData/Roaming/npm` by default.
+            out.push(
+                home.join("AppData")
+                    .join("Roaming")
+                    .join("npm")
+                    .join("claude.cmd"),
+            );
+            out.push(
+                home.join("AppData")
+                    .join("Roaming")
+                    .join("npm")
+                    .join("claude.ps1"),
+            );
+            // Hypothetical future MSI target — cheap to check and harmless
+            // if absent.
+            out.push(
+                home.join("AppData")
+                    .join("Local")
+                    .join("Programs")
+                    .join("claude")
+                    .join("claude.exe"),
+            );
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        if let Some(home) = home {
+            out.push(home.join(".local/bin/claude"));
+            out.push(home.join(".claude/local/claude"));
+            out.push(home.join(".nix-profile/bin/claude"));
+        }
+        out.push(PathBuf::from("/usr/local/bin/claude"));
+        out.push(PathBuf::from("/opt/homebrew/bin/claude"));
+        out.push(PathBuf::from("/run/current-system/sw/bin/claude"));
+        out.push(PathBuf::from("/nix/var/nix/profiles/default/bin/claude"));
+    }
+
+    out
+}
+
+/// Search PATH directories for a `claude` binary, trying each platform
+/// filename variant (`claude.exe`/`claude.cmd`/`claude.ps1` on Windows,
+/// bare `claude` elsewhere).
+///
+/// Skips non-absolute entries to prevent repo-local execution
+/// (e.g. a `.` entry would otherwise let a malicious repo provide its own
+/// `claude` binary).
 fn search_path_dirs(path: &std::ffi::OsStr, exists: &impl Fn(&Path) -> bool) -> Option<OsString> {
     for dir in std::env::split_paths(path) {
         if !dir.is_absolute() {
             continue;
         }
-        let candidate = dir.join("claude");
-        if exists(&candidate) {
-            return Some(candidate.into_os_string());
+        for name in claude_binary_variants() {
+            let candidate = dir.join(name);
+            if exists(&candidate) {
+                return Some(candidate.into_os_string());
+            }
         }
     }
     None
@@ -2167,6 +2245,7 @@ mod tests {
         None
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_resolve_process_path_wins() {
         // Process PATH is checked first and should win over everything.
@@ -2184,6 +2263,7 @@ mod tests {
         assert_eq!(result, OsString::from("/custom/bin/claude"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_resolve_shell_path_before_well_known() {
         // When process PATH misses, shell probe runs before well-known paths.
@@ -2197,6 +2277,7 @@ mod tests {
         assert_eq!(result, OsString::from("/shell/bin/claude"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_resolve_shell_probe_deferred() {
         // Shell probe should NOT run if process PATH already found claude.
@@ -2214,6 +2295,7 @@ mod tests {
         assert!(!probed.load(std::sync::atomic::Ordering::SeqCst));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_resolve_falls_back_to_well_known_home() {
         let home = PathBuf::from("/home/user");
@@ -2222,6 +2304,7 @@ mod tests {
         assert_eq!(result, expected.into_os_string());
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_resolve_falls_back_to_claude_local() {
         let home = PathBuf::from("/home/user");
@@ -2230,6 +2313,7 @@ mod tests {
         assert_eq!(result, expected.into_os_string());
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_resolve_falls_back_to_system() {
         let result = resolve_claude_path_inner(None, None, no_shell, |p| {
@@ -2238,6 +2322,7 @@ mod tests {
         assert_eq!(result, OsString::from("/usr/local/bin/claude"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_resolve_falls_back_to_homebrew() {
         let result = resolve_claude_path_inner(None, None, no_shell, |p| {
@@ -2246,6 +2331,7 @@ mod tests {
         assert_eq!(result, OsString::from("/opt/homebrew/bin/claude"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_resolve_finds_nix_profile() {
         let home = PathBuf::from("/home/user");
@@ -2254,6 +2340,7 @@ mod tests {
         assert_eq!(result, expected.into_os_string());
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_resolve_finds_nixos_system() {
         let result = resolve_claude_path_inner(None, None, no_shell, |p| {
@@ -2262,6 +2349,7 @@ mod tests {
         assert_eq!(result, OsString::from("/run/current-system/sw/bin/claude"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_resolve_home_before_system_in_fallbacks() {
         // Within the well-known fallbacks, home paths are checked before system.
@@ -2273,12 +2361,14 @@ mod tests {
         assert_eq!(result, home_path.into_os_string());
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_resolve_bare_fallback() {
         let result = resolve_claude_path_inner(None, None, no_shell, |_| false);
         assert_eq!(result, OsString::from("claude"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_resolve_skips_relative_in_process_path() {
         let result = resolve_claude_path_inner(
@@ -2294,6 +2384,7 @@ mod tests {
         assert_eq!(result, OsString::from("/abs/bin/claude"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_resolve_skips_empty_path_entry() {
         let result =
@@ -2303,6 +2394,7 @@ mod tests {
         assert_eq!(result, OsString::from("/good/bin/claude"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_resolve_all_relative_falls_through_to_bare() {
         let result = resolve_claude_path_inner(
@@ -2314,6 +2406,7 @@ mod tests {
         assert_eq!(result, OsString::from("claude"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_search_path_dirs_skips_relative() {
         let path = OsString::from(".:/tmp/evil:/good/bin");
@@ -2323,11 +2416,74 @@ mod tests {
         assert_eq!(result, Some(OsString::from("/tmp/evil/claude")));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_search_path_dirs_returns_none_for_all_relative() {
         let path = OsString::from(".:relative:./bin");
         let result = search_path_dirs(path.as_os_str(), &|_| true);
         assert_eq!(result, None);
+    }
+
+    // --- Windows-specific resolve tests ---
+
+    /// `.local\bin\claude.exe` is the location the official Anthropic
+    /// Windows installer drops the binary into. If this lookup ever
+    /// regresses, users who ran `irm https://claude.ai/install.ps1` will
+    /// see "program not found" despite the file being right there.
+    #[cfg(windows)]
+    #[test]
+    fn test_resolve_falls_back_to_anthropic_native_windows() {
+        let home = PathBuf::from(r"C:\Users\user");
+        let expected = home.join(r".local\bin\claude.exe");
+        let expected_clone = expected.clone();
+        let result = resolve_claude_path_inner(
+            Some(home),
+            None,
+            || None,
+            move |p| p == expected_clone,
+        );
+        assert_eq!(result, expected.into_os_string());
+    }
+
+    /// `%APPDATA%\npm\claude.cmd` is what `npm i -g @anthropic-ai/claude-code`
+    /// produces on Windows — a `.cmd` shim, not a `.exe`. Our resolver must
+    /// accept both variants.
+    #[cfg(windows)]
+    #[test]
+    fn test_resolve_falls_back_to_npm_shim_windows() {
+        let home = PathBuf::from(r"C:\Users\user");
+        let expected = home.join(r"AppData\Roaming\npm\claude.cmd");
+        let expected_clone = expected.clone();
+        let result = resolve_claude_path_inner(
+            Some(home),
+            None,
+            || None,
+            move |p| p == expected_clone,
+        );
+        assert_eq!(result, expected.into_os_string());
+    }
+
+    /// `search_path_dirs` must probe each Windows filename variant in order
+    /// within a single directory — a user who has only `claude.cmd` on PATH
+    /// (npm install) should resolve just like one with `claude.exe` (native
+    /// install).
+    #[cfg(windows)]
+    #[test]
+    fn test_search_path_dirs_tries_each_variant_windows() {
+        let path = OsString::from(r"C:\tools\npm");
+        let expected = PathBuf::from(r"C:\tools\npm\claude.cmd");
+        let expected_clone = expected.clone();
+        let result = search_path_dirs(path.as_os_str(), &move |p| p == expected_clone);
+        assert_eq!(result, Some(expected.into_os_string()));
+    }
+
+    /// The bare-name last-resort fallback must be `claude.exe` on Windows,
+    /// not `claude` — otherwise `CreateProcessW` may not resolve it even
+    /// with PATHEXT configured, depending on the caller's settings.
+    #[cfg(windows)]
+    #[test]
+    fn test_bare_name_is_exe_on_windows() {
+        assert_eq!(claude_bare_name(), "claude.exe");
     }
 
     // --- build_claude_args attachment tests ---
