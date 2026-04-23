@@ -69,13 +69,13 @@ export function useKeyboardShortcuts() {
             (w) => w.id === selectedWorkspaceId,
           );
           if (ws && isAgentBusy(ws.agent_status)) {
-            // Clear queued message — user is taking manual control.
-            useAppStore.getState().clearQueuedMessage(selectedWorkspaceId);
             const sessionId =
               useAppStore.getState().selectedSessionIdByWorkspaceId[
                 selectedWorkspaceId
               ];
             if (sessionId) {
+              // Clear queued message — user is taking manual control.
+              useAppStore.getState().clearQueuedMessage(sessionId);
               // Route through remote or local stop path. `stop_agent` is a
               // per-session command now — pass the active session id.
               const stopPromise = ws.remote_connection_id
