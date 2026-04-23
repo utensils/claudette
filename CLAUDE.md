@@ -130,8 +130,15 @@ src-server/             — Standalone + embeddable remote server
 ### Database conventions
 
 - `rusqlite::Connection` is not `Send` — open a fresh connection in each Tauri command via `Database::open(&state.db_path)`
-- Schema migrations use `PRAGMA user_version` — bump the version when adding new migrations
 - UI-only state (collapsed sections, panel widths, selection) is NOT persisted — keep in Zustand
+
+### Schema migrations
+
+- Migrations live as `.sql` files under `src/migrations/` and are registered in `src/migrations/mod.rs` as `Migration` entries in the `MIGRATIONS` const slice.
+- **Adding a migration:** create `src/migrations/YYYYMMDDHHMMSS_snake_case_description.sql` using the current UTC timestamp, then append a matching `Migration { id, sql: include_str!(...), legacy_version: None }` entry to `MIGRATIONS`. Migration IDs must be unique — a test enforces this.
+- **Never edit the SQL of a released migration.** The `id` is the tracked identity; rewriting or renaming applied migrations will desync databases in the field. Fix forward with a new migration.
+- **Merging branches:** each new migration is a distinct `.sql` file and a distinct `MIGRATIONS` entry, so parallel-branch migrations no longer collide on an integer version — both apply when merged. If two branches happen to choose the same timestamp (e.g. from `date -u +%Y%m%d%H%M%S` run at the same second), git will surface the clash as a merge conflict in `mod.rs`; bump one timestamp by a second and rename its file to resolve.
+- `PRAGMA user_version` is retained only to seed `schema_migrations` once on pre-redesign databases during the first run of the new runner. Do not read or write it in new code.
 
 ## Project context
 

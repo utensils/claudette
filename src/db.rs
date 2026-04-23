@@ -1,9 +1,11 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, params};
 
 use serde::{Deserialize, Serialize};
 
+use crate::migrations::{MIGRATIONS, Migration};
 use crate::model::{
     Attachment, ChatMessage, CheckpointFile, CompletedTurnData, ConversationCheckpoint,
     RemoteConnection, Repository, TerminalTab, TurnToolActivity, Workspace, WorkspaceStatus,
@@ -72,403 +74,99 @@ impl Database {
     }
 
     fn migrate(&self) -> Result<(), rusqlite::Error> {
-        let version: i32 = self
+        self.bootstrap_and_backfill(MIGRATIONS)?;
+        Self::run_migrations(&self.conn, MIGRATIONS)
+    }
+
+    /// Ensure `schema_migrations` exists; seed it from `PRAGMA user_version`
+    /// on pre-redesign databases. Idempotent: subsequent calls are no-ops.
+    fn bootstrap_and_backfill(&self, migrations: &[Migration]) -> Result<(), rusqlite::Error> {
+        let table_exists: bool = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                           WHERE type='table' AND name='schema_migrations')",
+            [],
+            |r| r.get(0),
+        )?;
+        if table_exists {
+            return Ok(());
+        }
+
+        let legacy_version: i32 = self
             .conn
-            .query_row("PRAGMA user_version", [], |row| row.get(0))?;
+            .query_row("PRAGMA user_version", [], |r| r.get(0))?;
 
-        if version < 1 {
-            self.conn.execute_batch(
-                "CREATE TABLE repositories (
-                    id          TEXT PRIMARY KEY,
-                    path        TEXT NOT NULL UNIQUE,
-                    name        TEXT NOT NULL,
-                    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
-                );
-
-                CREATE TABLE workspaces (
-                    id              TEXT PRIMARY KEY,
-                    repository_id   TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
-                    name            TEXT NOT NULL,
-                    branch_name     TEXT NOT NULL,
-                    worktree_path   TEXT,
-                    status          TEXT NOT NULL DEFAULT 'active',
-                    status_line     TEXT NOT NULL DEFAULT '',
-                    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-                    UNIQUE(repository_id, name)
-                );
-
-                PRAGMA user_version = 1;",
-            )?;
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE schema_migrations (
+                 id         TEXT PRIMARY KEY,
+                 applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+             );",
+        )?;
+        for m in migrations {
+            if let Some(v) = m.legacy_version
+                && v <= legacy_version
+            {
+                tx.execute(
+                    "INSERT INTO schema_migrations (id) VALUES (?1)",
+                    params![m.id],
+                )?;
+            }
         }
-
-        if version < 2 {
-            self.conn.execute_batch(
-                "CREATE TABLE chat_messages (
-                    id            TEXT PRIMARY KEY,
-                    workspace_id  TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-                    role          TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
-                    content       TEXT NOT NULL,
-                    cost_usd      REAL,
-                    duration_ms   INTEGER,
-                    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
-                );
-
-                CREATE INDEX idx_chat_messages_workspace
-                    ON chat_messages(workspace_id, created_at);
-
-                PRAGMA user_version = 2;",
-            )?;
-        }
-
-        if version < 3 {
-            self.conn.execute_batch(
-                "ALTER TABLE repositories ADD COLUMN icon TEXT;
-                 ALTER TABLE repositories ADD COLUMN path_slug TEXT;
-                 UPDATE repositories SET path_slug = name WHERE path_slug IS NULL;
-
-                 CREATE TABLE app_settings (
-                     key   TEXT PRIMARY KEY,
-                     value TEXT NOT NULL
-                 );
-
-                 PRAGMA user_version = 3;",
-            )?;
-        }
-
-        if version < 4 {
-            self.conn.execute_batch(
-                "CREATE TABLE terminal_tabs (
-                    id               INTEGER PRIMARY KEY,
-                    workspace_id     TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-                    title            TEXT NOT NULL DEFAULT 'Terminal',
-                    is_script_output INTEGER NOT NULL DEFAULT 0,
-                    sort_order       INTEGER NOT NULL DEFAULT 0,
-                    created_at       TEXT NOT NULL DEFAULT (datetime('now'))
-                );
-
-                CREATE INDEX idx_terminal_tabs_workspace
-                    ON terminal_tabs(workspace_id, sort_order);
-
-                PRAGMA user_version = 4;",
-            )?;
-        }
-
-        if version < 5 {
-            self.conn.execute_batch(
-                "ALTER TABLE repositories ADD COLUMN setup_script TEXT;
-
-                 PRAGMA user_version = 5;",
-            )?;
-        }
-
-        if version < 6 {
-            self.conn.execute_batch(
-                "ALTER TABLE repositories ADD COLUMN custom_instructions TEXT;
-
-                 PRAGMA user_version = 6;",
-            )?;
-        }
-
-        if version < 7 {
-            self.conn.execute_batch(
-                "CREATE TABLE remote_connections (
-                    id                  TEXT PRIMARY KEY,
-                    name                TEXT NOT NULL,
-                    host                TEXT NOT NULL,
-                    port                INTEGER DEFAULT 7683,
-                    session_token       TEXT,
-                    cert_fingerprint    TEXT,
-                    auto_connect        INTEGER DEFAULT 0,
-                    created_at          TEXT NOT NULL DEFAULT (datetime('now'))
-                );
-
-                PRAGMA user_version = 7;",
-            )?;
-        }
-
-        if version < 8 {
-            self.conn.execute_batch(
-                "CREATE TABLE slash_command_usage (
-                    workspace_id  TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-                    command_name  TEXT NOT NULL,
-                    use_count     INTEGER NOT NULL DEFAULT 1,
-                    last_used_at  TEXT NOT NULL DEFAULT (datetime('now')),
-                    PRIMARY KEY (workspace_id, command_name)
-                );
-
-                PRAGMA user_version = 8;",
-            )?;
-        }
-
-        if version < 9 {
-            self.conn.execute_batch(
-                "ALTER TABLE workspaces ADD COLUMN session_id TEXT;
-                 ALTER TABLE workspaces ADD COLUMN turn_count INTEGER NOT NULL DEFAULT 0;
-
-                 PRAGMA user_version = 9;",
-            )?;
-        }
-
-        if version < 10 {
-            self.conn.execute_batch(
-                "CREATE TABLE conversation_checkpoints (
-                    id            TEXT PRIMARY KEY,
-                    workspace_id  TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-                    message_id    TEXT NOT NULL,
-                    commit_hash   TEXT,
-                    turn_index    INTEGER NOT NULL,
-                    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
-                );
-
-                CREATE INDEX idx_checkpoints_workspace
-                    ON conversation_checkpoints(workspace_id, turn_index);
-
-                PRAGMA user_version = 10;",
-            )?;
-        }
-
-        if version < 11 {
-            self.conn.execute_batch(
-                "CREATE TABLE turn_tool_activities (
-                    id              TEXT PRIMARY KEY,
-                    checkpoint_id   TEXT NOT NULL REFERENCES conversation_checkpoints(id) ON DELETE CASCADE,
-                    tool_use_id     TEXT NOT NULL,
-                    tool_name       TEXT NOT NULL,
-                    input_json      TEXT NOT NULL DEFAULT '',
-                    result_text     TEXT NOT NULL DEFAULT '',
-                    summary         TEXT NOT NULL DEFAULT '',
-                    sort_order      INTEGER NOT NULL DEFAULT 0
-                );
-
-                CREATE INDEX idx_turn_tool_activities_checkpoint
-                    ON turn_tool_activities(checkpoint_id, sort_order);
-
-                ALTER TABLE conversation_checkpoints ADD COLUMN message_count INTEGER NOT NULL DEFAULT 0;
-
-                PRAGMA user_version = 11;",
-            )?;
-        }
-
-        if version < 12 {
-            // Single batch so the column add, backfill, and version bump are
-            // atomic — a partial apply won't leave user_version stale.
-            self.conn.execute_batch(
-                "ALTER TABLE repositories ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
-
-                UPDATE repositories SET sort_order = (
-                    SELECT COUNT(*) FROM repositories r2 WHERE r2.name < repositories.name
-                );
-
-                PRAGMA user_version = 12;",
-            )?;
-        }
-
-        if version < 13 {
-            self.conn.execute_batch(
-                "ALTER TABLE chat_messages ADD COLUMN thinking TEXT;
-                 PRAGMA user_version = 13;",
-            )?;
-        }
-
-        if version < 14 {
-            self.conn.execute_batch(
-                "ALTER TABLE repositories ADD COLUMN branch_rename_preferences TEXT;
-                 PRAGMA user_version = 14;",
-            )?;
-        }
-
-        if version < 15 {
-            self.conn.execute_batch(
-                "CREATE TABLE checkpoint_files (
-                    id              TEXT PRIMARY KEY,
-                    checkpoint_id   TEXT NOT NULL REFERENCES conversation_checkpoints(id) ON DELETE CASCADE,
-                    file_path       TEXT NOT NULL,
-                    content         BLOB,
-                    file_mode       INTEGER NOT NULL DEFAULT 33188,
-                    UNIQUE(checkpoint_id, file_path)
-                );
-
-                CREATE INDEX idx_checkpoint_files_checkpoint
-                    ON checkpoint_files(checkpoint_id);
-
-                PRAGMA user_version = 15;",
-            )?;
-        }
-
-        if version < 16 {
-            self.conn.execute_batch(
-                "CREATE TABLE attachments (
-                    id           TEXT PRIMARY KEY,
-                    message_id   TEXT NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
-                    filename     TEXT NOT NULL,
-                    media_type   TEXT NOT NULL,
-                    data         BLOB NOT NULL,
-                    width        INTEGER,
-                    height       INTEGER,
-                    size_bytes   INTEGER NOT NULL,
-                    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
-                );
-
-                CREATE INDEX idx_attachments_message
-                    ON attachments(message_id);
-
-                PRAGMA user_version = 16;",
-            )?;
-        }
-
-        if version < 17 {
-            self.conn.execute_batch(
-                "CREATE TABLE IF NOT EXISTS repository_mcp_servers (
-                    id              TEXT PRIMARY KEY,
-                    repository_id   TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
-                    name            TEXT NOT NULL,
-                    config_json     TEXT NOT NULL,
-                    source          TEXT NOT NULL,
-                    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-                    UNIQUE(repository_id, name)
-                );
-
-                PRAGMA user_version = 17;",
-            )?;
-        }
-
-        if version < 18 {
-            self.conn.execute_batch(
-                "ALTER TABLE repository_mcp_servers ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1;
-
-                PRAGMA user_version = 18;",
-            )?;
-        }
-
-        if version < 19 {
-            self.conn.execute_batch(
-                "ALTER TABLE repositories ADD COLUMN setup_script_auto_run INTEGER NOT NULL DEFAULT 0;
-
-                PRAGMA user_version = 19;",
-            )?;
-        }
-
-        if version < 20 {
-            self.conn.execute_batch(
-                "ALTER TABLE chat_messages ADD COLUMN input_tokens INTEGER;
-                 ALTER TABLE chat_messages ADD COLUMN output_tokens INTEGER;
-                 ALTER TABLE chat_messages ADD COLUMN cache_read_tokens INTEGER;
-                 ALTER TABLE chat_messages ADD COLUMN cache_creation_tokens INTEGER;
-
-                 PRAGMA user_version = 20;",
-            )?;
-        }
-
-        if version < 21 {
-            // Metrics capture foundation: per-session lifecycle rows, per-commit
-            // rows, and a frozen-aggregates table for workspaces that get
-            // hard-deleted (so lifetime dashboard stats survive `delete_workspace`).
-            self.conn.execute_batch(
-                "CREATE TABLE agent_sessions (
-                    id              TEXT PRIMARY KEY,
-                    workspace_id    TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
-                    repository_id   TEXT NOT NULL,
-                    started_at      TEXT NOT NULL DEFAULT (datetime('now')),
-                    last_message_at TEXT NOT NULL DEFAULT (datetime('now')),
-                    ended_at        TEXT,
-                    turn_count      INTEGER NOT NULL DEFAULT 0,
-                    completed_ok    INTEGER NOT NULL DEFAULT 0
-                );
-                CREATE INDEX idx_agent_sessions_workspace ON agent_sessions(workspace_id);
-                CREATE INDEX idx_agent_sessions_started   ON agent_sessions(started_at);
-
-                CREATE TABLE agent_commits (
-                    commit_hash     TEXT NOT NULL,
-                    workspace_id    TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-                    repository_id   TEXT NOT NULL,
-                    session_id      TEXT,
-                    additions       INTEGER NOT NULL DEFAULT 0,
-                    deletions       INTEGER NOT NULL DEFAULT 0,
-                    files_changed   INTEGER NOT NULL DEFAULT 0,
-                    committed_at    TEXT NOT NULL,
-                    PRIMARY KEY (workspace_id, commit_hash)
-                );
-                CREATE INDEX idx_agent_commits_workspace ON agent_commits(workspace_id);
-                CREATE INDEX idx_agent_commits_committed ON agent_commits(committed_at);
-
-                CREATE TABLE deleted_workspace_summaries (
-                    id                        TEXT PRIMARY KEY,
-                    workspace_id              TEXT NOT NULL,
-                    workspace_name            TEXT NOT NULL,
-                    repository_id             TEXT NOT NULL,
-                    workspace_created_at      TEXT NOT NULL,
-                    deleted_at                TEXT NOT NULL DEFAULT (datetime('now')),
-                    sessions_started          INTEGER NOT NULL DEFAULT 0,
-                    sessions_completed        INTEGER NOT NULL DEFAULT 0,
-                    total_turns               INTEGER NOT NULL DEFAULT 0,
-                    total_session_duration_ms INTEGER NOT NULL DEFAULT 0,
-                    commits_made              INTEGER NOT NULL DEFAULT 0,
-                    total_additions           INTEGER NOT NULL DEFAULT 0,
-                    total_deletions           INTEGER NOT NULL DEFAULT 0,
-                    total_files_changed       INTEGER NOT NULL DEFAULT 0,
-                    messages_user             INTEGER NOT NULL DEFAULT 0,
-                    messages_assistant        INTEGER NOT NULL DEFAULT 0,
-                    messages_system           INTEGER NOT NULL DEFAULT 0,
-                    total_cost_usd            REAL NOT NULL DEFAULT 0,
-                    first_message_at          TEXT,
-                    last_message_at           TEXT,
-                    slash_commands_used       INTEGER NOT NULL DEFAULT 0
-                );
-                CREATE INDEX idx_deleted_ws_summaries_repo ON deleted_workspace_summaries(repository_id);
-
-                PRAGMA user_version = 21;",
-            )?;
-        }
-
-        if version < 22 {
-            // Leaderboard and per-repo aggregations do correlated subquery
-            // lookups like `WHERE s.repository_id = r.repository_id` and
-            // `GROUP BY repository_id`. Without these indexes those scans are
-            // full-table, which the 30s dashboard poll amplifies.
-            self.conn.execute_batch(
-                "CREATE INDEX idx_agent_sessions_repo ON agent_sessions(repository_id);
-                 CREATE INDEX idx_agent_commits_repo  ON agent_commits(repository_id);
-
-                 PRAGMA user_version = 22;",
-            )?;
-        }
-
-        if version < 23 {
-            // Gate the first-turn auto-rename on a persistent per-workspace
-            // flag. The previous gate (`session.turn_count <= 1`) tripped
-            // spuriously whenever the in-memory session was wiped — on
-            // `stop_agent`, spawn failure, or `!got_init` CLI exits — letting
-            // a later prompt rename a workspace that had already had its
-            // first-prompt rename. The flag tracks the one-shot *claim*, not
-            // the rename outcome: it's set on the prompt that reserves the
-            // slot, so a Haiku/git failure leaves the workspace with its
-            // original name but doesn't retry on later prompts. Backfill
-            // existing workspaces with prior chat history so an upgrade
-            // doesn't rename them on the next turn.
-            self.conn.execute_batch(
-                "ALTER TABLE workspaces ADD COLUMN branch_auto_rename_claimed INTEGER NOT NULL DEFAULT 0;
-
-                 UPDATE workspaces SET branch_auto_rename_claimed = 1
-                   WHERE id IN (SELECT DISTINCT workspace_id FROM chat_messages);
-
-                 PRAGMA user_version = 23;",
-            )?;
-        }
-
-        if version < 24 {
-            self.conn.execute_batch(
-                "ALTER TABLE deleted_workspace_summaries ADD COLUMN total_input_tokens INTEGER NOT NULL DEFAULT 0;
-                 ALTER TABLE deleted_workspace_summaries ADD COLUMN total_output_tokens INTEGER NOT NULL DEFAULT 0;
-
-                 CREATE INDEX idx_chat_messages_created ON chat_messages(created_at);
-
-                 PRAGMA user_version = 24;",
-            )?;
-        }
-
+        tx.commit()?;
         Ok(())
     }
 
+    /// Apply every migration in `migrations` that is not already recorded in
+    /// `schema_migrations`. Each migration's SQL and its tracking-row insert
+    /// run inside a single transaction, so a failure leaves no partial state.
+    fn run_migrations(conn: &Connection, migrations: &[Migration]) -> Result<(), rusqlite::Error> {
+        let mut seen: HashSet<&str> = HashSet::with_capacity(migrations.len());
+        for m in migrations {
+            assert!(
+                seen.insert(m.id),
+                "duplicate migration id in MIGRATIONS: {}",
+                m.id,
+            );
+        }
+
+        let applied: HashSet<String> = conn
+            .prepare("SELECT id FROM schema_migrations")?
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<Result<_, _>>()?;
+
+        for m in migrations {
+            if applied.contains(m.id) {
+                continue;
+            }
+            let tx = conn.unchecked_transaction()?;
+            tx.execute_batch(m.sql)?;
+            tx.execute(
+                "INSERT INTO schema_migrations (id) VALUES (?1)",
+                params![m.id],
+            )?;
+            tx.commit()?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+impl Database {
+    /// Test-only accessor: expose the underlying connection for setup needs
+    /// that don't fit `execute_batch` (e.g. parameterized queries).
+    pub fn conn(&self) -> &Connection {
+        &self.conn
+    }
+
+    /// Test-only: run the migration runner against a caller-supplied slice.
+    /// Used to inject synthetic migrations for error-path and ordering tests.
+    pub fn migrate_with(&self, migrations: &[Migration]) -> Result<(), rusqlite::Error> {
+        self.bootstrap_and_backfill(migrations)?;
+        Self::run_migrations(&self.conn, migrations)
+    }
+}
+
+impl Database {
     // --- Repositories ---
 
     pub fn insert_repository(&self, repo: &Repository) -> Result<(), rusqlite::Error> {
@@ -3754,5 +3452,183 @@ mod tests {
             .unwrap();
         assert_eq!((turns_w1, adds_w1), (4, 12));
         assert_eq!((turns_w2, adds_w2), (9, 30));
+    }
+
+    // --- Migration runner tests ---
+
+    fn count_applied(db: &Database) -> i64 {
+        db.conn()
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    fn applied_ids(db: &Database) -> Vec<String> {
+        let mut stmt = db
+            .conn()
+            .prepare("SELECT id FROM schema_migrations ORDER BY id")
+            .unwrap();
+        stmt.query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
+    /// Apply the SQL bodies of the first N pre-redesign migrations directly,
+    /// then set `PRAGMA user_version = N`, producing a DB that looks exactly
+    /// like one from before the redesign at that version.
+    fn build_legacy_db_at_version(n: i32) -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        for m in MIGRATIONS.iter().take(n as usize) {
+            conn.execute_batch(m.sql).unwrap();
+        }
+        conn.execute_batch(&format!("PRAGMA user_version = {n};"))
+            .unwrap();
+        conn
+    }
+
+    #[test]
+    fn test_migrations_unique_ids() {
+        let mut seen = HashSet::new();
+        for m in MIGRATIONS {
+            assert!(
+                seen.insert(m.id),
+                "duplicate migration id in MIGRATIONS: {}",
+                m.id,
+            );
+        }
+    }
+
+    #[test]
+    fn test_migrations_timestamp_prefix_format() {
+        for m in MIGRATIONS {
+            let prefix: String = m.id.chars().take(14).collect();
+            assert_eq!(
+                prefix.len(),
+                14,
+                "migration id too short, expected 14-digit timestamp prefix: {}",
+                m.id,
+            );
+            assert!(
+                prefix.chars().all(|c| c.is_ascii_digit()),
+                "migration id must start with 14 ASCII digits: {}",
+                m.id,
+            );
+            assert_eq!(
+                m.id.chars().nth(14),
+                Some('_'),
+                "migration id must have underscore after timestamp: {}",
+                m.id,
+            );
+        }
+    }
+
+    #[test]
+    fn test_fresh_db_applies_all_migrations() {
+        let db = Database::open_in_memory().unwrap();
+        assert_eq!(count_applied(&db) as usize, MIGRATIONS.len());
+    }
+
+    #[test]
+    fn test_migrate_is_idempotent() {
+        let db = Database::open_in_memory().unwrap();
+        let before = count_applied(&db);
+        // Re-invoke — same MIGRATIONS slice, already-applied rows must be skipped.
+        db.migrate_with(MIGRATIONS).unwrap();
+        assert_eq!(before, count_applied(&db));
+    }
+
+    #[test]
+    fn test_backfill_from_user_version_19() {
+        let conn = build_legacy_db_at_version(19);
+        let db = Database { conn };
+        db.migrate().unwrap();
+
+        let ids = applied_ids(&db);
+        assert_eq!(ids.len(), MIGRATIONS.len());
+        for m in MIGRATIONS {
+            assert!(
+                ids.contains(&m.id.to_string()),
+                "missing backfilled id: {}",
+                m.id,
+            );
+        }
+    }
+
+    #[test]
+    fn test_backfill_from_user_version_0() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        let db = Database { conn };
+        db.migrate().unwrap();
+        assert_eq!(count_applied(&db) as usize, MIGRATIONS.len());
+    }
+
+    #[test]
+    fn test_partial_backfill_from_mid_version() {
+        let conn = build_legacy_db_at_version(10);
+        let db = Database { conn };
+        db.migrate().unwrap();
+
+        // All 19 legacy + none extra: migrations 1-10 got backfilled rows,
+        // 11-19 ran for real as fresh migrations. Either way the final row
+        // count is MIGRATIONS.len() and all IDs are present.
+        assert_eq!(count_applied(&db) as usize, MIGRATIONS.len());
+        for m in MIGRATIONS {
+            let present: bool = db
+                .conn()
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE id = ?1)",
+                    params![m.id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert!(present, "id not present after partial backfill: {}", m.id);
+        }
+    }
+
+    #[test]
+    fn test_skips_already_applied_migration() {
+        // Synthetic migration: inject an id into schema_migrations and point
+        // its SQL at something that would fail if re-run. The runner must
+        // skip it because the id is already present.
+        let db = Database::open_in_memory().unwrap();
+        let synthetic = [Migration {
+            id: "29991231235959_synthetic_broken_sql",
+            sql: "this is not valid sql and would fail if executed",
+            legacy_version: None,
+        }];
+        db.conn()
+            .execute(
+                "INSERT INTO schema_migrations (id) VALUES (?1)",
+                params![synthetic[0].id],
+            )
+            .unwrap();
+        db.migrate_with(&synthetic).unwrap();
+    }
+
+    #[test]
+    fn test_migration_failure_is_atomic() {
+        let db = Database::open_in_memory().unwrap();
+        let bad = [Migration {
+            id: "29991231235959_synthetic_bad",
+            sql: "ALTER TABLE does_not_exist ADD COLUMN x INTEGER;",
+            legacy_version: None,
+        }];
+        let err = db.migrate_with(&bad);
+        assert!(err.is_err(), "expected migration failure to bubble up");
+
+        let present: bool = db
+            .conn()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE id = ?1)",
+                params![bad[0].id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            !present,
+            "failed migration must not leave tracking row in schema_migrations",
+        );
     }
 }
