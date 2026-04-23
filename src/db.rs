@@ -1125,6 +1125,17 @@ impl Database {
         Ok(())
     }
 
+    pub fn update_workspace_name(&self, id: &str, new_name: &str) -> Result<(), rusqlite::Error> {
+        let rows_affected = self.conn.execute(
+            "UPDATE workspaces SET name = ?1 WHERE id = ?2",
+            params![new_name, id],
+        )?;
+        if rows_affected != 1 {
+            return Err(rusqlite::Error::StatementChangedRows(rows_affected));
+        }
+        Ok(())
+    }
+
     pub fn delete_workspace(&self, id: &str) -> Result<(), rusqlite::Error> {
         self.conn
             .execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
@@ -2145,6 +2156,55 @@ mod tests {
         // Renaming a workspace that doesn't exist should fail.
         let result = db.rename_workspace("no-such-id", "new-name", "claudette/new-name");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_update_workspace_name() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w1", "r1", "old-name"))
+            .unwrap();
+        db.update_workspace_name("w1", "new-name").unwrap();
+        let workspaces = db.list_workspaces().unwrap();
+        assert_eq!(workspaces[0].name, "new-name");
+        assert_eq!(workspaces[0].branch_name, "claudette/old-name");
+    }
+
+    #[test]
+    fn test_update_workspace_name_unique_conflict() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w1", "r1", "name-a"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w2", "r1", "name-b"))
+            .unwrap();
+        let result = db.update_workspace_name("w1", "name-b");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_update_workspace_name_nonexistent() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        let result = db.update_workspace_name("no-such-id", "new-name");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_update_workspace_name_cross_repo_ok() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        db.insert_repository(&make_repo("r2", "/tmp/repo2", "repo2"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w1", "r1", "shared-name"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w2", "r2", "other-name"))
+            .unwrap();
+        db.update_workspace_name("w2", "shared-name").unwrap();
     }
 
     #[test]

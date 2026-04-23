@@ -341,6 +341,7 @@ fn main() {
             commands::workspace::run_workspace_setup,
             commands::workspace::archive_workspace,
             commands::workspace::restore_workspace,
+            commands::workspace::rename_workspace,
             commands::workspace::delete_workspace,
             commands::workspace::generate_workspace_name,
             commands::workspace::refresh_branches,
@@ -417,6 +418,14 @@ fn main() {
             commands::plugin::load_plugin_configuration,
             commands::plugin::save_plugin_top_level_configuration,
             commands::plugin::save_plugin_channel_configuration,
+            // Sound Packs (CESP)
+            commands::cesp::cesp_fetch_registry,
+            commands::cesp::cesp_list_installed,
+            commands::cesp::cesp_install_pack,
+            commands::cesp::cesp_update_pack,
+            commands::cesp::cesp_delete_pack,
+            commands::cesp::cesp_preview_sound,
+            commands::cesp::cesp_play_for_event,
             // Shell Integration
             commands::shell::setup_shell_integration,
             commands::shell::apply_shell_integration,

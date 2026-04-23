@@ -26,6 +26,15 @@
      our bright/medium accents; light themes override below. */
   --on-accent:           #1c1815;
 
+  /* ---- Purple accent (empty-state cards) ---- */
+  --purple-bg:           rgba(139, 92, 246, 0.08);
+  --purple-bg-hover:     rgba(139, 92, 246, 0.13);
+  --purple-border:       rgba(139, 92, 246, 0.20);
+  --purple-border-hover: rgba(139, 92, 246, 0.35);
+  --purple-btn-bg:       rgba(139, 92, 246, 0.20);
+  --purple-btn-bg-hover: rgba(139, 92, 246, 0.30);
+  --purple-text:         #c4b5fd;
+
   /* ---- Mascot pink (the bow) ---- */
   --mascot-pink:         #f5a0b8;
   --mascot-pink-dim:     #d97a95;

@@ -23,7 +23,7 @@ export default defineConfig({
         {
           icon: 'discord',
           label: 'Discord',
-          href: 'https://discord.gg/Ks9Ghnem',
+          href: 'https://discord.gg/aumGBKccmD',
         },
       ],
       customCss: [

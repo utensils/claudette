@@ -626,10 +626,11 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "claudette"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "base64 0.22.1",
  "dirs",
+ "flate2",
  "futures",
  "mlua",
  "open",
@@ -638,6 +639,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tar",
  "tempfile",
  "tokio",
  "url",
@@ -647,7 +649,7 @@ dependencies = [
 
 [[package]]
 name = "claudette-server"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "base64 0.22.1",
  "clap",
@@ -674,7 +676,7 @@ dependencies = [
 
 [[package]]
 name = "claudette-tauri"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "async-trait",
  "chrono",

@@ -19,6 +19,45 @@ use claudette::{base64_decode, base64_encode};
 
 use crate::state::{AgentSessionState, AppState, PendingPermission};
 
+async fn fire_completion_notification(
+    db_path: &std::path::Path,
+    cesp_playback: &std::sync::Mutex<claudette::cesp::SoundPlaybackState>,
+    event: crate::tray::NotificationEvent,
+    ws_id: &str,
+) {
+    let Ok(db) = Database::open(db_path) else {
+        return;
+    };
+    let resolved = crate::tray::resolve_notification(&db, cesp_playback, event);
+    if resolved.sound != "None" {
+        crate::commands::settings::play_notification_sound(resolved.sound, Some(resolved.volume));
+    }
+    if let Ok(Some(cmd)) = db.get_app_setting("notification_command")
+        && !cmd.is_empty()
+        && let Some(fresh_ws) = db
+            .list_workspaces()
+            .ok()
+            .and_then(|wss| wss.into_iter().find(|w| w.id == ws_id))
+    {
+        let repo_path = db
+            .get_repository(&fresh_ws.repository_id)
+            .ok()
+            .flatten()
+            .map(|r| r.path)
+            .unwrap_or_default();
+        let default_branch = git::default_branch(&repo_path)
+            .await
+            .unwrap_or_else(|_| "main".into());
+        let fresh_env = WorkspaceEnv::from_workspace(&fresh_ws, &repo_path, default_branch);
+        if let Some(mut command) =
+            crate::commands::settings::build_notification_command(&cmd, &fresh_env)
+            && let Ok(child) = command.spawn()
+        {
+            crate::commands::settings::spawn_and_reap(child);
+        }
+    }
+}
+
 /// Frontend-facing input for a file attachment (base64-encoded).
 #[derive(Clone, Deserialize)]
 pub struct AttachmentInput {
@@ -793,6 +832,7 @@ pub async fn send_chat_message(
         // across multi-message turns.
         let mut latest_usage: Option<claudette::agent::TokenUsage> = None;
         let mut pending_attention_kind: Option<crate::state::AttentionKind>;
+        let mut notified_via_result = false;
         while let Some(event) = rx.recv().await {
             pending_attention_kind = None;
             // Track whether the CLI initialized successfully.
@@ -1031,9 +1071,9 @@ pub async fn send_chat_message(
             // When a persistent turn completes (Result event), clear active_pid
             // so the workspace shows as idle. The persistent process stays alive
             // for the next turn — only active_pid is cleared, not persistent_session.
-            if let AgentEvent::Stream(StreamEvent::Result { .. }) = &event {
+            if let AgentEvent::Stream(StreamEvent::Result { subtype, .. }) = &event {
                 let app_state = app.state::<AppState>();
-                let session_id_for_capture = {
+                let (session_id_for_capture, needs_attention) = {
                     let mut agents = app_state.agents.write().await;
                     if let Some(session) = agents.get_mut(&ws_id)
                         && session.active_pid == Some(spawned_pid)
@@ -1041,10 +1081,12 @@ pub async fn send_chat_message(
                     {
                         session.active_pid = None;
                     }
-                    agents
+                    let sid = agents
                         .get(&ws_id)
                         .map(|s| s.session_id.clone())
-                        .unwrap_or_default()
+                        .unwrap_or_default();
+                    let attn = agents.get(&ws_id).is_some_and(|s| s.needs_attention);
+                    (sid, attn)
                 };
                 // Rebuild tray so it reflects the idle state. Without this,
                 // the tray stays stuck on "Running" because the persistent
@@ -1065,6 +1107,16 @@ pub async fn send_chat_message(
                     &wt_path,
                 )
                 .await;
+                if !needs_attention {
+                    let event = if subtype == "success" {
+                        crate::tray::NotificationEvent::Finished
+                    } else {
+                        crate::tray::NotificationEvent::Error
+                    };
+                    fire_completion_notification(&db_path, &app_state.cesp_playback, event, &ws_id)
+                        .await;
+                    notified_via_result = true;
+                }
             }
 
             // Track per-assistant-message cumulative usage as the CLI streams it.
@@ -1141,56 +1193,16 @@ pub async fn send_chat_message(
                     )
                     .await;
                 }
-                // Play notification sound + run command if the window is not focused.
-                // This runs on the Rust side so it works even when the webview
-                // is suspended (window hidden / close-to-tray).
                 let needs_attention_now = agents.get(&ws_id).is_some_and(|s| s.needs_attention);
-                let window_focused = app
-                    .get_webview_window("main")
-                    .and_then(|w| w.is_focused().ok())
-                    .unwrap_or(false);
-                // Skip if user is actively watching (window focused) or if this
-                // is an attention event (notify_attention already handled it).
-                if !window_focused
-                    && !needs_attention_now
-                    && let Ok(db) = Database::open(&db_path)
-                {
-                    let sound = crate::tray::resolve_notification_sound(
-                        &db,
-                        crate::tray::NotificationEvent::Finished,
-                    );
-                    if sound != "None" {
-                        crate::commands::settings::play_notification_sound(sound);
-                    }
-                    // Run notification command if configured — uses the same
-                    // tested helper as the settings test button and tray path.
-                    // Rebuild WorkspaceEnv from the DB so it reflects any
-                    // renames that happened during the turn (try_auto_rename).
-                    if let Ok(Some(cmd)) = db.get_app_setting("notification_command")
-                        && !cmd.is_empty()
-                        && let Some(fresh_ws) = db
-                            .list_workspaces()
-                            .ok()
-                            .and_then(|wss| wss.into_iter().find(|w| w.id == ws_id))
-                    {
-                        let repo_path = db
-                            .get_repository(&fresh_ws.repository_id)
-                            .ok()
-                            .flatten()
-                            .map(|r| r.path)
-                            .unwrap_or_default();
-                        let default_branch = git::default_branch(&repo_path)
-                            .await
-                            .unwrap_or_else(|_| "main".into());
-                        let fresh_env =
-                            WorkspaceEnv::from_workspace(&fresh_ws, &repo_path, default_branch);
-                        if let Some(mut command) =
-                            crate::commands::settings::build_notification_command(&cmd, &fresh_env)
-                            && let Ok(child) = command.spawn()
-                        {
-                            crate::commands::settings::spawn_and_reap(child);
-                        }
-                    }
+                let app_state = app.state::<crate::state::AppState>();
+                if !needs_attention_now && !notified_via_result {
+                    let event = if exit_code == Some(0) {
+                        crate::tray::NotificationEvent::Finished
+                    } else {
+                        crate::tray::NotificationEvent::Error
+                    };
+                    fire_completion_notification(&db_path, &app_state.cesp_playback, event, &ws_id)
+                        .await;
                 }
 
                 drop(agents);
@@ -1784,6 +1796,8 @@ pub async fn submit_agent_answer(
             .pending_permissions
             .remove(&tool_use_id)
             .expect("checked above");
+        session.needs_attention = false;
+        session.attention_kind = None;
         (pending, ps)
     };
 
@@ -1850,6 +1864,8 @@ pub async fn submit_plan_approval(
             .pending_permissions
             .remove(&tool_use_id)
             .expect("checked above");
+        session.needs_attention = false;
+        session.attention_kind = None;
         (pending, ps)
     };
 

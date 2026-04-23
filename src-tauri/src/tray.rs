@@ -13,6 +13,8 @@ pub enum NotificationEvent {
     Ask,
     Plan,
     Finished,
+    Error,
+    SessionStart,
 }
 
 impl NotificationEvent {
@@ -21,6 +23,18 @@ impl NotificationEvent {
             Self::Ask => "notification_sound_ask",
             Self::Plan => "notification_sound_plan",
             Self::Finished => "notification_sound_finished",
+            Self::Error => "notification_sound_error",
+            Self::SessionStart => "notification_sound_session_start",
+        }
+    }
+
+    fn cesp_event_name(&self) -> &'static str {
+        match self {
+            Self::Ask => "ask",
+            Self::Plan => "plan",
+            Self::Finished => "finished",
+            Self::Error => "error",
+            Self::SessionStart => "session_start",
         }
     }
 }
@@ -52,6 +66,46 @@ where
 /// Fallback: per-event key -> global `notification_sound` -> legacy `audio_notifications` -> "Default"
 pub fn resolve_notification_sound(db: &Database, event: NotificationEvent) -> String {
     resolve_notification_sound_with(|key| db.get_app_setting(key).ok().flatten(), event)
+}
+
+pub struct ResolvedSound {
+    pub sound: String,
+    pub volume: f64,
+}
+
+/// Read muted/volume/source settings from the DB, play a CESP sound if that
+/// source is active (via the shared playback state), or return the system
+/// sound name. Callers only need to handle the system-sound path.
+pub fn resolve_notification(
+    db: &Database,
+    cesp_playback: &std::sync::Mutex<claudette::cesp::SoundPlaybackState>,
+    event: NotificationEvent,
+) -> ResolvedSound {
+    let db_get = |key: &str| db.get_app_setting(key).ok().flatten();
+
+    let muted = db_get("cesp_muted").is_some_and(|v| v == "true");
+    let volume: f64 = db_get("cesp_volume")
+        .and_then(|v| v.parse().ok())
+        .filter(|v: &f64| v.is_finite())
+        .unwrap_or(1.0)
+        .clamp(0.0, 1.0);
+
+    let sound = if muted || volume <= 0.0 {
+        "None".to_string()
+    } else if db_get("sound_source").as_deref() == Some("openpeon") {
+        if let Ok(mut playback) = cesp_playback.lock() {
+            claudette::cesp::play_cesp_sound_for_event_with_state(
+                event.cesp_event_name(),
+                &mut playback,
+                &db_get,
+            );
+        }
+        "None".to_string()
+    } else {
+        resolve_notification_sound(db, event)
+    };
+
+    ResolvedSound { sound, volume }
 }
 
 // Baseline tray icons (the ones shipped for the Auto style).
@@ -375,12 +429,21 @@ pub fn notify_attention(app: &AppHandle, workspace_id: &str, kind: AttentionKind
         .map(|w| w.name.clone())
         .unwrap_or_else(|| "An agent".to_string());
 
-    let sound = resolve_notification_sound(&db, NotificationEvent::from(kind));
+    let app_state = app.state::<AppState>();
+    let resolved =
+        resolve_notification(&db, &app_state.cesp_playback, NotificationEvent::from(kind));
 
     let title = "Claudette — Input Required";
     let body = format!("{ws_name} is waiting for your response");
 
-    send_notification(app, workspace_id, title, &body, &sound);
+    send_notification(
+        app,
+        workspace_id,
+        title,
+        &body,
+        &resolved.sound,
+        resolved.volume,
+    );
 
     // Run user-configured notification command (if set).
     // Build a best-effort WorkspaceEnv even when the workspace lookup fails
@@ -583,6 +646,7 @@ pub(crate) fn send_notification(
     title: &str,
     body: &str,
     sound: &str,
+    #[cfg_attr(target_os = "macos", allow(unused))] volume: f64,
 ) {
     // On macOS, use mac-notification-sys directly so we can block for the
     // click response. When the user clicks the notification, show the window
@@ -631,7 +695,7 @@ pub(crate) fn send_notification(
         use tauri_plugin_notification::NotificationExt;
         let _ = app.notification().builder().title(title).body(body).show();
         if sound != "None" {
-            crate::commands::settings::play_notification_sound(sound.to_string());
+            crate::commands::settings::play_notification_sound(sound.to_string(), Some(volume));
         }
     }
 }

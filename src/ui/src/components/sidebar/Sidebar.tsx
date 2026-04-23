@@ -3,6 +3,7 @@ import { useAppStore } from "../../stores/useAppStore";
 import {
   archiveWorkspace,
   reorderRepositories,
+  renameWorkspace,
   restoreWorkspace,
   generateWorkspaceName,
   createWorkspace,
@@ -96,6 +97,11 @@ export const Sidebar = memo(function Sidebar() {
     [workspaces],
   );
   const spinnerChar = useSpinnerFrame(anyRunning);
+
+  const [renamingWsId, setRenamingWsId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  const renameCancelledRef = useRef(false);
 
   const creatingRef = useRef(false);
   const archivingRef = useRef<Set<string>>(new Set());
@@ -256,6 +262,22 @@ export const Sidebar = memo(function Sidebar() {
     }
   }, [updateWorkspace]);
 
+  const handleRenameSubmit = useCallback(async (wsId: string) => {
+    const trimmed = renameValue.trim();
+    const ws = workspaces.find((w) => w.id === wsId);
+    if (!trimmed || trimmed === ws?.name) {
+      setRenamingWsId(null);
+      return;
+    }
+    try {
+      await renameWorkspace(wsId, trimmed);
+      updateWorkspace(wsId, { name: trimmed });
+    } catch (e) {
+      console.error("Failed to rename workspace:", e);
+    }
+    setRenamingWsId(null);
+  }, [renameValue, workspaces, updateWorkspace]);
+
   const renderWorkspace = (ws: typeof workspaces[number]) => {
     const badge: "ask" | "plan" | "done" | null =
       agentQuestions[ws.id] ? "ask" :
@@ -291,6 +313,13 @@ export const Sidebar = memo(function Sidebar() {
             {spinnerChar}
           </span>
         ) : (() => {
+          if (ws.status === "Archived") {
+            return (
+              <span className={styles.statusIcon} title="Archived">
+                <Archive size={14} style={{ color: "var(--text-dim)" }} />
+              </span>
+            );
+          }
           const summary = scmSummary[ws.id];
           if (summary?.hasPr) {
             const prState = summary.prState;
@@ -319,9 +348,43 @@ export const Sidebar = memo(function Sidebar() {
           );
         })()}
         <div className={styles.wsInfo}>
-          <span className={styles.wsName}>
-            {ws.name}
-          </span>
+          {renamingWsId === ws.id ? (
+            <input
+              ref={renameInputRef}
+              className={styles.wsNameInput}
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onBlur={() => {
+                if (renameCancelledRef.current) {
+                  renameCancelledRef.current = false;
+                  return;
+                }
+                handleRenameSubmit(ws.id);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleRenameSubmit(ws.id);
+                if (e.key === "Escape") {
+                  renameCancelledRef.current = true;
+                  setRenamingWsId(null);
+                }
+              }}
+              autoFocus
+              onClick={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
+              aria-label="Rename workspace"
+            />
+          ) : (
+            <span
+              className={styles.wsName}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                setRenamingWsId(ws.id);
+                setRenameValue(ws.name);
+              }}
+            >
+              {ws.name}
+            </span>
+          )}
           <span className={styles.wsBranch}>{ws.branch_name}</span>
           {(() => {
             const commandState = workspaceTerminalCommands[ws.id];

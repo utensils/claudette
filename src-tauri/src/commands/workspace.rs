@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::process::Command as TokioCommand;
 
 use claudette::agent;
@@ -155,6 +155,16 @@ pub async fn create_workspace(
     };
 
     crate::tray::rebuild_tray(&app);
+
+    let app_state = app.state::<crate::state::AppState>();
+    let resolved = crate::tray::resolve_notification(
+        &db,
+        &app_state.cesp_playback,
+        crate::tray::NotificationEvent::SessionStart,
+    );
+    if resolved.sound != "None" {
+        crate::commands::settings::play_notification_sound(resolved.sound, Some(resolved.volume));
+    }
 
     Ok(CreateWorkspaceResult {
         workspace: ws,
@@ -545,6 +555,35 @@ pub async fn delete_workspace(
         supervisor.remove_repo(&repo_id).await;
         let _ = app.emit("mcp-status-cleared", &repo_id);
     }
+
+    crate::tray::rebuild_tray(&app);
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn rename_workspace(
+    id: String,
+    new_name: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let trimmed = new_name.trim().to_string();
+    if !is_valid_workspace_name(&trimmed) {
+        return Err("Invalid workspace name. Use letters, numbers, and hyphens only.".into());
+    }
+    if trimmed.len() > 60 {
+        return Err("Workspace name must be 60 characters or fewer".into());
+    }
+
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    db.update_workspace_name(&id, &trimmed).map_err(|e| {
+        if e.to_string().contains("UNIQUE constraint failed") {
+            "A workspace with this name already exists in this repository".into()
+        } else {
+            e.to_string()
+        }
+    })?;
 
     crate::tray::rebuild_tray(&app);
 

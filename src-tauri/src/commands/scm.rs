@@ -617,7 +617,13 @@ async fn auto_archive_workspace(
     pr_number: Option<u64>,
 ) {
     // All DB work in a block (Database is not Send — must not hold across .await)
-    let archive_info: Option<(String, String, Option<String>, Option<String>, String)> = {
+    let archive_info: Option<(
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        crate::tray::ResolvedSound,
+    )> = {
         let db = match Database::open(&app_state.db_path) {
             Ok(db) => db,
             Err(e) => {
@@ -640,8 +646,11 @@ async fn auto_archive_workspace(
             .flatten()
             .map(|r| r.path);
 
-        let sound =
-            crate::tray::resolve_notification_sound(&db, crate::tray::NotificationEvent::Finished);
+        let resolved = crate::tray::resolve_notification(
+            &db,
+            &app_state.cesp_playback,
+            crate::tray::NotificationEvent::Finished,
+        );
 
         // Update DB status
         let _ = db.delete_terminal_tabs_for_workspace(workspace_id);
@@ -656,11 +665,11 @@ async fn auto_archive_workspace(
             ws.name.clone(),
             ws.worktree_path.clone(),
             repo_path,
-            sound,
+            resolved,
         ))
     };
 
-    let Some((ws_id, ws_name, wt_path, repo_path, sound)) = archive_info else {
+    let Some((ws_id, ws_name, wt_path, repo_path, resolved)) = archive_info else {
         return;
     };
 
@@ -688,7 +697,14 @@ async fn auto_archive_workspace(
         }
         None => format!("Workspace \u{2018}{ws_name}\u{2019} archived \u{2014} PR merged"),
     };
-    crate::tray::send_notification(handle, "", "Claudette", &body, &sound);
+    crate::tray::send_notification(
+        handle,
+        "",
+        "Claudette",
+        &body,
+        &resolved.sound,
+        resolved.volume,
+    );
 
     let mut payload = serde_json::json!({
         "workspace_id": ws_id,
