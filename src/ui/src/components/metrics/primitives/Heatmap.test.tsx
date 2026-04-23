@@ -8,7 +8,9 @@ describe("Heatmap", () => {
     const width = 13 * (11 + 2) - 2;
     const height = 7 * (11 + 2) - 2;
     expect(html).toContain(`viewBox="0 0 ${width} ${height}"`);
-    expect(html).toMatch(/aspect-ratio:\s*167\s*\/\s*89/);
+    expect(html).toMatch(
+      new RegExp(`aspect-ratio:\\s*${width}\\s*/\\s*${height}`)
+    );
   });
 
   it("propagates aspect-ratio when custom dimensions are supplied", () => {
