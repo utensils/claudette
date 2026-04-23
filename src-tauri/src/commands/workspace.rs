@@ -547,7 +547,8 @@ pub async fn archive_workspace(
     }
 
     // Stop any running agents and clear sessions so tray state stays consistent.
-    let ended_sids: Vec<String> = {
+    // Collect PIDs and session IDs under the lock, then stop processes outside it.
+    let (ended_sids, pids_to_stop): (Vec<String>, Vec<u32>) = {
         let mut agents = state.agents.write().await;
         let to_remove: Vec<String> = agents
             .iter()
@@ -555,18 +556,22 @@ pub async fn archive_workspace(
             .map(|(k, _)| k.clone())
             .collect();
         let mut sids = Vec::new();
+        let mut pids = Vec::new();
         for key in to_remove {
             if let Some(session) = agents.remove(&key) {
                 if !session.claude_session_id.is_empty() {
                     sids.push(session.claude_session_id);
                 }
                 if let Some(pid) = session.active_pid {
-                    let _ = claudette::agent::stop_agent(pid).await;
+                    pids.push(pid);
                 }
             }
         }
-        sids
+        (sids, pids)
     };
+    for pid in pids_to_stop {
+        let _ = claudette::agent::stop_agent(pid).await;
+    }
     for sid in &ended_sids {
         let _ = db.end_agent_session(sid, true);
     }
@@ -655,20 +660,21 @@ pub async fn delete_workspace(
     let repo = repos.iter().find(|r| r.id == repo_id);
 
     // Stop any running agents and clear sessions so tray state stays consistent.
-    {
+    // Collect PIDs under the lock, then stop processes outside it.
+    let pids_to_stop: Vec<u32> = {
         let mut agents = state.agents.write().await;
         let to_remove: Vec<String> = agents
             .iter()
             .filter(|(_, s)| s.workspace_id == id)
             .map(|(k, _)| k.clone())
             .collect();
-        for key in to_remove {
-            if let Some(session) = agents.remove(&key)
-                && let Some(pid) = session.active_pid
-            {
-                let _ = claudette::agent::stop_agent(pid).await;
-            }
-        }
+        to_remove
+            .into_iter()
+            .filter_map(|key| agents.remove(&key).and_then(|s| s.active_pid))
+            .collect()
+    };
+    for pid in pids_to_stop {
+        let _ = claudette::agent::stop_agent(pid).await;
     }
 
     if let Some(repo) = repo {

@@ -1125,13 +1125,15 @@ async fn handle_archive_chat_session(
     let workspace_id = session.workspace_id.clone();
 
     // Stop and remove the live agent for this session.
-    {
+    // Capture the PID under the lock, then drop the lock before the async stop.
+    let pid_to_stop = {
         let mut agents = state.agents.write().await;
-        if let Some(mut agent) = agents.remove(session_id)
-            && let Some(pid) = agent.active_pid.take()
-        {
-            let _ = agent::stop_agent(pid).await;
-        }
+        agents
+            .remove(session_id)
+            .and_then(|mut agent| agent.active_pid.take())
+    };
+    if let Some(pid) = pid_to_stop {
+        let _ = agent::stop_agent(pid).await;
     }
 
     let fresh = db
