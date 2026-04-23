@@ -383,10 +383,15 @@ pub async fn create_worktree(
     base_branch_override: Option<&str>,
     remote_override: Option<&str>,
 ) -> Result<String, GitError> {
-    let _ = fetch_remote(repo_path, remote_override).await;
+    let effective_remote = remote_override.map(|r| r.to_string()).or_else(|| {
+        base_branch_override
+            .and_then(|b| b.split_once('/'))
+            .map(|(r, _)| r.to_string())
+    });
+    let _ = fetch_remote(repo_path, effective_remote.as_deref()).await;
     let base = match base_branch_override {
         Some(b) => b.to_string(),
-        None => default_branch(repo_path, remote_override).await?,
+        None => default_branch(repo_path, effective_remote.as_deref()).await?,
     };
 
     // Verify the base ref points to a real commit (symbolic-ref HEAD returns

@@ -50,7 +50,6 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
   const [repoConfig, setRepoConfig] = useState<RepoConfigInfo | null>(null);
   const [mcpServers, setMcpServers] = useState<SavedMcpServer[]>([]);
   const [archiveOnMerge, setArchiveOnMerge] = useState<"inherit" | "true" | "false">("inherit");
-  const defaultBranches = useAppStore((s) => s.defaultBranches);
   const setDefaultBranches = useAppStore((s) => s.setDefaultBranches);
   const iconPopoverRef = useRef<HTMLDivElement>(null);
 
@@ -77,12 +76,14 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
   }, [repoId]);
 
   useEffect(() => {
+    let cancelled = false;
     listGitRemotes(repoId)
-      .then(setAvailableRemotes)
-      .catch(() => setAvailableRemotes([]));
+      .then((remotes) => { if (!cancelled) setAvailableRemotes(remotes); })
+      .catch(() => { if (!cancelled) setAvailableRemotes([]); });
     listGitRemoteBranches(repoId)
-      .then(setAvailableBranches)
-      .catch(() => setAvailableBranches([]));
+      .then((branches) => { if (!cancelled) setAvailableBranches(branches); })
+      .catch(() => { if (!cancelled) setAvailableBranches([]); });
+    return () => { cancelled = true; };
   }, [repoId]);
 
   useEffect(() => {
@@ -235,7 +236,8 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
         if (updates.base_branch !== undefined) {
           getDefaultBranch(repoId).then((branch) => {
             if (branch) {
-              setDefaultBranches({ ...defaultBranches, [repoId]: branch });
+              const current = useAppStore.getState().defaultBranches;
+              setDefaultBranches({ ...current, [repoId]: branch });
             }
           });
         }
@@ -243,7 +245,7 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
         setError(String(e));
       }
     },
-    [repoId, updateRepo, defaultBranches, setDefaultBranches]
+    [repoId, updateRepo, setDefaultBranches]
   );
 
   if (!repo) {
