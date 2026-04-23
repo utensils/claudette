@@ -232,8 +232,8 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
           base_branch: finalBaseBranch,
           default_remote: finalDefaultRemote,
         });
-        // Refresh the displayed default branch when base_branch changes.
-        if (updates.base_branch !== undefined) {
+        // Refresh the displayed default branch when either override changes.
+        if (updates.base_branch !== undefined || updates.default_remote !== undefined) {
           getDefaultBranch(repoId).then((branch) => {
             if (branch) {
               const current = useAppStore.getState().defaultBranches;

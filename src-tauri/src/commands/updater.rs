@@ -101,7 +101,11 @@ pub async fn install_pending_update(
                     total = c;
                 }
                 downloaded += chunk_len as u64;
-                let pct = (downloaded * 100).checked_div(total).unwrap_or(0).min(100) as u32;
+                let pct = downloaded
+                    .checked_mul(100)
+                    .and_then(|v| v.checked_div(total))
+                    .unwrap_or(0)
+                    .min(100) as u32;
                 let _ = app_for_cb.emit("updater://progress", pct);
             },
             || {},
