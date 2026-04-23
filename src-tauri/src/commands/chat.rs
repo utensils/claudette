@@ -1416,7 +1416,9 @@ pub async fn send_chat_message(
                         .get(&chat_session_id_for_stream)
                         .map(|s| s.claude_session_id.clone())
                         .unwrap_or_default();
-                    let attn = agents.get(&chat_session_id_for_stream).is_some_and(|s| s.needs_attention);
+                    let attn = agents
+                        .get(&chat_session_id_for_stream)
+                        .is_some_and(|s| s.needs_attention);
                     (sid, attn)
                 };
                 // Rebuild tray so it reflects the idle state. Without this,
@@ -1532,7 +1534,9 @@ pub async fn send_chat_message(
                     )
                     .await;
                 }
-                let needs_attention_now = agents.get(&chat_session_id_for_stream).is_some_and(|s| s.needs_attention);
+                let needs_attention_now = agents
+                    .get(&chat_session_id_for_stream)
+                    .is_some_and(|s| s.needs_attention);
                 let app_state = app.state::<crate::state::AppState>();
                 if !needs_attention_now && !notified_via_result {
                     let event = if exit_code == Some(0) {
