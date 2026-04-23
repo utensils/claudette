@@ -293,6 +293,23 @@ mod tests {
         dir
     }
 
+    /// Return a fresh SQLite DB in a sibling tempdir to the worktree,
+    /// matching production layout (the app's DB lives under
+    /// `~/.claudette/`, never inside a managed worktree). Putting the
+    /// test DB *inside* `setup_test_repo`'s worktree would make
+    /// `restore_snapshot` — which lists and deletes every non-snapshot
+    /// file under the worktree — try to delete `test.db` while the test
+    /// still holds an open rusqlite connection to it. On Windows that
+    /// triggers `ERROR_USER_MAPPED_FILE` (1224) because SQLite
+    /// memory-maps part of the DB; on Unix the unlink silently
+    /// succeeds and masks the fact that the test was doing something
+    /// unrealistic. Either way, the DB doesn't belong in the worktree.
+    fn make_db_outside_worktree() -> (TempDir, std::path::PathBuf) {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = db_dir.path().join("test.db");
+        (db_dir, db_path)
+    }
+
     #[tokio::test]
     async fn test_collect_worktree_files() {
         let dir = setup_test_repo().await;
@@ -378,7 +395,7 @@ mod tests {
             .unwrap();
 
         // Save snapshot to DB
-        let db_path = dir.path().join("test.db");
+        let (_db_dir, db_path) = make_db_outside_worktree();
         let db = crate::db::Database::open(&db_path).unwrap();
         db.execute_batch(TEST_SEED_SQL).unwrap();
 
@@ -426,7 +443,7 @@ mod tests {
             .await
             .unwrap();
 
-        let db_path = dir.path().join("test.db");
+        let (_db_dir, db_path) = make_db_outside_worktree();
         let db = crate::db::Database::open(&db_path).unwrap();
         db.execute_batch(TEST_SEED_SQL).unwrap();
 
@@ -454,7 +471,7 @@ mod tests {
             .await
             .unwrap();
 
-        let db_path = dir.path().join("test.db");
+        let (_db_dir, db_path) = make_db_outside_worktree();
         let db = crate::db::Database::open(&db_path).unwrap();
         db.execute_batch(TEST_SEED_SQL).unwrap();
 
@@ -489,7 +506,7 @@ mod tests {
             .await
             .unwrap();
 
-        let db_path = dir.path().join("test.db");
+        let (_db_dir, db_path) = make_db_outside_worktree();
         let db = crate::db::Database::open(&db_path).unwrap();
         db.execute_batch(TEST_SEED_SQL).unwrap();
 

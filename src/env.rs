@@ -31,6 +31,22 @@ pub fn shell_path() -> Option<&'static OsString> {
     SHELL_PATH.get_or_init(login_shell_path_probe).as_ref()
 }
 
+/// Is the login-shell PATH cache already populated?
+///
+/// Used by async-context callers (`resolve_git_path_blocking`) that want
+/// to benefit from the enriched PATH when available but must avoid
+/// triggering the 5-second shell probe inline on a Tokio worker. On
+/// Windows there is no shell probe to warm, so this is always `true`.
+#[cfg(unix)]
+pub fn shell_path_is_cached() -> bool {
+    SHELL_PATH.get().is_some()
+}
+
+#[cfg(not(unix))]
+pub fn shell_path_is_cached() -> bool {
+    true
+}
+
 /// Force the login-shell PATH probe to run to completion, populating the
 /// [`SHELL_PATH`] cache. Call this once at app startup from a thread
 /// where a 5-second block is acceptable (a plain `std::thread::spawn` at
@@ -363,6 +379,12 @@ impl WorkspaceEnv {
 mod tests {
     use super::*;
 
+    /// `/usr/bin` is a Unix-only expectation. On Windows PATH has a
+    /// completely different shape (`C:\Windows\System32;...`) — the
+    /// `enriched_path_is_nonempty` / `..._contains_no_empty_entries`
+    /// tests below give us the platform-agnostic invariants we
+    /// actually care about.
+    #[cfg(unix)]
     #[test]
     fn enriched_path_includes_process_path() {
         let enriched = enriched_path();
@@ -514,6 +536,29 @@ mod tests {
             SHELL_PATH.get().is_some(),
             "prewarm must populate the SHELL_PATH OnceLock on Unix",
         );
+    }
+
+    /// `shell_path_is_cached` is the signal async callers
+    /// (`resolve_git_path_blocking`) use to decide whether they can
+    /// safely call `enriched_path()` without risking the 5 s shell
+    /// probe. On Windows it must always be `true` — no shell probe
+    /// exists on that platform, so there's nothing to wait for.
+    #[cfg(not(unix))]
+    #[test]
+    fn shell_path_is_cached_is_always_true_on_non_unix() {
+        assert!(shell_path_is_cached());
+    }
+
+    /// On Unix the answer depends on whether the probe has run yet.
+    /// Since these tests share a process-wide `OnceLock`, the truthful
+    /// post-prewarm state is the only one we can assert without races
+    /// — but we at least verify the function returns and the value is
+    /// monotonically `true` after the first `prewarm_shell_path()`.
+    #[cfg(unix)]
+    #[test]
+    fn shell_path_is_cached_is_true_after_prewarm() {
+        prewarm_shell_path();
+        assert!(shell_path_is_cached());
     }
 
     // ---- Platform-agnostic expansion tests --------------------------------

@@ -919,11 +919,12 @@ pub async fn run_turn(
 }
 
 /// Stop an agent process by killing it.
+///
+/// Platform-specific: `kill -9 <pid>` on Unix, `taskkill /PID <pid> /T /F`
+/// on Windows. The `/T` flag terminates the whole process tree so MCP
+/// server children are reaped alongside the parent claude process.
 pub async fn stop_agent(pid: u32) -> Result<(), String> {
-    let output = tokio::process::Command::new("kill")
-        .no_console_window()
-        .args(["-9", &pid.to_string()])
-        .output()
+    let output = stop_agent_force(pid)
         .await
         .map_err(|e| format!("Failed to kill agent: {e}"))?;
 
@@ -937,35 +938,101 @@ pub async fn stop_agent(pid: u32) -> Result<(), String> {
     }
 }
 
-/// Gracefully stop an agent process (SIGTERM → wait → SIGKILL).
+/// Platform-specific force-kill invocation. Returns the raw `Output` so
+/// callers can shape their own error messages (or ignore exit status
+/// when probing liveness, as `stop_agent_graceful` does on Unix).
+async fn stop_agent_force(pid: u32) -> std::io::Result<std::process::Output> {
+    #[cfg(unix)]
+    {
+        tokio::process::Command::new("kill")
+            .no_console_window()
+            .args(["-9", &pid.to_string()])
+            .output()
+            .await
+    }
+    #[cfg(windows)]
+    {
+        tokio::process::Command::new("taskkill")
+            .no_console_window()
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .output()
+            .await
+    }
+}
+
+/// Gracefully stop an agent process.
 ///
-/// Sends SIGTERM first and allows up to 500 ms for the process to exit.
-/// Falls back to SIGKILL if the deadline expires. Suitable for tearing
-/// down idle persistent sessions at turn boundaries where we don't need
-/// an instant kill.
+/// On Unix this is SIGTERM → poll up to 500 ms → SIGKILL. On Windows we
+/// issue `taskkill /PID <pid> /T` (no `/F`) first, which sends
+/// `WM_CLOSE` / a CTRL_CLOSE_EVENT equivalent and lets the child exit
+/// cleanly; if it's still alive after the poll window we escalate to
+/// `/F`. Used at idle-session teardown where we don't need an instant
+/// kill.
 pub async fn stop_agent_graceful(pid: u32) -> Result<(), String> {
-    // Send SIGTERM for graceful shutdown.
+    // Send the graceful signal. Errors here are non-fatal — the force
+    // escalation below covers any "process didn't respond" case.
+    #[cfg(unix)]
     let _ = tokio::process::Command::new("kill")
         .no_console_window()
         .args(["-15", &pid.to_string()])
         .output()
         .await;
+    #[cfg(windows)]
+    let _ = tokio::process::Command::new("taskkill")
+        .no_console_window()
+        .args(["/PID", &pid.to_string(), "/T"])
+        .output()
+        .await;
 
-    // Poll for up to 500 ms.
+    // Poll for up to 500 ms. On Unix we use `kill -0` (permission-only
+    // probe, no signal sent) which exits non-zero once the pid is gone.
+    // On Windows `tasklist /FI "PID eq <pid>"` prints a header line
+    // plus one row while the process exists; once the process exits,
+    // it prints an "INFO: No tasks..." line to stderr, so we check for
+    // the pid in stdout.
     for _ in 0..10 {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        if !pid_is_alive(pid).await {
+            return Ok(());
+        }
+    }
+
+    // Escalate to force-kill.
+    stop_agent(pid).await
+}
+
+/// Best-effort liveness probe. Returns `true` if the pid appears to
+/// still be running, `false` if the probe indicates it's gone (or if
+/// the probe itself fails — a failed probe is treated as "dead" so
+/// `stop_agent_graceful` doesn't loop forever on a misbehaving OS).
+async fn pid_is_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
         let probe = tokio::process::Command::new("kill")
             .no_console_window()
             .args(["-0", &pid.to_string()])
             .output()
             .await;
-        if probe.is_ok_and(|o| !o.status.success()) {
-            return Ok(());
+        probe.is_ok_and(|o| o.status.success())
+    }
+    #[cfg(windows)]
+    {
+        let probe = tokio::process::Command::new("tasklist")
+            .no_console_window()
+            .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+            .output()
+            .await;
+        match probe {
+            Ok(o) if o.status.success() => {
+                // /NH suppresses the header; /FO CSV gives one row per
+                // match. An alive pid appears in stdout; a dead one
+                // yields an "INFO: No tasks..." message on stderr and
+                // an empty stdout.
+                !String::from_utf8_lossy(&o.stdout).trim().is_empty()
+            }
+            _ => false,
         }
     }
-
-    // Escalate to SIGKILL.
-    stop_agent(pid).await
 }
 
 // ---------------------------------------------------------------------------

@@ -31,7 +31,14 @@ fn validate_file_path(file_path: &str) -> Result<(), DiffError> {
             "Invalid file path: contains null byte".into(),
         ));
     }
-    if Path::new(file_path).is_absolute() {
+    // Reject platform-absolute paths AND Unix-style rooted paths on any
+    // platform. `Path::is_absolute` on Windows considers only
+    // drive-letter and UNC forms absolute — so `/etc/passwd` would pass
+    // through `is_absolute()` as `false` on a Windows build, defeating
+    // the path-traversal guard. Checking the leading byte directly
+    // closes that gap regardless of host OS.
+    let first_byte = file_path.as_bytes().first().copied();
+    if Path::new(file_path).is_absolute() || first_byte == Some(b'/') || first_byte == Some(b'\\') {
         return Err(DiffError::CommandFailed(
             "Invalid file path: absolute paths are not allowed".into(),
         ));
@@ -849,6 +856,14 @@ mod integration_tests {
         git_cmd(dir, &["init", "-b", "main"]);
         git_cmd(dir, &["config", "user.email", "test@test.com"]);
         git_cmd(dir, &["config", "user.name", "Test"]);
+        // Force LF line endings in the working tree. Git for Windows
+        // defaults to `core.autocrlf=true` globally, which rewrites LF to
+        // CRLF on checkout and would make the revert assertions compare
+        // "keep\r\n" against "keep\n". The production worktree this
+        // module manages is a git worktree created by the app, where we
+        // control the config — so mirroring that in tests is closer to
+        // real conditions, not less accurate.
+        git_cmd(dir, &["config", "core.autocrlf", "false"]);
 
         // Create initial file and commit on main
         std::fs::write(dir.join("file.txt"), "line 1\nline 2\nline 3\n").unwrap();

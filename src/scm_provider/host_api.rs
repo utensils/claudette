@@ -201,16 +201,27 @@ async fn host_exec(
 mod tests {
     use super::*;
 
+    /// Build a context whose `worktree_path` is a real directory so
+    /// `Command::current_dir` actually works. Hardcoding `/tmp` worked
+    /// on Unix but fails on Windows (no `/tmp` → `ERROR_DIRECTORY`).
+    /// `std::env::temp_dir()` resolves per-platform — `/tmp` on Unix,
+    /// `%TEMP%` on Windows.
     fn make_test_ctx() -> HostContext {
+        let tmp = std::env::temp_dir().to_string_lossy().into_owned();
         HostContext {
             plugin_name: "test".to_string(),
-            allowed_clis: vec!["echo".to_string()],
+            // `cargo` is cross-platform, guaranteed to be in PATH on
+            // any Rust CI host, and produces stable human-readable
+            // output. `echo` would be simpler but is a `cmd.exe`
+            // builtin on Windows — there's no `echo.exe` on PATH, so
+            // spawning it directly via `Command::new` fails.
+            allowed_clis: vec!["cargo".to_string()],
             workspace_info: WorkspaceInfo {
                 id: "ws-1".to_string(),
                 name: "test-workspace".to_string(),
                 branch: "main".to_string(),
-                worktree_path: "/tmp".to_string(),
-                repo_path: "/tmp".to_string(),
+                worktree_path: tmp.clone(),
+                repo_path: tmp,
             },
             config: HashMap::new(),
         }
@@ -312,13 +323,16 @@ mod tests {
         let lua = create_lua_vm(ctx).unwrap();
 
         let result: LuaTable = lua
-            .load(r#"return host.exec("echo", {"hello", "world"})"#)
+            .load(r#"return host.exec("cargo", {"--version"})"#)
             .eval_async()
             .await
             .unwrap();
 
         let stdout: String = result.get("stdout").unwrap();
-        assert!(stdout.trim().contains("hello world"));
+        assert!(
+            stdout.trim().starts_with("cargo "),
+            "expected `cargo --version` stdout to start with \"cargo \", got: {stdout:?}",
+        );
         assert_eq!(result.get::<i32>("code").unwrap(), 0);
     }
 
@@ -358,8 +372,12 @@ mod tests {
         let ctx = make_test_ctx();
         let lua = create_lua_vm(ctx).unwrap();
 
+        // Use the allowed cmd — the null-byte check must fire *after*
+        // the allowlist check, so using a non-allowed cmd would hit the
+        // earlier error path and never exercise the branch we want to
+        // cover.
         let result: LuaResult<LuaTable> = lua
-            .load(r#"return host.exec("echo", {"hello\0world"})"#)
+            .load(r#"return host.exec("cargo", {"--version\0"})"#)
             .eval_async()
             .await;
 

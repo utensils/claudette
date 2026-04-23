@@ -85,7 +85,9 @@ mod tests {
 
     /// The trait must be idempotent: calling it twice on the same command
     /// mustn't panic, change the program name, or otherwise corrupt state.
-    /// (On Windows the second call just re-OR's the same creation flag.)
+    /// (`CommandExt::creation_flags` *sets* the value rather than OR-ing,
+    /// so the second call just writes the same flag back — no bit
+    /// accumulation, but the post-state is identical either way.)
     #[test]
     fn repeat_application_is_safe() {
         let mut cmd = std::process::Command::new("true");

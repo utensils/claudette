@@ -347,7 +347,7 @@
               # above, so no separate lld package is needed.
               #
               # clangXwinShim wraps plain `clang` (see its definition above)
-              # to rewrite `/imsvc` → `-imsvc`; `lib.hiPrio` lets it win the
+              # to rewrite `/imsvc` → `-isystem`; `lib.hiPrio` lets it win the
               # buildEnv symlink conflict over clang-unwrapped's own
               # `bin/clang`, while clang-unwrapped's other binaries
               # (clang-cl, clang++, ...) pass through unchanged.
