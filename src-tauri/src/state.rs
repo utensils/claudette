@@ -327,7 +327,8 @@ mod tests {
     fn spawn_sleep() -> (tokio::process::Child, u32) {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let child = tokio::process::Command::new("sleep").no_console_window()
+            let child = tokio::process::Command::new("sleep")
+                .no_console_window()
                 .arg("3600")
                 .kill_on_drop(true)
                 .spawn()
@@ -385,7 +386,8 @@ mod tests {
     fn local_server_state_drop_kills_child() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let (child, pid) = rt.block_on(async {
-            let child = tokio::process::Command::new("sleep").no_console_window()
+            let child = tokio::process::Command::new("sleep")
+                .no_console_window()
                 .arg("3600")
                 .kill_on_drop(true)
                 .spawn()

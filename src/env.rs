@@ -11,10 +11,10 @@
 //! It also defines [`WorkspaceEnv`], the set of `CLAUDETTE_*` environment
 //! variables injected into every subprocess.
 
+use crate::process::CommandWindowExt as _;
 use std::ffi::OsString;
 use std::path::Path;
 use std::sync::OnceLock;
-use crate::process::CommandWindowExt as _;
 
 /// Cached login-shell PATH, resolved once per process lifetime.
 static SHELL_PATH: OnceLock<Option<OsString>> = OnceLock::new();
@@ -237,7 +237,8 @@ fn login_shell_path_probe() -> Option<OsString> {
         r#"printf '%s\n' "$PATH""#
     };
 
-    let mut child = std::process::Command::new(&shell).no_console_window()
+    let mut child = std::process::Command::new(&shell)
+        .no_console_window()
         .args(["-l", "-c", cmd_arg])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -615,8 +616,8 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn expand_replaces_defined_var() {
-        let system_root = std::env::var("SystemRoot")
-            .expect("SystemRoot must be defined in a Windows test env");
+        let system_root =
+            std::env::var("SystemRoot").expect("SystemRoot must be defined in a Windows test env");
         let expanded = expand_env_vars_windows(r"%SystemRoot%\System32");
         assert_eq!(expanded, format!(r"{system_root}\System32"));
     }
@@ -678,8 +679,8 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn expand_preserves_non_ascii_around_var_substitution() {
-        let system_root = std::env::var("SystemRoot")
-            .expect("SystemRoot must be defined in a Windows test env");
+        let system_root =
+            std::env::var("SystemRoot").expect("SystemRoot must be defined in a Windows test env");
         let out = expand_env_vars_windows(r"前%SystemRoot%後");
         assert_eq!(out, format!("前{system_root}後"));
     }

@@ -1,8 +1,8 @@
 use std::fmt;
 use std::path::Path;
 
-use tokio::process::Command;
 use crate::process::CommandWindowExt as _;
+use tokio::process::Command;
 
 use crate::model::diff::{
     DiffFile, DiffHunk, DiffLine, DiffLineType, FileDiff, FileStatus, StagedDiffFiles,
@@ -45,7 +45,8 @@ fn validate_file_path(file_path: &str) -> Result<(), DiffError> {
 }
 
 async fn run_git(path: &str, args: &[&str]) -> Result<String, DiffError> {
-    let output = Command::new(&crate::git::resolve_git_path_blocking()).no_console_window()
+    let output = Command::new(crate::git::resolve_git_path_blocking())
+        .no_console_window()
         .args(["-C", path])
         .args(args)
         .output()
@@ -271,7 +272,8 @@ pub async fn file_diff(
     if !ls_output.trim().is_empty() {
         // Untracked file — diff against /dev/null
         let full_path = Path::new(worktree_path).join(file_path);
-        let output = Command::new(&crate::git::resolve_git_path_blocking()).no_console_window()
+        let output = Command::new(crate::git::resolve_git_path_blocking())
+            .no_console_window()
             .args(["-C", worktree_path])
             .args([
                 "diff",
@@ -323,7 +325,8 @@ pub async fn file_diff_for_layer(
         Some("untracked") => {
             // Diff against /dev/null for untracked files
             let full_path = Path::new(worktree_path).join(file_path);
-            let output = Command::new(&crate::git::resolve_git_path_blocking()).no_console_window()
+            let output = Command::new(crate::git::resolve_git_path_blocking())
+                .no_console_window()
                 .args(["-C", worktree_path])
                 .args([
                     "diff",
@@ -833,7 +836,8 @@ mod integration_tests {
     use std::process::Command as StdCommand;
 
     fn git_cmd(dir: &Path, args: &[&str]) -> String {
-        let output = StdCommand::new(&crate::git::resolve_git_path_blocking()).no_console_window()
+        let output = StdCommand::new(crate::git::resolve_git_path_blocking())
+            .no_console_window()
             .args(["-C", dir.to_str().unwrap()])
             .args(args)
             .output()

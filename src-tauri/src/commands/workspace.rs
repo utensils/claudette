@@ -898,7 +898,8 @@ pub async fn open_workspace_in_terminal(worktree_path: String) -> Result<(), Str
             end tell"#
         );
 
-        tokio::process::Command::new("osascript").no_console_window()
+        tokio::process::Command::new("osascript")
+            .no_console_window()
             .arg("-e")
             .arg(&script)
             .spawn()

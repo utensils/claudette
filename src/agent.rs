@@ -920,7 +920,8 @@ pub async fn run_turn(
 
 /// Stop an agent process by killing it.
 pub async fn stop_agent(pid: u32) -> Result<(), String> {
-    let output = tokio::process::Command::new("kill").no_console_window()
+    let output = tokio::process::Command::new("kill")
+        .no_console_window()
         .args(["-9", &pid.to_string()])
         .output()
         .await
@@ -944,7 +945,8 @@ pub async fn stop_agent(pid: u32) -> Result<(), String> {
 /// an instant kill.
 pub async fn stop_agent_graceful(pid: u32) -> Result<(), String> {
     // Send SIGTERM for graceful shutdown.
-    let _ = tokio::process::Command::new("kill").no_console_window()
+    let _ = tokio::process::Command::new("kill")
+        .no_console_window()
         .args(["-15", &pid.to_string()])
         .output()
         .await;
@@ -952,7 +954,8 @@ pub async fn stop_agent_graceful(pid: u32) -> Result<(), String> {
     // Poll for up to 500 ms.
     for _ in 0..10 {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        let probe = tokio::process::Command::new("kill").no_console_window()
+        let probe = tokio::process::Command::new("kill")
+            .no_console_window()
             .args(["-0", &pid.to_string()])
             .output()
             .await;
@@ -2451,12 +2454,8 @@ mod tests {
         let home = PathBuf::from(r"C:\Users\user");
         let expected = home.join(r".local\bin\claude.exe");
         let expected_clone = expected.clone();
-        let result = resolve_claude_path_inner(
-            Some(home),
-            None,
-            || None,
-            move |p| p == expected_clone,
-        );
+        let result =
+            resolve_claude_path_inner(Some(home), None, || None, move |p| p == expected_clone);
         assert_eq!(result, expected.into_os_string());
     }
 
@@ -2469,12 +2468,8 @@ mod tests {
         let home = PathBuf::from(r"C:\Users\user");
         let expected = home.join(r"AppData\Roaming\npm\claude.cmd");
         let expected_clone = expected.clone();
-        let result = resolve_claude_path_inner(
-            Some(home),
-            None,
-            || None,
-            move |p| p == expected_clone,
-        );
+        let result =
+            resolve_claude_path_inner(Some(home), None, || None, move |p| p == expected_clone);
         assert_eq!(result, expected.into_os_string());
     }
 
@@ -2937,7 +2932,8 @@ mod tests {
     #[tokio::test]
     async fn test_stop_agent_graceful_stops_process_before_escalation() {
         // Spawn a process that traps SIGTERM and exits cleanly.
-        let mut child = tokio::process::Command::new("sh").no_console_window()
+        let mut child = tokio::process::Command::new("sh")
+            .no_console_window()
             .args(["-c", "trap 'exit 0' TERM; sleep 5"])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -2958,7 +2954,8 @@ mod tests {
             .expect("failed to reap child");
 
         // kill -0 should fail for a dead process.
-        let probe = tokio::process::Command::new("kill").no_console_window()
+        let probe = tokio::process::Command::new("kill")
+            .no_console_window()
             .args(["-0", &pid.to_string()])
             .output()
             .await;

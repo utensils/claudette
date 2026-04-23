@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use crate::process::CommandWindowExt as _;
 use mlua::LuaSerdeExt;
 use mlua::prelude::*;
 use tokio::process::Command;
-use crate::process::CommandWindowExt as _;
 
 /// Context passed to the Lua host API functions.
 #[derive(Debug, Clone)]

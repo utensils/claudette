@@ -214,10 +214,16 @@ mod opener {
         let cmd = Command::new("open").no_console_window().arg(path).spawn();
 
         #[cfg(target_os = "linux")]
-        let cmd = Command::new("xdg-open").no_console_window().arg(path).spawn();
+        let cmd = Command::new("xdg-open")
+            .no_console_window()
+            .arg(path)
+            .spawn();
 
         #[cfg(target_os = "windows")]
-        let cmd = Command::new("cmd").no_console_window().args(["/C", "start", "", path]).spawn();
+        let cmd = Command::new("cmd")
+            .no_console_window()
+            .args(["/C", "start", "", path])
+            .spawn();
 
         #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
         let cmd = Err(std::io::Error::new(

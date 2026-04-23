@@ -3,9 +3,9 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use crate::process::CommandWindowExt as _;
 use serde::Serialize;
 use tokio::process::Command;
-use crate::process::CommandWindowExt as _;
 
 /// Resolve the `git` binary once and reuse the absolute path for every
 /// subsequent call. Caching matters because git is invoked dozens of times
@@ -178,7 +178,8 @@ impl fmt::Display for GitError {
 impl std::error::Error for GitError {}
 
 async fn run_git(repo_path: &str, args: &[&str]) -> Result<String, GitError> {
-    let output = Command::new(&crate::git::resolve_git_path_blocking()).no_console_window()
+    let output = Command::new(crate::git::resolve_git_path_blocking())
+        .no_console_window()
         .args(["-C", repo_path])
         .args(args)
         .output()
@@ -196,7 +197,8 @@ async fn run_git(repo_path: &str, args: &[&str]) -> Result<String, GitError> {
 /// Read `git config user.name` from global config (no repo required).
 /// Returns `None` if not configured.
 pub async fn get_git_username() -> Result<Option<String>, GitError> {
-    let output = Command::new(&crate::git::resolve_git_path_blocking()).no_console_window()
+    let output = Command::new(crate::git::resolve_git_path_blocking())
+        .no_console_window()
         .args(["config", "--global", "user.name"])
         .output()
         .await
@@ -324,7 +326,8 @@ pub async fn fetch_remote(repo_path: &str) -> Result<(), GitError> {
     };
 
     // Spawn with kill_on_drop so the child is terminated if the timeout fires.
-    let mut child = match Command::new(&crate::git::resolve_git_path_blocking()).no_console_window()
+    let mut child = match Command::new(crate::git::resolve_git_path_blocking())
+        .no_console_window()
         .args(["-C", repo_path, "fetch", &remote])
         .kill_on_drop(true)
         .stdout(std::process::Stdio::null())
@@ -987,7 +990,8 @@ mod tests {
         // Clone from bare remote.
         let clone_dir = tempfile::tempdir().unwrap();
         let clone_path = clone_dir.path().to_str().unwrap();
-        let output = tokio::process::Command::new(&crate::git::resolve_git_path_blocking()).no_console_window()
+        let output = tokio::process::Command::new(crate::git::resolve_git_path_blocking())
+            .no_console_window()
             .args(["clone", remote_path, clone_path])
             .output()
             .await
@@ -1019,7 +1023,8 @@ mod tests {
         // Push a new commit directly to the bare remote via a temp worktree.
         let pusher = tempfile::tempdir().unwrap();
         let pusher_path = pusher.path().to_str().unwrap();
-        let out = tokio::process::Command::new(&crate::git::resolve_git_path_blocking()).no_console_window()
+        let out = tokio::process::Command::new(crate::git::resolve_git_path_blocking())
+            .no_console_window()
             .args(["clone", remote_path, pusher_path])
             .output()
             .await
@@ -1280,9 +1285,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_resolve_git_falls_back_system_unix() {
-        let result = resolve_git_path_inner(None, None, |p| {
-            p == Path::new("/usr/local/bin/git")
-        });
+        let result = resolve_git_path_inner(None, None, |p| p == Path::new("/usr/local/bin/git"));
         assert_eq!(result, OsString::from("/usr/local/bin/git"));
     }
 

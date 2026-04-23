@@ -241,7 +241,8 @@ pub async fn detect_installed_apps(state: State<'_, AppState>) -> Result<Vec<Det
 /// Launch an app using macOS `open -a` command.
 #[cfg(target_os = "macos")]
 async fn open_macos_app(app_name: &str, worktree_path: &str) -> Result<(), String> {
-    tokio::process::Command::new("open").no_console_window()
+    tokio::process::Command::new("open")
+        .no_console_window()
         .args(["-a", app_name, worktree_path])
         .spawn()
         .map_err(|e| format!("Failed to launch {app_name}: {e}"))?;
@@ -286,7 +287,8 @@ end run"#
         other => return Err(format!("No AppleScript handler for app '{other}'")),
     };
 
-    tokio::process::Command::new("osascript").no_console_window()
+    tokio::process::Command::new("osascript")
+        .no_console_window()
         .arg("-e")
         .arg(script)
         .arg("--")
@@ -369,7 +371,8 @@ end run"#,
         )
     };
 
-    tokio::process::Command::new("osascript").no_console_window()
+    tokio::process::Command::new("osascript")
+        .no_console_window()
         .arg("-e")
         .arg(script)
         .arg("--")
@@ -522,7 +525,8 @@ pub async fn open_workspace_in_app(
         .map(|a| a.replace("{}", &worktree_path))
         .collect();
 
-    tokio::process::Command::new(&detected.detected_path).no_console_window()
+    tokio::process::Command::new(&detected.detected_path)
+        .no_console_window()
         .args(&args)
         .spawn()
         .map_err(|e| format!("Failed to launch {}: {e}", entry.name))?;

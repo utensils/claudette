@@ -424,7 +424,8 @@ pub fn play_audio_file(path: &Path, volume: f64) {
             .unwrap_or("")
             .to_lowercase();
         let result = if ext == "ogg" || ext == "oga" {
-            std::process::Command::new("ffplay").no_console_window()
+            std::process::Command::new("ffplay")
+                .no_console_window()
                 .args(["-nodisp", "-autoexit", "-volume"])
                 .arg(format!("{}", (volume * 100.0) as u32))
                 .arg(path)
@@ -432,7 +433,8 @@ pub fn play_audio_file(path: &Path, volume: f64) {
                 .stderr(std::process::Stdio::null())
                 .spawn()
         } else {
-            std::process::Command::new("afplay").no_console_window()
+            std::process::Command::new("afplay")
+                .no_console_window()
                 .arg("-v")
                 .arg(format!("{volume}"))
                 .arg(path)
@@ -451,7 +453,8 @@ pub fn play_audio_file(path: &Path, volume: f64) {
             .unwrap_or("")
             .to_lowercase();
         let result = if ext == "mp3" {
-            std::process::Command::new("ffplay").no_console_window()
+            std::process::Command::new("ffplay")
+                .no_console_window()
                 .args(["-nodisp", "-autoexit", "-volume"])
                 .arg(format!("{}", (volume * 100.0) as u32))
                 .arg(path)
@@ -460,13 +463,15 @@ pub fn play_audio_file(path: &Path, volume: f64) {
                 .spawn()
         } else {
             let pa_volume = (volume * 65536.0) as u32;
-            std::process::Command::new("paplay").no_console_window()
+            std::process::Command::new("paplay")
+                .no_console_window()
                 .arg("--volume")
                 .arg(pa_volume.to_string())
                 .arg(path)
                 .spawn()
                 .or_else(|_| {
-                    std::process::Command::new("ffplay").no_console_window()
+                    std::process::Command::new("ffplay")
+                        .no_console_window()
                         .args(["-nodisp", "-autoexit", "-volume"])
                         .arg(format!("{}", (volume * 100.0) as u32))
                         .arg(path)
