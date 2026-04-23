@@ -4,6 +4,7 @@ use std::time::Duration;
 use mlua::LuaSerdeExt;
 use mlua::prelude::*;
 use tokio::process::Command;
+use crate::process::CommandWindowExt as _;
 
 /// Context passed to the Lua host API functions.
 #[derive(Debug, Clone)]
@@ -154,6 +155,7 @@ async fn host_exec(
     // Build and execute the command with kill_on_drop so timed-out
     // processes don't leak.
     let mut command = Command::new(cmd);
+    command.no_console_window();
     command.args(&args);
     command.current_dir(&ctx.workspace_info.worktree_path);
     // macOS GUI apps inherit a minimal launchd PATH, so binaries like

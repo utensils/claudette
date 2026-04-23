@@ -13,6 +13,7 @@
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use crate::process::CommandWindowExt as _;
 
 /// A detected MCP server with its full configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -465,7 +466,7 @@ fn detect_repo_local_mcps(repo_path: &Path) -> Option<Vec<McpServer>> {
 
 /// Check if a file is explicitly gitignored (returns true if ignored).
 fn is_gitignored(repo_path: &Path, file: &str) -> bool {
-    std::process::Command::new("git")
+    std::process::Command::new("git").no_console_window()
         .args(["check-ignore", "-q", file])
         .current_dir(repo_path)
         .stdout(std::process::Stdio::null())
@@ -486,7 +487,7 @@ mod tests {
         let repo = dir.path();
 
         // Init git repo
-        std::process::Command::new("git")
+        std::process::Command::new("git").no_console_window()
             .args(["init"])
             .current_dir(repo)
             .stdout(std::process::Stdio::null())
@@ -501,14 +502,14 @@ mod tests {
         fs::write(repo.join(".claude.json"), mcp_json).unwrap();
 
         // Stage and commit .gitignore so git is functional
-        std::process::Command::new("git")
+        std::process::Command::new("git").no_console_window()
             .args(["add", ".gitignore"])
             .current_dir(repo)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
             .unwrap();
-        std::process::Command::new("git")
+        std::process::Command::new("git").no_console_window()
             .args(["commit", "-m", "init", "--allow-empty"])
             .current_dir(repo)
             .stdout(std::process::Stdio::null())
@@ -546,7 +547,7 @@ mod tests {
         let repo = dir.path();
 
         // Init git repo WITHOUT .gitignore
-        std::process::Command::new("git")
+        std::process::Command::new("git").no_console_window()
             .args(["init"])
             .current_dir(repo)
             .stdout(std::process::Stdio::null())
@@ -669,7 +670,7 @@ mod tests {
     #[test]
     fn test_is_gitignored_false_not_ignored() {
         let dir = TempDir::new().unwrap();
-        std::process::Command::new("git")
+        std::process::Command::new("git").no_console_window()
             .args(["init"])
             .current_dir(dir.path())
             .stdout(std::process::Stdio::null())

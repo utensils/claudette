@@ -5,6 +5,7 @@ use std::path::Path;
 use tokio::process::Command;
 
 use crate::model::CheckpointFile;
+use crate::process::CommandWindowExt as _;
 
 /// Maximum file size to include in a snapshot (10 MB).
 const MAX_SNAPSHOT_FILE_SIZE: u64 = 10 * 1024 * 1024;
@@ -43,7 +44,7 @@ impl From<std::io::Error> for SnapshotError {
 /// Enumerate all files in a worktree that git tracks or would track
 /// (respects .gitignore). Returns NUL-separated paths.
 async fn list_worktree_files(worktree_path: &str) -> Result<Vec<String>, SnapshotError> {
-    let output = Command::new("git")
+    let output = Command::new("git").no_console_window()
         .args(["-C", worktree_path])
         .args([
             "ls-files",
@@ -270,17 +271,17 @@ mod tests {
     async fn setup_test_repo() -> TempDir {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().to_str().unwrap();
-        Command::new("git")
+        Command::new("git").no_console_window()
             .args(["init", path])
             .output()
             .await
             .unwrap();
-        Command::new("git")
+        Command::new("git").no_console_window()
             .args(["-C", path, "config", "user.email", "test@test.com"])
             .output()
             .await
             .unwrap();
-        Command::new("git")
+        Command::new("git").no_console_window()
             .args(["-C", path, "config", "user.name", "Test"])
             .output()
             .await
@@ -297,7 +298,7 @@ mod tests {
         tokio::fs::write(dir.path().join("hello.txt"), b"hello")
             .await
             .unwrap();
-        Command::new("git")
+        Command::new("git").no_console_window()
             .args(["-C", dir_str, "add", "hello.txt"])
             .output()
             .await

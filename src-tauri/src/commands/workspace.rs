@@ -17,6 +17,7 @@ use claudette::model::{AgentStatus, Workspace, WorkspaceStatus};
 use claudette::names::NameGenerator;
 
 use crate::state::AppState;
+use claudette::process::CommandWindowExt as _;
 
 #[derive(Serialize, Clone)]
 pub struct SetupResult {
@@ -278,6 +279,7 @@ async fn resolve_and_run_setup(
     //    scripts won't spawn there without a user-installed shell — the
     //    grandchild-leak on timeout is moot until that is addressed.
     let mut cmd = TokioCommand::new("sh");
+    cmd.no_console_window();
     cmd.arg("-c")
         .arg(&script)
         .current_dir(worktree_path)
@@ -860,6 +862,7 @@ pub async fn open_workspace_in_terminal(worktree_path: String) -> Result<(), Str
         let mut errors = Vec::new();
         for (terminal, args) in &terminals {
             let mut cmd = tokio::process::Command::new(terminal);
+            cmd.no_console_window();
             for arg in args {
                 cmd.arg(arg);
             }
@@ -895,7 +898,7 @@ pub async fn open_workspace_in_terminal(worktree_path: String) -> Result<(), Str
             end tell"#
         );
 
-        tokio::process::Command::new("osascript")
+        tokio::process::Command::new("osascript").no_console_window()
             .arg("-e")
             .arg(&script)
             .spawn()

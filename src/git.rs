@@ -3,6 +3,7 @@ use std::path::Path;
 
 use serde::Serialize;
 use tokio::process::Command;
+use crate::process::CommandWindowExt as _;
 
 #[derive(Debug, Clone)]
 pub enum GitError {
@@ -22,7 +23,7 @@ impl fmt::Display for GitError {
 impl std::error::Error for GitError {}
 
 async fn run_git(repo_path: &str, args: &[&str]) -> Result<String, GitError> {
-    let output = Command::new("git")
+    let output = Command::new("git").no_console_window()
         .args(["-C", repo_path])
         .args(args)
         .output()
@@ -40,7 +41,7 @@ async fn run_git(repo_path: &str, args: &[&str]) -> Result<String, GitError> {
 /// Read `git config user.name` from global config (no repo required).
 /// Returns `None` if not configured.
 pub async fn get_git_username() -> Result<Option<String>, GitError> {
-    let output = Command::new("git")
+    let output = Command::new("git").no_console_window()
         .args(["config", "--global", "user.name"])
         .output()
         .await
@@ -168,7 +169,7 @@ pub async fn fetch_remote(repo_path: &str) -> Result<(), GitError> {
     };
 
     // Spawn with kill_on_drop so the child is terminated if the timeout fires.
-    let mut child = match Command::new("git")
+    let mut child = match Command::new("git").no_console_window()
         .args(["-C", repo_path, "fetch", &remote])
         .kill_on_drop(true)
         .stdout(std::process::Stdio::null())
@@ -830,7 +831,7 @@ mod tests {
         // Clone from bare remote.
         let clone_dir = tempfile::tempdir().unwrap();
         let clone_path = clone_dir.path().to_str().unwrap();
-        let output = tokio::process::Command::new("git")
+        let output = tokio::process::Command::new("git").no_console_window()
             .args(["clone", remote_path, clone_path])
             .output()
             .await
@@ -862,7 +863,7 @@ mod tests {
         // Push a new commit directly to the bare remote via a temp worktree.
         let pusher = tempfile::tempdir().unwrap();
         let pusher_path = pusher.path().to_str().unwrap();
-        let out = tokio::process::Command::new("git")
+        let out = tokio::process::Command::new("git").no_console_window()
             .args(["clone", remote_path, pusher_path])
             .output()
             .await

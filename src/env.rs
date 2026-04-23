@@ -14,6 +14,7 @@
 use std::ffi::OsString;
 use std::path::Path;
 use std::sync::OnceLock;
+use crate::process::CommandWindowExt as _;
 
 /// Cached login-shell PATH, resolved once per process lifetime.
 static SHELL_PATH: OnceLock<Option<OsString>> = OnceLock::new();
@@ -83,7 +84,7 @@ fn login_shell_path_probe() -> Option<OsString> {
         r#"printf '%s\n' "$PATH""#
     };
 
-    let mut child = std::process::Command::new(&shell)
+    let mut child = std::process::Command::new(&shell).no_console_window()
         .args(["-l", "-c", cmd_arg])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -304,6 +305,7 @@ mod tests {
     fn apply_std_sets_env_on_command() {
         let env = sample_env();
         let mut cmd = std::process::Command::new("echo");
+        cmd.no_console_window();
         env.apply_std(&mut cmd);
 
         let envs: Vec<_> = cmd.get_envs().collect();

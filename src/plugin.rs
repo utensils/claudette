@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use crate::process::CommandWindowExt as _;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
@@ -359,7 +360,7 @@ pub async fn run_claude_plugin_command(
         crate::env::which_in_enriched_path("claude").unwrap_or_else(|_| PathBuf::from("claude"));
     let current_dir = plugin_command_cwd(repo_path);
 
-    let output = tokio::process::Command::new(&claude_path)
+    let output = tokio::process::Command::new(&claude_path).no_console_window()
         .args(args)
         .current_dir(current_dir)
         .stdout(std::process::Stdio::piped())
@@ -1252,7 +1253,7 @@ fn read_secure_storage_object() -> Result<Value, String> {
     #[cfg(target_os = "macos")]
     {
         let account = std::env::var("USER").unwrap_or_else(|_| "root".to_string());
-        let output = std::process::Command::new("security")
+        let output = std::process::Command::new("security").no_console_window()
             .args([
                 "find-generic-password",
                 "-s",
@@ -1291,7 +1292,7 @@ fn write_secure_storage_object(value: &Value) -> Result<(), String> {
         let account = std::env::var("USER").unwrap_or_else(|_| "root".to_string());
         let json = serde_json::to_string(value)
             .map_err(|e| format!("Failed to serialize keychain payload: {e}"))?;
-        let output = std::process::Command::new("security")
+        let output = std::process::Command::new("security").no_console_window()
             .args([
                 "add-generic-password",
                 "-U",

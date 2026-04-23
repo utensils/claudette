@@ -600,6 +600,33 @@
                 category = "windows";
               }
               {
+                name = "deploy-win-arm64";
+                command = ''
+                  set -euo pipefail
+                  # Build, then stop any running instance on the test VM and
+                  # copy the fresh .exe over. The remote process has a file
+                  # lock on claudette.exe while running, so scp cannot
+                  # overwrite it without the Stop-Process step.
+                  #
+                  # Host and remote path are overridable for cases where the
+                  # VM's DHCP lease changes or someone else tests against a
+                  # different machine. Defaults match the project's shared
+                  # Windows-on-ARM test VM (see project memory).
+                  HOST=''${CLAUDETTE_WIN_HOST:-brink@172.16.52.129}
+                  REMOTE_PATH=''${CLAUDETTE_WIN_REMOTE_PATH:-OneDrive/Desktop/claudette.exe}
+                  build-win-arm64
+                  echo ""
+                  echo "Stopping running claudette on $HOST (if any)..."
+                  ssh "$HOST" 'Stop-Process -Name claudette -Force -ErrorAction SilentlyContinue'
+                  echo "Copying to $HOST:$REMOTE_PATH ..."
+                  scp target/aarch64-pc-windows-msvc/release/claudette.exe "$HOST:$REMOTE_PATH"
+                  echo ""
+                  echo "Deployed. Double-click claudette.exe on the VM desktop to run."
+                '';
+                help = "Build + deploy aarch64-pc-windows-msvc exe to the test VM (overridable via CLAUDETTE_WIN_HOST / CLAUDETTE_WIN_REMOTE_PATH)";
+                category = "windows";
+              }
+              {
                 name = "build-win-x64";
                 command = ''
                   set -euo pipefail

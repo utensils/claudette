@@ -10,6 +10,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 
 use crate::env::WorkspaceEnv;
+use crate::process::CommandWindowExt as _;
 
 // ---------------------------------------------------------------------------
 // Stream event types — maps to Claude CLI `--output-format stream-json`
@@ -539,7 +540,7 @@ pub fn build_stdin_message(prompt: &str, attachments: &[FileAttachment]) -> Stri
 /// Resolve the full path to the `claude` CLI binary (async-safe).
 ///
 /// GUI apps on macOS (and some Linux desktop environments) don't inherit the
-/// user's shell PATH, so a bare `Command::new("claude")` fails with ENOENT.
+/// user's shell PATH, so a bare `Command::new("claude").no_console_window()` fails with ENOENT.
 /// We first check the current process PATH, then ask the user's login shell
 /// for its PATH, then try well-known install locations, and finally fall back
 /// to a bare `claude` command.
@@ -711,6 +712,7 @@ pub async fn run_turn(
 
     let claude_path = resolve_claude_path().await;
     let mut cmd = Command::new(&claude_path);
+    cmd.no_console_window();
     cmd.args(&args)
         .current_dir(working_dir)
         .stdout(std::process::Stdio::piped())
@@ -825,7 +827,7 @@ pub async fn run_turn(
 
 /// Stop an agent process by killing it.
 pub async fn stop_agent(pid: u32) -> Result<(), String> {
-    let output = tokio::process::Command::new("kill")
+    let output = tokio::process::Command::new("kill").no_console_window()
         .args(["-9", &pid.to_string()])
         .output()
         .await
@@ -849,7 +851,7 @@ pub async fn stop_agent(pid: u32) -> Result<(), String> {
 /// an instant kill.
 pub async fn stop_agent_graceful(pid: u32) -> Result<(), String> {
     // Send SIGTERM for graceful shutdown.
-    let _ = tokio::process::Command::new("kill")
+    let _ = tokio::process::Command::new("kill").no_console_window()
         .args(["-15", &pid.to_string()])
         .output()
         .await;
@@ -857,7 +859,7 @@ pub async fn stop_agent_graceful(pid: u32) -> Result<(), String> {
     // Poll for up to 500 ms.
     for _ in 0..10 {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        let probe = tokio::process::Command::new("kill")
+        let probe = tokio::process::Command::new("kill").no_console_window()
             .args(["-0", &pid.to_string()])
             .output()
             .await;
@@ -912,6 +914,7 @@ impl PersistentSession {
 
         let claude_path = resolve_claude_path().await;
         let mut cmd = Command::new(&claude_path);
+        cmd.no_console_window();
         cmd.args(&args)
             .current_dir(working_dir)
             .stdin(std::process::Stdio::piped())
@@ -1275,6 +1278,7 @@ pub async fn generate_branch_name(
 
     let claude_path = resolve_claude_path().await;
     let mut cmd = Command::new(&claude_path);
+    cmd.no_console_window();
     cmd.stdin(std::process::Stdio::null())
         .env("PATH", crate::env::enriched_path());
     // Run in the user's worktree so the CLI loads *their* project context.
@@ -2762,7 +2766,7 @@ mod tests {
     #[tokio::test]
     async fn test_stop_agent_graceful_stops_process_before_escalation() {
         // Spawn a process that traps SIGTERM and exits cleanly.
-        let mut child = tokio::process::Command::new("sh")
+        let mut child = tokio::process::Command::new("sh").no_console_window()
             .args(["-c", "trap 'exit 0' TERM; sleep 5"])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -2783,7 +2787,7 @@ mod tests {
             .expect("failed to reap child");
 
         // kill -0 should fail for a dead process.
-        let probe = tokio::process::Command::new("kill")
+        let probe = tokio::process::Command::new("kill").no_console_window()
             .args(["-0", &pid.to_string()])
             .output()
             .await;
