@@ -5,6 +5,7 @@
 }
 
 .header {
+  position: relative;
   padding: 14px 16px 8px;
   display: flex;
   align-items: center;
@@ -47,10 +48,6 @@
   color: var(--text-muted);
 }
 
-.filterDropdown {
-  position: relative;
-}
-
 .filterToggle {
   background: none;
   border: none;
@@ -72,18 +69,19 @@
 .filterMenu {
   position: absolute;
   top: 100%;
-  right: 0;
+  left: 8px;
+  right: 8px;
   margin-top: 4px;
   background: var(--chat-input-bg);
   border: 1px solid var(--divider);
   border-radius: 8px;
   box-shadow: var(--shadow-md);
-  min-width: 240px;
   z-index: 100;
   padding: 10px 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  overflow: hidden;
 }
 
 .filterRow {
@@ -102,6 +100,7 @@
 
 .filterSelect {
   flex: 1;
+  min-width: 0;
   background-color: var(--input-bg, var(--hover-bg));
   color: var(--text-primary);
   border: 1px solid var(--divider);
