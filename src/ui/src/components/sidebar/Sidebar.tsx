@@ -101,6 +101,7 @@ export const Sidebar = memo(function Sidebar() {
   const [renamingWsId, setRenamingWsId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
+  const renameCancelledRef = useRef(false);
 
   const creatingRef = useRef(false);
   const archivingRef = useRef<Set<string>>(new Set());
@@ -346,10 +347,19 @@ export const Sidebar = memo(function Sidebar() {
               className={styles.wsNameInput}
               value={renameValue}
               onChange={(e) => setRenameValue(e.target.value)}
-              onBlur={() => handleRenameSubmit(ws.id)}
+              onBlur={() => {
+                if (renameCancelledRef.current) {
+                  renameCancelledRef.current = false;
+                  return;
+                }
+                handleRenameSubmit(ws.id);
+              }}
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleRenameSubmit(ws.id);
-                if (e.key === "Escape") setRenamingWsId(null);
+                if (e.key === "Escape") {
+                  renameCancelledRef.current = true;
+                  setRenamingWsId(null);
+                }
               }}
               autoFocus
               onClick={(e) => e.stopPropagation()}
