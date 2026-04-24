@@ -26,7 +26,7 @@ describe("trimSelectionTrailingWhitespace", () => {
     );
   });
 
-  it("preserves empty lines (an empty line stays empty, not removed)", () => {
+  it("preserves interior empty lines (not trailing)", () => {
     const input = "line one\n\nline three";
     expect(trimSelectionTrailingWhitespace(input)).toBe("line one\n\nline three");
   });
@@ -40,9 +40,39 @@ describe("trimSelectionTrailingWhitespace", () => {
   });
 
   it("does not touch non-ASCII whitespace (e.g. NBSP)", () => {
-    // Non-breaking space is semantically meaningful in terminal output
-    // (e.g. prompts). Only strip regular spaces and tabs.
     const nbsp = " ";
     expect(trimSelectionTrailingWhitespace(`line${nbsp}`)).toBe(`line${nbsp}`);
+  });
+
+  it("drops trailing all-empty lines (selection dragged past end of content)", () => {
+    const input = "real content\n   \n\n   \n";
+    expect(trimSelectionTrailingWhitespace(input)).toBe("real content\n");
+  });
+
+  it("drops trailing empty lines and keeps a single newline when the original ended with one", () => {
+    const input = "real content\n\n\n";
+    expect(trimSelectionTrailingWhitespace(input)).toBe("real content\n");
+  });
+
+  it("drops trailing empty lines without adding a newline when the original had none", () => {
+    const input = "real content\n   \n   ";
+    expect(trimSelectionTrailingWhitespace(input)).toBe("real content");
+  });
+
+  it("returns empty string when the entire selection is whitespace", () => {
+    expect(trimSelectionTrailingWhitespace("   \n   \n\n")).toBe("");
+  });
+
+  it("preserves leading blank lines (may be intentional spacing)", () => {
+    expect(trimSelectionTrailingWhitespace("\n\nafter blank\n")).toBe(
+      "\n\nafter blank\n",
+    );
+  });
+
+  it("drops only trailing empties, not interior ones", () => {
+    const input = "top\n\nmiddle\n\nbottom\n\n\n";
+    expect(trimSelectionTrailingWhitespace(input)).toBe(
+      "top\n\nmiddle\n\nbottom\n",
+    );
   });
 });
