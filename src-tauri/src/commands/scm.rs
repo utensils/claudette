@@ -810,9 +810,7 @@ async fn auto_archive_workspace(
     }
 
     // Delete the local branch when the setting is enabled.
-    if delete_record
-        && let Some(repo_path) = &repo_path
-    {
+    if delete_record && let Some(repo_path) = &repo_path {
         let _ = claudette::git::branch_delete(repo_path, &branch_name).await;
     }
 
