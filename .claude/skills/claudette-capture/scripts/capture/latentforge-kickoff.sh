@@ -11,9 +11,9 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/../lib/common.sh"
 
 NAME="latentforge-kickoff"
-WORKSPACE_NAME="${WORKSPACE_NAME:-docs-site}"
+WORKSPACE_NAME="${WORKSPACE_NAME:-demo-$(date +%H%M)}"
 
-PROMPT="Build a complete VitePress documentation website for this project. Include a polished landing page with a clear value prop, a Getting Started guide, an Architecture overview, and an API reference auto-generated from the code. Use the default VitePress theme with a project-appropriate primary color. Add a Nix devshell helper command (e.g. 'docs-dev') that starts the hot-reloading dev server so developers can preview changes locally; wire Node/pnpm into the existing devshell so it works inside 'nix develop'. When the implementation is complete, verify the build succeeds, commit all changes with conventional-commit messages, push the branch to origin, and open a pull request on GitHub with gh pr create (include a clear title and a summary of what was added)."
+PROMPT="Build a polished VitePress docs site for this project: landing page, Getting Started guide, and an auto-generated MCP tools reference. Add a 'docs-dev' helper in the Nix devshell for hot reload, then commit, push, and open a PR."
 
 log "preflight"
 window_require
