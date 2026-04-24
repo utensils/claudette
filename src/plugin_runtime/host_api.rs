@@ -127,48 +127,94 @@ fn register_host_api(lua: &Lua, ctx: HostContext) -> LuaResult<()> {
         })?,
     )?;
 
+    // Canonicalize the workspace root once per VM creation. Both
+    // `host.file_exists` and `host.read_file` use it as the confinement
+    // boundary: any path they resolve (after following symlinks) must
+    // descend from this root, or the operation fails. Stored as
+    // Option<PathBuf> so plugins whose worktree no longer exists fail
+    // closed (deny everything) rather than panicking.
+    let confinement = std::path::Path::new(&ctx.workspace_info.worktree_path)
+        .canonicalize()
+        .ok();
+
     // host.file_exists(path) -> bool
     //
-    // Sandbox-safe: takes an explicit path string from the plugin. The
-    // sandbox removed `io`/`os`, so plugins can't probe the filesystem
-    // on their own — this host-provided helper is the only way to check
-    // for the presence of config files (`.envrc`, `mise.toml`, `.env`,
-    // `flake.nix`, etc.) that env providers detect on.
+    // Returns true only when the path resolves to something that exists
+    // AND is inside the workspace root (after canonicalization — symlinks
+    // that escape the workspace resolve to false, not true).
     //
-    // Returns true for both files and directories — providers that need
-    // finer distinction can call `host.read_file` (which errors on dirs).
+    // Deliberately returns `false` (not error) for paths outside the
+    // workspace so a malicious plugin can't probe the filesystem by
+    // observing whether the call succeeds or errors.
+    let file_exists_root = confinement.clone();
     host.set(
         "file_exists",
-        lua.create_function(|_, path: String| {
+        lua.create_function(move |_, path: String| {
             if path.contains('\0') {
                 return Err(LuaError::external("path must not contain null bytes"));
             }
-            Ok(std::path::Path::new(&path).exists())
+            Ok(resolve_inside_workspace(&path, file_exists_root.as_deref()).is_some())
         })?,
     )?;
 
     // host.read_file(path) -> string
     //
-    // Reads the file at `path` as UTF-8. Used by env providers that
-    // parse config files in-process (e.g. dotenv's `.env` parser) rather
-    // than shelling out to an external tool.
-    //
-    // Raises a Lua error on missing files, unreadable files, or non-UTF-8
-    // contents. Plugins can wrap calls in `pcall` if they need to handle
-    // the failure themselves.
+    // Reads the file at `path` as UTF-8. Rejects paths that escape the
+    // workspace (`../../etc/passwd`, absolute paths outside, symlinks
+    // pointing out) with a Lua error. Used by env providers that parse
+    // config files in-process (e.g. dotenv's `.env` parser).
+    let read_file_root = confinement;
     host.set(
         "read_file",
-        lua.create_function(|_, path: String| {
+        lua.create_function(move |_, path: String| {
             if path.contains('\0') {
                 return Err(LuaError::external("path must not contain null bytes"));
             }
-            std::fs::read_to_string(&path)
+            let canonical =
+                resolve_inside_workspace(&path, read_file_root.as_deref()).ok_or_else(|| {
+                    LuaError::external(format!(
+                        "path '{path}' is outside the workspace or does not exist"
+                    ))
+                })?;
+            std::fs::read_to_string(&canonical)
                 .map_err(|e| LuaError::external(format!("failed to read '{path}': {e}")))
         })?,
     )?;
 
     lua.globals().set("host", host)?;
     Ok(())
+}
+
+/// Resolve `path` (absolute or relative to `workspace_root`) into a
+/// canonical path, confirming it exists and is descended from the
+/// canonical `workspace_root`. Returns `None` if:
+///   - `workspace_root` is `None` (fail closed — no confinement possible)
+///   - the path doesn't exist
+///   - the path's canonical form escapes the workspace root (symlink
+///     traversal, absolute paths outside, `..` components that land
+///     outside)
+///
+/// Canonicalization follows symlinks, so a repo-local `.env -> /etc/passwd`
+/// resolves to `/etc/passwd` which doesn't start with the workspace root
+/// → confinement fails. This is the primary mitigation for malicious
+/// plugins or repos attempting to read outside the worktree.
+fn resolve_inside_workspace(
+    path: &str,
+    workspace_root: Option<&std::path::Path>,
+) -> Option<std::path::PathBuf> {
+    let root = workspace_root?;
+    let input = std::path::Path::new(path);
+    let candidate = if input.is_absolute() {
+        input.to_path_buf()
+    } else {
+        root.join(input)
+    };
+    let canonical = candidate.canonicalize().ok()?;
+    if canonical.starts_with(root) {
+        Some(canonical)
+    } else {
+        None
+    }
 }
 
 /// Execute a subprocess, restricted to allowed CLIs.
@@ -530,5 +576,137 @@ mod tests {
             .load(r#"return host.read_file("/tmp/file\0injected")"#)
             .eval();
         assert!(result.is_err());
+    }
+
+    /// Build a context whose workspace root is the given tempdir. Used
+    /// by the confinement tests below so they can assert that paths
+    /// outside that tempdir are rejected.
+    fn ctx_with_worktree(worktree: &std::path::Path) -> HostContext {
+        HostContext {
+            plugin_name: "test".to_string(),
+            allowed_clis: vec![],
+            workspace_info: WorkspaceInfo {
+                id: "ws-1".into(),
+                name: "test".into(),
+                branch: "main".into(),
+                worktree_path: worktree.to_string_lossy().into_owned(),
+                repo_path: worktree.to_string_lossy().into_owned(),
+            },
+            config: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_file_exists_rejects_absolute_path_outside_workspace() {
+        // Absolute path to a file the OS is guaranteed to have at a
+        // predictable location. On all supported platforms this is NOT
+        // under the narrow tempdir workspace, so confinement should deny.
+        let workspace = tempfile::tempdir().unwrap();
+        let ctx = ctx_with_worktree(workspace.path());
+        let lua = create_lua_vm(ctx).unwrap();
+
+        // Use the Rust binary's path — exists for sure on every host
+        // that runs this test, and is clearly outside the tempdir.
+        let outside = std::env::current_exe().unwrap();
+        let outside_s = outside.to_string_lossy().replace('\\', "\\\\");
+        let exists: bool = lua
+            .load(format!(r#"return host.file_exists("{outside_s}")"#))
+            .eval()
+            .unwrap();
+        assert!(
+            !exists,
+            "path outside workspace must report as not existing"
+        );
+    }
+
+    #[test]
+    fn test_read_file_rejects_absolute_path_outside_workspace() {
+        let workspace = tempfile::tempdir().unwrap();
+        let ctx = ctx_with_worktree(workspace.path());
+        let lua = create_lua_vm(ctx).unwrap();
+
+        let outside = std::env::current_exe().unwrap();
+        let outside_s = outside.to_string_lossy().replace('\\', "\\\\");
+        let result: LuaResult<String> = lua
+            .load(format!(r#"return host.read_file("{outside_s}")"#))
+            .eval();
+        assert!(
+            result.is_err(),
+            "read_file must reject path outside workspace"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("outside the workspace"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_read_file_rejects_symlink_escaping_workspace() {
+        // A `.env` inside the workspace that symlinks to a file outside
+        // must not be readable — this is the path-traversal escape Codex
+        // flagged as the primary attack for a malicious `.env`.
+        let workspace = tempfile::tempdir().unwrap();
+        let outside_dir = tempfile::tempdir().unwrap();
+        let secret = outside_dir.path().join("secret.txt");
+        std::fs::write(&secret, "sensitive").unwrap();
+
+        let link = workspace.path().join(".env");
+        std::os::unix::fs::symlink(&secret, &link).unwrap();
+
+        let ctx = ctx_with_worktree(workspace.path());
+        let lua = create_lua_vm(ctx).unwrap();
+
+        // file_exists follows the symlink → resolves outside → false.
+        let exists: bool = lua
+            .load(r#"return host.file_exists(".env")"#)
+            .eval()
+            .unwrap();
+        assert!(!exists, "symlink escape must report as not existing");
+
+        // read_file follows the symlink → resolves outside → error.
+        let result: LuaResult<String> = lua.load(r#"return host.read_file(".env")"#).eval();
+        assert!(
+            result.is_err(),
+            "symlink escape must be rejected by read_file"
+        );
+    }
+
+    #[test]
+    fn test_file_exists_allows_path_inside_workspace() {
+        // Sanity check that the confinement doesn't over-restrict legit
+        // workspace files — plugins MUST still be able to detect on
+        // `.envrc` / `mise.toml` / etc.
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::write(workspace.path().join(".envrc"), "use flake").unwrap();
+        let ctx = ctx_with_worktree(workspace.path());
+        let lua = create_lua_vm(ctx).unwrap();
+
+        let exists: bool = lua
+            .load(r#"return host.file_exists(".envrc")"#)
+            .eval()
+            .unwrap();
+        assert!(exists, "file inside workspace must be visible");
+
+        let contents: String = lua
+            .load(r#"return host.read_file(".envrc")"#)
+            .eval()
+            .unwrap();
+        assert_eq!(contents, "use flake");
+    }
+
+    #[test]
+    fn test_file_exists_rejects_dotdot_traversal() {
+        // `..` in a relative path must not let a plugin escape upward.
+        let workspace = tempfile::tempdir().unwrap();
+        let ctx = ctx_with_worktree(workspace.path());
+        let lua = create_lua_vm(ctx).unwrap();
+
+        let exists: bool = lua
+            .load(r#"return host.file_exists("../../../etc/passwd")"#)
+            .eval()
+            .unwrap();
+        assert!(!exists, "dotdot traversal must be denied");
     }
 }

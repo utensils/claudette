@@ -68,22 +68,42 @@ impl EnvCache {
 
     /// Store (or overwrite) the cache entry for `(worktree, plugin)`.
     ///
-    /// `ProviderExport.watched` is snapshotted: each path's current
-    /// mtime is recorded alongside it, so future `get_fresh` calls can
-    /// detect changes.
-    pub fn put(&self, worktree: &Path, plugin: &str, export: &ProviderExport) {
-        let key = (worktree.to_path_buf(), plugin.to_string());
-        let watched = export
+    /// Returns `true` if the entry was stored, `false` if it was dropped
+    /// because a watched file's mtime changed between the two snapshots
+    /// we take (before-store and after-store). The race we're guarding:
+    ///
+    ///   t0: plugin's `export()` captures env based on on-disk content
+    ///   t1: we snapshot mtimes ("first")
+    ///   t2: we snapshot mtimes again ("second")
+    ///   t3: caller stores the entry
+    ///
+    /// If a file changes during [t1, t2] we see it here and refuse to
+    /// cache — the next resolve will re-run `export()` and pick up the
+    /// fresh state. A change during [t0, t1] still slips through (we
+    /// cache stale env under the post-change mtime), but the window is
+    /// microseconds and — being bounded above by the slowest syscall —
+    /// small enough that not-caching-at-all would be more wasteful than
+    /// the occasional stale turn. File-content hashing would fully close
+    /// this and is v2 work.
+    pub fn put(&self, worktree: &Path, plugin: &str, export: &ProviderExport) -> bool {
+        let first: Vec<(PathBuf, Option<SystemTime>)> = export
             .watched
             .iter()
             .map(|p| (p.clone(), mtime(p)))
             .collect();
+        let second: Vec<Option<SystemTime>> = export.watched.iter().map(|p| mtime(p)).collect();
+        if first.iter().zip(second.iter()).any(|((_, a), b)| a != b) {
+            return false;
+        }
+
+        let key = (worktree.to_path_buf(), plugin.to_string());
         let entry = CacheEntry {
             env: export.env.clone(),
-            watched,
+            watched: first,
             evaluated_at: SystemTime::now(),
         };
         self.entries.write().unwrap().insert(key, entry);
+        true
     }
 
     /// Forget the cache for `(worktree, plugin)`. If `plugin` is `None`,
