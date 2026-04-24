@@ -791,6 +791,7 @@ pub async fn run_turn(
     settings: &AgentSettings,
     attachments: &[FileAttachment],
     ws_env: Option<&WorkspaceEnv>,
+    resolved_env: Option<&crate::env_provider::ResolvedEnv>,
 ) -> Result<TurnHandle, String> {
     let has_attachments = !attachments.is_empty();
     let args = build_claude_args(
@@ -829,6 +830,14 @@ pub async fn run_turn(
     }
     cmd.env_remove("CLAUDECODE");
     cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
+
+    // Apply user-provided env-provider output (direnv / mise / nix-devshell /
+    // dotenv) BEFORE the workspace's CLAUDETTE_* markers so those always win,
+    // and BEFORE the settings-driven 1M-context toggle so the UI choice
+    // cannot be overridden by a provider that happens to export the same key.
+    if let Some(env) = resolved_env {
+        env.apply(&mut cmd);
+    }
 
     cmd.env_remove("CLAUDE_CODE_DISABLE_1M_CONTEXT");
     if settings.disable_1m_context {
@@ -1066,6 +1075,7 @@ impl PersistentSession {
         custom_instructions: Option<&str>,
         settings: &AgentSettings,
         ws_env: Option<&WorkspaceEnv>,
+        resolved_env: Option<&crate::env_provider::ResolvedEnv>,
     ) -> Result<Self, String> {
         let args = build_persistent_args(
             session_id,
@@ -1093,6 +1103,12 @@ impl PersistentSession {
         }
         cmd.env_remove("CLAUDECODE");
         cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
+
+        // See run_turn for layering rationale — env-provider output under
+        // the CLAUDETTE_* markers, under the settings-driven context toggle.
+        if let Some(env) = resolved_env {
+            env.apply(&mut cmd);
+        }
 
         cmd.env_remove("CLAUDE_CODE_DISABLE_1M_CONTEXT");
         if settings.disable_1m_context {

@@ -445,6 +445,11 @@ async fn handle_send_chat_message(
         &agent_settings,
         &[], // Attachments not yet supported over remote transport
         Some(&ws_env),
+        // Env-provider activation is not wired into the remote server path in
+        // v1 — it requires a PluginRegistry + EnvCache in ServerState, which
+        // is a separate follow-up. Local desktop agents already get it via
+        // claudette-tauri's AppState.
+        None,
     )
     .await?;
 

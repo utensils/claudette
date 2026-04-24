@@ -8,6 +8,7 @@ use claudette::agent::PersistentSession;
 use parking_lot::Mutex as ParkingMutex;
 use tokio::sync::{RwLock, Semaphore};
 
+use claudette::env_provider::EnvCache;
 use claudette::plugin_runtime::PluginRegistry;
 use claudette::scm::types::{CiCheck, PullRequest};
 
@@ -283,6 +284,10 @@ pub struct AppState {
     pub usage_cache: RwLock<Option<UsageCacheEntry>>,
     /// SCM provider plugin registry.
     pub plugins: RwLock<PluginRegistry>,
+    /// mtime-keyed cache of env-provider exports. One entry per
+    /// `(worktree, plugin_name)` pair, invalidated when any watched
+    /// file (`.envrc`, `mise.toml`, `.env`, `flake.lock`, etc.) changes.
+    pub env_cache: Arc<EnvCache>,
     /// Cached PR/CI status data keyed by (repo_id, branch_name).
     pub scm_cache: ScmCache,
     /// Limits concurrent SCM CLI invocations.
@@ -316,6 +321,7 @@ impl AppState {
             next_tray_seq: AtomicU64::new(1),
             usage_cache: RwLock::new(None),
             plugins: RwLock::new(plugins),
+            env_cache: Arc::new(EnvCache::new()),
             scm_cache: ScmCache::new(),
             scm_semaphore: Arc::new(Semaphore::new(4)),
             pending_update: tokio::sync::Mutex::new(None),

@@ -30,8 +30,22 @@ use serde::Serialize;
 use crate::plugin_runtime::host_api::WorkspaceInfo;
 
 use backend::EnvProviderBackend;
-use cache::EnvCache;
+pub use backend::PluginRegistryBackend;
+pub use cache::EnvCache;
 use types::EnvMap;
+
+/// Convenience helper that wires the standard [`PluginRegistryBackend`]
+/// into [`resolve_for_workspace`] with minimal boilerplate at the call
+/// site. The tauri layer uses this from spawn command handlers.
+pub async fn resolve_with_registry(
+    registry: &crate::plugin_runtime::PluginRegistry,
+    cache: &EnvCache,
+    worktree: &Path,
+    ws_info: &WorkspaceInfo,
+) -> ResolvedEnv {
+    let backend = PluginRegistryBackend::new(registry);
+    resolve_for_workspace(&backend, cache, worktree, ws_info).await
+}
 
 /// The merged env contributed by all detected env-provider plugins.
 #[derive(Debug, Default, Clone)]

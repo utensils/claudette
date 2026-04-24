@@ -579,6 +579,28 @@ pub async fn send_chat_message(
     };
     let ws_env = WorkspaceEnv::from_workspace(ws, repo_path, default_branch);
 
+    // Resolve the env-provider layer (direnv / mise / dotenv / nix-devshell)
+    // once per turn. The mtime-keyed cache makes this essentially free on
+    // turns where nothing changed; on the first turn or after the user
+    // edits `.envrc` / `mise.toml` / etc., it re-runs the affected plugin.
+    let ws_info_for_env = claudette::plugin_runtime::host_api::WorkspaceInfo {
+        id: ws.id.clone(),
+        name: ws.name.clone(),
+        branch: ws.branch_name.clone(),
+        worktree_path: worktree_path.clone(),
+        repo_path: repo_path.to_string(),
+    };
+    let resolved_env = {
+        let registry = state.plugins.read().await;
+        claudette::env_provider::resolve_with_registry(
+            &registry,
+            &state.env_cache,
+            std::path::Path::new(&worktree_path),
+            &ws_info_for_env,
+        )
+        .await
+    };
+
     // Use persistent session to keep MCP servers alive across turns.
     // First turn or after restart: start a PersistentSession.
     // Subsequent turns in same session: reuse the existing process via stdin.
@@ -588,6 +610,7 @@ pub async fn send_chat_message(
 
     // Helper: start a persistent session, using --resume for restored sessions.
     let ws_env_for_persistent = ws_env.clone();
+    let resolved_env_for_persistent = resolved_env.clone();
     let start_persistent = |worktree: String,
                             sid: String,
                             is_resume: bool,
@@ -595,6 +618,7 @@ pub async fn send_chat_message(
                             instructions: Option<String>,
                             settings: AgentSettings| {
         let env = ws_env_for_persistent.clone();
+        let resolved = resolved_env_for_persistent.clone();
         async move {
             let ps = Arc::new(
                 PersistentSession::start(
@@ -605,6 +629,7 @@ pub async fn send_chat_message(
                     instructions.as_deref(),
                     &settings,
                     Some(&env),
+                    Some(&resolved),
                 )
                 .await?,
             );
