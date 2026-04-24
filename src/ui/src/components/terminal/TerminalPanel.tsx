@@ -698,13 +698,16 @@ export const TerminalPanel = memo(function TerminalPanel() {
         ) {
           // The helper textarea is what xterm's own click-focus
           // path uses; calling term.focus() directly can no-op on
-          // the very first mount.
+          // the very first mount. We deliberately don't scrollToBottom
+          // here — if the user was reading scrollback, clicking a pane
+          // to focus it (or any other action that triggers a
+          // re-focus, like a pane split that promotes a sibling)
+          // should leave their scroll position alone.
           const helper = inst.container.querySelector(
             ".xterm-helper-textarea",
           ) as HTMLTextAreaElement | null;
-          if (helper) helper.focus();
+          if (helper) helper.focus({ preventScroll: true });
           else inst.term.focus();
-          inst.term.scrollToBottom();
         }
       }
     }
