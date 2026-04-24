@@ -166,6 +166,19 @@ impl Database {
     }
 }
 
+/// Returns true when `err` is the SQLite `UNIQUE` constraint failure on
+/// `repositories.path` — i.e. the caller tried to insert a repo whose path
+/// is already registered. Other constraint failures (including UNIQUE on
+/// other columns) return false.
+pub fn is_duplicate_repository_path_error(err: &rusqlite::Error) -> bool {
+    if let rusqlite::Error::SqliteFailure(code, Some(msg)) = err {
+        code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE
+            && msg.contains("repositories.path")
+    } else {
+        false
+    }
+}
+
 impl Database {
     // --- Repositories ---
 
@@ -1772,7 +1785,25 @@ mod tests {
         db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
             .unwrap();
         let result = db.insert_repository(&make_repo("r2", "/tmp/repo1", "repo1-dup"));
-        assert!(result.is_err());
+        let err = result.expect_err("expected UNIQUE constraint failure");
+        assert!(
+            super::is_duplicate_repository_path_error(&err),
+            "expected duplicate-path error, got: {err:?}",
+        );
+    }
+
+    #[test]
+    fn test_duplicate_repo_id_not_flagged_as_duplicate_path() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        let err = db
+            .insert_repository(&make_repo("r1", "/tmp/repo2", "repo2"))
+            .expect_err("expected PRIMARY KEY constraint failure on id");
+        assert!(
+            !super::is_duplicate_repository_path_error(&err),
+            "id collision should not be mapped to the duplicate-path branch: {err:?}",
+        );
     }
 
     #[test]
