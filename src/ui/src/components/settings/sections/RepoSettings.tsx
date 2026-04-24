@@ -175,8 +175,8 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
       custom_instructions?: string | null;
       branch_rename_preferences?: string | null;
       setup_script_auto_run?: boolean;
-      base_branch?: string | null;
-      default_remote?: string | null;
+      base_branch?: string;
+      default_remote?: string;
     }) => {
       const finalName = (updates.name ?? nameRef.current).trim();
       if (!finalName) return;
@@ -203,11 +203,11 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
       const finalBaseBranch =
         updates.base_branch !== undefined
           ? updates.base_branch
-          : baseBranchRef.current || null;
+          : baseBranchRef.current;
       const finalDefaultRemote =
         updates.default_remote !== undefined
           ? updates.default_remote
-          : defaultRemoteRef.current || null;
+          : defaultRemoteRef.current;
 
       try {
         setError(null);
@@ -315,10 +315,9 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
             onChange={(e) => {
               const val = e.target.value;
               setBaseBranch(val);
-              save({ base_branch: val || null });
+              save({ base_branch: val });
             }}
           >
-            <option value="">Auto-detect</option>
             {baseBranch && !availableBranches.includes(baseBranch) && (
               <option key={baseBranch} value={baseBranch}>
                 {baseBranch} (missing)
@@ -347,10 +346,9 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
             onChange={(e) => {
               const val = e.target.value;
               setDefaultRemote(val);
-              save({ default_remote: val || null });
+              save({ default_remote: val });
             }}
           >
-            <option value="">Auto-detect</option>
             {defaultRemote && !availableRemotes.includes(defaultRemote) && (
               <option key={defaultRemote} value={defaultRemote}>
                 {defaultRemote} (missing)

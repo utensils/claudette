@@ -10,6 +10,42 @@ use claudette::model::Repository;
 
 use crate::state::AppState;
 
+pub(crate) fn resolve_default_remote(remotes: &[String]) -> Option<String> {
+    match remotes.len() {
+        0 => None,
+        1 => Some(remotes[0].clone()),
+        _ => {
+            if remotes.iter().any(|r| r == "origin") {
+                Some("origin".to_string())
+            } else {
+                Some(remotes[0].clone())
+            }
+        }
+    }
+}
+
+pub(crate) fn resolve_default_branch(
+    branches: &[String],
+    default_remote: Option<&str>,
+) -> Option<String> {
+    if branches.is_empty() {
+        return None;
+    }
+    if branches.len() == 1 {
+        return Some(branches[0].clone());
+    }
+    let remote = default_remote.unwrap_or("origin");
+    let main = format!("{remote}/main");
+    if branches.iter().any(|b| b == &main) {
+        return Some(main);
+    }
+    let master = format!("{remote}/master");
+    if branches.iter().any(|b| b == &master) {
+        return Some(master);
+    }
+    Some(branches[0].clone())
+}
+
 #[derive(Serialize)]
 pub struct RepoConfigInfo {
     pub has_config_file: bool,
@@ -36,6 +72,14 @@ pub async fn add_repository(
 
     let path_slug = slug_from_path(&canon_str);
 
+    let remotes = git::list_remotes(&canon_str).await.unwrap_or_default();
+    let branches = git::list_remote_tracking_branches(&canon_str)
+        .await
+        .unwrap_or_default();
+
+    let default_remote = resolve_default_remote(&remotes);
+    let base_branch = resolve_default_branch(&branches, default_remote.as_deref());
+
     let repo = Repository {
         id: uuid::Uuid::new_v4().to_string(),
         path: canon_str,
@@ -48,8 +92,8 @@ pub async fn add_repository(
         sort_order: 0,
         branch_rename_preferences: None,
         setup_script_auto_run: false,
-        base_branch: None,
-        default_remote: None,
+        base_branch,
+        default_remote,
         path_valid: true,
     };
 
