@@ -18,6 +18,14 @@ case "${1:-}" in
 esac
 
 (cd src/ui && bun install --frozen-lockfile && bun run build)
+
+# Regenerate platform icons from the PNG master. `icon.ico` / `icon.icns` are
+# listed in `tauri.conf.json` but gitignored — tauri-build requires the .ico
+# at link time on Windows to embed the PE resource, so it must exist before
+# we invoke `cargo xwin`. CI does the equivalent in ci.yml / nightly.yml /
+# release-please.yml via `npx @tauri-apps/cli icon`.
+cargo tauri icon assets/logo.png
+
 cargo xwin build --release \
   --features tauri/custom-protocol \
   --target "$TRIPLE" -p claudette-tauri

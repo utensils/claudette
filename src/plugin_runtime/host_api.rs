@@ -322,6 +322,25 @@ fn decode_direnv_watches(encoded: &str) -> Vec<String> {
         .collect()
 }
 
+/// Collapse a CLI identifier (which plugins may declare as a bare name
+/// like `"gh"` or as a full path like `"C:\\Tools\\gh.exe"`) to a stable
+/// tool token suitable for the missing-CLI sentinel. Strips the directory
+/// and the trailing extension. Falls back to the original string when no
+/// sensible stem can be extracted.
+///
+/// Handles both `/` and `\` as separators regardless of the host platform —
+/// a plugin declared on a Windows install can be carried in a manifest
+/// that's loaded on macOS/Linux for tests, and `Path::file_stem` on Unix
+/// treats backslashes as regular characters.
+fn normalize_cli_name(cmd: &str) -> &str {
+    let basename = cmd.rsplit(['/', '\\']).next().unwrap_or(cmd);
+    let stem = basename
+        .rsplit_once('.')
+        .map(|(stem, _ext)| stem)
+        .unwrap_or(basename);
+    if stem.is_empty() { cmd } else { stem }
+}
+
 /// Execute a subprocess, restricted to allowed CLIs.
 async fn host_exec(
     lua: &Lua,
@@ -407,9 +426,23 @@ async fn host_exec(
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::piped());
 
-    let child = command
-        .spawn()
-        .map_err(|e| LuaError::external(format!("Failed to execute '{cmd}': {e}")))?;
+    let child = command.spawn().map_err(|e| {
+        // Preserve `NotFound` via the missing-CLI sentinel so a Tauri-layer
+        // interceptor (e.g. around scm/env-provider commands) can surface
+        // the MissingCli dialog instead of the raw subprocess error when a
+        // plugin's declared CLI (like `gh`) isn't installed.
+        //
+        // Normalize `cmd` to its basename sans extension before emitting the
+        // sentinel — a plugin that declares a full path (`C:\Tools\gh.exe`)
+        // would otherwise produce `MISSING_CLI:C:\Tools\gh.exe`, which the
+        // Tauri-side `guidance_for` lookup can't match to the `gh` entry
+        // (and whose drive-letter colon would also confuse a naive parser).
+        let tool = normalize_cli_name(cmd);
+        let msg = crate::missing_cli::map_spawn_err(&e, tool, || {
+            format!("Failed to execute '{cmd}': {e}")
+        });
+        LuaError::external(msg)
+    })?;
 
     // Run with timeout — kill_on_drop ensures the child is killed if
     // the future is dropped on timeout.
@@ -1071,5 +1104,29 @@ mod tests {
         );
         let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&compressed);
         assert!(decode_direnv_watches(&encoded).is_empty());
+    }
+
+    #[test]
+    fn normalize_cli_name_keeps_bare_name() {
+        assert_eq!(normalize_cli_name("gh"), "gh");
+        assert_eq!(normalize_cli_name("git"), "git");
+    }
+
+    #[test]
+    fn normalize_cli_name_strips_extension_and_directory() {
+        // Regression for Copilot review on PR #417: plugins that declare a
+        // full path (common on Windows) must still produce a tool token that
+        // matches `missing_cli::guidance_for`.
+        assert_eq!(normalize_cli_name(r"C:\Tools\gh.exe"), "gh");
+        assert_eq!(normalize_cli_name("/usr/local/bin/gh"), "gh");
+        assert_eq!(normalize_cli_name("gh.exe"), "gh");
+    }
+
+    #[test]
+    fn normalize_cli_name_falls_back_to_input_when_empty() {
+        // Path::file_stem returns None for `"/"` — the fallback must keep
+        // callers from silently emitting an empty tool token.
+        assert_eq!(normalize_cli_name("/"), "/");
+        assert_eq!(normalize_cli_name(""), "");
     }
 }

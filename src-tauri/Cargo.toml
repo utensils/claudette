@@ -45,6 +45,16 @@ url = "2"
 [target.'cfg(target_os = "macos")'.dependencies]
 mac-notification-sys = "0.6"
 
+[target.'cfg(windows)'.dependencies]
+# Registry probe for WebView2 Runtime + MessageBoxW fallback. Kept as direct
+# deps (not transitive via `claudette`) so main.rs can run the probe before
+# any lib-crate code that might depend on a working webview.
+winreg = "0.55"
+windows-sys = { version = "0.61", features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Foundation",
+] }
+
 [features]
 default = ["server"]
 devtools = ["tauri/devtools"]

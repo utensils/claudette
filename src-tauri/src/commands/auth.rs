@@ -57,7 +57,12 @@ pub async fn claude_auth_login(app: AppHandle, state: State<'_, AppState>) -> Re
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .map_err(|e| format!("Failed to spawn `claude auth login`: {e}"))?;
+        .map_err(|e| {
+            let err = claudette::missing_cli::map_spawn_err(&e, "claude", || {
+                format!("Failed to spawn `claude auth login`: {e}")
+            });
+            crate::missing_cli::handle_err(&app, &err).unwrap_or(err)
+        })?;
 
     let stdout = child
         .stdout

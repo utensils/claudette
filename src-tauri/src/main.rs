@@ -3,6 +3,7 @@
 
 mod commands;
 mod mdns;
+mod missing_cli;
 mod osc133;
 mod pty;
 mod remote;
@@ -10,6 +11,7 @@ mod state;
 mod transport;
 mod tray;
 mod usage;
+mod webview2_check;
 
 use std::path::PathBuf;
 
@@ -40,6 +42,12 @@ fn main() {
         });
         return;
     }
+
+    // Windows only: if the WebView2 Runtime is missing, Tauri's webview
+    // initialization would fail with a generic system error dialog and exit.
+    // Probe the runtime registry up-front and show a native MessageBox with
+    // a download link instead. No-op on macOS/Linux.
+    webview2_check::ensure_installed();
 
     // Determine database and worktree paths.
     let data_dir = dirs::data_dir()
