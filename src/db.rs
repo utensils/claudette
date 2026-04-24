@@ -3465,6 +3465,21 @@ mod tests {
     }
 
     #[test]
+    fn test_delete_workspace_idempotent() {
+        let db = setup_db_with_workspace();
+        db.delete_workspace_with_summary("w1").unwrap();
+        // Second delete of the same workspace must succeed (no-op).
+        db.delete_workspace_with_summary("w1").unwrap();
+        assert_eq!(
+            count_rows(
+                &db,
+                "SELECT COUNT(*) FROM deleted_workspace_summaries WHERE workspace_id = 'w1'"
+            ),
+            1
+        );
+    }
+
+    #[test]
     fn test_archive_leaves_metrics_untouched() {
         let db = setup_db_with_workspace();
         db.insert_agent_session("s1", "w1", "r1").unwrap();
