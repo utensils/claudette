@@ -168,6 +168,12 @@ export function refreshBranches(): Promise<[string, string][]> {
   return invoke("refresh_branches");
 }
 
+export function refreshWorkspaceBranch(
+  workspaceId: string,
+): Promise<string | null> {
+  return invoke("refresh_workspace_branch", { workspaceId });
+}
+
 export function openWorkspaceInTerminal(worktreePath: string): Promise<void> {
   return invoke("open_workspace_in_terminal", { worktreePath });
 }

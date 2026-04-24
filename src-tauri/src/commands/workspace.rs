@@ -644,26 +644,28 @@ pub fn generate_workspace_name() -> GeneratedWorkspaceName {
     }
 }
 
+/// Re-read the current branch for every active workspace and return the set
+/// of workspaces whose stored `branch_name` is now stale. Any drift is also
+/// persisted back to the DB so external branch renames (`git branch -m`,
+/// `git checkout -b`, etc.) made from the integrated terminal or elsewhere
+/// stop the DB from diverging from git reality.
 #[tauri::command]
 pub async fn refresh_branches(state: State<'_, AppState>) -> Result<Vec<(String, String)>, String> {
-    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
+    claudette::workspace_sync::reconcile_all_workspace_branches(&state.db_path).await
+}
 
-    let mut updates = Vec::new();
-
-    for ws in &workspaces {
-        if ws.status != WorkspaceStatus::Active {
-            continue;
-        }
-        if let Some(ref wt_path) = ws.worktree_path
-            && let Ok(branch) = git::current_branch(wt_path).await
-            && branch != ws.branch_name
-        {
-            updates.push((ws.id.clone(), branch));
-        }
-    }
-
-    Ok(updates)
+/// Re-read the current branch for a single workspace, persist any change, and
+/// return the new branch name (or `None` if nothing changed or the workspace
+/// isn't active). Used for event-driven refreshes — e.g. when the user selects
+/// a workspace or focuses its terminal panel — so sidebar state tracks
+/// external `git` operations without waiting on the 5s poll.
+#[tauri::command]
+pub async fn refresh_workspace_branch(
+    workspace_id: String,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    claudette::workspace_sync::reconcile_single_workspace_branch(&state.db_path, &workspace_id)
+        .await
 }
 
 #[derive(Serialize)]
