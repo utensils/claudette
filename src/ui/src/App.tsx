@@ -51,6 +51,30 @@ function App() {
         msgMap[msg.workspace_id] = msg;
       }
       setLastMessages(msgMap);
+      // Hydrate SCM summaries from persisted cache for instant sidebar display.
+      for (const row of data.scm_cache) {
+        if (row.pr_json == null) continue;
+        try {
+          const parsed: unknown = JSON.parse(row.pr_json);
+          const pr =
+            parsed !== null &&
+            typeof parsed === "object" &&
+            "number" in parsed &&
+            typeof (parsed as { number: unknown }).number === "number" &&
+            "state" in parsed &&
+            typeof (parsed as { state: unknown }).state === "string"
+              ? (parsed as import("./types/plugin").PullRequest)
+              : null;
+          useAppStore.getState().setScmSummary(row.workspace_id, {
+            hasPr: pr !== null,
+            prState: pr?.state ?? null,
+            ciState: pr?.ci_status ?? null,
+            lastUpdated: new Date(row.fetched_at.replace(" ", "T") + "Z").getTime(),
+          });
+        } catch {
+          // Corrupted cache entry — skip silently, will be refreshed by polling.
+        }
+      }
     });
     getAppSetting("terminal_font_size")
       .then((val) => {

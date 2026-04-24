@@ -487,6 +487,7 @@ pub async fn archive_workspace(
 
     db.delete_terminal_tabs_for_workspace(&id)
         .map_err(|e| e.to_string())?;
+    db.delete_scm_status_cache(&id).map_err(|e| e.to_string())?;
     db.update_workspace_status(&id, &WorkspaceStatus::Archived, None)
         .map_err(|e| e.to_string())?;
 

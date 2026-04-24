@@ -80,6 +80,7 @@ async fn lookup_workspace_context(
     {
         if let Ok(db) = Database::open(db_path) {
             let _ = db.update_workspace_branch_name(&ctx.workspace.id, &actual);
+            let _ = db.delete_scm_status_cache(&ctx.workspace.id);
         }
         ctx.workspace.branch_name = actual;
     }
@@ -172,6 +173,11 @@ pub async fn load_scm_detail(
     {
         Some(name) => name,
         None => {
+            // Clear any stale cache row so old badges don't persist across restarts
+            // when the provider is no longer available (e.g. plugin removed).
+            if let Ok(db) = Database::open(&state.db_path) {
+                let _ = db.delete_scm_status_cache(&workspace_id);
+            }
             return Ok(ScmDetail {
                 workspace_id,
                 pull_request: None,
@@ -257,7 +263,7 @@ pub async fn load_scm_detail(
         let cached_error = error.clone();
         let mut cache = state.scm_cache.entries.write().await;
         cache.insert(
-            cache_key,
+            cache_key.clone(),
             ScmCacheEntry {
                 pull_request: pull_request.clone(),
                 ci_checks: ci_checks.clone(),
@@ -265,6 +271,31 @@ pub async fn load_scm_detail(
                 error: cached_error,
             },
         );
+    }
+
+    // Persist to SQLite for instant display on next app launch.
+    {
+        match Database::open(&state.db_path) {
+            Ok(db) => {
+                if let Err(e) = db.upsert_scm_status_cache(&claudette::db::ScmStatusCacheRow {
+                    workspace_id: workspace_id.clone(),
+                    repo_id: cache_key.0.clone(),
+                    branch_name: cache_key.1.clone(),
+                    provider: Some(provider_name.clone()),
+                    pr_json: serde_json::to_string(&pull_request).ok(),
+                    ci_json: serde_json::to_string(&ci_checks).ok(),
+                    error: error.clone(),
+                    fetched_at: String::new(),
+                }) {
+                    eprintln!(
+                        "[scm] Failed to persist SCM cache for workspace {workspace_id}: {e}"
+                    );
+                }
+            }
+            Err(e) => {
+                eprintln!("[scm] Failed to open DB for SCM cache persistence: {e}");
+            }
+        }
     }
 
     Ok(ScmDetail {
@@ -321,6 +352,9 @@ pub async fn scm_create_pr(
     // Invalidate cache
     let cache_key = (ctx.repo.id.clone(), ctx.workspace.branch_name.clone());
     state.scm_cache.entries.write().await.remove(&cache_key);
+    if let Ok(db) = Database::open(&state.db_path) {
+        let _ = db.delete_scm_status_cache(&workspace_id);
+    }
 
     serde_json::from_value(result).map_err(|e| e.to_string())
 }
@@ -361,6 +395,9 @@ pub async fn scm_merge_pr(
     // Invalidate cache
     let cache_key = (ctx.repo.id.clone(), ctx.workspace.branch_name.clone());
     state.scm_cache.entries.write().await.remove(&cache_key);
+    if let Ok(db) = Database::open(&state.db_path) {
+        let _ = db.delete_scm_status_cache(&workspace_id);
+    }
 
     Ok(result)
 }
@@ -374,6 +411,9 @@ pub async fn scm_refresh(
     let ctx = lookup_workspace_context(&state.db_path, &workspace_id).await?;
     let cache_key = (ctx.repo.id, ctx.workspace.branch_name);
     state.scm_cache.entries.write().await.remove(&cache_key);
+    if let Ok(db) = Database::open(&state.db_path) {
+        let _ = db.delete_scm_status_cache(&workspace_id);
+    }
 
     load_scm_detail(workspace_id, state).await
 }
@@ -444,13 +484,24 @@ async fn poll_workspace_scm(app_state: &AppState, workspace_id: &str) -> Option<
         .await
         .ok()?;
 
-    let provider_name = resolve_provider_for_polling(
+    let provider_name = match resolve_provider_for_polling(
         &ctx.manual_override,
         &ctx.repo.path,
         ctx.repo.default_remote.as_deref(),
         app_state,
     )
-    .await?;
+    .await
+    {
+        Some(name) => name,
+        None => {
+            // Clear any stale cache row so old badges don't persist across restarts
+            // when the provider is no longer available (e.g. plugin removed).
+            if let Ok(db) = Database::open(&app_state.db_path) {
+                let _ = db.delete_scm_status_cache(workspace_id);
+            }
+            return None;
+        }
+    };
 
     let ws_info = make_workspace_info(&ctx.workspace, &ctx.repo);
     let cache_key = (ctx.repo.id.clone(), ctx.workspace.branch_name.clone());
@@ -521,7 +572,7 @@ async fn poll_workspace_scm(app_state: &AppState, workspace_id: &str) -> Option<
         let cached_error = error.clone();
         let mut cache = app_state.scm_cache.entries.write().await;
         cache.insert(
-            cache_key,
+            cache_key.clone(),
             ScmCacheEntry {
                 pull_request: pull_request.clone(),
                 ci_checks: ci_checks.clone(),
@@ -529,6 +580,31 @@ async fn poll_workspace_scm(app_state: &AppState, workspace_id: &str) -> Option<
                 error: cached_error,
             },
         );
+    }
+
+    // Persist to SQLite for instant display on next app launch.
+    {
+        match Database::open(&app_state.db_path) {
+            Ok(db) => {
+                if let Err(e) = db.upsert_scm_status_cache(&claudette::db::ScmStatusCacheRow {
+                    workspace_id: workspace_id.to_string(),
+                    repo_id: cache_key.0.clone(),
+                    branch_name: cache_key.1.clone(),
+                    provider: Some(provider_name.clone()),
+                    pr_json: serde_json::to_string(&pull_request).ok(),
+                    ci_json: serde_json::to_string(&ci_checks).ok(),
+                    error: error.clone(),
+                    fetched_at: String::new(),
+                }) {
+                    eprintln!(
+                        "[scm] Failed to persist SCM cache for workspace {workspace_id}: {e}"
+                    );
+                }
+            }
+            Err(e) => {
+                eprintln!("[scm] Failed to open DB for SCM cache persistence: {e}");
+            }
+        }
     }
 
     Some(ScmDetail {
@@ -685,6 +761,7 @@ async fn auto_archive_workspace(
 
         // Update DB status
         let _ = db.delete_terminal_tabs_for_workspace(workspace_id);
+        let _ = db.delete_scm_status_cache(workspace_id);
         let _ = db.update_workspace_status(
             workspace_id,
             &claudette::model::WorkspaceStatus::Archived,
