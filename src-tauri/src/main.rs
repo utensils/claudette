@@ -355,6 +355,7 @@ fn main() {
             commands::workspace::delete_workspace,
             commands::workspace::generate_workspace_name,
             commands::workspace::refresh_branches,
+            commands::workspace::refresh_workspace_branch,
             commands::workspace::discover_worktrees,
             commands::workspace::import_worktrees,
             commands::workspace::open_workspace_in_terminal,
