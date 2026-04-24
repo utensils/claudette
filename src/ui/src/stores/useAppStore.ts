@@ -16,11 +16,20 @@ import type {
   FileDiff,
   DiffViewMode,
   TerminalTab,
+  TerminalPaneNode,
+  TerminalPaneNodeId,
+  TerminalSplitDirection,
   WorkspaceCommandState,
   RemoteConnectionInfo,
   DiscoveredServer,
   ConversationCheckpoint,
 } from "../types";
+import {
+  closeLeaf as closeLeafInTree,
+  makeLeaf as makePaneLeaf,
+  splitLeaf as splitLeafInTree,
+  updateSizes as updateSizesInTree,
+} from "./terminalPaneTree";
 import type { McpStatusSnapshot } from "../types/mcp";
 import type { RemoteInitialData } from "../types/remote";
 import type { DetectedApp } from "../types/apps";
@@ -315,6 +324,47 @@ interface AppState {
   ) => void;
   updateTerminalTabPtyId: (tabId: number, ptyId: number) => void;
 
+  // Per-tab split-pane layout (ephemeral — not persisted). Keyed by tab id.
+  terminalPaneTrees: Record<number, TerminalPaneNode>;
+  // Active leaf id per tab — which pane receives focus and keyboard shortcuts.
+  activeTerminalPaneId: Record<number, TerminalPaneNodeId>;
+  // Maximum leaves per tab before splits are refused. Exposed on state so
+  // the UI can disable the split button at the cap.
+  terminalPaneMaxLeaves: number;
+  // Ensure a tab has a pane tree; no-op if one already exists. Returns the
+  // (possibly pre-existing) root leaf id for convenience.
+  ensurePaneTree: (tabId: number) => TerminalPaneNodeId;
+  setPaneTree: (tabId: number, tree: TerminalPaneNode) => void;
+  // Split the given leaf in two. Returns the id of the newly-created leaf,
+  // or null if the split was refused (cap reached, leaf not in tree, etc).
+  splitPane: (
+    tabId: number,
+    leafId: TerminalPaneNodeId,
+    direction: TerminalSplitDirection,
+  ) => TerminalPaneNodeId | null;
+  // Close a single pane. Returns the id of the newly-focused leaf, or null
+  // if the pane was the sole leaf (caller should close the tab instead).
+  closePane: (
+    tabId: number,
+    leafId: TerminalPaneNodeId,
+  ) => TerminalPaneNodeId | null;
+  setActivePane: (tabId: number, leafId: TerminalPaneNodeId) => void;
+  setPaneSizes: (
+    tabId: number,
+    splitId: TerminalPaneNodeId,
+    sizes: [number, number],
+  ) => void;
+  setPanePtyId: (
+    tabId: number,
+    leafId: TerminalPaneNodeId,
+    ptyId: number,
+  ) => void;
+  setPaneSpawnError: (
+    tabId: number,
+    leafId: TerminalPaneNodeId,
+    error: string | null,
+  ) => void;
+
   // -- SCM --
   scmSummary: Record<string, import("../types/plugin").ScmSummary>;
   scmDetail: import("../types/plugin").ScmDetail | null;
@@ -478,7 +528,7 @@ interface AppState {
 
 const toastTimers = new Map<string, number>();
 
-export const useAppStore = create<AppState>((set) => ({
+export const useAppStore = create<AppState>((set, get) => ({
   // -- Repositories --
   repositories: [],
   setRepositories: (repos) => set({ repositories: repos }),
@@ -500,11 +550,21 @@ export const useAppStore = create<AppState>((set) => ({
       const newActiveTerminalTabId = { ...s.activeTerminalTabId };
       const newWorkspaceTerminalCommands = { ...s.workspaceTerminalCommands };
       const newUnreadCompletions = new Set(s.unreadCompletions);
+      // Collect all tab ids we're about to orphan, then drop their pane
+      // trees and active-pane entries alongside the workspace-keyed maps.
+      const orphanedTabIds = new Set<number>();
       for (const wsId of removedWsIds) {
+        for (const tab of s.terminalTabs[wsId] ?? []) orphanedTabIds.add(tab.id);
         delete newTerminalTabs[wsId];
         delete newActiveTerminalTabId[wsId];
         delete newWorkspaceTerminalCommands[wsId];
         newUnreadCompletions.delete(wsId);
+      }
+      const newPaneTrees = { ...s.terminalPaneTrees };
+      const newActivePane = { ...s.activeTerminalPaneId };
+      for (const tabId of orphanedTabIds) {
+        delete newPaneTrees[tabId];
+        delete newActivePane[tabId];
       }
       return {
         repositories: s.repositories.filter((r) => r.id !== id),
@@ -519,6 +579,8 @@ export const useAppStore = create<AppState>((set) => ({
         activeTerminalTabId: newActiveTerminalTabId,
         workspaceTerminalCommands: newWorkspaceTerminalCommands,
         unreadCompletions: newUnreadCompletions,
+        terminalPaneTrees: newPaneTrees,
+        activeTerminalPaneId: newActivePane,
       };
     }),
 
@@ -541,12 +603,19 @@ export const useAppStore = create<AppState>((set) => ({
       // The cleanup effect in TerminalPanel watches `terminalTabs` and tears
       // down xterm instances and PTYs whose tab ids no longer exist in any
       // workspace; the other maps are value-keyed by workspace id.
+      const orphanedTabIds = (s.terminalTabs[id] ?? []).map((t) => t.id);
       const newTerminalTabs = { ...s.terminalTabs };
       delete newTerminalTabs[id];
       const newActiveTerminalTabId = { ...s.activeTerminalTabId };
       delete newActiveTerminalTabId[id];
       const newWorkspaceTerminalCommands = { ...s.workspaceTerminalCommands };
       delete newWorkspaceTerminalCommands[id];
+      const newPaneTrees = { ...s.terminalPaneTrees };
+      const newActivePane = { ...s.activeTerminalPaneId };
+      for (const tabId of orphanedTabIds) {
+        delete newPaneTrees[tabId];
+        delete newActivePane[tabId];
+      }
       return {
         workspaces: s.workspaces.filter((w) => w.id !== id),
         selectedWorkspaceId:
@@ -555,6 +624,8 @@ export const useAppStore = create<AppState>((set) => ({
         terminalTabs: newTerminalTabs,
         activeTerminalTabId: newActiveTerminalTabId,
         workspaceTerminalCommands: newWorkspaceTerminalCommands,
+        terminalPaneTrees: newPaneTrees,
+        activeTerminalPaneId: newActivePane,
       };
     }),
   selectWorkspace: (id) =>
@@ -1094,11 +1165,21 @@ export const useAppStore = create<AppState>((set) => ({
     set((s) => {
       const tabs = (s.terminalTabs[wsId] || []).filter((t) => t.id !== tabId);
       const wasActive = s.activeTerminalTabId[wsId] === tabId;
+      // Drop the tab's pane tree and active-pane entry. The terminal panel
+      // cleans up xterm instances by observing the terminalTabs map, and
+      // we never want stale pane state to leak if the tab id is later
+      // reused.
+      const nextTrees = { ...s.terminalPaneTrees };
+      delete nextTrees[tabId];
+      const nextActivePane = { ...s.activeTerminalPaneId };
+      delete nextActivePane[tabId];
       return {
         terminalTabs: { ...s.terminalTabs, [wsId]: tabs },
         activeTerminalTabId: wasActive
           ? { ...s.activeTerminalTabId, [wsId]: tabs[0]?.id ?? null }
           : s.activeTerminalTabId,
+        terminalPaneTrees: nextTrees,
+        activeTerminalPaneId: nextActivePane,
       };
     }),
   setActiveTerminalTab: (wsId, id) =>
@@ -1123,6 +1204,119 @@ export const useAppStore = create<AppState>((set) => ({
         );
       }
       return { terminalTabs: newTabs };
+    }),
+
+  // Pane-tree slice. State is ephemeral: if the app restarts, every tab
+  // comes back as a single-leaf tree. See `terminalPaneTree.ts` for the
+  // pure tree operations these setters wrap.
+  terminalPaneTrees: {},
+  activeTerminalPaneId: {},
+  terminalPaneMaxLeaves: 6,
+  ensurePaneTree: (tabId) => {
+    const existing = get().terminalPaneTrees[tabId];
+    if (existing && existing.kind === "leaf") return existing.id;
+    if (existing && existing.kind === "split") {
+      // Use the stored active leaf if valid, otherwise pick the leftmost
+      // leaf as a stable default.
+      const stored = get().activeTerminalPaneId[tabId];
+      if (stored) return stored;
+    }
+    const leaf = makePaneLeaf();
+    set((s) => ({
+      terminalPaneTrees: { ...s.terminalPaneTrees, [tabId]: leaf },
+      activeTerminalPaneId: { ...s.activeTerminalPaneId, [tabId]: leaf.id },
+    }));
+    return leaf.id;
+  },
+  setPaneTree: (tabId, tree) =>
+    set((s) => ({
+      terminalPaneTrees: { ...s.terminalPaneTrees, [tabId]: tree },
+    })),
+  splitPane: (tabId, leafId, direction) => {
+    const state = get();
+    const tree = state.terminalPaneTrees[tabId];
+    if (!tree) return null;
+    const cap = state.terminalPaneMaxLeaves;
+    // Count leaves inline to avoid a second module dep.
+    const countLeaves = (n: TerminalPaneNode): number =>
+      n.kind === "leaf" ? 1 : countLeaves(n.children[0]) + countLeaves(n.children[1]);
+    if (countLeaves(tree) >= cap) return null;
+    const { tree: nextTree, newLeafId } = splitLeafInTree(tree, leafId, direction);
+    if (!newLeafId) return null;
+    set((s) => ({
+      terminalPaneTrees: { ...s.terminalPaneTrees, [tabId]: nextTree },
+      // Focus the freshly created pane.
+      activeTerminalPaneId: { ...s.activeTerminalPaneId, [tabId]: newLeafId },
+    }));
+    return newLeafId;
+  },
+  closePane: (tabId, leafId) => {
+    const state = get();
+    const tree = state.terminalPaneTrees[tabId];
+    if (!tree) return null;
+    const { tree: nextTree, closed, promotedLeafId } = closeLeafInTree(tree, leafId);
+    if (!closed || !promotedLeafId) return null;
+    set((s) => ({
+      terminalPaneTrees: { ...s.terminalPaneTrees, [tabId]: nextTree },
+      activeTerminalPaneId: {
+        ...s.activeTerminalPaneId,
+        [tabId]: promotedLeafId,
+      },
+    }));
+    return promotedLeafId;
+  },
+  setActivePane: (tabId, leafId) =>
+    set((s) => ({
+      activeTerminalPaneId: { ...s.activeTerminalPaneId, [tabId]: leafId },
+    })),
+  setPaneSizes: (tabId, splitId, sizes) =>
+    set((s) => {
+      const tree = s.terminalPaneTrees[tabId];
+      if (!tree) return {};
+      const next = updateSizesInTree(tree, splitId, sizes);
+      if (next === tree) return {};
+      return { terminalPaneTrees: { ...s.terminalPaneTrees, [tabId]: next } };
+    }),
+  setPanePtyId: (tabId, leafId, ptyId) =>
+    set((s) => {
+      const tree = s.terminalPaneTrees[tabId];
+      if (!tree) return {};
+      const rewrite = (n: TerminalPaneNode): TerminalPaneNode => {
+        if (n.kind === "leaf") {
+          return n.id === leafId ? { ...n, ptyId, spawnError: null } : n;
+        }
+        const l = rewrite(n.children[0]);
+        const r = rewrite(n.children[1]);
+        if (l === n.children[0] && r === n.children[1]) return n;
+        return { ...n, children: [l, r] };
+      };
+      const next = rewrite(tree);
+      if (next === tree) return {};
+      return { terminalPaneTrees: { ...s.terminalPaneTrees, [tabId]: next } };
+    }),
+  setPaneSpawnError: (tabId, leafId, error) =>
+    set((s) => {
+      const tree = s.terminalPaneTrees[tabId];
+      if (!tree) return {};
+      const rewrite = (n: TerminalPaneNode): TerminalPaneNode => {
+        if (n.kind === "leaf") {
+          if (n.id !== leafId) return n;
+          // Clear ptyId when an error is set so the UI doesn't accidentally
+          // keep writing to a dead PTY id.
+          return {
+            ...n,
+            spawnError: error,
+            ...(error ? { ptyId: undefined } : {}),
+          };
+        }
+        const l = rewrite(n.children[0]);
+        const r = rewrite(n.children[1]);
+        if (l === n.children[0] && r === n.children[1]) return n;
+        return { ...n, children: [l, r] };
+      };
+      const next = rewrite(tree);
+      if (next === tree) return {};
+      return { terminalPaneTrees: { ...s.terminalPaneTrees, [tabId]: next } };
     }),
 
   // -- UI --

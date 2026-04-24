@@ -45,6 +45,7 @@ type KeyInit = {
   metaKey?: boolean;
   ctrlKey?: boolean;
   shiftKey?: boolean;
+  altKey?: boolean;
 };
 
 function mk(init: KeyInit): KeyboardEvent {
@@ -55,6 +56,7 @@ function mk(init: KeyInit): KeyboardEvent {
     metaKey: init.metaKey ?? false,
     ctrlKey: init.ctrlKey ?? false,
     shiftKey: init.shiftKey ?? false,
+    altKey: init.altKey ?? false,
   } as unknown as KeyboardEvent;
 }
 
@@ -180,5 +182,113 @@ describe("terminalKeyAction", () => {
   it("recognizes Ctrl+- as zoom-out (Linux)", () => {
     expect(terminalKeyAction(mk({ code: "Minus", ctrlKey: true })))
       .toEqual({ kind: "zoom", direction: "out" });
+  });
+
+  describe("split-pane", () => {
+    it("Cmd+D splits side-by-side (horizontal layout) on macOS", () => {
+      expect(terminalKeyAction(mk({ code: "KeyD", key: "d", metaKey: true })))
+        .toEqual({ kind: "split-pane", direction: "horizontal" });
+    });
+
+    it("Cmd+Shift+D splits stacked (vertical layout) on macOS", () => {
+      expect(
+        terminalKeyAction(
+          mk({ code: "KeyD", key: "D", metaKey: true, shiftKey: true }),
+        ),
+      ).toEqual({ kind: "split-pane", direction: "vertical" });
+    });
+
+    it("does NOT intercept bare Ctrl+D — shell EOF must reach the PTY", () => {
+      expect(terminalKeyAction(mk({ code: "KeyD", key: "d", ctrlKey: true })))
+        .toBeNull();
+    });
+
+    it("Ctrl+Shift+D splits side-by-side on Linux/Windows", () => {
+      expect(
+        terminalKeyAction(
+          mk({ code: "KeyD", key: "D", ctrlKey: true, shiftKey: true }),
+        ),
+      ).toEqual({ kind: "split-pane", direction: "horizontal" });
+    });
+
+    it("Ctrl+Shift+Alt+D splits stacked on Linux/Windows", () => {
+      expect(
+        terminalKeyAction(
+          mk({
+            code: "KeyD",
+            key: "D",
+            ctrlKey: true,
+            shiftKey: true,
+            altKey: true,
+          }),
+        ),
+      ).toEqual({ kind: "split-pane", direction: "vertical" });
+    });
+
+    it("works with Dvorak-style layouts via ev.code even when ev.key differs", () => {
+      expect(
+        terminalKeyAction(mk({ code: "KeyD", key: "e", metaKey: true })),
+      ).toEqual({ kind: "split-pane", direction: "horizontal" });
+    });
+  });
+
+  describe("close-pane", () => {
+    it("Cmd+W closes the pane on macOS", () => {
+      expect(terminalKeyAction(mk({ key: "w", metaKey: true })))
+        .toEqual({ kind: "close-pane" });
+    });
+
+    it("does NOT intercept bare Ctrl+W — readline word-rubout must reach the PTY", () => {
+      expect(terminalKeyAction(mk({ key: "w", ctrlKey: true }))).toBeNull();
+    });
+
+    it("Ctrl+Shift+W closes the pane on Linux/Windows", () => {
+      expect(
+        terminalKeyAction(mk({ key: "w", ctrlKey: true, shiftKey: true })),
+      ).toEqual({ kind: "close-pane" });
+    });
+  });
+
+  describe("focus-pane", () => {
+    it("Cmd+Option+Arrow navigates between panes", () => {
+      expect(
+        terminalKeyAction(
+          mk({ key: "ArrowLeft", metaKey: true, altKey: true }),
+        ),
+      ).toEqual({ kind: "focus-pane", direction: "left" });
+      expect(
+        terminalKeyAction(
+          mk({ key: "ArrowRight", metaKey: true, altKey: true }),
+        ),
+      ).toEqual({ kind: "focus-pane", direction: "right" });
+      expect(
+        terminalKeyAction(
+          mk({ key: "ArrowUp", metaKey: true, altKey: true }),
+        ),
+      ).toEqual({ kind: "focus-pane", direction: "up" });
+      expect(
+        terminalKeyAction(
+          mk({ key: "ArrowDown", metaKey: true, altKey: true }),
+        ),
+      ).toEqual({ kind: "focus-pane", direction: "down" });
+    });
+
+    it("Ctrl+Alt+Arrow also navigates (Linux convention)", () => {
+      expect(
+        terminalKeyAction(
+          mk({ key: "ArrowLeft", ctrlKey: true, altKey: true }),
+        ),
+      ).toEqual({ kind: "focus-pane", direction: "left" });
+    });
+
+    it("bare Option+Arrow is NOT intercepted — word-motion belongs to readline", () => {
+      expect(terminalKeyAction(mk({ key: "ArrowLeft", altKey: true })))
+        .toBeNull();
+    });
+
+    it("Cmd+Arrow without Alt is NOT intercepted — line-motion on macOS", () => {
+      expect(terminalKeyAction(mk({ key: "ArrowLeft", metaKey: true })))
+        .toBeNull();
+    });
   });
 });

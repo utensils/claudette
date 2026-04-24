@@ -18,6 +18,11 @@ export type {
 } from "./diff";
 export type {
   TerminalTab,
+  TerminalLeafPane,
+  TerminalSplitPane,
+  TerminalPaneNode,
+  TerminalPaneNodeId,
+  TerminalSplitDirection,
   WorkspaceCommandState,
   CommandEvent,
   SetupResult,

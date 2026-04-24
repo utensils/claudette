@@ -12,7 +12,7 @@ Claudette supports keyboard shortcuts for fast navigation and common actions. Ho
 | Shortcut | Action |
 |----------|--------|
 | `⌘/Ctrl + B` | Toggle sidebar |
-| `⌘/Ctrl + D` | Toggle diff panel (right sidebar) |
+| `⌘/Ctrl + D` | Toggle diff panel (right sidebar) — when the terminal is focused this splits the terminal instead, see [Terminal Panes](#terminal-panes) |
 | `` ⌘/Ctrl + ` `` | Toggle terminal panel |
 | `⌘/Ctrl + ,` | Open/close settings |
 
@@ -37,6 +37,21 @@ Claudette supports keyboard shortcuts for fast navigation and common actions. Ho
 |----------|--------|
 | `Shift + Tab` | Toggle plan mode |
 | `Escape` | Dismiss current overlay, or stop running agent |
+
+### Terminal Panes
+
+These fire only when a terminal pane has keyboard focus — they shadow the
+equivalent global shortcuts (e.g. `⌘D` toggles the diff panel when the chat
+is focused but splits the terminal when the terminal is focused).
+
+| Shortcut | Action |
+|----------|--------|
+| `⌘D` (macOS) / `Ctrl+Shift+D` (Linux) | Split pane side-by-side |
+| `⌘⇧D` (macOS) / `Ctrl+Shift+Alt+D` (Linux) | Split pane stacked |
+| `⌘W` (macOS) / `Ctrl+Shift+W` (Linux) | Close the focused pane (or the tab when it's the last pane) |
+| `⌘⌥←/→/↑/↓` (macOS) / `Ctrl+Alt+arrow` (Linux) | Move focus to the neighboring pane |
+| `⌘T` (macOS) / `Ctrl+Shift+T` (Linux) | New terminal tab |
+| `⌘⇧[` / `⌘⇧]` | Previous / next terminal tab |
 
 ## Escape Key Priority
 
