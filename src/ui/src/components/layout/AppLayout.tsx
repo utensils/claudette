@@ -13,6 +13,7 @@ import { SettingsPage } from "../settings/SettingsPage";
 import { ResizeHandle } from "./ResizeHandle";
 import { ToastContainer } from "./Toast";
 import { useAgentStream } from "../../hooks/useAgentStream";
+import { isAgentBusy } from "../../utils/agentStatus";
 import { useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
 import { useBranchRefresh } from "../../hooks/useBranchRefresh";
 import { useAutoUpdater } from "../../hooks/useAutoUpdater";
@@ -40,22 +41,24 @@ export function AppLayout() {
   useAutoUpdater();
 
   useEffect(() => {
-    const prevStatuses: Record<string, string> = {};
+    const prevBusy = new Map<string, boolean>();
     for (const ws of useAppStore.getState().workspaces) {
-      prevStatuses[ws.id] = typeof ws.agent_status === "string" ? ws.agent_status : "Error";
+      prevBusy.set(ws.id, isAgentBusy(ws.agent_status));
     }
-    return useAppStore.subscribe((state) => {
+    return useAppStore.subscribe((state, prev) => {
+      if (state.workspaces === prev.workspaces) return;
+      const currentIds = new Set<string>();
       for (const ws of state.workspaces) {
-        const prev = prevStatuses[ws.id];
-        prevStatuses[ws.id] = typeof ws.agent_status === "string" ? ws.agent_status : "Error";
-        if (
-          prev &&
-          (prev === "Running" || prev === "Compacting") &&
-          ws.agent_status !== "Running" &&
-          ws.agent_status !== "Compacting"
-        ) {
+        currentIds.add(ws.id);
+        const wasBusy = prevBusy.get(ws.id);
+        const busy = isAgentBusy(ws.agent_status);
+        prevBusy.set(ws.id, busy);
+        if (wasBusy && !busy) {
           state.markWorkspaceAsUnread(ws.id);
         }
+      }
+      for (const id of prevBusy.keys()) {
+        if (!currentIds.has(id)) prevBusy.delete(id);
       }
     });
   }, []);

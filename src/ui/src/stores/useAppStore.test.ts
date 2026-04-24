@@ -1326,3 +1326,37 @@ describe("rollbackConversation updates latestTurnUsage", () => {
     expect(useAppStore.getState().latestTurnUsage.ws1).toBeUndefined();
   });
 });
+
+describe("selectWorkspace clears unreadCompletions", () => {
+  beforeEach(() => {
+    useAppStore.setState({
+      unreadCompletions: new Set<string>(),
+      selectedWorkspaceId: null,
+    });
+  });
+
+  it("clears unread for the selected workspace", () => {
+    useAppStore.getState().markWorkspaceAsUnread("ws-a");
+    expect(useAppStore.getState().unreadCompletions.has("ws-a")).toBe(true);
+
+    useAppStore.getState().selectWorkspace("ws-a");
+    expect(useAppStore.getState().unreadCompletions.has("ws-a")).toBe(false);
+    expect(useAppStore.getState().selectedWorkspaceId).toBe("ws-a");
+  });
+
+  it("does not clear unread for other workspaces", () => {
+    useAppStore.getState().markWorkspaceAsUnread("ws-a");
+    useAppStore.getState().markWorkspaceAsUnread("ws-b");
+
+    useAppStore.getState().selectWorkspace("ws-b");
+    expect(useAppStore.getState().unreadCompletions.has("ws-a")).toBe(true);
+    expect(useAppStore.getState().unreadCompletions.has("ws-b")).toBe(false);
+  });
+
+  it("handles selecting null (dashboard) without error", () => {
+    useAppStore.getState().markWorkspaceAsUnread("ws-a");
+    useAppStore.getState().selectWorkspace(null);
+    expect(useAppStore.getState().unreadCompletions.has("ws-a")).toBe(true);
+    expect(useAppStore.getState().selectedWorkspaceId).toBeNull();
+  });
+});
