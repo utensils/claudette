@@ -27,7 +27,11 @@ import {
   terminalKeyAction,
   type TerminalKeyAction,
 } from "./terminalShortcuts";
-import { countLeaves, neighborLeaf } from "../../stores/terminalPaneTree";
+import {
+  countLeaves,
+  neighborLeaf,
+  shouldFocusLeaf,
+} from "../../stores/terminalPaneTree";
 import { trimSelectionTrailingWhitespace } from "./terminalSelection";
 import {
   focusActiveTerminal,
@@ -511,9 +515,60 @@ export const TerminalPanel = memo(function TerminalPanel() {
         if (inst.ptyId >= 0) {
           resizePty(inst.ptyId, inst.term.cols, inst.term.rows);
         }
+        // After a split, the shell receives SIGWINCH and typically
+        // redraws its prompt, pushing previous output up out of the
+        // (now smaller) viewport. Scrolling to the bottom keeps the
+        // cursor / newest output in view — without this the user
+        // perceives the split as having "truncated" or "reset" their
+        // terminal content, even though the scrollback is intact.
+        inst.term.scrollToBottom();
       }
     }
-  }, [terminalTabs, workspaces, terminalPaneTrees, createInstance, destroyInstance]);
+
+    // Apply keyboard focus to whichever leaf the store says is active
+    // for the currently-selected tab. We do this in the same
+    // useLayoutEffect (rather than a separate useEffect with a deferred
+    // timer) because rapid-fire state changes at startup or during a
+    // split were cancelling the deferred focus calls before they could
+    // run. Doing the focus synchronously here — after reparent, in the
+    // same render cycle — guarantees exactly one focus attempt per
+    // applied layout change.
+    if (terminalPanelVisible && activeTerminalTabId != null) {
+      const focusedLeafId = activeTerminalPaneId[activeTerminalTabId];
+      if (focusedLeafId) {
+        const inst = instancesRef.current.get(focusedLeafId);
+        if (
+          inst &&
+          shouldFocusLeaf(
+            focusedLeafId,
+            inst.tabId,
+            activeTerminalPaneId,
+            activeTerminalTabId,
+            terminalPanelVisible,
+          )
+        ) {
+          // The helper textarea is what xterm's own click-focus
+          // path uses; calling term.focus() directly can no-op on
+          // the very first mount.
+          const helper = inst.container.querySelector(
+            ".xterm-helper-textarea",
+          ) as HTMLTextAreaElement | null;
+          if (helper) helper.focus();
+          else inst.term.focus();
+          inst.term.scrollToBottom();
+        }
+      }
+    }
+  }, [
+    terminalTabs,
+    workspaces,
+    terminalPaneTrees,
+    activeTerminalPaneId,
+    activeTerminalTabId,
+    terminalPanelVisible,
+    createInstance,
+    destroyInstance,
+  ]);
 
   // Font / theme propagation across all live instances.
   useEffect(() => {
@@ -536,14 +591,16 @@ export const TerminalPanel = memo(function TerminalPanel() {
     }
   }, [currentThemeId, fontFamilyMono]);
 
-  // Refit + focus on panel-visibility transitions.
+  // Refit on panel-visibility / tab-switch transitions. Focus is handled
+  // by the dedicated active-leaf effect below, which respects the
+  // per-tab active pane rather than indiscriminately focusing the first
+  // xterm helper textarea it finds.
   useEffect(() => {
     if (!terminalPanelVisible) return;
     const id = requestAnimationFrame(() => {
       for (const inst of instancesRef.current.values()) {
         safeFit(inst);
       }
-      focusActiveTerminal();
     });
     return () => cancelAnimationFrame(id);
   }, [terminalPanelVisible, activeTerminalTabId]);

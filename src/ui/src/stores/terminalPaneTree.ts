@@ -198,6 +198,31 @@ export function updateSizes(
   return { ...tree, children: [nextLeft, nextRight] };
 }
 
+/**
+ * Returns true when the given leaf should currently receive keyboard focus.
+ *
+ * A leaf is focus-eligible only when:
+ *   - the terminal panel is visible at all;
+ *   - the leaf belongs to the tab the user currently has active in the
+ *     workspace (we don't steal focus into a leaf of a background tab);
+ *   - the leaf is marked as the active pane for that tab.
+ *
+ * Pure so we can unit-test the "splitting jumps focus to the new pane"
+ * and "closing jumps focus back to the sibling" contracts without needing
+ * a DOM. See `shouldFocusLeaf` tests in terminalPaneTree.test.ts.
+ */
+export function shouldFocusLeaf(
+  leafId: TerminalPaneNodeId,
+  tabId: number,
+  activeLeafByTab: Readonly<Record<number, TerminalPaneNodeId>>,
+  selectedTabId: number | null,
+  panelVisible: boolean,
+): boolean {
+  if (!panelVisible) return false;
+  if (selectedTabId == null || tabId !== selectedTabId) return false;
+  return activeLeafByTab[tabId] === leafId;
+}
+
 export type PaneNavigationDirection = "left" | "right" | "up" | "down";
 
 // Return the id of the leaf to focus when moving from `fromId` in the given

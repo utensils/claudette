@@ -12,6 +12,7 @@ import {
   findParentSplit,
   makeLeaf,
   neighborLeaf,
+  shouldFocusLeaf,
   splitLeaf,
   updateSizes,
 } from "./terminalPaneTree";
@@ -282,5 +283,65 @@ describe("neighborLeaf", () => {
 
   it("returns null when id is missing", () => {
     expect(neighborLeaf(tree, "missing", "right")).toBeNull();
+  });
+});
+
+// Regression: the "splitting should jump focus clearly to new split,
+// closing should jump focus back to previous" bug. The store sets
+// activeTerminalPaneId correctly, but the UI effect must only apply
+// keyboard focus when the leaf is the active leaf of the currently-
+// selected tab, and only while the terminal panel is visible.
+describe("shouldFocusLeaf", () => {
+  it("focuses the leaf that is active for the selected tab when the panel is visible", () => {
+    expect(
+      shouldFocusLeaf("leaf-a", 1, { 1: "leaf-a" }, 1, true),
+    ).toBe(true);
+  });
+
+  it("does not focus the leaf when it is NOT the active leaf for its tab", () => {
+    expect(
+      shouldFocusLeaf("leaf-b", 1, { 1: "leaf-a" }, 1, true),
+    ).toBe(false);
+  });
+
+  it("does not focus leaves belonging to a background tab", () => {
+    expect(
+      shouldFocusLeaf("leaf-a", 2, { 2: "leaf-a" }, 1, true),
+    ).toBe(false);
+  });
+
+  it("does not focus anything when the terminal panel is hidden", () => {
+    expect(
+      shouldFocusLeaf("leaf-a", 1, { 1: "leaf-a" }, 1, false),
+    ).toBe(false);
+  });
+
+  it("does not focus anything when no tab is selected", () => {
+    expect(
+      shouldFocusLeaf("leaf-a", 1, { 1: "leaf-a" }, null, true),
+    ).toBe(false);
+  });
+
+  // Split contract: after a split, activeTerminalPaneId swings to the
+  // new leaf — this function must report the new leaf as focus-eligible
+  // and the previously-active leaf as no longer focus-eligible.
+  it("after split: new leaf becomes focus-eligible, old leaf is not", () => {
+    const before = { 1: "old-leaf" };
+    const after = { 1: "new-leaf" };
+    // Before split, old is active:
+    expect(shouldFocusLeaf("old-leaf", 1, before, 1, true)).toBe(true);
+    expect(shouldFocusLeaf("new-leaf", 1, before, 1, true)).toBe(false);
+    // After split, active swings to new:
+    expect(shouldFocusLeaf("old-leaf", 1, after, 1, true)).toBe(false);
+    expect(shouldFocusLeaf("new-leaf", 1, after, 1, true)).toBe(true);
+  });
+
+  // Close contract: after closing the active leaf, the store promotes
+  // the sibling — focus must follow to the sibling.
+  it("after close: surviving sibling becomes focus-eligible", () => {
+    const before = { 1: "new-leaf" };
+    const after = { 1: "old-leaf" }; // sibling promoted
+    expect(shouldFocusLeaf("old-leaf", 1, before, 1, true)).toBe(false);
+    expect(shouldFocusLeaf("old-leaf", 1, after, 1, true)).toBe(true);
   });
 });
