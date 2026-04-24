@@ -21,6 +21,7 @@ pub mod cache;
 #[cfg(test)]
 mod plugin_tests;
 pub mod types;
+pub mod watcher;
 
 use std::path::Path;
 use std::time::SystemTime;
@@ -33,6 +34,7 @@ use backend::EnvProviderBackend;
 pub use backend::PluginRegistryBackend;
 pub use cache::EnvCache;
 use types::EnvMap;
+pub use watcher::EnvWatcher;
 
 /// Convenience helper that wires the standard [`PluginRegistryBackend`]
 /// into [`resolve_for_workspace`] with minimal boilerplate at the call

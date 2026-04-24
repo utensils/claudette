@@ -106,6 +106,21 @@ impl EnvCache {
         true
     }
 
+    /// Return the paths this `(worktree, plugin)` entry is watching,
+    /// or an empty vec if no entry exists. Used by the fs watcher to
+    /// learn which paths to subscribe to after a fresh export —
+    /// callers shouldn't have to re-derive the list from the plugin's
+    /// return value because it may have been normalized by `put`.
+    pub fn watched_paths(&self, worktree: &Path, plugin: &str) -> Vec<PathBuf> {
+        let key = (worktree.to_path_buf(), plugin.to_string());
+        self.entries
+            .read()
+            .unwrap()
+            .get(&key)
+            .map(|entry| entry.watched.iter().map(|(p, _)| p.clone()).collect())
+            .unwrap_or_default()
+    }
+
     /// Forget the cache for `(worktree, plugin)`. If `plugin` is `None`,
     /// forget all plugins for the worktree. Used by the "Reload env" UI
     /// action and by detect=false (plugin no longer applies).

@@ -26,6 +26,11 @@ dirs = "6"
 open = "5"
 mlua = { version = "0.10", features = ["luau", "serialize", "async", "send"] }
 flate2 = "1"
+# Cross-platform filesystem watcher used by env-provider reactive
+# invalidation. RecommendedWatcher picks FSEvents (macOS), inotify
+# (Linux), and ReadDirectoryChangesW (Windows) — single API across all
+# three target platforms.
+notify = "7"
 rand = "0.8"
 sha2 = "0.10"
 tar = "0.4"

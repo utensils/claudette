@@ -11,13 +11,25 @@
 
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::Arc;
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use claudette::db::Database;
+use claudette::env_provider::EnvWatcher;
 
 use crate::state::AppState;
+
+/// Payload for the `env-cache-invalidated` Tauri event. The frontend's
+/// EnvPanel subscribes to this and refetches when the worktree + plugin
+/// match what it's currently displaying. Kept deliberately small so
+/// routing logic on the JS side can be a string compare.
+#[derive(Clone, Serialize)]
+pub struct EnvCacheInvalidatedPayload {
+    pub worktree_path: String,
+    pub plugin_name: String,
+}
 
 /// App-settings key for "is this env-provider enabled for this repo?".
 /// Default (absent key) is enabled. `"false"` disables.
@@ -130,6 +142,12 @@ pub async fn get_env_sources(
         &disabled,
     )
     .await;
+
+    // Subscribe the fs watcher to every freshly-cached plugin's
+    // watched paths. Must happen BEFORE `filter_globally_disabled`
+    // moves `resolved.sources` — we want to register even hidden
+    // sources so backing invalidation stays correct.
+    register_resolved_with_watcher(&state, Path::new(&worktree), &resolved.sources).await;
 
     let visible = filter_globally_disabled(resolved.sources, |name| registry.is_disabled(name));
     let sources = visible
@@ -431,6 +449,113 @@ async fn resolve_target(
             Ok((repo.path, ws_info, repo.id))
         }
     }
+}
+
+/// Build the `EnvWatcher` and store it in `AppState`. Called once at
+/// Tauri setup time. The change callback invalidates the cache entry
+/// and emits `env-cache-invalidated` so any live UI can refetch. On
+/// construction failure (rare — usually Linux inotify limits) we log
+/// and leave `env_watcher = None`, which means reactive invalidation
+/// is disabled but lazy mtime invalidation still works.
+pub fn setup_env_watcher(app: AppHandle) {
+    let state = app.state::<AppState>();
+    let cache = Arc::clone(&state.env_cache);
+    let app_for_cb = app.clone();
+    let watcher = match EnvWatcher::new(Arc::new(move |worktree, plugin| {
+        cache.invalidate(worktree, Some(plugin));
+        let _ = app_for_cb.emit(
+            "env-cache-invalidated",
+            EnvCacheInvalidatedPayload {
+                worktree_path: worktree.to_string_lossy().into_owned(),
+                plugin_name: plugin.to_string(),
+            },
+        );
+    })) {
+        Ok(w) => Arc::new(w),
+        Err(err) => {
+            eprintln!("[env-watcher] failed to start: {err} — reactive invalidation disabled");
+            return;
+        }
+    };
+    // Block-on is fine here — `setup_env_watcher` runs during Tauri
+    // setup, where we're not on a hot path; the lock is held for a
+    // single swap. The `Arc<EnvWatcher>` then lives for the app
+    // lifetime.
+    let app_for_store = app.clone();
+    tauri::async_runtime::block_on(async move {
+        let state = app_for_store.state::<AppState>();
+        *state.env_watcher.write().await = Some(watcher);
+    });
+}
+
+/// Register every `(worktree, plugin)` that was just resolved with
+/// the fs watcher, using the watched paths the cache stored. Called
+/// after each `resolve_with_registry` so reactive invalidation stays
+/// current as plugins change what they care about.
+///
+/// Plugins whose source entry errored or didn't detect are skipped —
+/// they have no cached watched paths to register.
+pub async fn register_resolved_with_watcher(
+    state: &AppState,
+    worktree: &Path,
+    sources: &[claudette::env_provider::ResolvedSource],
+) {
+    let watcher_guard = state.env_watcher.read().await;
+    let Some(watcher) = watcher_guard.as_ref() else {
+        return;
+    };
+    for source in sources {
+        if source.error.is_some() || !source.detected {
+            // detect=false / error path: the dispatcher already
+            // invalidated this entry; make sure the watcher drops it
+            // too so we stop receiving events for stale paths.
+            watcher.unregister(worktree, Some(&source.plugin_name));
+            continue;
+        }
+        let paths = state.env_cache.watched_paths(worktree, &source.plugin_name);
+        if paths.is_empty() {
+            continue;
+        }
+        watcher.register(worktree, &source.plugin_name, &paths);
+    }
+}
+
+/// Fire-and-forget env-provider warmup for a freshly-added repo.
+/// Resolves against the repo's main checkout so the cache is ready
+/// for the first EnvPanel open, and trust errors (`.envrc` blocked,
+/// `mise.toml` untrusted) surface before the user creates a workspace.
+///
+/// Errors are swallowed — this is best-effort warmup, not a
+/// correctness path. The user will see the error on the next EnvPanel
+/// open if the warmup genuinely failed.
+pub fn spawn_repo_env_warmup(app: AppHandle, repo_id: String) {
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        let Ok(db) = Database::open(&state.db_path) else {
+            return;
+        };
+        let Ok(Some(repo)) = db.get_repository(&repo_id) else {
+            return;
+        };
+        let ws_info = claudette::plugin_runtime::host_api::WorkspaceInfo {
+            id: format!("repo:{}", repo.id),
+            name: repo.name.clone(),
+            branch: String::new(),
+            worktree_path: repo.path.clone(),
+            repo_path: repo.path.clone(),
+        };
+        let disabled = load_disabled_providers(&db, &repo.id);
+        let registry = state.plugins.read().await;
+        let resolved = claudette::env_provider::resolve_with_registry(
+            &registry,
+            &state.env_cache,
+            Path::new(&repo.path),
+            &ws_info,
+            &disabled,
+        )
+        .await;
+        register_resolved_with_watcher(&state, Path::new(&repo.path), &resolved.sources).await;
+    });
 }
 
 #[cfg(test)]

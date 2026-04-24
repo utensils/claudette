@@ -8,7 +8,7 @@ use claudette::agent::PersistentSession;
 use parking_lot::Mutex as ParkingMutex;
 use tokio::sync::{RwLock, Semaphore};
 
-use claudette::env_provider::EnvCache;
+use claudette::env_provider::{EnvCache, EnvWatcher};
 use claudette::plugin_runtime::PluginRegistry;
 use claudette::scm::types::{CiCheck, PullRequest};
 
@@ -296,6 +296,13 @@ pub struct AppState {
     /// `(worktree, plugin_name)` pair, invalidated when any watched
     /// file (`.envrc`, `mise.toml`, `.env`, `flake.lock`, etc.) changes.
     pub env_cache: Arc<EnvCache>,
+    /// Filesystem watcher that proactively evicts `env_cache` entries
+    /// when any plugin's `watched` paths change on disk. Set at
+    /// startup from `main.rs` once the `AppHandle` is available so
+    /// the change callback can emit an `env-cache-invalidated` Tauri
+    /// event; `None` before setup finishes or if watcher construction
+    /// failed (logged, lazy mtime invalidation still covers).
+    pub env_watcher: RwLock<Option<Arc<EnvWatcher>>>,
     /// Cached PR/CI status data keyed by (repo_id, branch_name).
     pub scm_cache: ScmCache,
     /// Limits concurrent SCM CLI invocations.
@@ -330,6 +337,7 @@ impl AppState {
             usage_cache: RwLock::new(None),
             plugins: RwLock::new(plugins),
             env_cache: Arc::new(EnvCache::new()),
+            env_watcher: RwLock::new(None),
             scm_cache: ScmCache::new(),
             scm_semaphore: Arc::new(Semaphore::new(4)),
             pending_update: tokio::sync::Mutex::new(None),

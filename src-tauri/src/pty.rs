@@ -124,6 +124,12 @@ pub async fn spawn_pty(
         )
         .await
     };
+    crate::commands::env::register_resolved_with_watcher(
+        &state,
+        std::path::Path::new(&working_dir),
+        &resolved_env.sources,
+    )
+    .await;
     for (k, v) in &resolved_env.vars {
         match v {
             Some(val) => cmd.env(k, val),

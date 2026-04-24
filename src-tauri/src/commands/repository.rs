@@ -108,6 +108,15 @@ pub async fn add_repository(
 
     crate::tray::rebuild_tray(&app);
 
+    // Warm the env-provider cache against the repo's main checkout
+    // so the first EnvPanel open doesn't pay the cold cost — and so
+    // any trust issues (blocked `.envrc`, untrusted `mise.toml`) show
+    // up before the user tries to spawn a workspace. Fire-and-forget
+    // because a `.envrc` can prompt for `direnv allow` which takes
+    // time; blocking `add_repository` on it would make the repo-add
+    // UX sluggish.
+    crate::commands::env::spawn_repo_env_warmup(app.clone(), repo.id.clone());
+
     Ok(repo)
 }
 

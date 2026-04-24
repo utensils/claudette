@@ -470,16 +470,21 @@ async fn resolve_env_for_workspace(
         .map(|db| crate::commands::env::load_disabled_providers(&db, &ws.repository_id))
         .unwrap_or_default();
     let registry = state.plugins.read().await;
-    Some(
-        claudette::env_provider::resolve_with_registry(
-            &registry,
-            &state.env_cache,
-            Path::new(worktree),
-            &ws_info,
-            &disabled,
-        )
-        .await,
+    let resolved = claudette::env_provider::resolve_with_registry(
+        &registry,
+        &state.env_cache,
+        Path::new(worktree),
+        &ws_info,
+        &disabled,
     )
+    .await;
+    crate::commands::env::register_resolved_with_watcher(
+        state,
+        Path::new(worktree),
+        &resolved.sources,
+    )
+    .await;
+    Some(resolved)
 }
 
 #[tauri::command]

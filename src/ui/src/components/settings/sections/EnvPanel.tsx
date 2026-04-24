@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   getEnvSources,
   reloadEnv,
@@ -218,6 +219,40 @@ export function EnvPanel({ target }: EnvPanelProps) {
 
   useEffect(() => {
     void refresh();
+  }, [refresh]);
+
+  // Reactive invalidation: when the Rust-side fs watcher detects that
+  // a plugin's watched file changed (user edited `.envrc`, ran
+  // `direnv allow`, modified `flake.lock`, etc.), the backend emits
+  // `env-cache-invalidated`. We refetch so the panel shows fresh
+  // vars_contributed counts without the user having to click Reload.
+  //
+  // Debounced because editors often save + swap + touch, firing the
+  // event 2-3 times in rapid succession. 300ms coalesces the bursts
+  // into a single re-resolve.
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        unlisten = await listen("env-cache-invalidated", () => {
+          if (cancelled) return;
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(() => {
+            void refresh();
+          }, 300);
+        });
+      } catch {
+        // Listen failure means the event bridge isn't wired up — fall
+        // back to the existing manual Reload button. Silent is fine.
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      unlisten?.();
+    };
   }, [refresh]);
 
   const handleReloadAll = useCallback(async () => {

@@ -323,6 +323,15 @@ fn main() {
             // Start background SCM polling for PR status and CI checks.
             commands::scm::start_scm_polling(app.handle().clone());
 
+            // Build the env-provider fs watcher now that the AppHandle
+            // exists. On a change: invalidate the matching cache entry
+            // and emit a Tauri event so the EnvPanel (and other
+            // subscribers) can refetch without waiting for the next
+            // spawn. If `notify` can't start (Linux inotify watch cap
+            // hit, headless CI with no kernel support, etc.) we fall
+            // back to pure lazy mtime invalidation.
+            commands::env::setup_env_watcher(app.handle().clone());
+
             Ok(())
         })
         .on_window_event(|window, event| {

@@ -608,6 +608,12 @@ pub async fn send_chat_message(
         )
         .await
     };
+    crate::commands::env::register_resolved_with_watcher(
+        &state,
+        std::path::Path::new(&worktree_path),
+        &resolved_env.sources,
+    )
+    .await;
 
     // Env-provider drift teardown: the env baked into the current
     // persistent session is fixed at spawn time; Claude's subprocess
