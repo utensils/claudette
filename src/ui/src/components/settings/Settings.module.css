@@ -1032,7 +1032,7 @@
   margin: 4px 8px 8px 22px;
   padding: 10px 12px;
   border-left: 2px solid var(--status-stopped);
-  background: var(--error-hover, rgba(220, 60, 60, 0.08));
+  background: var(--error-hover);
   border-radius: 0 4px 4px 0;
   display: flex;
   flex-direction: column;

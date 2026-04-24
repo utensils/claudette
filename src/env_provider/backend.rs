@@ -120,22 +120,28 @@ impl EnvProviderBackend for PluginRegistryBackend<'_> {
             ))
         })?;
 
-        let env = obj
-            .get("env")
-            .and_then(|v| v.as_object())
-            .map(|m| {
-                m.iter()
-                    .map(|(k, v)| {
-                        let val = match v {
-                            serde_json::Value::Null => None,
-                            serde_json::Value::String(s) => Some(s.clone()),
-                            other => Some(other.to_string()),
-                        };
-                        (k.clone(), val)
-                    })
-                    .collect::<EnvMap>()
-            })
-            .unwrap_or_default();
+        let env = match obj.get("env").and_then(|v| v.as_object()) {
+            Some(m) => {
+                let mut env = EnvMap::new();
+                for (k, v) in m.iter() {
+                    let val = match v {
+                        serde_json::Value::Null => None,
+                        serde_json::Value::String(s) => Some(s.clone()),
+                        // OS env vars are strings. Silently stringifying
+                        // objects/arrays/numbers would hide plugin bugs —
+                        // surface them as a clear parse error instead.
+                        _ => {
+                            return Err(PluginError::ParseError(format!(
+                                "{plugin}: export().env[{k:?}] must be a string or null"
+                            )));
+                        }
+                    };
+                    env.insert(k.clone(), val);
+                }
+                env
+            }
+            None => EnvMap::default(),
+        };
 
         let watched: Vec<PathBuf> = obj
             .get("watched")

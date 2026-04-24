@@ -89,26 +89,29 @@ pub async fn spawn_pty(
         repo_path: root_path.clone(),
     };
     let disabled_env_providers = {
-        // Look up the repo_id from the DB so we can honor per-repo
-        // user disables of env providers.
+        // Look up repo_id + per-repo env-provider disables in a single
+        // DB open — this runs on every PTY spawn, so avoid duplicate
+        // opens and workspace-list scans.
         use claudette::db::Database;
-        let repo_id = Database::open(&state.db_path)
+        Database::open(&state.db_path)
             .ok()
-            .and_then(|db| {
-                db.list_workspaces()
-                    .ok()?
-                    .into_iter()
-                    .find(|w| w.id == workspace_id)
-                    .map(|w| w.repository_id)
+            .map(|db| {
+                let repo_id = db
+                    .list_workspaces()
+                    .ok()
+                    .and_then(|ws| {
+                        ws.into_iter()
+                            .find(|w| w.id == workspace_id)
+                            .map(|w| w.repository_id)
+                    })
+                    .unwrap_or_default();
+                if repo_id.is_empty() {
+                    Default::default()
+                } else {
+                    crate::commands::env::load_disabled_providers(&db, &repo_id)
+                }
             })
-            .unwrap_or_default();
-        if repo_id.is_empty() {
-            Default::default()
-        } else {
-            claudette::db::Database::open(&state.db_path)
-                .map(|db| crate::commands::env::load_disabled_providers(&db, &repo_id))
-                .unwrap_or_default()
-        }
+            .unwrap_or_default()
     };
     let resolved_env = {
         let registry = state.plugins.read().await;

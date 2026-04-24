@@ -160,8 +160,12 @@ impl PluginRegistry {
 
     /// Set or clear a user setting override for a plugin. Pass `None` to
     /// revert to the manifest's default value. No-op if the plugin
-    /// isn't registered.
+    /// isn't registered — we don't want unknown plugin names to
+    /// silently accumulate override entries.
     pub fn set_setting(&self, plugin_name: &str, key: &str, value: Option<serde_json::Value>) {
+        if !self.plugins.contains_key(plugin_name) {
+            return;
+        }
         let mut guard = self.setting_overrides.write().unwrap();
         match value {
             Some(v) => {
@@ -650,5 +654,22 @@ mod tests {
             .unwrap();
         assert_eq!(result["flag"], false);
         assert_eq!(result["name"], "bob");
+    }
+
+    #[test]
+    fn set_setting_ignores_unknown_plugin_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = PluginRegistry::discover(dir.path());
+
+        registry.set_setting(
+            "does-not-exist",
+            "some_key",
+            Some(serde_json::Value::String("x".into())),
+        );
+
+        // Unknown plugin names must NOT silently accumulate override
+        // entries in the map.
+        let overrides = registry.setting_overrides.read().unwrap();
+        assert!(!overrides.contains_key("does-not-exist"));
     }
 }

@@ -6,6 +6,7 @@ import {
   runEnvTrust,
   setEnvProviderEnabled,
 } from "../../../services/env";
+import { listClaudettePlugins } from "../../../services/claudettePlugins";
 import type { EnvSourceInfo, EnvTarget } from "../../../types/env";
 import styles from "../Settings.module.css";
 
@@ -29,14 +30,17 @@ interface ErrorInsight {
  * have a canned hint.
  */
 function analyzeError(pluginName: string, err: string): ErrorInsight {
-  if (/not trusted|mise trust/i.test(err)) {
+  // Gate the canned "Run this to fix it" hints on the plugin id so a
+  // third-party plugin whose error text happens to contain "not trusted"
+  // or "is blocked" doesn't get a wrong mise/direnv suggestion.
+  if (pluginName === "env-mise" && /not trusted|mise trust/i.test(err)) {
     return {
       summary: "mise config files in this workspace are not trusted.",
       suggestedCommand: "mise trust",
       suggestedDescription: "Run in the workspace to authorize mise config:",
     };
   }
-  if (/is blocked|direnv allow/i.test(err)) {
+  if (pluginName === "env-direnv" && /is blocked|direnv allow/i.test(err)) {
     return {
       summary: ".envrc is blocked — direnv needs explicit permission.",
       suggestedCommand: "direnv allow",
@@ -157,6 +161,42 @@ export function EnvPanel({ target }: EnvPanelProps) {
     }
   }, [target]);
 
+  // Kick off a cheap registry-only fetch in parallel with the resolve
+  // pass so the toggle rows appear instantly, even on a fresh mount
+  // where the full resolve (direnv/nix/mise) can take seconds. The
+  // resolve result replaces the placeholder rows once it completes.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const plugins = await listClaudettePlugins();
+        if (cancelled) return;
+        setSources((prev) => {
+          // If the resolve pass already populated us (fast repo), keep it.
+          if (prev !== null) return prev;
+          return plugins
+            .filter((p) => p.kind === "env-provider" && p.enabled)
+            .map<EnvSourceInfo>((p) => ({
+              plugin_name: p.name,
+              display_name: p.display_name,
+              detected: false,
+              enabled: true,
+              vars_contributed: 0,
+              cached: false,
+              evaluated_at_ms: 0,
+              error: null,
+            }));
+        });
+      } catch {
+        // Listing is best-effort scaffolding; the real resolve path
+        // below will surface any fetch error.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [target]);
+
   useEffect(() => {
     void refresh();
   }, [refresh]);
@@ -206,6 +246,10 @@ export function EnvPanel({ target }: EnvPanelProps) {
     );
   }
 
+  // Only show the blanking "Loading…" in the edge case where BOTH the
+  // placeholder-list fetch and the resolve fetch are still pending —
+  // otherwise the placeholder rows let the user see + toggle providers
+  // immediately.
   if (loading && sources === null) {
     return <div className={styles.settingDescription}>Loading…</div>;
   }

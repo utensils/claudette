@@ -83,7 +83,7 @@ Feature flags in `claudette-tauri`:
 
 ### Tauri commands
 
-Commands in `src-tauri/src/commands/` are organized by domain: `chat`, `workspace`, `repository`, `scm`, `terminal`, `diff`, `settings`, `plugin`, `mcp`, `remote`, `usage`, `metrics`, `files`, `shell`, `slash_commands`, `plan`, `apps`, `data`, `cesp`, `updater`, `debug`. Each is a thin wrapper — business logic belongs in the `claudette` crate.
+Commands in `src-tauri/src/commands/` are organized by domain: `apps`, `auth`, `cesp`, `chat`, `data`, `debug`, `diff`, `env`, `files`, `mcp`, `metrics`, `plan`, `plugin`, `plugins_runtime`, `remote`, `repository`, `scm`, `settings`, `shell`, `slash_commands`, `terminal`, `updater`, `usage`, `workspace`. Each is a thin wrapper — business logic belongs in the `claudette` crate.
 
 ## Project structure
 

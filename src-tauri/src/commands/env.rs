@@ -160,8 +160,10 @@ pub async fn get_env_sources(
 }
 
 /// Toggle whether an env-provider plugin runs for the target's repo.
-/// Disabling evicts any cached result for every workspace under the
-/// repo so the next spawn reflects the change immediately.
+/// The toggle is persisted per-repo, so the change applies to every
+/// worktree under that repo. This evicts the cache for the repo's
+/// main checkout AND every workspace worktree beneath it so the next
+/// spawn in any of them reflects the new state immediately.
 #[tauri::command]
 pub async fn set_env_provider_enabled(
     target: EnvTarget,
@@ -169,7 +171,7 @@ pub async fn set_env_provider_enabled(
     enabled: bool,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let (worktree, _, repo_id) = resolve_target(&state, &target).await?;
+    let (_, _, repo_id) = resolve_target(&state, &target).await?;
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let key = enabled_key(&repo_id, &plugin_name);
     // We persist only the "disabled" case; absent key = enabled (default).
@@ -179,13 +181,40 @@ pub async fn set_env_provider_enabled(
         db.set_app_setting(&key, "false")
             .map_err(|e| e.to_string())?;
     }
-    // Invalidate the cache entry for this (worktree, plugin) regardless
-    // of direction — enabling should re-run the plugin on next resolve,
-    // disabling should stop applying a stale cached result.
-    state
-        .env_cache
-        .invalidate(Path::new(&worktree), Some(&plugin_name));
+    // Per-repo setting → fan-out cache eviction across the repo's main
+    // checkout + every workspace worktree. Re-enabling forces a fresh
+    // eval on next resolve; disabling stops a stale cached value from
+    // being applied.
+    for path in repo_worktree_paths(&db, &repo_id) {
+        state
+            .env_cache
+            .invalidate(Path::new(&path), Some(&plugin_name));
+    }
     Ok(())
+}
+
+/// Every on-disk worktree path associated with a repo: the main
+/// checkout plus each workspace.worktree_path. Silently drops
+/// database errors — if we can't list workspaces, we just invalidate
+/// what we can (or nothing), and stale cache entries will expire on
+/// the next mtime change anyway.
+fn repo_worktree_paths(db: &Database, repo_id: &str) -> Vec<String> {
+    let Ok(Some(repo)) = db.get_repository(repo_id) else {
+        return Vec::new();
+    };
+    let mut paths = vec![repo.path.clone()];
+    if let Ok(workspaces) = db.list_workspaces() {
+        for ws in workspaces {
+            if ws.repository_id == repo_id {
+                if let Some(wt) = ws.worktree_path {
+                    if wt != repo.path {
+                        paths.push(wt);
+                    }
+                }
+            }
+        }
+    }
+    paths
 }
 
 /// Evict the env-provider cache for the target, forcing a fresh
