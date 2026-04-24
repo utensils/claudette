@@ -940,6 +940,7 @@
   resize: none;
   min-height: 52px;
   max-height: 160px;
+  overflow-x: hidden;
 }
 
 .input:focus-visible {

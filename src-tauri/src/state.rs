@@ -52,6 +52,11 @@ pub struct AgentSessionState {
     pub needs_attention: bool,
     /// What kind of input the agent needs, if any.
     pub attention_kind: Option<AttentionKind>,
+    /// Set when the deferred attention notification has been fired for the
+    /// current attention cycle. Cleared whenever `needs_attention` is cleared
+    /// (i.e. when the user responds). Prevents repeated banner/sound when
+    /// multiple `can_use_tool` prompts queue inside a single cycle.
+    pub attention_notification_sent: bool,
     /// Long-lived process that persists MCP servers across turns.
     /// When present, subsequent turns write to this process's stdin instead of
     /// spawning new processes.

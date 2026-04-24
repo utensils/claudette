@@ -739,6 +739,7 @@ mod tests {
             } else {
                 None
             },
+            attention_notification_sent: false,
             persistent_session: None,
             mcp_config_dirty: false,
             session_plan_mode: false,
