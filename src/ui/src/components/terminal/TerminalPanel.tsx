@@ -100,12 +100,32 @@ function safeFit(inst: LeafInstance) {
 // viewport while scrollback exists below the visible window, scroll the
 // display up so the cursor sits near the bottom of the viewport and the
 // preceding history is visible again.
+// One-stop helper for the "scroll the display immediately, not on the next
+// animation frame" path we need after a split-driven reparent. The public
+// `Terminal.scrollLines` API dispatches through xterm's viewport smooth-scroll
+// animator; when the host div has just been re-attached to a different parent
+// the viewport's scrollable element isn't fully laid out yet and the call is
+// swallowed without moving `buffer.ydisp`. `_core._bufferService.scrollLines`
+// mutates `ydisp` synchronously, which is the behaviour we actually want.
+//
+// `_core` is a private implementation detail of xterm. It has been stable
+// across the 5.x line (see `xterm/src/common/services/BufferService.ts`), but
+// is not part of the published API and may move on a major xterm upgrade.
+// This single helper is the only place that reaches into `_core`; if it ever
+// breaks, the fallback below keeps behaviour correct (just not synchronous)
+// until we wire up a public-API alternative.
 interface XtermInternals {
   _core?: {
     _bufferService?: {
       scrollLines(disp: number, suppressScrollEvent?: boolean): void;
     };
   };
+}
+
+function scrollLinesImmediate(term: Terminal, lines: number): void {
+  const bs = (term as unknown as XtermInternals)._core?._bufferService;
+  if (bs) bs.scrollLines(lines);
+  else term.scrollLines(lines);
 }
 
 // Push the current visible rows into scrollback by writing newlines
@@ -184,16 +204,7 @@ function scheduleReclaimHistory(inst: LeafInstance) {
       baseY: buf.baseY,
     });
     if (lines < 0) {
-      // Terminal.scrollLines() routes through the browser viewport's
-      // smooth-scroll animator, which rides on a scrollable DOM element
-      // that hasn't finished laying out right after the pane reparents
-      // — the call gets swallowed and ydisp never moves. Going through
-      // the BufferService mutates buffer.ydisp synchronously and the
-      // renderer picks up the change on its next tick, which is the
-      // behaviour we actually want.
-      const bs = (inst.term as unknown as XtermInternals)._core?._bufferService;
-      if (bs) bs.scrollLines(lines);
-      else inst.term.scrollLines(lines);
+      scrollLinesImmediate(inst.term, lines);
       return true;
     }
     return false;

@@ -135,8 +135,10 @@ export function closeLeaf(
     return { tree, closed: false, promotedLeafId: null };
   }
 
-  // Direct child match: promote the sibling subtree.
-  if (tree.children[0].id === targetId) {
+  // Direct child match: promote the sibling subtree. Restrict to leaf
+  // children — a split node happens to have its own id, and matching it
+  // here would silently delete a whole subtree on a stale/incorrect id.
+  if (tree.children[0].kind === "leaf" && tree.children[0].id === targetId) {
     const sibling = tree.children[1];
     return {
       tree: sibling,
@@ -144,7 +146,7 @@ export function closeLeaf(
       promotedLeafId: leftmostLeafId(sibling),
     };
   }
-  if (tree.children[1].id === targetId) {
+  if (tree.children[1].kind === "leaf" && tree.children[1].id === targetId) {
     const sibling = tree.children[0];
     return {
       tree: sibling,

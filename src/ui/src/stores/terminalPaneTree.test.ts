@@ -204,6 +204,17 @@ describe("closeLeaf", () => {
     expect(next).toBe(tree);
     expect(closed).toBe(false);
   });
+
+  // Regression: closeLeaf must only collapse leaves. A split node's id must
+  // not match the direct-child fast path and silently promote its sibling.
+  it("refuses to treat a split node id as a close target", () => {
+    const inner = split("inner", "vertical", leaf("c"), leaf("d"));
+    const tree = split("root", "horizontal", leaf("a"), inner);
+    const { tree: next, closed, promotedLeafId } = closeLeaf(tree, "inner");
+    expect(next).toBe(tree);
+    expect(closed).toBe(false);
+    expect(promotedLeafId).toBeNull();
+  });
 });
 
 describe("updateSizes", () => {
