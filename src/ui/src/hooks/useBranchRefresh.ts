@@ -5,9 +5,11 @@ import type { Workspace } from "../types/workspace";
 
 type UpdateWorkspace = (id: string, updates: Partial<Workspace>) => void;
 
-/// Poll all active workspaces for external branch-name drift and mirror any
-/// detected changes into the Zustand store. Errors are swallowed so a
-/// transient git/IPC failure doesn't break the polling loop.
+/**
+ * Poll all active workspaces for external branch-name drift and mirror any
+ * detected changes into the Zustand store. Errors are swallowed so a
+ * transient git/IPC failure doesn't break the polling loop.
+ */
 export async function pollAndApplyBranchUpdates(
   updateWorkspace: UpdateWorkspace,
 ): Promise<void> {
@@ -21,9 +23,11 @@ export async function pollAndApplyBranchUpdates(
   }
 }
 
-/// Immediate refresh for a single workspace — called when the user selects
-/// one so external renames appear without waiting on the 5s poll. Returns
-/// the new branch name if one was applied (useful for tests).
+/**
+ * Immediate refresh for a single workspace — called when the user selects
+ * one so external renames appear without waiting on the 5s poll. Returns
+ * the new branch name if one was applied (useful for tests).
+ */
 export async function refreshSelectedWorkspaceBranch(
   workspaceId: string,
   updateWorkspace: UpdateWorkspace,

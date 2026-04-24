@@ -47,7 +47,8 @@ pub async fn reconcile_all_workspace_branches(
     if !updates.is_empty() {
         let db = Database::open(db_path).map_err(|e| e.to_string())?;
         for (id, branch) in &updates {
-            let _ = db.update_workspace_branch_name(id, branch);
+            db.update_workspace_branch_name(id, branch)
+                .map_err(|e| e.to_string())?;
         }
     }
 
@@ -95,41 +96,40 @@ mod tests {
     use crate::model::{AgentStatus, Repository, Workspace};
     use std::process::Command;
 
+    fn run_git(path: &Path, args: &[&str], action: &str) {
+        let git_path = crate::git::resolve_git_path_blocking();
+        let output = Command::new(&git_path)
+            .args(args)
+            .current_dir(path)
+            .output()
+            .unwrap_or_else(|e| panic!("{action}: failed to spawn git: {e}"));
+        assert!(
+            output.status.success(),
+            "{action} failed ({:?}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
     fn init_git_repo(path: &Path, branch: &str) {
-        Command::new("git")
-            .args(["init", "-b", branch])
-            .current_dir(path)
-            .output()
-            .expect("git init");
-        Command::new("git")
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(path)
-            .output()
-            .expect("git config");
-        Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(path)
-            .output()
-            .expect("git config");
+        run_git(path, &["init", "-b", branch], "git init");
+        run_git(
+            path,
+            &["config", "user.email", "test@test.com"],
+            "git config user.email",
+        );
+        run_git(
+            path,
+            &["config", "user.name", "Test"],
+            "git config user.name",
+        );
         std::fs::write(path.join("README.md"), "# test").unwrap();
-        Command::new("git")
-            .args(["add", "-A"])
-            .current_dir(path)
-            .output()
-            .expect("git add");
-        Command::new("git")
-            .args(["commit", "-m", "initial"])
-            .current_dir(path)
-            .output()
-            .expect("git commit");
+        run_git(path, &["add", "-A"], "git add");
+        run_git(path, &["commit", "-m", "initial"], "git commit");
     }
 
     fn rename_branch(path: &Path, new_name: &str) {
-        Command::new("git")
-            .args(["branch", "-m", new_name])
-            .current_dir(path)
-            .output()
-            .expect("git branch -m");
+        run_git(path, &["branch", "-m", new_name], "git branch -m");
     }
 
     fn make_ws(id: &str, repo_id: &str, branch: &str, worktree: &Path) -> Workspace {
@@ -364,18 +364,26 @@ mod tests {
         init_git_repo(repo_dir.path(), "main");
 
         // Detach HEAD at the current commit.
-        let head_sha = std::process::Command::new("git")
+        let git_path = crate::git::resolve_git_path_blocking();
+        let rev_parse = Command::new(&git_path)
             .args(["rev-parse", "HEAD"])
             .current_dir(repo_dir.path())
             .output()
+            .expect("spawn git rev-parse");
+        assert!(
+            rev_parse.status.success(),
+            "git rev-parse failed: {}",
+            String::from_utf8_lossy(&rev_parse.stderr),
+        );
+        let head_sha = String::from_utf8(rev_parse.stdout)
             .unwrap()
-            .stdout;
-        let head_sha = String::from_utf8(head_sha).unwrap().trim().to_string();
-        std::process::Command::new("git")
-            .args(["checkout", "--detach", &head_sha])
-            .current_dir(repo_dir.path())
-            .output()
-            .unwrap();
+            .trim()
+            .to_string();
+        run_git(
+            repo_dir.path(),
+            &["checkout", "--detach", &head_sha],
+            "git checkout --detach",
+        );
 
         let db_dir = tempfile::tempdir().unwrap();
         let db_path = db_dir.path().join("test.db");
