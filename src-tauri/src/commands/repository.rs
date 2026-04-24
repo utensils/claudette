@@ -4,7 +4,7 @@ use serde::Serialize;
 use tauri::{AppHandle, State};
 
 use claudette::config;
-use claudette::db::Database;
+use claudette::db::{Database, is_duplicate_repository_path_error};
 use claudette::git;
 use claudette::model::Repository;
 
@@ -52,7 +52,13 @@ pub async fn add_repository(
     };
 
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    db.insert_repository(&repo).map_err(|e| e.to_string())?;
+    db.insert_repository(&repo).map_err(|e| {
+        if is_duplicate_repository_path_error(&e) {
+            "This repository is already in Claudette.".to_string()
+        } else {
+            e.to_string()
+        }
+    })?;
 
     crate::tray::rebuild_tray(&app);
 
