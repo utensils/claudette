@@ -653,31 +653,34 @@ pub async fn send_chat_message(
     let saved_turn_count = session.turn_count;
 
     // Helper: start a persistent session, using --resume for restored sessions.
+    // Routes claude-missing errors through the missing-CLI dialog emitter so
+    // both the initial-start and respawn paths surface the same guidance.
     let ws_env_for_persistent = ws_env.clone();
     let resolved_env_for_persistent = resolved_env.clone();
-    let start_persistent = |worktree: String,
-                            sid: String,
-                            is_resume: bool,
-                            tools: Vec<String>,
-                            instructions: Option<String>,
-                            settings: AgentSettings| {
+    let app_for_persistent = app.clone();
+    let start_persistent = move |worktree: String,
+                                 sid: String,
+                                 is_resume: bool,
+                                 tools: Vec<String>,
+                                 instructions: Option<String>,
+                                 settings: AgentSettings| {
         let env = ws_env_for_persistent.clone();
         let resolved = resolved_env_for_persistent.clone();
+        let app = app_for_persistent.clone();
         async move {
-            let ps = Arc::new(
-                PersistentSession::start(
-                    std::path::Path::new(&worktree),
-                    &sid,
-                    is_resume,
-                    &tools,
-                    instructions.as_deref(),
-                    &settings,
-                    Some(&env),
-                    Some(&resolved),
-                )
-                .await?,
-            );
-            Ok::<Arc<PersistentSession>, String>(ps)
+            let started = PersistentSession::start(
+                std::path::Path::new(&worktree),
+                &sid,
+                is_resume,
+                &tools,
+                instructions.as_deref(),
+                &settings,
+                Some(&env),
+                Some(&resolved),
+            )
+            .await
+            .map_err(|e| crate::missing_cli::handle_err(&app, &e).unwrap_or(e))?;
+            Ok::<Arc<PersistentSession>, String>(Arc::new(started))
         }
     };
 
@@ -791,6 +794,7 @@ pub async fn send_chat_message(
                     session.session_id = String::new();
                 }
                 drop(agents);
+                let e = crate::missing_cli::handle_err(&app, &e).unwrap_or(e);
                 return Err(e);
             }
         };

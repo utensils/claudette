@@ -229,6 +229,16 @@ function App() {
       }
     });
 
+    // Listen for missing-CLI events (claude/git/gh not on PATH). Routes to the
+    // MissingCliModal so users see platform-specific install guidance instead
+    // of a raw subprocess error.
+    const unlistenMissingCli = listen<import("./components/modals/MissingCliModal").MissingCliData>(
+      "missing-dependency",
+      (event) => {
+        useAppStore.getState().openModal("missingCli", event.payload as unknown as Record<string, unknown>);
+      },
+    );
+
     // Listen for workspace auto-archived events (e.g. PR merged with archive_on_merge).
     const unlistenAutoArchived = listen<{ workspace_id: string; workspace_name: string; pr_number?: number }>("workspace-auto-archived", (event) => {
       const { workspace_id, workspace_name, pr_number } = event.payload;
@@ -257,6 +267,7 @@ function App() {
       unlistenResetZoom.then((fn) => fn());
       unlistenScmUpdate.then((fn) => fn());
       unlistenAutoArchived.then((fn) => fn());
+      unlistenMissingCli.then((fn) => fn());
     };
   }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setPluginManagementEnabled, setAppVersion]);
 

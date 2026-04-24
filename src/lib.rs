@@ -12,6 +12,7 @@ pub mod mcp;
 pub mod mcp_supervisor;
 pub mod metrics;
 pub mod migrations;
+pub mod missing_cli;
 pub mod model;
 pub mod names;
 pub mod path;

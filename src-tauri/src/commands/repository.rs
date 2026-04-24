@@ -60,7 +60,10 @@ pub async fn add_repository(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Repository, String> {
-    git::validate_repo(&path).await.map_err(|e| e.to_string())?;
+    git::validate_repo(&path).await.map_err(|e| {
+        let err = e.to_string();
+        crate::missing_cli::handle_err(&app, &err).unwrap_or(err)
+    })?;
 
     let canon = std::fs::canonicalize(&path).map_err(|e| format!("Invalid path: {e}"))?;
     let canon_str = canon.to_string_lossy().to_string();
@@ -168,9 +171,13 @@ pub async fn set_setup_script_auto_run(
 pub async fn relink_repository(
     id: String,
     path: String,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    git::validate_repo(&path).await.map_err(|e| e.to_string())?;
+    git::validate_repo(&path).await.map_err(|e| {
+        let err = e.to_string();
+        crate::missing_cli::handle_err(&app, &err).unwrap_or(err)
+    })?;
 
     let canon = std::fs::canonicalize(&path).map_err(|e| format!("Invalid path: {e}"))?;
     let canon_str = canon.to_string_lossy().to_string();

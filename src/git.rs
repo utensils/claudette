@@ -175,6 +175,23 @@ fn resolve_git_path_inner(
 pub enum GitError {
     NotAGitRepo,
     CommandFailed(String),
+    /// The `git` executable could not be located on PATH. The `Display` form
+    /// uses the shared [`crate::missing_cli::format_err`] sentinel so Tauri
+    /// wrappers can detect it via [`crate::missing_cli::parse_err`].
+    CliNotFound,
+}
+
+impl GitError {
+    /// Map an `io::Error` from a git-subprocess spawn/output call, preserving
+    /// the `NotFound` signal as [`GitError::CliNotFound`] instead of folding
+    /// it into a generic `CommandFailed` string.
+    pub fn from_spawn_io(err: std::io::Error) -> Self {
+        if crate::missing_cli::is_not_found(&err) {
+            Self::CliNotFound
+        } else {
+            Self::CommandFailed(err.to_string())
+        }
+    }
 }
 
 impl fmt::Display for GitError {
@@ -182,6 +199,7 @@ impl fmt::Display for GitError {
         match self {
             Self::NotAGitRepo => write!(f, "Not a git repository"),
             Self::CommandFailed(msg) => write!(f, "Git command failed: {msg}"),
+            Self::CliNotFound => write!(f, "{}", crate::missing_cli::format_err("git")),
         }
     }
 }
@@ -195,7 +213,7 @@ async fn run_git(repo_path: &str, args: &[&str]) -> Result<String, GitError> {
         .args(args)
         .output()
         .await
-        .map_err(|e| GitError::CommandFailed(e.to_string()))?;
+        .map_err(GitError::from_spawn_io)?;
 
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -213,7 +231,7 @@ pub async fn get_git_username() -> Result<Option<String>, GitError> {
         .args(["config", "--global", "user.name"])
         .output()
         .await
-        .map_err(|e| GitError::CommandFailed(e.to_string()))?;
+        .map_err(GitError::from_spawn_io)?;
 
     if output.status.success() {
         let name = String::from_utf8_lossy(&output.stdout).trim().to_string();

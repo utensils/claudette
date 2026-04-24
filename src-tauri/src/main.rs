@@ -3,6 +3,7 @@
 
 mod commands;
 mod mdns;
+mod missing_cli;
 mod osc133;
 mod pty;
 mod remote;
