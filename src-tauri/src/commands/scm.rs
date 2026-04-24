@@ -825,25 +825,36 @@ async fn auto_archive_workspace(
     }
 
     // Now that async cleanup is done, persist the archive/delete mutation.
-    {
-        if let Ok(db) = Database::open(&app_state.db_path) {
+    // Check the result so we don't emit frontend events for a state change
+    // that didn't actually land in the DB.
+    let mutation_ok = Database::open(&app_state.db_path)
+        .ok()
+        .map(|db| {
             if delete_record {
-                let _ = db.delete_workspace_with_summary(&ws_id);
+                db.delete_workspace_with_summary(&ws_id).is_ok()
             } else {
                 let _ = db.delete_terminal_tabs_for_workspace(&ws_id);
                 let _ = db.delete_scm_status_cache(&ws_id);
-                let _ = db.update_workspace_status(
+                db.update_workspace_status(
                     &ws_id,
                     &claudette::model::WorkspaceStatus::Archived,
                     None,
-                );
+                )
+                .is_ok()
             }
-        }
+        })
+        .unwrap_or(false);
+
+    if !mutation_ok {
+        eprintln!("[scm] DB mutation failed while auto-archiving workspace '{ws_name}' ({ws_id})");
+        return;
     }
+
+    let deleted = delete_record;
 
     // If the workspace record was fully deleted and no workspaces remain for this
     // repo, clean up MCP supervisor state.
-    if delete_record {
+    if deleted {
         let supervisor = handle.state::<Arc<McpSupervisor>>();
         let remaining = Database::open(&app_state.db_path)
             .map(|db| db.list_workspaces().unwrap_or_default())
@@ -857,7 +868,7 @@ async fn auto_archive_workspace(
     // Rebuild tray and notify frontend
     crate::tray::rebuild_tray(handle);
 
-    let verb = if delete_record { "deleted" } else { "archived" };
+    let verb = if deleted { "deleted" } else { "archived" };
     let body = match pr_number {
         Some(num) => {
             format!("Workspace \u{2018}{ws_name}\u{2019} {verb} \u{2014} PR #{num} merged")
@@ -876,7 +887,7 @@ async fn auto_archive_workspace(
     let mut payload = serde_json::json!({
         "workspace_id": ws_id,
         "workspace_name": ws_name,
-        "deleted": delete_record,
+        "deleted": deleted,
     });
     if let Some(num) = pr_number {
         payload["pr_number"] = serde_json::json!(num);
