@@ -173,6 +173,11 @@ pub async fn load_scm_detail(
     {
         Some(name) => name,
         None => {
+            // Clear any stale cache row so old badges don't persist across restarts
+            // when the provider is no longer available (e.g. plugin removed).
+            if let Ok(db) = Database::open(&state.db_path) {
+                let _ = db.delete_scm_status_cache(&workspace_id);
+            }
             return Ok(ScmDetail {
                 workspace_id,
                 pull_request: None,
@@ -479,13 +484,24 @@ async fn poll_workspace_scm(app_state: &AppState, workspace_id: &str) -> Option<
         .await
         .ok()?;
 
-    let provider_name = resolve_provider_for_polling(
+    let provider_name = match resolve_provider_for_polling(
         &ctx.manual_override,
         &ctx.repo.path,
         ctx.repo.default_remote.as_deref(),
         app_state,
     )
-    .await?;
+    .await
+    {
+        Some(name) => name,
+        None => {
+            // Clear any stale cache row so old badges don't persist across restarts
+            // when the provider is no longer available (e.g. plugin removed).
+            if let Ok(db) = Database::open(&app_state.db_path) {
+                let _ = db.delete_scm_status_cache(workspace_id);
+            }
+            return None;
+        }
+    };
 
     let ws_info = make_workspace_info(&ctx.workspace, &ctx.repo);
     let cache_key = (ctx.repo.id.clone(), ctx.workspace.branch_name.clone());

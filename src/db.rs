@@ -1783,6 +1783,7 @@ impl Database {
 
     // --- SCM Status Cache ---
 
+    /// `row.fetched_at` is ignored; the database sets it to `datetime('now')` on every upsert.
     pub fn upsert_scm_status_cache(&self, row: &ScmStatusCacheRow) -> Result<(), rusqlite::Error> {
         self.conn.execute(
             "INSERT OR REPLACE INTO scm_status_cache
