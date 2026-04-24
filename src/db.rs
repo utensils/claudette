@@ -1799,7 +1799,7 @@ mod tests {
             .unwrap();
         let err = db
             .insert_repository(&make_repo("r1", "/tmp/repo2", "repo2"))
-            .expect_err("expected UNIQUE constraint failure on id");
+            .expect_err("expected PRIMARY KEY constraint failure on id");
         assert!(
             !super::is_duplicate_repository_path_error(&err),
             "id collision should not be mapped to the duplicate-path branch: {err:?}",
