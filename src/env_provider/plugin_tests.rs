@@ -88,7 +88,7 @@ fn direnv_detect_skips_missing_envrc() {
 
 /// Encode paths into direnv's `DIRENV_WATCHES` wire format — URL-safe
 /// base64 of zlib-compressed JSON `[{"path": ..., "modtime": N, ...}, ...]`.
-/// Mirrors the decoder lives in `host_api::decode_direnv_watches`.
+/// Mirrors the decoder in `host_api::decode_direnv_watches`.
 fn encode_direnv_watches(paths: &[&str]) -> String {
     use base64::Engine as _;
     use flate2::Compression;
@@ -131,9 +131,21 @@ fn direnv_export_with_stubbed_exec(
 
     // Overwrite `host.exec` in the globals of this VM. The plugin's
     // `export` is the only path that calls it (detect uses file_exists).
+    // Assert shape here so the test catches a regression where the
+    // plugin spawns the wrong CLI or passes the wrong args — a silent
+    // accept would let such a bug through.
     let stub_script = format!(
         r#"
         host.exec = function(cmd, args)
+            if cmd ~= "direnv" then
+                error("expected host.exec cmd='direnv', got: " .. tostring(cmd))
+            end
+            if type(args) ~= "table" or args[1] ~= "export" or args[2] ~= "json" or args[3] ~= nil then
+                local got = type(args) == "table"
+                    and tostring(args[1]) .. "," .. tostring(args[2]) .. "," .. tostring(args[3])
+                    or tostring(args)
+                error("expected host.exec args={{'export','json'}}, got: " .. got)
+            end
             return {{ stdout = [==[{env_json}]==], stderr = "", code = 0 }}
         end
         "#
@@ -196,7 +208,15 @@ fn direnv_export_watches_list_merges_direnv_watches() {
     }))
     .unwrap();
     let stub = format!(
-        r#"host.exec = function() return {{ stdout = [==[{env_json}]==], stderr = "", code = 0 }} end"#
+        r#"
+        host.exec = function(cmd, args)
+            if cmd ~= "direnv" then error("expected cmd='direnv', got: " .. tostring(cmd)) end
+            if type(args) ~= "table" or args[1] ~= "export" or args[2] ~= "json" or args[3] ~= nil then
+                error("expected args={{'export','json'}}")
+            end
+            return {{ stdout = [==[{env_json}]==], stderr = "", code = 0 }}
+        end
+        "#
     );
     lua.load(&stub).exec().unwrap();
 

@@ -243,13 +243,27 @@ fn resolve_inside_workspace(
 /// truncated data, bad JSON) returns an empty vec — direnv is the source
 /// of truth and emits blank/placeholder values in normal operation that
 /// we shouldn't surface as plugin errors.
+///
+/// Size limits: the compressed input and the decompressed JSON are each
+/// capped. Real-world DIRENV_WATCHES values are well under 10 KB even in
+/// repos with many `watch_file` entries; the 1 MiB / 8 MiB caps below
+/// are orders of magnitude higher than anything sane while still
+/// bounding allocations if a malicious or broken producer hands us a
+/// zip bomb.
 fn decode_direnv_watches(encoded: &str) -> Vec<String> {
     use base64::Engine as _;
     use flate2::read::ZlibDecoder;
     use std::io::Read as _;
 
+    /// Max compressed input we'll even try to decode (1 MiB).
+    const MAX_COMPRESSED_BYTES: usize = 1024 * 1024;
+    /// Max decompressed JSON we'll accept (8 MiB) — bounds the zlib
+    /// decoder so a deliberately over-compressed payload can't blow up
+    /// the heap on `read_to_string`.
+    const MAX_DECOMPRESSED_BYTES: u64 = 8 * 1024 * 1024;
+
     let trimmed = encoded.trim();
-    if trimmed.is_empty() {
+    if trimmed.is_empty() || trimmed.len() > MAX_COMPRESSED_BYTES {
         return Vec::new();
     }
 
@@ -261,13 +275,20 @@ fn decode_direnv_watches(encoded: &str) -> Vec<String> {
         .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(trimmed))
         .or_else(|_| base64::engine::general_purpose::STANDARD.decode(trimmed));
     let bytes = match bytes {
-        Ok(b) => b,
-        Err(_) => return Vec::new(),
+        Ok(b) if b.len() <= MAX_COMPRESSED_BYTES => b,
+        _ => return Vec::new(),
     };
 
-    let mut decoder = ZlibDecoder::new(&bytes[..]);
+    let mut decoder = ZlibDecoder::new(&bytes[..]).take(MAX_DECOMPRESSED_BYTES);
     let mut json = String::new();
     if decoder.read_to_string(&mut json).is_err() {
+        return Vec::new();
+    }
+    // `Take` reads at most MAX_DECOMPRESSED_BYTES; a producer handing us
+    // a payload that would decompress to exactly the cap is borderline,
+    // so treat "filled the cap" as an indication that the original was
+    // likely truncated and skip rather than serving half-parsed data.
+    if json.len() as u64 >= MAX_DECOMPRESSED_BYTES {
         return Vec::new();
     }
 
@@ -906,5 +927,39 @@ mod tests {
             .eval()
             .unwrap();
         assert_eq!(len, 0);
+    }
+
+    #[test]
+    fn decode_direnv_watches_rejects_oversize_compressed_input() {
+        // A 2 MiB base64-safe string — over the 1 MiB compressed-input
+        // cap. We don't even try to decode this: it returns empty
+        // before touching zlib/JSON, so a zip-bomb-sized header never
+        // allocates the decompressed buffer.
+        let oversize: String = "A".repeat(2 * 1024 * 1024);
+        assert!(decode_direnv_watches(&oversize).is_empty());
+    }
+
+    #[test]
+    fn decode_direnv_watches_rejects_decompression_bomb() {
+        // Craft a zip bomb: 16 MiB of zeros compresses to a handful of
+        // bytes. The 8 MiB decompressed cap should trip and return
+        // empty without filling memory with the full expansion.
+        use base64::Engine as _;
+        use flate2::Compression;
+        use flate2::write::ZlibEncoder;
+        use std::io::Write as _;
+
+        let huge = vec![0u8; 16 * 1024 * 1024];
+        let mut enc = ZlibEncoder::new(Vec::new(), Compression::best());
+        enc.write_all(&huge).unwrap();
+        let compressed = enc.finish().unwrap();
+        // Sanity: the bomb really is small once compressed.
+        assert!(
+            compressed.len() < 64 * 1024,
+            "compressed size {} too large for a zip bomb test",
+            compressed.len()
+        );
+        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&compressed);
+        assert!(decode_direnv_watches(&encoded).is_empty());
     }
 }
