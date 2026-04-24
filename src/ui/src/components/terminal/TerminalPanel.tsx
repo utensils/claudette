@@ -16,6 +16,7 @@ import {
   closePty,
 } from "../../services/tauri";
 import { cycleTabId, terminalKeyAction } from "./terminalShortcuts";
+import { trimSelectionTrailingWhitespace } from "./terminalSelection";
 import {
   focusActiveTerminal,
   focusChatPrompt,
@@ -259,6 +260,20 @@ export const TerminalPanel = memo(function TerminalPanel() {
 
       term.open(tabContainer);
       safeFitRaw(tabContainer, fit);
+
+      // Rewrite the clipboard payload on copy to rstrip trailing whitespace
+      // per line. xterm.js renders on a fixed cell grid, so a selection that
+      // sweeps short lines includes the blank trailing cells as spaces;
+      // native macOS terminals trim those at copy time and so do we.
+      const handleCopy = (ev: ClipboardEvent) => {
+        if (!term.hasSelection()) return;
+        ev.preventDefault();
+        ev.clipboardData?.setData(
+          "text/plain",
+          trimSelectionTrailingWhitespace(term.getSelection()),
+        );
+      };
+      tabContainer.addEventListener("copy", handleCopy);
 
       const instance: TermInstance = {
         term,
