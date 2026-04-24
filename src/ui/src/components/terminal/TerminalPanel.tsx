@@ -44,6 +44,10 @@ import {
   type LeafInstanceSnapshot,
   type NeededLeaf,
 } from "./terminalLeafManager";
+import {
+  shouldForwardPtyResize,
+  type PtySizeSnapshot,
+} from "./terminalPtyResize";
 import { reclaimScrollLines } from "./terminalReclaim";
 import "@xterm/xterm/css/xterm.css";
 import styles from "./TerminalPanel.module.css";
@@ -72,6 +76,7 @@ interface LeafInstance {
   reclaimDisposer: (() => void) | null;
   handleCopy: (ev: ClipboardEvent) => void;
   keyHandler: (ev: KeyboardEvent) => boolean;
+  lastPtySize: PtySizeSnapshot | null;
 }
 
 function safeFit(inst: LeafInstance) {
@@ -218,6 +223,26 @@ function scheduleReclaimHistory(inst: LeafInstance) {
 function closePtyBestEffort(ptyId: number) {
   void closePty(ptyId).catch((err) => {
     console.error(`Failed to close PTY ${ptyId} during teardown:`, err);
+  });
+}
+
+function forwardPtyResize(
+  inst: LeafInstance,
+  nextSize: PtySizeSnapshot = { cols: inst.term.cols, rows: inst.term.rows },
+) {
+  if (inst.ptyId < 0) return;
+  if (!shouldForwardPtyResize(inst.lastPtySize, nextSize)) return;
+  inst.lastPtySize = nextSize;
+  void resizePty(inst.ptyId, nextSize.cols, nextSize.rows).catch((err) => {
+    console.error(`Failed to resize PTY ${inst.ptyId}:`, err);
+    const lastSize = inst.lastPtySize;
+    if (
+      lastSize &&
+      lastSize.cols === nextSize.cols &&
+      lastSize.rows === nextSize.rows
+    ) {
+      inst.lastPtySize = null;
+    }
   });
 }
 
@@ -527,6 +552,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
         reclaimDisposer: null,
         handleCopy,
         keyHandler,
+        lastPtySize: null,
         resizeObserver: new ResizeObserver(() => {
           // Resolve `this` via closure; filled in next line.
         }),
@@ -585,11 +611,11 @@ export const TerminalPanel = memo(function TerminalPanel() {
             writePty(ptyId, bytes);
           });
           term.onResize(({ cols, rows }) => {
-            resizePty(ptyId, cols, rows);
+            forwardPtyResize(inst, { cols, rows });
           });
 
           safeFit(inst);
-          resizePty(ptyId, term.cols, term.rows);
+          forwardPtyResize(inst);
         } catch (e) {
           console.error("Failed to spawn PTY:", e);
           const msg = e instanceof Error ? e.message : String(e);
@@ -680,9 +706,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
         // The container may have gone from 0×0 to a real size — refit
         // immediately so the user doesn't see an 80×24 stub.
         safeFit(inst);
-        if (inst.ptyId >= 0) {
-          resizePty(inst.ptyId, inst.term.cols, inst.term.rows);
-        }
+        forwardPtyResize(inst);
         const resized =
           inst.term.cols !== prevCols || inst.term.rows !== prevRows;
         if (freshLeafIds.has(spec.leafId)) {
