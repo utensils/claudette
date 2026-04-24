@@ -139,14 +139,49 @@ impl Database {
                 continue;
             }
             let tx = conn.unchecked_transaction()?;
-            tx.execute_batch(m.sql)?;
-            tx.execute(
-                "INSERT INTO schema_migrations (id) VALUES (?1)",
-                params![m.id],
-            )?;
-            tx.commit()?;
+            match tx.execute_batch(m.sql) {
+                Ok(()) => {
+                    tx.execute(
+                        "INSERT INTO schema_migrations (id) VALUES (?1)",
+                        params![m.id],
+                    )?;
+                    tx.commit()?;
+                }
+                Err(e) if m.legacy_version.is_some() && is_partial_migration_error(&e) => {
+                    // The old non-transactional runner applied DDL without transaction
+                    // protection. A crash between statements leaves the schema partially
+                    // modified with user_version unchanged. Apply statements one at a time,
+                    // skipping any whose effects are already present.
+                    drop(tx); // rollback the failed batch
+                    let repair = conn.unchecked_transaction()?;
+                    for stmt in m.sql.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+                        if let Err(e2) = repair.execute_batch(stmt)
+                            && !is_partial_migration_error(&e2)
+                        {
+                            return Err(e2);
+                        }
+                    }
+                    repair.execute(
+                        "INSERT INTO schema_migrations (id) VALUES (?1)",
+                        params![m.id],
+                    )?;
+                    repair.commit()?;
+                }
+                Err(e) => return Err(e),
+            }
         }
         Ok(())
+    }
+}
+
+/// Returns true for DDL errors that indicate a statement's effect is already present in the
+/// schema (duplicate column, duplicate index, etc.). Used to self-heal databases that were
+/// partially migrated by the old non-transactional runner.
+fn is_partial_migration_error(e: &rusqlite::Error) -> bool {
+    if let rusqlite::Error::SqliteFailure(_, Some(msg)) = e {
+        msg.starts_with("duplicate column name") || msg.contains("already exists")
+    } else {
+        false
     }
 }
 
@@ -163,6 +198,12 @@ impl Database {
     pub fn migrate_with(&self, migrations: &[Migration]) -> Result<(), rusqlite::Error> {
         self.bootstrap_and_backfill(migrations)?;
         Self::run_migrations(&self.conn, migrations)
+    }
+
+    /// Test-only: wrap a raw connection without running migrations.
+    /// Used to simulate pre-existing database states for migration tests.
+    pub fn from_raw_conn(conn: Connection) -> Self {
+        Self { conn }
     }
 }
 
@@ -3629,6 +3670,38 @@ mod tests {
         assert!(
             !present,
             "failed migration must not leave tracking row in schema_migrations",
+        );
+    }
+
+    #[test]
+    fn test_partial_migration_24_self_heals() {
+        // Regression test for the crash-safety gap in the old non-transactional runner.
+        //
+        // Migration 24 in the old system ran DDL without an explicit transaction.
+        // A crash after `ALTER TABLE ... ADD COLUMN total_input_tokens` but before
+        // `PRAGMA user_version = 24` left databases with the column present but
+        // user_version stuck at 23. The new runner must survive this state.
+        let conn = build_legacy_db_at_version(23);
+        conn.execute_batch(
+            "ALTER TABLE deleted_workspace_summaries ADD COLUMN total_input_tokens INTEGER NOT NULL DEFAULT 0;",
+        )
+        .unwrap();
+
+        let db = Database::from_raw_conn(conn);
+        db.migrate_with(MIGRATIONS)
+            .expect("partial migration 24 state must be survivable");
+
+        let has_output_tokens: bool = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM pragma_table_info('deleted_workspace_summaries') WHERE name = 'total_output_tokens'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            has_output_tokens,
+            "migration 24 must have added total_output_tokens after self-healing",
         );
     }
 }
