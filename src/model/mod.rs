@@ -4,6 +4,7 @@ mod chat_message;
 mod checkpoint;
 pub mod diff;
 mod metrics;
+mod pinned_command;
 mod remote_connection;
 mod repository;
 mod terminal_tab;
@@ -20,6 +21,7 @@ pub use metrics::{
     AgentCommit, AgentSession, AnalyticsMetrics, DashboardMetrics, DeletedWorkspaceSummary,
     HeatmapCell, RepoLeaderRow, SessionDot, WorkspaceMetrics,
 };
+pub use pinned_command::PinnedCommand;
 pub use remote_connection::RemoteConnection;
 pub use repository::Repository;
 pub use terminal_tab::TerminalTab;
