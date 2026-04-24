@@ -75,12 +75,13 @@ export function PinnedCommandsBar({
 
   const handleUnpin = useCallback((id: number) => {
     setPins((prev) => {
-      const removed = prev.find((p) => p.id === id);
+      const previousPins = prev;
+      const nextPins = prev.filter((p) => p.id !== id);
       unpinCommand(id).catch((e) => {
         console.error("Failed to unpin command:", e);
-        if (removed) setPins((cur) => [...cur, removed].sort((a, b) => a.sort_order - b.sort_order));
+        setPins(previousPins);
       });
-      return prev.filter((p) => p.id !== id);
+      return nextPins;
     });
   }, []);
 
@@ -93,12 +94,10 @@ export function PinnedCommandsBar({
         e.preventDefault();
         if (availableCommands.length > 0) {
           handlePin(availableCommands[0].name);
-        } else if (pickerQuery.trim() && slashCommands.length === 0) {
-          handlePin(pickerQuery.trim().replace(/^\//, ""));
         }
       }
     },
-    [availableCommands, handlePin, pickerQuery, slashCommands.length],
+    [availableCommands, handlePin],
   );
 
   useEffect(() => {
@@ -121,25 +120,28 @@ export function PinnedCommandsBar({
           slashCommands.length > 0 &&
           !slashCommands.some((c) => c.name === pin.command_name);
         return (
-          <button
+          <span
             key={pin.id}
             className={`${styles.pill}${isStale ? ` ${styles.pillStale}` : ""}`}
-            onClick={() => onInsertCommand("/" + pin.command_name)}
-            title={isStale ? `/${pin.command_name} (not available)` : `/${pin.command_name}`}
           >
-            <span className={styles.slash}>/</span>
-            {pin.command_name}
-            <span
+            <button
+              type="button"
+              className={styles.pillAction}
+              onClick={() => onInsertCommand(`/${pin.command_name} `)}
+              title={isStale ? `/${pin.command_name} (not available)` : `/${pin.command_name}`}
+            >
+              <span className={styles.slash}>/</span>
+              {pin.command_name}
+            </button>
+            <button
+              type="button"
               className={styles.unpin}
-              role="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                handleUnpin(pin.id);
-              }}
+              aria-label={`Unpin /${pin.command_name}`}
+              onClick={() => handleUnpin(pin.id)}
             >
               ✕
-            </span>
-          </button>
+            </button>
+          </span>
         );
       })}
 
