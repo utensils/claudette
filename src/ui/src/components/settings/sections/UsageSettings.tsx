@@ -305,7 +305,7 @@ export function UsageSettings() {
 
       {fetchState.status === "error" && !usage && authState.status !== "running" && (
         <div className={styles.usageEmptyState}>
-          <span>
+          <span className={styles.usageErrorMessage}>
             {fetchState.error.includes("ENV_AUTH:")
               ? fetchState.error.replace("ENV_AUTH:", "")
               : fetchState.error}
@@ -313,16 +313,21 @@ export function UsageSettings() {
           {authState.status === "error" && (
             <span className={styles.usageTimestamp}>{authState.error}</span>
           )}
-          {isAuthError(fetchState.error) && (
-            <button className={styles.usageRefreshBtn} onClick={startAuthLogin}>
-              <LogIn size={12} /> Sign in
-            </button>
-          )}
-          {!fetchState.error.includes("ENV_AUTH:") && (
-            <button className={styles.usageRefreshBtn} onClick={fetchUsage}>
-              <RefreshCw size={12} /> Retry
-            </button>
-          )}
+          <div className={styles.usageActions}>
+            {isAuthError(fetchState.error) && (
+              <button
+                className={`${styles.usageRefreshBtn} ${styles.usageRefreshBtnPrimary}`}
+                onClick={startAuthLogin}
+              >
+                <LogIn size={12} /> Sign in
+              </button>
+            )}
+            {!fetchState.error.includes("ENV_AUTH:") && (
+              <button className={styles.usageRefreshBtn} onClick={fetchUsage}>
+                <RefreshCw size={12} /> Retry
+              </button>
+            )}
+          </div>
         </div>
       )}
 
