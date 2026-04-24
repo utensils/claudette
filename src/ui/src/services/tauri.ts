@@ -865,6 +865,16 @@ export function openReleaseNotes(): Promise<void> {
   return invoke("open_release_notes");
 }
 
+// -- Auth --
+
+export function claudeAuthLogin(): Promise<void> {
+  return invoke("claude_auth_login");
+}
+
+export function cancelClaudeAuthLogin(): Promise<void> {
+  return invoke("cancel_claude_auth_login");
+}
+
 // -- Metrics --
 
 export function getDashboardMetrics(): Promise<DashboardMetrics> {

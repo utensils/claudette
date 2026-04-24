@@ -836,10 +836,34 @@
 
 .usageRefreshBtn {
   composes: iconBtn;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
   font-size: 12px;
+}
+
+.usageRefreshBtnPrimary {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: var(--on-accent);
+}
+
+.usageRefreshBtnPrimary:hover {
+  background: var(--accent-dim);
+  border-color: var(--accent-dim);
+}
+
+.usageActions {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.usageErrorMessage {
+  max-width: 420px;
+  line-height: 1.5;
 }
 
 .usageTimestamp {

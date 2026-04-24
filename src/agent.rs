@@ -561,7 +561,7 @@ pub fn build_stdin_message(prompt: &str, attachments: &[FileAttachment]) -> Stri
 /// On Windows the base PATH comes from the registry — a handful of
 /// `Path::is_file` probes plus one registry read, sub-millisecond — so
 /// we run it inline.
-async fn resolve_claude_path() -> OsString {
+pub async fn resolve_claude_path() -> OsString {
     static RESOLVED: OnceLock<OsString> = OnceLock::new();
     if let Some(cached) = RESOLVED.get() {
         return cached.clone();

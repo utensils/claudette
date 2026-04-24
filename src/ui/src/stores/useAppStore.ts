@@ -438,11 +438,7 @@ interface AppState {
 
   // -- Claude Code Usage --
   claudeCodeUsage: ClaudeCodeUsage | null;
-  claudeCodeUsageLoading: boolean;
-  claudeCodeUsageError: string | null;
   setClaudeCodeUsage: (usage: ClaudeCodeUsage | null) => void;
-  setClaudeCodeUsageLoading: (loading: boolean) => void;
-  setClaudeCodeUsageError: (error: string | null) => void;
 
   // -- Metrics --
   dashboardMetrics: DashboardMetrics | null;
@@ -1399,14 +1395,7 @@ export const useAppStore = create<AppState>((set) => ({
 
   // -- Claude Code Usage --
   claudeCodeUsage: null,
-  claudeCodeUsageLoading: false,
-  claudeCodeUsageError: null,
-  setClaudeCodeUsage: (usage) =>
-    set({ claudeCodeUsage: usage, claudeCodeUsageError: null }),
-  setClaudeCodeUsageLoading: (loading) =>
-    set({ claudeCodeUsageLoading: loading }),
-  setClaudeCodeUsageError: (error) =>
-    set({ claudeCodeUsageError: error, claudeCodeUsageLoading: false }),
+  setClaudeCodeUsage: (usage) => set({ claudeCodeUsage: usage }),
 
   // -- Metrics --
   dashboardMetrics: null,

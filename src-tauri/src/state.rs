@@ -288,6 +288,12 @@ pub struct AppState {
     pub pending_update: tokio::sync::Mutex<Option<tauri_plugin_updater::Update>>,
     /// CESP sound pack playback state (no-repeat + debounce tracking).
     pub cesp_playback: Mutex<claudette::cesp::SoundPlaybackState>,
+    /// Cancellation signal for an in-flight `claude auth login` subprocess.
+    /// The waiter task owns the `Child` directly and selects between
+    /// `child.wait()` and this receiver; sending on the paired sender asks
+    /// the waiter to kill the process and emit a cancelled completion event.
+    /// `Some` while a flow is running, `None` otherwise.
+    pub auth_login_cancel: tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
 
 impl AppState {
@@ -309,6 +315,7 @@ impl AppState {
             scm_semaphore: Arc::new(Semaphore::new(4)),
             pending_update: tokio::sync::Mutex::new(None),
             cesp_playback: Mutex::new(claudette::cesp::SoundPlaybackState::new()),
+            auth_login_cancel: tokio::sync::Mutex::new(None),
         }
     }
 

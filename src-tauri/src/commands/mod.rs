@@ -1,4 +1,5 @@
 pub mod apps;
+pub mod auth;
 pub mod cesp;
 pub mod chat;
 pub mod data;

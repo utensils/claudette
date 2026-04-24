@@ -466,6 +466,9 @@ fn main() {
             commands::usage::get_claude_code_usage,
             commands::usage::open_usage_settings,
             commands::usage::open_release_notes,
+            // Auth
+            commands::auth::claude_auth_login,
+            commands::auth::cancel_claude_auth_login,
             // SCM Plugins
             commands::scm::list_scm_providers,
             commands::scm::get_scm_provider,
