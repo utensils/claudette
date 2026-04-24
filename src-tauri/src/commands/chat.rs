@@ -19,6 +19,14 @@ use claudette::{base64_decode, base64_encode};
 
 use crate::state::{AgentSessionState, AppState, PendingPermission};
 
+/// How long to wait between emitting `agent-permission-prompt` and firing the
+/// attention system notification. This is the window in which the webview
+/// picks up the event, runs the Zustand setter, and paints the question/plan
+/// card. 300ms is a compromise: long enough to cover typical React render
+/// plus a macOS window-show animation (when the user had the window hidden),
+/// short enough that the notification still feels tied to the trigger.
+const ATTENTION_NOTIFY_DELAY_MS: u64 = 300;
+
 async fn fire_completion_notification(
     db_path: &std::path::Path,
     cesp_playback: &std::sync::Mutex<claudette::cesp::SoundPlaybackState>,
@@ -839,10 +847,8 @@ pub async fn send_chat_message(
         // to None after each persistence so per-message counts stay distinct
         // across multi-message turns.
         let mut latest_usage: Option<claudette::agent::TokenUsage> = None;
-        let mut pending_attention_kind: Option<crate::state::AttentionKind>;
         let mut notified_via_result = false;
         while let Some(event) = rx.recv().await {
-            pending_attention_kind = None;
             // Track whether the CLI initialized successfully.
             if let AgentEvent::Stream(StreamEvent::System { subtype, .. }) = &event
                 && subtype == "init"
@@ -930,6 +936,29 @@ pub async fn send_chat_message(
                         "input": input,
                     });
                     let _ = app.emit("agent-permission-prompt", &payload);
+
+                    // Fire the system notification after the frontend has the
+                    // data it needs to render the card. We emit
+                    // `agent-permission-prompt` synchronously above; the
+                    // short sleep gives the webview time to pick up the event
+                    // and paint before the notification sound/banner arrives.
+                    // Tied to ControlRequest (not the earlier ContentBlockStart)
+                    // because the card is driven by this event, not the
+                    // streaming tool_use block.
+                    let kind = if tool_name == "AskUserQuestion" {
+                        crate::state::AttentionKind::Ask
+                    } else {
+                        crate::state::AttentionKind::Plan
+                    };
+                    let app_for_notify = app.clone();
+                    let ws_id_for_notify = ws_id.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(
+                            ATTENTION_NOTIFY_DELAY_MS,
+                        ))
+                        .await;
+                        crate::tray::notify_attention(&app_for_notify, &ws_id_for_notify, kind);
+                    });
                 } else {
                     let app_state = app.state::<AppState>();
                     let agents = app_state.agents.read().await;
@@ -964,9 +993,10 @@ pub async fn send_chat_message(
             }
 
             // Detect tool calls that require user input (question, plan approval).
-            // Capture whether we need to notify — the actual notification is
-            // deferred until after the event is emitted to the frontend so the
-            // UI updates before the system notification appears.
+            // The tray state flip happens here (on ContentBlockStart) so the
+            // icon/menu update is immediate. The *notification* itself fires
+            // later, from the ControlRequest branch, once the frontend has the
+            // data it needs to render the question/plan card.
             if let AgentEvent::Stream(StreamEvent::Stream {
                 event:
                     InnerStreamEvent::ContentBlockStart {
@@ -983,7 +1013,6 @@ pub async fn send_chat_message(
                 };
                 let app_state = app.state::<AppState>();
                 let mut agents = app_state.agents.write().await;
-                let already_notified = agents.get(&ws_id).is_some_and(|s| s.needs_attention);
                 if let Some(session) = agents.get_mut(&ws_id) {
                     session.needs_attention = true;
                     session.attention_kind = Some(kind);
@@ -993,12 +1022,6 @@ pub async fn send_chat_message(
                     if name == "ExitPlanMode" {
                         session.session_exited_plan = true;
                     }
-                }
-                drop(agents);
-                // Only send notification once per attention cycle — skip if
-                // we already notified the user about this workspace.
-                if !already_notified {
-                    pending_attention_kind = Some(kind);
                 }
             }
 
@@ -1361,14 +1384,6 @@ pub async fn send_chat_message(
                 event,
             };
             let _ = app.emit("agent-stream", &payload);
-
-            // Send attention notification AFTER emitting the event to the
-            // frontend — this gives the UI time to update before the system
-            // notification / sound fires, so the badge is already visible
-            // when the user sees the notification.
-            if let Some(kind) = pending_attention_kind {
-                crate::tray::notify_attention(&app, &ws_id, kind);
-            }
         }
     });
 
