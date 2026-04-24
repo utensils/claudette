@@ -44,6 +44,7 @@ import {
   type LeafInstanceSnapshot,
   type NeededLeaf,
 } from "./terminalLeafManager";
+import { reclaimScrollLines } from "./terminalReclaim";
 import "@xterm/xterm/css/xterm.css";
 import styles from "./TerminalPanel.module.css";
 
@@ -67,6 +68,8 @@ interface LeafInstance {
   unlisten: (() => void) | null;
   resizeObserver: ResizeObserver;
   fitTimer: ReturnType<typeof setTimeout> | null;
+  reclaimTimer: ReturnType<typeof setTimeout> | null;
+  reclaimDisposer: (() => void) | null;
   handleCopy: (ev: ClipboardEvent) => void;
   keyHandler: (ev: KeyboardEvent) => boolean;
 }
@@ -75,6 +78,80 @@ function safeFit(inst: LeafInstance) {
   if (inst.container.clientHeight > 0 && inst.container.clientWidth > 0) {
     inst.fit.fit();
   }
+}
+
+// A split triggers SIGWINCH on the underlying PTY; many shells (zsh + zle's
+// `reset-prompt`, p10k, starship's zle-line-init, etc.) respond by moving the
+// cursor to (0,0) and emitting `\e[J`, which clears the visible viewport and
+// redraws the prompt at the top. Scrollback is preserved, but the user sees
+// an empty pane with a lone prompt at the top — which reads as "the split
+// truncated my output".
+//
+// We can't stop the shell from doing that, but we can compensate after the
+// fact: once the redraw has settled, if the cursor landed high in the
+// viewport while scrollback exists below the visible window, scroll the
+// display up so the cursor sits near the bottom of the viewport and the
+// preceding history is visible again.
+interface XtermInternals {
+  _core?: {
+    _bufferService?: {
+      scrollLines(disp: number, suppressScrollEvent?: boolean): void;
+    };
+  };
+}
+
+function scheduleReclaimHistory(inst: LeafInstance) {
+  if (inst.reclaimDisposer) {
+    inst.reclaimDisposer();
+    inst.reclaimDisposer = null;
+  }
+  if (inst.reclaimTimer) clearTimeout(inst.reclaimTimer);
+
+  const tryReclaim = (): boolean => {
+    const buf = inst.term.buffer.active;
+    const lines = reclaimScrollLines({
+      rows: inst.term.rows,
+      cursorY: buf.cursorY,
+      baseY: buf.baseY,
+    });
+    if (lines < 0) {
+      // Terminal.scrollLines() routes through the browser viewport's
+      // smooth-scroll animator, which rides on a scrollable DOM element
+      // that hasn't finished laying out right after the pane reparents
+      // — the call gets swallowed and ydisp never moves. Going through
+      // the BufferService mutates buffer.ydisp synchronously and the
+      // renderer picks up the change on its next tick, which is the
+      // behaviour we actually want.
+      const bs = (inst.term as unknown as XtermInternals)._core?._bufferService;
+      if (bs) bs.scrollLines(lines);
+      else inst.term.scrollLines(lines);
+      return true;
+    }
+    return false;
+  };
+
+  // The shell's SIGWINCH response arrives asynchronously via pty-output;
+  // its timing is a race we can't pin down (hundreds of ms on a cold zsh,
+  // sub-20ms on warm runs). Hook onCursorMove and evaluate after every
+  // cursor update until the condition fires once, then stop.
+  const sub = inst.term.onCursorMove(() => {
+    if (tryReclaim()) {
+      sub.dispose();
+      inst.reclaimDisposer = null;
+      if (inst.reclaimTimer) {
+        clearTimeout(inst.reclaimTimer);
+        inst.reclaimTimer = null;
+      }
+    }
+  });
+  inst.reclaimDisposer = () => sub.dispose();
+  // Belt-and-suspenders: drop the listener after a second regardless, so
+  // we don't keep reacting to unrelated cursor moves far after the split.
+  inst.reclaimTimer = setTimeout(() => {
+    inst.reclaimTimer = null;
+    sub.dispose();
+    inst.reclaimDisposer = null;
+  }, 1000);
 }
 
 function closePtyBestEffort(ptyId: number) {
@@ -216,6 +293,18 @@ export const TerminalPanel = memo(function TerminalPanel() {
     setActiveTerminalTab,
     addTerminalTab,
   ]);
+
+  // When the workspace's tab list becomes empty (e.g. user closed the last
+  // tab, triggering the panel to collapse), release the auto-create guard
+  // so the next time the panel opens for this workspace we spawn a fresh
+  // tab instead of showing an empty panel.
+  useEffect(() => {
+    if (!selectedWorkspaceId) return;
+    const wsTabs = terminalTabs[selectedWorkspaceId];
+    if (wsTabs && wsTabs.length === 0 && autoCreatedRef.current === selectedWorkspaceId) {
+      autoCreatedRef.current = null;
+    }
+  }, [selectedWorkspaceId, terminalTabs]);
 
   // Ensure every tab has a pane tree (ephemeral counterpart to the DB tabs).
   useEffect(() => {
@@ -373,6 +462,8 @@ export const TerminalPanel = memo(function TerminalPanel() {
         ptyId: -1,
         unlisten: null,
         fitTimer: null,
+        reclaimTimer: null,
+        reclaimDisposer: null,
         handleCopy,
         keyHandler,
         resizeObserver: new ResizeObserver(() => {
@@ -457,6 +548,8 @@ export const TerminalPanel = memo(function TerminalPanel() {
     const inst = instancesRef.current.get(leafId);
     if (!inst) return;
     if (inst.fitTimer) clearTimeout(inst.fitTimer);
+    if (inst.reclaimTimer) clearTimeout(inst.reclaimTimer);
+    if (inst.reclaimDisposer) inst.reclaimDisposer();
     inst.resizeObserver.disconnect();
     inst.container.removeEventListener("copy", inst.handleCopy);
     inst.term.dispose();
@@ -520,6 +613,8 @@ export const TerminalPanel = memo(function TerminalPanel() {
       const selector = `[data-pane-target="${CSS.escape(spec.leafId)}"]`;
       const target = document.querySelector(selector) as HTMLElement | null;
       if (target && inst.container.parentElement !== target) {
+        const prevCols = inst.term.cols;
+        const prevRows = inst.term.rows;
         target.appendChild(inst.container);
         // The container may have gone from 0×0 to a real size — refit
         // immediately so the user doesn't see an 80×24 stub.
@@ -527,16 +622,19 @@ export const TerminalPanel = memo(function TerminalPanel() {
         if (inst.ptyId >= 0) {
           resizePty(inst.ptyId, inst.term.cols, inst.term.rows);
         }
-        // Only scroll to bottom for freshly-created instances. For a
-        // reparented surviving pane the cols usually shrank, lines
-        // reflowed to wrap wider, and the shell redrew its prompt — if
-        // we ALSO force scrollToBottom we push the user's recent
-        // command output well above the visible viewport and they
-        // perceive it as content loss. Leaving xterm's natural resize
-        // scroll position alone keeps the cursor row visible while
-        // letting the user scroll up to see prior output.
+        const resized =
+          inst.term.cols !== prevCols || inst.term.rows !== prevRows;
         if (freshLeafIds.has(spec.leafId)) {
+          // Brand-new pane: park the cursor at the bottom so the fresh
+          // prompt is visible.
           inst.term.scrollToBottom();
+        } else if (resized && inst.ptyId >= 0) {
+          // Existing pane that just got a new size (split/close changed
+          // the pane geometry). The shell will SIGWINCH-redraw its
+          // prompt at the top of the cleared viewport; wait for that
+          // and then scroll the display up so the preserved scrollback
+          // (the user's prior output) is visible above it.
+          scheduleReclaimHistory(inst);
         }
       }
     }
