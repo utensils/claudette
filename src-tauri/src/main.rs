@@ -21,6 +21,19 @@ use tauri::Manager;
 
 use claudette::db::Database;
 
+// Accelerator for the "Close Window" menu item on macOS.
+//
+// We intentionally do NOT use the platform default (`CmdOrCtrl+W`) here —
+// that would let the macOS native menu catch the key before the webview
+// does, which prevents the terminal's `Cmd+W = close pane` shortcut from
+// ever firing. Using `Cmd+Shift+W` for close-window matches iTerm2 /
+// Safari / Chrome conventions, and leaves `Cmd+W` free to reach xterm.
+//
+// `macos_close_window_accelerator_does_not_shadow_terminal_close` in the
+// tests below locks in this invariant.
+#[cfg(target_os = "macos")]
+const MACOS_CLOSE_WINDOW_ACCELERATOR: &str = "CmdOrCtrl+Shift+W";
+
 fn main() {
     // Install the rustls crypto provider before any TLS usage. Both
     // aws-lc-rs and ring are active (tauri-plugin-updater pulls in ring),
@@ -237,7 +250,19 @@ fn main() {
                     &[
                         &PredefinedMenuItem::minimize(app, None)?,
                         &PredefinedMenuItem::maximize(app, None)?,
-                        &PredefinedMenuItem::close_window(app, None)?,
+                        // Custom Close Window item. We can't use
+                        // `PredefinedMenuItem::close_window` because it
+                        // bakes in the platform default accelerator (Cmd+W
+                        // on macOS), which would shadow the terminal's
+                        // `Cmd+W = close pane` shortcut — the OS menu
+                        // would catch the key before the webview saw it.
+                        &MenuItem::with_id(
+                            app,
+                            "close-window",
+                            "Close Window",
+                            true,
+                            Some(MACOS_CLOSE_WINDOW_ACCELERATOR),
+                        )?,
                         &PredefinedMenuItem::separator(app)?,
                         &PredefinedMenuItem::fullscreen(app, None)?,
                     ],
@@ -254,6 +279,13 @@ fn main() {
                 } else if event.id().as_ref() == "open-settings" {
                     tray::show_and_focus(app);
                     let _ = app.emit("open-settings", ());
+                } else if event.id().as_ref() == "close-window" {
+                    // Route to the existing CloseRequested flow so the
+                    // macOS "hide instead of quit" logic in
+                    // on_window_event stays in one place.
+                    if let Some(win) = app.get_webview_window("main") {
+                        let _ = win.close();
+                    }
                 } else if event.id().as_ref() == "quit-app" {
                     let state = app.state::<state::AppState>();
                     let running = state
@@ -574,4 +606,38 @@ fn main() {
                 _ => {}
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(target_os = "macos")]
+    use super::MACOS_CLOSE_WINDOW_ACCELERATOR;
+
+    // Regression: the native macOS "Close Window" menu item must NOT bind
+    // `Cmd+W`. If it does, macOS catches the key at the OS level before
+    // xterm gets a chance to run its custom key-event handler, and the
+    // terminal's `Cmd+W = close pane` shortcut silently becomes a hide-
+    // window action. See `MACOS_CLOSE_WINDOW_ACCELERATOR` for the
+    // rationale.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_close_window_accelerator_does_not_shadow_terminal_close() {
+        let invalid_forms = [
+            "CmdOrCtrl+W",
+            "Cmd+W",
+            "CommandOrControl+W",
+            "Command+W",
+            "Ctrl+W",
+            "Meta+W",
+        ];
+        for bad in invalid_forms {
+            assert_ne!(
+                MACOS_CLOSE_WINDOW_ACCELERATOR, bad,
+                "close-window must not bind {bad} — that shadows the terminal's Cmd+W = close pane"
+            );
+        }
+        // Positive assertion: we expect the iTerm2 / Safari / Chrome
+        // convention so users' muscle memory carries over.
+        assert_eq!(MACOS_CLOSE_WINDOW_ACCELERATOR, "CmdOrCtrl+Shift+W");
+    }
 }
