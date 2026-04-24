@@ -74,6 +74,11 @@ import {
   resolveNativeHandler,
 } from "./nativeSlashCommands";
 import { checkpointHasFileChanges, clearAllHasFileChanges, buildRollbackMap } from "../../utils/checkpointUtils";
+import {
+  assistantTextForTurn,
+  buildPlainTurnFooters,
+  findTriggeringUserIndex,
+} from "../../utils/chatTurnFooter";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { CompactionDivider } from "./CompactionDivider";
 import { SyntheticContinuationMessage } from "./SyntheticContinuationMessage";
@@ -1319,6 +1324,7 @@ function TurnFooter({
   assistantText,
   onFork,
   onRollback,
+  className,
 }: {
   durationMs?: number;
   inputTokens?: number;
@@ -1326,6 +1332,7 @@ function TurnFooter({
   assistantText?: string;
   onFork?: () => void;
   onRollback?: () => void;
+  className?: string;
 }) {
   const [copied, setCopied] = useState(false);
   const copyTimeoutRef = useRef<number | null>(null);
@@ -1437,7 +1444,10 @@ function TurnFooter({
   const hasMetadata = !!(tokensNode || elapsedNode);
 
   return (
-    <div className={styles.turnFooter} onClick={(e) => e.stopPropagation()}>
+    <div
+      className={`${styles.turnFooter}${className ? ` ${className}` : ""}`}
+      onClick={(e) => e.stopPropagation()}
+    >
       {tokensNode}
       {tokensNode && elapsedNode && (
         <span className={styles.turnFooterDot} aria-hidden="true">·</span>
@@ -1483,6 +1493,15 @@ function TaskProgressBar({
  * per-message selectors and redundant re-renders during streaming.
  */
 const EMPTY_CHECKPOINTS: import("../../types/checkpoint").ConversationCheckpoint[] = [];
+
+type RollbackModalData = {
+  workspaceId: string;
+  checkpointId: string | null;
+  messageId: string;
+  messagePreview: string;
+  messageContent: string;
+  hasFileChanges: boolean;
+};
 
 const MessagesWithTurns = memo(function MessagesWithTurns({
   messages,
@@ -1553,65 +1572,33 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
     return map;
   }, [completedTurns]);
 
-  // Joined assistant text per turn, used by the "Copy output" action in the
-  // turn footer. A turn's slice is [prevTurn.afterMessageIndex, afterMessageIndex).
-  const assistantTextByTurnId = useMemo(() => {
-    const map = new Map<string, string>();
-    let prevBoundary = 0;
-    for (const turn of completedTurns) {
-      const text = messages
-        .slice(prevBoundary, turn.afterMessageIndex)
-        .filter((m) => m.role === "Assistant")
-        .map((m) => m.content)
-        .join("\n\n")
-        .trim();
-      map.set(turn.id, text);
-      prevBoundary = turn.afterMessageIndex;
-    }
-    return map;
-  }, [completedTurns, messages]);
+  const completedTurnPositions = useMemo(
+    () => new Set(completedTurns.map((turn) => turn.afterMessageIndex)),
+    [completedTurns],
+  );
 
-  // Map user message index → checkpoint for the preceding turn.
-  // Checks the message immediately before this user message (assistant or
-  // user for tool-only turns) for a matching checkpoint. Index 0 always
-  // maps to null (clear-all) when any checkpoints exist.
+  const findTriggeringUserIdx = useCallback(
+    (afterMessageIndex: number) => {
+      return findTriggeringUserIndex(messages, afterMessageIndex);
+    },
+    [messages],
+  );
+
+  // Map user message index → checkpoint for rollback buttons.
+  // Each user message maps to the latest preceding checkpoint, with the first
+  // user message mapping to null so it can clear the whole conversation.
   const rollbackCheckpointByIdx = useMemo(
     () => buildRollbackMap(messages, checkpoints),
     [messages, checkpoints],
   );
 
-  // Per-turn rollback data, keyed by turn.id. A turn's rollback target is
-  // the checkpoint captured just before the triggering user message ran.
-  // A turn's triggering user message is the first User message in its range
-  // [prevBoundary, afterMessageIndex) — the checkpoint itself is anchored to
-  // the last assistant message of the turn, so we can't use cp.message_id.
-  const rollbackByTurnId = useMemo(() => {
-    const result = new Map<
-      string,
-      {
-        workspaceId: string;
-        checkpointId: string | null;
-        messageId: string;
-        messagePreview: string;
-        messageContent: string;
-        hasFileChanges: boolean;
-      }
-    >();
-    let prevBoundary = 0;
-    for (const turn of completedTurns) {
-      let userIdx = -1;
-      for (let i = prevBoundary; i < turn.afterMessageIndex && i < messages.length; i++) {
-        if (messages[i].role === "User") {
-          userIdx = i;
-          break;
-        }
-      }
-      prevBoundary = turn.afterMessageIndex;
-      if (userIdx === -1) continue;
-      if (!rollbackCheckpointByIdx.has(userIdx)) continue;
+  const buildRollbackData = useCallback(
+    (userIdx: number): RollbackModalData | null => {
+      if (!rollbackCheckpointByIdx.has(userIdx)) return null;
       const target = rollbackCheckpointByIdx.get(userIdx) ?? null;
       const userMsg = messages[userIdx];
-      result.set(turn.id, {
+      if (!userMsg) return null;
+      return {
         workspaceId,
         checkpointId: target ? target.id : null,
         messageId: userMsg.id,
@@ -1620,16 +1607,99 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
         hasFileChanges: target
           ? checkpointHasFileChanges(target, checkpoints)
           : clearAllHasFileChanges(checkpoints),
-      });
+      };
+    },
+    [checkpoints, messages, rollbackCheckpointByIdx, workspaceId],
+  );
+
+  // Joined assistant text per turn, used by the "Copy output" action in the
+  // turn footer. CompletedTurn is only persisted for tool-using turns, so the
+  // slice starts at the nearest preceding user message instead of the previous
+  // CompletedTurn boundary.
+  const assistantTextByTurnId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const turn of completedTurns) {
+      const userIdx = findTriggeringUserIdx(turn.afterMessageIndex);
+      if (userIdx === -1) {
+        map.set(turn.id, "");
+        continue;
+      }
+      map.set(
+        turn.id,
+        assistantTextForTurn(messages, userIdx, turn.afterMessageIndex),
+      );
+    }
+    return map;
+  }, [completedTurns, findTriggeringUserIdx, messages]);
+
+  // Per-turn rollback data, keyed by turn.id. Completed turns are only
+  // persisted for tool-using turns, so the triggering user is the nearest
+  // user message before the completed turn boundary.
+  const rollbackByTurnId = useMemo(() => {
+    const result = new Map<string, RollbackModalData>();
+    for (const turn of completedTurns) {
+      const userIdx = findTriggeringUserIdx(turn.afterMessageIndex);
+      if (userIdx === -1) continue;
+      const data = buildRollbackData(userIdx);
+      if (data) result.set(turn.id, data);
     }
     return result;
-  }, [completedTurns, checkpoints, messages, workspaceId, rollbackCheckpointByIdx]);
+  }, [buildRollbackData, completedTurns, findTriggeringUserIdx]);
 
   const buildOnRollback = (turnId: string) => {
     if (isRunning) return undefined;
     const data = rollbackByTurnId.get(turnId);
     if (!data) return undefined;
     return () => openModal("rollback", data);
+  };
+
+  const plainTurnFootersByPosition = useMemo(() => {
+    return buildPlainTurnFooters(
+      messages,
+      rollbackCheckpointByIdx,
+      completedTurnPositions,
+      checkpoints,
+    );
+  }, [checkpoints, completedTurnPositions, messages, rollbackCheckpointByIdx]);
+
+  const renderPlainTurnFooter = (position: number) => {
+    const data = plainTurnFootersByPosition.get(position);
+    if (!data) return null;
+    const rollbackData = buildRollbackData(data.userIdx);
+    const onRollback =
+      !isRunning && rollbackData
+        ? () => openModal("rollback", rollbackData)
+        : undefined;
+    const onFork =
+      data.forkCheckpointId && onForkTurn
+        ? () => onForkTurn(data.forkCheckpointId!)
+        : undefined;
+    const hasRenderableTokens =
+      typeof data.inputTokens === "number" &&
+      typeof data.outputTokens === "number";
+
+    if (
+      !data.assistantText &&
+      !data.durationMs &&
+      !hasRenderableTokens &&
+      !onFork &&
+      !onRollback
+    ) {
+      return null;
+    }
+
+    return (
+      <TurnFooter
+        key={`plain-turn-footer-${data.position}`}
+        durationMs={data.durationMs}
+        inputTokens={data.inputTokens}
+        outputTokens={data.outputTokens}
+        assistantText={data.assistantText}
+        onFork={onFork}
+        onRollback={onRollback}
+        className={styles.messageTurnFooter}
+      />
+    );
   };
 
   // Compute cumulative task progress at each turn index in a single O(n) pass.
@@ -1796,6 +1866,7 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
             </div>
           </div>
           )}
+          {renderPlainTurnFooter(idx + 1)}
         </React.Fragment>
         );
       })}

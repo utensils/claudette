@@ -676,6 +676,10 @@
   font-variant-numeric: tabular-nums;
 }
 
+.messageTurnFooter {
+  margin: -2px 0 6px;
+}
+
 .turnFooterElapsed {
   font-family: var(--font-mono);
   color: var(--text-dim);
