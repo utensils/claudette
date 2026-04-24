@@ -31,6 +31,7 @@
             "dialog:default",
             "clipboard-manager:allow-write-text",
             "clipboard-manager:allow-read-text",
+            "clipboard-manager:allow-write-image",
             "updater:default",
             "process:default",
             "notification:default"

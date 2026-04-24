@@ -3,6 +3,9 @@ import {
   extensionFor,
   downloadAttachment,
   openAttachmentInBrowser,
+  copyAttachmentToClipboard,
+  shareAttachment,
+  isShareSupported,
   type DownloadableAttachment,
 } from "./attachmentDownload";
 
@@ -100,5 +103,85 @@ describe("openAttachmentInBrowser", () => {
       filename: "screenshot.png",
       mediaType: "image/png",
     });
+  });
+});
+
+describe("copyAttachmentToClipboard", () => {
+  it("writes decoded bytes to the clipboard", async () => {
+    const writeImage = vi.fn().mockResolvedValue(undefined);
+    await copyAttachmentToClipboard(fixture, { writeImage });
+    expect(writeImage).toHaveBeenCalledWith([104, 101, 108, 108, 111]);
+  });
+
+  it("propagates clipboard errors", async () => {
+    const writeImage = vi.fn().mockRejectedValue(new Error("no clipboard"));
+    await expect(
+      copyAttachmentToClipboard(fixture, { writeImage }),
+    ).rejects.toThrow("no clipboard");
+  });
+});
+
+describe("isShareSupported", () => {
+  it("returns false when navigator has no share()", () => {
+    expect(isShareSupported({}, null)).toBe(false);
+  });
+
+  it("returns true when share exists and canShare is missing", () => {
+    expect(isShareSupported({ share: async () => {} }, null)).toBe(true);
+  });
+
+  it("asks canShare about a probe file when both exist", () => {
+    const canShare = vi.fn().mockReturnValue(true);
+    const probe = new File([new Uint8Array(0)], "x.png", { type: "image/png" });
+    expect(isShareSupported({ share: async () => {}, canShare }, probe)).toBe(
+      true,
+    );
+    expect(canShare).toHaveBeenCalledWith({ files: [probe] });
+  });
+
+  it("denies when canShare returns false for the probe", () => {
+    const probe = new File([new Uint8Array(0)], "x.png", { type: "image/png" });
+    expect(
+      isShareSupported(
+        { share: async () => {}, canShare: () => false },
+        probe,
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("shareAttachment", () => {
+  it("calls navigator.share with a file and a title", async () => {
+    const share = vi.fn().mockResolvedValue(undefined);
+    await shareAttachment(fixture, { nav: { share } });
+
+    expect(share).toHaveBeenCalledOnce();
+    const arg = share.mock.calls[0][0];
+    expect(arg.title).toBe("screenshot.png");
+    expect(arg.files).toHaveLength(1);
+    expect((arg.files[0] as File).name).toBe("screenshot.png");
+    expect((arg.files[0] as File).type).toBe("image/png");
+  });
+
+  it("swallows AbortError (user dismissed the sheet)", async () => {
+    const share = vi
+      .fn()
+      .mockRejectedValue(new DOMException("user cancelled", "AbortError"));
+    await expect(
+      shareAttachment(fixture, { nav: { share } }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("surfaces non-Abort errors", async () => {
+    const share = vi.fn().mockRejectedValue(new Error("share backend down"));
+    await expect(
+      shareAttachment(fixture, { nav: { share } }),
+    ).rejects.toThrow("share backend down");
+  });
+
+  it("throws when navigator.share is unavailable", async () => {
+    await expect(shareAttachment(fixture, { nav: {} })).rejects.toThrow(
+      /not available/,
+    );
   });
 });

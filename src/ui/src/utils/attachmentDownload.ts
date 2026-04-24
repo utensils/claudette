@@ -1,4 +1,5 @@
 import { save } from "@tauri-apps/plugin-dialog";
+import { writeImage } from "@tauri-apps/plugin-clipboard-manager";
 import { invoke } from "@tauri-apps/api/core";
 
 import { base64ToBytes } from "./base64";
@@ -88,4 +89,83 @@ export async function openAttachmentInBrowser(
     filename: attachment.filename,
     mediaType: attachment.media_type,
   });
+}
+
+/**
+ * Copy the attachment image bytes to the system clipboard as an image (not
+ * as a file reference). Paste targets such as Messages, Keynote, or a web
+ * chat will receive the pixels directly.
+ */
+export async function copyAttachmentToClipboard(
+  attachment: DownloadableAttachment,
+  deps: { writeImage?: typeof writeImage } = {},
+): Promise<void> {
+  const writeImageFn = deps.writeImage ?? writeImage;
+  const bytes = base64ToBytes(attachment.data_base64);
+  await writeImageFn(Array.from(bytes));
+}
+
+/**
+ * Probe whether the current webview can invoke the native share sheet with
+ * a file. On macOS WKWebView the Web Share API is available; on Linux /
+ * Windows WebView2 it typically isn't, and we hide the Share menu item
+ * rather than offering a broken action.
+ *
+ * `nav` is injectable so the unit tests can exercise all three branches
+ * (no navigator.share, has navigator.share but no canShare, fully capable)
+ * deterministically — the real `navigator` is captured once at page load.
+ */
+export function isShareSupported(
+  nav: {
+    share?: (data: ShareData) => Promise<void>;
+    canShare?: (data: ShareData) => boolean;
+  } = typeof navigator === "undefined" ? {} : navigator,
+  probeFile: File | null = typeof File === "undefined"
+    ? null
+    : new File([new Uint8Array(0)], "probe.png", { type: "image/png" }),
+): boolean {
+  if (typeof nav.share !== "function") return false;
+  // canShare is advisory on some browsers. Assume yes if it's missing, since
+  // nav.share existing is a strong signal. Only deny when canShare
+  // explicitly returns false for our probe file.
+  if (typeof nav.canShare === "function" && probeFile) {
+    return nav.canShare({ files: [probeFile] });
+  }
+  return true;
+}
+
+/**
+ * Invoke the native share sheet with the attachment as a single file.
+ * Resolves when the sheet closes (success, cancel, or the user just
+ * dismissing). Throws only if the API itself is unavailable — the
+ * caller is expected to gate on `isShareSupported()` first.
+ */
+export async function shareAttachment(
+  attachment: DownloadableAttachment,
+  deps: {
+    nav?: { share?: (data: ShareData) => Promise<void> };
+  } = {},
+): Promise<void> {
+  const nav =
+    deps.nav ?? (typeof navigator === "undefined" ? {} : navigator);
+  if (typeof nav.share !== "function") {
+    throw new Error("Web Share API not available in this environment");
+  }
+  const bytes = base64ToBytes(attachment.data_base64);
+  // Share wants a File; construct it from the in-memory bytes. If the
+  // webview doesn't expose File (node test env without polyfills), let
+  // the caller's try/catch surface the error.
+  const file = new File([bytes], attachment.filename, {
+    type: attachment.media_type,
+  });
+  try {
+    await nav.share({
+      files: [file],
+      title: attachment.filename,
+    });
+  } catch (e) {
+    // AbortError = user dismissed the sheet; not a real failure.
+    if (e instanceof DOMException && e.name === "AbortError") return;
+    throw e;
+  }
 }

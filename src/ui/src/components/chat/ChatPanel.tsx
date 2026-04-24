@@ -61,6 +61,9 @@ import { AttachmentContextMenu } from "./AttachmentContextMenu";
 import {
   downloadAttachment,
   openAttachmentInBrowser,
+  copyAttachmentToClipboard,
+  shareAttachment,
+  isShareSupported,
   type DownloadableAttachment,
 } from "../../utils/attachmentDownload";
 import { FileMentionPicker, matchFiles } from "./FileMentionPicker";
@@ -1065,6 +1068,14 @@ export function ChatPanel() {
               },
             },
             {
+              label: "Copy Image",
+              onSelect: () => {
+                copyAttachmentToClipboard(attachmentMenu.attachment).catch(
+                  (err) => console.error("Copy failed:", err),
+                );
+              },
+            },
+            {
               label: "Open in New Window",
               onSelect: () => {
                 openAttachmentInBrowser(attachmentMenu.attachment).catch(
@@ -1072,6 +1083,18 @@ export function ChatPanel() {
                 );
               },
             },
+            ...(isShareSupported()
+              ? [
+                  {
+                    label: "Share…",
+                    onSelect: () => {
+                      shareAttachment(attachmentMenu.attachment).catch((err) =>
+                        console.error("Share failed:", err),
+                      );
+                    },
+                  },
+                ]
+              : []),
           ]}
         />
       )}
