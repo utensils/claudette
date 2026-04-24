@@ -270,7 +270,25 @@ async fn host_exec(
     if ctx.kind == PluginKind::EnvProvider {
         command.env_clear();
         command.env("PATH", crate::env::enriched_path());
-        for key in ["HOME", "USER", "LOGNAME", "SHELL", "TERM", "LANG", "LC_ALL"] {
+        // XDG_*_HOME vars matter: direnv/mise store their allow/trust
+        // caches under XDG_DATA_HOME (defaulting to $HOME/.local/share
+        // when unset). Users who point those at non-default paths
+        // would otherwise see their pre-approved worktrees reported
+        // as blocked because we'd be looking at the default location
+        // while their terminal wrote to the override.
+        for key in [
+            "HOME",
+            "USER",
+            "LOGNAME",
+            "SHELL",
+            "TERM",
+            "LANG",
+            "LC_ALL",
+            "XDG_DATA_HOME",
+            "XDG_STATE_HOME",
+            "XDG_CACHE_HOME",
+            "XDG_CONFIG_HOME",
+        ] {
             if let Ok(val) = std::env::var(key) {
                 command.env(key, val);
             }

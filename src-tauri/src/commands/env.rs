@@ -189,51 +189,138 @@ pub async fn reload_env(
     Ok(())
 }
 
+/// Env-provider CLI trust/state pass-through. direnv and mise look
+/// up their trust cache under XDG_*_HOME (falling back to $HOME-based
+/// defaults), and some users point those at non-default locations.
+/// `host_exec`'s env-provider hermetic path and `run_env_trust` must
+/// both preserve these vars so what Claudette reads/writes matches
+/// what the user's terminal sees.
+const ENV_PROVIDER_PASSTHROUGH_KEYS: &[&str] = &[
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "TERM",
+    "LANG",
+    "LC_ALL",
+    "XDG_DATA_HOME",
+    "XDG_STATE_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_CONFIG_HOME",
+];
+
 /// Run a plugin's trust command (`direnv allow`, `mise trust`) in the
 /// target's worktree directory. Hard-coded dispatch by plugin name so
 /// a malicious plugin manifest can't declare arbitrary commands for
-/// us to auto-run. Inherits `HOME`/`USER`/`LOGNAME`/`SHELL`/`TERM`
-/// from the app process so the tool writes to the user's existing
-/// trust cache.
+/// us to auto-run.
+///
+/// direnv and mise hash the target path into their allow-cache keys,
+/// so a single approval doesn't cover sibling worktrees. When the
+/// target is a repo (from `RepoSettings`), we fan out: run the
+/// command in the repo's main checkout AND every existing workspace
+/// worktree under it. That way one click blesses every path the
+/// agent, setup script, or PTY will actually spawn in.
 #[tauri::command]
 pub async fn run_env_trust(
     target: EnvTarget,
     plugin_name: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let (worktree, _, _) = resolve_target(&state, &target).await?;
-
     let cmd: &[&str] = match plugin_name.as_str() {
         "env-direnv" => &["direnv", "allow"],
         "env-mise" => &["mise", "trust"],
         _ => return Err(format!("no trust command defined for '{plugin_name}'")),
     };
 
-    let mut command = tokio::process::Command::new(cmd[0]);
-    command.args(&cmd[1..]);
-    command.current_dir(&worktree);
-    command.env("PATH", claudette::env::enriched_path());
-    for key in ["HOME", "USER", "LOGNAME", "SHELL", "TERM", "LANG", "LC_ALL"] {
-        if let Ok(val) = std::env::var(key) {
-            command.env(key, val);
+    // Collect every path we need to approve. For a Workspace target
+    // it's just that workspace. For a Repo target it's repo.path +
+    // every workspace.worktree_path that exists for that repo.
+    let paths = resolve_trust_paths(&state, &target).await?;
+    if paths.is_empty() {
+        return Err("no worktrees to run trust against".to_string());
+    }
+
+    let mut errors: Vec<String> = Vec::new();
+    for path in &paths {
+        let mut command = tokio::process::Command::new(cmd[0]);
+        command.args(&cmd[1..]);
+        command.current_dir(path);
+        command.env("PATH", claudette::env::enriched_path());
+        for key in ENV_PROVIDER_PASSTHROUGH_KEYS {
+            if let Ok(val) = std::env::var(key) {
+                command.env(key, val);
+            }
+        }
+
+        let output = command
+            .output()
+            .await
+            .map_err(|e| format!("failed to spawn {}: {e}", cmd[0]))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            errors.push(format!(
+                "{}: {} failed: {}",
+                path,
+                cmd.join(" "),
+                stderr.trim()
+            ));
+            continue;
+        }
+
+        // Trust state changed → evict this path's cache entry so the
+        // next resolve re-runs export with the now-allowed config.
+        state
+            .env_cache
+            .invalidate(Path::new(path), Some(&plugin_name));
+    }
+
+    if !errors.is_empty() && errors.len() == paths.len() {
+        return Err(errors.join("; "));
+    }
+    // Partial success is fine — the caller's refresh will show which
+    // paths are now trusted and which still need attention.
+    Ok(())
+}
+
+/// Gather every on-disk path we should run the trust command against.
+/// `Workspace` → the workspace's worktree. `Repo` → repo.path plus
+/// every workspace.worktree_path that currently exists for the repo.
+async fn resolve_trust_paths(state: &AppState, target: &EnvTarget) -> Result<Vec<String>, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    match target {
+        EnvTarget::Workspace { workspace_id } => {
+            let ws = db
+                .list_workspaces()
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .find(|w| w.id == *workspace_id)
+                .ok_or("Workspace not found")?;
+            let worktree = ws
+                .worktree_path
+                .clone()
+                .ok_or("Workspace has no worktree")?;
+            Ok(vec![worktree])
+        }
+        EnvTarget::Repo { repo_id } => {
+            let repo = db
+                .get_repository(repo_id)
+                .map_err(|e| e.to_string())?
+                .ok_or("Repository not found")?;
+            let mut paths = vec![repo.path.clone()];
+            let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
+            for ws in workspaces {
+                if ws.repository_id == *repo_id {
+                    if let Some(wt) = ws.worktree_path {
+                        if wt != repo.path {
+                            paths.push(wt);
+                        }
+                    }
+                }
+            }
+            Ok(paths)
         }
     }
-
-    let output = command
-        .output()
-        .await
-        .map_err(|e| format!("failed to spawn {}: {e}", cmd[0]))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("{} failed: {}", cmd.join(" "), stderr.trim()));
-    }
-
-    // Trust state changed → evict so the next resolve re-runs export.
-    state
-        .env_cache
-        .invalidate(Path::new(&worktree), Some(&plugin_name));
-    Ok(())
 }
 
 /// Build a [`WorkspaceInfo`] for the given target, returning

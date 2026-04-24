@@ -28,7 +28,21 @@ function M.detect(args)
 end
 
 function M.export(args)
-    local result = host.exec("nix", { "print-dev-env", "--json" })
+    -- `nix print-dev-env --json` auto-discovers only flake.nix. For
+    -- legacy `shell.nix`-only repos we must pass `-f shell.nix`
+    -- explicitly; otherwise nix errors with "could not find a
+    -- flake.nix" even though detect said the repo was eligible.
+    local flake_path = join(args.worktree, "flake.nix")
+    local shell_path = join(args.worktree, "shell.nix")
+    local result
+    if host.file_exists(flake_path) then
+        result = host.exec("nix", { "print-dev-env", "--json" })
+    elseif host.file_exists(shell_path) then
+        result = host.exec("nix", { "print-dev-env", "--json", "-f", shell_path })
+    else
+        error("nix print-dev-env failed: neither flake.nix nor shell.nix present at export time")
+    end
+
     if result.code ~= 0 then
         error("nix print-dev-env failed: " .. (result.stderr or result.stdout or "unknown error"))
     end
