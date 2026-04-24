@@ -56,6 +56,7 @@ import { SegmentedMeter } from "./composer/SegmentedMeter";
 import { ContextPopover } from "./composer/ContextPopover";
 import { WorkspaceActions } from "./WorkspaceActions";
 import { SlashCommandPicker, filterSlashCommands } from "./SlashCommandPicker";
+import { PinnedCommandsBar } from "./PinnedCommandsBar";
 import { AttachMenu } from "./AttachMenu";
 import { FileMentionPicker, matchFiles } from "./FileMentionPicker";
 import {
@@ -1871,6 +1872,11 @@ function ChatInputArea({
   const [contextPopoverOpen, setContextPopoverOpen] = useState(false);
   const pluginRefreshToken = useAppStore((s) => s.pluginRefreshToken);
 
+  const handleInsertPinnedCommand = useCallback((commandText: string) => {
+    setChatInput((prev) => commandText + (prev ? " " + prev : ""));
+    textareaRef.current?.focus();
+  }, []);
+
   // Per-workspace draft storage: save input when switching away,
   // restore when switching back.
   const draftsRef = useRef<Record<string, string>>({});
@@ -2427,6 +2433,11 @@ function ChatInputArea({
           ))}
         </div>
       )}
+      <PinnedCommandsBar
+        repoId={repoId}
+        slashCommands={slashCommands}
+        onInsertCommand={handleInsertPinnedCommand}
+      />
       <textarea
         ref={textareaRef}
         // data-chat-input is the stable selector used by the global focus

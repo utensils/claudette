@@ -9,6 +9,7 @@ pub mod diff;
 pub mod files;
 pub mod mcp;
 pub mod metrics;
+pub mod pinned_commands;
 pub mod plan;
 pub mod plugin;
 pub mod remote;

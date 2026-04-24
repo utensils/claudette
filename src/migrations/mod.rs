@@ -144,4 +144,9 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("20260423190000_scm_status_cache.sql"),
         legacy_version: None,
     },
+    Migration {
+        id: "20260424044912_pinned_commands",
+        sql: include_str!("20260424044912_pinned_commands.sql"),
+        legacy_version: None,
+    },
 ];
