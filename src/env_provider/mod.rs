@@ -38,10 +38,9 @@ use types::EnvMap;
 /// into [`resolve_for_workspace`] with minimal boilerplate at the call
 /// site. The tauri layer uses this from spawn command handlers.
 ///
-/// Merges the per-repo `disabled` set with the registry's globally-
-/// disabled plugin names so the dispatcher sees a single "skip this"
-/// set and globally-off plugins show up in the UI as cleanly disabled
-/// (rather than as a `PluginDisabled` error surfaced through detect).
+/// The dispatcher consults the backend directly for global-disable
+/// state (via [`EnvProviderBackend::is_plugin_disabled`]), so callers
+/// only need to pass their per-repo disabled set here.
 pub async fn resolve_with_registry(
     registry: &crate::plugin_runtime::PluginRegistry,
     cache: &EnvCache,
@@ -50,13 +49,7 @@ pub async fn resolve_with_registry(
     disabled: &std::collections::HashSet<String>,
 ) -> ResolvedEnv {
     let backend = PluginRegistryBackend::new(registry);
-    let mut merged_disabled = disabled.clone();
-    for name in backend.env_provider_names() {
-        if registry.is_disabled(&name) {
-            merged_disabled.insert(name);
-        }
-    }
-    resolve_for_workspace(&backend, cache, worktree, ws_info, &merged_disabled).await
+    resolve_for_workspace(&backend, cache, worktree, ws_info, disabled).await
 }
 
 /// The merged env contributed by all detected env-provider plugins.
@@ -181,9 +174,14 @@ pub async fn resolve_for_workspace(
     let mut sources = Vec::with_capacity(names.len());
 
     for name in names {
-        if disabled.contains(&name) {
-            // User explicitly turned this provider off — drop any cached
-            // result so re-enabling it forces a fresh evaluation.
+        // "Disabled" means either:
+        //   - the user toggled it off per-repo (Environment panel), or
+        //   - the plugin is globally disabled in the Plugins settings
+        //     section (via `backend.is_plugin_disabled`).
+        // Both surface the same way to the UI (`error: "disabled"`)
+        // and drop any stale cache entry so re-enabling forces a
+        // fresh evaluation on the next resolve.
+        if disabled.contains(&name) || backend.is_plugin_disabled(&name) {
             cache.invalidate(worktree, Some(&name));
             sources.push(ResolvedSource {
                 plugin_name: name,
@@ -730,6 +728,60 @@ mod tests {
         assert!(
             cache.get_fresh(tmp.path(), "env-direnv").is_none(),
             "detect=false must evict the stale cache entry"
+        );
+    }
+
+    #[tokio::test]
+    async fn globally_disabled_skips_even_with_warm_cache() {
+        // Regression for the Codex finding: even when a plugin had a
+        // previously-cached export, flipping it off globally must stop
+        // its vars from reaching the merged env on the next resolve.
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = EnvCache::new();
+
+        // Seed a warm cache entry for env-direnv pointing at a real
+        // file so the mtime check would otherwise keep it fresh.
+        let watched = tmp.path().join(".envrc");
+        std::fs::write(&watched, "x").unwrap();
+        let export = ProviderExport {
+            env: {
+                let mut m = EnvMap::new();
+                m.insert("SHOULD_NOT_SHOW".into(), Some("leaked".into()));
+                m
+            },
+            watched: vec![watched.clone()],
+        };
+        cache.put(tmp.path(), "env-direnv", &export);
+        assert!(cache.get_fresh(tmp.path(), "env-direnv").is_some());
+
+        let backend = MockBackend::new()
+            .with_plugin("env-direnv")
+            .with_globally_disabled("env-direnv")
+            .detects("env-direnv", true)
+            .exports("env-direnv", export.clone());
+
+        let resolved = resolve_for_workspace(
+            &backend,
+            &cache,
+            tmp.path(),
+            &ws_info(),
+            &Default::default(),
+        )
+        .await;
+
+        assert!(
+            !resolved.vars.contains_key("SHOULD_NOT_SHOW"),
+            "globally-disabled plugin must not contribute vars (warm cache leak)"
+        );
+        let source = resolved
+            .sources
+            .iter()
+            .find(|s| s.plugin_name == "env-direnv")
+            .expect("plugin must appear in sources");
+        assert_eq!(source.error.as_deref(), Some("disabled"));
+        assert!(
+            cache.get_fresh(tmp.path(), "env-direnv").is_none(),
+            "disable must invalidate the cache entry"
         );
     }
 

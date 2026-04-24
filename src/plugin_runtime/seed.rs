@@ -142,27 +142,25 @@ pub fn reseed_bundled_plugins_force(plugin_dir: &Path) -> Vec<String> {
             continue;
         }
 
-        // If a user has modified init.lua we refuse to clobber. Hash
-        // match with the embedded version is our "safe to overwrite"
-        // signal.
-        if init_file.exists() {
-            let on_disk = std::fs::read_to_string(&init_file).unwrap_or_default();
-            let embedded_hash = sha256_hex(init_lua);
-            let disk_hash = sha256_hex(&on_disk);
-            if embedded_hash != disk_hash && !on_disk.is_empty() {
-                // If the on-disk content differs from the current
-                // embedded one, we need another signal that the user
-                // hasn't customized — compare against `plugin_json`
-                // content. But plugin.json is likely to have been
-                // re-rendered on disk (pretty-printed by us), so we
-                // still respect user-edited init.lua.
-                warnings.push(format!(
-                    "Plugin '{name}': init.lua has user modifications — skipping update. \
-                     Delete {} to force a reseed.",
-                    dir.display()
-                ));
-                continue;
-            }
+        // Ownership check: presence of `.version` is our signal that
+        // Claudette seeded this directory. If present, overwriting is
+        // safe — we own the file regardless of whether the content
+        // matches the *current* embedded hash (this is the whole
+        // point of reseed: a plugin seeded from an older Claudette
+        // version has different content but is still ours to update).
+        //
+        // If `.version` is absent but `init.lua` exists, the directory
+        // was created by the user (or a user's tool), so we skip.
+        // This is stricter than the previous hash-based check: we no
+        // longer need to guess based on matching hashes.
+        let has_version_stamp = version_file.exists();
+        if init_file.exists() && !has_version_stamp {
+            warnings.push(format!(
+                "Plugin '{name}': no .version file — directory appears user-created, skipping. \
+                 Delete {} to force a reseed.",
+                dir.display()
+            ));
+            continue;
         }
 
         if let Err(e) = write_plugin_files(
@@ -324,35 +322,58 @@ mod tests {
     }
 
     #[test]
-    fn force_reseed_overwrites_unmodified_current_version() {
-        // Even when .version matches APP_VERSION, force reseed should
-        // still rewrite on-disk init.lua that matches the embedded hash.
-        // (Use case: user stuck on a stale init.lua because we shipped
-        // tree changes between version bumps.)
+    fn force_reseed_rewrites_stale_version_content() {
+        // Regression guard for the Codex finding: when a plugin was
+        // seeded by an older Claudette build, its on-disk init.lua
+        // doesn't match the current embedded hash. The previous
+        // hash-based gate would misclassify this as "user modified"
+        // and refuse to overwrite — exactly the case the Reload
+        // button is supposed to repair. Using `.version` presence
+        // as the ownership signal fixes it.
         let dir = tempfile::tempdir().unwrap();
         seed_bundled_plugins(dir.path());
 
-        // Swap init.lua with a *previously-embedded* content (simulated
-        // by overwriting with the same bytes so the hash matches the
-        // current embed — we can't easily simulate "previous embed"
-        // without shipping a second copy).
-        // What we can assert: force reseed writes the current content
-        // even if .version says we're on APP_VERSION (vs the gated
-        // seed which would skip).
         let init_path = dir.path().join("github/init.lua");
-        let before = std::fs::read_to_string(&init_path).unwrap();
-        // Overwrite with whitespace added so hash differs from on-disk
-        // but this mimics user modification — should be preserved.
-        std::fs::write(&init_path, format!("{before}\n-- added")).unwrap();
+        // Simulate a stale seeded copy: different content than the
+        // current embed, but `.version` is still present (seeded by
+        // a prior Claudette build).
+        std::fs::write(&init_path, "-- stale content from older version").unwrap();
+
+        let warnings = reseed_bundled_plugins_force(dir.path());
+        let github_warnings: Vec<_> = warnings.iter().filter(|w| w.contains("github")).collect();
+        assert!(
+            github_warnings.is_empty(),
+            "stale seeded copy must be overwritten without warning: {github_warnings:?}"
+        );
+        let after = std::fs::read_to_string(&init_path).unwrap();
+        assert!(
+            !after.contains("stale content"),
+            "stale content must be replaced with embedded plugin"
+        );
+    }
+
+    #[test]
+    fn force_reseed_skips_user_created_plugin_dir() {
+        // A user-created plugin directory has no `.version` stamp.
+        // The reseed must refuse to clobber it.
+        let dir = tempfile::tempdir().unwrap();
+        let user_dir = dir.path().join("github");
+        std::fs::create_dir_all(&user_dir).unwrap();
+        std::fs::write(
+            user_dir.join("init.lua"),
+            "-- user-authored plugin (never seeded)",
+        )
+        .unwrap();
+        std::fs::write(user_dir.join("plugin.json"), "{}").unwrap();
+        // NO .version file — this is the user-ownership signal.
 
         let warnings = reseed_bundled_plugins_force(dir.path());
         assert!(
             warnings.iter().any(|w| w.contains("github")),
-            "user-modified init.lua should be preserved with a warning: {warnings:?}"
+            "user-created plugin dir must be preserved with a warning: {warnings:?}"
         );
-        // Content should be unchanged (we preserved user edits).
-        let after = std::fs::read_to_string(&init_path).unwrap();
-        assert!(after.contains("-- added"));
+        let preserved = std::fs::read_to_string(user_dir.join("init.lua")).unwrap();
+        assert!(preserved.contains("user-authored"));
     }
 
     #[test]

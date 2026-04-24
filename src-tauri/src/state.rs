@@ -88,6 +88,14 @@ pub struct AgentSessionState {
     /// `plan_mode=false` on the next turn, so we force a teardown regardless
     /// of the requested flag. Reset after teardown.
     pub session_exited_plan: bool,
+    /// Snapshot of the env-provider resolved env `vars` map baked into
+    /// the current persistent session at spawn. Each new turn re-resolves
+    /// and compares; any divergence (user edited `.envrc`, ran
+    /// `direnv allow`, toggled a provider, changed a plugin setting)
+    /// forces a teardown so the fresh env reaches the agent subprocess.
+    /// Stored as a plain map because `EnvMap` already is one; keeping a
+    /// snapshot lets the comparison be a single equality check.
+    pub session_resolved_env: claudette::env_provider::types::EnvMap,
 }
 
 /// Handle to an active PTY process.

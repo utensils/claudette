@@ -273,11 +273,104 @@ fn nix_detect_skips_plain_repo() {
 // Integration: real CLIs (gated behind build.rs probes)
 // ---------------------------------------------------------------------------
 
+/// Serialize HOME/XDG env overrides across integration tests. Tokio
+/// tests run in parallel by default, and `std::env::set_var` is
+/// process-global — concurrent integration tests tripping over each
+/// other's HOME would produce flaky failures.
+#[cfg(any(has_direnv, has_mise))]
+fn env_override_mutex() -> &'static std::sync::Mutex<()> {
+    static M: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    M.get_or_init(|| std::sync::Mutex::new(()))
+}
+
+/// RAII guard that redirects HOME + XDG_*_HOME to a tempdir for the
+/// duration of an integration test. Restores the prior values on drop
+/// so subsequent tests (and the rest of the test binary) see the real
+/// user env. Holds the serialization mutex across the whole test so
+/// env overrides never overlap.
+///
+/// Why this matters: `direnv allow` and `mise trust` write their
+/// trust-cache entries under `$XDG_DATA_HOME` / `$XDG_STATE_HOME`
+/// (falling back to `$HOME/.local/share`). Without isolation, the
+/// integration tests pollute the developer's real trust cache with
+/// tempdir paths, and fail outright in sandboxed CI environments
+/// where `~/.local/...` is read-only.
+#[cfg(any(has_direnv, has_mise))]
+struct ScopedHome {
+    _guard: std::sync::MutexGuard<'static, ()>,
+    _tmp: tempfile::TempDir,
+    prior: Vec<(&'static str, Option<String>)>,
+}
+
+#[cfg(any(has_direnv, has_mise))]
+impl ScopedHome {
+    fn new() -> Self {
+        let guard = env_override_mutex()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().to_path_buf();
+        let xdg_data = home.join(".local/share");
+        let xdg_state = home.join(".local/state");
+        let xdg_cache = home.join(".cache");
+        let xdg_config = home.join(".config");
+        for p in [&xdg_data, &xdg_state, &xdg_cache, &xdg_config] {
+            std::fs::create_dir_all(p).unwrap();
+        }
+
+        let keys = [
+            ("HOME", home.to_string_lossy().into_owned()),
+            ("XDG_DATA_HOME", xdg_data.to_string_lossy().into_owned()),
+            ("XDG_STATE_HOME", xdg_state.to_string_lossy().into_owned()),
+            ("XDG_CACHE_HOME", xdg_cache.to_string_lossy().into_owned()),
+            ("XDG_CONFIG_HOME", xdg_config.to_string_lossy().into_owned()),
+        ];
+
+        let prior: Vec<(&'static str, Option<String>)> = keys
+            .iter()
+            .map(|(k, _)| (*k, std::env::var(*k).ok()))
+            .collect();
+
+        for (k, v) in keys {
+            // SAFETY: set_var is unsafe in edition 2024 because it can
+            // race with other threads reading env. `env_override_mutex`
+            // serializes all integration tests that mutate these keys,
+            // and the keys are restored before the mutex releases.
+            unsafe {
+                std::env::set_var(k, v);
+            }
+        }
+
+        Self {
+            _guard: guard,
+            _tmp: tmp,
+            prior,
+        }
+    }
+}
+
+#[cfg(any(has_direnv, has_mise))]
+impl Drop for ScopedHome {
+    fn drop(&mut self) {
+        for (k, v) in &self.prior {
+            unsafe {
+                match v {
+                    Some(val) => std::env::set_var(k, val),
+                    None => std::env::remove_var(k),
+                }
+            }
+        }
+    }
+}
+
 #[cfg(has_direnv)]
 #[tokio::test]
 async fn integration_direnv_export_returns_env() {
-    // Write an .envrc that exports a var, then go through the dispatcher
-    // using the real PluginRegistryBackend against a real direnv CLI.
+    // Redirect HOME + XDG_*_HOME into a tempdir so `direnv allow`
+    // writes to a disposable cache instead of the developer's real
+    // `~/.local/share/direnv/allow/`.
+    let _scoped = ScopedHome::new();
+
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
         tmp.path().join(".envrc"),
@@ -285,8 +378,8 @@ async fn integration_direnv_export_returns_env() {
     )
     .unwrap();
 
-    // direnv requires the .envrc to be allowed. We drive that via the
-    // CLI since direnv's own allow-list lives under XDG_DATA_HOME.
+    // direnv requires the .envrc to be allowed. direnv reads HOME for
+    // its allow-cache location, which we've redirected above.
     let status = std::process::Command::new("direnv")
         .arg("allow")
         .current_dir(tmp.path())
@@ -344,6 +437,10 @@ async fn integration_direnv_export_returns_env() {
 #[cfg(has_mise)]
 #[tokio::test]
 async fn integration_mise_export_returns_env() {
+    // See ScopedHome for why this matters — `mise trust` writes to
+    // `$XDG_STATE_HOME/mise/trusted-configs/` (or equivalents).
+    let _scoped = ScopedHome::new();
+
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
         tmp.path().join("mise.toml"),

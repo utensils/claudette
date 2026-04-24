@@ -400,6 +400,7 @@ pub async fn send_chat_message(
                 session_disable_1m_context: false,
                 pending_permissions: std::collections::HashMap::new(),
                 session_exited_plan: false,
+                session_resolved_env: Default::default(),
             };
         }
 
@@ -418,6 +419,7 @@ pub async fn send_chat_message(
             session_disable_1m_context: false,
             pending_permissions: std::collections::HashMap::new(),
             session_exited_plan: false,
+            session_resolved_env: Default::default(),
         }
     });
 
@@ -607,6 +609,42 @@ pub async fn send_chat_message(
         .await
     };
 
+    // Env-provider drift teardown: the env baked into the current
+    // persistent session is fixed at spawn time; Claude's subprocess
+    // won't see `.envrc` / `mise.toml` / `direnv allow` changes until
+    // it's respawned. Compare the freshly-resolved vars against the
+    // snapshot stored at spawn and teardown on any divergence. The
+    // mtime-keyed cache makes this re-resolve nearly free on quiet
+    // turns, so the check costs nothing in the common case.
+    if session.persistent_session.is_some() && session.session_resolved_env != resolved_env.vars {
+        eprintln!(
+            "[chat] env-provider output changed ({} vars before, {} after) — tearing down persistent session for {workspace_id}",
+            session.session_resolved_env.len(),
+            resolved_env.vars.len(),
+        );
+        let to_deny_env = drain_pending_permissions(session);
+        let stale_pid = session.persistent_session.as_ref().map(|ps| ps.pid());
+        session.persistent_session = None;
+        session.active_pid = None;
+        session.session_exited_plan = false;
+        if stale_pid.is_some() || to_deny_env.is_some() {
+            drop(agents);
+            if let Some((ref ps, drained)) = to_deny_env {
+                deny_drained_permissions(
+                    drained,
+                    ps,
+                    "Session restarted because workspace env changed.",
+                )
+                .await;
+            }
+            if let Some(pid) = stale_pid {
+                let _ = agent::stop_agent_graceful(pid).await;
+            }
+            agents = state.agents.write().await;
+        }
+    }
+    let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
+
     // Use persistent session to keep MCP servers alive across turns.
     // First turn or after restart: start a PersistentSession.
     // Subsequent turns in same session: reuse the existing process via stdin.
@@ -699,6 +737,7 @@ pub async fn send_chat_message(
                 // spawn-time flags above so the latch can't leak across
                 // respawns (including paths that skip the drift branch).
                 session.session_exited_plan = false;
+                session.session_resolved_env = resolved_env.vars.clone();
                 handle
             }
         }
@@ -766,6 +805,7 @@ pub async fn send_chat_message(
         session.session_disable_1m_context = agent_settings.disable_1m_context;
         // See the sibling reset above — fresh process, fresh latch.
         session.session_exited_plan = false;
+        session.session_resolved_env = resolved_env.vars.clone();
         let _ = db.save_agent_session(&workspace_id, &final_sid, session.turn_count);
         handle
     };

@@ -28,6 +28,17 @@ pub trait EnvProviderBackend: Send + Sync {
     /// `kind = "env-provider"`.
     fn env_provider_names(&self) -> Vec<String>;
 
+    /// True when the plugin is globally disabled and must not run,
+    /// regardless of per-repo toggle state. The dispatcher checks this
+    /// alongside the caller-supplied `disabled` HashSet and treats a
+    /// hit identically — invalidates the cache and records a
+    /// `disabled` source. Keeping the check on the backend (rather
+    /// than relying on callers to merge in the registry's state) makes
+    /// direct uses of [`resolve_for_workspace`] safe too.
+    fn is_plugin_disabled(&self, _plugin: &str) -> bool {
+        false
+    }
+
     /// Run the plugin's `detect` operation. Returns `true` if the
     /// plugin wants to contribute env for this worktree.
     fn detect(
@@ -66,6 +77,10 @@ impl EnvProviderBackend for PluginRegistryBackend<'_> {
             .filter(|(_, p)| p.manifest.kind == PluginKind::EnvProvider)
             .map(|(name, _)| name.clone())
             .collect()
+    }
+
+    fn is_plugin_disabled(&self, plugin: &str) -> bool {
+        self.registry.is_disabled(plugin)
     }
 
     async fn detect(
@@ -154,6 +169,8 @@ pub(crate) mod mock {
         /// Counts per plugin: (detect_calls, export_calls). Used by tests to
         /// assert cache behavior (e.g., that export was NOT called on a cache hit).
         pub calls: Mutex<HashMap<String, (usize, usize)>>,
+        /// Plugin names that should report as globally disabled.
+        pub globally_disabled: std::collections::HashSet<String>,
     }
 
     impl MockBackend {
@@ -163,7 +180,13 @@ pub(crate) mod mock {
                 detect_results: HashMap::new(),
                 export_results: HashMap::new(),
                 calls: Mutex::new(HashMap::new()),
+                globally_disabled: std::collections::HashSet::new(),
             }
+        }
+
+        pub fn with_globally_disabled(mut self, name: &str) -> Self {
+            self.globally_disabled.insert(name.to_string());
+            self
         }
 
         pub fn with_plugin(mut self, name: &str) -> Self {
@@ -200,6 +223,10 @@ pub(crate) mod mock {
     impl EnvProviderBackend for MockBackend {
         fn env_provider_names(&self) -> Vec<String> {
             self.plugins.clone()
+        }
+
+        fn is_plugin_disabled(&self, plugin: &str) -> bool {
+            self.globally_disabled.contains(plugin)
         }
 
         async fn detect(
