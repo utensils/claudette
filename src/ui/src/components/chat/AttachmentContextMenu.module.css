@@ -2,11 +2,11 @@
   position: fixed;
   z-index: 10000;
   min-width: 220px;
-  background: var(--bg-elevated, #1e1e1e);
-  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  background: var(--sidebar-bg);
+  border: 1px solid var(--sidebar-border);
   border-radius: 8px;
   padding: 4px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-lg);
   font-size: 13px;
   user-select: none;
 }
@@ -19,15 +19,16 @@
   padding: 6px 10px;
   border: none;
   background: transparent;
-  color: var(--text-primary, #e6e6e6);
+  color: var(--text-primary);
   text-align: left;
   border-radius: 4px;
   cursor: pointer;
   font: inherit;
+  transition: background var(--transition-fast);
 }
 
 .item:hover:not(:disabled) {
-  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+  background: var(--hover-bg);
 }
 
 .item:disabled {
@@ -40,5 +41,5 @@
   align-items: center;
   width: 16px;
   height: 16px;
-  color: var(--text-secondary, #a0a0a0);
+  color: var(--text-muted);
 }
