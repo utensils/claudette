@@ -16,7 +16,7 @@ import {
   pairWithServer,
   startLocalServer,
 } from "../../services/tauri";
-import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, LoaderCircle, GitPullRequestArrow, GitPullRequestDraft, GitMerge, GitPullRequestClosed } from "lucide-react";
+import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, CirclePause, LoaderCircle, GitPullRequestArrow, GitPullRequestDraft, GitMerge, GitPullRequestClosed } from "lucide-react";
 import { RepoIcon } from "../shared/RepoIcon";
 import { UpdateBanner } from "../layout/UpdateBanner";
 import { getScmSortPriority } from "../../utils/scmSortPriority";
@@ -271,7 +271,7 @@ export const Sidebar = memo(function Sidebar() {
     const badge: "ask" | "plan" | "done" | null =
       agentQuestions[ws.id] ? "ask" :
       planApprovals[ws.id] ? "plan" :
-      unreadCompletions.has(ws.id) && ws.agent_status !== "Running" ? "done" :
+      unreadCompletions.has(ws.id) && ws.agent_status !== "Running" && ws.agent_status !== "Stopped" ? "done" :
       null;
     return (
       <div
@@ -330,9 +330,13 @@ export const Sidebar = memo(function Sidebar() {
               </span>
             );
           }
-          return (
-            <span className={styles.statusIcon} title={ws.agent_status === "Stopped" ? "Stopped" : "Idle"}>
-              <CircleDashed size={14} style={{ color: ws.agent_status === "Stopped" ? "var(--status-stopped)" : "var(--text-dim)" }} />
+          return ws.agent_status === "Stopped" ? (
+            <span className={styles.statusIcon} title="Stopped">
+              <CirclePause size={14} style={{ color: "var(--status-stopped)" }} />
+            </span>
+          ) : (
+            <span className={styles.statusIcon} title="Idle">
+              <CircleDashed size={14} style={{ color: "var(--text-dim)" }} />
             </span>
           );
         })()}

@@ -247,7 +247,7 @@ export function Dashboard() {
       const badge: "ask" | "plan" | "done" | null =
         agentQuestions[ws.id] ? "ask" :
         planApprovals[ws.id] ? "plan" :
-        unreadCompletions.has(ws.id) && !isAgentBusy(ws.agent_status) ? "done" :
+        unreadCompletions.has(ws.id) && !isAgentBusy(ws.agent_status) && ws.agent_status !== "Stopped" ? "done" :
         null;
       const groupKey = badge ? 0 : isAgentBusy(ws.agent_status) ? 1 : 2;
       const lastUsed = lastMessages[ws.id]?.created_at ?? ws.created_at;
