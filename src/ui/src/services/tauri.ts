@@ -243,6 +243,41 @@ export function recordSlashCommandUsage(
   });
 }
 
+// -- Pinned Commands --
+
+export interface PinnedCommand {
+  id: number;
+  repo_id: string;
+  command_name: string;
+  sort_order: number;
+  created_at: string;
+  use_count: number;
+}
+
+export function getPinnedCommands(
+  repoId: string,
+): Promise<PinnedCommand[]> {
+  return invoke("get_pinned_commands", { repoId });
+}
+
+export function pinCommand(
+  repoId: string,
+  commandName: string,
+): Promise<PinnedCommand> {
+  return invoke("pin_command", { repoId, commandName });
+}
+
+export function unpinCommand(id: number): Promise<void> {
+  return invoke("unpin_command", { id });
+}
+
+export function reorderPinnedCommands(
+  repoId: string,
+  ids: number[],
+): Promise<void> {
+  return invoke("reorder_pinned_commands", { repoId, ids });
+}
+
 // -- Plugins --
 
 export function listPlugins(

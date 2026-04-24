@@ -57,6 +57,7 @@ import { SegmentedMeter } from "./composer/SegmentedMeter";
 import { ContextPopover } from "./composer/ContextPopover";
 import { WorkspaceActions } from "./WorkspaceActions";
 import { SlashCommandPicker, filterSlashCommands } from "./SlashCommandPicker";
+import { PinnedCommandsBar } from "./PinnedCommandsBar";
 import { AttachMenu } from "./AttachMenu";
 import {
   AttachmentContextMenu,
@@ -2441,6 +2442,11 @@ function ChatInputArea({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [voice.state, voice.cancel]);
 
+  const handleInsertPinnedCommand = useCallback((commandText: string) => {
+    setChatInput((prev) => commandText + (prev ? " " + prev : ""));
+    textareaRef.current?.focus();
+  }, []);
+
   // Per-session draft storage: save input when switching away,
   // restore when switching back.
   const draftsRef = useRef<Record<string, string>>({});
@@ -3038,6 +3044,11 @@ function ChatInputArea({
           ))}
         </div>
       )}
+      <PinnedCommandsBar
+        repoId={repoId}
+        slashCommands={slashCommands}
+        onInsertCommand={handleInsertPinnedCommand}
+      />
       <div className={styles.inputTextWrap}>
         {showUltrathinkOverlay && (
           <div className={styles.inputHighlight} aria-hidden="true">

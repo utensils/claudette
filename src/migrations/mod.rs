@@ -150,6 +150,11 @@ pub const MIGRATIONS: &[Migration] = &[
         legacy_version: None,
     },
     Migration {
+        id: "20260424044912_pinned_commands",
+        sql: include_str!("20260424044912_pinned_commands.sql"),
+        legacy_version: None,
+    },
+    Migration {
         id: "20260425003451_attachments_origin_and_tool_use",
         sql: include_str!("20260425003451_attachments_origin_and_tool_use.sql"),
         legacy_version: None,

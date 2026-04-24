@@ -460,6 +460,11 @@ fn main() {
             // Slash commands
             commands::slash_commands::list_slash_commands,
             commands::slash_commands::record_slash_command_usage,
+            // Pinned commands
+            commands::pinned_commands::get_pinned_commands,
+            commands::pinned_commands::pin_command,
+            commands::pinned_commands::unpin_command,
+            commands::pinned_commands::reorder_pinned_commands,
             // Files
             commands::files::list_workspace_files,
             commands::files::read_workspace_file,
