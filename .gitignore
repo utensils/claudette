@@ -75,3 +75,6 @@ tags
 # consume. Built per-target by CI (and by scripts/stage-cli-sidecar.sh
 # locally) before each bundle; never checked in.
 /src-tauri/binaries/
+
+# playwright-cli workspace (created transiently by capture scripts)
+.playwright-cli/

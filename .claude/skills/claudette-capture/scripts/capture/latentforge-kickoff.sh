@@ -1,34 +1,34 @@
 #!/usr/bin/env bash
 # latentforge-kickoff — creates a workspace in latentforge, enables plan mode,
-# types a prompt, submits it. Records the whole interaction.
+# types a prompt, clicks the Send button (natural flow, input clears).
 #
-# Output: /tmp/claudette-capture/latentforge-kickoff.mov  (final concat happens
-#         in demo-concat.sh — this step just produces the raw .mov)
-# Exports:  LF_WORKSPACE_ID to a sibling file at /tmp/claudette-capture/lf-workspace-id
-#
-# Duration: ~20s
+# Output: /tmp/claudette-capture/latentforge-kickoff.mp4
+# Exports: $TMP_DIR/lf-workspace-id  with the new workspace UUID
+# Duration: ~26s
 
 set -euo pipefail
 # shellcheck disable=SC1091
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/../lib/common.sh"
 
 NAME="latentforge-kickoff"
-WORKSPACE_NAME="vitepress-docs"
+WORKSPACE_NAME="${WORKSPACE_NAME:-docs-site}"
 
-PROMPT="Implement a full VitePress documentation website for this project. Include: a polished landing page, a Getting Started guide, an Architecture overview, and an API reference generated from the code. Use the default VitePress theme with a project-appropriate primary color. Keep the build wired into the existing tooling. When implementation is complete, commit all changes with conventional-commit messages, push the branch to origin, and open a pull request on GitHub (gh pr create) with a clear title and a summary of what was added."
+PROMPT="Build a complete VitePress documentation website for this project. Include a polished landing page with a clear value prop, a Getting Started guide, an Architecture overview, and an API reference auto-generated from the code. Use the default VitePress theme with a project-appropriate primary color. Add a Nix devshell helper command (e.g. 'docs-dev') that starts the hot-reloading dev server so developers can preview changes locally; wire Node/pnpm into the existing devshell so it works inside 'nix develop'. When the implementation is complete, verify the build succeeds, commit all changes with conventional-commit messages, push the branch to origin, and open a pull request on GitHub with gh pr create (include a clear title and a summary of what was added)."
 
 log "preflight"
 window_require
 window_activate
 sleep 0.3
 
-log "resetting to default-dark, closing settings"
+log "resetting UI to clean default-dark state"
 eval_js "
   const s = window.__CLAUDETTE_STORE__.getState();
   document.documentElement.setAttribute('data-theme', 'default-dark');
   s.setCurrentThemeId('default-dark');
   if (s.settingsOpen) s.closeSettings();
   s.setSidebarShowArchived(false);
+  window.__CLAUDETTE_STORE__.setState({ terminalPanelVisible: false });
+  s.selectWorkspace(null);
   return 'ok';
 "
 sleep 0.6
@@ -36,10 +36,10 @@ sleep 0.6
 log "recording → $TMP_DIR/$NAME.mov"
 record_start "$NAME"
 
-# Brief dashboard hold
+# Brief hold on dashboard
 sleep 1.4
 
-log "creating workspace 'vitepress-docs' in latentforge"
+log "creating workspace '$WORKSPACE_NAME' in latentforge"
 WS_ID_JSON=$(eval_js "
   const s = window.__CLAUDETTE_STORE__.getState();
   const repo = s.repositories.find(r => r.name === 'latentforge');
@@ -49,11 +49,10 @@ WS_ID_JSON=$(eval_js "
     name: '$WORKSPACE_NAME',
     skipSetup: true,
   });
-  // Refresh workspace list from backend so the new ws shows up in sidebar
   const loaded = await window.__CLAUDETTE_INVOKE__('load_initial_data');
   if (loaded && loaded.workspaces) s.setWorkspaces(loaded.workspaces);
-  const ws = (loaded?.workspaces || s.workspaces).find(w => w.id === result.workspace.id);
   s.selectWorkspace(result.workspace.id);
+  const ws = s.workspaces.find(w => w.id === result.workspace.id);
   return { id: result.workspace.id, name: ws?.name, branch: ws?.branch_name };
 ")
 echo "$WS_ID_JSON" | tee "$TMP_DIR/lf-workspace.json"
@@ -66,48 +65,70 @@ log "enabling plan mode"
 eval_js "window.__CLAUDETTE_STORE__.getState().setPlanMode('$WS_ID', true); return 'ok';" >/dev/null
 sleep 1.0
 
-log "typing prompt"
-# Pre-escape double quotes + backticks for JS template literal safety
+log "typing prompt (faster chunks + 10ms per char for smoother capture)"
 ESCAPED_PROMPT=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$PROMPT")
+# Type in chunks so we stay under the 10s eval timeout. typeInto streams
+# character-by-character inside a single eval; split the prompt in halves.
+CHUNK_SIZE=350
+python3 - "$PROMPT" "$CHUNK_SIZE" >"$TMP_DIR/prompt-chunks.json" <<'PY'
+import json, sys
+text, n = sys.argv[1], int(sys.argv[2])
+chunks = [text[i:i+n] for i in range(0, len(text), n)]
+json.dump(chunks, sys.stdout)
+PY
+
+# First chunk clears then types; subsequent chunks append.
+first_chunk=$(python3 -c "import json; print(json.dumps(json.load(open('$TMP_DIR/prompt-chunks.json'))[0]))")
 eval_js "
-  // Find the composer textarea. ChatPanel renders a <textarea>; pick the last
-  // one since Settings etc. may have others.
   const areas = Array.from(document.querySelectorAll('textarea'));
   const ta = areas[areas.length - 1];
   if (!ta) throw new Error('no textarea found');
-  await window.capture.typeInto('textarea:last-of-type', $ESCAPED_PROMPT, 18);
-  return 'typed';
-"
-sleep 1.2
-
-log "submitting prompt (planMode=true)"
-eval_js "
-  const s = window.__CLAUDETTE_STORE__.getState();
-  const wsId = '$WS_ID';
-  s.updateWorkspace(wsId, { agent_status: 'Running' });
-  s.clearUnreadCompletion(wsId);
-  await window.__CLAUDETTE_INVOKE__('send_chat_message', {
-    workspaceId: wsId,
-    content: $ESCAPED_PROMPT,
-    permissionLevel: null,
-    model: null,
-    fastMode: null,
-    thinkingEnabled: null,
-    planMode: true,
-  });
-  // Clear the composer so the UI looks clean after send
-  const areas = Array.from(document.querySelectorAll('textarea'));
-  const ta = areas[areas.length - 1];
-  if (ta) {
-    const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(ta), 'value').set;
-    setter.call(ta, '');
+  ta.focus();
+  // Clear first
+  const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(ta), 'value').set;
+  setter.call(ta, '');
+  ta.dispatchEvent(new Event('input', { bubbles: true }));
+  // Stream first chunk
+  let cur = '';
+  for (const ch of $first_chunk) {
+    cur += ch;
+    setter.call(ta, cur);
     ta.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 9));
   }
-  return 'sent';
-"
+  return 'chunk1 done';
+" >/dev/null
 
-# Record 6s of the agent kicking off (thinking indicator, early tokens)
-sleep 6.0
+# Remaining chunks: append to existing value
+chunk_count=$(python3 -c "import json; print(len(json.load(open('$TMP_DIR/prompt-chunks.json'))))")
+for i in $(seq 1 $((chunk_count - 1))); do
+  chunk=$(python3 -c "import json; print(json.dumps(json.load(open('$TMP_DIR/prompt-chunks.json'))[$i]))")
+  eval_js "
+    const areas = Array.from(document.querySelectorAll('textarea'));
+    const ta = areas[areas.length - 1];
+    const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(ta), 'value').set;
+    let cur = ta.value;
+    for (const ch of $chunk) {
+      cur += ch;
+      setter.call(ta, cur);
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+      await new Promise(r => setTimeout(r, 9));
+    }
+    return 'chunk$i done';
+  " >/dev/null
+done
+sleep 0.8
+
+log "clicking Send button"
+eval_js "
+  const btn = document.querySelector('button[aria-label=\"Send message\"]');
+  if (!btn) throw new Error('Send button not found');
+  btn.click();
+  return 'clicked';
+" >/dev/null
+
+# Record 7s of the agent kicking off (thinking indicator + plan agent spawning)
+sleep 7.0
 
 record_stop "$NAME"
 
