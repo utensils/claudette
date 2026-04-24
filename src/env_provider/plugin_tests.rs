@@ -238,13 +238,17 @@ fn nix_detect_finds_shell_nix() {
 }
 
 #[test]
-fn nix_detect_skips_when_direnv_present() {
-    // Even with flake.nix present, if .envrc exists, env-direnv wins —
-    // nix-devshell must back off to avoid double-evaluating the flake.
+fn nix_detect_finds_flake_even_with_envrc() {
+    // Detection is a pure function of what's on disk — if flake.nix
+    // exists, env-nix-devshell detects regardless of whether direnv is
+    // also configured. Precedence handles the overlap at merge time
+    // (direnv > nix-devshell, so direnv's vars win on collisions when
+    // both plugins export), and the per-provider toggle lets users
+    // disable either one if they want a single-source setup.
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("flake.nix"), "{}").unwrap();
     std::fs::write(tmp.path().join(".envrc"), "use flake").unwrap();
-    assert!(!run_detect(
+    assert!(run_detect(
         "env-nix-devshell",
         NIX_SRC,
         &["nix"],

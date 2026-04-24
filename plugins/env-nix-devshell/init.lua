@@ -1,12 +1,15 @@
 -- env-nix-devshell plugin for Claudette.
 --
 -- Activates a Nix devshell for users who keep their toolchain in a
--- `flake.nix` (or legacy `shell.nix`) *without* the direnv wrapper.
+-- `flake.nix` (or legacy `shell.nix`).
 --
--- Detection policy: only activate when NO `.envrc` is present. If
--- direnv is in play, it already wraps the flake (via `use flake` in
--- `.envrc`), and the `env-direnv` plugin wins on precedence. We stay
--- out of its way to avoid evaluating the flake twice.
+-- Detection is a pure function of what's on disk: if `flake.nix` or
+-- `shell.nix` exists, we detect. We deliberately do NOT back off when
+-- `.envrc` is present — instead, precedence handles the overlap:
+-- `env-direnv` outranks `env-nix-devshell`, so when an `.envrc` does
+-- `use flake` and both plugins export, direnv's values win on key
+-- collisions at merge time. Users who want only one can toggle the
+-- other off in the Environment settings panel.
 --
 -- Export: runs `nix print-dev-env --json` which emits
 -- `{ variables: { NAME: { type, value } } }`. We keep only
@@ -20,10 +23,6 @@ local function join(dir, name)
 end
 
 function M.detect(args)
-    -- direnv wraps the flake — let env-direnv handle it.
-    if host.file_exists(join(args.worktree, ".envrc")) then
-        return false
-    end
     return host.file_exists(join(args.worktree, "flake.nix"))
         or host.file_exists(join(args.worktree, "shell.nix"))
 end
