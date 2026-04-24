@@ -3,14 +3,17 @@
 # with OpenSSH enabled + the caller's pubkey pre-authorized + a known
 # Administrator password baked in via user-data.
 #
-# Usage:
-#   aws-win-spinup               # prints status, stashes state, returns
-#   eval "$(aws-win-spinup)"     # ALSO sets CLAUDETTE_WIN_* in current shell
+# Usage (eval-free path — recommended):
+#   aws-win-spinup               # launches, stashes state, returns
+#   aws-win-rdp                  # auto-discovers the instance
+#   deploy-win-x64               # auto-discovers the instance
+#   aws-win-destroy              # tears down + scrubs state
 #
-# Downstream helpers (aws-win-rdp, deploy-win-x64, aws-win-destroy) all
-# auto-discover the instance from AWS tags + state files, so env vars
-# are optional. State survives shell/direnv reloads because it lives in
-# $PRJ_ROOT/.claudette/ (gitignored) rather than $TMPDIR.
+# Optional eval path (for callers that want env vars set in their
+# current shell): `eval "$(aws-win-spinup)"`. Downstream helpers work
+# either way — they fall back to $PRJ_ROOT/.claudette/aws-win/ and AWS
+# tag lookup when env vars aren't set. State survives shell/direnv
+# reloads because it lives under the project, not $TMPDIR.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=_aws-common.sh
@@ -128,14 +131,32 @@ INSTANCE_ID=$(aws_ ec2 run-instances \
   --query 'Instances[0].InstanceId' --output text)
 log "instance: $INSTANCE_ID — waiting for running state"
 aws_ ec2 wait instance-running --instance-ids "$INSTANCE_ID"
-PUBLIC_IP=$(instance_public_ip "$INSTANCE_ID")
+
+# 5. Poll for public IP assignment. EC2 reports `running` as soon as
+# the hypervisor boots the instance, but the public IP can lag by a
+# few seconds. Capture the IP in a short loop rather than reading it
+# once and risking an empty/None value driving the sshd poll below.
+PUBLIC_IP=""
+IP_DEADLINE=$(( $(date +%s) + 120 ))
+while [ "$(date +%s)" -lt "$IP_DEADLINE" ]; do
+  PUBLIC_IP=$(instance_public_ip "$INSTANCE_ID")
+  [ -n "$PUBLIC_IP" ] && [ "$PUBLIC_IP" != "None" ] && break
+  sleep 3
+done
+if [ -z "$PUBLIC_IP" ] || [ "$PUBLIC_IP" = "None" ]; then
+  log "timed out waiting for public IP assignment on $INSTANCE_ID"
+  exit 1
+fi
 log "public IP: $PUBLIC_IP — waiting for sshd (Windows first-boot + user-data is slow, ~5-8 min)"
 
-# 5. Poll sshd via ssh-keyscan (no auth needed — just confirms sshd
-# finished starting, which on Windows is the slow part).
+# 6. Poll sshd via ssh-keyscan (no auth needed — just confirms sshd
+# finished starting, which on Windows is the slow part). Accept any
+# host key type: Windows OpenSSH generates rsa+ecdsa+ed25519 by
+# default today, but we shouldn't bind to that detail.
 DEADLINE=$(( $(date +%s) + 900 ))
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
-  if ssh-keyscan -T 5 -t rsa "$PUBLIC_IP" 2>/dev/null | grep -q ssh-rsa; then
+  if ssh-keyscan -T 5 "$PUBLIC_IP" 2>/dev/null \
+       | awk 'NF >= 3 && $2 ~ /^(ssh|ecdsa)/ { found=1; exit } END { exit !found }'; then
     log "sshd ready"
     break
   fi
@@ -147,22 +168,26 @@ if [ "$(date +%s)" -ge "$DEADLINE" ]; then
   exit 1
 fi
 
-# 6. Persist instance info to the project-scoped state dir so
+# 7. Persist instance info to the project-scoped state dir so
 # downstream helpers work from any shell, including after a
 # direnv reload. Password is in a mode-600 sidecar.
 ( umask 077; printf '%s' "$ADMIN_PASS" > "$(state_file "$INSTANCE_ID" pass)" )
 printf '%s\n' "$INSTANCE_ID" > "$STATE_DIR/current"
 
-# 7. Emit exports on stdout so `eval "$(aws-win-spinup)"` works for
-# callers who want env vars. All downstream helpers work without them.
+# 8. Emit exports on stdout so `eval "$(aws-win-spinup)"` works for
+# callers who want env vars. The password is deliberately NOT included
+# here: it would leak into terminal scrollback and shell/CI logs for
+# the common non-eval invocation. aws-win-rdp reads it from the mode-
+# 600 sidecar, and anyone who wants it in their shell can run
+# `cat $PRJ_ROOT/.claudette/aws-win/<id>.pass` or read $PASS_FILE.
 cat <<EOF
 export CLAUDETTE_WIN_HOST=Administrator@$PUBLIC_IP
 export CLAUDETTE_WIN_REMOTE_PATH=Desktop/claudette.exe
 export CLAUDETTE_WIN_INSTANCE_ID=$INSTANCE_ID
-export CLAUDETTE_WIN_ADMIN_PASSWORD='$ADMIN_PASS'
 # Host:    $PUBLIC_IP
 # SSH:     ssh Administrator@$PUBLIC_IP
 # RDP:     aws-win-rdp            # macOS; opens Windows App with password on clipboard
 # Deploy:  deploy-win-x64
 # Destroy: aws-win-destroy
+# Admin password is in $STATE_DIR/$INSTANCE_ID.pass (mode 600).
 EOF

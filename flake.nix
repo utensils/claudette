@@ -366,9 +366,11 @@
               pkgs.llvmPackages.llvm
               # aws-win-spinup / aws-win-destroy helpers shell out to these.
               # Pinning them here means teammates on plain Darwin don't need
-              # a system awscli install for the devshell command to work.
+              # a system awscli/openssl install for the devshell to work.
+              # openssl is used by aws-win-spinup for random password
+              # generation; awscli2 drives the EC2 API calls.
               pkgs.awscli2
-              pkgs.jq
+              pkgs.openssl
             ]
             ++ darwinBuildInputs
             ++ linuxBuildInputs
