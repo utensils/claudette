@@ -27,7 +27,7 @@ import {
   terminalKeyAction,
   type TerminalKeyAction,
 } from "./terminalShortcuts";
-import { neighborLeaf } from "../../stores/terminalPaneTree";
+import { countLeaves, neighborLeaf } from "../../stores/terminalPaneTree";
 import { trimSelectionTrailingWhitespace } from "./terminalSelection";
 import {
   focusActiveTerminal,
@@ -133,7 +133,6 @@ export const TerminalPanel = memo(function TerminalPanel() {
     activeTerminalTabIdRef.current = activeTerminalTabId;
   }, [activeTerminalTabId]);
 
-  const ws = workspaces.find((w) => w.id === selectedWorkspaceId);
   const tabs = useMemo(
     () => (selectedWorkspaceId ? terminalTabs[selectedWorkspaceId] ?? [] : []),
     [selectedWorkspaceId, terminalTabs],
@@ -262,7 +261,15 @@ export const TerminalPanel = memo(function TerminalPanel() {
         case "close-pane": {
           if (!activePaneId) return;
           const promoted = closePane(tabId, activePaneId);
-          if (!promoted) void handleCloseTab(tabId);
+          if (promoted) return;
+          // `closePane` returns null both for "this was the sole leaf"
+          // (we should close the tab) AND for "no-op: tree missing or
+          // stale activePaneId" (we should NOT close the tab). Only fall
+          // through to close-tab when the tree genuinely has a single
+          // leaf remaining — otherwise a stale id would silently nuke a
+          // tab full of panes.
+          const tree = state.terminalPaneTrees[tabId];
+          if (tree && countLeaves(tree) === 1) void handleCloseTab(tabId);
           return;
         }
         case "focus-pane": {
@@ -448,15 +455,29 @@ export const TerminalPanel = memo(function TerminalPanel() {
   // Reconcile instances against the tree + reparent containers. Runs
   // useLayoutEffect so the DOM mutation happens in the same frame as the
   // React render, avoiding a visible flicker.
+  //
+  // IMPORTANT: we collect needed leaves across EVERY workspace's tabs, not
+  // just the currently-selected workspace. Otherwise switching workspaces
+  // would diff the previous workspace's leaves out of `needed`, destroy
+  // their instances, and close their PTYs — killing long-running commands
+  // (dev server, tailing logs, etc). The target divs for other
+  // workspaces' tabs are not currently rendered, so their containers sit
+  // detached in memory; when the user switches back, the target divs
+  // reappear and the reparent loop re-mounts them in the DOM.
   useLayoutEffect(() => {
-    const worktreePath = ws?.worktree_path;
-    if (!worktreePath || !ws?.id) return;
-
-    const tabSpecs = tabs.map((t) => ({
-      id: t.id,
-      workspaceId: ws.id,
-      worktreePath,
-    }));
+    const tabSpecs: Array<{
+      id: number;
+      workspaceId: string;
+      worktreePath: string;
+    }> = [];
+    for (const [wsId, wsTabs] of Object.entries(terminalTabs)) {
+      const workspace = workspaces.find((w) => w.id === wsId);
+      const worktreePath = workspace?.worktree_path;
+      if (!worktreePath) continue;
+      for (const tab of wsTabs) {
+        tabSpecs.push({ id: tab.id, workspaceId: wsId, worktreePath });
+      }
+    }
     const needed = collectNeededLeaves(tabSpecs, terminalPaneTrees);
 
     // Build a snapshot map for diffLeaves so we stay out of the instance
@@ -492,7 +513,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
         }
       }
     }
-  }, [tabs, terminalPaneTrees, ws?.id, ws?.worktree_path, createInstance, destroyInstance]);
+  }, [terminalTabs, workspaces, terminalPaneTrees, createInstance, destroyInstance]);
 
   // Font / theme propagation across all live instances.
   useEffect(() => {

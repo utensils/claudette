@@ -182,7 +182,14 @@ export function updateSizes(
   sizes: [number, number],
 ): TerminalPaneNode {
   if (tree.kind === "leaf") return tree;
-  if (tree.id === splitId) return { ...tree, sizes };
+  if (tree.id === splitId) {
+    // Preserve referential equality when the sizes haven't actually
+    // changed so `setPaneSizes` short-circuits and Zustand doesn't kick
+    // off a wasted rerender. react-resizable-panels' onLayoutChanged can
+    // fire repeatedly with identical sizes during a drag.
+    if (tree.sizes[0] === sizes[0] && tree.sizes[1] === sizes[1]) return tree;
+    return { ...tree, sizes };
+  }
   const nextLeft = updateSizes(tree.children[0], splitId, sizes);
   const nextRight = updateSizes(tree.children[1], splitId, sizes);
   if (nextLeft === tree.children[0] && nextRight === tree.children[1]) {

@@ -229,6 +229,12 @@ describe("updateSizes", () => {
     const next = updateSizes(tree, "missing", [10, 90]);
     expect(next).toBe(tree);
   });
+
+  it("returns the same reference when sizes are unchanged", () => {
+    const tree = split("s", "horizontal", leaf("a"), leaf("b"), [40, 60]);
+    const next = updateSizes(tree, "s", [40, 60]);
+    expect(next).toBe(tree);
+  });
 });
 
 describe("neighborLeaf", () => {

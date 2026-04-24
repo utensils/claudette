@@ -44,6 +44,25 @@ describe("pane slice: ensurePaneTree", () => {
     const second = useAppStore.getState().ensurePaneTree(1);
     expect(second).toBe(first);
   });
+
+  // Regression: a split tree with no active-pane entry must NOT be
+  // replaced by a fresh single leaf. ensurePaneTree should keep the
+  // split and fall back to the leftmost leaf.
+  it("preserves an existing split tree when active-pane id is missing", () => {
+    const rootLeaf = useAppStore.getState().ensurePaneTree(1);
+    const newLeaf = useAppStore.getState().splitPane(1, rootLeaf, "horizontal");
+    expect(newLeaf).not.toBeNull();
+    const splitTree = useAppStore.getState().terminalPaneTrees[1];
+    // Simulate the stored active-pane id being lost (e.g. store hydration
+    // skipped it, or the id was stale and got cleared).
+    useAppStore.setState({ activeTerminalPaneId: {} });
+
+    const picked = useAppStore.getState().ensurePaneTree(1);
+
+    expect(useAppStore.getState().terminalPaneTrees[1]).toBe(splitTree);
+    expect(picked).toBe(rootLeaf);
+    expect(useAppStore.getState().activeTerminalPaneId[1]).toBe(rootLeaf);
+  });
 });
 
 describe("pane slice: splitPane", () => {

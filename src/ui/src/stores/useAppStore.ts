@@ -25,7 +25,9 @@ import type {
   ConversationCheckpoint,
 } from "../types";
 import {
+  allLeafIds as allPaneLeafIds,
   closeLeaf as closeLeafInTree,
+  countLeaves as countPaneLeaves,
   makeLeaf as makePaneLeaf,
   splitLeaf as splitLeafInTree,
   updateSizes as updateSizesInTree,
@@ -1216,10 +1218,22 @@ export const useAppStore = create<AppState>((set, get) => ({
     const existing = get().terminalPaneTrees[tabId];
     if (existing && existing.kind === "leaf") return existing.id;
     if (existing && existing.kind === "split") {
-      // Use the stored active leaf if valid, otherwise pick the leftmost
-      // leaf as a stable default.
+      // Preserve the existing split layout. Use the stored active leaf if
+      // it still identifies a leaf in the tree; otherwise fall back to the
+      // leftmost leaf (and backfill activeTerminalPaneId so future reads
+      // don't hit this branch again).
+      const leaves = allPaneLeafIds(existing);
       const stored = get().activeTerminalPaneId[tabId];
-      if (stored) return stored;
+      const pick = stored && leaves.includes(stored) ? stored : leaves[0];
+      if (pick !== stored) {
+        set((s) => ({
+          activeTerminalPaneId: {
+            ...s.activeTerminalPaneId,
+            [tabId]: pick,
+          },
+        }));
+      }
+      return pick;
     }
     const leaf = makePaneLeaf();
     set((s) => ({
@@ -1237,10 +1251,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const tree = state.terminalPaneTrees[tabId];
     if (!tree) return null;
     const cap = state.terminalPaneMaxLeaves;
-    // Count leaves inline to avoid a second module dep.
-    const countLeaves = (n: TerminalPaneNode): number =>
-      n.kind === "leaf" ? 1 : countLeaves(n.children[0]) + countLeaves(n.children[1]);
-    if (countLeaves(tree) >= cap) return null;
+    if (countPaneLeaves(tree) >= cap) return null;
     const { tree: nextTree, newLeafId } = splitLeafInTree(tree, leafId, direction);
     if (!newLeafId) return null;
     set((s) => ({
@@ -1301,12 +1312,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       const rewrite = (n: TerminalPaneNode): TerminalPaneNode => {
         if (n.kind === "leaf") {
           if (n.id !== leafId) return n;
-          // Clear ptyId when an error is set so the UI doesn't accidentally
-          // keep writing to a dead PTY id.
+          // Clear ptyId whenever an error is recorded — use `!= null` so
+          // an empty-string error still invalidates ptyId (truthy check
+          // would miss `""` and leave the UI talking to a dead PTY).
           return {
             ...n,
             spawnError: error,
-            ...(error ? { ptyId: undefined } : {}),
+            ...(error != null ? { ptyId: undefined } : {}),
           };
         }
         const l = rewrite(n.children[0]);
