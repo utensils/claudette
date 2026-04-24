@@ -185,6 +185,12 @@
   to { transform: rotate(360deg); }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .statusSpinner {
+    animation: none;
+  }
+}
+
 .badgeDone,
 .badgePlan,
 .badgeAsk {

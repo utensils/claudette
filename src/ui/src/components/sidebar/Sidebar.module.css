@@ -370,6 +370,12 @@
   animation: spin 1s linear infinite;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .statusSpinner {
+    animation: none;
+  }
+}
+
 .statusIcon {
   display: flex;
   align-items: center;

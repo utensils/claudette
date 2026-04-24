@@ -570,6 +570,12 @@
   to { transform: rotate(360deg); }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+}
+
 .elapsed {
   color: var(--text-dim);
   font-size: 12px;
