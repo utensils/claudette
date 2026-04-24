@@ -57,6 +57,15 @@ import { ContextPopover } from "./composer/ContextPopover";
 import { WorkspaceActions } from "./WorkspaceActions";
 import { SlashCommandPicker, filterSlashCommands } from "./SlashCommandPicker";
 import { AttachMenu } from "./AttachMenu";
+import { AttachmentContextMenu } from "./AttachmentContextMenu";
+import {
+  downloadAttachment,
+  openAttachmentInBrowser,
+  copyAttachmentToClipboard,
+  shareAttachment,
+  isShareSupported,
+  type DownloadableAttachment,
+} from "../../utils/attachmentDownload";
 import { FileMentionPicker, matchFiles } from "./FileMentionPicker";
 import {
   describeSlashQuery,
@@ -197,6 +206,28 @@ export function ChatPanel() {
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const processingRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const [attachmentMenu, setAttachmentMenu] = useState<{
+    x: number;
+    y: number;
+    attachment: DownloadableAttachment;
+  } | null>(null);
+
+  const openAttachmentMenu = useCallback(
+    (e: React.MouseEvent, attachment: DownloadableAttachment) => {
+      e.preventDefault();
+      setAttachmentMenu({
+        x: e.clientX,
+        y: e.clientY,
+        attachment,
+      });
+    },
+    [],
+  );
+
+  // navigator.canShare({ files: [probe] }) doesn't change across re-renders —
+  // it's a function of the platform / webview capabilities. Compute once.
+  const shareSupported = useMemo(() => isShareSupported(), []);
 
   // Prompt history: stores past user inputs per workspace.
   const historyRef = useRef<Record<string, string[]>>({});
@@ -899,6 +930,7 @@ export function ChatPanel() {
                   workspaceId={selectedWorkspaceId}
                   isRunning={isRunning}
                   onForkTurn={isRemote ? undefined : handleFork}
+                  onAttachmentContextMenu={openAttachmentMenu}
                 />
               )}
 
@@ -1023,7 +1055,53 @@ export function ChatPanel() {
         historyRef={historyRef}
         historyIndexRef={historyIndexRef}
         draftRef={draftRef}
+        onAttachmentContextMenu={openAttachmentMenu}
       />
+      {attachmentMenu && (
+        <AttachmentContextMenu
+          x={attachmentMenu.x}
+          y={attachmentMenu.y}
+          onClose={() => setAttachmentMenu(null)}
+          items={[
+            {
+              label: "Download Image",
+              onSelect: () => {
+                downloadAttachment(attachmentMenu.attachment).catch((err) =>
+                  console.error("Download failed:", err),
+                );
+              },
+            },
+            {
+              label: "Copy Image",
+              onSelect: () => {
+                copyAttachmentToClipboard(attachmentMenu.attachment).catch(
+                  (err) => console.error("Copy failed:", err),
+                );
+              },
+            },
+            {
+              label: "Open in New Window",
+              onSelect: () => {
+                openAttachmentInBrowser(attachmentMenu.attachment).catch(
+                  (err) => console.error("Open in browser failed:", err),
+                );
+              },
+            },
+            ...(shareSupported
+              ? [
+                  {
+                    label: "Share…",
+                    onSelect: () => {
+                      shareAttachment(attachmentMenu.attachment).catch((err) =>
+                        console.error("Share failed:", err),
+                      );
+                    },
+                  },
+                ]
+              : []),
+          ]}
+        />
+      )}
     </div>
   );
 }
@@ -1386,6 +1464,7 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
   workspaceId,
   isRunning,
   onForkTurn,
+  onAttachmentContextMenu,
 }: {
   messages: ChatMessage[];
   workspaceId: string;
@@ -1393,6 +1472,12 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
   /** Handler invoked when the user forks a turn. Undefined disables the fork
    *  button (e.g. for remote workspaces where the command cannot run). */
   onForkTurn?: (checkpointId: string) => void;
+  /** Right-click handler on message-image attachments. Lifted to ChatPanel so
+   *  the context menu renders at the top of the component tree. */
+  onAttachmentContextMenu?: (
+    e: React.MouseEvent,
+    attachment: DownloadableAttachment,
+  ) => void;
 }) {
   const completedTurns = useAppStore(
     (s) => s.completedTurns[workspaceId] ?? EMPTY_COMPLETED_TURNS
@@ -1643,6 +1728,13 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
                         src={`data:${att.media_type};base64,${att.data_base64}`}
                         alt={att.filename}
                         className={styles.messageImage}
+                        onContextMenu={(e) =>
+                          onAttachmentContextMenu?.(e, {
+                            filename: att.filename,
+                            media_type: att.media_type,
+                            data_base64: att.data_base64,
+                          })
+                        }
                       />
                     ),
                   )}
@@ -1829,6 +1921,7 @@ function ChatInputArea({
   historyRef,
   historyIndexRef,
   draftRef,
+  onAttachmentContextMenu,
 }: {
   onSend: (
     content: string,
@@ -1844,6 +1937,10 @@ function ChatInputArea({
   historyRef: React.MutableRefObject<Record<string, string[]>>;
   historyIndexRef: React.MutableRefObject<number>;
   draftRef: React.MutableRefObject<string>;
+  onAttachmentContextMenu?: (
+    e: React.MouseEvent,
+    attachment: DownloadableAttachment,
+  ) => void;
 }) {
   const [chatInput, setChatInput] = useState("");
   const [cursorPos, setCursorPos] = useState(0);
@@ -2125,6 +2222,12 @@ function ChatInputArea({
         // Skip text/plain — pasting text should insert into the textarea,
         // not create a file attachment.
         if (item.type === "text/plain") continue;
+        // Some clipboard writers (notably `navigator.clipboard.write` with
+        // a ClipboardItem) expose the image both as a "string" item (its
+        // data URL) and a "file" item. We must check the file variant —
+        // getAsFile() returns null for string items, which would
+        // silently drop the paste.
+        if (item.kind !== "file") continue;
         if (SUPPORTED_ATTACHMENT_TYPES.has(item.type)) {
           e.preventDefault();
           const file = item.getAsFile();
@@ -2414,7 +2517,17 @@ function ChatInputArea({
                   </span>
                 </div>
               ) : (
-                <img src={att.preview_url} alt={att.filename} />
+                <img
+                  src={att.preview_url}
+                  alt={att.filename}
+                  onContextMenu={(e) =>
+                    onAttachmentContextMenu?.(e, {
+                      filename: att.filename,
+                      media_type: att.media_type,
+                      data_base64: att.data_base64,
+                    })
+                  }
+                />
               )}
               <button
                 className={styles.attachmentRemove}

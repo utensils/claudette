@@ -19,7 +19,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost https://github.com; img-src 'self' asset: http://asset.localhost data:; font-src 'self' data:",
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost https://github.com; img-src 'self' asset: http://asset.localhost data: blob:; media-src 'self' blob:; font-src 'self' data:",
       "capabilities": [
         {
           "identifier": "main-capability",

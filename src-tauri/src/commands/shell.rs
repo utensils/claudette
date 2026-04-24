@@ -205,7 +205,7 @@ pub async fn open_url(url: String) -> Result<(), String> {
     Ok(())
 }
 
-mod opener {
+pub(crate) mod opener {
     use claudette::process::CommandWindowExt as _;
     use std::process::Command;
 
