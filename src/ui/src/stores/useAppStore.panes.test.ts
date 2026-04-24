@@ -21,6 +21,8 @@ function resetStore() {
     activeTerminalTabId: {},
     terminalPaneTrees: {},
     activeTerminalPaneId: {},
+    terminalPaneMaxLeaves: 6,
+    terminalPanelVisible: false,
     workspaces: [],
     repositories: [],
     selectedWorkspaceId: null,
@@ -43,6 +45,16 @@ describe("pane slice: ensurePaneTree", () => {
     const first = useAppStore.getState().ensurePaneTree(1);
     const second = useAppStore.getState().ensurePaneTree(1);
     expect(second).toBe(first);
+  });
+
+  it("backfills the active leaf id for an existing leaf tree", () => {
+    const leafId = useAppStore.getState().ensurePaneTree(1);
+    useAppStore.setState({ activeTerminalPaneId: {} });
+
+    const picked = useAppStore.getState().ensurePaneTree(1);
+
+    expect(picked).toBe(leafId);
+    expect(useAppStore.getState().activeTerminalPaneId[1]).toBe(leafId);
   });
 
   // Regression: a split tree with no active-pane entry must NOT be

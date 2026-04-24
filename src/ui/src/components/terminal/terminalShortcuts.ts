@@ -50,6 +50,25 @@ export type TerminalKeyAction =
   | null;
 
 /**
+ * Returns true when a key should still reach the PTY, but must not bubble to
+ * window-level shortcuts.
+ *
+ * Today this covers bare Ctrl+D on Linux/Windows: the shell should receive
+ * EOF, but the global diff-sidebar shortcut must not also fire.
+ */
+export function shouldStopTerminalEventPropagation(ev: KeyboardEvent): boolean {
+  const isD = ev.code === "KeyD" || ev.key === "d" || ev.key === "D";
+  return (
+    ev.type === "keydown" &&
+    isD &&
+    ev.ctrlKey &&
+    !ev.metaKey &&
+    !ev.shiftKey &&
+    !ev.altKey
+  );
+}
+
+/**
  * Decide whether a keyboard event should trigger a terminal-scoped action.
  *
  * The xterm handler uses the result to call `preventDefault()`,

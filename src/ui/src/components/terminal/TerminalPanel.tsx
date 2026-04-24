@@ -24,6 +24,7 @@ import {
 } from "../../services/tauri";
 import {
   cycleTabId,
+  shouldStopTerminalEventPropagation,
   terminalKeyAction,
   type TerminalKeyAction,
 } from "./terminalShortcuts";
@@ -489,7 +490,13 @@ export const TerminalPanel = memo(function TerminalPanel() {
   useEffect(() => {
     keyHandlerRef.current = (ev: KeyboardEvent): boolean => {
       const action = terminalKeyAction(ev);
-      if (!action) return true;
+      if (!action) {
+        if (shouldStopTerminalEventPropagation(ev)) {
+          ev.stopImmediatePropagation();
+          ev.stopPropagation();
+        }
+        return true;
+      }
       ev.preventDefault();
       if (action.kind === "zoom") return false;
       ev.stopImmediatePropagation();
@@ -537,7 +544,12 @@ export const TerminalPanel = memo(function TerminalPanel() {
       };
       container.addEventListener("copy", handleCopy);
 
-      const inst: LeafInstance = {
+      let inst!: LeafInstance;
+      const resizeObserver = new ResizeObserver(() => {
+        if (inst.fitTimer) clearTimeout(inst.fitTimer);
+        inst.fitTimer = setTimeout(() => safeFit(inst), 150);
+      });
+      inst = {
         leafId: spec.leafId,
         tabId: spec.tabId,
         workspaceId: spec.workspaceId,
@@ -553,14 +565,8 @@ export const TerminalPanel = memo(function TerminalPanel() {
         handleCopy,
         keyHandler,
         lastPtySize: null,
-        resizeObserver: new ResizeObserver(() => {
-          // Resolve `this` via closure; filled in next line.
-        }),
+        resizeObserver,
       };
-      inst.resizeObserver = new ResizeObserver(() => {
-        if (inst.fitTimer) clearTimeout(inst.fitTimer);
-        inst.fitTimer = setTimeout(() => safeFit(inst), 150);
-      });
       inst.resizeObserver.observe(container);
 
       // Spawn the PTY asynchronously. If the instance has been destroyed

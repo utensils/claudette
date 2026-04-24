@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { cycleTabId, terminalKeyAction } from "./terminalShortcuts";
+import {
+  cycleTabId,
+  shouldStopTerminalEventPropagation,
+  terminalKeyAction,
+} from "./terminalShortcuts";
 
 describe("cycleTabId", () => {
   it("returns null for an empty list", () => {
@@ -290,5 +294,33 @@ describe("terminalKeyAction", () => {
       expect(terminalKeyAction(mk({ key: "ArrowLeft", metaKey: true })))
         .toBeNull();
     });
+  });
+});
+
+describe("shouldStopTerminalEventPropagation", () => {
+  it("stops bare Ctrl+D from reaching window-level shortcuts", () => {
+    expect(
+      shouldStopTerminalEventPropagation(
+        mk({ code: "KeyD", key: "d", ctrlKey: true }),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not stop actual terminal shortcuts or unrelated keys", () => {
+    expect(
+      shouldStopTerminalEventPropagation(
+        mk({ code: "KeyD", key: "D", ctrlKey: true, shiftKey: true }),
+      ),
+    ).toBe(false);
+    expect(
+      shouldStopTerminalEventPropagation(
+        mk({ code: "KeyD", key: "d", metaKey: true }),
+      ),
+    ).toBe(false);
+    expect(
+      shouldStopTerminalEventPropagation(
+        mk({ code: "KeyW", key: "w", ctrlKey: true }),
+      ),
+    ).toBe(false);
   });
 });

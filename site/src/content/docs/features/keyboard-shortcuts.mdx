@@ -12,7 +12,7 @@ Claudette supports keyboard shortcuts for fast navigation and common actions. Ho
 | Shortcut | Action |
 |----------|--------|
 | `⌘/Ctrl + B` | Toggle sidebar |
-| `⌘/Ctrl + D` | Toggle diff panel (right sidebar) — when the terminal is focused this splits the terminal instead, see [Terminal Panes](#terminal-panes) |
+| `⌘/Ctrl + D` | Toggle diff panel (right sidebar). Terminal panes use terminal-only `D` bindings instead; see [Terminal Panes](#terminal-panes). |
 | `` ⌘/Ctrl + ` `` | Toggle terminal panel |
 | `⌘/Ctrl + ,` | Open/close settings |
 | `⌘⇧W` (macOS) | Close the window (hides to tray on macOS). `⌘W` is reserved for the terminal — see [Terminal Panes](#terminal-panes). |
@@ -42,8 +42,10 @@ Claudette supports keyboard shortcuts for fast navigation and common actions. Ho
 ### Terminal Panes
 
 These fire only when a terminal pane has keyboard focus — they shadow the
-equivalent global shortcuts (e.g. `⌘D` toggles the diff panel when the chat
-is focused but splits the terminal when the terminal is focused).
+equivalent global shortcuts where applicable (e.g. `⌘D` toggles the diff
+panel when the chat is focused but splits the terminal on macOS when the
+terminal is focused; Linux/Windows keep bare `Ctrl+D` for shell EOF and use
+`Ctrl+Shift+D` instead).
 
 | Shortcut | Action |
 |----------|--------|

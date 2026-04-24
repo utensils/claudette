@@ -1223,7 +1223,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   terminalPaneMaxLeaves: 6,
   ensurePaneTree: (tabId) => {
     const existing = get().terminalPaneTrees[tabId];
-    if (existing && existing.kind === "leaf") return existing.id;
+    if (existing && existing.kind === "leaf") {
+      const stored = get().activeTerminalPaneId[tabId];
+      if (stored !== existing.id) {
+        set((s) => ({
+          activeTerminalPaneId: {
+            ...s.activeTerminalPaneId,
+            [tabId]: existing.id,
+          },
+        }));
+      }
+      return existing.id;
+    }
     if (existing && existing.kind === "split") {
       // Preserve the existing split layout. Use the stored active leaf if
       // it still identifies a leaf in the tree; otherwise fall back to the
