@@ -607,8 +607,24 @@ pub fn resolve_claude_path_blocking() -> OsString {
     } else {
         std::env::var_os("PATH")
     };
-    let resolved =
-        resolve_claude_path_inner(dirs::home_dir(), path, login_shell_path, is_executable_file);
+    // Also gate the lazy shell-path probe inside the resolver: even with
+    // `enriched_path()` skipped above, the `login_shell_path` closure
+    // would still invoke `crate::env::shell_path()` (and pay the 5 s
+    // probe) on a process-PATH miss. Returning `None` when the cache is
+    // cold keeps the blocking helper truly non-stalling — well-known
+    // fallback paths still cover typical installs.
+    let resolved = resolve_claude_path_inner(
+        dirs::home_dir(),
+        path,
+        || {
+            if crate::env::shell_path_is_cached() {
+                login_shell_path()
+            } else {
+                None
+            }
+        },
+        is_executable_file,
+    );
     if Path::new(&resolved).is_absolute() {
         let _ = RESOLVED_CLAUDE_PATH.set(resolved.clone());
     }
