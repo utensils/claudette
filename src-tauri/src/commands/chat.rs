@@ -1367,6 +1367,32 @@ pub async fn send_chat_message(
     Ok(())
 }
 
+/// What `take_stop_snapshot` hands back: permissions to deny, pid to kill,
+/// and the session id to mark ended in the DB.
+type StopSnapshot = (
+    Option<(Arc<PersistentSession>, Vec<PendingPermission>)>,
+    Option<u32>,
+    Option<String>,
+);
+
+/// Mutations performed on an agent session when the user clicks Stop.
+///
+/// Stop interrupts the in-flight turn — it takes `active_pid` so the caller
+/// can kill the process and drains pending permission requests so the caller
+/// can deny them. It deliberately does NOT clear `session_id`, `turn_count`,
+/// or `persistent_session`: those are owned by `reset_agent_session` and
+/// `clear_conversation`. Preserving them is what lets the next
+/// `send_chat_message` resume via `--resume` instead of spawning a fresh
+/// conversation. The now-dead `persistent_session` handle is fine — on the
+/// next turn `send_turn` detects the broken pipe and respawns with
+/// `--resume <session_id>`.
+fn take_stop_snapshot(session: &mut AgentSessionState) -> StopSnapshot {
+    let drained = drain_pending_permissions(session);
+    let ended_sid = Some(session.session_id.clone());
+    let pid = session.active_pid.take();
+    (drained, pid, ended_sid)
+}
+
 #[tauri::command]
 pub async fn stop_agent(
     workspace_id: String,
@@ -1379,16 +1405,7 @@ pub async fn stop_agent(
     let (to_deny_stop, pid_to_kill, ended_sid) = {
         let mut agents = state.agents.write().await;
         match agents.get_mut(&workspace_id) {
-            Some(session) => {
-                let drained = drain_pending_permissions(session);
-                let ended_sid = Some(session.session_id.clone());
-                // Clear persistent session and reset session state so the next
-                // turn starts completely fresh (not --resume with a stale ID).
-                session.persistent_session = None;
-                session.turn_count = 0;
-                session.session_id = String::new();
-                (drained, session.active_pid.take(), ended_sid)
-            }
+            Some(session) => take_stop_snapshot(session),
             None => (None, None, None),
         }
     };
@@ -1400,11 +1417,10 @@ pub async fn stop_agent(
         agent::stop_agent(pid).await?;
     }
 
-    // Clear persisted session from DB too. `stop_agent` aborts an in-flight
-    // turn (SIGTERM on the live pid + deny mid-turn permission prompts), so
-    // the session did not complete successfully — record it as a failure.
+    // Record the interrupted turn as a failure for analytics, but leave the
+    // workspace's session_id / turn_count rows intact so an app restart after
+    // stop still resumes via --resume.
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    let _ = db.clear_agent_session(&workspace_id);
     if let Some(sid) = ended_sid.as_deref().filter(|s| !s.is_empty()) {
         let _ = db.end_agent_session(sid, false);
     }
@@ -2385,5 +2401,64 @@ mod tests {
         let input = json!({});
         let response = build_permission_response(&s(&["*", "Read"]), false, false, "Edit", &input);
         assert_eq!(response["behavior"], "deny");
+    }
+
+    use super::take_stop_snapshot;
+    use crate::state::AgentSessionState;
+    use std::collections::HashMap;
+
+    fn fresh_session(session_id: &str, turn_count: u32, pid: Option<u32>) -> AgentSessionState {
+        AgentSessionState {
+            session_id: session_id.to_string(),
+            turn_count,
+            active_pid: pid,
+            custom_instructions: None,
+            needs_attention: false,
+            attention_kind: None,
+            persistent_session: None,
+            mcp_config_dirty: false,
+            session_plan_mode: false,
+            session_allowed_tools: Vec::new(),
+            session_disable_1m_context: false,
+            pending_permissions: HashMap::new(),
+            session_exited_plan: false,
+        }
+    }
+
+    #[test]
+    fn take_stop_snapshot_preserves_session_identity_for_resume() {
+        // Regression guard for the bug where Stop wiped session_id/turn_count,
+        // causing the next send to start a brand-new conversation instead of
+        // resuming. Stop must leave those fields intact so send_chat_message
+        // can spawn the CLI with --resume <session_id>.
+        let mut session = fresh_session("sess-abc", 7, Some(12345));
+
+        let (drained, pid, ended_sid) = take_stop_snapshot(&mut session);
+
+        // Caller receives the pid to kill and the sid to log.
+        assert!(drained.is_none(), "no pending permissions to drain");
+        assert_eq!(pid, Some(12345));
+        assert_eq!(ended_sid.as_deref(), Some("sess-abc"));
+
+        // Session identity is preserved — this is the fix.
+        assert_eq!(session.session_id, "sess-abc");
+        assert_eq!(session.turn_count, 7);
+        assert!(session.persistent_session.is_none());
+
+        // active_pid is consumed so the caller can kill without racing.
+        assert!(session.active_pid.is_none());
+    }
+
+    #[test]
+    fn take_stop_snapshot_is_idempotent_when_already_stopped() {
+        // A double-stop (e.g. user clicks Stop twice) must not corrupt state.
+        let mut session = fresh_session("sess-abc", 7, None);
+
+        let (_, pid, ended_sid) = take_stop_snapshot(&mut session);
+
+        assert!(pid.is_none());
+        assert_eq!(ended_sid.as_deref(), Some("sess-abc"));
+        assert_eq!(session.session_id, "sess-abc");
+        assert_eq!(session.turn_count, 7);
     }
 }
