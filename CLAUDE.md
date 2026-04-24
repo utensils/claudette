@@ -83,7 +83,7 @@ Feature flags in `claudette-tauri`:
 
 ### Tauri commands
 
-Commands in `src-tauri/src/commands/` are organized by domain: `chat`, `workspace`, `repository`, `terminal`, `diff`, `settings`, `plugin`, `mcp`, `remote`, `usage`, `files`, `shell`, `slash_commands`, `plan`, `apps`, `data`, `debug`. Each is a thin wrapper — business logic belongs in the `claudette` crate.
+Commands in `src-tauri/src/commands/` are organized by domain: `chat`, `workspace`, `repository`, `scm`, `terminal`, `diff`, `settings`, `plugin`, `mcp`, `remote`, `usage`, `metrics`, `files`, `shell`, `slash_commands`, `plan`, `apps`, `data`, `cesp`, `updater`, `debug`. Each is a thin wrapper — business logic belongs in the `claudette` crate.
 
 ## Project structure
 
@@ -92,10 +92,23 @@ Cargo.toml              — workspace root + claudette lib crate
 src/
   lib.rs                — library entry point, re-exports backend modules
   db.rs                 — SQLite database: connection, migrations, CRUD
+  migrations/           — versioned .sql files + MIGRATIONS registry
   git.rs                — async git worktree operations
   diff.rs               — diff parsing and git diff operations
   agent.rs              — Claude CLI subprocess + JSON streaming
-  model/                — data types (no UI or IO logic)
+  fork.rs               — session forking / checkpoint branching
+  snapshot.rs           — workspace snapshots
+  process.rs            — cross-platform process spawning helpers
+  mcp.rs / mcp_supervisor.rs — MCP server config + lifecycle supervision
+  plugin.rs             — Claude-Code plugin marketplace integration
+  plugin_runtime/       — sandboxed Lua runtime (mlua) shared across plugin kinds
+  permissions.rs        — tool/permission policy
+  scm/                  — SCM consumer of plugin_runtime: PR/CI types + host/URL detection
+  env_provider/         — env-provider consumer: dispatcher, mtime cache, merged ResolvedEnv
+  slash_commands.rs     — slash command loading and dispatch
+  cesp.rs               — CESP (Claudette event stream protocol)
+  config.rs / env.rs / path.rs / file_expand.rs — config, env, path helpers
+  model/                — data types (no UI or IO logic); all derive Serialize
   names/                — random workspace name generator
   ui/                   — React/Vite frontend (see src/ui/package.json)
 src-tauri/              — Tauri binary crate
@@ -104,8 +117,22 @@ src-tauri/              — Tauri binary crate
   src/pty.rs            — PTY management via portable-pty
   src/tray.rs           — system tray: icon/menu/tooltip, notifications
   src/transport/        — Remote transport trait + WebSocket client
+  src/remote.rs         — embedded remote server wiring
+  src/mdns.rs           — mDNS advertisement for remote discovery
+  src/osc133.rs         — OSC 133 terminal prompt-marker parsing
 src-server/             — Standalone + embeddable remote server
+plugins/                — bundled Lua plugins (compiled in via include_str!)
+  scm-github/           — GitHub PR / CI provider
+  scm-gitlab/           — GitLab PR / CI provider
+  env-direnv/           — direnv env activation
+  env-mise/             — mise env activation
+  env-dotenv/           — `.env` in-process parser
+  env-nix-devshell/     — `nix print-dev-env` env activation
 ```
+
+### Plugin system
+
+A single sandboxed Lua runtime (`src/plugin_runtime/`) serves multiple plugin kinds declared via `plugin.json`'s `kind` field (`scm` | `env-provider`, defaults to `scm`). Each kind has its own domain consumer (`src/scm/`, `src/env_provider/`) that dispatches operations on top of the shared runtime. Bundled plugins live in `plugins/*/` and are seeded into the user's plugin dir on first run. Users can drop their own plugins into `~/.claudette/plugins/<name>/` (one `plugin.json` + one `init.lua`); discovery picks them up at startup.
 
 ### Guidelines for new code
 
@@ -121,6 +148,11 @@ src-server/             — Standalone + embeddable remote server
 
 - **Rust**: tests use `tempfile::tempdir()` to create ephemeral git repos — no fixtures or test databases. Async tests use `#[tokio::test]`. Test modules live at the bottom of each file (`#[cfg(test)] mod tests`).
 - **TypeScript**: vitest with `describe`/`it`/`expect`. Zustand tests reset state via `useAppStore.setState()` in `beforeEach`. No test database — frontend tests are pure state/logic tests. When constructing fixtures for store state, always read the actual type definition (e.g., `TerminalTab` in `types/terminal.ts`) — do not guess field names. Look for existing `make*` helpers in adjacent test files before creating new fixtures.
+
+### Windows specifics
+
+- `AGENTS.md` is a symlink to `CLAUDE.md` for Codex/other agent-tool compatibility — edit `CLAUDE.md`, never `AGENTS.md`.
+- Windows builds use MSVC toolchain; `[target.'cfg(windows)'.dependencies]` in `Cargo.toml` pulls in Windows-only crates. Gate Windows-specific code with `#[cfg(windows)]` / `#[cfg(not(windows))]` rather than Unix-only paths.
 
 ### Notification architecture
 
@@ -147,7 +179,7 @@ src-server/             — Standalone + embeddable remote server
 - See GitHub Issue #5 for the full MVP PRD
 - See GitHub Issue #11 for the Workspace Management TDD
 - P0 features: workspace management, agent chat, diff viewer, integrated terminal, checkpoints, git/GitHub integration, scripts, repo settings
-- Target platforms: macOS (Apple Silicon + Intel) and Linux (x86_64, Wayland + X11)
+- Target platforms: macOS (Apple Silicon + Intel), Linux (x86_64, Wayland + X11), and Windows (x86_64 + ARM64)
 
 ## Debugging (dev builds only)
 
