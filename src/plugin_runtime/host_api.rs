@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use crate::plugin_runtime::manifest::PluginKind;
 use crate::process::CommandWindowExt as _;
 use mlua::LuaSerdeExt;
 use mlua::prelude::*;
@@ -10,6 +11,7 @@ use tokio::process::Command;
 #[derive(Debug, Clone)]
 pub struct HostContext {
     pub plugin_name: String,
+    pub kind: PluginKind,
     pub allowed_clis: Vec<String>,
     pub workspace_info: WorkspaceInfo,
     pub config: HashMap<String, serde_json::Value>,
@@ -254,11 +256,32 @@ async fn host_exec(
     command.no_console_window();
     command.args(&args);
     command.current_dir(&ctx.workspace_info.worktree_path);
-    // macOS GUI apps inherit a minimal launchd PATH, so binaries like
-    // `gh`/`glab` (typically in /opt/homebrew/bin) wouldn't be found.
-    // Pass the enriched PATH so the child — and anything it shells out
-    // to (git, credential helpers, editors) — can resolve them.
-    command.env("PATH", crate::env::enriched_path());
+
+    // Env-provider plugins run hermetically: we clear the inherited env
+    // and set only a minimal, stable baseline. This matters for tools
+    // like `direnv export json` which compute a *diff* against the
+    // current env — if Claudette was launched from a terminal that
+    // already had the workspace's env loaded, direnv would emit only
+    // the delta (handful of vars), not the full set. A hermetic baseline
+    // makes the exported set deterministic and independent of how
+    // Claudette was launched. SCM plugins keep inheriting the full env
+    // because they depend on user-state vars like `GH_TOKEN`,
+    // `SSH_AUTH_SOCK`, `XDG_CONFIG_HOME`, etc.
+    if ctx.kind == PluginKind::EnvProvider {
+        command.env_clear();
+        command.env("PATH", crate::env::enriched_path());
+        for key in ["HOME", "USER", "LOGNAME", "SHELL", "TERM", "LANG", "LC_ALL"] {
+            if let Ok(val) = std::env::var(key) {
+                command.env(key, val);
+            }
+        }
+    } else {
+        // macOS GUI apps inherit a minimal launchd PATH, so binaries like
+        // `gh`/`glab` (typically in /opt/homebrew/bin) wouldn't be found.
+        // Pass the enriched PATH so the child — and anything it shells out
+        // to (git, credential helpers, editors) — can resolve them.
+        command.env("PATH", crate::env::enriched_path());
+    }
     command.kill_on_drop(true);
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::piped());
@@ -306,6 +329,7 @@ mod tests {
         let tmp = std::env::temp_dir().to_string_lossy().into_owned();
         HostContext {
             plugin_name: "test".to_string(),
+            kind: PluginKind::Scm,
             // `cargo` is cross-platform, guaranteed to be in PATH on
             // any Rust CI host, and produces stable human-readable
             // output. `echo` would be simpler but is a `cmd.exe`
@@ -584,6 +608,7 @@ mod tests {
     fn ctx_with_worktree(worktree: &std::path::Path) -> HostContext {
         HostContext {
             plugin_name: "test".to_string(),
+            kind: PluginKind::Scm,
             allowed_clis: vec![],
             workspace_info: WorkspaceInfo {
                 id: "ws-1".into(),

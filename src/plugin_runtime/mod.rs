@@ -171,6 +171,7 @@ impl PluginRegistry {
 
         let ctx = HostContext {
             plugin_name: plugin_name.to_string(),
+            kind: plugin.manifest.kind,
             allowed_clis: plugin.manifest.required_clis.clone(),
             workspace_info,
             config: plugin.config.clone(),

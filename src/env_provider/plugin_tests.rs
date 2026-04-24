@@ -19,6 +19,7 @@ use mlua::Lua;
 use std::path::Path;
 
 use crate::plugin_runtime::host_api::{HostContext, WorkspaceInfo, create_lua_vm};
+use crate::plugin_runtime::manifest::PluginKind;
 
 const DIRENV_SRC: &str = include_str!("../../plugins/env-direnv/init.lua");
 const MISE_SRC: &str = include_str!("../../plugins/env-mise/init.lua");
@@ -29,6 +30,7 @@ const NIX_SRC: &str = include_str!("../../plugins/env-nix-devshell/init.lua");
 fn make_vm(plugin: &str, allowed: &[&str], worktree: &Path) -> Lua {
     let ctx = HostContext {
         plugin_name: plugin.to_string(),
+        kind: PluginKind::EnvProvider,
         allowed_clis: allowed.iter().map(|s| s.to_string()).collect(),
         workspace_info: WorkspaceInfo {
             id: "ws-1".into(),
