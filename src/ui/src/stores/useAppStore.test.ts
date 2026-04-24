@@ -3,6 +3,7 @@ import { useAppStore } from "./useAppStore";
 import type { AgentQuestion } from "./useAppStore";
 import type { ChatMessage } from "../types/chat";
 import type { ConversationCheckpoint } from "../types/checkpoint";
+import type { Workspace } from "../types/workspace";
 import { applyPlanModeMountDefault } from "../components/chat/applyPlanModeMountDefault";
 
 const WS_ID = "test-workspace";
@@ -1364,5 +1365,71 @@ describe("selectWorkspace clears unreadCompletions", () => {
     useAppStore.getState().selectWorkspace(null);
     expect(useAppStore.getState().unreadCompletions.has("ws-a")).toBe(true);
     expect(useAppStore.getState().selectedWorkspaceId).toBeNull();
+  });
+});
+
+function makeWorkspace(id: string, repoId: string = "r1"): Workspace {
+  return {
+    id,
+    repository_id: repoId,
+    name: `ws-${id}`,
+    branch_name: `branch-${id}`,
+    worktree_path: null,
+    status: "Active",
+    agent_status: "Idle",
+    status_line: "",
+    created_at: "2026-01-01T00:00:00Z",
+    remote_connection_id: null,
+  };
+}
+
+describe("removeWorkspace", () => {
+  beforeEach(() => {
+    useAppStore.setState({
+      workspaces: [makeWorkspace("ws-a"), makeWorkspace("ws-b")],
+      selectedWorkspaceId: "ws-a",
+      unreadCompletions: new Set(["ws-a", "ws-b"]),
+      terminalTabs: {
+        "ws-a": [{ id: 1, workspace_id: "ws-a", title: "shell", is_script_output: false, sort_order: 1, created_at: "" }],
+        "ws-b": [{ id: 2, workspace_id: "ws-b", title: "shell", is_script_output: false, sort_order: 1, created_at: "" }],
+      },
+      activeTerminalTabId: { "ws-a": 1, "ws-b": 2 },
+      workspaceTerminalCommands: {
+        "ws-a": { command: "ls", isRunning: false, exitCode: 0 },
+        "ws-b": { command: "pwd", isRunning: false, exitCode: 0 },
+      },
+    });
+  });
+
+  it("filters the workspace out of the array", () => {
+    useAppStore.getState().removeWorkspace("ws-a");
+    const ids = useAppStore.getState().workspaces.map((w) => w.id);
+    expect(ids).toEqual(["ws-b"]);
+  });
+
+  it("clears selectedWorkspaceId when the selected workspace is removed", () => {
+    useAppStore.getState().removeWorkspace("ws-a");
+    expect(useAppStore.getState().selectedWorkspaceId).toBeNull();
+  });
+
+  it("leaves selectedWorkspaceId unchanged when a different workspace is removed", () => {
+    useAppStore.getState().removeWorkspace("ws-b");
+    expect(useAppStore.getState().selectedWorkspaceId).toBe("ws-a");
+  });
+
+  it("cleans up per-workspace terminal state", () => {
+    useAppStore.getState().removeWorkspace("ws-a");
+    const s = useAppStore.getState();
+    expect(s.terminalTabs["ws-a"]).toBeUndefined();
+    expect(s.activeTerminalTabId["ws-a"]).toBeUndefined();
+    expect(s.workspaceTerminalCommands["ws-a"]).toBeUndefined();
+    // Other workspace's state is untouched.
+    expect(s.terminalTabs["ws-b"]).toBeDefined();
+  });
+
+  it("removes workspace from unreadCompletions", () => {
+    useAppStore.getState().removeWorkspace("ws-a");
+    expect(useAppStore.getState().unreadCompletions.has("ws-a")).toBe(false);
+    expect(useAppStore.getState().unreadCompletions.has("ws-b")).toBe(true);
   });
 });

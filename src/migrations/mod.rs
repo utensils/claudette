@@ -139,4 +139,9 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("20260423000001_repository_base_branch_and_default_remote.sql"),
         legacy_version: None,
     },
+    Migration {
+        id: "20260423190000_scm_status_cache",
+        sql: include_str!("20260423190000_scm_status_cache.sql"),
+        legacy_version: None,
+    },
 ];

@@ -487,6 +487,7 @@ pub async fn archive_workspace(
 
     db.delete_terminal_tabs_for_workspace(&id)
         .map_err(|e| e.to_string())?;
+    db.delete_scm_status_cache(&id).map_err(|e| e.to_string())?;
     db.update_workspace_status(&id, &WorkspaceStatus::Archived, None)
         .map_err(|e| e.to_string())?;
 
@@ -541,18 +542,14 @@ pub async fn delete_workspace(
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
 
     let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
-    let ws = workspaces
-        .iter()
-        .find(|w| w.id == id)
-        .ok_or("Workspace not found")?;
+    let Some(ws) = workspaces.iter().find(|w| w.id == id) else {
+        return Ok(());
+    };
 
     let repo_id = ws.repository_id.clone();
 
     let repos = db.list_repositories().map_err(|e| e.to_string())?;
-    let repo = repos
-        .iter()
-        .find(|r| r.id == repo_id)
-        .ok_or("Repository not found")?;
+    let repo = repos.iter().find(|r| r.id == repo_id);
 
     // Stop any running agent and clear session so tray state stays consistent.
     {
@@ -564,13 +561,15 @@ pub async fn delete_workspace(
         }
     }
 
-    // Remove worktree if active.
-    if let Some(ref wt_path) = ws.worktree_path {
-        let _ = git::remove_worktree(&repo.path, wt_path, true).await;
-    }
+    if let Some(repo) = repo {
+        // Remove worktree if active.
+        if let Some(ref wt_path) = ws.worktree_path {
+            let _ = git::remove_worktree(&repo.path, wt_path, true).await;
+        }
 
-    // Best-effort branch delete. Force-deletes even if unmerged commits exist.
-    let _ = git::branch_delete(&repo.path, &ws.branch_name).await;
+        // Best-effort branch delete. Force-deletes even if unmerged commits exist.
+        let _ = git::branch_delete(&repo.path, &ws.branch_name).await;
+    }
 
     // Cascade deletes chat messages and terminal tabs. Materializes a frozen
     // summary row into `deleted_workspace_summaries` in the same transaction so

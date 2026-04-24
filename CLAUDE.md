@@ -18,8 +18,8 @@ cargo fmt --all --check                          # Check formatting
 
 # Frontend (React/TypeScript)
 cd src/ui && bun install                         # Install frontend dependencies
-cd src/ui && bun run build                       # Build frontend for production
-cd src/ui && bunx tsc --noEmit                   # TypeScript type check
+cd src/ui && bun run build                       # Build frontend (runs tsc -b && vite build)
+cd src/ui && bunx tsc -b                         # TypeScript type check (same as CI)
 cd src/ui && bun run test                        # Run frontend tests (vitest)
 cd src/ui && bun run test:watch                  # Run tests in watch mode
 
@@ -29,6 +29,8 @@ cargo tauri build                                # Release build
 ```
 
 IMPORTANT: CI sets `RUSTFLAGS="-Dwarnings"` — all compiler warnings are errors. Fix warnings before committing.
+
+IMPORTANT: Always run `cd src/ui && bunx tsc -b` after modifying TypeScript files (including tests). CI runs `tsc -b` via `bun run build` — `vitest` does **not** type-check (it uses esbuild), so tests can pass locally while types are broken. Run `tsc -b` as the final check before committing any frontend change.
 
 CI also enforces `bun install --frozen-lockfile` — do not modify `bun.lock` without intention. CI runs `cargo llvm-cov` for Rust test coverage (uploaded to Codecov). CI lints only the `claudette` and `claudette-server` crates (not `claudette-tauri`, which requires system libs).
 
@@ -118,7 +120,7 @@ src-server/             — Standalone + embeddable remote server
 ### Testing patterns
 
 - **Rust**: tests use `tempfile::tempdir()` to create ephemeral git repos — no fixtures or test databases. Async tests use `#[tokio::test]`. Test modules live at the bottom of each file (`#[cfg(test)] mod tests`).
-- **TypeScript**: vitest with `describe`/`it`/`expect`. Zustand tests reset state via `useAppStore.setState()` in `beforeEach`. No test database — frontend tests are pure state/logic tests.
+- **TypeScript**: vitest with `describe`/`it`/`expect`. Zustand tests reset state via `useAppStore.setState()` in `beforeEach`. No test database — frontend tests are pure state/logic tests. When constructing fixtures for store state, always read the actual type definition (e.g., `TerminalTab` in `types/terminal.ts`) — do not guess field names. Look for existing `make*` helpers in adjacent test files before creating new fixtures.
 
 ### Notification architecture
 

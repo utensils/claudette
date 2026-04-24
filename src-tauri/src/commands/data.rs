@@ -18,6 +18,7 @@ pub struct InitialData {
     pub default_branches: HashMap<String, String>,
     /// Most recent chat message per workspace (for dashboard display).
     pub last_messages: Vec<ChatMessage>,
+    pub scm_cache: Vec<claudette::db::ScmStatusCacheRow>,
 }
 
 #[tauri::command]
@@ -158,6 +159,7 @@ pub async fn load_initial_data(state: State<'_, AppState>) -> Result<InitialData
         .collect();
 
     let last_messages = db.last_message_per_workspace().map_err(|e| e.to_string())?;
+    let scm_cache = db.load_all_scm_status_cache().map_err(|e| e.to_string())?;
 
     Ok(InitialData {
         repositories,
@@ -165,5 +167,6 @@ pub async fn load_initial_data(state: State<'_, AppState>) -> Result<InitialData
         worktree_base_dir,
         default_branches,
         last_messages,
+        scm_cache,
     })
 }
