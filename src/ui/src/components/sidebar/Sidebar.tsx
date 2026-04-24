@@ -53,6 +53,7 @@ export const Sidebar = memo(function Sidebar() {
   const openModal = useAppStore((s) => s.openModal);
   const openSettings = useAppStore((s) => s.openSettings);
   const updateWorkspace = useAppStore((s) => s.updateWorkspace);
+  const removeWorkspace = useAppStore((s) => s.removeWorkspace);
   const unreadCompletions = useAppStore((s) => s.unreadCompletions);
   const agentQuestions = useAppStore((s) => s.agentQuestions);
   const planApprovals = useAppStore((s) => s.planApprovals);
@@ -225,19 +226,23 @@ export const Sidebar = memo(function Sidebar() {
     if (archivingRef.current.has(wsId)) return;
     archivingRef.current.add(wsId);
     try {
-      await archiveWorkspace(wsId);
-      updateWorkspace(wsId, {
-        status: "Archived",
-        worktree_path: null,
-        agent_status: "Stopped",
-      });
+      const deleted = await archiveWorkspace(wsId);
+      if (deleted) {
+        removeWorkspace(wsId);
+      } else {
+        updateWorkspace(wsId, {
+          status: "Archived",
+          worktree_path: null,
+          agent_status: "Stopped",
+        });
+      }
       if (useAppStore.getState().selectedWorkspaceId === wsId) selectWorkspace(null);
     } catch (e) {
       console.error("Failed to archive workspace:", e);
     } finally {
       archivingRef.current.delete(wsId);
     }
-  }, [updateWorkspace, selectWorkspace]);
+  }, [updateWorkspace, removeWorkspace, selectWorkspace]);
 
   const handleRestore = useCallback(async (wsId: string) => {
     if (restoringRef.current.has(wsId)) return;

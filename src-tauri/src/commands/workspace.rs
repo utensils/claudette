@@ -439,7 +439,8 @@ pub async fn archive_workspace(
     id: String,
     app: AppHandle,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+    supervisor: State<'_, Arc<McpSupervisor>>,
+) -> Result<bool, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
 
     let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
@@ -453,6 +454,8 @@ pub async fn archive_workspace(
         .iter()
         .find(|r| r.id == ws.repository_id)
         .ok_or("Repository not found")?;
+
+    let repo_id = ws.repository_id.clone();
 
     if let Some(ref wt_path) = ws.worktree_path {
         let _ = git::remove_worktree(&repo.path, wt_path, false).await;
@@ -485,6 +488,23 @@ pub async fn archive_workspace(
         let _ = db.end_agent_session(sid, true);
     }
 
+    if delete_branch {
+        // Branch is gone — nothing left to restore. Fully delete the record while
+        // preserving lifetime stats in `deleted_workspace_summaries`.
+        db.delete_workspace_with_summary(&id)
+            .map_err(|e| e.to_string())?;
+
+        // If this was the last workspace for the repo, clean up MCP supervisor state.
+        let remaining = db.list_workspaces().unwrap_or_default();
+        if !remaining.iter().any(|w| w.repository_id == repo_id) {
+            supervisor.remove_repo(&repo_id).await;
+            let _ = app.emit("mcp-status-cleared", &repo_id);
+        }
+
+        crate::tray::rebuild_tray(&app);
+        return Ok(true);
+    }
+
     db.delete_terminal_tabs_for_workspace(&id)
         .map_err(|e| e.to_string())?;
     db.delete_scm_status_cache(&id).map_err(|e| e.to_string())?;
@@ -493,7 +513,7 @@ pub async fn archive_workspace(
 
     crate::tray::rebuild_tray(&app);
 
-    Ok(())
+    Ok(false)
 }
 
 #[tauri::command]

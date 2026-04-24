@@ -139,7 +139,7 @@ export function runWorkspaceSetup(
   return invoke("run_workspace_setup", { workspaceId });
 }
 
-export function archiveWorkspace(id: string): Promise<void> {
+export function archiveWorkspace(id: string): Promise<boolean> {
   return invoke("archive_workspace", { id });
 }
 

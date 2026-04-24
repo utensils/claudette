@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Instant;
 
 use futures::stream::{self, StreamExt};
@@ -5,6 +6,7 @@ use serde::Serialize;
 use tauri::{Emitter, Manager, State};
 
 use claudette::db::Database;
+use claudette::mcp_supervisor::McpSupervisor;
 use claudette::plugin_runtime::host_api::WorkspaceInfo;
 use claudette::scm::detect;
 use claudette::scm::types::{CiCheck, PullRequest};
@@ -716,6 +718,9 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
 /// Performs the same core steps as the `archive_workspace` Tauri command:
 /// removes the worktree, updates the DB status, stops any running agent,
 /// and emits a `workspace-auto-archived` event to the frontend.
+///
+/// When `git_delete_branch_on_archive` is enabled, fully deletes the workspace
+/// record (preserving lifetime stats) instead of moving it to Archived status.
 async fn auto_archive_workspace(
     handle: &tauri::AppHandle,
     app_state: &AppState,
@@ -726,8 +731,10 @@ async fn auto_archive_workspace(
     struct ArchiveInfo {
         ws_id: String,
         ws_name: String,
+        repo_id: String,
         worktree_path: Option<String>,
         repo_path: Option<String>,
+        delete_record: bool,
         resolved: crate::tray::ResolvedSound,
     }
     let archive_info: Option<ArchiveInfo> = {
@@ -753,26 +760,39 @@ async fn auto_archive_workspace(
             .flatten()
             .map(|r| r.path);
 
+        let delete_record = db
+            .get_app_setting("git_delete_branch_on_archive")
+            .ok()
+            .flatten()
+            .as_deref()
+            == Some("true");
+
         let resolved = crate::tray::resolve_notification(
             &db,
             &app_state.cesp_playback,
             crate::tray::NotificationEvent::Finished,
         );
 
-        // Update DB status
-        let _ = db.delete_terminal_tabs_for_workspace(workspace_id);
-        let _ = db.delete_scm_status_cache(workspace_id);
-        let _ = db.update_workspace_status(
-            workspace_id,
-            &claudette::model::WorkspaceStatus::Archived,
-            None,
-        );
+        if delete_record {
+            // Fully remove the record; lifetime stats are frozen in a summary row.
+            let _ = db.delete_workspace_with_summary(workspace_id);
+        } else {
+            let _ = db.delete_terminal_tabs_for_workspace(workspace_id);
+            let _ = db.delete_scm_status_cache(workspace_id);
+            let _ = db.update_workspace_status(
+                workspace_id,
+                &claudette::model::WorkspaceStatus::Archived,
+                None,
+            );
+        }
 
         Some(ArchiveInfo {
             ws_id: ws.id.clone(),
             ws_name: ws.name.clone(),
+            repo_id: ws.repository_id.clone(),
             worktree_path: ws.worktree_path.clone(),
             repo_path,
+            delete_record,
             resolved,
         })
     };
@@ -780,8 +800,10 @@ async fn auto_archive_workspace(
     let Some(ArchiveInfo {
         ws_id,
         ws_name,
+        repo_id,
         worktree_path: wt_path,
         repo_path,
+        delete_record,
         resolved,
     }) = archive_info
     else {
@@ -803,14 +825,28 @@ async fn auto_archive_workspace(
         }
     }
 
+    // If the workspace record was fully deleted and no workspaces remain for this
+    // repo, clean up MCP supervisor state.
+    if delete_record {
+        let supervisor = handle.state::<Arc<McpSupervisor>>();
+        let remaining = Database::open(&app_state.db_path)
+            .map(|db| db.list_workspaces().unwrap_or_default())
+            .unwrap_or_default();
+        if !remaining.iter().any(|w| w.repository_id == repo_id) {
+            supervisor.remove_repo(&repo_id).await;
+            let _ = handle.emit("mcp-status-cleared", &repo_id);
+        }
+    }
+
     // Rebuild tray and notify frontend
     crate::tray::rebuild_tray(handle);
 
+    let verb = if delete_record { "deleted" } else { "archived" };
     let body = match pr_number {
         Some(num) => {
-            format!("Workspace \u{2018}{ws_name}\u{2019} archived \u{2014} PR #{num} merged")
+            format!("Workspace \u{2018}{ws_name}\u{2019} {verb} \u{2014} PR #{num} merged")
         }
-        None => format!("Workspace \u{2018}{ws_name}\u{2019} archived \u{2014} PR merged"),
+        None => format!("Workspace \u{2018}{ws_name}\u{2019} {verb} \u{2014} PR merged"),
     };
     crate::tray::send_notification(
         handle,
@@ -824,10 +860,11 @@ async fn auto_archive_workspace(
     let mut payload = serde_json::json!({
         "workspace_id": ws_id,
         "workspace_name": ws_name,
+        "deleted": delete_record,
     });
     if let Some(num) = pr_number {
         payload["pr_number"] = serde_json::json!(num);
     }
     let _ = handle.emit("workspace-auto-archived", payload);
-    eprintln!("[scm] Auto-archived workspace '{ws_name}' ({ws_id})");
+    eprintln!("[scm] Auto-{verb} workspace '{ws_name}' ({ws_id})");
 }
