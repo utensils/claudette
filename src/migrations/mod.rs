@@ -152,6 +152,6 @@ pub const MIGRATIONS: &[Migration] = &[
     Migration {
         id: "20260422000000_chat_sessions",
         sql: include_str!("20260422000000_chat_sessions.sql"),
-        legacy_version: None,
+        legacy_version: Some(25),
     },
 ];
