@@ -2,16 +2,26 @@
 /// — never compiled into release builds.
 ///
 /// Architecture:
-///   Terminal ──TCP:19432──▶ debug server ──eval()──▶ webview JS context
-///                                                        │
-///   Terminal ◀──TCP────── debug server ◀──event── webview (emit result)
+///   Terminal ──TCP:<port>──▶ debug server ──eval()──▶ webview JS context
+///                                                          │
+///   Terminal ◀──TCP──────── debug server ◀──event── webview (emit result)
+///
+/// The port defaults to 19432 but can be overridden via the
+/// `CLAUDETTE_DEBUG_PORT` env var so multiple dev instances can run side-by-side.
 use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, Emitter, Listener, Manager};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-/// Port for the debug TCP server. Only binds to 127.0.0.1.
-const DEBUG_PORT: u16 = 19432;
+/// Default port for the debug TCP server. Only binds to 127.0.0.1.
+const DEFAULT_DEBUG_PORT: u16 = 19432;
+
+fn debug_port() -> u16 {
+    std::env::var("CLAUDETTE_DEBUG_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_DEBUG_PORT)
+}
 
 /// Tauri command: eval JS in the webview and return the result.
 /// Called internally by the TCP server, but also registered as a Tauri command
@@ -97,17 +107,19 @@ pub async fn debug_eval_result(
     Ok(())
 }
 
-/// Start the debug TCP eval server on 127.0.0.1:19432.
+/// Start the debug TCP eval server on 127.0.0.1. Port is 19432 by default,
+/// or `$CLAUDETTE_DEBUG_PORT` when set.
 /// Call this from the Tauri `setup()` hook.
 pub fn start_debug_server(app: AppHandle) {
+    let port = debug_port();
     tauri::async_runtime::spawn(async move {
-        let listener = match tokio::net::TcpListener::bind(("127.0.0.1", DEBUG_PORT)).await {
+        let listener = match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
             Ok(l) => {
-                eprintln!("[debug] Eval server listening on 127.0.0.1:{DEBUG_PORT}");
+                eprintln!("[debug] Eval server listening on 127.0.0.1:{port}");
                 l
             }
             Err(e) => {
-                eprintln!("[debug] Failed to start eval server: {e}");
+                eprintln!("[debug] Failed to start eval server on port {port}: {e}");
                 return;
             }
         };

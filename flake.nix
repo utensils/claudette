@@ -535,8 +535,8 @@
             commands = [
               {
                 name = "dev";
-                command = "cd src/ui && bun install && cd ../.. && cargo tauri dev --features devtools,server";
-                help = "Start Tauri dev mode with hot-reload (includes embedded server)";
+                command = "exec ./scripts/dev.sh";
+                help = "Start Tauri dev mode with hot-reload (auto-selects free Vite + debug ports)";
                 category = "development";
               }
               {

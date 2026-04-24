@@ -189,7 +189,7 @@ A single sandboxed Lua runtime (`src/plugin_runtime/`) serves multiple plugin ki
 
 ## Debugging (dev builds only)
 
-A debug TCP eval server runs on `127.0.0.1:19432` in dev builds. It executes JS in the webview and returns results over TCP. **Always use the `/claudette-debug` skill for debugging** — it has recipes for state inspection, store tracing, session monitoring, and UAT.
+A debug TCP eval server runs on `127.0.0.1` in dev builds (default port `19432`, overridable via `$CLAUDETTE_DEBUG_PORT` — `scripts/dev.sh` probes for a free port so multiple dev instances can coexist). It executes JS in the webview and returns results over TCP. **Always use the `/claudette-debug` skill for debugging** — it auto-discovers the right instance via `${TMPDIR:-/tmp}/claudette-dev/<pid>.json` and has recipes for state inspection, store tracing, session monitoring, and UAT.
 
 ```bash
 /claudette-debug state                    # Store overview
