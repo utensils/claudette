@@ -234,12 +234,14 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
         });
         // Refresh the displayed default branch when either override changes.
         if (updates.base_branch !== undefined || updates.default_remote !== undefined) {
-          getDefaultBranch(repoId).then((branch) => {
-            if (branch) {
-              const current = useAppStore.getState().defaultBranches;
-              setDefaultBranches({ ...current, [repoId]: branch });
-            }
-          });
+          getDefaultBranch(repoId)
+            .then((branch) => {
+              if (branch) {
+                const current = useAppStore.getState().defaultBranches;
+                setDefaultBranches({ ...current, [repoId]: branch });
+              }
+            })
+            .catch(() => {});
         }
       } catch (e) {
         setError(String(e));
@@ -317,6 +319,11 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
             }}
           >
             <option value="">Auto-detect</option>
+            {baseBranch && !availableBranches.includes(baseBranch) && (
+              <option key={baseBranch} value={baseBranch}>
+                {baseBranch} (missing)
+              </option>
+            )}
             {availableBranches.map((b) => (
               <option key={b} value={b}>
                 {b}
@@ -344,6 +351,11 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
             }}
           >
             <option value="">Auto-detect</option>
+            {defaultRemote && !availableRemotes.includes(defaultRemote) && (
+              <option key={defaultRemote} value={defaultRemote}>
+                {defaultRemote} (missing)
+              </option>
+            )}
             {availableRemotes.map((r) => (
               <option key={r} value={r}>
                 {r}
