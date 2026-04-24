@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use futures::stream::{self, StreamExt};
 use serde::Serialize;
-use tauri::{Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use claudette::db::Database;
 use claudette::plugin_runtime::host_api::WorkspaceInfo;
@@ -315,6 +315,7 @@ pub async fn scm_create_pr(
     body: String,
     base: String,
     draft: bool,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<PullRequest, String> {
     let ctx = lookup_workspace_context(&state.db_path, &workspace_id).await?;
@@ -347,7 +348,10 @@ pub async fn scm_create_pr(
     let result = registry
         .call_operation(&provider, "create_pull_request", args, ws_info)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            let err = e.to_string();
+            crate::missing_cli::handle_err(&app, &err).unwrap_or(err)
+        })?;
 
     // Invalidate cache
     let cache_key = (ctx.repo.id.clone(), ctx.workspace.branch_name.clone());
@@ -364,6 +368,7 @@ pub async fn scm_create_pr(
 pub async fn scm_merge_pr(
     workspace_id: String,
     pr_number: u64,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     let ctx = lookup_workspace_context(&state.db_path, &workspace_id).await?;
@@ -390,7 +395,10 @@ pub async fn scm_merge_pr(
     let result = registry
         .call_operation(&provider, "merge_pull_request", args, ws_info)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            let err = e.to_string();
+            crate::missing_cli::handle_err(&app, &err).unwrap_or(err)
+        })?;
 
     // Invalidate cache
     let cache_key = (ctx.repo.id.clone(), ctx.workspace.branch_name.clone());

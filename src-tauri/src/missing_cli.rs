@@ -32,8 +32,12 @@ fn emit(app: &AppHandle, guidance: &MissingCli) {
 }
 
 fn friendly_message(guidance: &MissingCli) -> String {
+    // We only emit the Tauri event here — the actual dialog is rendered by
+    // `MissingCliModal` on the frontend. Phrase the message neutrally so it
+    // still reads correctly if the event listener isn't mounted yet or the
+    // `emit` call above failed (see [`emit`]).
     format!(
-        "{} is not installed. See the install guide that just opened for options.",
+        "{} is not installed. See the install options dialog.",
         guidance.display_name
     )
 }

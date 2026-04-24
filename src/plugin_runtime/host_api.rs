@@ -391,9 +391,16 @@ async fn host_exec(
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::piped());
 
-    let child = command
-        .spawn()
-        .map_err(|e| LuaError::external(format!("Failed to execute '{cmd}': {e}")))?;
+    let child = command.spawn().map_err(|e| {
+        // Preserve `NotFound` via the missing-CLI sentinel so a Tauri-layer
+        // interceptor (e.g. around scm/env-provider commands) can surface
+        // the MissingCli dialog instead of the raw subprocess error when a
+        // plugin's declared CLI (like `gh`) isn't installed.
+        let msg = crate::missing_cli::map_spawn_err(&e, cmd, || {
+            format!("Failed to execute '{cmd}': {e}")
+        });
+        LuaError::external(msg)
+    })?;
 
     // Run with timeout — kill_on_drop ensures the child is killed if
     // the future is dropped on timeout.

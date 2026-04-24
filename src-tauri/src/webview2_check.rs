@@ -50,32 +50,33 @@ mod imp {
     /// for a different user only. In that case Tauri/wry will still surface
     /// its own system dialog — see follow-up issue for a more thorough probe.
     fn is_runtime_installed() -> bool {
-        let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        let paths: [(RegKey, String); 3] = [
-            (
-                hklm.clone(),
-                format!(r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{EVERGREEN_GUID}"),
-            ),
-            (
-                hklm,
-                format!(r"SOFTWARE\Microsoft\EdgeUpdate\Clients\{EVERGREEN_GUID}"),
-            ),
-            (
-                hkcu,
-                format!(r"Software\Microsoft\EdgeUpdate\Clients\{EVERGREEN_GUID}"),
-            ),
+        let hklm_paths = [
+            format!(r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{EVERGREEN_GUID}"),
+            format!(r"SOFTWARE\Microsoft\EdgeUpdate\Clients\{EVERGREEN_GUID}"),
         ];
-        for (root, path) in paths {
-            if let Ok(key) = root.open_subkey(&path)
-                && let Ok(pv) = key.get_value::<String, _>("pv")
-                && !pv.is_empty()
-                && pv != "0.0.0.0"
-            {
+        let hkcu_path = format!(r"Software\Microsoft\EdgeUpdate\Clients\{EVERGREEN_GUID}");
+
+        let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+        for path in &hklm_paths {
+            if has_valid_pv(&hklm, path) {
                 return true;
             }
         }
-        false
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        has_valid_pv(&hkcu, &hkcu_path)
+    }
+
+    /// Returns `true` iff `hive\path` exists and has a non-empty `pv` value
+    /// that isn't the placeholder `"0.0.0.0"` EdgeUpdate stamps when it
+    /// hasn't finished registering a runtime.
+    fn has_valid_pv(hive: &RegKey, path: &str) -> bool {
+        let Ok(key) = hive.open_subkey(path) else {
+            return false;
+        };
+        let Ok(pv) = key.get_value::<String, _>("pv") else {
+            return false;
+        };
+        !pv.is_empty() && pv != "0.0.0.0"
     }
 
     fn show_missing_dialog_and_exit() -> ! {
