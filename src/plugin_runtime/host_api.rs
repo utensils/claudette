@@ -120,6 +120,46 @@ fn register_host_api(lua: &Lua, ctx: HostContext) -> LuaResult<()> {
         })?,
     )?;
 
+    // host.file_exists(path) -> bool
+    //
+    // Sandbox-safe: takes an explicit path string from the plugin. The
+    // sandbox removed `io`/`os`, so plugins can't probe the filesystem
+    // on their own — this host-provided helper is the only way to check
+    // for the presence of config files (`.envrc`, `mise.toml`, `.env`,
+    // `flake.nix`, etc.) that env providers detect on.
+    //
+    // Returns true for both files and directories — providers that need
+    // finer distinction can call `host.read_file` (which errors on dirs).
+    host.set(
+        "file_exists",
+        lua.create_function(|_, path: String| {
+            if path.contains('\0') {
+                return Err(LuaError::external("path must not contain null bytes"));
+            }
+            Ok(std::path::Path::new(&path).exists())
+        })?,
+    )?;
+
+    // host.read_file(path) -> string
+    //
+    // Reads the file at `path` as UTF-8. Used by env providers that
+    // parse config files in-process (e.g. dotenv's `.env` parser) rather
+    // than shelling out to an external tool.
+    //
+    // Raises a Lua error on missing files, unreadable files, or non-UTF-8
+    // contents. Plugins can wrap calls in `pcall` if they need to handle
+    // the failure themselves.
+    host.set(
+        "read_file",
+        lua.create_function(|_, path: String| {
+            if path.contains('\0') {
+                return Err(LuaError::external("path must not contain null bytes"));
+            }
+            std::fs::read_to_string(&path)
+                .map_err(|e| LuaError::external(format!("failed to read '{path}': {e}")))
+        })?,
+    )?;
+
     lua.globals().set("host", host)?;
     Ok(())
 }
@@ -384,5 +424,91 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("null bytes"));
+    }
+
+    #[test]
+    fn test_host_file_exists_true() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("marker.txt");
+        std::fs::write(&file, "hi").unwrap();
+
+        let ctx = make_test_ctx();
+        let lua = create_lua_vm(ctx).unwrap();
+        let path = file.to_string_lossy().into_owned();
+        let exists: bool = lua
+            .load(format!(r#"return host.file_exists("{path}")"#))
+            .eval()
+            .unwrap();
+        assert!(exists, "existing file should return true");
+    }
+
+    #[test]
+    fn test_host_file_exists_false() {
+        let ctx = make_test_ctx();
+        let lua = create_lua_vm(ctx).unwrap();
+        // Cross-platform nonexistent path: tempdir + a child that never got created.
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("does-not-exist.xyz");
+        let path = missing.to_string_lossy().into_owned();
+        let exists: bool = lua
+            .load(format!(r#"return host.file_exists("{path}")"#))
+            .eval()
+            .unwrap();
+        assert!(!exists, "missing file should return false");
+    }
+
+    #[test]
+    fn test_host_file_exists_directory_returns_true() {
+        // Documented behavior: file_exists returns true for directories too.
+        // Providers that need file-vs-dir distinction can use host.read_file
+        // (which errors on directories) to disambiguate.
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = make_test_ctx();
+        let lua = create_lua_vm(ctx).unwrap();
+        let path = tmp.path().to_string_lossy().into_owned();
+        let exists: bool = lua
+            .load(format!(r#"return host.file_exists("{path}")"#))
+            .eval()
+            .unwrap();
+        assert!(exists, "existing directory should return true");
+    }
+
+    #[test]
+    fn test_host_read_file_returns_contents() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("data.env");
+        std::fs::write(&file, "FOO=bar\nBAZ=qux\n").unwrap();
+
+        let ctx = make_test_ctx();
+        let lua = create_lua_vm(ctx).unwrap();
+        let path = file.to_string_lossy().into_owned();
+        let contents: String = lua
+            .load(format!(r#"return host.read_file("{path}")"#))
+            .eval()
+            .unwrap();
+        assert_eq!(contents, "FOO=bar\nBAZ=qux\n");
+    }
+
+    #[test]
+    fn test_host_read_file_errors_on_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("nope.txt");
+        let ctx = make_test_ctx();
+        let lua = create_lua_vm(ctx).unwrap();
+        let path = missing.to_string_lossy().into_owned();
+        let result: LuaResult<String> = lua
+            .load(format!(r#"return host.read_file("{path}")"#))
+            .eval();
+        assert!(result.is_err(), "missing file should raise Lua error");
+    }
+
+    #[test]
+    fn test_host_read_file_rejects_null_byte_in_path() {
+        let ctx = make_test_ctx();
+        let lua = create_lua_vm(ctx).unwrap();
+        let result: LuaResult<String> = lua
+            .load(r#"return host.read_file("/tmp/file\0injected")"#)
+            .eval();
+        assert!(result.is_err());
     }
 }
