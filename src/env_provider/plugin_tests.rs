@@ -897,14 +897,20 @@ async fn integration_mise_auto_trust_on_retries_after_untrusted() {
 /// `nix print-dev-env --json` on a fresh flake with a nixpkgs input
 /// evaluates the flake from scratch; that's ~3s with warm nixpkgs in
 /// the store and 10–60s cold. Too slow for the default fast-test loop,
-/// so this is gated behind `CLAUDETTE_SLOW_TESTS=1`. Local devs run it
-/// with `CLAUDETTE_SLOW_TESTS=1 cargo test -- --ignored` or by setting
-/// the env var directly; CI runs a nightly slow-tests job.
+/// so this is `#[ignore]`-gated plus a `CLAUDETTE_SLOW_TESTS=1`
+/// backstop. Run it explicitly:
+///
+///   CLAUDETTE_SLOW_TESTS=1 cargo test -p claudette \
+///     integration_nix_devshell_export_returns_env -- --ignored --nocapture
+///
+/// The env-var check exists so `cargo test -- --include-ignored` on a
+/// machine without network/Nix still no-ops instead of failing.
 ///
 /// Platform gating: `has_nix` evaluates to false on Windows (no native
 /// Nix), so this test only compiles into the binary on Linux + macOS
 /// where Nix is installed.
 #[cfg(has_nix)]
+#[ignore = "slow: needs nix + network; run with CLAUDETTE_SLOW_TESTS=1 -- --ignored"]
 #[tokio::test]
 async fn integration_nix_devshell_export_returns_env() {
     if std::env::var("CLAUDETTE_SLOW_TESTS").ok().as_deref() != Some("1") {
@@ -931,14 +937,18 @@ async fn integration_nix_devshell_export_returns_env() {
     )
     .unwrap();
 
-    // Trivial flake that pulls nixpkgs and exposes a devShell with one
-    // exported env var. `mkShellNoCC` avoids the cc wrapper derivation
-    // — faster than the default `mkShell`.
+    // Trivial flake that pulls a pinned nixpkgs and exposes a devShell
+    // with one exported env var. `mkShellNoCC` avoids the cc wrapper
+    // derivation — faster than the default `mkShell`. The input is
+    // pinned to a specific nixos-24.11 revision so the test resolves
+    // deterministically across machines and isn't at the mercy of
+    // nixos-unstable moving under us (or GitHub being slow when a cache
+    // miss forces a fetch).
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
         tmp.path().join("flake.nix"),
         r#"{
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/50ab793786d9de88ee30ec4e4c24fb4236fc2674";
   outputs = { self, nixpkgs }:
     let
       systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
