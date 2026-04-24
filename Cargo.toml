@@ -39,3 +39,8 @@ winreg = "0.55"
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[build-dependencies]
+# Probes PATH for direnv/mise/nix so env-provider integration tests
+# can compile-out when the tool isn't installed on the build host.
+which = "7"

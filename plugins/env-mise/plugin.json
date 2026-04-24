@@ -1,0 +1,18 @@
+{
+  "name": "env-mise",
+  "display_name": "mise",
+  "version": "1.0.0",
+  "description": "Activate mise-managed environment (tools + env vars) for workspace subprocesses",
+  "kind": "env-provider",
+  "required_clis": ["mise"],
+  "operations": ["detect", "export"],
+  "settings": [
+    {
+      "type": "boolean",
+      "key": "auto_trust",
+      "label": "Always trust mise config",
+      "description": "When mise reports config files as not trusted, run `mise trust` automatically. mise normally requires per-path trust — enabling this bypasses that for zero-friction activation.",
+      "default": false
+    }
+  ]
+}

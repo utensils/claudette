@@ -10,6 +10,11 @@ const APP_SECTIONS = [
   { id: "notifications", label: "Notifications", icon: Bell },
   { id: "git", label: "Git", icon: GitBranch },
   { id: "plugins", label: "Plugins", icon: Puzzle },
+  {
+    id: "claude-code-plugins",
+    label: "Claude Code Plugins",
+    icon: Puzzle,
+  },
 ];
 
 const MORE_SECTIONS = [
@@ -17,8 +22,9 @@ const MORE_SECTIONS = [
 ];
 
 export function getAppSections(pluginManagementEnabled: boolean) {
-  return APP_SECTIONS.filter((section) =>
-    section.id !== "plugins" || pluginManagementEnabled,
+  return APP_SECTIONS.filter(
+    (section) =>
+      section.id !== "claude-code-plugins" || pluginManagementEnabled,
   );
 }
 

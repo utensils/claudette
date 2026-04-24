@@ -562,24 +562,79 @@ pub fn build_stdin_message(prompt: &str, attachments: &[FileAttachment]) -> Stri
 /// `Path::is_file` probes plus one registry read, sub-millisecond — so
 /// we run it inline.
 pub async fn resolve_claude_path() -> OsString {
-    static RESOLVED: OnceLock<OsString> = OnceLock::new();
-    if let Some(cached) = RESOLVED.get() {
+    if let Some(cached) = RESOLVED_CLAUDE_PATH.get() {
         return cached.clone();
     }
     #[cfg(unix)]
     let resolved = tokio::task::spawn_blocking(resolve_claude_path_sync)
         .await
-        .unwrap_or_else(|_| OsString::from("claude"));
+        .unwrap_or_else(|_| OsString::from(claude_bare_name()));
     #[cfg(not(unix))]
     let resolved = resolve_claude_path_sync();
 
     // Only cache absolute paths — the bare "claude" fallback should allow
     // retries on subsequent calls in case the environment improves.
     if Path::new(&resolved).is_absolute() {
-        let _ = RESOLVED.set(resolved.clone());
+        let _ = RESOLVED_CLAUDE_PATH.set(resolved.clone());
     }
     resolved
 }
+
+/// Resolve the `claude` CLI path from a synchronous (non-async) context.
+///
+/// Mirrors [`crate::git::resolve_git_path_blocking`] so callers that can't
+/// `.await` (e.g. background `std::thread` startup tasks like the User-Agent
+/// cache warmer) get the same lookup order — process PATH, login-shell PATH,
+/// well-known install locations — instead of a bare `Command::new("claude")`
+/// that misses Windows npm shims (`claude.cmd`/`claude.ps1`) and the official
+/// installer paths under `%LOCALAPPDATA%`.
+///
+/// Shares the same `OnceLock` cache as [`resolve_claude_path`], so the first
+/// call from either side populates it and subsequent calls are free.
+///
+/// On a cold shell-path cache we skip [`crate::env::enriched_path`] and use
+/// the raw process PATH instead, matching `resolve_git_path_blocking`'s
+/// behaviour: this avoids stalling for up to 5 s on the login-shell probe
+/// when the caller can't afford that wait. The fallback well-known paths
+/// (npm shims, `%LOCALAPPDATA%\Programs\claude`, `~/.local/bin`, etc.) still
+/// run, so most installs resolve even without the enriched PATH.
+pub fn resolve_claude_path_blocking() -> OsString {
+    if let Some(cached) = RESOLVED_CLAUDE_PATH.get() {
+        return cached.clone();
+    }
+    let path = if crate::env::shell_path_is_cached() {
+        Some(crate::env::enriched_path())
+    } else {
+        std::env::var_os("PATH")
+    };
+    // Also gate the lazy shell-path probe inside the resolver: even with
+    // `enriched_path()` skipped above, the `login_shell_path` closure
+    // would still invoke `crate::env::shell_path()` (and pay the 5 s
+    // probe) on a process-PATH miss. Returning `None` when the cache is
+    // cold keeps the blocking helper truly non-stalling — well-known
+    // fallback paths still cover typical installs.
+    let resolved = resolve_claude_path_inner(
+        dirs::home_dir(),
+        path,
+        || {
+            if crate::env::shell_path_is_cached() {
+                login_shell_path()
+            } else {
+                None
+            }
+        },
+        is_executable_file,
+    );
+    if Path::new(&resolved).is_absolute() {
+        let _ = RESOLVED_CLAUDE_PATH.set(resolved.clone());
+    }
+    resolved
+}
+
+/// Shared cache for [`resolve_claude_path`] and [`resolve_claude_path_blocking`].
+/// Only populated for absolute paths — the bare-`claude` fallback stays
+/// uncached so the next call gets a chance to find a real install.
+static RESOLVED_CLAUDE_PATH: OnceLock<OsString> = OnceLock::new();
 
 /// Synchronous core of [`resolve_claude_path`]. Extracted so it can run
 /// inside `tokio::task::spawn_blocking` on Unix without juggling async
@@ -791,6 +846,7 @@ pub async fn run_turn(
     settings: &AgentSettings,
     attachments: &[FileAttachment],
     ws_env: Option<&WorkspaceEnv>,
+    resolved_env: Option<&crate::env_provider::ResolvedEnv>,
 ) -> Result<TurnHandle, String> {
     let has_attachments = !attachments.is_empty();
     let args = build_claude_args(
@@ -829,6 +885,14 @@ pub async fn run_turn(
     }
     cmd.env_remove("CLAUDECODE");
     cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
+
+    // Apply user-provided env-provider output (direnv / mise / nix-devshell /
+    // dotenv) BEFORE the workspace's CLAUDETTE_* markers so those always win,
+    // and BEFORE the settings-driven 1M-context toggle so the UI choice
+    // cannot be overridden by a provider that happens to export the same key.
+    if let Some(env) = resolved_env {
+        env.apply(&mut cmd);
+    }
 
     cmd.env_remove("CLAUDE_CODE_DISABLE_1M_CONTEXT");
     if settings.disable_1m_context {
@@ -1066,6 +1130,7 @@ impl PersistentSession {
         custom_instructions: Option<&str>,
         settings: &AgentSettings,
         ws_env: Option<&WorkspaceEnv>,
+        resolved_env: Option<&crate::env_provider::ResolvedEnv>,
     ) -> Result<Self, String> {
         let args = build_persistent_args(
             session_id,
@@ -1093,6 +1158,12 @@ impl PersistentSession {
         }
         cmd.env_remove("CLAUDECODE");
         cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
+
+        // See run_turn for layering rationale — env-provider output under
+        // the CLAUDETTE_* markers, under the settings-driven context toggle.
+        if let Some(env) = resolved_env {
+            env.apply(&mut cmd);
+        }
 
         cmd.env_remove("CLAUDE_CODE_DISABLE_1M_CONTEXT");
         if settings.disable_1m_context {

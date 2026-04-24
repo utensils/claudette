@@ -2,9 +2,10 @@ pub mod host_api;
 pub mod manifest;
 pub mod seed;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::RwLock;
 use std::time::Duration;
 
 use host_api::{HostContext, WorkspaceInfo};
@@ -40,6 +41,7 @@ pub enum PluginError {
     NoProvider,
     OperationNotSupported(String),
     PluginNotFound(String),
+    PluginDisabled(String),
 }
 
 impl fmt::Display for PluginError {
@@ -58,6 +60,7 @@ impl fmt::Display for PluginError {
             Self::NoProvider => write!(f, "No provider configured for this repository"),
             Self::OperationNotSupported(op) => write!(f, "Operation '{op}' is not supported"),
             Self::PluginNotFound(name) => write!(f, "Plugin '{name}' not found"),
+            Self::PluginDisabled(name) => write!(f, "Plugin '{name}' is disabled"),
         }
     }
 }
@@ -73,6 +76,20 @@ impl serde::Serialize for PluginError {
 pub struct PluginRegistry {
     pub plugins: HashMap<String, LoadedPlugin>,
     pub plugin_dir: PathBuf,
+    /// User-persisted setting overrides, keyed by plugin name → setting
+    /// key → JSON value. Populated from `app_settings` at app start
+    /// and updated by the Plugins settings UI. Takes precedence over
+    /// manifest defaults and any static `plugin.config`.
+    ///
+    /// The lock is independent of `plugins`, so concurrent reads (from
+    /// `call_operation` building its HostContext) don't contend with
+    /// writes from the UI layer.
+    setting_overrides: RwLock<HashMap<String, HashMap<String, serde_json::Value>>>,
+    /// Globally-disabled plugin names. `call_operation` short-circuits
+    /// with `PluginDisabled` for any name in this set; dispatchers that
+    /// want to skip silently (e.g. env-provider resolution) should call
+    /// `is_disabled` and filter.
+    disabled: RwLock<HashSet<String>>,
 }
 
 impl PluginRegistry {
@@ -92,6 +109,8 @@ impl PluginRegistry {
                 return Self {
                     plugins,
                     plugin_dir: plugin_dir.to_path_buf(),
+                    setting_overrides: RwLock::new(HashMap::new()),
+                    disabled: RwLock::new(HashSet::new()),
                 };
             }
         };
@@ -134,7 +153,95 @@ impl PluginRegistry {
         Self {
             plugins,
             plugin_dir: plugin_dir.to_path_buf(),
+            setting_overrides: RwLock::new(HashMap::new()),
+            disabled: RwLock::new(HashSet::new()),
         }
+    }
+
+    /// Set or clear a user setting override for a plugin. Pass `None` to
+    /// revert to the manifest's default value. No-op if the plugin
+    /// isn't registered — we don't want unknown plugin names to
+    /// silently accumulate override entries.
+    pub fn set_setting(&self, plugin_name: &str, key: &str, value: Option<serde_json::Value>) {
+        if !self.plugins.contains_key(plugin_name) {
+            return;
+        }
+        let mut guard = self.setting_overrides.write().unwrap();
+        match value {
+            Some(v) => {
+                guard
+                    .entry(plugin_name.to_string())
+                    .or_default()
+                    .insert(key.to_string(), v);
+            }
+            None => {
+                if let Some(entry) = guard.get_mut(plugin_name) {
+                    entry.remove(key);
+                    if entry.is_empty() {
+                        guard.remove(plugin_name);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Return the effective config map a plugin's Lua VM will see.
+    /// Precedence (lowest → highest): manifest `settings[].default` →
+    /// static `plugin.config` → user setting overrides.
+    ///
+    /// Returns an empty map for unknown plugin names rather than an
+    /// error; `call_operation` is the surface that rejects unknown
+    /// plugins.
+    pub fn effective_config(&self, plugin_name: &str) -> HashMap<String, serde_json::Value> {
+        let mut out: HashMap<String, serde_json::Value> = HashMap::new();
+
+        if let Some(plugin) = self.plugins.get(plugin_name) {
+            for field in &plugin.manifest.settings {
+                let default = field.default_value();
+                if !default.is_null() {
+                    out.insert(field.key().to_string(), default);
+                }
+            }
+            for (k, v) in &plugin.config {
+                out.insert(k.clone(), v.clone());
+            }
+        }
+
+        let overrides = self.setting_overrides.read().unwrap();
+        if let Some(plugin_overrides) = overrides.get(plugin_name) {
+            for (k, v) in plugin_overrides {
+                out.insert(k.clone(), v.clone());
+            }
+        }
+
+        out
+    }
+
+    /// Globally enable/disable a plugin. Disabled plugins return
+    /// `PluginDisabled` from `call_operation`; dispatchers that prefer
+    /// silent filtering (env-provider resolution) check `is_disabled`
+    /// first.
+    ///
+    /// No-op for plugin names that aren't registered — parallels
+    /// `set_setting`, and keeps startup hydration from app_settings
+    /// silently dropping entries for removed/renamed plugins instead of
+    /// ghost-disabling them. Callers at the API boundary (e.g.
+    /// `set_claudette_plugin_enabled`) should validate unknown names
+    /// explicitly and surface an error to the user.
+    pub fn set_disabled(&self, plugin_name: &str, disabled: bool) {
+        if !self.plugins.contains_key(plugin_name) {
+            return;
+        }
+        let mut guard = self.disabled.write().unwrap();
+        if disabled {
+            guard.insert(plugin_name.to_string());
+        } else {
+            guard.remove(plugin_name);
+        }
+    }
+
+    pub fn is_disabled(&self, plugin_name: &str) -> bool {
+        self.disabled.read().unwrap().contains(plugin_name)
     }
 
     /// Execute an operation on a plugin.
@@ -152,6 +259,10 @@ impl PluginRegistry {
             .plugins
             .get(plugin_name)
             .ok_or_else(|| PluginError::PluginNotFound(plugin_name.to_string()))?;
+
+        if self.is_disabled(plugin_name) {
+            return Err(PluginError::PluginDisabled(plugin_name.to_string()));
+        }
 
         if !plugin.cli_available {
             let cli_list = plugin.manifest.required_clis.join(", ");
@@ -171,9 +282,10 @@ impl PluginRegistry {
 
         let ctx = HostContext {
             plugin_name: plugin_name.to_string(),
+            kind: plugin.manifest.kind,
             allowed_clis: plugin.manifest.required_clis.clone(),
             workspace_info,
-            config: plugin.config.clone(),
+            config: self.effective_config(plugin_name),
         };
 
         let lua =
@@ -433,5 +545,152 @@ mod tests {
             .await;
 
         assert!(matches!(result, Err(PluginError::OperationNotSupported(_))));
+    }
+
+    fn make_plugin_with_settings_manifest(dir: &Path) -> PluginRegistry {
+        let plugin_dir = dir.join("settings-demo");
+        std::fs::create_dir(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("plugin.json"),
+            r#"{
+                "name": "settings-demo",
+                "display_name": "Settings Demo",
+                "version": "1.0.0",
+                "description": "demo",
+                "operations": ["read_config"],
+                "settings": [
+                    { "type": "boolean", "key": "flag", "label": "Flag", "default": false },
+                    { "type": "text", "key": "name", "label": "Name", "default": "alice" }
+                ]
+            }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            plugin_dir.join("init.lua"),
+            r#"
+            local M = {}
+            function M.read_config(args)
+                return { flag = host.config("flag"), name = host.config("name") }
+            end
+            return M
+            "#,
+        )
+        .unwrap();
+        PluginRegistry::discover(dir)
+    }
+
+    #[test]
+    fn effective_config_uses_manifest_defaults_when_no_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = make_plugin_with_settings_manifest(dir.path());
+        let cfg = registry.effective_config("settings-demo");
+        assert_eq!(cfg.get("flag"), Some(&serde_json::Value::Bool(false)));
+        assert_eq!(
+            cfg.get("name"),
+            Some(&serde_json::Value::String("alice".into()))
+        );
+    }
+
+    #[test]
+    fn set_setting_overrides_manifest_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = make_plugin_with_settings_manifest(dir.path());
+        registry.set_setting("settings-demo", "flag", Some(serde_json::Value::Bool(true)));
+        let cfg = registry.effective_config("settings-demo");
+        assert_eq!(cfg.get("flag"), Some(&serde_json::Value::Bool(true)));
+        // Unset override reverts to manifest default.
+        registry.set_setting("settings-demo", "flag", None);
+        let cfg = registry.effective_config("settings-demo");
+        assert_eq!(cfg.get("flag"), Some(&serde_json::Value::Bool(false)));
+    }
+
+    #[test]
+    fn effective_config_empty_for_unknown_plugin() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = PluginRegistry::discover(dir.path());
+        assert!(registry.effective_config("no-such-plugin").is_empty());
+    }
+
+    #[test]
+    fn set_disabled_and_is_disabled_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = make_plugin_with_settings_manifest(dir.path());
+        assert!(!registry.is_disabled("settings-demo"));
+        registry.set_disabled("settings-demo", true);
+        assert!(registry.is_disabled("settings-demo"));
+        registry.set_disabled("settings-demo", false);
+        assert!(!registry.is_disabled("settings-demo"));
+    }
+
+    #[test]
+    fn set_disabled_ignores_unknown_plugin_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = PluginRegistry::discover(dir.path());
+        registry.set_disabled("does-not-exist", true);
+        assert!(
+            !registry.is_disabled("does-not-exist"),
+            "unknown plugin names must not accumulate in the disabled set"
+        );
+    }
+
+    #[tokio::test]
+    async fn call_operation_errors_for_disabled_plugin() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = make_plugin_with_settings_manifest(dir.path());
+        registry.set_disabled("settings-demo", true);
+
+        let ws = WorkspaceInfo {
+            id: "ws-1".into(),
+            name: "test".into(),
+            branch: "main".into(),
+            worktree_path: "/tmp".into(),
+            repo_path: "/tmp".into(),
+        };
+        let result = registry
+            .call_operation("settings-demo", "read_config", serde_json::json!({}), ws)
+            .await;
+        assert!(matches!(result, Err(PluginError::PluginDisabled(_))));
+    }
+
+    #[tokio::test]
+    async fn call_operation_populates_host_config_from_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = make_plugin_with_settings_manifest(dir.path());
+        registry.set_setting(
+            "settings-demo",
+            "name",
+            Some(serde_json::Value::String("bob".into())),
+        );
+
+        let ws = WorkspaceInfo {
+            id: "ws-1".into(),
+            name: "test".into(),
+            branch: "main".into(),
+            worktree_path: "/tmp".into(),
+            repo_path: "/tmp".into(),
+        };
+        let result = registry
+            .call_operation("settings-demo", "read_config", serde_json::json!({}), ws)
+            .await
+            .unwrap();
+        assert_eq!(result["flag"], false);
+        assert_eq!(result["name"], "bob");
+    }
+
+    #[test]
+    fn set_setting_ignores_unknown_plugin_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = PluginRegistry::discover(dir.path());
+
+        registry.set_setting(
+            "does-not-exist",
+            "some_key",
+            Some(serde_json::Value::String("x".into())),
+        );
+
+        // Unknown plugin names must NOT silently accumulate override
+        // entries in the map.
+        let overrides = registry.setting_overrides.read().unwrap();
+        assert!(!overrides.contains_key("does-not-exist"));
     }
 }

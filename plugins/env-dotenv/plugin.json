@@ -1,0 +1,9 @@
+{
+  "name": "env-dotenv",
+  "display_name": "dotenv",
+  "version": "1.0.0",
+  "description": "Parse .env file and apply KEY=VALUE entries to workspace subprocesses",
+  "kind": "env-provider",
+  "required_clis": [],
+  "operations": ["detect", "export"]
+}

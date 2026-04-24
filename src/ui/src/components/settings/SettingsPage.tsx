@@ -9,6 +9,7 @@ import { RepoSettings } from "./sections/RepoSettings";
 import { ExperimentalSettings } from "./sections/ExperimentalSettings";
 import { UsageSettings } from "./sections/UsageSettings";
 import { PluginsSettings } from "./sections/PluginsSettings";
+import { ClaudeCodePluginsSettings } from "./sections/ClaudeCodePluginsSettings";
 import styles from "./Settings.module.css";
 
 function SectionContent({ section }: { section: string | null }) {
@@ -19,8 +20,13 @@ function SectionContent({ section }: { section: string | null }) {
   if (section === "appearance") return <AppearanceSettings />;
   if (section === "notifications") return <NotificationsSettings />;
   if (section === "git") return <GitSettings />;
-  if (section === "plugins") {
-    return pluginManagementEnabled ? <PluginsSettings /> : <ExperimentalSettings />;
+  if (section === "plugins") return <PluginsSettings />;
+  if (section === "claude-code-plugins") {
+    return pluginManagementEnabled ? (
+      <ClaudeCodePluginsSettings />
+    ) : (
+      <ExperimentalSettings />
+    );
   }
   if (section === "experimental") return <ExperimentalSettings />;
   if (section.startsWith("repo:"))

@@ -231,6 +231,8 @@ mod tests {
                 remote_patterns: patterns.iter().map(|s| s.to_string()).collect(),
                 operations: vec![],
                 config_schema: std::collections::HashMap::new(),
+                kind: crate::plugin_runtime::manifest::PluginKind::Scm,
+                settings: vec![],
             },
             dir: std::path::PathBuf::new(),
             config: std::collections::HashMap::new(),

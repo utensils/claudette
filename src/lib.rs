@@ -4,6 +4,7 @@ pub mod config;
 pub mod db;
 pub mod diff;
 pub mod env;
+pub mod env_provider;
 pub mod file_expand;
 pub mod fork;
 pub mod git;

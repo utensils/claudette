@@ -6,11 +6,13 @@ pub mod data;
 #[cfg(debug_assertions)]
 pub mod debug;
 pub mod diff;
+pub mod env;
 pub mod files;
 pub mod mcp;
 pub mod metrics;
 pub mod plan;
 pub mod plugin;
+pub mod plugins_runtime;
 pub mod remote;
 pub mod repository;
 pub mod scm;

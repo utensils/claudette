@@ -159,7 +159,7 @@ describe("plugin settings routing", () => {
 
     const state = useAppStore.getState();
     expect(state.settingsOpen).toBe(true);
-    expect(state.settingsSection).toBe("plugins");
+    expect(state.settingsSection).toBe("claude-code-plugins");
     expect(state.pluginSettingsTab).toBe("installed");
     expect(state.pluginSettingsRepoId).toBe("repo-1");
     expect(state.pluginSettingsIntent).toEqual({
@@ -194,7 +194,7 @@ describe("plugin settings routing", () => {
     });
   });
 
-  it("manual plugins settings entry resets to global available view", () => {
+  it("manual claude-code-plugins settings entry resets to global available view", () => {
     useAppStore.setState({
       pluginSettingsRepoId: "repo-1",
       pluginSettingsIntent: {
@@ -208,10 +208,10 @@ describe("plugin settings routing", () => {
       pluginSettingsTab: "installed",
     });
 
-    useAppStore.getState().setSettingsSection("plugins");
+    useAppStore.getState().setSettingsSection("claude-code-plugins");
 
     const state = useAppStore.getState();
-    expect(state.settingsSection).toBe("plugins");
+    expect(state.settingsSection).toBe("claude-code-plugins");
     expect(state.pluginSettingsRepoId).toBeNull();
     expect(state.pluginSettingsIntent).toBeNull();
     expect(state.pluginSettingsTab).toBe("available");
@@ -222,15 +222,23 @@ describe("plugin settings routing", () => {
     expect(useAppStore.getState().pluginManagementEnabled).toBe(false);
   });
 
-  it("redirects plugin settings section to experimental when disabled", () => {
+  it("redirects claude-code-plugins section to experimental when management disabled", () => {
     useAppStore.setState({ pluginManagementEnabled: false });
 
-    useAppStore.getState().setSettingsSection("plugins");
+    useAppStore.getState().setSettingsSection("claude-code-plugins");
 
     const state = useAppStore.getState();
     expect(state.settingsSection).toBe("experimental");
     expect(state.pluginSettingsIntent).toBeNull();
     expect(state.pluginSettingsRepoId).toBeNull();
+  });
+
+  it("keeps the new plugins (Claudette) section accessible regardless of management flag", () => {
+    useAppStore.setState({ pluginManagementEnabled: false });
+
+    useAppStore.getState().setSettingsSection("plugins");
+
+    expect(useAppStore.getState().settingsSection).toBe("plugins");
   });
 
   it("ignores openPluginSettings when plugin management is disabled", () => {

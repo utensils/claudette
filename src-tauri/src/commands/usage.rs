@@ -30,9 +30,14 @@ async fn open_external_url(url: &str) -> Result<(), String> {
     }
     #[cfg(target_os = "windows")]
     {
+        // `start` treats its first quoted argument as a window title, so an
+        // unquoted target containing spaces or quotes can be misparsed as a
+        // title with no real target. The empty `""` slot neutralises that
+        // quirk — current callers pass controlled URLs, but the defensive
+        // form costs nothing and protects future callers.
         tokio::process::Command::new("cmd")
             .no_console_window()
-            .args(["/C", "start", url])
+            .args(["/C", "start", "", url])
             .spawn()
             .map_err(|e| format!("Failed to open URL: {e}"))?;
     }

@@ -153,6 +153,7 @@ pub async fn create_workspace(
     let setup_result = if skip_setup.unwrap_or(false) {
         None
     } else {
+        let resolved_env = resolve_env_for_workspace(&state, &ws, &repo_path).await;
         resolve_and_run_setup(
             &ws,
             Path::new(&repo_path),
@@ -160,6 +161,7 @@ pub async fn create_workspace(
             settings_setup_script.as_deref(),
             repo_base_branch.as_deref(),
             repo_default_remote.as_deref(),
+            resolved_env.as_ref(),
         )
         .await
     };
@@ -238,6 +240,7 @@ async fn resolve_and_run_setup(
     settings_script: Option<&str>,
     base_branch: Option<&str>,
     default_remote: Option<&str>,
+    resolved_env: Option<&claudette::env_provider::ResolvedEnv>,
 ) -> Option<SetupResult> {
     // 1. Check .claudette.json
     let (script, source) = match config::load_config(repo_path) {
@@ -302,6 +305,13 @@ async fn resolve_and_run_setup(
         .stderr(std::process::Stdio::piped());
     #[cfg(unix)]
     cmd.process_group(0);
+    // Env-provider layer (direnv/mise/dotenv/nix-devshell) first so the
+    // user's setup commands can rely on tools/vars from those sources
+    // (e.g. `bun install` finding `node` from a mise-managed toolchain),
+    // then WorkspaceEnv on top so CLAUDETTE_* markers always win.
+    if let Some(env) = resolved_env {
+        env.apply(&mut cmd);
+    }
     ws_env.apply(&mut cmd);
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -421,6 +431,7 @@ pub async fn run_workspace_setup(
         .find(|r| r.id == ws.repository_id)
         .ok_or("Repository not found")?;
 
+    let resolved_env = resolve_env_for_workspace(&state, ws, &repo.path).await;
     let result = resolve_and_run_setup(
         ws,
         Path::new(&repo.path),
@@ -428,10 +439,47 @@ pub async fn run_workspace_setup(
         repo.setup_script.as_deref(),
         repo.base_branch.as_deref(),
         repo.default_remote.as_deref(),
+        resolved_env.as_ref(),
     )
     .await;
 
     Ok(result)
+}
+
+/// Resolve the env-provider layer for a workspace, producing a
+/// [`claudette::env_provider::ResolvedEnv`] merged from all detected
+/// providers (direnv, mise, dotenv, nix-devshell).
+///
+/// Returns `None` when the workspace has no worktree path yet (which
+/// shouldn't happen by the time we're about to spawn, but keeps the
+/// call sites defensive).
+async fn resolve_env_for_workspace(
+    state: &AppState,
+    ws: &Workspace,
+    repo_path: &str,
+) -> Option<claudette::env_provider::ResolvedEnv> {
+    let worktree = ws.worktree_path.as_deref()?;
+    let ws_info = claudette::plugin_runtime::host_api::WorkspaceInfo {
+        id: ws.id.clone(),
+        name: ws.name.clone(),
+        branch: ws.branch_name.clone(),
+        worktree_path: worktree.to_string(),
+        repo_path: repo_path.to_string(),
+    };
+    let disabled = Database::open(&state.db_path)
+        .map(|db| crate::commands::env::load_disabled_providers(&db, &ws.repository_id))
+        .unwrap_or_default();
+    let registry = state.plugins.read().await;
+    Some(
+        claudette::env_provider::resolve_with_registry(
+            &registry,
+            &state.env_cache,
+            Path::new(worktree),
+            &ws_info,
+            &disabled,
+        )
+        .await,
+    )
 }
 
 #[tauri::command]

@@ -74,7 +74,69 @@ pub async fn spawn_pty(
     cmd.cwd(&working_dir);
     configure_pty_env(&mut cmd);
 
-    // Set workspace context env vars for scripts and tools.
+    // Resolve the env-provider layer for this workspace.
+    // Unlike the agent spawn path, the PTY hosts an interactive shell that
+    // runs the user's profile — so ~/.zprofile / ~/.bashrc / direnv shell
+    // hooks will ALSO layer env on top of whatever we set here. The result
+    // is: our CLAUDETTE_* markers + direnv/mise/dotenv/nix-devshell env is
+    // the "base" the shell inherits; the user's shell profile runs after
+    // and can override/add if they want.
+    let ws_info = claudette::plugin_runtime::host_api::WorkspaceInfo {
+        id: workspace_id.clone(),
+        name: workspace_name.clone(),
+        branch: branch_name.clone(),
+        worktree_path: working_dir.clone(),
+        repo_path: root_path.clone(),
+    };
+    let disabled_env_providers = {
+        // Look up repo_id + per-repo env-provider disables in a single
+        // DB open — this runs on every PTY spawn, so avoid duplicate
+        // opens and workspace-list scans.
+        use claudette::db::Database;
+        Database::open(&state.db_path)
+            .ok()
+            .map(|db| {
+                let repo_id = db
+                    .list_workspaces()
+                    .ok()
+                    .and_then(|ws| {
+                        ws.into_iter()
+                            .find(|w| w.id == workspace_id)
+                            .map(|w| w.repository_id)
+                    })
+                    .unwrap_or_default();
+                if repo_id.is_empty() {
+                    Default::default()
+                } else {
+                    crate::commands::env::load_disabled_providers(&db, &repo_id)
+                }
+            })
+            .unwrap_or_default()
+    };
+    let resolved_env = {
+        let registry = state.plugins.read().await;
+        claudette::env_provider::resolve_with_registry(
+            &registry,
+            &state.env_cache,
+            std::path::Path::new(&working_dir),
+            &ws_info,
+            &disabled_env_providers,
+        )
+        .await
+    };
+    for (k, v) in &resolved_env.vars {
+        match v {
+            Some(val) => cmd.env(k, val),
+            // portable-pty's CommandBuilder inherits the base env, so
+            // None-valued entries must be explicitly removed rather
+            // than just skipped — otherwise the interactive shell
+            // silently picks up the parent-process value.
+            None => cmd.env_remove(k),
+        }
+    }
+
+    // Set workspace context env vars for scripts and tools. Applied AFTER
+    // resolved_env so CLAUDETTE_* markers always win.
     let ws_env = claudette::env::WorkspaceEnv {
         workspace_name,
         workspace_id,
