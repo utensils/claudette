@@ -113,19 +113,52 @@ interface XtermInternals {
 // useLayoutEffect, whereas the shell's response arrives via an async
 // pty-output event — so the ordering is guaranteed.
 //
-// We cap the count by the actual rendered buffer height so a degenerate
-// call (rows = 0, large leftover scrollback) doesn't write forever.
+// Two subtleties that matter for UX:
+//   - Only preserve the rows that actually have content. A pane whose
+//     viewport is mostly blank (e.g., right after a previous split
+//     where the shell has only re-drawn its prompt at the top) would
+//     otherwise have a full viewport's worth of blanks appended to
+//     scrollback on every split — scrollback bloat the user perceives
+//     as "extra spaces with each further split".
+//   - Don't push the cursor's own row (the shell's current prompt
+//     line) into scrollback. The shell will redraw the prompt at the
+//     new viewport's top on SIGWINCH; if we leave the current prompt
+//     row in place at new viewport row 0 the redraw overwrites it
+//     cleanly, rather than leaving the pre-split prompt stranded in
+//     scrollback as a duplicate immediately above the new one.
 function padViewportIntoScrollback(inst: LeafInstance) {
   const rows = inst.term.rows;
   if (rows <= 0) return;
   const buf = inst.term.buffer.active;
-  // Newlines needed to move the current cursor from its current row to
-  // the bottom of the viewport PLUS one full viewport-height of
-  // scrolls. That combination pushes every currently-visible row up
-  // into scrollback regardless of cursor position.
-  const count = 2 * rows - 1 - buf.cursorY;
-  if (count <= 0) return;
-  inst.term.write("\r" + "\n".repeat(count));
+  // Walk the viewport bottom-up to find the last row with any
+  // non-whitespace content. Everything from row 0 through that row is
+  // what we need to preserve; rows below are already blank and the
+  // shell's \e[J will erase them without data loss.
+  let lastContentY = -1;
+  for (let y = rows - 1; y >= 0; y--) {
+    const line = buf.getLine(buf.baseY + y);
+    if (line && line.translateToString(true).length > 0) {
+      lastContentY = y;
+      break;
+    }
+  }
+  if (lastContentY < 0) return;
+  // Scroll by lastContentY — NOT lastContentY + 1. That leaves the
+  // final non-blank row in the viewport for the shell's imminent
+  // redraw to overwrite in place. For common single-line prompts,
+  // that cleanly eliminates what would otherwise be a "duplicate
+  // prompt" in scrollback; for multi-line prompts (e.g. starship's
+  // line + input-line pair) it reduces the duplicate to a single row
+  // rather than burying the full prompt block above the new one.
+  //
+  // Using the content-row count rather than the full viewport height
+  // avoids appending a viewport's worth of blank rows to scrollback
+  // each time we split a pane whose viewport has already been
+  // redrawn small (e.g. after a previous split).
+  const scrolls = lastContentY;
+  if (scrolls <= 0) return;
+  const moves = Math.max(0, rows - 1 - buf.cursorY);
+  inst.term.write("\r" + "\n".repeat(moves + scrolls));
 }
 
 function scheduleReclaimHistory(inst: LeafInstance) {
