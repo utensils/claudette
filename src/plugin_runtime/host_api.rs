@@ -26,9 +26,6 @@ pub struct WorkspaceInfo {
 
 const EXEC_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// CLIs that are always allowed regardless of manifest declarations.
-const ALWAYS_ALLOWED_CLIS: &[&str] = &["git"];
-
 /// Create a sandboxed Lua VM with the host API registered.
 pub fn create_lua_vm(ctx: HostContext) -> LuaResult<Lua> {
     let lua = Lua::new();
@@ -42,13 +39,23 @@ pub fn create_lua_vm(ctx: HostContext) -> LuaResult<Lua> {
     Ok(lua)
 }
 
-/// Remove os and io standard libraries from the Lua VM.
+/// Remove stdlib functions that give a plugin filesystem/network/process
+/// access outside the host-mediated API. The sandbox is defense-in-depth
+/// — a plugin is compiled code the user opted to install, not adversarial
+/// input — but we minimize the reachable surface anyway.
+///
+/// Includes `package`/`require`: mlua's Luau backend disables `require`
+/// by default, but we clear them unconditionally so a future mlua
+/// change (or a different Lua backend) doesn't silently re-enable
+/// file-backed module loading.
 fn sandbox_stdlib(lua: &Lua) -> LuaResult<()> {
     let globals = lua.globals();
     globals.set("os", LuaNil)?;
     globals.set("io", LuaNil)?;
     globals.set("loadfile", LuaNil)?;
     globals.set("dofile", LuaNil)?;
+    globals.set("package", LuaNil)?;
+    globals.set("require", LuaNil)?;
     Ok(())
 }
 
@@ -171,10 +178,13 @@ async fn host_exec(
     args_table: LuaTable,
     ctx: &HostContext,
 ) -> LuaResult<LuaTable> {
-    // Validate command is in the allowlist
-    let is_always_allowed = ALWAYS_ALLOWED_CLIS.contains(&cmd);
+    // Validate command is in this plugin's manifest-declared allowlist.
+    // Previously `git` was always-allowed as a convenience, but that let
+    // plugins execute arbitrary shell via `git -c alias.x='!...'` without
+    // declaring it — the user's install-time trust decision about which
+    // CLIs this plugin may run must be the sole authority.
     let is_declared = ctx.allowed_clis.iter().any(|c| c == cmd);
-    if !is_always_allowed && !is_declared {
+    if !is_declared {
         return Err(LuaError::external(format!(
             "Command '{cmd}' is not in this plugin's allowed CLIs: {:?}",
             ctx.allowed_clis
@@ -392,19 +402,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_exec_git_always_allowed() {
+    async fn test_exec_git_no_longer_always_allowed() {
+        // `git` was previously in an always-allowed list, which let a
+        // plugin exploit `git -c alias.x='!sh ...' x` to run arbitrary
+        // shell without declaring it. With the constant removed, plugins
+        // must declare every CLI they use — the manifest is the sole
+        // allowlist authority.
         let ctx = make_test_ctx();
         let lua = create_lua_vm(ctx).unwrap();
 
-        // git should work even though it's not in allowed_clis
-        let result: LuaTable = lua
+        let result: LuaResult<LuaTable> = lua
             .load(r#"return host.exec("git", {"--version"})"#)
             .eval_async()
-            .await
-            .unwrap();
+            .await;
 
-        let stdout: String = result.get("stdout").unwrap();
-        assert!(stdout.contains("git version"));
+        assert!(
+            result.is_err(),
+            "git must not be allowed without declaration"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("not in this plugin's allowed CLIs"),
+            "unexpected error: {err}"
+        );
     }
 
     #[tokio::test]

@@ -42,9 +42,10 @@ pub async fn resolve_with_registry(
     cache: &EnvCache,
     worktree: &Path,
     ws_info: &WorkspaceInfo,
+    disabled: &std::collections::HashSet<String>,
 ) -> ResolvedEnv {
     let backend = PluginRegistryBackend::new(registry);
-    resolve_for_workspace(&backend, cache, worktree, ws_info).await
+    resolve_for_workspace(&backend, cache, worktree, ws_info, disabled).await
 }
 
 /// The merged env contributed by all detected env-provider plugins.
@@ -142,20 +143,47 @@ pub fn precedence_of(name: &str) -> i32 {
 /// Iterates in ascending precedence order; later (higher) providers
 /// overwrite earlier (lower) ones on key collision. `None` values unset
 /// the key from the merged map.
+///
+/// When a plugin name appears in `disabled`, it's skipped entirely —
+/// `detect` is not called, the cache is not consulted, and the source
+/// entry records `detected=false` with an `"disabled"` error string so
+/// the UI can distinguish user-disabled from not-applicable.
 pub async fn resolve_for_workspace(
     backend: &impl EnvProviderBackend,
     cache: &EnvCache,
     worktree: &Path,
     ws_info: &WorkspaceInfo,
+    disabled: &std::collections::HashSet<String>,
 ) -> ResolvedEnv {
     let mut names = backend.env_provider_names();
-    // Sort ascending: lowest precedence first, so higher overwrites on merge.
-    names.sort_by_key(|n| precedence_of(n));
+    // Sort: primary by precedence (ascending, so higher overwrites on
+    // merge); secondary by name so unknown providers with tied
+    // precedence collide deterministically instead of by HashMap
+    // iteration order.
+    names.sort_by(|a, b| {
+        precedence_of(a)
+            .cmp(&precedence_of(b))
+            .then_with(|| a.cmp(b))
+    });
 
     let mut merged = EnvMap::new();
     let mut sources = Vec::with_capacity(names.len());
 
     for name in names {
+        if disabled.contains(&name) {
+            // User explicitly turned this provider off — drop any cached
+            // result so re-enabling it forces a fresh evaluation.
+            cache.invalidate(worktree, Some(&name));
+            sources.push(ResolvedSource {
+                plugin_name: name,
+                detected: false,
+                vars_contributed: 0,
+                cached: false,
+                evaluated_at: SystemTime::now(),
+                error: Some("disabled".to_string()),
+            });
+            continue;
+        }
         let source = resolve_one(backend, cache, &name, worktree, ws_info, &mut merged).await;
         sources.push(source);
     }
@@ -283,8 +311,14 @@ mod tests {
     async fn resolve_empty_no_plugins() {
         let backend = MockBackend::new();
         let cache = EnvCache::new();
-        let resolved =
-            resolve_for_workspace(&backend, &cache, std::path::Path::new("/tmp"), &ws_info()).await;
+        let resolved = resolve_for_workspace(
+            &backend,
+            &cache,
+            std::path::Path::new("/tmp"),
+            &ws_info(),
+            &Default::default(),
+        )
+        .await;
         assert!(resolved.vars.is_empty());
         assert!(resolved.sources.is_empty());
     }
@@ -302,7 +336,14 @@ mod tests {
                 export_of(&[("FOO", Some("bar"))], vec![tmp.path().join(".envrc")]),
             );
         let cache = EnvCache::new();
-        let resolved = resolve_for_workspace(&backend, &cache, tmp.path(), &ws_info()).await;
+        let resolved = resolve_for_workspace(
+            &backend,
+            &cache,
+            tmp.path(),
+            &ws_info(),
+            &Default::default(),
+        )
+        .await;
 
         assert_eq!(resolved.vars.get("FOO").unwrap().as_deref(), Some("bar"));
         assert_eq!(resolved.sources.len(), 1);
@@ -318,8 +359,14 @@ mod tests {
             .with_plugin("env-direnv")
             .detects("env-direnv", false);
         let cache = EnvCache::new();
-        let resolved =
-            resolve_for_workspace(&backend, &cache, std::path::Path::new("/tmp"), &ws_info()).await;
+        let resolved = resolve_for_workspace(
+            &backend,
+            &cache,
+            std::path::Path::new("/tmp"),
+            &ws_info(),
+            &Default::default(),
+        )
+        .await;
 
         assert!(resolved.vars.is_empty());
         let (detects, exports) = backend.call_counts("env-direnv");
@@ -353,7 +400,14 @@ mod tests {
                 ),
             );
         let cache = EnvCache::new();
-        let resolved = resolve_for_workspace(&backend, &cache, tmp.path(), &ws_info()).await;
+        let resolved = resolve_for_workspace(
+            &backend,
+            &cache,
+            tmp.path(),
+            &ws_info(),
+            &Default::default(),
+        )
+        .await;
 
         assert_eq!(
             resolved.vars.get("KEY").unwrap().as_deref(),
@@ -386,7 +440,14 @@ mod tests {
                 export_of(&[("UNWANTED", None)], vec![tmp.path().join(".envrc")]),
             );
         let cache = EnvCache::new();
-        let resolved = resolve_for_workspace(&backend, &cache, tmp.path(), &ws_info()).await;
+        let resolved = resolve_for_workspace(
+            &backend,
+            &cache,
+            tmp.path(),
+            &ws_info(),
+            &Default::default(),
+        )
+        .await;
 
         // The merged map DOES contain the key, but its value is None —
         // which tells apply() to env_remove it from the spawned process.
@@ -409,9 +470,23 @@ mod tests {
         let cache = EnvCache::new();
 
         // First resolve: cold cache.
-        let _ = resolve_for_workspace(&backend, &cache, tmp.path(), &ws_info()).await;
+        let _ = resolve_for_workspace(
+            &backend,
+            &cache,
+            tmp.path(),
+            &ws_info(),
+            &Default::default(),
+        )
+        .await;
         // Second resolve: should be a cache hit.
-        let resolved = resolve_for_workspace(&backend, &cache, tmp.path(), &ws_info()).await;
+        let resolved = resolve_for_workspace(
+            &backend,
+            &cache,
+            tmp.path(),
+            &ws_info(),
+            &Default::default(),
+        )
+        .await;
 
         assert!(
             resolved.sources[0].cached,
@@ -436,13 +511,27 @@ mod tests {
                 export_of(&[("FOO", Some("bar"))], vec![envrc.clone()]),
             );
         let cache = EnvCache::new();
-        let _ = resolve_for_workspace(&backend, &cache, tmp.path(), &ws_info()).await;
+        let _ = resolve_for_workspace(
+            &backend,
+            &cache,
+            tmp.path(),
+            &ws_info(),
+            &Default::default(),
+        )
+        .await;
 
         // Touch the watched file — forces a distinguishable mtime.
         std::thread::sleep(std::time::Duration::from_millis(1100));
         std::fs::write(&envrc, "y").unwrap();
 
-        let _ = resolve_for_workspace(&backend, &cache, tmp.path(), &ws_info()).await;
+        let _ = resolve_for_workspace(
+            &backend,
+            &cache,
+            tmp.path(),
+            &ws_info(),
+            &Default::default(),
+        )
+        .await;
 
         let (_, exports) = backend.call_counts("env-direnv");
         assert_eq!(exports, 2, "mtime change must re-export");
@@ -457,8 +546,14 @@ mod tests {
         b.detect_results
             .insert("env-direnv".into(), Err("direnv not allowed".into()));
         let cache = EnvCache::new();
-        let resolved =
-            resolve_for_workspace(&b, &cache, std::path::Path::new("/tmp"), &ws_info()).await;
+        let resolved = resolve_for_workspace(
+            &b,
+            &cache,
+            std::path::Path::new("/tmp"),
+            &ws_info(),
+            &Default::default(),
+        )
+        .await;
         assert_eq!(resolved.sources.len(), 1);
         assert!(resolved.sources[0].error.is_some());
         assert!(resolved.vars.is_empty());
@@ -471,8 +566,14 @@ mod tests {
             .detects("env-direnv", true)
             .export_fails("env-direnv", "something broke");
         let cache = EnvCache::new();
-        let resolved =
-            resolve_for_workspace(&backend, &cache, std::path::Path::new("/tmp"), &ws_info()).await;
+        let resolved = resolve_for_workspace(
+            &backend,
+            &cache,
+            std::path::Path::new("/tmp"),
+            &ws_info(),
+            &Default::default(),
+        )
+        .await;
 
         assert!(resolved.sources[0].detected);
         assert!(resolved.sources[0].error.is_some());
@@ -518,6 +619,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn disabled_provider_is_skipped_and_cache_invalidated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let envrc = tmp.path().join(".envrc");
+        std::fs::write(&envrc, "x").unwrap();
+
+        // Seed a cache entry as if direnv previously detected + exported.
+        let cache = EnvCache::new();
+        cache.put(
+            tmp.path(),
+            "env-direnv",
+            &export_of(&[("FOO", Some("bar"))], vec![envrc.clone()]),
+        );
+        assert!(cache.get_fresh(tmp.path(), "env-direnv").is_some());
+
+        // Now the user disables it. Expect:
+        // - detect is NOT called
+        // - export is NOT called
+        // - cache entry is dropped so re-enabling re-runs the plugin
+        // - source records a "disabled" reason
+        let backend = MockBackend::new().with_plugin("env-direnv");
+        let mut disabled = std::collections::HashSet::new();
+        disabled.insert("env-direnv".to_string());
+        let resolved =
+            resolve_for_workspace(&backend, &cache, tmp.path(), &ws_info(), &disabled).await;
+
+        let (detects, exports) = backend.call_counts("env-direnv");
+        assert_eq!(detects, 0, "disabled provider must not be detected");
+        assert_eq!(exports, 0, "disabled provider must not be exported");
+        assert!(resolved.vars.is_empty());
+        assert_eq!(resolved.sources.len(), 1);
+        assert_eq!(resolved.sources[0].error.as_deref(), Some("disabled"));
+        assert!(
+            cache.get_fresh(tmp.path(), "env-direnv").is_none(),
+            "disabling must evict cached env so re-enable re-runs fresh"
+        );
+    }
+
+    #[tokio::test]
+    async fn precedence_tie_break_is_deterministic_by_name() {
+        // Two unknown providers share precedence 10. Without a secondary
+        // sort key the merge order would follow HashMap iteration, so
+        // which "FOO" wins depends on hash state. With the name tiebreak,
+        // "aaa" sorts before "bbb" in ascending order — so "bbb" merges
+        // last and wins on key collision.
+        let backend = MockBackend::new()
+            .with_plugin("aaa")
+            .with_plugin("bbb")
+            .detects("aaa", true)
+            .detects("bbb", true)
+            .exports("aaa", export_of(&[("FOO", Some("from-aaa"))], vec![]))
+            .exports("bbb", export_of(&[("FOO", Some("from-bbb"))], vec![]));
+        let cache = EnvCache::new();
+        let resolved = resolve_for_workspace(
+            &backend,
+            &cache,
+            std::path::Path::new("/tmp"),
+            &ws_info(),
+            &Default::default(),
+        )
+        .await;
+
+        assert_eq!(
+            resolved.vars.get("FOO").and_then(|v| v.as_deref()),
+            Some("from-bbb"),
+            "tied-precedence plugins must resolve by ascending name — bbb sorts later, wins merge"
+        );
+    }
+
+    #[tokio::test]
     async fn detect_false_invalidates_stale_cache() {
         let tmp = tempfile::tempdir().unwrap();
         let envrc = tmp.path().join(".envrc");
@@ -537,7 +707,14 @@ mod tests {
         let backend = MockBackend::new()
             .with_plugin("env-direnv")
             .detects("env-direnv", false);
-        let _ = resolve_for_workspace(&backend, &cache, tmp.path(), &ws_info()).await;
+        let _ = resolve_for_workspace(
+            &backend,
+            &cache,
+            tmp.path(),
+            &ws_info(),
+            &Default::default(),
+        )
+        .await;
 
         assert!(
             cache.get_fresh(tmp.path(), "env-direnv").is_none(),

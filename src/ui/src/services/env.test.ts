@@ -10,6 +10,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 import {
   getWorkspaceEnvSources,
   reloadWorkspaceEnv,
+  setEnvProviderEnabled,
 } from "./env";
 
 describe("env service", () => {
@@ -59,6 +60,28 @@ describe("env service", () => {
       expect(invokeMock).toHaveBeenCalledWith("reload_workspace_env", {
         workspaceId: "ws-2",
         pluginName: "env-direnv",
+      });
+    });
+  });
+
+  describe("setEnvProviderEnabled", () => {
+    it("forwards enabled=true when re-enabling a provider", async () => {
+      invokeMock.mockResolvedValueOnce(undefined);
+      await setEnvProviderEnabled("ws-1", "env-mise", true);
+      expect(invokeMock).toHaveBeenCalledWith("set_env_provider_enabled", {
+        workspaceId: "ws-1",
+        pluginName: "env-mise",
+        enabled: true,
+      });
+    });
+
+    it("forwards enabled=false when disabling a provider", async () => {
+      invokeMock.mockResolvedValueOnce(undefined);
+      await setEnvProviderEnabled("ws-1", "env-mise", false);
+      expect(invokeMock).toHaveBeenCalledWith("set_env_provider_enabled", {
+        workspaceId: "ws-1",
+        pluginName: "env-mise",
+        enabled: false,
       });
     });
   });

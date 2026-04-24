@@ -590,6 +590,11 @@ pub async fn send_chat_message(
         worktree_path: worktree_path.clone(),
         repo_path: repo_path.to_string(),
     };
+    let disabled_env_providers = {
+        let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+        let repo_id = repo.as_ref().map(|r| r.id.as_str()).unwrap_or("");
+        crate::commands::env::load_disabled_providers(&db, repo_id)
+    };
     let resolved_env = {
         let registry = state.plugins.read().await;
         claudette::env_provider::resolve_with_registry(
@@ -597,6 +602,7 @@ pub async fn send_chat_message(
             &state.env_cache,
             std::path::Path::new(&worktree_path),
             &ws_info_for_env,
+            &disabled_env_providers,
         )
         .await
     };

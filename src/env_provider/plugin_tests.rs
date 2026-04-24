@@ -307,8 +307,14 @@ async fn integration_direnv_export_returns_env() {
         repo_path: tmp.path().to_string_lossy().into_owned(),
     };
 
-    let resolved =
-        crate::env_provider::resolve_for_workspace(&backend, &cache, tmp.path(), &ws_info).await;
+    let resolved = crate::env_provider::resolve_for_workspace(
+        &backend,
+        &cache,
+        tmp.path(),
+        &ws_info,
+        &Default::default(),
+    )
+    .await;
     let direnv_source = resolved
         .sources
         .iter()
@@ -361,8 +367,14 @@ async fn integration_mise_export_returns_env() {
         repo_path: tmp.path().to_string_lossy().into_owned(),
     };
 
-    let resolved =
-        crate::env_provider::resolve_for_workspace(&backend, &cache, tmp.path(), &ws_info).await;
+    let resolved = crate::env_provider::resolve_for_workspace(
+        &backend,
+        &cache,
+        tmp.path(),
+        &ws_info,
+        &Default::default(),
+    )
+    .await;
     let mise_source = resolved
         .sources
         .iter()

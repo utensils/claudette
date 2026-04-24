@@ -396,6 +396,41 @@ impl Database {
         Ok(())
     }
 
+    /// Delete a single app setting. Returns Ok(()) whether the key
+    /// existed or not — callers using "absent means default" semantics
+    /// (e.g. env-provider enable/disable) don't care.
+    pub fn delete_app_setting(&self, key: &str) -> Result<(), rusqlite::Error> {
+        self.conn
+            .execute("DELETE FROM app_settings WHERE key = ?1", params![key])?;
+        Ok(())
+    }
+
+    /// Return every `(key, value)` whose key starts with `prefix`.
+    /// Used by features that namespace many related settings under one
+    /// prefix (e.g. per-provider env-provider enable flags) and need to
+    /// enumerate them efficiently.
+    pub fn list_app_settings_with_prefix(
+        &self,
+        prefix: &str,
+    ) -> Result<Vec<(String, String)>, rusqlite::Error> {
+        // Escape LIKE metacharacters so a prefix containing % or _ doesn't
+        // accidentally match unrelated keys. ESCAPE '\' designates the
+        // backslash as the literal-escape marker.
+        let escaped: String = prefix
+            .chars()
+            .flat_map(|c| match c {
+                '%' | '_' | '\\' => vec!['\\', c],
+                _ => vec![c],
+            })
+            .collect();
+        let pattern = format!("{escaped}%");
+        let mut stmt = self.conn.prepare(
+            "SELECT key, value FROM app_settings WHERE key LIKE ?1 ESCAPE '\\' ORDER BY key",
+        )?;
+        let rows = stmt.query_map(params![pattern], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
+    }
+
     // --- Workspaces ---
 
     pub fn insert_workspace(&self, ws: &Workspace) -> Result<(), rusqlite::Error> {

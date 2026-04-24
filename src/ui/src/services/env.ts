@@ -27,3 +27,21 @@ export function reloadWorkspaceEnv(
 ): Promise<void> {
   return invoke("reload_workspace_env", { workspaceId, pluginName });
 }
+
+/**
+ * Enable or disable a specific env-provider plugin for the workspace's
+ * repo. Disabling persists across app restarts. The backend invalidates
+ * the plugin's cache entry so the state change takes effect on the
+ * next spawn — no need for an explicit reload.
+ */
+export function setEnvProviderEnabled(
+  workspaceId: string,
+  pluginName: string,
+  enabled: boolean,
+): Promise<void> {
+  return invoke("set_env_provider_enabled", {
+    workspaceId,
+    pluginName,
+    enabled,
+  });
+}

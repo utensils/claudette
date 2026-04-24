@@ -88,6 +88,28 @@ pub async fn spawn_pty(
         worktree_path: working_dir.clone(),
         repo_path: root_path.clone(),
     };
+    let disabled_env_providers = {
+        // Look up the repo_id from the DB so we can honor per-repo
+        // user disables of env providers.
+        use claudette::db::Database;
+        let repo_id = Database::open(&state.db_path)
+            .ok()
+            .and_then(|db| {
+                db.list_workspaces()
+                    .ok()?
+                    .into_iter()
+                    .find(|w| w.id == workspace_id)
+                    .map(|w| w.repository_id)
+            })
+            .unwrap_or_default();
+        if repo_id.is_empty() {
+            Default::default()
+        } else {
+            claudette::db::Database::open(&state.db_path)
+                .map(|db| crate::commands::env::load_disabled_providers(&db, &repo_id))
+                .unwrap_or_default()
+        }
+    };
     let resolved_env = {
         let registry = state.plugins.read().await;
         claudette::env_provider::resolve_with_registry(
@@ -95,16 +117,18 @@ pub async fn spawn_pty(
             &state.env_cache,
             std::path::Path::new(&working_dir),
             &ws_info,
+            &disabled_env_providers,
         )
         .await
     };
     for (k, v) in &resolved_env.vars {
         match v {
             Some(val) => cmd.env(k, val),
-            // portable-pty's CommandBuilder has no env_remove — but since
-            // the PTY inherits only what we explicitly set, simply omitting
-            // a key is the "unset" semantic here. Skip None-valued entries.
-            None => continue,
+            // portable-pty's CommandBuilder inherits the base env, so
+            // None-valued entries must be explicitly removed rather
+            // than just skipped — otherwise the interactive shell
+            // silently picks up the parent-process value.
+            None => cmd.env_remove(k),
         }
     }
 

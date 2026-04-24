@@ -480,6 +480,7 @@ fn main() {
             // Env-provider diagnostic UI
             commands::env::get_workspace_env_sources,
             commands::env::reload_workspace_env,
+            commands::env::set_env_provider_enabled,
             // Local server
             commands::remote::start_local_server,
             commands::remote::stop_local_server,
