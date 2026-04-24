@@ -1,5 +1,5 @@
 import { memo, useMemo, useEffect, useState } from "react";
-import { GitBranch, Layers, Globe, BadgeCheck, BadgeInfo, BadgeQuestionMark, ChevronDown, ChevronRight } from "lucide-react";
+import { GitBranch, Layers, Globe, CircleCheck, CircleAlert, CircleQuestionMark, ChevronDown, ChevronRight } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import type { AgentStatus } from "../../types/workspace";
 import { isAgentBusy } from "../../utils/agentStatus";
@@ -125,15 +125,15 @@ const WorkspaceCard = memo(function WorkspaceCard({
           )}
           {badge === "done" ? (
             <span className={styles.badgeDone} title="Completed" aria-label="Completed" role="img">
-              <BadgeCheck size={12} />
+              <CircleCheck size={12} />
             </span>
           ) : badge === "plan" ? (
             <span className={styles.badgePlan} title="Plan approval needed" aria-label="Plan approval needed" role="img">
-              <BadgeInfo size={12} />
+              <CircleAlert size={12} />
             </span>
           ) : badge === "ask" ? (
             <span className={styles.badgeAsk} title="Question requires attention" aria-label="Question requires attention" role="img">
-              <BadgeQuestionMark size={12} />
+              <CircleQuestionMark size={12} />
             </span>
           ) : isRunning ? (
             <span className={styles.statusSpinner} title={statusTitle} aria-label={statusTitle} role="img">

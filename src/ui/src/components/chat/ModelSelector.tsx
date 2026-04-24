@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { BadgeDollarSign, ChevronRight } from "lucide-react";
+import { CircleDollarSign, ChevronRight } from "lucide-react";
 import styles from "./ModelSelector.module.css";
 import { MODELS, type Model } from "./modelRegistry";
 
@@ -112,7 +112,7 @@ function ModelRow({
           className={styles.extraUsage}
           title="Extra usage: 1M context requests are billed at API rates beyond your subscription plan allocation"
         >
-          <BadgeDollarSign size={14} />
+          <CircleDollarSign size={14} />
         </span>
       )}
       {selected && <span className={styles.check}>✓</span>}

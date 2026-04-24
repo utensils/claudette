@@ -16,10 +16,9 @@ import {
   pairWithServer,
   startLocalServer,
 } from "../../services/tauri";
-import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, BadgeCheck, BadgeInfo, BadgeQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, GitPullRequestArrow, GitPullRequestDraft, GitMerge, GitPullRequestClosed } from "lucide-react";
+import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, LoaderCircle, GitPullRequestArrow, GitPullRequestDraft, GitMerge, GitPullRequestClosed } from "lucide-react";
 import { RepoIcon } from "../shared/RepoIcon";
 import { UpdateBanner } from "../layout/UpdateBanner";
-import { useSpinnerFrame } from "../../hooks/useSpinnerFrame";
 import { getScmSortPriority } from "../../utils/scmSortPriority";
 import styles from "./Sidebar.module.css";
 
@@ -87,16 +86,6 @@ export const Sidebar = memo(function Sidebar() {
   const didDragRef = useRef(false);
   const DRAG_THRESHOLD = 5; // px before drag activates
   const workspaceTerminalCommands = useAppStore((s) => s.workspaceTerminalCommands);
-
-  const anyRunning = useMemo(
-    () =>
-      workspaces.some(
-        (ws) =>
-          ws.agent_status === "Running" || ws.agent_status === "Compacting",
-      ),
-    [workspaces],
-  );
-  const spinnerChar = useSpinnerFrame(anyRunning);
 
   const [renamingWsId, setRenamingWsId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -294,15 +283,15 @@ export const Sidebar = memo(function Sidebar() {
       >
         {badge === "done" ? (
           <span className={styles.badgeDone} title="Completed" aria-label="Completed" role="img">
-            <BadgeCheck size={14} />
+            <CircleCheck size={14} />
           </span>
         ) : badge === "plan" ? (
           <span className={styles.badgePlan} title="Plan approval needed" aria-label="Plan approval needed" role="img">
-            <BadgeInfo size={14} />
+            <CircleAlert size={14} />
           </span>
         ) : badge === "ask" ? (
           <span className={styles.badgeAsk} title="Question requires attention" aria-label="Question requires attention" role="img">
-            <BadgeQuestionMark size={14} />
+            <CircleQuestionMark size={14} />
           </span>
         ) : ws.agent_status === "Running" || ws.agent_status === "Compacting" ? (
           <span
@@ -310,7 +299,7 @@ export const Sidebar = memo(function Sidebar() {
             aria-hidden="true"
             title={ws.agent_status === "Compacting" ? "Compacting context…" : "Running"}
           >
-            {spinnerChar}
+            <LoaderCircle size={14} />
           </span>
         ) : (() => {
           if (ws.status === "Archived") {
@@ -810,7 +799,7 @@ export const Sidebar = memo(function Sidebar() {
               {!collapsed && creatingWorkspace && creatingWorkspace.repoId === repo.id && (
                 <div className={`${styles.wsItem} ${styles.wsItemLoading}`}>
                   <span className={styles.statusSpinner} aria-hidden="true">
-                    {spinnerChar}
+                    <LoaderCircle size={14} />
                   </span>
                   <div className={styles.wsInfo}>
                     <span className={`${styles.wsName} ${styles.wsNamePlaceholder}`}>
@@ -1019,9 +1008,6 @@ function RemoteConnectionGroup({
     (w) => w.remote_connection_id === conn.id
   );
 
-  const anyRunning = remoteWorkspaces.some((ws) => ws.agent_status === "Running");
-  const spinnerChar = useSpinnerFrame(anyRunning);
-
   const handleCreateWorkspace = async (repoId: string) => {
     if (creatingRef.current.has(repoId)) return;
     creatingRef.current.add(repoId);
@@ -1151,7 +1137,7 @@ function RemoteConnectionGroup({
                   >
                     {ws.agent_status === "Running" ? (
                       <span className={styles.statusSpinner} aria-hidden="true">
-                        {spinnerChar}
+                        <LoaderCircle size={14} />
                       </span>
                     ) : (
                       <span

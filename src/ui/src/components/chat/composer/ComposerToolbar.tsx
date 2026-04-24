@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { BadgeDollarSign, Sparkles, BookOpen } from "lucide-react";
+import { CircleDollarSign, Sparkles, BookOpen } from "lucide-react";
 import { useAppStore } from "../../../stores/useAppStore";
 import { getAppSetting, setAppSetting } from "../../../services/tauri";
 import { ModelSelector, MODELS } from "../ModelSelector";
@@ -125,7 +125,7 @@ export function ComposerToolbar({ workspaceId, disabled }: ComposerToolbarProps)
           disabled={disabled}
           title={isExtraUsage ? "Change model (extra usage: 1M context billed at API rates)" : "Change model"}
         >
-          {isExtraUsage && <BadgeDollarSign size={14} className={styles.extraUsage} />}
+          {isExtraUsage && <CircleDollarSign size={14} className={styles.extraUsage} />}
         </ToolbarPill>
         {modelSelectorOpen && (
           <ModelSelector
