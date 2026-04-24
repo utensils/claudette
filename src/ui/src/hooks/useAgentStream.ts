@@ -94,10 +94,6 @@ export function useAgentStream() {
         // fires before the user has a chance to answer. The question is
         // cleared when the user responds (onRespond) or sends a new message.
 
-        // Badge-check notification is handled by a store subscription
-        // in AppLayout (watching Running→Idle/Stopped transitions) rather
-        // than here, because this closure can go stale under HMR.
-
         // Notification sound + command are handled on the Rust side
         // (in ProcessExited handler) so they work even when the webview
         // is suspended (window hidden / close-to-tray).
