@@ -224,7 +224,7 @@ private func transcribeWithSFSpeech(url: URL) -> ClaudettePlatformSpeechTranscri
         }
 
         if let error, !completed {
-            failure = error.localizedDescription
+            failure = friendlySFSpeechErrorMessage(error)
             completed = true
             semaphore.signal()
         }
@@ -236,7 +236,7 @@ private func transcribeWithSFSpeech(url: URL) -> ClaudettePlatformSpeechTranscri
         return transcriptionError(
             statusEngineUnavailable,
             engineSFSpeech,
-            "Apple Speech transcription timed out."
+            "Transcription timed out. Try a shorter recording."
         )
     }
 
@@ -247,13 +247,26 @@ private func transcribeWithSFSpeech(url: URL) -> ClaudettePlatformSpeechTranscri
     lock.unlock()
 
     if let finalFailure {
-        return transcriptionError(
-            statusEngineUnavailable,
-            engineSFSpeech,
-            "Apple Speech transcription failed: \(finalFailure)"
-        )
+        return transcriptionError(statusEngineUnavailable, engineSFSpeech, finalFailure)
     }
     return transcriptionSuccess(engineSFSpeech, finalTranscript)
+}
+
+private func friendlySFSpeechErrorMessage(_ error: Error) -> String {
+    let nsError = error as NSError
+    // kAFAssistantErrorDomain code 1110 ("No speech detected") is common when
+    // the user holds the mic too far away or stops recording before speaking.
+    if nsError.domain == "kAFAssistantErrorDomain" {
+        switch nsError.code {
+        case 1110:
+            return "No speech detected. Try again closer to the microphone."
+        case 1101, 1107:
+            return "Speech recognition was interrupted. Try again."
+        default:
+            break
+        }
+    }
+    return error.localizedDescription
 }
 
 private func writeStatus(

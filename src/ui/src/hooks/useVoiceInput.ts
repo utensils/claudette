@@ -118,6 +118,18 @@ export function useVoiceInput(
     return () => window.clearInterval(interval);
   }, [state]);
 
+  // Auto-dismiss transient transcription errors so the toolbar doesn't keep
+  // displaying a stale message after the user has moved on. Setup-required
+  // states stay visible because they require user action.
+  useEffect(() => {
+    if (state !== "error") return;
+    const timeout = window.setTimeout(() => {
+      setState("idle");
+      setError(null);
+    }, 6000);
+    return () => window.clearTimeout(timeout);
+  }, [state, error]);
+
   const cancel = useCallback(() => {
     cancelledRef.current = true;
     nativeRequestIdRef.current += 1;

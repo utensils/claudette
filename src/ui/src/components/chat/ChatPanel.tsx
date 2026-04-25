@@ -2,7 +2,7 @@ import React, { createContext, memo, useContext, useEffect, useRef, useState, us
 import { isAgentBusy } from "../../utils/agentStatus";
 import Markdown from "react-markdown";
 import { preprocessContent, MARKDOWN_COMPONENTS, REHYPE_PLUGINS, REMARK_PLUGINS } from "../../utils/markdown";
-import { FileText, GitBranch, LoaderCircle, Mic, Plus, RotateCcw, Send, Split, Square, X } from "lucide-react";
+import { AlertCircle, FileText, GitBranch, LoaderCircle, Mic, Plus, RotateCcw, Send, Split, Square, X } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import type { ToolActivity, CompletedTurn } from "../../stores/useAppStore";
 import {
@@ -2998,16 +2998,20 @@ function ChatInputArea({
                 onClick={() => openSettings("plugins")}
                 title={voice.error}
               >
-                {voice.error}
+                <AlertCircle size={12} className={styles.voiceErrorIcon} aria-hidden="true" />
+                <span className={styles.voiceErrorText}>{voice.error}</span>
               </button>
             ) : (
-              <div
+              <button
+                type="button"
                 className={styles.voiceErrorBtn}
                 role="status"
-                title={voice.error}
+                onClick={() => voice.cancel()}
+                title={`${voice.error}\n\nClick to dismiss`}
               >
-                {voice.error}
-              </div>
+                <AlertCircle size={12} className={styles.voiceErrorIcon} aria-hidden="true" />
+                <span className={styles.voiceErrorText}>{voice.error}</span>
+              </button>
             )
           )}
           <button

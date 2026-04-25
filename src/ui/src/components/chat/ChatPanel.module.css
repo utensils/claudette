@@ -1141,13 +1141,31 @@
 .voiceErrorBtn {
   cursor: pointer;
   color: var(--status-stopped);
-  max-width: min(360px, 45vw);
-  overflow: hidden;
-  text-overflow: ellipsis;
+  background: var(--status-stopped-bg, rgba(220, 38, 38, 0.08));
+  border-color: var(--status-stopped);
+  max-width: min(280px, 32vw);
+  font-size: var(--fs-xs);
+  animation: voice-error-fade-in 180ms ease-out;
 }
 
-.voiceErrorBtn[role="status"] {
-  cursor: default;
+.voiceErrorBtn:hover {
+  background: var(--status-stopped-bg-hover, rgba(220, 38, 38, 0.14));
+}
+
+.voiceErrorIcon {
+  flex-shrink: 0;
+}
+
+.voiceErrorText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+@keyframes voice-error-fade-in {
+  from { opacity: 0; transform: translateY(-2px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 .voiceWaveform {
