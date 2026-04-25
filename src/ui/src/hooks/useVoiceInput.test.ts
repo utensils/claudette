@@ -170,6 +170,7 @@ describe("useVoiceInput", () => {
     await controller.start();
 
     expect(onNeedsSetup).toHaveBeenCalledOnce();
+    expect(onNeedsSetup).toHaveBeenCalledWith("voice-distil-whisper-candle");
     expect(voiceService.startVoiceRecording).not.toHaveBeenCalled();
   });
 
@@ -225,6 +226,7 @@ describe("useVoiceInput", () => {
     await controller.start();
 
     expect(onNeedsSetup).toHaveBeenCalledOnce();
+    expect(onNeedsSetup).toHaveBeenCalledWith("voice-platform-system");
     expect(voiceService.startVoiceRecording).not.toHaveBeenCalled();
   });
 

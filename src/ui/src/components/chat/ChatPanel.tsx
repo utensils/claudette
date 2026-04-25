@@ -2289,9 +2289,13 @@ function ChatInputArea({
     });
   }, [cursorPos]);
 
+  const focusVoiceProvider = useAppStore((s) => s.focusVoiceProvider);
   const voice = useVoiceInput(
     insertTranscript,
-    () => openSettings("plugins"),
+    (providerId) => {
+      focusVoiceProvider(providerId);
+      openSettings("plugins");
+    },
   );
   const voiceErrorOpensSettings = shouldOpenVoiceSettingsForError(
     voice.activeProvider,

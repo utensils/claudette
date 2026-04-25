@@ -86,7 +86,7 @@ export interface VoiceInputController {
 
 export function useVoiceInput(
   onTranscript: (transcript: string) => void,
-  onNeedsSetup: () => void,
+  onNeedsSetup: (providerId: string) => void,
 ): VoiceInputController {
   const [state, setState] = useState<VoiceState>("idle");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -193,7 +193,7 @@ export function useVoiceInput(
       if (provider.setupRequired || provider.status !== "ready") {
         setError(providerMessage);
         setState("setup-required");
-        onNeedsSetup();
+        onNeedsSetup(provider.id);
         return;
       }
 

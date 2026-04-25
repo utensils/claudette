@@ -3,6 +3,10 @@ use std::path::Path;
 
 use crate::voice::CapturedAudio;
 
+// The non-Ready/non-Unavailable variants are only constructed on macOS via
+// availability_from_native(). Keeping the full enum cross-platform avoids
+// cfg-gating every match arm in voice.rs.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PlatformSpeechAvailabilityStatus {
     Ready,
@@ -51,6 +55,10 @@ impl PlatformSpeechAvailability {
 
 pub(crate) trait PlatformSpeechEngine: Send + Sync {
     fn availability(&self) -> PlatformSpeechAvailability;
+    // Only the macOS implementation actually triggers TCC permission prompts;
+    // the cross-platform fallback is a no-op. Allowed-as-dead on Windows/Linux
+    // where no caller is reachable.
+    #[allow(dead_code)]
     fn prepare(&self) -> PlatformSpeechAvailability;
     fn transcribe(&self, audio: CapturedAudio) -> Result<String, String>;
 }

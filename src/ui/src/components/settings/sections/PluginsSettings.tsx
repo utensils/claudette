@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { useAppStore } from "../../../stores/useAppStore";
 import {
   listBuiltinClaudettePlugins,
   listClaudettePlugins,
@@ -144,6 +145,22 @@ export function PluginsSettings() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Auto-expand the targeted voice provider when the user is redirected
+  // here from the chat mic button to grant permissions / install a model.
+  // Consumes the focus signal so it only fires on the redirect, not on
+  // every subsequent re-render.
+  const voiceProviderFocus = useAppStore((s) => s.voiceProviderFocus);
+  const focusVoiceProvider = useAppStore((s) => s.focusVoiceProvider);
+  useEffect(() => {
+    if (!voiceProviderFocus) return;
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.add(`voice:${voiceProviderFocus}`);
+      return next;
+    });
+    focusVoiceProvider(null);
+  }, [voiceProviderFocus, focusVoiceProvider]);
 
   useEffect(() => {
     let mounted = true;

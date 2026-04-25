@@ -420,6 +420,13 @@ interface AppState {
   setPluginSettingsRepoId: (repoId: string | null) => void;
   clearPluginSettingsIntent: () => void;
   bumpPluginRefreshToken: () => void;
+  /** Voice provider whose details panel should be expanded on next render
+   *  of PluginsSettings. Set when the user clicks the mic button and is
+   *  redirected to settings to grant permissions / install models, so the
+   *  user lands directly on the action they need to take. Cleared once the
+   *  panel has consumed the focus. */
+  voiceProviderFocus: string | null;
+  focusVoiceProvider: (providerId: string | null) => void;
 
   // -- Modals --
   activeModal: string | null;
@@ -1469,6 +1476,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   setPluginSettingsTab: (tab) => set({ pluginSettingsTab: tab }),
   setPluginSettingsRepoId: (repoId) => set({ pluginSettingsRepoId: repoId }),
   clearPluginSettingsIntent: () => set({ pluginSettingsIntent: null }),
+  voiceProviderFocus: null,
+  focusVoiceProvider: (providerId) => set({ voiceProviderFocus: providerId }),
   bumpPluginRefreshToken: () =>
     set((state) => ({ pluginRefreshToken: state.pluginRefreshToken + 1 })),
 
