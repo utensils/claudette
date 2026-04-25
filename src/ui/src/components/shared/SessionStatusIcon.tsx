@@ -1,6 +1,4 @@
-import { useEffect, useState } from "react";
-import { BadgeCheck, BadgeInfo, BadgeQuestionMark, CircleDashed } from "lucide-react";
-import { SPINNER_FRAMES, SPINNER_INTERVAL_MS } from "../../utils/spinnerFrames";
+import { CircleCheck, CircleDashed, CircleQuestionMark, CircleAlert, LoaderCircle } from "lucide-react";
 
 export type SessionStatusKind =
   | { kind: "running" }
@@ -15,46 +13,28 @@ interface Props {
 }
 
 export function SessionStatusIcon({ status, size = 14 }: Props) {
-  const [frame, setFrame] = useState(0);
-
-  useEffect(() => {
-    if (status.kind !== "running") return;
-    const id = window.setInterval(
-      () => setFrame((f) => (f + 1) % SPINNER_FRAMES.length),
-      SPINNER_INTERVAL_MS,
-    );
-    return () => window.clearInterval(id);
-  }, [status.kind]);
-
   switch (status.kind) {
     case "running":
       return (
-        <span
-          style={{
-            fontFamily: "monospace",
-            fontSize: size,
-            color: "var(--accent-primary)",
-            display: "inline-block",
-            lineHeight: 1,
-          }}
-        >
-          {SPINNER_FRAMES[frame]}
-        </span>
+        <LoaderCircle
+          size={size}
+          style={{ color: "var(--accent-primary)", animation: "spin 1s linear infinite" }}
+        />
       );
     case "ask":
       return (
-        <BadgeQuestionMark
+        <CircleQuestionMark
           size={size}
-          style={{ color: "var(--accent-primary)" }}
+          style={{ color: "var(--badge-ask)" }}
         />
       );
     case "plan":
       return (
-        <BadgeInfo size={size} style={{ color: "var(--accent-warning)" }} />
+        <CircleAlert size={size} style={{ color: "var(--badge-plan)" }} />
       );
     case "unread":
       return (
-        <BadgeCheck size={size} style={{ color: "var(--accent-success)" }} />
+        <CircleCheck size={size} style={{ color: "var(--badge-done)" }} />
       );
     case "idle":
       return <CircleDashed size={size} style={{ color: "var(--text-dim)" }} />;

@@ -75,6 +75,16 @@
   opacity: 1;
 }
 
+.icon.pulse {
+  animation: pulse-badge 2s ease-in-out infinite;
+  opacity: 1;
+}
+
+@keyframes pulse-badge {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
 .name {
   flex: 1;
   min-width: 0;
