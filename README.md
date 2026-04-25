@@ -21,12 +21,15 @@ Claudette is a cross-platform desktop application built with [Tauri 2](https://t
 - [Tauri CLI](https://tauri.app/start/): `cargo install tauri-cli --version "^2"`
 - Platform dependencies for Tauri:
   - **macOS**: Xcode Command Line Tools (`xcode-select --install`)
-  - **Linux**: System libraries for WebKitGTK. On Debian/Ubuntu:
+  - **Linux**: System libraries for WebKitGTK and ALSA (the latter is needed by the voice-input recorder). On Debian/Ubuntu:
 
     ```sh
     sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
-      libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+      libasound2-dev
     ```
+
+    Equivalents on other distros: `alsa-lib-devel` (Fedora/RHEL), `alsa-lib` (Arch). Nix users get this automatically via `flake.nix`.
 
 ## Getting started
 
@@ -49,6 +52,18 @@ cargo clippy --workspace --all-targets
 # Check frontend types
 cd src/ui && bunx tsc --noEmit
 ```
+
+### macOS: voice input in dev mode
+
+`cargo tauri dev` runs the binary directly, which is fine for everything **except** the Apple Speech voice-input provider. macOS's privacy system (TCC) refuses to grant Microphone or Speech Recognition permissions to a bare Mach-O binary, and aborts the process when the prompt appears.
+
+Use the dev script instead — it wraps the binary in a signed `Claudette Dev.app` bundle (with the right `Info.plist` usage strings + entitlements) and launches it via Launch Services:
+
+```sh
+./scripts/dev.sh
+```
+
+If you don't need voice input, plain `cargo tauri dev` is still fine.
 
 ## Project structure
 

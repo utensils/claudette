@@ -57,6 +57,19 @@ cd src/ui && bun install && cd ../..
 cargo tauri dev
 ```
 
+> **macOS — voice input dev mode:** if you're working on or testing the
+> voice-input feature, run `./scripts/dev.sh` instead of `cargo tauri dev`.
+> The script wraps the dev binary in a signed `.app` bundle with the
+> usage strings + entitlements that macOS TCC requires before granting
+> Microphone or Speech Recognition permission. Plain `cargo tauri dev`
+> works for everything else.
+
+> **Linux — ALSA development headers:** Debian/Ubuntu users need
+> `libasound2-dev` installed (Fedora: `alsa-lib-devel`, Arch: `alsa-lib`).
+> The `cpal` audio crate fails to build without it. The full apt
+> install line is in the [README prerequisites](README.md#prerequisites).
+> Nix users get this automatically via `flake.nix`.
+
 ## Commit Conventions
 
 This project uses **conventional commits**. Every commit message and PR title must follow this format:
