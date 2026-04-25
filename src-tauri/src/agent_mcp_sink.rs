@@ -93,13 +93,6 @@ async fn send_attachment(
     media_type: String,
     caption: Option<String>,
 ) -> BridgeResponse {
-    // Read file from disk (async, off the listener task).
-    let bytes = match tokio::fs::read(&file_path).await {
-        Ok(b) => b,
-        Err(e) => return BridgeResponse::err(format!("read {file_path}: {e}")),
-    };
-    let size_bytes = bytes.len() as u64;
-
     // Strip path components — the policy and DB only see the basename.
     let filename = std::path::Path::new(&file_path)
         .file_name()
@@ -107,11 +100,22 @@ async fn send_attachment(
         .unwrap_or("")
         .to_string();
 
-    // Validate against the agent-side policy. Rejected files come back to the
-    // model as a tool-error so it can adjust and retry.
+    // Validate size *before* reading bytes — a prompt-injected or mistaken
+    // call with a multi-GB path would otherwise allocate the whole file into
+    // RAM only to reject it afterward.
+    let size_bytes = match tokio::fs::metadata(&file_path).await {
+        Ok(m) => m.len(),
+        Err(e) => return BridgeResponse::err(format!("stat {file_path}: {e}")),
+    };
     if let Err(reason) = policy(&media_type, size_bytes, &filename) {
         return BridgeResponse::err(reason);
     }
+
+    // Now safe to read into memory — policy has bounded the size.
+    let bytes = match tokio::fs::read(&file_path).await {
+        Ok(b) => b,
+        Err(e) => return BridgeResponse::err(format!("read {file_path}: {e}")),
+    };
 
     // Resolve the anchor message_id from AppState.
     let anchor_msg_id = {

@@ -143,6 +143,13 @@ pub struct AttachmentResponse {
     pub width: Option<i32>,
     pub height: Option<i32>,
     pub size_bytes: i64,
+    /// `"user"` for composer-supplied attachments, `"agent"` for ones the
+    /// agent delivered via `mcp__claudette__send_to_user`. The frontend
+    /// uses this to re-route agent attachments under the assistant message
+    /// instead of the user message they were FK-anchored to. Without this
+    /// on reload, persisted agent attachments display as "from you".
+    pub origin: claudette::model::AttachmentOrigin,
+    pub tool_use_id: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -2274,6 +2281,8 @@ pub async fn load_attachments_for_workspace(
                 width: a.width,
                 height: a.height,
                 size_bytes: a.size_bytes,
+                origin: a.origin,
+                tool_use_id: a.tool_use_id,
             });
         }
     }
@@ -2377,6 +2386,8 @@ pub async fn read_file_as_base64(path: String) -> Result<AttachmentResponse, Str
             width: None,
             height: None,
             size_bytes,
+            origin: claudette::model::AttachmentOrigin::User,
+            tool_use_id: None,
         })
     } else {
         // Unknown extension — attempt to read as text.
@@ -2397,6 +2408,8 @@ pub async fn read_file_as_base64(path: String) -> Result<AttachmentResponse, Str
                     width: None,
                     height: None,
                     size_bytes,
+                    origin: claudette::model::AttachmentOrigin::User,
+                    tool_use_id: None,
                 })
             }
             Err(_) => Err(format!("Unsupported binary file type: .{ext}")),
