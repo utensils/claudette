@@ -28,6 +28,12 @@ pre:hover > .copyButton:hover {
   color: var(--text-primary);
 }
 
+.copyButton:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 1px;
+}
+
 .copyButton:active {
   opacity: 1;
 }

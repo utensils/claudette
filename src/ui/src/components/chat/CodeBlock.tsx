@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import styles from "./CodeBlock.module.css";
 
 export function CodeBlock({
@@ -26,6 +26,12 @@ export function CodeBlock({
         timeoutRef.current = window.setTimeout(() => setCopied(false), 1200);
       })
       .catch((err) => console.error("Copy code failed:", err));
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current !== null) clearTimeout(timeoutRef.current);
+    };
   }, []);
 
   return (
