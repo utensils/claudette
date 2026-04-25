@@ -280,22 +280,48 @@ jobs:
     if: always() && needs.build.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      # Atomic-ish promote: delete the live `nightly` release+tag, then retag
-      # `nightly-staging` to `nightly` and un-draft. The blackout window
-      # between these two API calls is ~1–2s — orders of magnitude smaller
-      # than the prior delete-then-rebuild flow, and covered on the client
-      # side by treating "release manifest not found" as "no update".
+      # Atomic-ish promote: verify the staging release is intact, delete the
+      # live `nightly` release+tag, then retag `nightly-staging` to
+      # `nightly` and un-draft. The blackout window between the delete and
+      # the retag is ~1–2s — orders of magnitude smaller than the prior
+      # delete-then-rebuild flow, and covered on the client side by treating
+      # "release manifest not found" as "no update".
       - name: Promote staging to nightly
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+
+          # Pre-flight: ensure `nightly-staging` is reachable before we touch
+          # `nightly`. If staging is somehow missing or the API is down, we
+          # want to abort *with `nightly` still intact* rather than leave the
+          # repository with no nightly release at all.
+          if ! gh release view nightly-staging --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::nightly-staging release is not reachable; aborting promotion"
+            exit 1
+          fi
+
           gh release delete nightly --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
-          gh release edit nightly-staging \
-            --repo "$GITHUB_REPOSITORY" \
-            --tag nightly \
-            --draft=false \
-            --prerelease
+
+          # Retry the retag a few times to ride out transient API hiccups
+          # (rate limits, brief outages). If all retries fail, the workflow
+          # exits non-zero and a follow-up run can recover by re-promoting
+          # the still-intact `nightly-staging` release.
+          for attempt in 1 2 3; do
+            if gh release edit nightly-staging \
+              --repo "$GITHUB_REPOSITORY" \
+              --tag nightly \
+              --draft=false \
+              --prerelease; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Failed to promote nightly-staging to nightly after 3 attempts"
+              exit 1
+            fi
+            echo "Promotion attempt $attempt failed; retrying in 5s"
+            sleep 5
+          done
 
           # `gh release edit --tag` creates the new tag (`nightly`) at the
           # release's target commit but leaves the old `nightly-staging`

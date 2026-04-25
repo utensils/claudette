@@ -29,9 +29,9 @@ fn endpoint_for(channel: &str) -> &'static str {
     }
 }
 
-/// Classifies an updater error: `Ok(None)` means "treat as no update available
-/// rather than a hard failure", `Err(...)` is a real transport/parse failure
-/// that should bubble up to the UI.
+/// Classifies an updater error: `Ok(())` means "downgrade to no update
+/// available", `Err(...)` is a real transport/parse failure that should
+/// bubble up to the UI.
 ///
 /// `Error::ReleaseNotFound` covers two situations:
 ///   1. HTTP 404 on `latest.json` — the manifest does not exist (or is hidden
@@ -45,9 +45,9 @@ fn endpoint_for(channel: &str) -> &'static str {
 /// red error banner for either is more alarming than the situation warrants.
 /// True transport failures (DNS, TLS, connect) reach us as `Reqwest`/`Network`
 /// variants and continue to error.
-fn classify_check_error(err: tauri_plugin_updater::Error) -> Result<Option<()>, String> {
+fn classify_check_error(err: tauri_plugin_updater::Error) -> Result<(), String> {
     match err {
-        tauri_plugin_updater::Error::ReleaseNotFound => Ok(None),
+        tauri_plugin_updater::Error::ReleaseNotFound => Ok(()),
         other => Err(other.to_string()),
     }
 }
@@ -80,16 +80,14 @@ pub async fn check_for_updates_with_channel(
     let update = match result {
         Ok(u) => u,
         Err(e) => match classify_check_error(e) {
-            Ok(None) => {
+            Ok(()) => {
                 eprintln!(
                     "[updater] Release manifest unavailable for channel {channel:?}; \
-                     treating as no update (likely an in-progress nightly build)"
+                     treating as no update available"
                 );
                 None
             }
             Err(msg) => return Err(msg),
-            // `Ok(Some(_))` is unreachable: the helper never returns it.
-            Ok(Some(())) => unreachable!(),
         },
     };
 
@@ -163,7 +161,7 @@ mod tests {
     #[test]
     fn release_not_found_is_treated_as_no_update() {
         let result = classify_check_error(tauri_plugin_updater::Error::ReleaseNotFound);
-        assert!(matches!(result, Ok(None)));
+        assert!(matches!(result, Ok(())));
     }
 
     #[test]
