@@ -1441,3 +1441,96 @@ describe("removeWorkspace", () => {
     expect(useAppStore.getState().unreadCompletions.has("ws-b")).toBe(true);
   });
 });
+
+describe("addChatAttachments accepts agent-origin rows", () => {
+  beforeEach(() => {
+    useAppStore.setState({ chatAttachments: {} });
+  });
+
+  it("appends agent attachments alongside user attachments under the same message", () => {
+    const wsId = "ws-1";
+    const userAtt = {
+      id: "u1",
+      message_id: "m1",
+      filename: "user.png",
+      media_type: "image/png",
+      data_base64: "AA==",
+      text_content: null,
+      width: null,
+      height: null,
+      size_bytes: 1,
+    };
+    const agentAtt = {
+      id: "a1",
+      message_id: "m1",
+      filename: "shot.png",
+      media_type: "image/png",
+      data_base64: "BB==",
+      text_content: null,
+      width: null,
+      height: null,
+      size_bytes: 1,
+      origin: "agent" as const,
+      tool_use_id: null,
+    };
+
+    useAppStore.getState().addChatAttachments(wsId, [userAtt]);
+    useAppStore.getState().addChatAttachments(wsId, [agentAtt]);
+
+    const list = useAppStore.getState().chatAttachments[wsId];
+    expect(list).toHaveLength(2);
+    expect(list[0].id).toBe("u1");
+    expect(list[1].id).toBe("a1");
+    expect(list[1].origin).toBe("agent");
+  });
+
+  it("keeps origin field intact through addChatAttachments — needed for the assistant-message re-route in ChatPanel", () => {
+    // ChatPanel routes `origin: 'agent'` rows to the next assistant message
+    // chronologically (instead of the FK anchor user message). The store
+    // must not strip or default-shift this field, otherwise the visual
+    // anchoring breaks.
+    const wsId = "ws-route";
+    useAppStore.getState().addChatAttachments(wsId, [
+      {
+        id: "a1",
+        message_id: "user-msg",
+        filename: "shot.png",
+        media_type: "image/png",
+        data_base64: "AA==",
+        text_content: null,
+        width: null,
+        height: null,
+        size_bytes: 1,
+        origin: "agent",
+        tool_use_id: null,
+      },
+    ]);
+    const att = useAppStore.getState().chatAttachments[wsId][0];
+    expect(att.origin).toBe("agent");
+    expect(att.message_id).toBe("user-msg");
+  });
+
+  it("preserves field-by-field round trip for SVG agent attachments", () => {
+    // SVG is allowed by policy; rendering uses data:image/svg+xml URL — make
+    // sure the type flows through unchanged.
+    const wsId = "ws-2";
+    useAppStore.getState().addChatAttachments(wsId, [
+      {
+        id: "svg1",
+        message_id: "m1",
+        filename: "diagram.svg",
+        media_type: "image/svg+xml",
+        data_base64: "PHN2Zy8+",
+        text_content: null,
+        width: null,
+        height: null,
+        size_bytes: 6,
+        origin: "agent",
+        tool_use_id: null,
+      },
+    ]);
+    const att = useAppStore.getState().chatAttachments[wsId][0];
+    expect(att.media_type).toBe("image/svg+xml");
+    expect(att.data_base64).toBe("PHN2Zy8+");
+  });
+});

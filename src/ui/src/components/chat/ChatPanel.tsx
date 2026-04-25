@@ -1563,15 +1563,37 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
   );
 
   // Pre-build a Map keyed by message_id for O(1) lookup in the render loop.
+  //
+  // Agent-origin attachments are persisted with `message_id` set to the *user*
+  // message that triggered the turn (FK-cascade-safe). For display they
+  // belong with the *assistant* message of the same turn — i.e. the next
+  // Assistant message after the FK anchor in chronological order. This
+  // re-route happens here so the storage shape can stay simple.
   const attachmentsByMessage = useMemo(() => {
+    // Single reverse pass: each User message maps to the most recent
+    // Assistant message that follows it. O(n) instead of O(n²).
+    const userToNextAssistant = new Map<string, string>();
+    let nextAssistantId: string | null = null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role === "Assistant") {
+        nextAssistantId = m.id;
+      } else if (m.role === "User" && nextAssistantId) {
+        userToNextAssistant.set(m.id, nextAssistantId);
+      }
+    }
     const map = new Map<string, ChatAttachment[]>();
     for (const att of chatAttachments) {
-      const list = map.get(att.message_id);
+      const targetId =
+        att.origin === "agent"
+          ? (userToNextAssistant.get(att.message_id) ?? att.message_id)
+          : att.message_id;
+      const list = map.get(targetId);
       if (list) list.push(att);
-      else map.set(att.message_id, [att]);
+      else map.set(targetId, [att]);
     }
     return map;
-  }, [chatAttachments]);
+  }, [chatAttachments, messages]);
 
   // Build an index: afterMessageIndex → array of (turn, globalIndex) pairs.
   // Only recomputed when completedTurns changes, not on every streaming update.
@@ -1814,7 +1836,7 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
               <ThinkingBlock content={msg.thinking} isStreaming={false} />
             )}
             <div className={styles.content}>
-              {msg.role === "User" && attachmentsByMessage.has(msg.id) && (
+              {attachmentsByMessage.has(msg.id) && (
                 <div className={styles.messageImages}>
                   {attachmentsByMessage.get(msg.id)!.map((att) =>
                     att.media_type === "application/pdf" ? (

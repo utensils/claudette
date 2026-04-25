@@ -18,7 +18,7 @@ futures = "0.3"
 rusqlite = { version = "0.34", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["process", "fs", "io-util", "time", "sync", "rt", "net", "macros"] }
+tokio = { version = "1", features = ["process", "fs", "io-util", "io-std", "time", "sync", "rt", "net", "macros"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 which = "7"
@@ -34,6 +34,10 @@ notify = "7"
 rand = "0.8"
 sha2 = "0.10"
 tar = "0.4"
+# Cross-platform local IPC: Unix domain sockets on macOS/Linux, Named Pipes
+# on Windows. One async API for both, used by `agent_mcp::bridge` to talk to
+# the Claudette-hosted MCP grandchild that the Claude CLI spawns over stdio.
+interprocess = { version = "2", features = ["tokio"] }
 
 [target.'cfg(windows)'.dependencies]
 # Read fresh PATH from HKCU + HKLM Environment registry keys so we pick up

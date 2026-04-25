@@ -96,6 +96,16 @@ pub struct AgentSessionState {
     /// Stored as a plain map because `EnvMap` already is one; keeping a
     /// snapshot lets the comparison be a single equality check.
     pub session_resolved_env: claudette::env_provider::types::EnvMap,
+    /// Lifecycle handle for the in-process MCP server bridge that powers
+    /// `mcp__claudette__send_to_user`. Created alongside `persistent_session`
+    /// at spawn time; dropped when `persistent_session = None` so the listener
+    /// task is cancelled and the socket file unlinked. `None` between spawns.
+    pub mcp_bridge: Option<Arc<claudette::agent_mcp::bridge::McpBridgeSession>>,
+    /// `id` of the user message that triggered the most recent turn, used as
+    /// the FK anchor for any agent-authored attachments produced during that
+    /// turn. Updated each time a new user message is inserted; cleared on
+    /// session teardown. See `agent_mcp_sink::ChatBridgeSink`.
+    pub last_user_msg_id: Option<String>,
 }
 
 /// Handle to an active PTY process.

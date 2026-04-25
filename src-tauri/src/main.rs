@@ -1,6 +1,7 @@
 // Prevents additional console window on Windows in release.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod agent_mcp_sink;
 mod commands;
 mod mdns;
 mod missing_cli;
@@ -50,6 +51,22 @@ fn main() {
             if let Err(e) = claudette_server::run(claudette_server::ServerOptions::default()).await
             {
                 eprintln!("Server error: {e}");
+                std::process::exit(1);
+            }
+        });
+        return;
+    }
+
+    // When spawned with `--agent-mcp`, run the in-process MCP server over
+    // stdio. The Tauri parent injects this into `--mcp-config` for the Claude
+    // CLI, which spawns this binary as a stdio child. The grandchild forwards
+    // tool invocations back to the parent over a token-authed local socket
+    // (see `claudette::agent_mcp`).
+    if std::env::args().any(|a| a == "--agent-mcp") {
+        let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+        rt.block_on(async {
+            if let Err(e) = claudette::agent_mcp::server::run_stdio().await {
+                eprintln!("agent-mcp error: {e}");
                 std::process::exit(1);
             }
         });
@@ -561,6 +578,9 @@ fn main() {
             commands::plugins_runtime::set_claudette_plugin_enabled,
             commands::plugins_runtime::set_claudette_plugin_setting,
             commands::plugins_runtime::reseed_bundled_plugins,
+            // Built-in Claudette plugins (Rust-implemented agent surfaces)
+            commands::plugins_runtime::list_builtin_claudette_plugins,
+            commands::plugins_runtime::set_builtin_claudette_plugin_enabled,
             // Local server
             commands::remote::start_local_server,
             commands::remote::stop_local_server,

@@ -215,3 +215,62 @@ pub async fn reseed_bundled_plugins(state: State<'_, AppState>) -> Result<Vec<St
 
     Ok(warnings)
 }
+
+// ---------------------------------------------------------------------------
+// Built-in Claudette plugins
+// ---------------------------------------------------------------------------
+//
+// Built-in plugins are Rust-implemented agent surfaces that ship with
+// Claudette (currently just `send_to_user`, the in-process MCP tool).
+// They live alongside Lua plugins in the settings UI but use a separate
+// `builtin_plugin:{name}:enabled` key namespace so the two registries
+// don't collide.
+
+#[derive(Serialize)]
+pub struct BuiltinPluginInfo {
+    pub name: String,
+    pub title: String,
+    pub description: String,
+    pub enabled: bool,
+}
+
+#[tauri::command]
+pub async fn list_builtin_claudette_plugins(
+    state: State<'_, AppState>,
+) -> Result<Vec<BuiltinPluginInfo>, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let out = claudette::agent_mcp::BUILTIN_PLUGINS
+        .iter()
+        .map(|p| BuiltinPluginInfo {
+            name: p.name.to_string(),
+            title: p.title.to_string(),
+            description: p.description.to_string(),
+            enabled: claudette::agent_mcp::is_builtin_plugin_enabled(&db, p.name),
+        })
+        .collect();
+    Ok(out)
+}
+
+#[tauri::command]
+pub async fn set_builtin_claudette_plugin_enabled(
+    plugin_name: String,
+    enabled: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    if !claudette::agent_mcp::BUILTIN_PLUGINS
+        .iter()
+        .any(|p| p.name == plugin_name)
+    {
+        return Err(format!("unknown built-in plugin: {plugin_name}"));
+    }
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let key = claudette::agent_mcp::builtin_plugin_setting_key(&plugin_name);
+    if enabled {
+        // Absent key = enabled (matches the Lua-plugin convention).
+        db.delete_app_setting(&key).map_err(|e| e.to_string())?;
+    } else {
+        db.set_app_setting(&key, "false")
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}

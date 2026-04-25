@@ -144,4 +144,9 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("20260423190000_scm_status_cache.sql"),
         legacy_version: None,
     },
+    Migration {
+        id: "20260425003451_attachments_origin_and_tool_use",
+        sql: include_str!("20260425003451_attachments_origin_and_tool_use.sql"),
+        legacy_version: None,
+    },
 ];

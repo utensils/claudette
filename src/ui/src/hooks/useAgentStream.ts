@@ -646,4 +646,52 @@ export function useAgentStream() {
       unlisten.then((fn) => fn());
     };
   }, [updateWorkspace]);
+
+  // Listen for agent-authored attachments delivered via the
+  // `mcp__claudette__send_to_user` tool. The Rust bridge has already
+  // persisted them; we just need to mirror into the in-memory store so the
+  // chat surface re-renders. Reuses the existing user-attachment shape +
+  // rendering — origin: "agent" lets future code distinguish if needed.
+  const addChatAttachments = useAppStore((s) => s.addChatAttachments);
+  useEffect(() => {
+    let active = true;
+    const unlisten = listen<{
+      workspace_id: string;
+      message_id: string;
+      attachment: {
+        id: string;
+        message_id: string;
+        filename: string;
+        media_type: string;
+        size_bytes: number;
+        width: number | null;
+        height: number | null;
+        tool_use_id: string | null;
+        data_base64: string;
+        caption?: string | null;
+      };
+    }>("agent-attachment-created", (event) => {
+      if (!active) return;
+      const { workspace_id: wsId, attachment } = event.payload;
+      addChatAttachments(wsId, [
+        {
+          id: attachment.id,
+          message_id: attachment.message_id,
+          filename: attachment.filename,
+          media_type: attachment.media_type,
+          data_base64: attachment.data_base64,
+          text_content: null,
+          width: attachment.width,
+          height: attachment.height,
+          size_bytes: attachment.size_bytes,
+          origin: "agent",
+          tool_use_id: attachment.tool_use_id,
+        },
+      ]);
+    });
+    return () => {
+      active = false;
+      unlisten.then((fn) => fn());
+    };
+  }, [addChatAttachments]);
 }
