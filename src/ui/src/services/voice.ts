@@ -45,4 +45,3 @@ export function stopAndTranscribeVoice(
 export function cancelVoiceRecording(providerId?: string): Promise<void> {
   return invoke("voice_cancel_recording", { providerId: providerId ?? null });
 }
-

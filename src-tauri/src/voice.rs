@@ -1,10 +1,17 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use async_trait::async_trait;
+use candle_core::{D, Device, IndexOp, Tensor};
+use candle_nn::{VarBuilder, ops::softmax};
+use candle_transformers::models::whisper::{self as whisper, Config, audio};
 use claudette::db::Database;
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use futures_util::StreamExt;
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
+use tokenizers::Tokenizer;
 use tokio::io::AsyncWriteExt;
 
 const SELECTED_PROVIDER_KEY: &str = "voice:selected_provider";
@@ -12,7 +19,15 @@ const AUTO_PROVIDER_KEY: &str = "voice:auto_provider";
 const PLATFORM_ID: &str = "voice-platform-system";
 const DISTIL_ID: &str = "voice-distil-whisper-candle";
 const DISTIL_CACHE_DIR: &str = "distil-whisper-large-v3";
-const DISTIL_ENGINE_UNAVAILABLE_MESSAGE: &str = "Distil-Whisper is downloaded, but local transcription is not available in this build yet. Use System dictation for now, or install a Claudette build compiled with the Candle voice engine.";
+const DISTIL_READY_MESSAGE: &str = "Ready for offline transcription";
+const TARGET_SAMPLE_RATE: u32 = whisper::SAMPLE_RATE as u32;
+const DISTIL_MODEL_FILES: [(&str, Option<u64>); 5] = [
+    ("config.json", None),
+    ("generation_config.json", None),
+    ("preprocessor_config.json", None),
+    ("tokenizer.json", None),
+    ("model.safetensors", Some(100_000_000)),
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -81,6 +96,50 @@ pub struct VoiceErrorEvent {
     pub message: String,
 }
 
+#[derive(Debug, Clone)]
+struct CapturedAudio {
+    samples: Vec<f32>,
+    sample_rate: u32,
+}
+
+struct RecordingSession {
+    samples: Arc<Mutex<Vec<f32>>>,
+    sample_rate: u32,
+    _stream: Option<cpal::Stream>,
+}
+
+impl RecordingSession {
+    #[cfg(test)]
+    fn from_samples(samples: Vec<f32>, sample_rate: u32) -> Self {
+        Self {
+            samples: Arc::new(Mutex::new(samples)),
+            sample_rate,
+            _stream: None,
+        }
+    }
+
+    fn finish(self) -> CapturedAudio {
+        drop(self._stream);
+        let samples = self.samples.lock().clone();
+        CapturedAudio {
+            samples: resample_to_target_rate(&samples, self.sample_rate),
+            sample_rate: TARGET_SAMPLE_RATE,
+        }
+    }
+}
+
+trait AudioRecorder: Send + Sync {
+    fn start(&self) -> Result<RecordingSession, String>;
+}
+
+trait VoiceTranscriber: Send + Sync {
+    fn transcribe(&self, cache_path: &Path, audio: CapturedAudio) -> Result<String, String>;
+}
+
+struct CpalAudioRecorder;
+
+struct CandleWhisperTranscriber;
+
 #[async_trait]
 pub trait VoiceProvider: Send + Sync {
     fn id(&self) -> &'static str;
@@ -97,14 +156,33 @@ pub trait VoiceProvider: Send + Sync {
     async fn cancel(&self) -> Result<(), String>;
 }
 
-#[derive(Debug)]
 pub struct VoiceProviderRegistry {
     model_root: PathBuf,
+    active_recording: Mutex<Option<RecordingSession>>,
+    recorder: Arc<dyn AudioRecorder>,
+    transcriber: Arc<dyn VoiceTranscriber>,
 }
 
 impl VoiceProviderRegistry {
     pub fn new(model_root: PathBuf) -> Self {
-        Self { model_root }
+        Self::with_runtime(
+            model_root,
+            Arc::new(CpalAudioRecorder),
+            Arc::new(CandleWhisperTranscriber),
+        )
+    }
+
+    fn with_runtime(
+        model_root: PathBuf,
+        recorder: Arc<dyn AudioRecorder>,
+        transcriber: Arc<dyn VoiceTranscriber>,
+    ) -> Self {
+        Self {
+            model_root,
+            active_recording: Mutex::new(None),
+            recorder,
+            transcriber,
+        }
     }
 
     pub fn default_model_root() -> PathBuf {
@@ -198,11 +276,11 @@ impl VoiceProviderRegistry {
         Ok(DistilWhisperCandleProvider.status(self, &db))
     }
 
-    pub async fn start_recording(&self, provider_id: &str) -> Result<(), String> {
+    pub async fn start_recording(&self, db_path: &Path, provider_id: &str) -> Result<(), String> {
         self.ensure_known(provider_id)?;
         match provider_id {
             PLATFORM_ID => PlatformVoiceProvider.start_recording().await,
-            DISTIL_ID => DistilWhisperCandleProvider.start_recording().await,
+            DISTIL_ID => self.start_distil_recording(db_path).await,
             _ => Err(format!("Unknown voice provider: {provider_id}")),
         }
     }
@@ -211,7 +289,7 @@ impl VoiceProviderRegistry {
         self.ensure_known(provider_id)?;
         match provider_id {
             PLATFORM_ID => PlatformVoiceProvider.stop_and_transcribe().await,
-            DISTIL_ID => DistilWhisperCandleProvider.stop_and_transcribe().await,
+            DISTIL_ID => self.stop_distil_recording().await,
             _ => Err(format!("Unknown voice provider: {provider_id}")),
         }
     }
@@ -220,9 +298,51 @@ impl VoiceProviderRegistry {
         self.ensure_known(provider_id)?;
         match provider_id {
             PLATFORM_ID => PlatformVoiceProvider.cancel().await,
-            DISTIL_ID => DistilWhisperCandleProvider.cancel().await,
+            DISTIL_ID => self.cancel_distil_recording().await,
             _ => Err(format!("Unknown voice provider: {provider_id}")),
         }
+    }
+
+    async fn start_distil_recording(&self, db_path: &Path) -> Result<(), String> {
+        {
+            let db = Database::open(db_path).map_err(|e| e.to_string())?;
+            if !self.enabled(&db, DISTIL_ID) {
+                return Err("Distil-Whisper voice input is disabled".to_string());
+            }
+            if !distil_model_ready(&self.distil_cache_path()) {
+                return Err("Download the Distil-Whisper model before recording".to_string());
+            }
+        }
+
+        let mut active = self.active_recording.lock();
+        if active.is_some() {
+            return Err("Voice recording is already active".to_string());
+        }
+        *active = Some(self.recorder.start()?);
+        Ok(())
+    }
+
+    async fn stop_distil_recording(&self) -> Result<String, String> {
+        let session = self
+            .active_recording
+            .lock()
+            .take()
+            .ok_or_else(|| "No voice recording is active".to_string())?;
+        let audio = session.finish();
+        if audio.samples.is_empty() {
+            return Err("No audio was captured".to_string());
+        }
+
+        let cache_path = self.distil_cache_path();
+        let transcriber = Arc::clone(&self.transcriber);
+        tokio::task::spawn_blocking(move || transcriber.transcribe(&cache_path, audio))
+            .await
+            .map_err(|e| format!("Voice transcription task failed: {e}"))?
+    }
+
+    async fn cancel_distil_recording(&self) -> Result<(), String> {
+        let _ = self.active_recording.lock().take();
+        Ok(())
     }
 
     fn ensure_known(&self, provider_id: &str) -> Result<(), String> {
@@ -405,10 +525,10 @@ impl VoiceProvider for DistilWhisperCandleProvider {
             )
         } else if installed {
             (
-                VoiceProviderStatus::EngineUnavailable,
-                "Model installed, engine unavailable".to_string(),
+                VoiceProviderStatus::Ready,
+                DISTIL_READY_MESSAGE.to_string(),
                 false,
-                Some(DISTIL_ENGINE_UNAVAILABLE_MESSAGE.to_string()),
+                None,
             )
         } else if model_status
             .as_deref()
@@ -483,11 +603,11 @@ impl VoiceProvider for DistilWhisperCandleProvider {
     }
 
     async fn start_recording(&self) -> Result<(), String> {
-        Err(DISTIL_ENGINE_UNAVAILABLE_MESSAGE.to_string())
+        Err("Distil-Whisper recording is managed by the voice registry".to_string())
     }
 
     async fn stop_and_transcribe(&self) -> Result<String, String> {
-        Err(DISTIL_ENGINE_UNAVAILABLE_MESSAGE.to_string())
+        Err("Distil-Whisper transcription is managed by the voice registry".to_string())
     }
 
     async fn cancel(&self) -> Result<(), String> {
@@ -504,10 +624,385 @@ fn model_status_key(provider_id: &str) -> String {
 }
 
 fn distil_model_ready(cache_path: &Path) -> bool {
-    let model = cache_path.join("model.safetensors");
-    let tokenizer = cache_path.join("tokenizer.json");
-    let config = cache_path.join("config.json");
-    model.metadata().is_ok_and(|m| m.len() > 100_000_000) && tokenizer.is_file() && config.is_file()
+    DISTIL_MODEL_FILES.iter().all(|(filename, min_size)| {
+        let path = cache_path.join(filename);
+        if let Some(min_size) = min_size {
+            path.metadata().is_ok_and(|m| m.len() > *min_size)
+        } else {
+            path.is_file()
+        }
+    })
+}
+
+fn normalize_interleaved_f32(input: &[f32], channels: u16) -> Vec<f32> {
+    mix_interleaved_to_mono(input, channels, |sample| sample.clamp(-1.0, 1.0))
+}
+
+fn normalize_interleaved_i16(input: &[i16], channels: u16) -> Vec<f32> {
+    mix_interleaved_to_mono(input, channels, |sample| {
+        (sample as f32 / i16::MAX as f32).clamp(-1.0, 1.0)
+    })
+}
+
+fn normalize_interleaved_u16(input: &[u16], channels: u16) -> Vec<f32> {
+    mix_interleaved_to_mono(input, channels, |sample| {
+        ((sample as f32 - 32768.0) / 32768.0).clamp(-1.0, 1.0)
+    })
+}
+
+fn mix_interleaved_to_mono<T>(
+    input: &[T],
+    channels: u16,
+    mut convert: impl FnMut(T) -> f32,
+) -> Vec<f32>
+where
+    T: Copy,
+{
+    let channel_count = usize::from(channels.max(1));
+    input
+        .chunks(channel_count)
+        .map(|frame| frame.iter().copied().map(&mut convert).sum::<f32>() / frame.len() as f32)
+        .collect()
+}
+
+fn resample_to_target_rate(samples: &[f32], sample_rate: u32) -> Vec<f32> {
+    if samples.is_empty() || sample_rate == TARGET_SAMPLE_RATE {
+        return samples.to_vec();
+    }
+
+    let output_len =
+        (samples.len() as u64 * u64::from(TARGET_SAMPLE_RATE) / u64::from(sample_rate)).max(1);
+    let ratio = sample_rate as f64 / TARGET_SAMPLE_RATE as f64;
+    (0..output_len)
+        .map(|out_index| {
+            let source = out_index as f64 * ratio;
+            let left = source.floor() as usize;
+            let right = (left + 1).min(samples.len() - 1);
+            let frac = (source - left as f64) as f32;
+            samples[left] * (1.0 - frac) + samples[right] * frac
+        })
+        .collect()
+}
+
+impl AudioRecorder for CpalAudioRecorder {
+    fn start(&self) -> Result<RecordingSession, String> {
+        let host = cpal::default_host();
+        let device = host
+            .default_input_device()
+            .ok_or_else(|| "No default microphone input device is available".to_string())?;
+        let supported_config = device
+            .default_input_config()
+            .map_err(|e| format!("Failed to read microphone input config: {e}"))?;
+        let sample_rate = supported_config.sample_rate();
+        let channels = supported_config.channels();
+        let stream_config: cpal::StreamConfig = supported_config.clone().into();
+        let samples = Arc::new(Mutex::new(Vec::<f32>::new()));
+        let error_handler = |err| {
+            eprintln!("voice input stream error: {err}");
+        };
+
+        let stream = match supported_config.sample_format() {
+            cpal::SampleFormat::F32 => {
+                let samples = Arc::clone(&samples);
+                device.build_input_stream(
+                    &stream_config,
+                    move |data: &[f32], _| {
+                        samples
+                            .lock()
+                            .extend(normalize_interleaved_f32(data, channels));
+                    },
+                    error_handler,
+                    None,
+                )
+            }
+            cpal::SampleFormat::I16 => {
+                let samples = Arc::clone(&samples);
+                device.build_input_stream(
+                    &stream_config,
+                    move |data: &[i16], _| {
+                        samples
+                            .lock()
+                            .extend(normalize_interleaved_i16(data, channels));
+                    },
+                    error_handler,
+                    None,
+                )
+            }
+            cpal::SampleFormat::U16 => {
+                let samples = Arc::clone(&samples);
+                device.build_input_stream(
+                    &stream_config,
+                    move |data: &[u16], _| {
+                        samples
+                            .lock()
+                            .extend(normalize_interleaved_u16(data, channels));
+                    },
+                    error_handler,
+                    None,
+                )
+            }
+            other => {
+                return Err(format!("Unsupported microphone sample format: {other:?}"));
+            }
+        }
+        .map_err(|e| format!("Failed to open microphone input stream: {e}"))?;
+        stream
+            .play()
+            .map_err(|e| format!("Failed to start microphone input stream: {e}"))?;
+
+        Ok(RecordingSession {
+            samples,
+            sample_rate,
+            _stream: Some(stream),
+        })
+    }
+}
+
+impl VoiceTranscriber for CandleWhisperTranscriber {
+    fn transcribe(&self, cache_path: &Path, captured: CapturedAudio) -> Result<String, String> {
+        transcribe_distil_whisper(cache_path, captured)
+    }
+}
+
+enum WhisperModel {
+    Normal(whisper::model::Whisper),
+}
+
+impl WhisperModel {
+    fn config(&self) -> &Config {
+        match self {
+            Self::Normal(model) => &model.config,
+        }
+    }
+
+    fn encoder_forward(&mut self, input: &Tensor, flush: bool) -> candle_core::Result<Tensor> {
+        match self {
+            Self::Normal(model) => model.encoder.forward(input, flush),
+        }
+    }
+
+    fn decoder_forward(
+        &mut self,
+        input: &Tensor,
+        audio_features: &Tensor,
+        flush: bool,
+    ) -> candle_core::Result<Tensor> {
+        match self {
+            Self::Normal(model) => model.decoder.forward(input, audio_features, flush),
+        }
+    }
+
+    fn decoder_final_linear(&self, input: &Tensor) -> candle_core::Result<Tensor> {
+        match self {
+            Self::Normal(model) => model.decoder.final_linear(input),
+        }
+    }
+}
+
+struct WhisperDecoder {
+    model: WhisperModel,
+    tokenizer: Tokenizer,
+    suppress_tokens: Tensor,
+    sot_token: u32,
+    transcribe_token: u32,
+    eot_token: u32,
+    no_timestamps_token: u32,
+}
+
+impl WhisperDecoder {
+    fn new(model: WhisperModel, tokenizer: Tokenizer, device: &Device) -> Result<Self, String> {
+        let no_timestamps_token = token_id(&tokenizer, whisper::NO_TIMESTAMPS_TOKEN)?;
+        let suppress_tokens = (0..model.config().vocab_size as u32)
+            .map(|index| {
+                if model.config().suppress_tokens.contains(&index) {
+                    f32::NEG_INFINITY
+                } else {
+                    0.0
+                }
+            })
+            .collect::<Vec<_>>();
+        let suppress_tokens = Tensor::new(suppress_tokens.as_slice(), device)
+            .map_err(|e| format!("Failed to build Whisper token suppression mask: {e}"))?;
+
+        Ok(Self {
+            sot_token: token_id(&tokenizer, whisper::SOT_TOKEN)?,
+            transcribe_token: token_id(&tokenizer, whisper::TRANSCRIBE_TOKEN)?,
+            eot_token: token_id(&tokenizer, whisper::EOT_TOKEN)?,
+            no_timestamps_token,
+            model,
+            tokenizer,
+            suppress_tokens,
+        })
+    }
+
+    fn run(&mut self, mel: &Tensor) -> Result<String, String> {
+        let (_, _, content_frames) = mel
+            .dims3()
+            .map_err(|e| format!("Invalid Whisper mel tensor: {e}"))?;
+        let mut seek = 0;
+        let mut text = String::new();
+
+        while seek < content_frames {
+            let segment_size = usize::min(content_frames - seek, whisper::N_FRAMES);
+            let segment = mel
+                .narrow(2, seek, segment_size)
+                .map_err(|e| format!("Failed to slice Whisper mel segment: {e}"))?;
+            let decoded = self.decode(&segment)?;
+            if !decoded.trim().is_empty() {
+                if !text.is_empty() {
+                    text.push(' ');
+                }
+                text.push_str(decoded.trim());
+            }
+            seek += segment_size;
+        }
+
+        Ok(text.trim().to_string())
+    }
+
+    fn decode(&mut self, mel: &Tensor) -> Result<String, String> {
+        let audio_features = self
+            .model
+            .encoder_forward(mel, true)
+            .map_err(|e| format!("Whisper encoder failed: {e}"))?;
+        let mut tokens = vec![
+            self.sot_token,
+            self.transcribe_token,
+            self.no_timestamps_token,
+        ];
+        let sample_len = self.model.config().max_target_positions / 2;
+
+        for index in 0..sample_len {
+            let tokens_tensor = Tensor::new(tokens.as_slice(), mel.device())
+                .and_then(|tensor| tensor.unsqueeze(0))
+                .map_err(|e| format!("Failed to build Whisper token tensor: {e}"))?;
+            let decoded = self
+                .model
+                .decoder_forward(&tokens_tensor, &audio_features, index == 0)
+                .map_err(|e| format!("Whisper decoder failed: {e}"))?;
+            let (_, seq_len, _) = decoded
+                .dims3()
+                .map_err(|e| format!("Invalid Whisper decoder output: {e}"))?;
+            let logits = self
+                .model
+                .decoder_final_linear(
+                    &decoded
+                        .i((..1, seq_len - 1..))
+                        .map_err(|e| format!("Failed to slice Whisper logits: {e}"))?,
+                )
+                .and_then(|logits| logits.i(0))
+                .and_then(|logits| logits.i(0))
+                .and_then(|logits| logits.broadcast_add(&self.suppress_tokens))
+                .map_err(|e| format!("Whisper logits failed: {e}"))?;
+            let next_token = greedy_token(&logits)?;
+            if next_token == self.eot_token {
+                break;
+            }
+            tokens.push(next_token);
+        }
+
+        self.tokenizer
+            .decode(&tokens, true)
+            .map(|text| text.trim().to_string())
+            .map_err(|e| format!("Failed to decode Whisper tokens: {e}"))
+    }
+}
+
+fn greedy_token(logits: &Tensor) -> Result<u32, String> {
+    let logits = softmax(logits, D::Minus1).map_err(|e| format!("Whisper softmax failed: {e}"))?;
+    let values = logits
+        .to_vec1::<f32>()
+        .map_err(|e| format!("Failed to read Whisper logits: {e}"))?;
+    values
+        .iter()
+        .enumerate()
+        .max_by(|(_, left), (_, right)| left.total_cmp(right))
+        .map(|(index, _)| index as u32)
+        .ok_or_else(|| "Whisper returned no token logits".to_string())
+}
+
+fn token_id(tokenizer: &Tokenizer, token: &str) -> Result<u32, String> {
+    tokenizer
+        .token_to_id(token)
+        .ok_or_else(|| format!("Whisper tokenizer is missing token {token}"))
+}
+
+fn transcribe_distil_whisper(cache_path: &Path, captured: CapturedAudio) -> Result<String, String> {
+    if captured.sample_rate != TARGET_SAMPLE_RATE {
+        return Err(format!(
+            "Expected {TARGET_SAMPLE_RATE} Hz audio, got {} Hz",
+            captured.sample_rate
+        ));
+    }
+    if !distil_model_ready(cache_path) {
+        return Err("Distil-Whisper model files are incomplete".to_string());
+    }
+
+    let config_path = cache_path.join("config.json");
+    let tokenizer_path = cache_path.join("tokenizer.json");
+    let weights_path = cache_path.join("model.safetensors");
+    let config: Config = serde_json::from_str(
+        &std::fs::read_to_string(&config_path)
+            .map_err(|e| format!("Failed to read Whisper config: {e}"))?,
+    )
+    .map_err(|e| format!("Failed to parse Whisper config: {e}"))?;
+    let tokenizer = Tokenizer::from_file(&tokenizer_path)
+        .map_err(|e| format!("Failed to load tokenizer: {e}"))?;
+    let device = Device::Cpu;
+    let mel_filters = build_mel_filters(config.num_mel_bins);
+    let mel = audio::pcm_to_mel(&config, &captured.samples, &mel_filters);
+    let mel_len = mel.len() / config.num_mel_bins;
+    let mel = Tensor::from_vec(mel, (1, config.num_mel_bins, mel_len), &device)
+        .map_err(|e| format!("Failed to build Whisper mel tensor: {e}"))?;
+    let var_builder =
+        unsafe { VarBuilder::from_mmaped_safetensors(&[weights_path], whisper::DTYPE, &device) }
+            .map_err(|e| format!("Failed to load Whisper weights: {e}"))?;
+    let model = whisper::model::Whisper::load(&var_builder, config)
+        .map_err(|e| format!("Failed to initialize Whisper model: {e}"))?;
+    let mut decoder = WhisperDecoder::new(WhisperModel::Normal(model), tokenizer, &device)?;
+    decoder.run(&mel)
+}
+
+fn build_mel_filters(num_mel_bins: usize) -> Vec<f32> {
+    let freq_bins = whisper::N_FFT / 2 + 1;
+    let min_mel = hz_to_mel(0.0);
+    let max_mel = hz_to_mel(TARGET_SAMPLE_RATE as f32 / 2.0);
+    let mel_points = (0..num_mel_bins + 2)
+        .map(|index| {
+            let fraction = index as f32 / (num_mel_bins + 1) as f32;
+            mel_to_hz(min_mel + fraction * (max_mel - min_mel))
+        })
+        .collect::<Vec<_>>();
+    let fft_freqs = (0..freq_bins)
+        .map(|index| index as f32 * TARGET_SAMPLE_RATE as f32 / whisper::N_FFT as f32)
+        .collect::<Vec<_>>();
+    let mut filters = vec![0.0; num_mel_bins * freq_bins];
+
+    for mel_index in 0..num_mel_bins {
+        let left = mel_points[mel_index];
+        let center = mel_points[mel_index + 1];
+        let right = mel_points[mel_index + 2];
+        for (freq_index, freq) in fft_freqs.iter().copied().enumerate() {
+            let value = if freq < left || freq > right {
+                0.0
+            } else if freq <= center {
+                (freq - left) / (center - left)
+            } else {
+                (right - freq) / (right - center)
+            };
+            filters[mel_index * freq_bins + freq_index] = value.max(0.0);
+        }
+    }
+
+    filters
+}
+
+fn hz_to_mel(hz: f32) -> f32 {
+    2595.0 * (1.0 + hz / 700.0).log10()
+}
+
+fn mel_to_hz(mel: f32) -> f32 {
+    700.0 * (10_f32.powf(mel / 2595.0) - 1.0)
 }
 
 async fn download_distil_model(
@@ -515,18 +1010,14 @@ async fn download_distil_model(
     provider_id: &str,
     cache_path: &Path,
 ) -> Result<(), String> {
-    let files: [(&str, Option<u64>); 5] = [
-        ("config.json", None),
-        ("generation_config.json", None),
-        ("preprocessor_config.json", None),
-        ("tokenizer.json", None),
-        ("model.safetensors", Some(1_500_000_000)),
-    ];
-    let known_total = files.iter().filter_map(|(_, size)| *size).sum::<u64>();
+    let known_total = DISTIL_MODEL_FILES
+        .iter()
+        .filter_map(|(_, size)| *size)
+        .sum::<u64>();
     let mut overall_downloaded = 0_u64;
     let client = reqwest::Client::new();
 
-    for (filename, known_size) in files {
+    for (filename, known_size) in DISTIL_MODEL_FILES {
         let destination = cache_path.join(filename);
         if destination.is_file() {
             overall_downloaded += destination.metadata().map(|m| m.len()).unwrap_or(0);
@@ -596,6 +1087,7 @@ async fn download_distil_model(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tempfile::tempdir;
 
     fn test_db_path() -> (tempfile::TempDir, PathBuf) {
@@ -608,6 +1100,73 @@ mod tests {
 
     fn open_test_db(path: &Path) -> Database {
         Database::open(path).expect("open db")
+    }
+
+    fn write_complete_distil_model(cache_path: &Path) {
+        std::fs::create_dir_all(cache_path).expect("create model cache");
+        std::fs::write(cache_path.join("tokenizer.json"), "{}").expect("write tokenizer");
+        std::fs::write(cache_path.join("config.json"), "{}").expect("write config");
+        std::fs::write(cache_path.join("generation_config.json"), "{}")
+            .expect("write generation config");
+        std::fs::write(cache_path.join("preprocessor_config.json"), "{}")
+            .expect("write preprocessor config");
+        let model_file =
+            std::fs::File::create(cache_path.join("model.safetensors")).expect("create model");
+        model_file.set_len(100_000_001).expect("size model");
+    }
+
+    struct FakeRecorder {
+        starts: AtomicUsize,
+        samples: Vec<f32>,
+        sample_rate: u32,
+    }
+
+    impl FakeRecorder {
+        fn new(samples: Vec<f32>) -> Self {
+            Self {
+                starts: AtomicUsize::new(0),
+                samples,
+                sample_rate: TARGET_SAMPLE_RATE,
+            }
+        }
+    }
+
+    impl AudioRecorder for FakeRecorder {
+        fn start(&self) -> Result<RecordingSession, String> {
+            self.starts.fetch_add(1, Ordering::Relaxed);
+            Ok(RecordingSession::from_samples(
+                self.samples.clone(),
+                self.sample_rate,
+            ))
+        }
+    }
+
+    struct FakeTranscriber {
+        calls: AtomicUsize,
+        result: Mutex<Result<String, String>>,
+    }
+
+    impl FakeTranscriber {
+        fn ok(text: &str) -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+                result: Mutex::new(Ok(text.to_string())),
+            }
+        }
+
+        fn err(message: &str) -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+                result: Mutex::new(Err(message.to_string())),
+            }
+        }
+    }
+
+    impl VoiceTranscriber for FakeTranscriber {
+        fn transcribe(&self, _cache_path: &Path, _audio: CapturedAudio) -> Result<String, String> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            self.result.lock().clone()
+        }
     }
 
     #[test]
@@ -706,7 +1265,28 @@ mod tests {
     }
 
     #[test]
-    fn complete_distil_model_reports_engine_unavailable() {
+    fn complete_distil_model_reports_ready() {
+        let (_db_dir, db_path) = test_db_path();
+        let model_dir = tempdir().expect("model dir");
+        let cache_path = model_dir.path().join(DISTIL_CACHE_DIR);
+        write_complete_distil_model(&cache_path);
+
+        let db = open_test_db(&db_path);
+        let registry = VoiceProviderRegistry::new(model_dir.path().to_path_buf());
+        let provider = registry
+            .list_providers(&db)
+            .into_iter()
+            .find(|provider| provider.metadata.id == DISTIL_ID)
+            .expect("distil provider");
+
+        assert_eq!(provider.status, VoiceProviderStatus::Ready);
+        assert!(!provider.setup_required);
+        assert!(provider.can_remove_model);
+        assert_eq!(provider.error, None);
+    }
+
+    #[test]
+    fn incomplete_distil_manifest_requires_setup() {
         let (_db_dir, db_path) = test_db_path();
         let model_dir = tempdir().expect("model dir");
         let cache_path = model_dir.path().join(DISTIL_CACHE_DIR);
@@ -725,15 +1305,203 @@ mod tests {
             .find(|provider| provider.metadata.id == DISTIL_ID)
             .expect("distil provider");
 
-        assert_eq!(provider.status, VoiceProviderStatus::EngineUnavailable);
-        assert!(!provider.setup_required);
-        assert!(provider.can_remove_model);
-        assert!(
-            provider
-                .error
-                .as_deref()
-                .is_some_and(|error| error.contains("not available in this build"))
+        assert_eq!(provider.status, VoiceProviderStatus::NeedsSetup);
+        assert!(provider.setup_required);
+        assert!(!provider.can_remove_model);
+    }
+
+    #[test]
+    fn sample_conversion_handles_formats_and_channels() {
+        assert_eq!(normalize_interleaved_f32(&[], 1), Vec::<f32>::new());
+        assert_eq!(
+            normalize_interleaved_f32(&[0.5, -0.25], 1),
+            vec![0.5, -0.25]
         );
+        assert_eq!(
+            normalize_interleaved_i16(&[i16::MAX, i16::MIN], 2),
+            vec![(1.0 + -1.0) / 2.0]
+        );
+        assert_eq!(
+            normalize_interleaved_u16(&[u16::MIN, u16::MAX], 2),
+            vec![(-1.0 + 0.9999695) / 2.0]
+        );
+    }
+
+    #[test]
+    fn resample_to_target_rate_keeps_target_rate_unchanged() {
+        let samples = vec![0.0, 0.5, 1.0];
+        assert_eq!(
+            resample_to_target_rate(&samples, TARGET_SAMPLE_RATE),
+            samples
+        );
+    }
+
+    #[tokio::test]
+    async fn start_distil_recording_rejects_disabled_provider() {
+        let (_db_dir, db_path) = test_db_path();
+        let model_dir = tempdir().expect("model dir");
+        write_complete_distil_model(&model_dir.path().join(DISTIL_CACHE_DIR));
+        let db = open_test_db(&db_path);
+        db.set_app_setting(&enabled_key(DISTIL_ID), "false")
+            .expect("disable provider");
+        drop(db);
+
+        let registry = VoiceProviderRegistry::with_runtime(
+            model_dir.path().to_path_buf(),
+            Arc::new(FakeRecorder::new(vec![0.1])),
+            Arc::new(FakeTranscriber::ok("ignored")),
+        );
+
+        let err = registry
+            .start_recording(&db_path, DISTIL_ID)
+            .await
+            .expect_err("disabled provider should not record");
+        assert!(err.contains("disabled"));
+    }
+
+    #[tokio::test]
+    async fn start_distil_recording_rejects_missing_model() {
+        let (_db_dir, db_path) = test_db_path();
+        let model_dir = tempdir().expect("model dir");
+        let registry = VoiceProviderRegistry::with_runtime(
+            model_dir.path().to_path_buf(),
+            Arc::new(FakeRecorder::new(vec![0.1])),
+            Arc::new(FakeTranscriber::ok("ignored")),
+        );
+
+        let err = registry
+            .start_recording(&db_path, DISTIL_ID)
+            .await
+            .expect_err("missing model should not record");
+        assert!(err.contains("Download"));
+    }
+
+    #[tokio::test]
+    async fn start_distil_recording_rejects_already_active_recording() {
+        let (_db_dir, db_path) = test_db_path();
+        let model_dir = tempdir().expect("model dir");
+        write_complete_distil_model(&model_dir.path().join(DISTIL_CACHE_DIR));
+        let recorder = Arc::new(FakeRecorder::new(vec![0.1]));
+        let registry = VoiceProviderRegistry::with_runtime(
+            model_dir.path().to_path_buf(),
+            recorder.clone(),
+            Arc::new(FakeTranscriber::ok("ignored")),
+        );
+
+        registry
+            .start_recording(&db_path, DISTIL_ID)
+            .await
+            .expect("first recording starts");
+        let err = registry
+            .start_recording(&db_path, DISTIL_ID)
+            .await
+            .expect_err("second recording should fail");
+
+        assert!(err.contains("already active"));
+        assert_eq!(recorder.starts.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn stop_without_recording_returns_clear_error() {
+        let registry = VoiceProviderRegistry::with_runtime(
+            PathBuf::from("/tmp/models"),
+            Arc::new(FakeRecorder::new(vec![0.1])),
+            Arc::new(FakeTranscriber::ok("ignored")),
+        );
+
+        let err = registry
+            .stop_and_transcribe(DISTIL_ID)
+            .await
+            .expect_err("stop without recording should fail");
+        assert!(err.contains("No voice recording is active"));
+    }
+
+    #[tokio::test]
+    async fn cancel_drops_active_recording() {
+        let (_db_dir, db_path) = test_db_path();
+        let model_dir = tempdir().expect("model dir");
+        write_complete_distil_model(&model_dir.path().join(DISTIL_CACHE_DIR));
+        let transcriber = Arc::new(FakeTranscriber::ok("ignored"));
+        let registry = VoiceProviderRegistry::with_runtime(
+            model_dir.path().to_path_buf(),
+            Arc::new(FakeRecorder::new(vec![0.1])),
+            transcriber.clone(),
+        );
+
+        registry
+            .start_recording(&db_path, DISTIL_ID)
+            .await
+            .expect("recording starts");
+        registry
+            .cancel_recording(DISTIL_ID)
+            .await
+            .expect("cancel recording");
+
+        let err = registry
+            .stop_and_transcribe(DISTIL_ID)
+            .await
+            .expect_err("cancelled recording should be gone");
+        assert!(err.contains("No voice recording is active"));
+        assert_eq!(transcriber.calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn start_then_stop_returns_fake_transcript() {
+        let (_db_dir, db_path) = test_db_path();
+        let model_dir = tempdir().expect("model dir");
+        write_complete_distil_model(&model_dir.path().join(DISTIL_CACHE_DIR));
+        let transcriber = Arc::new(FakeTranscriber::ok("hello from test"));
+        let registry = VoiceProviderRegistry::with_runtime(
+            model_dir.path().to_path_buf(),
+            Arc::new(FakeRecorder::new(vec![0.1, 0.2, 0.3])),
+            transcriber.clone(),
+        );
+
+        registry
+            .start_recording(&db_path, DISTIL_ID)
+            .await
+            .expect("recording starts");
+        let transcript = registry
+            .stop_and_transcribe(DISTIL_ID)
+            .await
+            .expect("transcribes");
+
+        assert_eq!(transcript, "hello from test");
+        assert_eq!(transcriber.calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn transcription_error_does_not_poison_later_recordings() {
+        let (_db_dir, db_path) = test_db_path();
+        let model_dir = tempdir().expect("model dir");
+        write_complete_distil_model(&model_dir.path().join(DISTIL_CACHE_DIR));
+        let transcriber = Arc::new(FakeTranscriber::err("boom"));
+        let registry = VoiceProviderRegistry::with_runtime(
+            model_dir.path().to_path_buf(),
+            Arc::new(FakeRecorder::new(vec![0.1])),
+            transcriber.clone(),
+        );
+
+        registry
+            .start_recording(&db_path, DISTIL_ID)
+            .await
+            .expect("recording starts");
+        let err = registry
+            .stop_and_transcribe(DISTIL_ID)
+            .await
+            .expect_err("fake transcriber fails");
+        assert_eq!(err, "boom");
+
+        *transcriber.result.lock() = Ok("recovered".to_string());
+        registry
+            .start_recording(&db_path, DISTIL_ID)
+            .await
+            .expect("recording can start again");
+        let transcript = registry
+            .stop_and_transcribe(DISTIL_ID)
+            .await
+            .expect("later transcription succeeds");
+        assert_eq!(transcript, "recovered");
     }
 
     #[tokio::test]
@@ -741,8 +1509,7 @@ mod tests {
         let (_db_dir, db_path) = test_db_path();
         let model_dir = tempdir().expect("model dir");
         let cache_path = model_dir.path().join(DISTIL_CACHE_DIR);
-        std::fs::create_dir_all(&cache_path).expect("create model cache");
-        std::fs::write(cache_path.join("tokenizer.json"), "{}").expect("write tokenizer");
+        write_complete_distil_model(&cache_path);
         let db = open_test_db(&db_path);
         db.set_app_setting(&model_status_key(DISTIL_ID), "installed")
             .expect("set model status");

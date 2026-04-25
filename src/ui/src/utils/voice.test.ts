@@ -5,6 +5,7 @@ import {
   chooseVoiceProvider,
   describeSpeechRecognitionError,
   insertTranscriptAtSelection,
+  isNativeVoiceProvider,
 } from "./voice";
 
 function provider(
@@ -138,6 +139,33 @@ describe("insertTranscriptAtSelection", () => {
       text: "hello",
       cursor: 5,
     });
+  });
+});
+
+describe("isNativeVoiceProvider", () => {
+  it("returns true for local model providers", () => {
+    expect(
+      isNativeVoiceProvider(
+        provider({
+          id: "voice-distil-whisper-candle",
+          kind: "local-model",
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("returns false for platform and external providers", () => {
+    expect(isNativeVoiceProvider(provider({ id: "voice-platform-system" }))).toBe(
+      false,
+    );
+    expect(
+      isNativeVoiceProvider(
+        provider({
+          id: "voice-cloud-provider",
+          kind: "external",
+        }),
+      ),
+    ).toBe(false);
   });
 });
 

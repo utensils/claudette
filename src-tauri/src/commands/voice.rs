@@ -71,7 +71,10 @@ pub async fn voice_start_recording(
             .voice
             .resolve_provider_id(&db, provider_id.as_deref())?
     };
-    state.voice.start_recording(&provider_id).await
+    state
+        .voice
+        .start_recording(&state.db_path, &provider_id)
+        .await
 }
 
 #[tauri::command]

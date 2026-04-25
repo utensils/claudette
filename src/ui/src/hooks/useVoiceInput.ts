@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { listVoiceProviders } from "../services/voice";
+import {
+  cancelVoiceRecording,
+  listVoiceProviders,
+  startVoiceRecording,
+  stopAndTranscribeVoice,
+} from "../services/voice";
 import type { VoiceProviderInfo } from "../types/voice";
 import {
   PLATFORM_VOICE_PROVIDER_ID,
   chooseVoiceProvider,
   describeSpeechRecognitionError,
+  isNativeVoiceProvider,
 } from "../utils/voice";
 
 type VoiceState =
@@ -88,6 +94,7 @@ export function useVoiceInput(
   const [error, setError] = useState<string | null>(null);
   const [activeProvider, setActiveProvider] = useState<VoiceProviderInfo | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const nativeProviderRef = useRef<string | null>(null);
   const finalTranscriptRef = useRef("");
   const cancelledRef = useRef(false);
   const platformSpeechDisabled = useMemo(() => isMacPlatform(), []);
@@ -114,6 +121,10 @@ export function useVoiceInput(
     cancelledRef.current = true;
     recognitionRef.current?.abort();
     recognitionRef.current = null;
+    if (nativeProviderRef.current) {
+      void cancelVoiceRecording(nativeProviderRef.current);
+      nativeProviderRef.current = null;
+    }
     finalTranscriptRef.current = "";
     setInterimTranscript("");
     setState("idle");
@@ -145,7 +156,7 @@ export function useVoiceInput(
       return;
     }
 
-    if (provider.id !== PLATFORM_VOICE_PROVIDER_ID) {
+    if (isNativeVoiceProvider(provider)) {
       const providerMessage = provider.error ?? provider.statusLabel;
       if (provider.status === "engine-unavailable" || provider.status === "error") {
         setError(providerMessage);
@@ -158,7 +169,23 @@ export function useVoiceInput(
         onNeedsSetup();
         return;
       }
-      setError(providerMessage || "This local provider is not available.");
+
+      try {
+        await startVoiceRecording(provider.id);
+      } catch (err) {
+        setError(String(err));
+        setState("error");
+        return;
+      }
+
+      nativeProviderRef.current = provider.id;
+      setElapsedSeconds(0);
+      setState("recording");
+      return;
+    }
+
+    if (provider.id !== PLATFORM_VOICE_PROVIDER_ID) {
+      setError(provider.error ?? provider.statusLabel ?? "This voice provider is not available.");
       setState("error");
       return;
     }
@@ -226,10 +253,29 @@ export function useVoiceInput(
   }, [Recognition, onNeedsSetup, onTranscript]);
 
   const stop = useCallback(() => {
+    if (nativeProviderRef.current) {
+      const providerId = nativeProviderRef.current;
+      nativeProviderRef.current = null;
+      setState("transcribing");
+      void stopAndTranscribeVoice(providerId)
+        .then((transcript) => {
+          if (cancelledRef.current) return;
+          const normalized = transcript.trim();
+          if (normalized) onTranscript(normalized);
+          setState("idle");
+        })
+        .catch((err) => {
+          if (cancelledRef.current) return;
+          setError(String(err));
+          setState("error");
+        });
+      return;
+    }
+
     if (!recognitionRef.current) return;
     setState("transcribing");
     recognitionRef.current.stop();
-  }, []);
+  }, [onTranscript]);
 
   return {
     state,

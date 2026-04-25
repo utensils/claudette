@@ -34,6 +34,10 @@ export function chooseVoiceProvider(
   return readyLocal ?? platform ?? null;
 }
 
+export function isNativeVoiceProvider(provider: VoiceProviderInfo): boolean {
+  return provider.kind === "local-model";
+}
+
 export function insertTranscriptAtSelection(
   text: string,
   transcript: string,

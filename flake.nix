@@ -205,6 +205,7 @@
             pkgs.glib-networking
             pkgs.openssl
             pkgs.zlib
+            pkgs.alsa-lib
             pkgs.libayatana-appindicator
             # webkit2gtk delegates <video>/<audio> rendering to GStreamer.
             # Without gst-plugins-base the dev log fills with
