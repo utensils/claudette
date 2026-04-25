@@ -489,7 +489,7 @@ function VoiceProviderRow({
               </strong>
             </div>
           )}
-          {progress && (
+          {progress && (provider.status === "downloading" || preparing) && (
             <div className={styles.envErrorHint}>
               Downloading {progress.filename}:{" "}
               {progress.percent === null

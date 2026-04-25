@@ -238,8 +238,16 @@ export function useVoiceInput(
     }
 
     if (!Recognition) {
-      setError("System dictation is not available in this webview.");
-      setState("error");
+      // Linux/Windows webviews typically don't expose the Web Speech API.
+      // Rust reports the platform provider as "ready" because it has no
+      // way to introspect webview capabilities, so we treat the missing
+      // engine as setup-required here and route the user to Plugins
+      // settings where they can enable the offline Whisper provider.
+      setError(
+        "System dictation isn't available in this webview. Switch to an offline voice provider in Plugins settings.",
+      );
+      setState("setup-required");
+      onNeedsSetup(provider.id);
       return;
     }
 
