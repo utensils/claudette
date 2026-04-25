@@ -57,6 +57,7 @@
         "windowSize": { "width": 660, "height": 400 }
       },
       "minimumSystemVersion": "11.0",
+      "entitlements": "Entitlements.plist",
       "infoPlist": "Info.plist"
     }
   },

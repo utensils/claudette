@@ -247,17 +247,6 @@ mod tests {
     }
 
     #[test]
-    fn platform_speech_bridge_refuses_unbundled_permission_prompts() {
-        let availability = DefaultPlatformSpeechEngine::new().prepare();
-
-        assert_eq!(
-            availability.status,
-            PlatformSpeechAvailabilityStatus::EngineUnavailable
-        );
-        assert!(availability.message.contains(".app bundle"));
-    }
-
-    #[test]
     #[ignore = "requires CLAUDETTE_PLATFORM_SPEECH_SAMPLE_WAV and macOS speech permissions"]
     fn ignored_platform_speech_transcribes_fixture_wav() {
         let sample_path = std::env::var_os("CLAUDETTE_PLATFORM_SPEECH_SAMPLE_WAV")
