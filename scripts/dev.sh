@@ -70,6 +70,11 @@ echo "▸ Discovery file:   $discovery_file"
 (cd src/ui && bun install)
 
 features="${CARGO_TAURI_FEATURES:-devtools,server}"
+runner_args=()
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  runner_args=(--runner "$repo_root/scripts/macos-dev-app-runner.sh")
+fi
 
 exec cargo tauri dev --features "$features" \
+  "${runner_args[@]}" \
   -c "{\"build\":{\"devUrl\":\"http://localhost:$vite_port\"}}"

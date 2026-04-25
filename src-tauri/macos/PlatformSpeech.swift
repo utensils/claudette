@@ -106,11 +106,11 @@ public func claudette_platform_speech_free_string(_ pointer: UnsafeMutablePointe
 }
 
 private func platformSpeechStatus(prepare: Bool) -> ClaudettePlatformSpeechStatus {
-    if let missingUsageDescription = missingTCCUsageDescriptionKey() {
+    if let tccPreflightFailure = tccPreflightFailureMessage() {
         return status(
             statusEngineUnavailable,
             engineNone,
-            "App bundle is missing \(missingUsageDescription). Rebuild Claudette so macOS can show the required privacy prompt."
+            tccPreflightFailure
         )
     }
 
@@ -144,13 +144,18 @@ private func platformSpeechStatus(prepare: Bool) -> ClaudettePlatformSpeechStatu
     return sfSpeechStatus()
 }
 
-private func missingTCCUsageDescriptionKey() -> String? {
-    let infoDictionary = Bundle.main.infoDictionary ?? [:]
+private func tccPreflightFailureMessage() -> String? {
+    let bundle = Bundle.main
+    if bundle.bundleURL.pathExtension.lowercased() != "app" {
+        return "Apple Speech permissions require Claudette to run from a macOS .app bundle. Start Claudette with the dev helper or a packaged build."
+    }
+
+    let infoDictionary = bundle.infoDictionary ?? [:]
     if usageDescriptionValue("NSMicrophoneUsageDescription", in: infoDictionary) == nil {
-        return "NSMicrophoneUsageDescription"
+        return "App bundle is missing NSMicrophoneUsageDescription. Rebuild Claudette so macOS can show the required privacy prompt."
     }
     if usageDescriptionValue("NSSpeechRecognitionUsageDescription", in: infoDictionary) == nil {
-        return "NSSpeechRecognitionUsageDescription"
+        return "App bundle is missing NSSpeechRecognitionUsageDescription. Rebuild Claudette so macOS can show the required privacy prompt."
     }
     return nil
 }
