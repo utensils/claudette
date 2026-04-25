@@ -12,7 +12,7 @@ interface AttachmentLightboxProps {
   onClose: () => void;
   /** Right-click handler for the previewed image. When set, suppresses the
    *  WebKit default image context menu (Open in New Window, Copy Image, …)
-   *  and lets the caller surface its own attachment menu. See issue #433. */
+   *  and lets the caller surface its own attachment menu. See issue 433. */
   onContextMenu?: (e: React.MouseEvent) => void;
 }
 

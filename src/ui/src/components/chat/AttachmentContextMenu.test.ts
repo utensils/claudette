@@ -55,7 +55,7 @@ describe("clampMenuToViewport", () => {
 describe("attachmentNounFor", () => {
   // The default-image labels read awkwardly for PDFs and text files
   // ("Download Image" for a PDF). Map media types to a sensible noun so
-  // the menu labels match the artifact kind. See issue #430.
+  // the menu labels match the artifact kind. See issue 430.
 
   it("returns 'Image' for raster image types", () => {
     expect(attachmentNounFor("image/png")).toBe("Image");

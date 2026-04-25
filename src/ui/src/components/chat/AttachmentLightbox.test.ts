@@ -66,7 +66,7 @@ describe("needsSvgFallbackSize", () => {
   // SVGs with only a viewBox (no width/height attributes on <svg>) have no
   // intrinsic pixel dimensions when loaded through <img>, so the lightbox
   // collapses to 0×0. Other image types always carry intrinsic pixel
-  // dimensions, so they don't need the fallback. See issue #432.
+  // dimensions, so they don't need the fallback. See issue 432.
 
   it("returns true for image/svg+xml", () => {
     expect(needsSvgFallbackSize("image/svg+xml")).toBe(true);

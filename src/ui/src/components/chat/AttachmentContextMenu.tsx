@@ -41,7 +41,7 @@ export function clampMenuToViewport(
 /**
  * Pick a human-readable noun for an attachment's media type. Used to label
  * the context menu actions so a PDF doesn't show "Download Image". See
- * issue #430.
+ * issue 430.
  */
 export function attachmentNounFor(mediaType: string): "Image" | "PDF" | "File" {
   if (mediaType.startsWith("image/")) return "Image";

@@ -144,7 +144,7 @@ function PdfThumbnail({ dataBase64, attachmentId, filename, className, onClick, 
   onClick?: () => void;
   /** Right-click handler. Wired so PDF thumbnails get the same Claudette
    *  context menu (Download / Copy / Open) as image attachments rather than
-   *  WebKit's default image menu. See issue #430. */
+   *  WebKit's default image menu. See issue 430. */
   onContextMenu?: (e: React.MouseEvent) => void;
 }) {
   const [src, setSrc] = useState<string | null>(null);

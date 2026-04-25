@@ -252,7 +252,11 @@ fn extension_for_media_type(media_type: &str) -> &str {
         .split_once('+')
         .map(|p| p.0)
         .unwrap_or(after_slash);
-    if !bare.is_empty() && bare.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.') {
+    if !bare.is_empty()
+        && bare
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+    {
         bare
     } else {
         "bin"
@@ -391,10 +395,7 @@ mod tests {
     #[test]
     fn extension_for_media_type_strips_xml_json_suffixes() {
         assert_eq!(extension_for_media_type("image/svg+xml"), "svg");
-        assert_eq!(
-            extension_for_media_type("application/ld+json"),
-            "ld"
-        );
+        assert_eq!(extension_for_media_type("application/ld+json"), "ld");
     }
 
     #[test]
