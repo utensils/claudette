@@ -15,6 +15,7 @@ import {
 
 type VoiceState =
   | "idle"
+  | "starting"
   | "setup-required"
   | "recording"
   | "transcribing"
@@ -160,6 +161,12 @@ export function useVoiceInput(
     setActiveProvider(null);
     finalTranscriptRef.current = "";
     cancelledRef.current = false;
+    // Immediate UI feedback before any awaits — without this, the user
+    // sees no change between clicking the mic and the OS permission
+    // prompt appearing (cold-start CoreAudio + TCC verification can
+    // take a couple of seconds on a fresh-signed build), and may
+    // assume the click did nothing and click again.
+    setState("starting");
 
     let providers: VoiceProviderInfo[];
     try {

@@ -176,6 +176,13 @@ impl RecordingSession {
 
 trait AudioRecorder: Send + Sync {
     fn start(&self) -> Result<RecordingSession, String>;
+    /// Touch the underlying audio host enough to trigger any one-time
+    /// initialization (e.g. CoreAudio's audio-server XPC handshake on
+    /// macOS). Safe to call without microphone permission — it must
+    /// not open an input stream and must not block on TCC prompts.
+    fn warmup(&self) {
+        // Default no-op; concrete recorders override.
+    }
 }
 
 trait VoiceTranscriber: Send + Sync {
@@ -357,6 +364,19 @@ impl VoiceProviderRegistry {
             PlatformVoiceProvider.status(self, db),
             DistilWhisperCandleProvider.status(self, db),
         ]
+    }
+
+    /// Pre-warm voice subsystems so the user's first mic click hits warm
+    /// state instead of paying cold-start cost (CoreAudio XPC handshake,
+    /// Speech.framework load, TCC verification of a fresh CDHash).
+    ///
+    /// Safe to call without any microphone or speech-recognition
+    /// permission — only touches enumeration / status APIs that don't
+    /// trigger TCC prompts. Intended to run once on a std thread
+    /// during app setup.
+    pub fn prewarm(&self) {
+        self.recorder.warmup();
+        let _ = self.platform_speech.availability();
     }
 
     pub fn set_selected_provider(
@@ -1165,6 +1185,18 @@ fn resample_to_target_rate(samples: &[f32], sample_rate: u32) -> Vec<f32> {
 }
 
 impl AudioRecorder for CpalAudioRecorder {
+    fn warmup(&self) {
+        // Enumerating the default input device + reading its default
+        // config initializes the CoreAudio audio-server XPC connection
+        // on macOS without opening a stream — so the eventual mic
+        // click only pays the TCC prompt cost, not the cold-start
+        // CoreAudio handshake. No permission is required for this.
+        let host = cpal::default_host();
+        if let Some(device) = host.default_input_device() {
+            let _ = device.default_input_config();
+        }
+    }
+
     fn start(&self) -> Result<RecordingSession, String> {
         let host = cpal::default_host();
         let device = host

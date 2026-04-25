@@ -3002,6 +3002,16 @@ function ChatInputArea({
               <span>{formatElapsedSeconds(voice.elapsedSeconds)}</span>
             </div>
           )}
+          {voice.state === "starting" && (
+            <div className={styles.voiceStatusText} aria-live="polite">
+              <LoaderCircle
+                size={12}
+                className={styles.voiceStatusSpinner}
+                aria-hidden="true"
+              />
+              <span>Starting…</span>
+            </div>
+          )}
           {voice.state === "transcribing" && (
             <div className={styles.voiceStatusText} aria-live="polite">
               <LoaderCircle
@@ -3041,10 +3051,14 @@ function ChatInputArea({
           )}
           <button
             type="button"
-            className={`${styles.voiceBtn} ${voice.state === "recording" ? styles.voiceBtnRecording : ""} ${voice.state === "transcribing" ? styles.voiceBtnTranscribing : ""}`}
+            className={`${styles.voiceBtn} ${voice.state === "recording" ? styles.voiceBtnRecording : ""} ${voice.state === "transcribing" || voice.state === "starting" ? styles.voiceBtnTranscribing : ""}`}
             onClick={() => {
               if (voice.state === "recording") voice.stop();
-              else if (voice.state === "transcribing") voice.cancel();
+              else if (
+                voice.state === "transcribing" ||
+                voice.state === "starting"
+              )
+                voice.cancel();
               else void voice.start();
             }}
             disabled={isRunning}
@@ -3053,17 +3067,27 @@ function ChatInputArea({
                 ? "Stop voice input"
                 : voice.state === "transcribing"
                   ? "Cancel transcription"
-                  : "Voice input"
+                  : voice.state === "starting"
+                    ? "Cancel"
+                    : "Voice input"
             }
             aria-label={
               voice.state === "recording"
                 ? "Stop voice input"
                 : voice.state === "transcribing"
                   ? "Cancel transcription"
-                  : "Voice input"
+                  : voice.state === "starting"
+                    ? "Cancel"
+                    : "Voice input"
             }
           >
-            {voice.state === "transcribing" ? <X size={16} /> : <Mic size={16} />}
+            {voice.state === "transcribing" ? (
+              <X size={16} />
+            ) : voice.state === "starting" ? (
+              <LoaderCircle size={16} className={styles.voiceStatusSpinner} />
+            ) : (
+              <Mic size={16} />
+            )}
           </button>
           <button
             className={`${styles.sendBtn} ${isRunning ? styles.sendBtnStop : ""}`}

@@ -374,6 +374,15 @@ fn main() {
             // returns). On Windows this is a no-op.
             std::thread::spawn(claudette::env::prewarm_shell_path);
 
+            // Pre-warm voice subsystems so the user's first mic click
+            // hits warm CoreAudio + Speech.framework state instead of
+            // a multi-second cold-start delay. Touches enumeration /
+            // status APIs only — no permission prompts triggered.
+            {
+                let voice = app.state::<state::AppState>().voice.clone();
+                std::thread::spawn(move || voice.prewarm());
+            }
+
             // Set up the system tray icon (respects tray_enabled setting).
             if let Err(e) = tray::setup_tray(app.handle()) {
                 eprintln!("[tray] Failed to setup tray: {e}");
