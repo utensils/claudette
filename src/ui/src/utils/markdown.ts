@@ -148,10 +148,10 @@ export function HighlightedCode({
   ...props
 }: HighlightedCodeProps): React.ReactElement {
   // Capture the full fence info string (up to whitespace), not just the
-  // [\w-]+ subset. Languages with non-word characters in their canonical
-  // names (e.g. `c++`, `f#`, `objective-c++`) need the full token so the
-  // worker's LANG_ALIASES table can normalize them; otherwise a `c++`
-  // fence collapses to `c` and gets highlighted as plain C.
+  // [\w-]+ subset. Supported languages with non-word characters in their
+  // canonical names (e.g. `c++`) need the full token so the worker's
+  // LANG_ALIASES table can normalize them; otherwise a `c++` fence
+  // collapses to `c` and gets highlighted as plain C.
   const lang = typeof className === "string"
     ? (className.match(/(?:^|\s)language-([^\s]+)/)?.[1] ?? null)
     : null;

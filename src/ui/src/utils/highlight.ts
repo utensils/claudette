@@ -67,8 +67,13 @@ function getWorker(): Worker {
 
 export function getCachedHighlight(code: string, lang: string): string | null {
   const trimmed = trimTrailingNewline(code);
-  const cached = cache.get(cacheKey(lang, trimmed));
-  return cached ?? null;
+  const key = cacheKey(lang, trimmed);
+  const cached = cache.get(key);
+  if (cached !== undefined) {
+    bumpLru(key, cached);
+    return cached;
+  }
+  return null;
 }
 
 export function highlightCode(code: string, lang: string): Promise<string | null> {
