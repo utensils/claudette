@@ -31,6 +31,7 @@ function provider(
     name: id,
     description: "",
     kind: "platform",
+    recordingMode: "webview",
     privacyLabel: "",
     offline: false,
     downloadRequired: false,
@@ -89,6 +90,7 @@ describe("useVoiceInput", () => {
       provider({
         id: "voice-distil-whisper-candle",
         kind: "local-model",
+        recordingMode: "native",
       }),
     ]);
     voiceService.startVoiceRecording.mockResolvedValueOnce(undefined);
@@ -113,6 +115,7 @@ describe("useVoiceInput", () => {
       provider({
         id: "voice-distil-whisper-candle",
         kind: "local-model",
+        recordingMode: "native",
       }),
     ]);
     voiceService.startVoiceRecording.mockResolvedValueOnce(undefined);
@@ -133,6 +136,7 @@ describe("useVoiceInput", () => {
       provider({
         id: "voice-distil-whisper-candle",
         kind: "local-model",
+        recordingMode: "native",
       }),
     ]);
     voiceService.startVoiceRecording.mockResolvedValue(undefined);
@@ -157,7 +161,63 @@ describe("useVoiceInput", () => {
       provider({
         id: "voice-distil-whisper-candle",
         kind: "local-model",
+        recordingMode: "native",
         status: "needs-setup",
+        setupRequired: true,
+      }),
+    ]);
+
+    await controller.start();
+
+    expect(onNeedsSetup).toHaveBeenCalledOnce();
+    expect(voiceService.startVoiceRecording).not.toHaveBeenCalled();
+  });
+
+  it("uses native platform dictation on macOS and inserts the transcript", async () => {
+    const speechRecognition = vi.fn();
+    const onTranscript = vi.fn();
+    vi.stubGlobal("navigator", {
+      language: "en-US",
+      platform: "MacIntel",
+      userAgent: "Mac OS X",
+    });
+    vi.stubGlobal("window", {
+      SpeechRecognition: speechRecognition,
+      webkitSpeechRecognition: undefined,
+    });
+    const controller = useVoiceInput(onTranscript, vi.fn());
+    voiceService.listVoiceProviders.mockResolvedValueOnce([
+      provider({
+        id: "voice-platform-system",
+        recordingMode: "native",
+      }),
+    ]);
+    voiceService.startVoiceRecording.mockResolvedValueOnce(undefined);
+    voiceService.stopAndTranscribeVoice.mockResolvedValueOnce(" spoken words ");
+
+    await controller.start();
+    controller.stop();
+    await flushPromises();
+
+    expect(speechRecognition).not.toHaveBeenCalled();
+    expect(voiceService.startVoiceRecording).toHaveBeenCalledWith(
+      "voice-platform-system",
+    );
+    expect(voiceService.stopAndTranscribeVoice).toHaveBeenCalledWith(
+      "voice-platform-system",
+    );
+    expect(onTranscript).toHaveBeenCalledWith("spoken words");
+  });
+
+  it("routes setup-required platform providers to settings", async () => {
+    const onNeedsSetup = vi.fn();
+    const controller = useVoiceInput(vi.fn(), onNeedsSetup);
+    voiceService.listVoiceProviders.mockResolvedValueOnce([
+      provider({
+        id: "voice-platform-system",
+        recordingMode: "native",
+        status: "needs-setup",
+        statusLabel: "Needs Speech Recognition permission",
         setupRequired: true,
       }),
     ]);
@@ -181,7 +241,10 @@ describe("useVoiceInput", () => {
     });
     const controller = useVoiceInput(vi.fn(), vi.fn());
     voiceService.listVoiceProviders.mockResolvedValueOnce([
-      provider({ id: "voice-platform-system" }),
+      provider({
+        id: "voice-platform-system",
+        recordingMode: "webview",
+      }),
     ]);
 
     await controller.start();

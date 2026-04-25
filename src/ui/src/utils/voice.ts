@@ -10,12 +10,10 @@ export interface SpeechRecognitionErrorLike {
 export function chooseVoiceProvider(
   providers: VoiceProviderInfo[],
 ): VoiceProviderInfo | null {
-  const selected = providers.find((provider) => provider.selected);
-  if (
-    selected &&
-    (selected.id !== PLATFORM_VOICE_PROVIDER_ID ||
-      (selected.enabled && selected.status === "ready"))
-  ) {
+  const selected = providers.find(
+    (provider) => provider.selected && provider.enabled,
+  );
+  if (selected) {
     return selected;
   }
 
@@ -31,11 +29,14 @@ export function chooseVoiceProvider(
       provider.enabled &&
       provider.status === "ready",
   );
-  return readyLocal ?? platform ?? null;
+  const setupRequired = providers.find(
+    (provider) => provider.enabled && provider.setupRequired,
+  );
+  return readyLocal ?? platform ?? setupRequired ?? null;
 }
 
 export function isNativeVoiceProvider(provider: VoiceProviderInfo): boolean {
-  return provider.kind === "local-model";
+  return provider.recordingMode === "native";
 }
 
 export function shouldOpenVoiceSettingsForError(

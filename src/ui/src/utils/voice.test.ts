@@ -18,6 +18,7 @@ function provider(
     name: id,
     description: "",
     kind: "platform",
+    recordingMode: "webview",
     privacyLabel: "",
     offline: false,
     downloadRequired: false,
@@ -105,18 +106,17 @@ describe("chooseVoiceProvider", () => {
     ).toBeNull();
   });
 
-  it("does not choose a selected unavailable platform provider", () => {
-    expect(
-      chooseVoiceProvider([
-        provider({
-          id: "voice-platform-system",
-          selected: true,
-          status: "unavailable",
-          statusLabel: "Unavailable",
-          error: "System dictation is disabled on macOS.",
-        }),
-      ]),
-    ).toBeNull();
+  it("returns a selected setup-required platform provider for actionable setup", () => {
+    const selected = provider({
+      id: "voice-platform-system",
+      selected: true,
+      status: "needs-setup",
+      statusLabel: "Needs Speech Recognition permission",
+      setupRequired: true,
+      error: "Enable Speech Recognition permission for Claudette.",
+    });
+
+    expect(chooseVoiceProvider([selected])).toBe(selected);
   });
 });
 
@@ -150,20 +150,38 @@ describe("isNativeVoiceProvider", () => {
         provider({
           id: "voice-distil-whisper-candle",
           kind: "local-model",
+          recordingMode: "native",
         }),
       ),
     ).toBe(true);
   });
 
-  it("returns false for platform and external providers", () => {
-    expect(isNativeVoiceProvider(provider({ id: "voice-platform-system" }))).toBe(
-      false,
-    );
+  it("returns true for native platform providers", () => {
+    expect(
+      isNativeVoiceProvider(
+        provider({
+          id: "voice-platform-system",
+          recordingMode: "native",
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("returns false for webview platform and external providers", () => {
+    expect(
+      isNativeVoiceProvider(
+        provider({
+          id: "voice-platform-system",
+          recordingMode: "webview",
+        }),
+      ),
+    ).toBe(false);
     expect(
       isNativeVoiceProvider(
         provider({
           id: "voice-cloud-provider",
           kind: "external",
+          recordingMode: "webview",
         }),
       ),
     ).toBe(false);

@@ -6,6 +6,7 @@ mod commands;
 mod mdns;
 mod missing_cli;
 mod osc133;
+mod platform_speech;
 mod pty;
 mod remote;
 mod state;

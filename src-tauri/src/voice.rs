@@ -16,6 +16,12 @@ use tauri::{AppHandle, Emitter};
 use tokenizers::Tokenizer;
 use tokio::io::AsyncWriteExt;
 
+#[cfg(target_os = "macos")]
+use crate::platform_speech::PlatformSpeechAvailability;
+use crate::platform_speech::{
+    DefaultPlatformSpeechEngine, PlatformSpeechAvailabilityStatus, PlatformSpeechEngine,
+};
+
 const SELECTED_PROVIDER_KEY: &str = "voice:selected_provider";
 const AUTO_PROVIDER_KEY: &str = "voice:auto_provider";
 const PLATFORM_ID: &str = "voice-platform-system";
@@ -61,6 +67,13 @@ pub enum VoiceProviderStatus {
     Error,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum VoiceRecordingMode {
+    Native,
+    Webview,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VoiceProviderMetadata {
@@ -68,6 +81,7 @@ pub struct VoiceProviderMetadata {
     pub name: String,
     pub description: String,
     pub kind: VoiceProviderKind,
+    pub recording_mode: VoiceRecordingMode,
     pub privacy_label: String,
     pub offline: bool,
     pub download_required: bool,
@@ -110,9 +124,9 @@ pub struct VoiceErrorEvent {
 }
 
 #[derive(Debug, Clone)]
-struct CapturedAudio {
-    samples: Vec<f32>,
-    sample_rate: u32,
+pub(crate) struct CapturedAudio {
+    pub(crate) samples: Vec<f32>,
+    pub(crate) sample_rate: u32,
 }
 
 struct RecordingSession {
@@ -223,9 +237,6 @@ pub trait VoiceProvider: Send + Sync {
         app: &AppHandle,
         db_path: &Path,
     ) -> Result<VoiceProviderInfo, String>;
-    async fn start_recording(&self) -> Result<(), String>;
-    async fn stop_and_transcribe(&self) -> Result<String, String>;
-    async fn cancel(&self) -> Result<(), String>;
 }
 
 pub struct VoiceProviderRegistry {
@@ -233,6 +244,7 @@ pub struct VoiceProviderRegistry {
     active_recording: Mutex<Option<RecordingSession>>,
     recorder: Arc<dyn AudioRecorder>,
     transcriber: Arc<dyn VoiceTranscriber>,
+    platform_speech: Arc<dyn PlatformSpeechEngine>,
     backend_checker: Arc<dyn CandleBackendChecker>,
     transcription_timeout: Duration,
 }
@@ -269,8 +281,26 @@ impl VoiceProviderRegistry {
             model_root,
             recorder,
             transcriber,
+            Arc::new(DefaultPlatformSpeechEngine::new()),
             Arc::new(DefaultCandleBackendChecker),
             transcription_timeout,
+        )
+    }
+
+    #[cfg(test)]
+    fn with_platform_runtime(
+        model_root: PathBuf,
+        recorder: Arc<dyn AudioRecorder>,
+        transcriber: Arc<dyn VoiceTranscriber>,
+        platform_speech: Arc<dyn PlatformSpeechEngine>,
+    ) -> Self {
+        Self::with_runtime_backend_and_timeout(
+            model_root,
+            recorder,
+            transcriber,
+            platform_speech,
+            Arc::new(DefaultCandleBackendChecker),
+            DISTIL_TRANSCRIPTION_TIMEOUT,
         )
     }
 
@@ -285,6 +315,7 @@ impl VoiceProviderRegistry {
             model_root,
             recorder,
             transcriber,
+            Arc::new(DefaultPlatformSpeechEngine::new()),
             backend_checker,
             DISTIL_TRANSCRIPTION_TIMEOUT,
         )
@@ -294,6 +325,7 @@ impl VoiceProviderRegistry {
         model_root: PathBuf,
         recorder: Arc<dyn AudioRecorder>,
         transcriber: Arc<dyn VoiceTranscriber>,
+        platform_speech: Arc<dyn PlatformSpeechEngine>,
         backend_checker: Arc<dyn CandleBackendChecker>,
         transcription_timeout: Duration,
     ) -> Self {
@@ -302,6 +334,7 @@ impl VoiceProviderRegistry {
             active_recording: Mutex::new(None),
             recorder,
             transcriber,
+            platform_speech,
             backend_checker,
             transcription_timeout,
         }
@@ -401,7 +434,7 @@ impl VoiceProviderRegistry {
     pub async fn start_recording(&self, db_path: &Path, provider_id: &str) -> Result<(), String> {
         self.ensure_known(provider_id)?;
         match provider_id {
-            PLATFORM_ID => PlatformVoiceProvider.start_recording().await,
+            PLATFORM_ID => self.start_platform_recording(db_path).await,
             DISTIL_ID => self.start_distil_recording(db_path).await,
             _ => Err(format!("Unknown voice provider: {provider_id}")),
         }
@@ -410,7 +443,7 @@ impl VoiceProviderRegistry {
     pub async fn stop_and_transcribe(&self, provider_id: &str) -> Result<String, String> {
         self.ensure_known(provider_id)?;
         match provider_id {
-            PLATFORM_ID => PlatformVoiceProvider.stop_and_transcribe().await,
+            PLATFORM_ID => self.stop_platform_recording().await,
             DISTIL_ID => self.stop_distil_recording().await,
             _ => Err(format!("Unknown voice provider: {provider_id}")),
         }
@@ -419,10 +452,68 @@ impl VoiceProviderRegistry {
     pub async fn cancel_recording(&self, provider_id: &str) -> Result<(), String> {
         self.ensure_known(provider_id)?;
         match provider_id {
-            PLATFORM_ID => PlatformVoiceProvider.cancel().await,
+            PLATFORM_ID => self.cancel_platform_recording().await,
             DISTIL_ID => self.cancel_distil_recording().await,
             _ => Err(format!("Unknown voice provider: {provider_id}")),
         }
+    }
+
+    async fn start_platform_recording(&self, db_path: &Path) -> Result<(), String> {
+        {
+            let db = Database::open(db_path).map_err(|e| e.to_string())?;
+            if !self.enabled(&db, PLATFORM_ID) {
+                return Err("System dictation is disabled".to_string());
+            }
+            let availability = self.platform_speech.availability();
+            if availability.status != PlatformSpeechAvailabilityStatus::Ready {
+                return Err(availability.message);
+            }
+        }
+
+        let mut active = self.active_recording.lock();
+        if active.is_some() {
+            return Err("Voice recording is already active".to_string());
+        }
+        *active = Some(self.recorder.start()?);
+        Ok(())
+    }
+
+    async fn stop_platform_recording(&self) -> Result<String, String> {
+        let session = self
+            .active_recording
+            .lock()
+            .take()
+            .ok_or_else(|| "No voice recording is active".to_string())?;
+        let audio = session.finish()?;
+        if audio.samples.is_empty() {
+            return Err("No audio was captured".to_string());
+        }
+        validate_captured_audio(&audio)?;
+
+        let platform_speech = Arc::clone(&self.platform_speech);
+        let timeout = self.transcription_timeout;
+        let task = tokio::task::spawn_blocking(move || platform_speech.transcribe(audio));
+        let transcript = tokio::time::timeout(timeout, task)
+            .await
+            .map_err(|_| {
+                format!(
+                    "System dictation timed out after {} seconds. Try a shorter recording.",
+                    timeout.as_secs()
+                )
+            })?
+            .map_err(|e| format!("System dictation task failed: {e}"))??;
+        let transcript = transcript.trim().to_string();
+        if transcript.is_empty() {
+            return Err(
+                "No speech was recognized. Try again closer to the microphone.".to_string(),
+            );
+        }
+        Ok(transcript)
+    }
+
+    async fn cancel_platform_recording(&self) -> Result<(), String> {
+        let _ = self.active_recording.lock().take();
+        Ok(())
     }
 
     async fn start_distil_recording(&self, db_path: &Path) -> Result<(), String> {
@@ -544,15 +635,77 @@ impl VoiceProviderRegistry {
 struct PlatformVoiceProvider;
 
 #[cfg(target_os = "macos")]
-fn platform_voice_unavailable_reason() -> Option<&'static str> {
-    Some(
-        "System dictation is disabled on macOS because WKWebView speech recognition can terminate the app before permission errors are recoverable.",
-    )
+fn platform_recording_mode() -> VoiceRecordingMode {
+    VoiceRecordingMode::Native
 }
 
 #[cfg(not(target_os = "macos"))]
-fn platform_voice_unavailable_reason() -> Option<&'static str> {
-    None
+fn platform_recording_mode() -> VoiceRecordingMode {
+    VoiceRecordingMode::Webview
+}
+
+#[cfg(target_os = "macos")]
+fn platform_description() -> &'static str {
+    "Uses native Apple Speech recognition through the operating system. Requires Microphone and Speech Recognition permission."
+}
+
+#[cfg(not(target_os = "macos"))]
+fn platform_description() -> &'static str {
+    "Uses the webview or operating system speech recognition surface when available. Requires microphone and speech recognition permission."
+}
+
+#[cfg(target_os = "macos")]
+fn platform_privacy_label() -> &'static str {
+    "Uses Apple Speech services; offline behavior varies by OS language support"
+}
+
+#[cfg(not(target_os = "macos"))]
+fn platform_privacy_label() -> &'static str {
+    "Uses platform services; offline behavior varies by OS"
+}
+
+#[cfg(target_os = "macos")]
+fn platform_accelerator_label() -> &'static str {
+    "Apple Speech"
+}
+
+#[cfg(not(target_os = "macos"))]
+fn platform_accelerator_label() -> &'static str {
+    "No setup"
+}
+
+#[cfg(target_os = "macos")]
+fn platform_status_from_availability(
+    availability: PlatformSpeechAvailability,
+) -> (VoiceProviderStatus, String, bool, Option<String>) {
+    match availability.status {
+        PlatformSpeechAvailabilityStatus::Ready => (
+            VoiceProviderStatus::Ready,
+            availability.message,
+            false,
+            None,
+        ),
+        PlatformSpeechAvailabilityStatus::NeedsMicrophonePermission
+        | PlatformSpeechAvailabilityStatus::NeedsSpeechPermission
+        | PlatformSpeechAvailabilityStatus::NeedsAssets => (
+            VoiceProviderStatus::NeedsSetup,
+            availability.message.clone(),
+            true,
+            Some(availability.message),
+        ),
+        PlatformSpeechAvailabilityStatus::EngineUnavailable => (
+            VoiceProviderStatus::EngineUnavailable,
+            "System dictation engine unavailable".to_string(),
+            false,
+            Some(availability.message),
+        ),
+        PlatformSpeechAvailabilityStatus::Unavailable => (
+            VoiceProviderStatus::Unavailable,
+            availability.message.clone(),
+            false,
+            Some(availability.message),
+        ),
+    }
 }
 
 #[async_trait]
@@ -565,41 +718,57 @@ impl VoiceProvider for PlatformVoiceProvider {
         VoiceProviderMetadata {
             id: self.id().to_string(),
             name: "System dictation".to_string(),
-            description:
-                "Uses the webview or operating system speech recognition surface when available. Requires microphone and speech recognition permission."
-                    .to_string(),
+            description: platform_description().to_string(),
             kind: VoiceProviderKind::Platform,
-            privacy_label: "Uses platform services; offline behavior varies by OS".to_string(),
+            recording_mode: platform_recording_mode(),
+            privacy_label: platform_privacy_label().to_string(),
             offline: false,
             download_required: false,
             model_size_label: None,
             cache_path: None,
-            accelerator_label: Some("No setup".to_string()),
+            accelerator_label: Some(platform_accelerator_label().to_string()),
         }
     }
 
     fn status(&self, registry: &VoiceProviderRegistry, db: &Database) -> VoiceProviderInfo {
         let enabled = registry.enabled(db, self.id());
-        let unavailable_reason = platform_voice_unavailable_reason();
+        #[cfg(target_os = "macos")]
+        let (status, status_label, setup_required, error) = if !enabled {
+            (
+                VoiceProviderStatus::Unavailable,
+                "Disabled".to_string(),
+                false,
+                None,
+            )
+        } else {
+            platform_status_from_availability(registry.platform_speech.availability())
+        };
+        #[cfg(not(target_os = "macos"))]
+        let (status, status_label, setup_required, error) = if enabled {
+            (
+                VoiceProviderStatus::Ready,
+                "Ready when webview speech recognition and OS permissions are available"
+                    .to_string(),
+                false,
+                None,
+            )
+        } else {
+            (
+                VoiceProviderStatus::Unavailable,
+                "Disabled".to_string(),
+                false,
+                None,
+            )
+        };
         VoiceProviderInfo {
             metadata: self.metadata(registry),
-            status: if enabled && unavailable_reason.is_none() {
-                VoiceProviderStatus::Ready
-            } else {
-                VoiceProviderStatus::Unavailable
-            },
-            status_label: if !enabled {
-                "Disabled".to_string()
-            } else if let Some(reason) = unavailable_reason {
-                reason.to_string()
-            } else {
-                "Ready when webview speech recognition and OS permissions are available".to_string()
-            },
+            status,
+            status_label,
             enabled,
             selected: registry.selected_provider(db).as_deref() == Some(self.id()),
-            setup_required: false,
+            setup_required,
             can_remove_model: false,
-            error: unavailable_reason.map(str::to_string),
+            error,
         }
     }
 
@@ -609,20 +778,12 @@ impl VoiceProvider for PlatformVoiceProvider {
         _app: &AppHandle,
         db_path: &Path,
     ) -> Result<VoiceProviderInfo, String> {
+        #[cfg(target_os = "macos")]
+        {
+            let _ = registry.platform_speech.prepare();
+        }
         let db = Database::open(db_path).map_err(|e| e.to_string())?;
         Ok(self.status(registry, &db))
-    }
-
-    async fn start_recording(&self) -> Result<(), String> {
-        Err("System dictation records in the webview when supported".to_string())
-    }
-
-    async fn stop_and_transcribe(&self) -> Result<String, String> {
-        Err("System dictation records in the webview when supported".to_string())
-    }
-
-    async fn cancel(&self) -> Result<(), String> {
-        Ok(())
     }
 }
 
@@ -641,6 +802,7 @@ impl VoiceProvider for DistilWhisperCandleProvider {
             name: "Distil-Whisper Large v3".to_string(),
             description: "Private offline transcription using distil-whisper/distil-large-v3 through the native provider interface.".to_string(),
             kind: VoiceProviderKind::LocalModel,
+            recording_mode: VoiceRecordingMode::Native,
             privacy_label: "Private after download; audio stays local".to_string(),
             offline: true,
             download_required: true,
@@ -758,18 +920,6 @@ impl VoiceProvider for DistilWhisperCandleProvider {
                 Err(err)
             }
         }
-    }
-
-    async fn start_recording(&self) -> Result<(), String> {
-        Err("Distil-Whisper recording is managed by the voice registry".to_string())
-    }
-
-    async fn stop_and_transcribe(&self) -> Result<String, String> {
-        Err("Distil-Whisper transcription is managed by the voice registry".to_string())
-    }
-
-    async fn cancel(&self) -> Result<(), String> {
-        Ok(())
     }
 }
 
@@ -1831,6 +1981,50 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    struct FakePlatformSpeechEngine {
+        availability: PlatformSpeechAvailability,
+        transcript: Mutex<Result<String, String>>,
+        calls: AtomicUsize,
+    }
+
+    #[cfg(target_os = "macos")]
+    impl FakePlatformSpeechEngine {
+        fn ready(engine_label: &str) -> Self {
+            Self {
+                availability: PlatformSpeechAvailability::ready(engine_label),
+                transcript: Mutex::new(Ok("platform transcript".to_string())),
+                calls: AtomicUsize::new(0),
+            }
+        }
+
+        fn needs_speech_permission() -> Self {
+            Self {
+                availability: PlatformSpeechAvailability::needs_speech_permission(
+                    "Needs Speech Recognition permission",
+                ),
+                transcript: Mutex::new(Ok("ignored".to_string())),
+                calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    impl PlatformSpeechEngine for FakePlatformSpeechEngine {
+        fn availability(&self) -> PlatformSpeechAvailability {
+            self.availability.clone()
+        }
+
+        fn prepare(&self) -> PlatformSpeechAvailability {
+            self.availability.clone()
+        }
+
+        fn transcribe(&self, _audio: CapturedAudio) -> Result<String, String> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            self.transcript.lock().clone()
+        }
+    }
+
     #[test]
     fn distil_cache_path_uses_provider_specific_directory() {
         let root = PathBuf::from("/tmp/claudette-test-models");
@@ -1887,10 +2081,15 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn platform_provider_is_unavailable_on_macos() {
+    fn platform_provider_ready_when_native_engine_ready() {
         let (_dir, db_path) = test_db_path();
         let db = open_test_db(&db_path);
-        let registry = VoiceProviderRegistry::new(PathBuf::from("/tmp/models"));
+        let registry = VoiceProviderRegistry::with_platform_runtime(
+            PathBuf::from("/tmp/models"),
+            Arc::new(FakeRecorder::new(vec![0.1])),
+            Arc::new(FakeTranscriber::ok("ignored")),
+            Arc::new(FakePlatformSpeechEngine::ready("Apple SpeechAnalyzer")),
+        );
 
         let provider = registry
             .list_providers(&db)
@@ -1898,13 +2097,44 @@ mod tests {
             .find(|provider| provider.metadata.id == PLATFORM_ID)
             .expect("platform provider");
 
-        assert_eq!(provider.status, VoiceProviderStatus::Unavailable);
+        assert_eq!(provider.status, VoiceProviderStatus::Ready);
         assert!(provider.enabled);
+        assert!(!provider.setup_required);
+        assert_eq!(provider.metadata.recording_mode, VoiceRecordingMode::Native);
+        assert!(provider.status_label.contains("Apple SpeechAnalyzer"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn platform_provider_reports_setup_required_for_speech_permission() {
+        let (_dir, db_path) = test_db_path();
+        let db = open_test_db(&db_path);
+        let registry = VoiceProviderRegistry::with_platform_runtime(
+            PathBuf::from("/tmp/models"),
+            Arc::new(FakeRecorder::new(vec![0.1])),
+            Arc::new(FakeTranscriber::ok("ignored")),
+            Arc::new(FakePlatformSpeechEngine::needs_speech_permission()),
+        );
+
+        registry
+            .set_selected_provider(&db, Some(PLATFORM_ID))
+            .expect("select platform provider");
+
+        let provider = registry
+            .list_providers(&db)
+            .into_iter()
+            .find(|provider| provider.metadata.id == PLATFORM_ID)
+            .expect("platform provider");
+
+        assert_eq!(provider.status, VoiceProviderStatus::NeedsSetup);
+        assert!(provider.enabled);
+        assert!(provider.selected);
+        assert!(provider.setup_required);
         assert!(
             provider
                 .error
                 .as_deref()
-                .is_some_and(|error| error.contains("disabled on macOS"))
+                .is_some_and(|error| error.contains("Speech Recognition"))
         );
     }
 
@@ -2076,6 +2306,61 @@ mod tests {
 
         assert!(err.contains("already active"));
         assert_eq!(recorder.starts.load(Ordering::Relaxed), 1);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn start_then_stop_platform_recording_returns_transcript() {
+        let (_db_dir, db_path) = test_db_path();
+        let platform_engine = Arc::new(FakePlatformSpeechEngine::ready("Apple Speech"));
+        *platform_engine.transcript.lock() = Ok("spoken platform words".to_string());
+        let registry = VoiceProviderRegistry::with_platform_runtime(
+            PathBuf::from("/tmp/models"),
+            Arc::new(FakeRecorder::new(vec![0.1, 0.2, 0.3])),
+            Arc::new(FakeTranscriber::ok("ignored")),
+            platform_engine.clone(),
+        );
+
+        registry
+            .start_recording(&db_path, PLATFORM_ID)
+            .await
+            .expect("platform recording starts");
+        let transcript = registry
+            .stop_and_transcribe(PLATFORM_ID)
+            .await
+            .expect("platform transcribes");
+
+        assert_eq!(transcript, "spoken platform words");
+        assert_eq!(platform_engine.calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn cancel_drops_active_platform_recording() {
+        let (_db_dir, db_path) = test_db_path();
+        let platform_engine = Arc::new(FakePlatformSpeechEngine::ready("Apple Speech"));
+        let registry = VoiceProviderRegistry::with_platform_runtime(
+            PathBuf::from("/tmp/models"),
+            Arc::new(FakeRecorder::new(vec![0.1, 0.2, 0.3])),
+            Arc::new(FakeTranscriber::ok("ignored")),
+            platform_engine.clone(),
+        );
+
+        registry
+            .start_recording(&db_path, PLATFORM_ID)
+            .await
+            .expect("platform recording starts");
+        registry
+            .cancel_recording(PLATFORM_ID)
+            .await
+            .expect("cancel platform recording");
+
+        let err = registry
+            .stop_and_transcribe(PLATFORM_ID)
+            .await
+            .expect_err("cancelled platform recording should be gone");
+        assert!(err.contains("No voice recording is active"));
+        assert_eq!(platform_engine.calls.load(Ordering::Relaxed), 0);
     }
 
     #[tokio::test]

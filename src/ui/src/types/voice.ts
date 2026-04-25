@@ -1,5 +1,7 @@
 export type VoiceProviderKind = "platform" | "local-model" | "external";
 
+export type VoiceRecordingMode = "native" | "webview";
+
 export type VoiceProviderStatus =
   | "ready"
   | "needs-setup"
@@ -13,6 +15,7 @@ export interface VoiceProviderInfo {
   name: string;
   description: string;
   kind: VoiceProviderKind;
+  recordingMode: VoiceRecordingMode;
   privacyLabel: string;
   offline: boolean;
   downloadRequired: boolean;

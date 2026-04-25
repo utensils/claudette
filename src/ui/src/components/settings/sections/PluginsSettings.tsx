@@ -386,6 +386,16 @@ function VoiceProviderRow({
     provider.downloadRequired &&
     provider.enabled &&
     (provider.status === "needs-setup" || provider.status === "error");
+  const canPreparePlatform =
+    !provider.downloadRequired &&
+    provider.enabled &&
+    provider.setupRequired &&
+    (provider.status === "needs-setup" || provider.status === "error");
+  const modeLabel = provider.offline
+    ? "offline"
+    : provider.recordingMode === "native"
+      ? "native"
+      : "webview";
 
   return (
     <div>
@@ -402,9 +412,7 @@ function VoiceProviderRow({
             {provider.name}
           </span>
           <span className={styles.mcpBadge}>{badge}</span>
-          <span className={styles.settingDescription}>
-            {provider.offline ? "offline" : "platform"}
-          </span>
+          <span className={styles.settingDescription}>{modeLabel}</span>
         </div>
         <div className={styles.mcpActions}>
           <button
@@ -481,6 +489,16 @@ function VoiceProviderRow({
                 disabled={preparing}
               >
                 {preparing ? "Downloading…" : "Download model"}
+              </button>
+            )}
+            {canPreparePlatform && (
+              <button
+                type="button"
+                className={styles.iconBtn}
+                onClick={onPrepare}
+                disabled={preparing}
+              >
+                {preparing ? "Preparing…" : "Set up permissions"}
               </button>
             )}
             {provider.status === "downloading" && (

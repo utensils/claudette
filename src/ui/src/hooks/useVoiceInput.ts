@@ -154,7 +154,12 @@ export function useVoiceInput(
     setActiveProvider(provider);
 
     if (!provider) {
-      setError("No enabled voice provider is ready. Open Plugins settings to enable System dictation or set up an offline provider.");
+      const hasEnabledProvider = providers.some((candidate) => candidate.enabled);
+      setError(
+        hasEnabledProvider
+          ? "No ready voice provider is available. Open Plugins settings to finish voice setup."
+          : "No enabled voice provider is ready. Open Plugins settings to enable System dictation or set up an offline provider.",
+      );
       setState("error");
       return;
     }
