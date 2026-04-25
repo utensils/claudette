@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::migrations::{MIGRATIONS, Migration};
 use crate::model::{
-    AgentStatus, Attachment, AttachmentOrigin, ChatMessage, ChatSession, CheckpointFile, CompletedTurnData,
-    ConversationCheckpoint, RemoteConnection, Repository, TerminalTab, TurnToolActivity, Workspace,
-    WorkspaceStatus,
+    AgentStatus, Attachment, AttachmentOrigin, ChatMessage, ChatSession, CheckpointFile,
+    CompletedTurnData, ConversationCheckpoint, RemoteConnection, Repository, TerminalTab,
+    TurnToolActivity, Workspace, WorkspaceStatus,
 };
 
 fn row_to_attachment(row: &rusqlite::Row) -> rusqlite::Result<Attachment> {
@@ -3090,7 +3090,7 @@ mod tests {
     #[test]
     fn test_insert_agent_attachment_round_trips_with_tool_use_id() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::Assistant, "here"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "here"))
             .unwrap();
         let att = Attachment {
             id: "ag1".into(),
@@ -3117,7 +3117,7 @@ mod tests {
     #[test]
     fn test_list_attachments_by_tool_use_id_filters_correctly() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::Assistant, "x"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "x"))
             .unwrap();
         let mk = |id: &str, tuid: Option<&str>| Attachment {
             id: id.into(),
@@ -3156,7 +3156,7 @@ mod tests {
         // Verifies row_to_attachment correctly populates origin for legacy
         // rows inserted via the User-shaped path.
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "hi"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "hi"))
             .unwrap();
         db.insert_attachment(&make_attachment("a1", "m1", "u.png"))
             .unwrap();
@@ -3170,7 +3170,7 @@ mod tests {
         // Migration adds `origin TEXT NOT NULL DEFAULT 'user'` so any pre-
         // existing row is implicitly user-supplied without a backfill step.
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "img"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "img"))
             .unwrap();
         db.insert_attachment(&make_attachment("a1", "m1", "u.png"))
             .unwrap();
@@ -3202,7 +3202,7 @@ mod tests {
         // strings must be rejected at write time so the column can be trusted
         // as an enum from Rust's side.
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "x"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "x"))
             .unwrap();
         let res = db.conn.execute(
             "INSERT INTO attachments (id, message_id, filename, media_type, data, size_bytes, origin)
@@ -3217,7 +3217,7 @@ mod tests {
         // Direct-SQL canary: confirms an agent-origin row with a tool_use_id
         // can be written. The Rust API for this lands in slice 2.
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::Assistant, "here"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "here"))
             .unwrap();
         db.conn.execute(
             "INSERT INTO attachments (id, message_id, filename, media_type, data, size_bytes, origin, tool_use_id)

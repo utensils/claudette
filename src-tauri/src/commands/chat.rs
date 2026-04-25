@@ -508,7 +508,6 @@ pub async fn send_chat_message(
             last_user_msg_id: None,
         }
     });
->>>>>>> 9d4ea4d (fix(chat): remove sync setState in SessionTab edit effect + fmt)
 
     // Clear any unresolved permission requests so the CLI doesn't hang when
     // we send the next turn. This replaces the old behaviour where the
@@ -985,11 +984,8 @@ pub async fn send_chat_message(
             &session.claude_session_id,
             session.turn_count,
         );
-        let _ = db.insert_agent_session(
-            &session.claude_session_id,
-            &workspace_id,
-            &ws.repository_id,
-        );
+        let _ =
+            db.insert_agent_session(&session.claude_session_id, &workspace_id, &ws.repository_id);
         let _ = db.reopen_agent_session(&session.claude_session_id);
         let _ = db.update_agent_session_turn(&session.claude_session_id, session.turn_count);
         if db
