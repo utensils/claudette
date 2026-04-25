@@ -24,7 +24,7 @@ pre:hover > .copyButton {
 
 pre:hover > .copyButton:hover {
   opacity: 1;
-  background: var(--hover-bg, rgba(255, 255, 255, 0.06));
+  background: var(--hover-bg);
   color: var(--text-primary);
 }
 

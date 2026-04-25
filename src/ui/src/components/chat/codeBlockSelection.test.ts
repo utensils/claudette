@@ -10,7 +10,7 @@ const css = readFileSync(
 );
 
 /**
- * Regression test for code-block selection stair-step bug (GitHub #396).
+ * Regression test for code-block selection stair-step bug.
  *
  * WebKit paints selection highlights across the full line-box width of the
  * selected element's containing block.  Without the properties asserted here,
