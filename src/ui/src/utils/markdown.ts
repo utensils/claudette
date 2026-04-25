@@ -1,4 +1,4 @@
-import React, { createElement, useContext, useEffect, useReducer } from "react";
+import React, { createElement, useContext, useEffect, useMemo, useReducer } from "react";
 import type { PluggableList } from "unified";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -151,7 +151,13 @@ export function HighlightedCode({
     ? className.match(/language-([\w-]+)/)?.[1] ?? null
     : null;
   const isStreaming = useContext(StreamingContext);
-  const code = lang ? extractText(children) : "";
+  // Memoize so re-renders that don't change `children` skip the recursive walk
+  // and keep `code`'s identity stable — the highlight effect's deps then no
+  // longer fire spuriously, so we don't enqueue redundant worker dispatches.
+  const code = useMemo(
+    () => (lang ? extractText(children) : ""),
+    [lang, children],
+  );
   const cached = lang ? getCachedHighlight(code, lang) : null;
   const [, forceUpdate] = useReducer((n: number) => n + 1, 0);
 

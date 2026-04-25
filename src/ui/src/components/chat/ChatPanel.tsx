@@ -1,7 +1,6 @@
 import React, { createContext, memo, useContext, useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { isAgentBusy } from "../../utils/agentStatus";
-import Markdown from "react-markdown";
-import { preprocessContent, MARKDOWN_COMPONENTS, REHYPE_PLUGINS, REMARK_PLUGINS } from "../../utils/markdown";
+import { MessageMarkdown } from "./MessageMarkdown";
 import { AlertCircle, FileText, GitBranch, LoaderCircle, Mic, Plus, RotateCcw, Send, Split, Square, X } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import type { ToolActivity, CompletedTurn } from "../../stores/useAppStore";
@@ -1309,13 +1308,7 @@ const StreamingMessage = memo(function StreamingMessage({
     >
       <div className={styles.content}>
         <StreamingContext.Provider value={isStreaming || pendingText.length > 0}>
-          <Markdown
-            remarkPlugins={REMARK_PLUGINS}
-            rehypePlugins={REHYPE_PLUGINS}
-            components={MARKDOWN_COMPONENTS}
-          >
-            {preprocessContent(displayed)}
-          </Markdown>
+          <MessageMarkdown content={displayed} />
         </StreamingContext.Provider>
         {showCaret && <span className={caretStyles.caret} aria-hidden="true" />}
       </div>
@@ -2033,13 +2026,7 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
                 // setup-script output, and other multi-line system notes
                 // preserve headings, lists, and code blocks instead of
                 // collapsing newlines into a single paragraph.
-                <Markdown
-                  remarkPlugins={REMARK_PLUGINS}
-                  rehypePlugins={REHYPE_PLUGINS}
-                  components={MARKDOWN_COMPONENTS}
-                >
-                  {preprocessContent(msg.content)}
-                </Markdown>
+                <MessageMarkdown content={msg.content} />
               ) : (
                 renderUltrathinkText(msg.content, {
                   animated: false,

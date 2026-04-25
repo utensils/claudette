@@ -1,16 +1,43 @@
+import { lazy, Suspense } from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import { SettingsSidebar } from "./SettingsSidebar";
-import { GeneralSettings } from "./sections/GeneralSettings";
-import { ModelSettings } from "./sections/ModelSettings";
-import { AppearanceSettings } from "./sections/AppearanceSettings";
-import { NotificationsSettings } from "./sections/NotificationsSettings";
-import { GitSettings } from "./sections/GitSettings";
-import { RepoSettings } from "./sections/RepoSettings";
-import { ExperimentalSettings } from "./sections/ExperimentalSettings";
-import { UsageSettings } from "./sections/UsageSettings";
-import { PluginsSettings } from "./sections/PluginsSettings";
-import { ClaudeCodePluginsSettings } from "./sections/ClaudeCodePluginsSettings";
 import styles from "./Settings.module.css";
+
+// Each section is split into its own chunk so cold start doesn't pay for
+// settings panels the user may never open. The first navigation into a section
+// fetches its chunk; subsequent navigations are cache hits.
+const GeneralSettings = lazy(() =>
+  import("./sections/GeneralSettings").then((m) => ({ default: m.GeneralSettings })),
+);
+const ModelSettings = lazy(() =>
+  import("./sections/ModelSettings").then((m) => ({ default: m.ModelSettings })),
+);
+const AppearanceSettings = lazy(() =>
+  import("./sections/AppearanceSettings").then((m) => ({ default: m.AppearanceSettings })),
+);
+const NotificationsSettings = lazy(() =>
+  import("./sections/NotificationsSettings").then((m) => ({ default: m.NotificationsSettings })),
+);
+const GitSettings = lazy(() =>
+  import("./sections/GitSettings").then((m) => ({ default: m.GitSettings })),
+);
+const RepoSettings = lazy(() =>
+  import("./sections/RepoSettings").then((m) => ({ default: m.RepoSettings })),
+);
+const ExperimentalSettings = lazy(() =>
+  import("./sections/ExperimentalSettings").then((m) => ({ default: m.ExperimentalSettings })),
+);
+const UsageSettings = lazy(() =>
+  import("./sections/UsageSettings").then((m) => ({ default: m.UsageSettings })),
+);
+const PluginsSettings = lazy(() =>
+  import("./sections/PluginsSettings").then((m) => ({ default: m.PluginsSettings })),
+);
+const ClaudeCodePluginsSettings = lazy(() =>
+  import("./sections/ClaudeCodePluginsSettings").then((m) => ({
+    default: m.ClaudeCodePluginsSettings,
+  })),
+);
 
 function SectionContent({ section }: { section: string | null }) {
   const pluginManagementEnabled = useAppStore((s) => s.pluginManagementEnabled);
@@ -42,7 +69,9 @@ export function SettingsPage() {
       <div className={styles.dragRegion} data-tauri-drag-region />
       <SettingsSidebar />
       <div className={styles.content}>
-        <SectionContent section={settingsSection} />
+        <Suspense fallback={null}>
+          <SectionContent section={settingsSection} />
+        </Suspense>
       </div>
     </div>
   );
