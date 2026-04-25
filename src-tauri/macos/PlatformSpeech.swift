@@ -106,6 +106,14 @@ public func claudette_platform_speech_free_string(_ pointer: UnsafeMutablePointe
 }
 
 private func platformSpeechStatus(prepare: Bool) -> ClaudettePlatformSpeechStatus {
+    if let missingUsageDescription = missingTCCUsageDescriptionKey() {
+        return status(
+            statusEngineUnavailable,
+            engineNone,
+            "App bundle is missing \(missingUsageDescription). Rebuild Claudette so macOS can show the required privacy prompt."
+        )
+    }
+
     let microphoneStatus = microphoneAuthorizationStatus(prepare: prepare)
     if microphoneStatus != .authorized {
         return status(
@@ -134,6 +142,28 @@ private func platformSpeechStatus(prepare: Bool) -> ClaudettePlatformSpeechStatu
     }
 
     return sfSpeechStatus()
+}
+
+private func missingTCCUsageDescriptionKey() -> String? {
+    let infoDictionary = Bundle.main.infoDictionary ?? [:]
+    if usageDescriptionValue("NSMicrophoneUsageDescription", in: infoDictionary) == nil {
+        return "NSMicrophoneUsageDescription"
+    }
+    if usageDescriptionValue("NSSpeechRecognitionUsageDescription", in: infoDictionary) == nil {
+        return "NSSpeechRecognitionUsageDescription"
+    }
+    return nil
+}
+
+private func usageDescriptionValue(
+    _ key: String,
+    in infoDictionary: [String: Any]
+) -> String? {
+    guard let value = infoDictionary[key] as? String else {
+        return nil
+    }
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
 }
 
 private func microphoneAuthorizationStatus(prepare: Bool) -> AVAuthorizationStatus {
