@@ -38,6 +38,18 @@ export function isNativeVoiceProvider(provider: VoiceProviderInfo): boolean {
   return provider.kind === "local-model";
 }
 
+export function shouldOpenVoiceSettingsForError(
+  provider: VoiceProviderInfo | null,
+): boolean {
+  if (!provider) return false;
+  return (
+    provider.setupRequired ||
+    provider.status === "needs-setup" ||
+    provider.status === "engine-unavailable" ||
+    provider.status === "error"
+  );
+}
+
 export function insertTranscriptAtSelection(
   text: string,
   transcript: string,

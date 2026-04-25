@@ -103,7 +103,10 @@ import { ScrollToBottomPill } from "./ScrollToBottomPill";
 import { useStickyScroll } from "../../hooks/useStickyScroll";
 import { useVoiceInput } from "../../hooks/useVoiceInput";
 import { debugChat } from "../../utils/chatDebug";
-import { insertTranscriptAtSelection } from "../../utils/voice";
+import {
+  insertTranscriptAtSelection,
+  shouldOpenVoiceSettingsForError,
+} from "../../utils/voice";
 import styles from "./ChatPanel.module.css";
 import caretStyles from "./caret.module.css";
 
@@ -2268,20 +2271,30 @@ function ChatInputArea({
     const ta = textareaRef.current;
     const start = ta?.selectionStart ?? cursorPos;
     const end = ta?.selectionEnd ?? cursorPos;
-    const next = insertTranscriptAtSelection(chatInput, transcript, start, end);
-    setChatInput(next.text);
-    setCursorPos(next.cursor);
-    requestAnimationFrame(() => {
-      const current = textareaRef.current;
-      if (!current) return;
-      current.focus();
-      current.selectionStart = current.selectionEnd = next.cursor;
+    setChatInput((currentInput) => {
+      const next = insertTranscriptAtSelection(
+        currentInput,
+        transcript,
+        start,
+        end,
+      );
+      setCursorPos(next.cursor);
+      requestAnimationFrame(() => {
+        const current = textareaRef.current;
+        if (!current) return;
+        current.focus();
+        current.selectionStart = current.selectionEnd = next.cursor;
+      });
+      return next.text;
     });
-  }, [chatInput, cursorPos]);
+  }, [cursorPos]);
 
   const voice = useVoiceInput(
     insertTranscript,
     () => openSettings("plugins"),
+  );
+  const voiceErrorOpensSettings = shouldOpenVoiceSettingsForError(
+    voice.activeProvider,
   );
 
   // Per-workspace draft storage: save input when switching away,
@@ -2965,37 +2978,65 @@ function ChatInputArea({
           )}
           {voice.state === "transcribing" && (
             <div className={styles.voiceStatusText} aria-live="polite">
-              Transcribing…
+              <LoaderCircle
+                size={12}
+                className={styles.voiceStatusSpinner}
+                aria-hidden="true"
+              />
+              <span>
+                {voice.activeProvider?.name
+                  ? `Transcribing with ${voice.activeProvider.name}`
+                  : "Transcribing"}
+              </span>
             </div>
           )}
           {voice.state === "error" && voice.error && (
-            <button
-              type="button"
-              className={styles.voiceErrorBtn}
-              onClick={() => openSettings("plugins")}
-              title={voice.error}
-            >
-              {voice.error}
-            </button>
+            voiceErrorOpensSettings ? (
+              <button
+                type="button"
+                className={styles.voiceErrorBtn}
+                onClick={() => openSettings("plugins")}
+                title={voice.error}
+              >
+                {voice.error}
+              </button>
+            ) : (
+              <div
+                className={styles.voiceErrorBtn}
+                role="status"
+                title={voice.error}
+              >
+                {voice.error}
+              </div>
+            )
           )}
           <button
             type="button"
-            className={`${styles.voiceBtn} ${voice.state === "recording" ? styles.voiceBtnRecording : ""}`}
+            className={`${styles.voiceBtn} ${voice.state === "recording" ? styles.voiceBtnRecording : ""} ${voice.state === "transcribing" ? styles.voiceBtnTranscribing : ""}`}
             onClick={() => {
               if (voice.state === "recording") voice.stop();
+              else if (voice.state === "transcribing") voice.cancel();
               else void voice.start();
             }}
-            disabled={isRunning || voice.state === "transcribing"}
+            disabled={isRunning}
             title={
               voice.state === "recording"
                 ? "Stop voice input"
+                : voice.state === "transcribing"
+                  ? "Cancel transcription"
                 : voice.platformSupported
                   ? "Voice input"
                   : "Voice providers"
             }
-            aria-label={voice.state === "recording" ? "Stop voice input" : "Voice input"}
+            aria-label={
+              voice.state === "recording"
+                ? "Stop voice input"
+                : voice.state === "transcribing"
+                  ? "Cancel transcription"
+                  : "Voice input"
+            }
           >
-            <Mic size={16} />
+            {voice.state === "transcribing" ? <X size={16} /> : <Mic size={16} />}
           </button>
           <button
             className={`${styles.sendBtn} ${isRunning ? styles.sendBtnStop : ""}`}

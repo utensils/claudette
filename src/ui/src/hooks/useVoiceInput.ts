@@ -95,6 +95,7 @@ export function useVoiceInput(
   const [activeProvider, setActiveProvider] = useState<VoiceProviderInfo | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const nativeProviderRef = useRef<string | null>(null);
+  const nativeRequestIdRef = useRef(0);
   const finalTranscriptRef = useRef("");
   const cancelledRef = useRef(false);
   const platformSpeechDisabled = useMemo(() => isMacPlatform(), []);
@@ -119,6 +120,7 @@ export function useVoiceInput(
 
   const cancel = useCallback(() => {
     cancelledRef.current = true;
+    nativeRequestIdRef.current += 1;
     recognitionRef.current?.abort();
     recognitionRef.current = null;
     if (nativeProviderRef.current) {
@@ -133,6 +135,7 @@ export function useVoiceInput(
   useEffect(() => cancel, [cancel]);
 
   const start = useCallback(async () => {
+    nativeRequestIdRef.current += 1;
     setError(null);
     setInterimTranscript("");
     finalTranscriptRef.current = "";
@@ -256,16 +259,28 @@ export function useVoiceInput(
     if (nativeProviderRef.current) {
       const providerId = nativeProviderRef.current;
       nativeProviderRef.current = null;
+      const requestId = nativeRequestIdRef.current + 1;
+      nativeRequestIdRef.current = requestId;
       setState("transcribing");
       void stopAndTranscribeVoice(providerId)
         .then((transcript) => {
-          if (cancelledRef.current) return;
+          if (
+            cancelledRef.current ||
+            nativeRequestIdRef.current !== requestId
+          ) {
+            return;
+          }
           const normalized = transcript.trim();
           if (normalized) onTranscript(normalized);
           setState("idle");
         })
         .catch((err) => {
-          if (cancelledRef.current) return;
+          if (
+            cancelledRef.current ||
+            nativeRequestIdRef.current !== requestId
+          ) {
+            return;
+          }
           setError(String(err));
           setState("error");
         });

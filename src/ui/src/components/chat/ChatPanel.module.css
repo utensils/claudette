@@ -1102,6 +1102,12 @@
   color: var(--accent-primary);
 }
 
+.voiceBtnTranscribing {
+  background: var(--panel-bg);
+  border-color: var(--status-running);
+  color: var(--text-primary);
+}
+
 .voiceRecordingStatus,
 .voiceStatusText,
 .voiceErrorBtn {
@@ -1118,12 +1124,30 @@
   white-space: nowrap;
 }
 
+.voiceStatusText {
+  max-width: min(300px, 38vw);
+}
+
+.voiceStatusText span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.voiceStatusSpinner {
+  flex-shrink: 0;
+  animation: voice-spin 0.9s linear infinite;
+}
+
 .voiceErrorBtn {
   cursor: pointer;
   color: var(--status-stopped);
   max-width: min(360px, 45vw);
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.voiceErrorBtn[role="status"] {
+  cursor: default;
 }
 
 .voiceWaveform {
@@ -1160,7 +1184,17 @@
   }
 }
 
+@keyframes voice-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .voiceStatusSpinner {
+    animation: none;
+  }
+
   .voiceWaveform span {
     animation: none;
     height: 8px;

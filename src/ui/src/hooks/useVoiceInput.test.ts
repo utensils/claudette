@@ -53,6 +53,20 @@ async function flushPromises(): Promise<void> {
   await Promise.resolve();
 }
 
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("useVoiceInput", () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
@@ -109,6 +123,31 @@ describe("useVoiceInput", () => {
     expect(voiceService.cancelVoiceRecording).toHaveBeenCalledWith(
       "voice-distil-whisper-candle",
     );
+  });
+
+  it("ignores a stale native transcript after cancel and restart", async () => {
+    const onTranscript = vi.fn();
+    const controller = useVoiceInput(onTranscript, vi.fn());
+    const firstTranscript = deferred<string>();
+    voiceService.listVoiceProviders.mockResolvedValue([
+      provider({
+        id: "voice-distil-whisper-candle",
+        kind: "local-model",
+      }),
+    ]);
+    voiceService.startVoiceRecording.mockResolvedValue(undefined);
+    voiceService.stopAndTranscribeVoice.mockReturnValueOnce(
+      firstTranscript.promise,
+    );
+
+    await controller.start();
+    controller.stop();
+    controller.cancel();
+    await controller.start();
+    firstTranscript.resolve("stale words");
+    await flushPromises();
+
+    expect(onTranscript).not.toHaveBeenCalled();
   });
 
   it("routes setup-required local providers to settings", async () => {

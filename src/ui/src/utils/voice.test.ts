@@ -6,6 +6,7 @@ import {
   describeSpeechRecognitionError,
   insertTranscriptAtSelection,
   isNativeVoiceProvider,
+  shouldOpenVoiceSettingsForError,
 } from "./voice";
 
 function provider(
@@ -166,6 +167,43 @@ describe("isNativeVoiceProvider", () => {
         }),
       ),
     ).toBe(false);
+  });
+});
+
+describe("shouldOpenVoiceSettingsForError", () => {
+  it("opens settings for provider setup and engine problems", () => {
+    expect(
+      shouldOpenVoiceSettingsForError(
+        provider({
+          id: "voice-distil-whisper-candle",
+          kind: "local-model",
+          status: "needs-setup",
+          setupRequired: true,
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      shouldOpenVoiceSettingsForError(
+        provider({
+          id: "voice-distil-whisper-candle",
+          kind: "local-model",
+          status: "engine-unavailable",
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not open settings for transient ready-provider errors", () => {
+    expect(
+      shouldOpenVoiceSettingsForError(
+        provider({
+          id: "voice-distil-whisper-candle",
+          kind: "local-model",
+          status: "ready",
+        }),
+      ),
+    ).toBe(false);
+    expect(shouldOpenVoiceSettingsForError(null)).toBe(false);
   });
 });
 

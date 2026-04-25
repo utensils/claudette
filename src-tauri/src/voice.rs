@@ -1,11 +1,13 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use candle_core::{D, Device, IndexOp, Tensor};
 use candle_nn::{VarBuilder, ops::softmax};
 use candle_transformers::models::whisper::{self as whisper, Config, audio};
 use claudette::db::Database;
+use cpal::Sample;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use futures_util::StreamExt;
 use parking_lot::Mutex;
@@ -21,12 +23,23 @@ const DISTIL_ID: &str = "voice-distil-whisper-candle";
 const DISTIL_CACHE_DIR: &str = "distil-whisper-large-v3";
 const DISTIL_READY_MESSAGE: &str = "Ready for offline transcription";
 const TARGET_SAMPLE_RATE: u32 = whisper::SAMPLE_RATE as u32;
+const DISTIL_TRANSCRIPTION_TIMEOUT: Duration = Duration::from_secs(90);
+const MIN_SIGNAL_PEAK: f32 = 0.001;
 const DISTIL_MODEL_FILES: [(&str, Option<u64>); 5] = [
     ("config.json", None),
     ("generation_config.json", None),
     ("preprocessor_config.json", None),
     ("tokenizer.json", None),
     ("model.safetensors", Some(100_000_000)),
+];
+const WHISPER_LANGUAGE_CODES: [&str; 99] = [
+    "en", "zh", "de", "es", "ru", "ko", "fr", "ja", "pt", "tr", "pl", "ca", "nl", "ar", "sv", "it",
+    "id", "hi", "fi", "vi", "he", "uk", "el", "ms", "cs", "ro", "da", "hu", "ta", "no", "th", "ur",
+    "hr", "bg", "lt", "la", "mi", "ml", "cy", "sk", "te", "fa", "lv", "bn", "sr", "az", "sl", "kn",
+    "et", "mk", "br", "eu", "is", "hy", "ne", "mn", "bs", "kk", "sq", "sw", "gl", "mr", "pa", "si",
+    "km", "sn", "yo", "so", "af", "oc", "ka", "be", "tg", "sd", "gu", "am", "yi", "lo", "uz", "fo",
+    "ht", "ps", "tk", "nn", "mt", "sa", "lb", "my", "bo", "tl", "mg", "as", "tt", "haw", "ln",
+    "ha", "ba", "jw", "su",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -104,6 +117,7 @@ struct CapturedAudio {
 
 struct RecordingSession {
     samples: Arc<Mutex<Vec<f32>>>,
+    stream_error: Arc<Mutex<Option<String>>>,
     sample_rate: u32,
     _stream: Option<cpal::Stream>,
 }
@@ -113,18 +127,36 @@ impl RecordingSession {
     fn from_samples(samples: Vec<f32>, sample_rate: u32) -> Self {
         Self {
             samples: Arc::new(Mutex::new(samples)),
+            stream_error: Arc::new(Mutex::new(None)),
             sample_rate,
             _stream: None,
         }
     }
 
-    fn finish(self) -> CapturedAudio {
+    #[cfg(test)]
+    fn from_samples_with_stream_error(
+        samples: Vec<f32>,
+        sample_rate: u32,
+        stream_error: impl Into<String>,
+    ) -> Self {
+        Self {
+            samples: Arc::new(Mutex::new(samples)),
+            stream_error: Arc::new(Mutex::new(Some(stream_error.into()))),
+            sample_rate,
+            _stream: None,
+        }
+    }
+
+    fn finish(self) -> Result<CapturedAudio, String> {
         drop(self._stream);
+        if let Some(err) = self.stream_error.lock().clone() {
+            return Err(format!("Microphone input failed: {err}"));
+        }
         let samples = self.samples.lock().clone();
-        CapturedAudio {
+        Ok(CapturedAudio {
             samples: resample_to_target_rate(&samples, self.sample_rate),
             sample_rate: TARGET_SAMPLE_RATE,
-        }
+        })
     }
 }
 
@@ -139,6 +171,34 @@ trait VoiceTranscriber: Send + Sync {
 struct CpalAudioRecorder;
 
 struct CandleWhisperTranscriber;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CandleBackend {
+    #[cfg(target_os = "macos")]
+    Metal,
+    #[cfg(not(target_os = "macos"))]
+    Cpu,
+}
+
+impl CandleBackend {
+    fn label(self) -> &'static str {
+        match self {
+            #[cfg(target_os = "macos")]
+            Self::Metal => "Metal",
+            #[cfg(not(target_os = "macos"))]
+            Self::Cpu => "CPU",
+        }
+    }
+
+    fn accelerator_label(self) -> &'static str {
+        match self {
+            #[cfg(target_os = "macos")]
+            Self::Metal => "Metal via Candle",
+            #[cfg(not(target_os = "macos"))]
+            Self::Cpu => "CPU via Candle",
+        }
+    }
+}
 
 #[async_trait]
 pub trait VoiceProvider: Send + Sync {
@@ -161,6 +221,7 @@ pub struct VoiceProviderRegistry {
     active_recording: Mutex<Option<RecordingSession>>,
     recorder: Arc<dyn AudioRecorder>,
     transcriber: Arc<dyn VoiceTranscriber>,
+    transcription_timeout: Duration,
 }
 
 impl VoiceProviderRegistry {
@@ -177,11 +238,26 @@ impl VoiceProviderRegistry {
         recorder: Arc<dyn AudioRecorder>,
         transcriber: Arc<dyn VoiceTranscriber>,
     ) -> Self {
+        Self::with_runtime_and_timeout(
+            model_root,
+            recorder,
+            transcriber,
+            DISTIL_TRANSCRIPTION_TIMEOUT,
+        )
+    }
+
+    fn with_runtime_and_timeout(
+        model_root: PathBuf,
+        recorder: Arc<dyn AudioRecorder>,
+        transcriber: Arc<dyn VoiceTranscriber>,
+        transcription_timeout: Duration,
+    ) -> Self {
         Self {
             model_root,
             active_recording: Mutex::new(None),
             recorder,
             transcriber,
+            transcription_timeout,
         }
     }
 
@@ -312,6 +388,7 @@ impl VoiceProviderRegistry {
             if !distil_model_ready(&self.distil_cache_path()) {
                 return Err("Download the Distil-Whisper model before recording".to_string());
             }
+            ensure_candle_backend_ready()?;
         }
 
         let mut active = self.active_recording.lock();
@@ -328,16 +405,32 @@ impl VoiceProviderRegistry {
             .lock()
             .take()
             .ok_or_else(|| "No voice recording is active".to_string())?;
-        let audio = session.finish();
+        let audio = session.finish()?;
         if audio.samples.is_empty() {
             return Err("No audio was captured".to_string());
         }
+        validate_captured_audio(&audio)?;
 
         let cache_path = self.distil_cache_path();
         let transcriber = Arc::clone(&self.transcriber);
-        tokio::task::spawn_blocking(move || transcriber.transcribe(&cache_path, audio))
+        let timeout = self.transcription_timeout;
+        let task = tokio::task::spawn_blocking(move || transcriber.transcribe(&cache_path, audio));
+        let transcript = tokio::time::timeout(timeout, task)
             .await
-            .map_err(|e| format!("Voice transcription task failed: {e}"))?
+            .map_err(|_| {
+                format!(
+                    "Voice transcription timed out after {} seconds. Try a shorter recording or check the selected voice provider.",
+                    timeout.as_secs()
+                )
+            })?
+            .map_err(|e| format!("Voice transcription task failed: {e}"))??;
+        let transcript = transcript.trim().to_string();
+        if transcript.is_empty() {
+            return Err(
+                "No speech was recognized. Try again closer to the microphone.".to_string(),
+            );
+        }
+        Ok(transcript)
     }
 
     async fn cancel_distil_recording(&self) -> Result<(), String> {
@@ -497,7 +590,7 @@ impl VoiceProvider for DistilWhisperCandleProvider {
             download_required: true,
             model_size_label: Some("About 1.5 GB plus tokenizer/config files".to_string()),
             cache_path: Some(cache_path.display().to_string()),
-            accelerator_label: Some("CPU now; Candle backend is isolated for Metal/CUDA builds".to_string()),
+            accelerator_label: Some(candle_accelerator_label()),
         }
     }
 
@@ -509,6 +602,7 @@ impl VoiceProvider for DistilWhisperCandleProvider {
             .ok()
             .flatten();
         let installed = distil_model_ready(&cache_path);
+        let backend_status = ensure_candle_backend_ready();
         let (status, status_label, setup_required, error) = if !enabled {
             (
                 VoiceProviderStatus::Unavailable,
@@ -523,10 +617,18 @@ impl VoiceProvider for DistilWhisperCandleProvider {
                 true,
                 None,
             )
+        } else if let Err(err) = &backend_status {
+            (
+                VoiceProviderStatus::EngineUnavailable,
+                "Voice engine unavailable".to_string(),
+                false,
+                Some(err.clone()),
+            )
         } else if installed {
+            let backend = backend_status.expect("backend availability checked");
             (
                 VoiceProviderStatus::Ready,
-                DISTIL_READY_MESSAGE.to_string(),
+                format!("{DISTIL_READY_MESSAGE} ({})", backend.label()),
                 false,
                 None,
             )
@@ -634,19 +736,101 @@ fn distil_model_ready(cache_path: &Path) -> bool {
     })
 }
 
+#[cfg(target_os = "macos")]
+fn select_candle_device() -> Result<(Device, CandleBackend), String> {
+    if !candle_core::utils::metal_is_available() {
+        return Err(
+            "Candle Metal is not available in this macOS build. Rebuild the app with candle-core/metal enabled."
+                .to_string(),
+        );
+    }
+
+    let device = Device::new_metal(0)
+        .map_err(|e| format!("Failed to initialize Candle Metal device: {e}"))?;
+    Ok((device, CandleBackend::Metal))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn select_candle_device() -> Result<(Device, CandleBackend), String> {
+    Ok((Device::Cpu, CandleBackend::Cpu))
+}
+
+fn ensure_candle_backend_ready() -> Result<CandleBackend, String> {
+    select_candle_device().map(|(_, backend)| backend)
+}
+
+fn candle_accelerator_label() -> String {
+    ensure_candle_backend_ready()
+        .map(|backend| backend.accelerator_label().to_string())
+        .unwrap_or_else(|err| format!("Unavailable: {err}"))
+}
+
+fn validate_captured_audio(audio: &CapturedAudio) -> Result<(), String> {
+    let peak = audio
+        .samples
+        .iter()
+        .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
+    if peak < MIN_SIGNAL_PEAK {
+        return Err("No speech was detected. Check microphone input and try again.".to_string());
+    }
+    Ok(())
+}
+
 fn normalize_interleaved_f32(input: &[f32], channels: u16) -> Vec<f32> {
-    mix_interleaved_to_mono(input, channels, |sample| sample.clamp(-1.0, 1.0))
+    normalize_interleaved_samples(input, channels)
+}
+
+fn normalize_interleaved_f64(input: &[f64], channels: u16) -> Vec<f32> {
+    normalize_interleaved_samples(input, channels)
+}
+
+fn normalize_interleaved_i8(input: &[i8], channels: u16) -> Vec<f32> {
+    normalize_interleaved_samples(input, channels)
 }
 
 fn normalize_interleaved_i16(input: &[i16], channels: u16) -> Vec<f32> {
-    mix_interleaved_to_mono(input, channels, |sample| {
-        (sample as f32 / i16::MAX as f32).clamp(-1.0, 1.0)
-    })
+    normalize_interleaved_samples(input, channels)
+}
+
+fn normalize_interleaved_i24(input: &[cpal::I24], channels: u16) -> Vec<f32> {
+    normalize_interleaved_samples(input, channels)
+}
+
+fn normalize_interleaved_i32(input: &[i32], channels: u16) -> Vec<f32> {
+    normalize_interleaved_samples(input, channels)
+}
+
+fn normalize_interleaved_i64(input: &[i64], channels: u16) -> Vec<f32> {
+    normalize_interleaved_samples(input, channels)
+}
+
+fn normalize_interleaved_u8(input: &[u8], channels: u16) -> Vec<f32> {
+    normalize_interleaved_samples(input, channels)
 }
 
 fn normalize_interleaved_u16(input: &[u16], channels: u16) -> Vec<f32> {
+    normalize_interleaved_samples(input, channels)
+}
+
+fn normalize_interleaved_u24(input: &[cpal::U24], channels: u16) -> Vec<f32> {
+    normalize_interleaved_samples(input, channels)
+}
+
+fn normalize_interleaved_u32(input: &[u32], channels: u16) -> Vec<f32> {
+    normalize_interleaved_samples(input, channels)
+}
+
+fn normalize_interleaved_u64(input: &[u64], channels: u16) -> Vec<f32> {
+    normalize_interleaved_samples(input, channels)
+}
+
+fn normalize_interleaved_samples<T>(input: &[T], channels: u16) -> Vec<f32>
+where
+    T: cpal::Sample + Copy,
+    f64: cpal::FromSample<T>,
+{
     mix_interleaved_to_mono(input, channels, |sample| {
-        ((sample as f32 - 32768.0) / 32768.0).clamp(-1.0, 1.0)
+        f64::from_sample(sample).clamp(-1.0, 1.0) as f32
     })
 }
 
@@ -697,50 +881,39 @@ impl AudioRecorder for CpalAudioRecorder {
         let channels = supported_config.channels();
         let stream_config: cpal::StreamConfig = supported_config.clone().into();
         let samples = Arc::new(Mutex::new(Vec::<f32>::new()));
-        let error_handler = |err| {
-            eprintln!("voice input stream error: {err}");
-        };
+        let stream_error = Arc::new(Mutex::new(None));
+
+        macro_rules! build_input_stream {
+            ($sample_ty:ty, $normalize:path) => {{
+                let samples = Arc::clone(&samples);
+                let stream_error = Arc::clone(&stream_error);
+                device.build_input_stream(
+                    &stream_config,
+                    move |data: &[$sample_ty], _| {
+                        samples.lock().extend($normalize(data, channels));
+                    },
+                    move |err| {
+                        *stream_error.lock() = Some(err.to_string());
+                        eprintln!("voice input stream error: {err}");
+                    },
+                    None,
+                )
+            }};
+        }
 
         let stream = match supported_config.sample_format() {
-            cpal::SampleFormat::F32 => {
-                let samples = Arc::clone(&samples);
-                device.build_input_stream(
-                    &stream_config,
-                    move |data: &[f32], _| {
-                        samples
-                            .lock()
-                            .extend(normalize_interleaved_f32(data, channels));
-                    },
-                    error_handler,
-                    None,
-                )
-            }
-            cpal::SampleFormat::I16 => {
-                let samples = Arc::clone(&samples);
-                device.build_input_stream(
-                    &stream_config,
-                    move |data: &[i16], _| {
-                        samples
-                            .lock()
-                            .extend(normalize_interleaved_i16(data, channels));
-                    },
-                    error_handler,
-                    None,
-                )
-            }
-            cpal::SampleFormat::U16 => {
-                let samples = Arc::clone(&samples);
-                device.build_input_stream(
-                    &stream_config,
-                    move |data: &[u16], _| {
-                        samples
-                            .lock()
-                            .extend(normalize_interleaved_u16(data, channels));
-                    },
-                    error_handler,
-                    None,
-                )
-            }
+            cpal::SampleFormat::I8 => build_input_stream!(i8, normalize_interleaved_i8),
+            cpal::SampleFormat::I16 => build_input_stream!(i16, normalize_interleaved_i16),
+            cpal::SampleFormat::I24 => build_input_stream!(cpal::I24, normalize_interleaved_i24),
+            cpal::SampleFormat::I32 => build_input_stream!(i32, normalize_interleaved_i32),
+            cpal::SampleFormat::I64 => build_input_stream!(i64, normalize_interleaved_i64),
+            cpal::SampleFormat::U8 => build_input_stream!(u8, normalize_interleaved_u8),
+            cpal::SampleFormat::U16 => build_input_stream!(u16, normalize_interleaved_u16),
+            cpal::SampleFormat::U24 => build_input_stream!(cpal::U24, normalize_interleaved_u24),
+            cpal::SampleFormat::U32 => build_input_stream!(u32, normalize_interleaved_u32),
+            cpal::SampleFormat::U64 => build_input_stream!(u64, normalize_interleaved_u64),
+            cpal::SampleFormat::F32 => build_input_stream!(f32, normalize_interleaved_f32),
+            cpal::SampleFormat::F64 => build_input_stream!(f64, normalize_interleaved_f64),
             other => {
                 return Err(format!("Unsupported microphone sample format: {other:?}"));
             }
@@ -752,6 +925,7 @@ impl AudioRecorder for CpalAudioRecorder {
 
         Ok(RecordingSession {
             samples,
+            stream_error,
             sample_rate,
             _stream: Some(stream),
         })
@@ -806,7 +980,15 @@ struct WhisperDecoder {
     sot_token: u32,
     transcribe_token: u32,
     eot_token: u32,
+    no_speech_token: Option<u32>,
     no_timestamps_token: u32,
+    language_token: Option<u32>,
+}
+
+struct WhisperDecodingResult {
+    text: String,
+    avg_logprob: f64,
+    no_speech_prob: f64,
 }
 
 impl WhisperDecoder {
@@ -828,7 +1010,11 @@ impl WhisperDecoder {
             sot_token: token_id(&tokenizer, whisper::SOT_TOKEN)?,
             transcribe_token: token_id(&tokenizer, whisper::TRANSCRIBE_TOKEN)?,
             eot_token: token_id(&tokenizer, whisper::EOT_TOKEN)?,
+            no_speech_token: whisper::NO_SPEECH_TOKENS
+                .iter()
+                .find_map(|token| token_id(&tokenizer, token).ok()),
             no_timestamps_token,
+            language_token: None,
             model,
             tokenizer,
             suppress_tokens,
@@ -836,6 +1022,9 @@ impl WhisperDecoder {
     }
 
     fn run(&mut self, mel: &Tensor) -> Result<String, String> {
+        if self.language_token.is_none() {
+            self.language_token = self.detect_language_token(mel)?;
+        }
         let (_, _, content_frames) = mel
             .dims3()
             .map_err(|e| format!("Invalid Whisper mel tensor: {e}"))?;
@@ -848,11 +1037,17 @@ impl WhisperDecoder {
                 .narrow(2, seek, segment_size)
                 .map_err(|e| format!("Failed to slice Whisper mel segment: {e}"))?;
             let decoded = self.decode(&segment)?;
-            if !decoded.trim().is_empty() {
+            if decoded.no_speech_prob > whisper::NO_SPEECH_THRESHOLD
+                && decoded.avg_logprob < whisper::LOGPROB_THRESHOLD
+            {
+                seek += segment_size;
+                continue;
+            }
+            if !decoded.text.trim().is_empty() {
                 if !text.is_empty() {
                     text.push(' ');
                 }
-                text.push_str(decoded.trim());
+                text.push_str(decoded.text.trim());
             }
             seek += segment_size;
         }
@@ -860,17 +1055,76 @@ impl WhisperDecoder {
         Ok(text.trim().to_string())
     }
 
-    fn decode(&mut self, mel: &Tensor) -> Result<String, String> {
+    fn detect_language_token(&mut self, mel: &Tensor) -> Result<Option<u32>, String> {
+        let language_token_ids = WHISPER_LANGUAGE_CODES
+            .iter()
+            .filter_map(|code| self.tokenizer.token_to_id(&format!("<|{code}|>")))
+            .collect::<Vec<_>>();
+        if language_token_ids.is_empty() {
+            return Ok(None);
+        }
+
+        let (_, _, seq_len) = mel
+            .dims3()
+            .map_err(|e| format!("Invalid Whisper mel tensor: {e}"))?;
+        let mel = mel
+            .narrow(
+                2,
+                0,
+                usize::min(seq_len, self.model.config().max_source_positions),
+            )
+            .map_err(|e| format!("Failed to slice Whisper language mel segment: {e}"))?;
+        let audio_features = self
+            .model
+            .encoder_forward(&mel, true)
+            .map_err(|e| format!("Whisper language encoder failed: {e}"))?;
+        let tokens = Tensor::new(&[[self.sot_token]], mel.device())
+            .map_err(|e| format!("Failed to build Whisper language token tensor: {e}"))?;
+        let token_ids = Tensor::new(language_token_ids.as_slice(), mel.device())
+            .map_err(|e| format!("Failed to build Whisper language token list: {e}"))?;
+        let decoded = self
+            .model
+            .decoder_forward(&tokens, &audio_features, true)
+            .map_err(|e| format!("Whisper language decoder failed: {e}"))?;
+        let logits = self
+            .model
+            .decoder_final_linear(
+                &decoded
+                    .i(..1)
+                    .map_err(|e| format!("Failed to slice Whisper language logits: {e}"))?,
+            )
+            .and_then(|logits| logits.i(0))
+            .and_then(|logits| logits.i(0))
+            .and_then(|logits| logits.index_select(&token_ids, 0))
+            .map_err(|e| format!("Whisper language logits failed: {e}"))?;
+        let probs = softmax(&logits, D::Minus1)
+            .map_err(|e| format!("Whisper language softmax failed: {e}"))?;
+        let values = probs
+            .to_vec1::<f32>()
+            .map_err(|e| format!("Failed to read Whisper language probabilities: {e}"))?;
+        values
+            .iter()
+            .enumerate()
+            .max_by(|(_, left), (_, right)| left.total_cmp(right))
+            .map(|(index, _)| Some(language_token_ids[index]))
+            .ok_or_else(|| "Whisper returned no language probabilities".to_string())
+    }
+
+    fn decode(&mut self, mel: &Tensor) -> Result<WhisperDecodingResult, String> {
         let audio_features = self
             .model
             .encoder_forward(mel, true)
             .map_err(|e| format!("Whisper encoder failed: {e}"))?;
-        let mut tokens = vec![
+        let mut tokens = decoder_prompt_tokens(
             self.sot_token,
+            self.language_token,
             self.transcribe_token,
             self.no_timestamps_token,
-        ];
+        );
         let sample_len = self.model.config().max_target_positions / 2;
+        let mut sum_logprob = 0.0_f64;
+        let mut generated_tokens = 0_usize;
+        let mut no_speech_prob = f64::NAN;
 
         for index in 0..sample_len {
             let tokens_tensor = Tensor::new(tokens.as_slice(), mel.device())
@@ -880,6 +1134,23 @@ impl WhisperDecoder {
                 .model
                 .decoder_forward(&tokens_tensor, &audio_features, index == 0)
                 .map_err(|e| format!("Whisper decoder failed: {e}"))?;
+            if index == 0
+                && let Some(no_speech_token) = self.no_speech_token
+            {
+                let logits =
+                    self.model
+                        .decoder_final_linear(&decoded.i(..1).map_err(|e| {
+                            format!("Failed to slice Whisper no-speech logits: {e}")
+                        })?)
+                        .and_then(|logits| logits.i(0))
+                        .and_then(|logits| logits.i(0))
+                        .map_err(|e| format!("Whisper no-speech logits failed: {e}"))?;
+                no_speech_prob = softmax(&logits, D::Minus1)
+                    .and_then(|probs| probs.i(no_speech_token as usize))
+                    .and_then(|prob| prob.to_scalar::<f32>())
+                    .map_err(|e| format!("Whisper no-speech probability failed: {e}"))?
+                    as f64;
+            }
             let (_, seq_len, _) = decoded
                 .dims3()
                 .map_err(|e| format!("Invalid Whisper decoder output: {e}"))?;
@@ -894,30 +1165,55 @@ impl WhisperDecoder {
                 .and_then(|logits| logits.i(0))
                 .and_then(|logits| logits.broadcast_add(&self.suppress_tokens))
                 .map_err(|e| format!("Whisper logits failed: {e}"))?;
-            let next_token = greedy_token(&logits)?;
+            let (next_token, next_prob) = greedy_token_with_prob(&logits)?;
+            tokens.push(next_token);
             if next_token == self.eot_token {
                 break;
             }
-            tokens.push(next_token);
+            generated_tokens += 1;
+            if next_prob > 0.0 {
+                sum_logprob += next_prob.ln();
+            }
         }
 
-        self.tokenizer
+        let text = self
+            .tokenizer
             .decode(&tokens, true)
             .map(|text| text.trim().to_string())
-            .map_err(|e| format!("Failed to decode Whisper tokens: {e}"))
+            .map_err(|e| format!("Failed to decode Whisper tokens: {e}"))?;
+        Ok(WhisperDecodingResult {
+            text,
+            avg_logprob: sum_logprob / generated_tokens.max(1) as f64,
+            no_speech_prob,
+        })
     }
 }
 
-fn greedy_token(logits: &Tensor) -> Result<u32, String> {
-    let logits = softmax(logits, D::Minus1).map_err(|e| format!("Whisper softmax failed: {e}"))?;
-    let values = logits
+fn decoder_prompt_tokens(
+    sot_token: u32,
+    language_token: Option<u32>,
+    transcribe_token: u32,
+    no_timestamps_token: u32,
+) -> Vec<u32> {
+    let mut tokens = vec![sot_token];
+    if let Some(language_token) = language_token {
+        tokens.push(language_token);
+    }
+    tokens.push(transcribe_token);
+    tokens.push(no_timestamps_token);
+    tokens
+}
+
+fn greedy_token_with_prob(logits: &Tensor) -> Result<(u32, f64), String> {
+    let probs = softmax(logits, D::Minus1).map_err(|e| format!("Whisper softmax failed: {e}"))?;
+    let values = probs
         .to_vec1::<f32>()
         .map_err(|e| format!("Failed to read Whisper logits: {e}"))?;
     values
         .iter()
         .enumerate()
         .max_by(|(_, left), (_, right)| left.total_cmp(right))
-        .map(|(index, _)| index as u32)
+        .map(|(index, prob)| (index as u32, f64::from(*prob)))
         .ok_or_else(|| "Whisper returned no token logits".to_string())
 }
 
@@ -948,7 +1244,7 @@ fn transcribe_distil_whisper(cache_path: &Path, captured: CapturedAudio) -> Resu
     .map_err(|e| format!("Failed to parse Whisper config: {e}"))?;
     let tokenizer = Tokenizer::from_file(&tokenizer_path)
         .map_err(|e| format!("Failed to load tokenizer: {e}"))?;
-    let device = Device::Cpu;
+    let (device, _backend) = select_candle_device()?;
     let mel_filters = build_mel_filters(config.num_mel_bins);
     let mel = audio::pcm_to_mel(&config, &captured.samples, &mel_filters);
     let mel_len = mel.len() / config.num_mel_bins;
@@ -1115,10 +1411,17 @@ mod tests {
         model_file.set_len(100_000_001).expect("size model");
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn candle_metal_feature_is_enabled_on_macos() {
+        assert!(candle_core::utils::metal_is_available());
+    }
+
     struct FakeRecorder {
         starts: AtomicUsize,
         samples: Vec<f32>,
         sample_rate: u32,
+        stream_error: Option<String>,
     }
 
     impl FakeRecorder {
@@ -1127,6 +1430,16 @@ mod tests {
                 starts: AtomicUsize::new(0),
                 samples,
                 sample_rate: TARGET_SAMPLE_RATE,
+                stream_error: None,
+            }
+        }
+
+        fn new_with_stream_error(samples: Vec<f32>, stream_error: impl Into<String>) -> Self {
+            Self {
+                starts: AtomicUsize::new(0),
+                samples,
+                sample_rate: TARGET_SAMPLE_RATE,
+                stream_error: Some(stream_error.into()),
             }
         }
     }
@@ -1134,6 +1447,13 @@ mod tests {
     impl AudioRecorder for FakeRecorder {
         fn start(&self) -> Result<RecordingSession, String> {
             self.starts.fetch_add(1, Ordering::Relaxed);
+            if let Some(stream_error) = &self.stream_error {
+                return Ok(RecordingSession::from_samples_with_stream_error(
+                    self.samples.clone(),
+                    self.sample_rate,
+                    stream_error.clone(),
+                ));
+            }
             Ok(RecordingSession::from_samples(
                 self.samples.clone(),
                 self.sample_rate,
@@ -1144,6 +1464,7 @@ mod tests {
     struct FakeTranscriber {
         calls: AtomicUsize,
         result: Mutex<Result<String, String>>,
+        sleep_for: std::time::Duration,
     }
 
     impl FakeTranscriber {
@@ -1151,6 +1472,7 @@ mod tests {
             Self {
                 calls: AtomicUsize::new(0),
                 result: Mutex::new(Ok(text.to_string())),
+                sleep_for: std::time::Duration::ZERO,
             }
         }
 
@@ -1158,6 +1480,15 @@ mod tests {
             Self {
                 calls: AtomicUsize::new(0),
                 result: Mutex::new(Err(message.to_string())),
+                sleep_for: std::time::Duration::ZERO,
+            }
+        }
+
+        fn slow(text: &str, sleep_for: std::time::Duration) -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+                result: Mutex::new(Ok(text.to_string())),
+                sleep_for,
             }
         }
     }
@@ -1165,6 +1496,7 @@ mod tests {
     impl VoiceTranscriber for FakeTranscriber {
         fn transcribe(&self, _cache_path: &Path, _audio: CapturedAudio) -> Result<String, String> {
             self.calls.fetch_add(1, Ordering::Relaxed);
+            std::thread::sleep(self.sleep_for);
             self.result.lock().clone()
         }
     }
@@ -1319,12 +1651,27 @@ mod tests {
         );
         assert_eq!(
             normalize_interleaved_i16(&[i16::MAX, i16::MIN], 2),
-            vec![(1.0 + -1.0) / 2.0]
+            vec![(-1.0 + 0.9999695) / 2.0]
         );
         assert_eq!(
             normalize_interleaved_u16(&[u16::MIN, u16::MAX], 2),
             vec![(-1.0 + 0.9999695) / 2.0]
         );
+        assert_eq!(
+            normalize_interleaved_i32(&[i32::MAX, i32::MIN], 2),
+            vec![(1.0 + -1.0) / 2.0]
+        );
+        assert_eq!(
+            normalize_interleaved_u8(&[u8::MIN, u8::MAX], 2),
+            vec![(-1.0 + 0.9921875) / 2.0]
+        );
+        assert_eq!(normalize_interleaved_f64(&[1.5, -1.5], 2), vec![0.0]);
+    }
+
+    #[test]
+    fn decoder_prompt_includes_language_token_when_available() {
+        assert_eq!(decoder_prompt_tokens(1, Some(2), 3, 4), vec![1, 2, 3, 4]);
+        assert_eq!(decoder_prompt_tokens(1, None, 3, 4), vec![1, 3, 4]);
     }
 
     #[test]
@@ -1468,6 +1815,109 @@ mod tests {
 
         assert_eq!(transcript, "hello from test");
         assert_eq!(transcriber.calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn recorder_stream_error_returns_clear_error_before_transcription() {
+        let (_db_dir, db_path) = test_db_path();
+        let model_dir = tempdir().expect("model dir");
+        write_complete_distil_model(&model_dir.path().join(DISTIL_CACHE_DIR));
+        let transcriber = Arc::new(FakeTranscriber::ok("ignored"));
+        let registry = VoiceProviderRegistry::with_runtime(
+            model_dir.path().to_path_buf(),
+            Arc::new(FakeRecorder::new_with_stream_error(
+                vec![0.1, 0.2, 0.3],
+                "device disconnected",
+            )),
+            transcriber.clone(),
+        );
+
+        registry
+            .start_recording(&db_path, DISTIL_ID)
+            .await
+            .expect("recording starts");
+        let err = registry
+            .stop_and_transcribe(DISTIL_ID)
+            .await
+            .expect_err("stream error should fail");
+
+        assert!(err.contains("device disconnected"));
+        assert_eq!(transcriber.calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn silent_recording_rejects_before_transcription() {
+        let (_db_dir, db_path) = test_db_path();
+        let model_dir = tempdir().expect("model dir");
+        write_complete_distil_model(&model_dir.path().join(DISTIL_CACHE_DIR));
+        let transcriber = Arc::new(FakeTranscriber::ok("ignored"));
+        let registry = VoiceProviderRegistry::with_runtime(
+            model_dir.path().to_path_buf(),
+            Arc::new(FakeRecorder::new(vec![0.0; TARGET_SAMPLE_RATE as usize])),
+            transcriber.clone(),
+        );
+
+        registry
+            .start_recording(&db_path, DISTIL_ID)
+            .await
+            .expect("recording starts");
+        let err = registry
+            .stop_and_transcribe(DISTIL_ID)
+            .await
+            .expect_err("silent recording should fail");
+
+        assert!(err.contains("No speech"));
+        assert_eq!(transcriber.calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn empty_transcript_returns_clear_error() {
+        let (_db_dir, db_path) = test_db_path();
+        let model_dir = tempdir().expect("model dir");
+        write_complete_distil_model(&model_dir.path().join(DISTIL_CACHE_DIR));
+        let registry = VoiceProviderRegistry::with_runtime(
+            model_dir.path().to_path_buf(),
+            Arc::new(FakeRecorder::new(vec![0.1, 0.2, 0.3])),
+            Arc::new(FakeTranscriber::ok("   ")),
+        );
+
+        registry
+            .start_recording(&db_path, DISTIL_ID)
+            .await
+            .expect("recording starts");
+        let err = registry
+            .stop_and_transcribe(DISTIL_ID)
+            .await
+            .expect_err("empty transcript should fail");
+
+        assert!(err.contains("No speech"));
+    }
+
+    #[tokio::test]
+    async fn transcription_timeout_returns_clear_error() {
+        let (_db_dir, db_path) = test_db_path();
+        let model_dir = tempdir().expect("model dir");
+        write_complete_distil_model(&model_dir.path().join(DISTIL_CACHE_DIR));
+        let registry = VoiceProviderRegistry::with_runtime_and_timeout(
+            model_dir.path().to_path_buf(),
+            Arc::new(FakeRecorder::new(vec![0.1, 0.2, 0.3])),
+            Arc::new(FakeTranscriber::slow(
+                "late transcript",
+                std::time::Duration::from_millis(50),
+            )),
+            std::time::Duration::from_millis(5),
+        );
+
+        registry
+            .start_recording(&db_path, DISTIL_ID)
+            .await
+            .expect("recording starts");
+        let err = registry
+            .stop_and_transcribe(DISTIL_ID)
+            .await
+            .expect_err("slow transcription should time out");
+
+        assert!(err.contains("timed out"));
     }
 
     #[tokio::test]
