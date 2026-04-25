@@ -242,6 +242,132 @@ describe("reconstructCompletedTurns", () => {
     expect(result[0].commitHash).toBe("abc123");
   });
 
+  it("leaves segments undefined when every activity has null group_id (legacy rows)", () => {
+    // Legacy turns persisted before the group_id column existed. The renderer
+    // treats absent `segments` as "one flat tool-group" — preserving the
+    // pre-migration visual exactly.
+    const messages = [makeMsg("m1")];
+    const turnData = [makeTurnData("cp1", "m1", 3)];
+    // `makeTurnData` doesn't set group_id → all activities get undefined.
+    const result = reconstructCompletedTurns(messages, turnData);
+    expect(result[0].segments).toBeUndefined();
+  });
+
+  it("derives one tool-group segment per distinct group_id, preserving order", () => {
+    const messages = [makeMsg("m1")];
+    const turnData: CompletedTurnData[] = [
+      {
+        checkpoint_id: "cp1",
+        message_id: "m1",
+        turn_index: 0,
+        message_count: 1,
+        commit_hash: null,
+        activities: [
+          {
+            id: "act-1",
+            checkpoint_id: "cp1",
+            tool_use_id: "t1",
+            tool_name: "Read",
+            input_json: "{}",
+            result_text: "",
+            summary: "",
+            sort_order: 0,
+            group_id: 0,
+          },
+          {
+            id: "act-2",
+            checkpoint_id: "cp1",
+            tool_use_id: "t2",
+            tool_name: "Read",
+            input_json: "{}",
+            result_text: "",
+            summary: "",
+            sort_order: 1,
+            group_id: 0,
+          },
+          {
+            id: "act-3",
+            checkpoint_id: "cp1",
+            tool_use_id: "t3",
+            tool_name: "Read",
+            input_json: "{}",
+            result_text: "",
+            summary: "",
+            sort_order: 2,
+            group_id: 1,
+          },
+        ],
+      },
+    ];
+
+    const result = reconstructCompletedTurns(messages, turnData);
+    const segs = result[0].segments!;
+    expect(segs).toHaveLength(2);
+    expect(segs[0]).toMatchObject({
+      kind: "tool-group",
+      toolUseIds: ["t1", "t2"],
+    });
+    expect(segs[1]).toMatchObject({
+      kind: "tool-group",
+      toolUseIds: ["t3"],
+    });
+  });
+
+  it("reconstructs a solo Task/Agent group as a subagent segment", () => {
+    const messages = [makeMsg("m1")];
+    const turnData: CompletedTurnData[] = [
+      {
+        checkpoint_id: "cp1",
+        message_id: "m1",
+        turn_index: 0,
+        message_count: 1,
+        commit_hash: null,
+        activities: [
+          {
+            id: "act-1",
+            checkpoint_id: "cp1",
+            tool_use_id: "t1",
+            tool_name: "Read",
+            input_json: "{}",
+            result_text: "",
+            summary: "",
+            sort_order: 0,
+            group_id: 0,
+          },
+          {
+            id: "act-2",
+            checkpoint_id: "cp1",
+            tool_use_id: "t2",
+            tool_name: "Task",
+            input_json: "{}",
+            result_text: "",
+            summary: "",
+            sort_order: 1,
+            group_id: 1,
+          },
+          {
+            id: "act-3",
+            checkpoint_id: "cp1",
+            tool_use_id: "t3",
+            tool_name: "Agent",
+            input_json: "{}",
+            result_text: "",
+            summary: "",
+            sort_order: 2,
+            group_id: 2,
+          },
+        ],
+      },
+    ];
+
+    const result = reconstructCompletedTurns(messages, turnData);
+    const segs = result[0].segments!;
+    expect(segs).toHaveLength(3);
+    expect(segs[0]).toMatchObject({ kind: "tool-group" });
+    expect(segs[1]).toMatchObject({ kind: "subagent", toolUseId: "t2" });
+    expect(segs[2]).toMatchObject({ kind: "subagent", toolUseId: "t3" });
+  });
+
   it("maps activity fields correctly", () => {
     const messages = [makeMsg("m1")];
     const turnData: CompletedTurnData[] = [

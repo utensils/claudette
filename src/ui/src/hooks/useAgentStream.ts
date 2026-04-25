@@ -11,6 +11,7 @@ import { debugChat } from "../utils/chatDebug";
 import { extractLatestCallUsage } from "../utils/extractLatestCallUsage";
 import { buildCompactionSentinel } from "../utils/compactionSentinel";
 import { pickMeterUsageFromResult } from "./pickMeterUsageFromResult";
+import { isSubagentTool } from "../utils/toolClassification";
 
 const ASK_USER_QUESTION_TOOL = "AskUserQuestion";
 
@@ -26,6 +27,8 @@ export function useAgentStream() {
   const appendToolActivityInput = useAppStore(
     (s) => s.appendToolActivityInput
   );
+  const appendToolSegment = useAppStore((s) => s.appendToolSegment);
+  const markSegmentBreak = useAppStore((s) => s.markSegmentBreak);
   const updateWorkspace = useAppStore((s) => s.updateWorkspace);
   const setAgentQuestion = useAppStore((s) => s.setAgentQuestion);
   const setPlanApproval = useAppStore((s) => s.setPlanApproval);
@@ -211,6 +214,9 @@ export function useAgentStream() {
                   const delta = inner.delta;
                   if ("type" in delta && delta.type === "text_delta") {
                     appendStreamingContent(wsId, delta.text);
+                    // Text arriving between tools breaks the current
+                    // tool-group segment; the next tool starts a new one.
+                    markSegmentBreak(wsId);
                   }
                   if (
                     "type" in delta &&
@@ -247,6 +253,7 @@ export function useAgentStream() {
                     delta.thinking
                   ) {
                     appendStreamingThinking(wsId, delta.thinking);
+                    markSegmentBreak(wsId);
                   }
                   break;
                 }
@@ -277,6 +284,11 @@ export function useAgentStream() {
                       collapsed: true,
                       summary: "",
                     });
+                    appendToolSegment(
+                      wsId,
+                      inner.content_block.id,
+                      isSubagentTool(inner.content_block.name),
+                    );
                     // Detect plan mode changes from agent tool calls.
                     if (inner.content_block.name === "EnterPlanMode") {
                       setPlanMode(wsId, true);
@@ -452,6 +464,8 @@ export function useAgentStream() {
     addToolActivity,
     updateToolActivity,
     appendToolActivityInput,
+    appendToolSegment,
+    markSegmentBreak,
     updateWorkspace,
     setAgentQuestion,
     setPlanApproval,
@@ -570,6 +584,18 @@ export function useAgentStream() {
       const savePromise = currentActivities.length > 0
         ? (() => {
             const messageCount = turnMessageCountRef.current[wsId] || 0;
+            // Build toolUseId → group_id (segment index) so each persisted
+            // activity can be grouped back together on reload.
+            const liveSegments =
+              useAppStore.getState().turnSegments[wsId] ?? [];
+            const groupByToolUseId = new Map<string, number>();
+            liveSegments.forEach((seg, idx) => {
+              if (seg.kind === "tool-group") {
+                for (const id of seg.toolUseIds) groupByToolUseId.set(id, idx);
+              } else {
+                groupByToolUseId.set(seg.toolUseId, idx);
+              }
+            });
             const activities = currentActivities.map((a, i) => ({
               id: crypto.randomUUID(),
               checkpoint_id: checkpoint.id,
@@ -579,6 +605,7 @@ export function useAgentStream() {
               result_text: a.resultText,
               summary: a.summary,
               sort_order: i,
+              group_id: groupByToolUseId.get(a.toolUseId) ?? null,
             }));
             return saveTurnToolActivities(checkpoint.id, messageCount, activities);
           })()
