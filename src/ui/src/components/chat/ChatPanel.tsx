@@ -2297,6 +2297,20 @@ function ChatInputArea({
     voice.activeProvider,
   );
 
+  // Esc cancels an active recording regardless of where focus is. The
+  // textarea's onKeyDown also handles Esc when it has focus; clicking
+  // the mic moves focus to the button, where Esc would otherwise just
+  // defocus it instead of stopping the recording.
+  useEffect(() => {
+    if (voice.state !== "recording") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      voice.cancel();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [voice.state, voice.cancel]);
+
   // Per-workspace draft storage: save input when switching away,
   // restore when switching back.
   const draftsRef = useRef<Record<string, string>>({});
