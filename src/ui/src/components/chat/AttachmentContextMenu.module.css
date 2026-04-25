@@ -1,6 +1,9 @@
 .menu {
   position: fixed;
-  z-index: 10000;
+  /* Higher than the lightbox backdrop (10001) so right-click while a
+     preview is open lands the menu above the overlay rather than behind
+     it. See issue #433. */
+  z-index: 10002;
   min-width: 220px;
   background: var(--sidebar-bg);
   border: 1px solid var(--sidebar-border);
