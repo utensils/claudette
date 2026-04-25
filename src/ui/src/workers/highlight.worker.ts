@@ -125,10 +125,14 @@ async function ensureLang(
 
 /**
  * Validate that an element subtree contains only what Shiki is supposed to
- * emit: `span` elements with at most `class`/`style` attributes, plus text
- * nodes. Anything else (including raw HTML embedded via prompt-injected
- * code text) means we refuse to serialize.
+ * emit: `span` elements with at most `class`/`className`/`style`
+ * properties, plus text nodes. Anything else (including raw HTML embedded
+ * via prompt-injected code text) means we refuse to serialize. Both `class`
+ * and `className` are accepted because hast nodes from different sources
+ * use either spelling.
  */
+const ALLOWED_PROPS = new Set(["class", "className", "style"]);
+
 function isStructurallySafe(node: ElementContent): boolean {
   if (node.type === "text") return true;
   if (node.type !== "element") return false;
@@ -136,7 +140,7 @@ function isStructurallySafe(node: ElementContent): boolean {
   if (el.tagName !== "span") return false;
   const props = el.properties ?? {};
   for (const key of Object.keys(props)) {
-    if (key !== "className" && key !== "style") return false;
+    if (!ALLOWED_PROPS.has(key)) return false;
   }
   return el.children.every(isStructurallySafe);
 }

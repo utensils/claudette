@@ -1052,13 +1052,19 @@ select:disabled {
  * the correct variable based on the active color scheme. Built-in themes
  * are matched by `[data-theme]`; user themes signal their scheme via an
  * inline `color-scheme: light|dark` on `<html>` (set in theme.ts:applyTheme).
+ *
+ * Selector targets only the Shiki-emitted token spans (those carrying the
+ * `--shiki-light` custom property inline). The line-wrapper spans Shiki
+ * also emits don't carry that property, so they harmlessly miss this rule
+ * and inherit `currentColor`. Using the inline-style attribute selector
+ * keeps the rule independent of CSS-module class hashing.
  */
-.content pre code span {
+pre code [style*="--shiki-light"] {
   color: var(--shiki-dark);
 }
-[data-theme="default-light"] .content pre code span,
-[data-theme="rose-pine-dawn"] .content pre code span,
-[data-theme="solarized-light"] .content pre code span,
-html[style*="color-scheme: light"] .content pre code span {
+[data-theme="default-light"] pre code [style*="--shiki-light"],
+[data-theme="rose-pine-dawn"] pre code [style*="--shiki-light"],
+[data-theme="solarized-light"] pre code [style*="--shiki-light"],
+html[style*="color-scheme: light"] pre code [style*="--shiki-light"] {
   color: var(--shiki-light);
 }
