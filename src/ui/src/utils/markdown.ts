@@ -108,7 +108,7 @@ export const REMARK_PLUGINS: PluggableList = [remarkGfm];
 export const EXTERNAL_SCHEMES = /^https?:|^mailto:/i;
 
 /**
- * Trim trailing newlines from the last text-node child of a code element.
+ * Trim all trailing newlines from the last text-node child of a code element.
  * rehype-highlight preserves the source `\n` before the closing fence; those
  * phantom newlines paint extra selection lines below the visible code.
  */
