@@ -10,12 +10,11 @@ const CELL_COUNT = 10;
 
 interface SegmentedMeterProps {
   sessionId: string;
-  workspaceId: string;
   onClick: () => void;
 }
 
-export function SegmentedMeter({ sessionId, workspaceId, onClick }: SegmentedMeterProps) {
-  const usage = useAppStore((s) => s.latestTurnUsage[workspaceId]);
+export function SegmentedMeter({ sessionId, onClick }: SegmentedMeterProps) {
+  const usage = useAppStore((s) => s.latestTurnUsage[sessionId]);
   const selectedModel = useAppStore((s) => s.selectedModel[sessionId]);
 
   const model = MODELS.find((m) => m.id === selectedModel);

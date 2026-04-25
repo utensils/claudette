@@ -1203,18 +1203,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       const nextCall = extractLatestCallUsage(messages);
       let latestTurnUsage = s.latestTurnUsage;
       if (nextCall) {
-        latestTurnUsage = { ...s.latestTurnUsage, [workspaceId]: nextCall };
-      } else if (workspaceId in s.latestTurnUsage) {
+        latestTurnUsage = { ...s.latestTurnUsage, [sessionId]: nextCall };
+      } else if (sessionId in s.latestTurnUsage) {
         const next = { ...s.latestTurnUsage };
-        delete next[workspaceId];
+        delete next[sessionId];
         latestTurnUsage = next;
       }
-      // Re-derive compactionEvents too — rollback's message truncation
-      // might drop compactions. Empty array for rolled-back-to-empty is
-      // fine (the slice is additive; empty == no dividers to render).
       const nextCompactionEvents = {
         ...s.compactionEvents,
-        [workspaceId]: extractCompactionEvents(messages),
+        [sessionId]: extractCompactionEvents(messages),
       };
       return {
         chatMessages: { ...s.chatMessages, [sessionId]: messages },

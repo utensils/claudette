@@ -1,5 +1,4 @@
 import React, { createContext, memo, useContext, useEffect, useRef, useState, useMemo, useCallback } from "react";
-import { isAgentBusy } from "../../utils/agentStatus";
 import { HighlightedMessageMarkdown } from "./HighlightedMessageMarkdown";
 import { HighlightedPlainText } from "./HighlightedPlainText";
 import { ChatSearchBar } from "./ChatSearchBar";
@@ -520,10 +519,10 @@ export function ChatPanel() {
         // clear any stale value so the meter hides.
         const callUsage = extractLatestCallUsage(filtered);
         const store = useAppStore.getState();
-        if (callUsage) store.setLatestTurnUsage(selectedWorkspaceId, callUsage);
-        else store.clearLatestTurnUsage(selectedWorkspaceId);
+        if (callUsage) store.setLatestTurnUsage(sessionId, callUsage);
+        else store.clearLatestTurnUsage(sessionId);
         // Phase 3: seed compactionEvents by scanning for COMPACTION: sentinels.
-        store.setCompactionEvents(selectedWorkspaceId, extractCompactionEvents(filtered));
+        store.setCompactionEvents(sessionId, extractCompactionEvents(filtered));
 
         // Load attachments for this session's messages.
         if (isLocal) {
@@ -539,8 +538,9 @@ export function ChatPanel() {
         // Skip if the agent is currently running — the in-memory state from
         // finalizeTurn() is more current than the DB and must not be overwritten.
         if (isLocal) {
-          const ws = useAppStore.getState().workspaces.find((w) => w.id === selectedWorkspaceId);
-          const isRunning = isAgentBusy(ws?.agent_status);
+          const sessions = useAppStore.getState().sessionsByWorkspace[selectedWorkspaceId] ?? [];
+          const thisSession = sessions.find((s) => s.id === sessionId);
+          const isRunning = thisSession?.agent_status === "Running";
           debugChat("ChatPanel", "load-completed-turns:gate", {
             sessionId,
             isRunning,
@@ -1087,26 +1087,30 @@ export function ChatPanel() {
 
               {activeSessionId && hasThinking && showThinkingBlocks && (
                 <StreamingThinkingBlock
-                  workspaceId={activeSessionId}
+                  sessionId={activeSessionId}
                   isStreaming={isRunning ?? false}
                   searchQuery={searchQuery}
                 />
               )}
 
               {activeSessionId && (hasStreaming || hasPendingTypewriter) && (
-                <StreamingMessage workspaceId={activeSessionId} isStreaming={isRunning ?? false} searchQuery={searchQuery} />
+                <StreamingMessage
+                  sessionId={activeSessionId}
+                  isStreaming={isRunning ?? false}
+                  searchQuery={searchQuery}
+                />
               )}
 
               {activeSessionId && activitiesCount > 0 && (
                 <ToolActivitiesSection
-                  workspaceId={activeSessionId}
+                  sessionId={activeSessionId}
                   isRunning={isRunning ?? false}
                   searchQuery={searchQuery}
                 />
               )}
 
               {activeSessionId && (
-                <CurrentTurnTaskProgress workspaceId={activeSessionId} />
+                <CurrentTurnTaskProgress sessionId={activeSessionId} />
               )}
 
               {pendingQuestion && (
@@ -1294,16 +1298,16 @@ export function ChatPanel() {
  * re-rendering ChatPanel on every thinking delta.
  */
 const StreamingThinkingBlock = memo(function StreamingThinkingBlock({
-  workspaceId,
+  sessionId,
   isStreaming,
   searchQuery,
 }: {
-  workspaceId: string;
+  sessionId: string;
   isStreaming: boolean;
   searchQuery: string;
 }) {
   const thinking = useAppStore(
-    (s) => s.streamingThinking[workspaceId] || ""
+    (s) => s.streamingThinking[sessionId] || ""
   );
   if (!thinking) return null;
   return (
@@ -1324,19 +1328,19 @@ const StreamingThinkingBlock = memo(function StreamingThinkingBlock({
  * completes).
  */
 const StreamingMessage = memo(function StreamingMessage({
-  workspaceId,
+  sessionId,
   isStreaming,
   searchQuery,
 }: {
-  workspaceId: string;
+  sessionId: string;
   isStreaming: boolean;
   searchQuery: string;
 }) {
   const streaming = useAppStore(
-    (s) => s.streamingContent[workspaceId] || ""
+    (s) => s.streamingContent[sessionId] || ""
   );
   const pendingText = useAppStore(
-    (s) => s.pendingTypewriter[workspaceId]?.text ?? ""
+    (s) => s.pendingTypewriter[sessionId]?.text ?? ""
   );
   const finishTypewriterDrain = useAppStore((s) => s.finishTypewriterDrain);
   const { handleContentChanged } = useContext(ScrollContext);
@@ -1354,9 +1358,9 @@ const StreamingMessage = memo(function StreamingMessage({
   // unmounts atomically with the completed message unhiding.
   useEffect(() => {
     if (!showCaret && !streaming && pendingText) {
-      finishTypewriterDrain(workspaceId);
+      finishTypewriterDrain(sessionId);
     }
-  }, [showCaret, streaming, pendingText, workspaceId, finishTypewriterDrain]);
+  }, [showCaret, streaming, pendingText, sessionId, finishTypewriterDrain]);
 
   if (!displayed) return null;
 
@@ -2169,16 +2173,16 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
  * Isolated so streaming text changes don't cause re-renders here.
  */
 const ToolActivitiesSection = memo(function ToolActivitiesSection({
-  workspaceId,
+  sessionId,
   isRunning,
   searchQuery,
 }: {
-  workspaceId: string;
+  sessionId: string;
   isRunning: boolean;
   searchQuery: string;
 }) {
   const activities = useAppStore(
-    (s) => s.toolActivities[workspaceId] ?? EMPTY_ACTIVITIES
+    (s) => s.toolActivities[sessionId] ?? EMPTY_ACTIVITIES
   );
   const [collapsed, setCollapsed] = useState(true);
 
@@ -2255,15 +2259,15 @@ const ToolActivitiesSection = memo(function ToolActivitiesSection({
  * the turn finalises (tasks move into CompletedTurn rendering).
  */
 const CurrentTurnTaskProgress = memo(function CurrentTurnTaskProgress({
-  workspaceId,
+  sessionId,
 }: {
-  workspaceId: string;
+  sessionId: string;
 }) {
   const completedTurns = useAppStore(
-    (s) => s.completedTurns[workspaceId] ?? EMPTY_COMPLETED_TURNS
+    (s) => s.completedTurns[sessionId] ?? EMPTY_COMPLETED_TURNS
   );
   const toolActivities = useAppStore(
-    (s) => s.toolActivities[workspaceId] ?? EMPTY_ACTIVITIES
+    (s) => s.toolActivities[sessionId] ?? EMPTY_ACTIVITIES
   );
 
   const result = useMemo(
@@ -3097,7 +3101,6 @@ function ChatInputArea({
         <div className={styles.inputControlsRight}>
           <SegmentedMeter
             sessionId={sessionId}
-            workspaceId={selectedWorkspaceId}
             onClick={() => setContextPopoverOpen((v) => !v)}
           />
           {voice.state === "recording" && (
@@ -3209,7 +3212,6 @@ function ChatInputArea({
           {contextPopoverOpen && (
             <ContextPopover
               sessionId={sessionId}
-              workspaceId={selectedWorkspaceId}
               onClose={() => setContextPopoverOpen(false)}
               onCompact={() => { onSend("/compact"); }}
               onClear={() => { onSend("/clear"); }}
