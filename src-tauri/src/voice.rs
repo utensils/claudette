@@ -1417,6 +1417,17 @@ mod tests {
         assert!(candle_core::utils::metal_is_available());
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn candle_metal_layer_norm_runs_on_macos() {
+        let device = Device::new_metal(0).expect("metal device");
+        let xs = Tensor::new(&[[1.0_f32, 2.0], [3.0, 4.0]], &device).expect("input tensor");
+        let alpha = Tensor::new(&[1.0_f32, 1.0], &device).expect("alpha tensor");
+        let beta = Tensor::new(&[0.0_f32, 0.0], &device).expect("beta tensor");
+
+        candle_nn::ops::layer_norm(&xs, &alpha, &beta, 1e-5).expect("metal layer norm should run");
+    }
+
     struct FakeRecorder {
         starts: AtomicUsize,
         samples: Vec<f32>,
