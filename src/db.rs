@@ -7,12 +7,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::migrations::{MIGRATIONS, Migration};
 use crate::model::{
-    Attachment, ChatMessage, CheckpointFile, CompletedTurnData, ConversationCheckpoint,
-    RemoteConnection, Repository, TerminalTab, TurnToolActivity, Workspace, WorkspaceStatus,
+    Attachment, AttachmentOrigin, ChatMessage, CheckpointFile, CompletedTurnData,
+    ConversationCheckpoint, RemoteConnection, Repository, TerminalTab, TurnToolActivity, Workspace,
+    WorkspaceStatus,
 };
 
 fn row_to_attachment(row: &rusqlite::Row) -> rusqlite::Result<Attachment> {
     let data: Vec<u8> = row.get(4)?;
+    let origin_str: String = row.get(9)?;
     Ok(Attachment {
         id: row.get(0)?,
         message_id: row.get(1)?,
@@ -23,8 +25,12 @@ fn row_to_attachment(row: &rusqlite::Row) -> rusqlite::Result<Attachment> {
         width: row.get(5)?,
         height: row.get(6)?,
         created_at: row.get(8)?,
+        origin: AttachmentOrigin::from_sql_str(&origin_str),
+        tool_use_id: row.get(10)?,
     })
 }
+
+const ATTACHMENT_COLUMNS: &str = "id, message_id, filename, media_type, data, width, height, size_bytes, created_at, origin, tool_use_id";
 
 /// Persisted SCM status for a workspace, loaded on app startup for instant display.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1074,8 +1080,8 @@ impl Database {
 
     pub fn insert_attachment(&self, att: &Attachment) -> Result<(), rusqlite::Error> {
         self.conn.execute(
-            "INSERT INTO attachments (id, message_id, filename, media_type, data, width, height, size_bytes)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO attachments (id, message_id, filename, media_type, data, width, height, size_bytes, origin, tool_use_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 att.id,
                 att.message_id,
@@ -1085,6 +1091,8 @@ impl Database {
                 att.width,
                 att.height,
                 att.size_bytes,
+                att.origin.as_sql_str(),
+                att.tool_use_id,
             ],
         )?;
         Ok(())
@@ -1100,8 +1108,8 @@ impl Database {
         let tx = self.conn.unchecked_transaction()?;
         for att in attachments {
             tx.execute(
-                "INSERT INTO attachments (id, message_id, filename, media_type, data, width, height, size_bytes)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO attachments (id, message_id, filename, media_type, data, width, height, size_bytes, origin, tool_use_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     att.id,
                     att.message_id,
@@ -1111,6 +1119,8 @@ impl Database {
                     att.width,
                     att.height,
                     att.size_bytes,
+                    att.origin.as_sql_str(),
+                    att.tool_use_id,
                 ],
             )?;
         }
@@ -1119,13 +1129,9 @@ impl Database {
     }
 
     pub fn get_attachment(&self, id: &str) -> Result<Option<Attachment>, rusqlite::Error> {
+        let sql = format!("SELECT {ATTACHMENT_COLUMNS} FROM attachments WHERE id = ?1");
         self.conn
-            .query_row(
-                "SELECT id, message_id, filename, media_type, data, width, height, size_bytes, created_at
-                 FROM attachments WHERE id = ?1",
-                params![id],
-                row_to_attachment,
-            )
+            .query_row(&sql, params![id], row_to_attachment)
             .optional()
     }
 
@@ -1133,10 +1139,10 @@ impl Database {
         &self,
         message_id: &str,
     ) -> Result<Vec<Attachment>, rusqlite::Error> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, message_id, filename, media_type, data, width, height, size_bytes, created_at
-             FROM attachments WHERE message_id = ?1 ORDER BY created_at",
-        )?;
+        let sql = format!(
+            "SELECT {ATTACHMENT_COLUMNS} FROM attachments WHERE message_id = ?1 ORDER BY created_at"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params![message_id], row_to_attachment)?;
         rows.collect()
     }
@@ -1155,8 +1161,8 @@ impl Database {
         // Build a parameterised IN clause.
         let placeholders: Vec<String> = (1..=message_ids.len()).map(|i| format!("?{i}")).collect();
         let sql = format!(
-            "SELECT id, message_id, filename, media_type, data, width, height, size_bytes, created_at
-             FROM attachments WHERE message_id IN ({}) ORDER BY created_at",
+            "SELECT {ATTACHMENT_COLUMNS} FROM attachments WHERE message_id IN ({})
+             ORDER BY created_at",
             placeholders.join(", ")
         );
 
@@ -1172,6 +1178,22 @@ impl Database {
             result.entry(att.message_id.clone()).or_default().push(att);
         }
         Ok(result)
+    }
+
+    /// List agent-authored attachments associated with a specific MCP
+    /// `tool_use_id`. Returns rows ordered by creation time so multiple
+    /// `send_to_user` calls within a single tool activity render in order.
+    pub fn list_attachments_by_tool_use(
+        &self,
+        tool_use_id: &str,
+    ) -> Result<Vec<Attachment>, rusqlite::Error> {
+        let sql = format!(
+            "SELECT {ATTACHMENT_COLUMNS} FROM attachments
+             WHERE tool_use_id = ?1 ORDER BY created_at"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![tool_use_id], row_to_attachment)?;
+        rows.collect()
     }
 
     // --- Conversation Checkpoints ---
@@ -2372,6 +2394,8 @@ mod tests {
             height: Some(200),
             size_bytes: 8,
             created_at: String::new(),
+            origin: AttachmentOrigin::User,
+            tool_use_id: None,
         }
     }
 
@@ -2502,6 +2526,156 @@ mod tests {
         assert_eq!(map.get("m1").map(|v| v.len()), Some(2));
         assert_eq!(map.get("m2").map(|v| v.len()), Some(1));
         assert!(!map.contains_key("m3"), "m3 should have no entry");
+    }
+
+    #[test]
+    fn test_insert_agent_attachment_round_trips_with_tool_use_id() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::Assistant, "here"))
+            .unwrap();
+        let att = Attachment {
+            id: "ag1".into(),
+            message_id: "m1".into(),
+            filename: "shot.png".into(),
+            media_type: "image/png".into(),
+            data: vec![0x89, 0x50, 0x4E, 0x47],
+            width: Some(640),
+            height: Some(480),
+            size_bytes: 4,
+            created_at: String::new(),
+            origin: AttachmentOrigin::Agent,
+            tool_use_id: Some("toolu_42".into()),
+        };
+        db.insert_attachment(&att).unwrap();
+
+        let got = db.get_attachment("ag1").unwrap().unwrap();
+        assert_eq!(got.origin, AttachmentOrigin::Agent);
+        assert_eq!(got.tool_use_id.as_deref(), Some("toolu_42"));
+        assert_eq!(got.filename, "shot.png");
+        assert_eq!(got.size_bytes, 4);
+    }
+
+    #[test]
+    fn test_list_attachments_by_tool_use_id_filters_correctly() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::Assistant, "x"))
+            .unwrap();
+        let mk = |id: &str, tuid: Option<&str>| Attachment {
+            id: id.into(),
+            message_id: "m1".into(),
+            filename: format!("{id}.png"),
+            media_type: "image/png".into(),
+            data: vec![0],
+            width: None,
+            height: None,
+            size_bytes: 1,
+            created_at: String::new(),
+            origin: AttachmentOrigin::Agent,
+            tool_use_id: tuid.map(String::from),
+        };
+        db.insert_attachment(&mk("a1", Some("toolu_1"))).unwrap();
+        db.insert_attachment(&mk("a2", Some("toolu_1"))).unwrap();
+        db.insert_attachment(&mk("a3", Some("toolu_2"))).unwrap();
+        db.insert_attachment(&mk("a4", None)).unwrap();
+
+        let one = db.list_attachments_by_tool_use("toolu_1").unwrap();
+        assert_eq!(one.len(), 2);
+        assert!(
+            one.iter()
+                .all(|a| a.tool_use_id.as_deref() == Some("toolu_1"))
+        );
+
+        let two = db.list_attachments_by_tool_use("toolu_2").unwrap();
+        assert_eq!(two.len(), 1);
+
+        let none = db.list_attachments_by_tool_use("missing").unwrap();
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn test_existing_user_attachment_loads_with_user_origin() {
+        // Verifies row_to_attachment correctly populates origin for legacy
+        // rows inserted via the User-shaped path.
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "hi"))
+            .unwrap();
+        db.insert_attachment(&make_attachment("a1", "m1", "u.png"))
+            .unwrap();
+        let got = db.get_attachment("a1").unwrap().unwrap();
+        assert_eq!(got.origin, AttachmentOrigin::User);
+        assert!(got.tool_use_id.is_none());
+    }
+
+    #[test]
+    fn test_attachments_origin_defaults_to_user_for_existing_rows() {
+        // Migration adds `origin TEXT NOT NULL DEFAULT 'user'` so any pre-
+        // existing row is implicitly user-supplied without a backfill step.
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "img"))
+            .unwrap();
+        db.insert_attachment(&make_attachment("a1", "m1", "u.png"))
+            .unwrap();
+
+        let origin: String = db
+            .conn
+            .query_row(
+                "SELECT origin FROM attachments WHERE id = ?1",
+                params!["a1"],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(origin, "user");
+
+        let tool_use_id: Option<String> = db
+            .conn
+            .query_row(
+                "SELECT tool_use_id FROM attachments WHERE id = ?1",
+                params!["a1"],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(tool_use_id.is_none());
+    }
+
+    #[test]
+    fn test_attachments_origin_check_rejects_invalid_values() {
+        // The CHECK constraint enforces origin ∈ {'user','agent'}; arbitrary
+        // strings must be rejected at write time so the column can be trusted
+        // as an enum from Rust's side.
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "x"))
+            .unwrap();
+        let res = db.conn.execute(
+            "INSERT INTO attachments (id, message_id, filename, media_type, data, size_bytes, origin)
+             VALUES ('a1', 'm1', 'x.png', 'image/png', x'00', 1, 'bogus')",
+            [],
+        );
+        assert!(res.is_err(), "CHECK should reject bogus origin");
+    }
+
+    #[test]
+    fn test_attachments_can_insert_agent_origin_with_tool_use_id() {
+        // Direct-SQL canary: confirms an agent-origin row with a tool_use_id
+        // can be written. The Rust API for this lands in slice 2.
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::Assistant, "here"))
+            .unwrap();
+        db.conn.execute(
+            "INSERT INTO attachments (id, message_id, filename, media_type, data, size_bytes, origin, tool_use_id)
+             VALUES ('a1', 'm1', 'shot.png', 'image/png', x'89504E47', 4, 'agent', 'toolu_123')",
+            [],
+        ).unwrap();
+
+        let (origin, tool_use_id): (String, Option<String>) = db
+            .conn
+            .query_row(
+                "SELECT origin, tool_use_id FROM attachments WHERE id = 'a1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(origin, "agent");
+        assert_eq!(tool_use_id.as_deref(), Some("toolu_123"));
     }
 
     // --- Repository settings tests ---

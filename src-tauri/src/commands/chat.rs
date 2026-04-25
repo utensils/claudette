@@ -17,7 +17,61 @@ use claudette::model::{
 use claudette::snapshot;
 use claudette::{base64_decode, base64_encode};
 
+use crate::agent_mcp_sink::ChatBridgeSink;
 use crate::state::{AgentSessionState, AppState, PendingPermission};
+use claudette::agent_mcp::bridge::{BridgeHandle, McpBridgeSession};
+
+/// Build a fresh bridge for a workspace and return an `mcp_config` JSON with
+/// the synthetic `claudette` MCP server entry merged in. The Claude CLI will
+/// spawn `claudette-tauri --agent-mcp` as a stdio child of itself and pass it
+/// the per-session socket address + token via env vars; the grandchild then
+/// connects back to the parent over the local socket.
+async fn start_bridge_and_inject_mcp(
+    app: &AppHandle,
+    db_path: &std::path::Path,
+    workspace_id: &str,
+    base_mcp_config: Option<String>,
+) -> Result<(Arc<McpBridgeSession>, Option<String>), String> {
+    let sink = Arc::new(ChatBridgeSink {
+        app: app.clone(),
+        db_path: db_path.to_path_buf(),
+        workspace_id: workspace_id.to_string(),
+    });
+    let bridge = Arc::new(McpBridgeSession::start(sink).await?);
+    let merged = inject_claudette_mcp_entry(base_mcp_config, bridge.handle())?;
+    Ok((bridge, merged))
+}
+
+fn inject_claudette_mcp_entry(
+    base: Option<String>,
+    handle: &BridgeHandle,
+) -> Result<Option<String>, String> {
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("current_exe: {e}"))?
+        .to_string_lossy()
+        .to_string();
+
+    let entry = serde_json::json!({
+        "type": "stdio",
+        "command": exe,
+        "args": ["--agent-mcp"],
+        "env": {
+            claudette::agent_mcp::server::ENV_SOCKET_ADDR: handle.socket_addr,
+            claudette::agent_mcp::server::ENV_TOKEN: handle.token,
+        }
+    });
+
+    let mut wrapper: serde_json::Value = match base.as_deref() {
+        Some(s) => serde_json::from_str(s).map_err(|e| format!("parse mcp_config: {e}"))?,
+        None => serde_json::json!({"mcpServers": {}}),
+    };
+    let servers = wrapper
+        .get_mut("mcpServers")
+        .and_then(|v| v.as_object_mut())
+        .ok_or_else(|| "mcp_config missing `mcpServers` object".to_string())?;
+    servers.insert(claudette::agent_mcp::server::SERVER_NAME.to_string(), entry);
+    Ok(Some(wrapper.to_string()))
+}
 
 /// How long to wait between emitting `agent-permission-prompt` and firing the
 /// attention system notification. This is the window in which the webview
@@ -317,6 +371,8 @@ pub async fn send_chat_message(
                 size_bytes,
                 data,
                 created_at: now_iso(),
+                origin: claudette::model::AttachmentOrigin::User,
+                tool_use_id: None,
             });
             cli_atts.push(FileAttachment {
                 media_type: input.media_type.clone(),
@@ -401,6 +457,8 @@ pub async fn send_chat_message(
                 pending_permissions: std::collections::HashMap::new(),
                 session_exited_plan: false,
                 session_resolved_env: Default::default(),
+                mcp_bridge: None,
+                last_user_msg_id: None,
             };
         }
 
@@ -420,6 +478,8 @@ pub async fn send_chat_message(
             pending_permissions: std::collections::HashMap::new(),
             session_exited_plan: false,
             session_resolved_env: Default::default(),
+            mcp_bridge: None,
+            last_user_msg_id: None,
         }
     });
 
@@ -457,6 +517,11 @@ pub async fn send_chat_message(
     }
     let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
 
+    // The user message has been persisted; record its id as the FK anchor
+    // for any agent-authored attachments produced during this turn (see
+    // `agent_mcp_sink::ChatBridgeSink`).
+    session.last_user_msg_id = Some(user_msg.id.clone());
+
     // MCP config changed while a previous turn was in flight — tear down the
     // persistent session so the next spawn picks up updated --mcp-config.
     // The session is idle between turns so a graceful SIGTERM is sufficient.
@@ -465,6 +530,9 @@ pub async fn send_chat_message(
         let to_deny_mcp = drain_pending_permissions(session);
         let stale_pid = session.persistent_session.as_ref().map(|ps| ps.pid());
         session.persistent_session = None;
+        // Tear down the agent-MCP bridge alongside the persistent session.
+        // Drop runs the listener cancellation + socket file unlink.
+        session.mcp_bridge = None;
         // Clear active_pid alongside persistent_session so a failed respawn
         // can't leave the next turn with a stale PID that the kernel may
         // have recycled (would get SIGKILLed by the stale-process branch).
@@ -484,7 +552,26 @@ pub async fn send_chat_message(
     }
     let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
 
-    let custom_instructions = session.custom_instructions.clone();
+    // The `send_to_user` built-in plugin is user-toggleable in Settings →
+    // Plugins. When disabled we skip both the synthetic MCP injection
+    // (further down, before spawn) and the system-prompt nudge here, so the
+    // agent has neither the tool nor any hint it exists.
+    let send_to_user_enabled = claudette::agent_mcp::is_builtin_plugin_enabled(&db, "send_to_user");
+
+    // Prepend the agent-MCP nudge to the user's repo-level instructions so
+    // the model knows to reach for `mcp__claudette__send_to_user` when the
+    // user asks for an inline file delivery. The nudge is session-level
+    // (only applied on fresh spawns via `--append-system-prompt`); on resume
+    // turns the original spawn's prompt is already in the CLI process.
+    let custom_instructions = if send_to_user_enabled {
+        let nudge = claudette::agent_mcp::SYSTEM_PROMPT_NUDGE;
+        match session.custom_instructions.as_deref() {
+            Some(existing) if !existing.trim().is_empty() => Some(format!("{nudge}\n\n{existing}")),
+            _ => Some(nudge.to_string()),
+        }
+    } else {
+        session.custom_instructions.clone()
+    };
     session.turn_count += 1;
     session.needs_attention = false;
     session.attention_kind = None;
@@ -538,6 +625,7 @@ pub async fn send_chat_message(
         let to_deny_drift = drain_pending_permissions(session);
         let stale_pid = session.persistent_session.as_ref().map(|ps| ps.pid());
         session.persistent_session = None;
+        session.mcp_bridge = None;
         // Clear active_pid alongside persistent_session. A concurrent turn
         // streaming this process at drift time would leave active_pid set;
         // without this clear, a failed respawn + next turn would SIGKILL a
@@ -631,6 +719,7 @@ pub async fn send_chat_message(
         let to_deny_env = drain_pending_permissions(session);
         let stale_pid = session.persistent_session.as_ref().map(|ps| ps.pid());
         session.persistent_session = None;
+        session.mcp_bridge = None;
         session.active_pid = None;
         session.session_exited_plan = false;
         if stale_pid.is_some() || to_deny_env.is_some() {
@@ -699,7 +788,23 @@ pub async fn send_chat_message(
                 // avoid blocking other workspaces during process startup.
                 eprintln!("[chat] Persistent session failed, respawning: {e}");
                 session.persistent_session = None;
+                session.mcp_bridge = None;
                 drop(agents);
+
+                let mut respawn_settings = agent_settings.clone();
+                let bridge = if send_to_user_enabled {
+                    let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
+                        &app,
+                        &state.db_path,
+                        &workspace_id,
+                        agent_settings.mcp_config.clone(),
+                    )
+                    .await?;
+                    respawn_settings.mcp_config = mcp_with_claudette;
+                    Some(b)
+                } else {
+                    None
+                };
 
                 let is_resume = saved_turn_count > 1;
                 let (ps, final_sid) = match start_persistent(
@@ -708,7 +813,7 @@ pub async fn send_chat_message(
                     is_resume,
                     allowed_tools.clone(),
                     custom_instructions.clone(),
-                    agent_settings.clone(),
+                    respawn_settings.clone(),
                 )
                 .await
                 {
@@ -722,7 +827,7 @@ pub async fn send_chat_message(
                             false,
                             allowed_tools.clone(),
                             custom_instructions.clone(),
-                            agent_settings.clone(),
+                            respawn_settings.clone(),
                         )
                         .await?;
                         (ps, fresh)
@@ -737,6 +842,7 @@ pub async fn send_chat_message(
                 agents = state.agents.write().await;
                 let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
                 session.persistent_session = Some(ps);
+                session.mcp_bridge = bridge;
                 session.session_id = final_sid;
                 session.session_plan_mode = agent_settings.plan_mode;
                 session.session_allowed_tools = allowed_tools.clone();
@@ -764,13 +870,33 @@ pub async fn send_chat_message(
         // Drop lock before async process spawn.
         drop(agents);
 
+        // Start the agent-MCP bridge and merge the synthetic `claudette`
+        // server entry into the spawn-time `--mcp-config` JSON when the
+        // built-in `send_to_user` plugin is enabled. The bridge is stored
+        // on the session below so it lives exactly as long as the
+        // persistent CLI process.
+        let mut spawn_settings = agent_settings.clone();
+        let bridge = if send_to_user_enabled {
+            let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
+                &app,
+                &state.db_path,
+                &workspace_id,
+                agent_settings.mcp_config.clone(),
+            )
+            .await?;
+            spawn_settings.mcp_config = mcp_with_claudette;
+            Some(b)
+        } else {
+            None
+        };
+
         let (ps, final_sid) = match start_persistent(
             worktree_path.clone(),
             sid.clone(),
             is_resume,
             allowed_tools.clone(),
             custom_instructions.clone(),
-            agent_settings.clone(),
+            spawn_settings.clone(),
         )
         .await
         {
@@ -785,7 +911,7 @@ pub async fn send_chat_message(
                     false,
                     allowed_tools.clone(),
                     custom_instructions.clone(),
-                    agent_settings.clone(),
+                    spawn_settings.clone(),
                 )
                 .await?;
                 (ps, fresh_sid)
@@ -809,6 +935,7 @@ pub async fn send_chat_message(
         agents = state.agents.write().await;
         let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
         session.persistent_session = Some(ps);
+        session.mcp_bridge = bridge;
         session.session_id = final_sid.clone();
         session.session_plan_mode = agent_settings.plan_mode;
         session.session_allowed_tools = allowed_tools.clone();
@@ -1312,8 +1439,12 @@ pub async fn send_chat_message(
                     // exited. A new turn may have already replaced it.
                     session.active_pid = None;
                     // Process died — clear persistent session so the next turn
-                    // spawns a fresh one.
+                    // spawns a fresh one. Drop the agent-MCP bridge alongside
+                    // (RAII unlinks the socket file) so a subsequent spawn
+                    // gets a fresh socket + token rather than reusing a bridge
+                    // whose grandchild is gone.
                     session.persistent_session = None;
+                    session.mcp_bridge = None;
                     ended_own_session = true;
                 }
                 // Close out the agent_sessions row for post-init exits too, so
@@ -2289,6 +2420,77 @@ fn now_iso() -> String {
 }
 
 #[cfg(test)]
+mod mcp_inject_tests {
+    use super::inject_claudette_mcp_entry;
+    use claudette::agent_mcp::bridge::BridgeHandle;
+
+    fn handle() -> BridgeHandle {
+        BridgeHandle {
+            socket_addr: "/tmp/cmcp/abc.sock".into(),
+            token: "secret".into(),
+        }
+    }
+
+    #[test]
+    fn inject_into_empty_config_creates_wrapper() {
+        let merged = inject_claudette_mcp_entry(None, &handle())
+            .unwrap()
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&merged).unwrap();
+        assert!(v["mcpServers"]["claudette"]["command"].is_string());
+        let args = v["mcpServers"]["claudette"]["args"].as_array().unwrap();
+        assert_eq!(args[0], "--agent-mcp");
+        let env = &v["mcpServers"]["claudette"]["env"];
+        assert_eq!(env["CLAUDETTE_MCP_SOCKET"], "/tmp/cmcp/abc.sock");
+        assert_eq!(env["CLAUDETTE_MCP_TOKEN"], "secret");
+    }
+
+    #[test]
+    fn inject_preserves_existing_servers() {
+        let base = serde_json::json!({
+            "mcpServers": {
+                "playwright": {"type": "stdio", "command": "npx", "args": ["pw"]}
+            }
+        })
+        .to_string();
+        let merged = inject_claudette_mcp_entry(Some(base), &handle())
+            .unwrap()
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&merged).unwrap();
+        assert!(v["mcpServers"]["playwright"]["command"].is_string());
+        assert_eq!(
+            v["mcpServers"]["claudette"]["env"]["CLAUDETTE_MCP_TOKEN"],
+            "secret"
+        );
+    }
+
+    #[test]
+    fn inject_overwrites_collision_with_claudette_name() {
+        // If a user happened to define an MCP server called `claudette`, our
+        // injected entry takes precedence — it's not user-configurable and
+        // we control the wire-up.
+        let base = serde_json::json!({
+            "mcpServers": {
+                "claudette": {"type": "stdio", "command": "rogue"}
+            }
+        })
+        .to_string();
+        let merged = inject_claudette_mcp_entry(Some(base), &handle())
+            .unwrap()
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(v["mcpServers"]["claudette"]["args"][0], "--agent-mcp");
+        assert_ne!(v["mcpServers"]["claudette"]["command"], "rogue");
+    }
+
+    #[test]
+    fn inject_rejects_malformed_base_json() {
+        let res = inject_claudette_mcp_entry(Some("not-json".into()), &handle());
+        assert!(res.is_err());
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::{RequestedFlags, SessionFlags, persistent_session_flags_drifted};
 
@@ -2575,6 +2777,8 @@ mod tests {
             pending_permissions: HashMap::new(),
             session_exited_plan: false,
             session_resolved_env: Default::default(),
+            mcp_bridge: None,
+            last_user_msg_id: None,
         }
     }
 

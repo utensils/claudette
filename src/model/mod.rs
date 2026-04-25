@@ -9,7 +9,7 @@ mod repository;
 mod terminal_tab;
 mod workspace;
 
-pub use attachment::Attachment;
+pub use attachment::{Attachment, AttachmentOrigin};
 pub use cesp::{
     CespCategorySounds, CespManifest, CespSound, InstalledPack, InstalledPackMeta, RegistryIndex,
     RegistryPack,

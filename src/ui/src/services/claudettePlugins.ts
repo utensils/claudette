@@ -43,3 +43,28 @@ export function setClaudettePluginSetting(
 export function reseedBundledPlugins(): Promise<string[]> {
   return invoke("reseed_bundled_plugins");
 }
+
+/** A built-in (Rust-implemented) Claudette plugin — currently just the
+ *  `send_to_user` MCP tool that lets the agent deliver files inline. */
+export interface BuiltinPluginInfo {
+  name: string;
+  title: string;
+  description: string;
+  enabled: boolean;
+}
+
+/** Snapshot of every shipped built-in plugin and its enabled state. */
+export function listBuiltinClaudettePlugins(): Promise<BuiltinPluginInfo[]> {
+  return invoke("list_builtin_claudette_plugins");
+}
+
+/** Toggle a built-in plugin on/off. Takes effect on the next agent spawn. */
+export function setBuiltinClaudettePluginEnabled(
+  pluginName: string,
+  enabled: boolean,
+): Promise<void> {
+  return invoke("set_builtin_claudette_plugin_enabled", {
+    pluginName,
+    enabled,
+  });
+}

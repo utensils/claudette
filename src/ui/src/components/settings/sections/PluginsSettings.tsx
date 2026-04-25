@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  listBuiltinClaudettePlugins,
   listClaudettePlugins,
   reseedBundledPlugins,
+  setBuiltinClaudettePluginEnabled,
   setClaudettePluginEnabled,
   setClaudettePluginSetting,
+  type BuiltinPluginInfo,
 } from "../../../services/claudettePlugins";
 import type {
   ClaudettePluginInfo,
@@ -31,6 +34,7 @@ const KIND_ORDER: ClaudettePluginKind[] = ["scm", "env-provider"];
  */
 export function PluginsSettings() {
   const [plugins, setPlugins] = useState<ClaudettePluginInfo[] | null>(null);
+  const [builtins, setBuiltins] = useState<BuiltinPluginInfo[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reseedMessage, setReseedMessage] = useState<string | null>(null);
@@ -40,14 +44,30 @@ export function PluginsSettings() {
     setLoading(true);
     setError(null);
     try {
-      const result = await listClaudettePlugins();
-      setPlugins(result);
+      const [luaResult, builtinResult] = await Promise.all([
+        listClaudettePlugins(),
+        listBuiltinClaudettePlugins(),
+      ]);
+      setPlugins(luaResult);
+      setBuiltins(builtinResult);
     } catch (e) {
       setError(String(e));
     } finally {
       setLoading(false);
     }
   }, []);
+
+  const handleToggleBuiltin = useCallback(
+    async (pluginName: string, nextEnabled: boolean) => {
+      try {
+        await setBuiltinClaudettePluginEnabled(pluginName, nextEnabled);
+        await refresh();
+      } catch (e) {
+        setError(String(e));
+      }
+    },
+    [refresh],
+  );
 
   useEffect(() => {
     void refresh();
@@ -137,6 +157,28 @@ export function PluginsSettings() {
         <em>(Not to be confused with Claude Code Plugins, which manages
         marketplace extensions for the Claude CLI itself.)</em>
       </div>
+
+      {builtins && builtins.length > 0 && (
+        <div className={styles.fieldGroup}>
+          <div className={styles.mcpGroupLabel}>Built-in Claudette plugins</div>
+          <div className={styles.mcpList}>
+            {builtins.map((p) => {
+              // Namespace the expanded key so a future Lua plugin named the
+              // same as a built-in can't accidentally co-toggle.
+              const key = `builtin:${p.name}`;
+              return (
+                <BuiltinPluginRow
+                  key={p.name}
+                  plugin={p}
+                  expanded={expanded.has(key)}
+                  onToggleExpand={() => toggleExpanded(key)}
+                  onToggleEnabled={(next) => handleToggleBuiltin(p.name, next)}
+                />
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {grouped.length === 0 && (
         <div className={styles.settingDescription}>
@@ -368,6 +410,75 @@ function SettingInput({
           ))}
         </select>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Row for a built-in (Rust-implemented) Claudette plugin. Simpler than the
+ * Lua plugin row because there's no manifest, no setting fields, no CLI
+ * dependency — just a description (behind a Details toggle, matching the
+ * Lua-plugin row layout) and an enable/disable switch.
+ */
+interface BuiltinPluginRowProps {
+  plugin: BuiltinPluginInfo;
+  expanded: boolean;
+  onToggleExpand: () => void;
+  onToggleEnabled: (enabled: boolean) => void;
+}
+
+export function BuiltinPluginRow({
+  plugin,
+  expanded,
+  onToggleExpand,
+  onToggleEnabled,
+}: BuiltinPluginRowProps) {
+  const dotColor = plugin.enabled
+    ? "var(--status-running)"
+    : "var(--text-faint)";
+  const badge = plugin.enabled ? "loaded" : "disabled";
+  return (
+    <div>
+      <div className={styles.mcpRow}>
+        <div className={styles.mcpInfo}>
+          <span
+            className={styles.mcpStatusDot}
+            style={{ background: dotColor }}
+            title={badge}
+          />
+          <span
+            className={`${styles.mcpName} ${!plugin.enabled ? styles.mcpNameDisabled : ""}`}
+          >
+            {plugin.title}
+          </span>
+          <span className={styles.mcpBadge}>{badge}</span>
+        </div>
+        <div className={styles.mcpActions}>
+          <button
+            type="button"
+            className={styles.envDetailsBtn}
+            onClick={onToggleExpand}
+            aria-expanded={expanded}
+          >
+            {expanded ? "Hide details" : "Details"}
+          </button>
+          <button
+            type="button"
+            className={`${styles.mcpToggle} ${plugin.enabled ? styles.mcpToggleOn : ""}`}
+            onClick={() => onToggleEnabled(!plugin.enabled)}
+            role="switch"
+            aria-checked={plugin.enabled}
+            aria-label={`${plugin.enabled ? "Disable" : "Enable"} ${plugin.title}`}
+          >
+            <span className={styles.mcpToggleKnob} />
+          </button>
+        </div>
+      </div>
+      {expanded && (
+        <div className={styles.envErrorCard}>
+          <div className={styles.settingDescription}>{plugin.description}</div>
+        </div>
+      )}
     </div>
   );
 }
