@@ -8,9 +8,11 @@
 
 <p align="center">
   <a href="https://codecov.io/gh/utensils/claudette"><img src="https://codecov.io/gh/utensils/claudette/graph/badge.svg" alt="codecov"/></a>
+  <a href="https://discord.gg/Ks9Ghnem"><img src="https://img.shields.io/discord/1491165880820699398?logo=discord&label=Discord" alt="Discord"/></a>
+  <a href="https://www.reddit.com/r/ClaudetteApp"><img src="https://img.shields.io/reddit/subreddit-subscribers/ClaudetteApp?style=social" alt="Reddit"/></a>
 </p>
 
-Claudette is a cross-platform desktop application built with [Tauri 2](https://tauri.app) (Rust backend) and React/TypeScript (frontend). It provides a lightweight interface for managing and orchestrating Claude Code sessions, similar in spirit to [Conductor.build](https://conductor.build) but with a focused feature set.
+Claudette is a cross-platform desktop application built with [Tauri 2](https://tauri.app) (Rust backend) and React/TypeScript (frontend). It provides a lightweight interface for managing and orchestrating Claude Code sessions, similar in spirit to [Conductor.build](https://conductor.build) but with a focused feature set. Unlike most similar tools, Claudette runs natively on **macOS** (Apple Silicon + Intel), **Linux** (x86_64, Wayland + X11), and **Windows** (x86_64 + ARM64).
 
 ## Prerequisites
 
@@ -240,7 +242,7 @@ All traffic is encrypted with TLS. The local app pins the server's certificate f
 
 ## Community
 
-Join us on [Discord](https://discord.gg/Ks9Ghnem) to ask questions, share feedback, and connect with other Claudette users.
+Join us on [Discord](https://discord.gg/aumGBKccmD) to ask questions, share feedback, and connect with other Claudette users.
 
 ## Contributing
 

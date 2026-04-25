@@ -1,6 +1,6 @@
 ---
 title: Installation
-description: Download and install Claudette on macOS or Linux.
+description: Download and install Claudette on macOS, Linux, or Windows.
 ---
 
 ## Download
@@ -12,10 +12,13 @@ Claudette is available as a pre-built binary from [GitHub Releases](https://gith
 | macOS | Apple Silicon (aarch64) | `.dmg` |
 | macOS | Intel (x86_64) | `.dmg` |
 | Linux | x86_64 | `.AppImage`, `.deb` |
+| Windows | x86_64 | `.zip` |
+| Windows | ARM64 | `.zip` |
 
 1. Download the appropriate binary for your platform from the [latest release](https://github.com/utensils/Claudette/releases/latest)
 2. **macOS**: Open the `.dmg` and drag Claudette to your Applications folder
 3. **Linux**: Run the `.AppImage` directly or install the `.deb` package
+4. **Windows**: Extract the `.zip` archive and run `claudette.exe`
 
 ## Prerequisites
 
@@ -52,6 +55,9 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
     sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
       libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
     ```
+  </TabItem>
+  <TabItem label="Windows">
+    Install [Visual Studio C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the **Desktop development with C++** workload, then install the Rust toolchain via [rustup](https://rustup.rs/).
   </TabItem>
 </Tabs>
 

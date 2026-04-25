@@ -44,7 +44,29 @@ export type TerminalKeyAction =
   | { kind: "toggle-panel" }
   | { kind: "focus-chat" }
   | { kind: "zoom"; direction: "in" | "out" }
+  | { kind: "split-pane"; direction: "horizontal" | "vertical" }
+  | { kind: "close-pane" }
+  | { kind: "focus-pane"; direction: "left" | "right" | "up" | "down" }
   | null;
+
+/**
+ * Returns true when a key should still reach the PTY, but must not bubble to
+ * window-level shortcuts.
+ *
+ * Today this covers bare Ctrl+D on Linux/Windows: the shell should receive
+ * EOF, but the global diff-sidebar shortcut must not also fire.
+ */
+export function shouldStopTerminalEventPropagation(ev: KeyboardEvent): boolean {
+  const isD = ev.code === "KeyD" || ev.key === "d" || ev.key === "D";
+  return (
+    ev.type === "keydown" &&
+    isD &&
+    ev.ctrlKey &&
+    !ev.metaKey &&
+    !ev.shiftKey &&
+    !ev.altKey
+  );
+}
 
 /**
  * Decide whether a keyboard event should trigger a terminal-scoped action.
@@ -106,6 +128,59 @@ export function terminalKeyAction(ev: KeyboardEvent): TerminalKeyAction {
   }
   if (ev.code === "Minus") {
     return { kind: "zoom", direction: "out" };
+  }
+
+  // Split pane shortcuts, mirroring iTerm2:
+  //   Cmd+D         — split side-by-side (horizontal layout; vertical divider)
+  //   Cmd+Shift+D   — split stacked (vertical layout; horizontal divider)
+  // We use `ev.code` (KeyD) so Dvorak and other layouts still work: the
+  // physical D key keeps the binding regardless of what character it emits.
+  //
+  // We deliberately do NOT intercept bare Ctrl+D because that is the shell's
+  // EOF marker — hijacking it would prevent users from logging out of a
+  // shell or closing stdin in a running process. Linux/Windows users can
+  // split with Ctrl+Shift+D (keeping Shift=stacked would make that combo
+  // overloaded, so on those platforms Ctrl+Alt+D selects stacked instead).
+  const isD = ev.code === "KeyD" || ev.key === "d" || ev.key === "D";
+  if (isD && ev.metaKey && !ev.ctrlKey) {
+    return {
+      kind: "split-pane",
+      direction: ev.shiftKey ? "vertical" : "horizontal",
+    };
+  }
+  if (isD && ev.ctrlKey && ev.shiftKey && !ev.metaKey) {
+    // Ctrl+Shift+D — split side-by-side on Linux/Windows.
+    // Ctrl+Shift+Alt+D — split stacked on Linux/Windows.
+    return {
+      kind: "split-pane",
+      direction: ev.altKey ? "vertical" : "horizontal",
+    };
+  }
+
+  // Cmd+W — close the focused pane (macOS only). The TerminalPanel handler
+  // falls back to closing the enclosing tab when only one pane remains.
+  // We deliberately do NOT intercept bare Ctrl+W on Linux/Windows because
+  // it is the standard readline `unix-word-rubout` (delete previous word),
+  // and hijacking it would break a widely-used shell shortcut. Linux users
+  // can close panes via Ctrl+Shift+W instead.
+  const isW = ev.key === "w" || ev.key === "W";
+  if (isW && !ev.shiftKey && ev.metaKey && !ev.ctrlKey) {
+    return { kind: "close-pane" };
+  }
+  if (isW && ev.ctrlKey && ev.shiftKey && !ev.metaKey) {
+    return { kind: "close-pane" };
+  }
+
+  // Cmd+Option+Arrow — move focus between panes. Option/Alt lives on the
+  // same physical key as macOS Option and Linux Alt, so both platforms can
+  // use the same binding. We require the Alt modifier to avoid clashing
+  // with readline word-motion (Meta-b/f) and macOS text-navigation
+  // (Cmd+Arrow → beginning/end of line), neither of which uses Alt.
+  if (ev.altKey) {
+    if (ev.key === "ArrowLeft") return { kind: "focus-pane", direction: "left" };
+    if (ev.key === "ArrowRight") return { kind: "focus-pane", direction: "right" };
+    if (ev.key === "ArrowUp") return { kind: "focus-pane", direction: "up" };
+    if (ev.key === "ArrowDown") return { kind: "focus-pane", direction: "down" };
   }
 
   return null;

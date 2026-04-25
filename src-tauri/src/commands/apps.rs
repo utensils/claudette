@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::state::AppState;
+use claudette::process::CommandWindowExt as _;
 
 const DEFAULT_APPS_JSON: &str = include_str!("../../default-apps.json");
 
@@ -241,6 +242,7 @@ pub async fn detect_installed_apps(state: State<'_, AppState>) -> Result<Vec<Det
 #[cfg(target_os = "macos")]
 async fn open_macos_app(app_name: &str, worktree_path: &str) -> Result<(), String> {
     tokio::process::Command::new("open")
+        .no_console_window()
         .args(["-a", app_name, worktree_path])
         .spawn()
         .map_err(|e| format!("Failed to launch {app_name}: {e}"))?;
@@ -286,6 +288,7 @@ end run"#
     };
 
     tokio::process::Command::new("osascript")
+        .no_console_window()
         .arg("-e")
         .arg(script)
         .arg("--")
@@ -369,6 +372,7 @@ end run"#,
     };
 
     tokio::process::Command::new("osascript")
+        .no_console_window()
         .arg("-e")
         .arg(script)
         .arg("--")
@@ -428,6 +432,7 @@ async fn open_in_terminal(
 
     // Build: terminal_binary [terminal_open_args with {} -> path] [exec_separator] editor_binary [editor_open_args]
     let mut cmd = tokio::process::Command::new(&terminal.detected_path);
+    cmd.no_console_window();
 
     for arg in &terminal_entry.open_args {
         cmd.arg(arg.replace("{}", worktree_path));
@@ -521,6 +526,7 @@ pub async fn open_workspace_in_app(
         .collect();
 
     tokio::process::Command::new(&detected.detected_path)
+        .no_console_window()
         .args(&args)
         .spawn()
         .map_err(|e| format!("Failed to launch {}: {e}", entry.name))?;

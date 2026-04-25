@@ -47,6 +47,13 @@
             fenixPkgs.latest.rust-src
             fenixPkgs.latest.rustc
             fenixPkgs.latest.rustfmt
+            # Windows MSVC cross-compile targets (consumed via cargo-xwin in
+            # the devshell). aarch64 is the priority per project plan;
+            # x86_64 included so both Windows architectures are available.
+            # rust-std ships the Windows stdlib binaries; the MS CRT and
+            # Windows SDK headers are fetched on demand by cargo-xwin.
+            fenixPkgs.targets.aarch64-pc-windows-msvc.latest.rust-std
+            fenixPkgs.targets.x86_64-pc-windows-msvc.latest.rust-std
           ];
 
           craneLib = (inputs.crane.mkLib pkgs).overrideToolchain rustToolchain;
@@ -143,6 +150,39 @@
             pkgs.apple-sdk_15
             pkgs.libiconv
           ];
+
+          # Wrapper around `clang` that rewrites the MSVC-style `/imsvc`
+          # include flag to the GNU-driver-compatible `-isystem` form.
+          #
+          # cargo-xwin's default (and correct-for-STL) mode is clang-cl: it
+          # injects `/imsvc <path>` pairs into CFLAGS_<target> so that clang-cl
+          # sees the MSVC CRT + SDK + C++ STL under xwin/crt/include (which
+          # actually contains <iterator>, <vector>, ... — the alternative
+          # "sysroot" mode ships a sysroot whose include/c++/stl/ directory
+          # is empty on aarch64, so clang-cl mode is the only workable one).
+          #
+          # The snag: `ring`'s build script compiles Windows ARM64 `.S`
+          # assembly by invoking `clang` directly (not clang-cl, because
+          # clang-cl doesn't parse GAS syntax). The GNU-driver `clang` then
+          # rejects `/imsvc` (treated as a filename) and also rejects
+          # `-imsvc` (clang-cl-only spelling). The only spelling accepted by
+          # both drivers is `-isystem`, which carries the same semantics we
+          # need here (mark the directory as a system header root, suppress
+          # diagnostics from headers within it).
+          #
+          # Wrapping `clang` specifically (not clang-cl, not clang++) is
+          # sufficient because that is the exact binary ring shells out to
+          # for the .S pregenerated files.
+          clangXwinShim = pkgs.writeShellScriptBin "clang" ''
+            args=()
+            for arg in "$@"; do
+              case "$arg" in
+                /imsvc) args+=("-isystem") ;;
+                *) args+=("$arg") ;;
+              esac
+            done
+            exec ${pkgs.llvmPackages.clang-unwrapped}/bin/clang "''${args[@]}"
+          '';
 
           # Linux native deps for webkit + GTK stack.
           # NOTE: cairo / pango / harfbuzz / atk / gdk-pixbuf are propagated by
@@ -301,6 +341,36 @@
               pkgs.cmake
               pkgs.perl
               pkgs.cargo-llvm-cov
+              # Windows cross-compile toolchain. cargo-xwin shells out to
+              # clang-cl (the MSVC-compatible driver) and llvm-lib / llvm-ar
+              # as the archiver; rust-lld is bundled with the fenix rustc
+              # above, so no separate lld package is needed.
+              #
+              # clangXwinShim wraps plain `clang` (see its definition above)
+              # to rewrite `/imsvc` → `-isystem`; `lib.hiPrio` lets it win the
+              # buildEnv symlink conflict over clang-unwrapped's own
+              # `bin/clang`, while clang-unwrapped's other binaries
+              # (clang-cl, clang++, ...) pass through unchanged.
+              #
+              # We intentionally use clang-unwrapped rather than
+              # llvmPackages.clang: the cc-wrapper variant only exposes the
+              # `clang` / `clang++` entry points and hides the `clang-cl`
+              # symlink that cargo-xwin looks up on PATH. llvmPackages.llvm
+              # gives the raw LLVM binaries (llvm-lib, llvm-ar, llvm-rc);
+              # we avoid llvmPackages.bintools because its wrapper symlinks
+              # (`strip`, `ar`, ...) collide with same-named symlinks
+              # elsewhere in the devshell's buildEnv.
+              pkgs.cargo-xwin
+              (lib.hiPrio clangXwinShim)
+              pkgs.llvmPackages.clang-unwrapped
+              pkgs.llvmPackages.llvm
+              # aws-win-spinup / aws-win-destroy helpers shell out to these.
+              # Pinning them here means teammates on plain Darwin don't need
+              # a system awscli/openssl install for the devshell to work.
+              # openssl is used by aws-win-spinup for random password
+              # generation; awscli2 drives the EC2 API calls.
+              pkgs.awscli2
+              pkgs.openssl
             ]
             ++ darwinBuildInputs
             ++ linuxBuildInputs
@@ -319,6 +389,16 @@
               {
                 name = "RUST_SRC_PATH";
                 value = "${fenixPkgs.latest.rust-src}/lib/rustlib/src/rust/library";
+              }
+              {
+                # cargo-xwin downloads the Microsoft CRT + Windows SDK
+                # headers on first Windows cross-build. Setting this to "1"
+                # signals acceptance of the Microsoft Software License Terms
+                # (https://go.microsoft.com/fwlink/?LinkID=2109288) so the
+                # download is non-interactive. The cache lives under
+                # ~/.cache/cargo-xwin/xwin and is reused across builds.
+                name = "XWIN_ACCEPT_LICENSE";
+                value = "1";
               }
             ]
             ++ lib.optionals pkgs.stdenv.isLinux [
@@ -455,8 +535,8 @@
             commands = [
               {
                 name = "dev";
-                command = "cd src/ui && bun install && cd ../.. && cargo tauri dev --features devtools,server";
-                help = "Start Tauri dev mode with hot-reload (includes embedded server)";
+                command = "exec ./scripts/dev.sh";
+                help = "Start Tauri dev mode with hot-reload (auto-selects free Vite + debug ports)";
                 category = "development";
               }
               {
@@ -486,6 +566,55 @@
                 command = "cargo test --workspace --all-features";
                 help = "Run all Rust tests";
                 category = "quality";
+              }
+              # Windows cross-build + deploy + AWS ephemeral-host helpers.
+              # All bodies live in ./scripts/ — the devshell commands are
+              # thin wrappers so flake.nix doesn't carry hundreds of lines
+              # of bash-in-nix-strings. See scripts/*.sh for the logic and
+              # scripts/_aws-common.sh for the shared helpers (profile/
+              # region defaults, state dir under $PRJ_ROOT/.claudette/,
+              # instance discovery).
+              {
+                name = "build-win-arm64";
+                command = ''exec "$PRJ_ROOT/scripts/build-win.sh" arm64 "$@"'';
+                help = "Cross-compile claudette.exe for aarch64-pc-windows-msvc (Windows on ARM)";
+                category = "windows";
+              }
+              {
+                name = "deploy-win-arm64";
+                command = ''exec "$PRJ_ROOT/scripts/deploy-win.sh" arm64 "$@"'';
+                help = "Build + deploy aarch64-pc-windows-msvc exe to the test VM (overridable via CLAUDETTE_WIN_HOST / CLAUDETTE_WIN_REMOTE_PATH)";
+                category = "windows";
+              }
+              {
+                name = "build-win-x64";
+                command = ''exec "$PRJ_ROOT/scripts/build-win.sh" x64 "$@"'';
+                help = "Cross-compile claudette.exe for x86_64-pc-windows-msvc";
+                category = "windows";
+              }
+              {
+                name = "deploy-win-x64";
+                command = ''exec "$PRJ_ROOT/scripts/deploy-win.sh" x64 "$@"'';
+                help = "Build + deploy x86_64-pc-windows-msvc exe (auto-discovers aws-win-spinup instance, or override via CLAUDETTE_WIN_HOST)";
+                category = "windows";
+              }
+              {
+                name = "aws-win-spinup";
+                command = ''exec "$PRJ_ROOT/scripts/aws-win-spinup.sh" "$@"'';
+                help = "Launch ephemeral Windows EC2 (us-west-2) with SSH+pubkey pre-configured and admin password baked in";
+                category = "windows";
+              }
+              {
+                name = "aws-win-rdp";
+                command = ''exec "$PRJ_ROOT/scripts/aws-win-rdp.sh" "$@"'';
+                help = "macOS: open the current aws-win-spinup instance in Windows App with admin password on clipboard";
+                category = "windows";
+              }
+              {
+                name = "aws-win-destroy";
+                command = ''exec "$PRJ_ROOT/scripts/aws-win-destroy.sh" "$@"'';
+                help = "Terminate all claudette-spinup tagged EC2 instances in AWS_REGION (default us-west-2) and scrub local state";
+                category = "windows";
               }
               {
                 name = "coverage";

@@ -18,6 +18,20 @@ You can open multiple terminal tabs within each workspace. Each tab runs its own
 A screenshot showing the terminal panel with tabs will be added here.
 :::
 
+## Split Panes
+
+Every terminal tab can be split into multiple panes side-by-side or stacked, so you can run a dev server, tail logs, and execute tests without leaving the workspace.
+
+- **Split side-by-side** (vertical divider): `⌘D` on macOS, `Ctrl+Shift+D` on Linux/Windows.
+- **Split stacked** (horizontal divider): `⌘⇧D` on macOS, `Ctrl+Shift+Alt+D` on Linux/Windows.
+- **Close the focused pane**: `⌘W` on macOS, `Ctrl+Shift+W` on Linux/Windows. When only one pane is left, this closes the enclosing tab.
+- **Move focus between panes**: `⌘⌥←/→/↑/↓` on macOS, `Ctrl+Alt+←/→/↑/↓` on Linux. You can also click any pane to focus it.
+- **Resize**: drag the divider between two panes.
+
+Each pane runs its own independent PTY in the workspace's worktree. Up to six panes are supported per tab to keep the layout usable.
+
+Split layouts are **ephemeral** — the app reopens each tab as a single pane on restart. Tab identity and titles are persisted; the split arrangement within a tab is not.
+
 ## Terminal Font Size
 
 Adjust the terminal font size in `Settings > Appearance > Terminal font size` (range: 8–24px, default: 11px).

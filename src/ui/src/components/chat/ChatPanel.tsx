@@ -2,7 +2,7 @@ import React, { createContext, memo, useContext, useEffect, useRef, useState, us
 import { isAgentBusy } from "../../utils/agentStatus";
 import Markdown from "react-markdown";
 import { preprocessContent, MARKDOWN_COMPONENTS, REHYPE_PLUGINS, REMARK_PLUGINS } from "../../utils/markdown";
-import { FileText, GitBranch, Plus, RotateCcw, Send, Split, Square, X } from "lucide-react";
+import { FileText, GitBranch, LoaderCircle, Plus, RotateCcw, Send, Split, Square, X } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import type { ToolActivity, CompletedTurn } from "../../stores/useAppStore";
 import {
@@ -24,7 +24,6 @@ import {
   setAppSetting,
   listWorkspaceFiles,
   clearConversation,
-  resetAgentSession,
   readPlanFile,
   loadDiffFiles,
   forkWorkspaceAtCheckpoint,
@@ -48,7 +47,6 @@ import {
   maxSizeFor,
   isTextFile,
 } from "../../utils/attachmentValidation";
-import { useAgentStream } from "../../hooks/useAgentStream";
 import { useTypewriter } from "../../hooks/useTypewriter";
 import { extractToolSummary } from "../../hooks/toolSummary";
 import { AgentQuestionCard } from "./AgentQuestionCard";
@@ -59,6 +57,20 @@ import { ContextPopover } from "./composer/ContextPopover";
 import { WorkspaceActions } from "./WorkspaceActions";
 import { SlashCommandPicker, filterSlashCommands } from "./SlashCommandPicker";
 import { AttachMenu } from "./AttachMenu";
+import {
+  AttachmentContextMenu,
+  buildAttachmentMenuLabels,
+} from "./AttachmentContextMenu";
+import { AttachmentLightbox } from "./AttachmentLightbox";
+import {
+  downloadAttachment,
+  openAttachmentInBrowser,
+  openAttachmentWithDefaultApp,
+  copyAttachmentToClipboard,
+  shareAttachment,
+  isShareSupported,
+  type DownloadableAttachment,
+} from "../../utils/attachmentDownload";
 import { FileMentionPicker, matchFiles } from "./FileMentionPicker";
 import {
   describeSlashQuery,
@@ -66,9 +78,19 @@ import {
   resolveNativeHandler,
 } from "./nativeSlashCommands";
 import { checkpointHasFileChanges, clearAllHasFileChanges, buildRollbackMap } from "../../utils/checkpointUtils";
+import {
+  assistantTextForTurn,
+  buildPlainTurnFooters,
+  findTriggeringUserIndex,
+} from "../../utils/chatTurnFooter";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { CompactionDivider } from "./CompactionDivider";
 import { SyntheticContinuationMessage } from "./SyntheticContinuationMessage";
+import {
+  hasUltrathink,
+  renderUltrathinkText,
+  resolveUltrathinkEffort,
+} from "./ultrathink";
 import {
   extractCompactionEvents,
   parseCompactionSentinel,
@@ -83,7 +105,6 @@ import { debugChat } from "../../utils/chatDebug";
 import styles from "./ChatPanel.module.css";
 import caretStyles from "./caret.module.css";
 
-import { SPINNER_FRAMES, SPINNER_INTERVAL_MS } from "../../utils/spinnerFrames";
 import { formatTokens } from "./formatTokens";
 
 function shouldDisable1mContext(modelId: string | null): boolean {
@@ -113,11 +134,18 @@ function formatDurationMs(ms: number): string {
  * (fetches the body from the backend on demand). Shows a loading pill with
  * the filename while the thumbnail generates.
  */
-function PdfThumbnail({ dataBase64, attachmentId, filename, className }: {
+function PdfThumbnail({ dataBase64, attachmentId, filename, className, onClick, onContextMenu }: {
   dataBase64?: string;
   attachmentId?: string;
   filename: string;
   className?: string;
+  /** Left-click handler. Used to open the PDF with the system's default
+   *  PDF viewer rather than the lightbox (which only renders images). */
+  onClick?: () => void;
+  /** Right-click handler. Wired so PDF thumbnails get the same Claudette
+   *  context menu (Download / Copy / Open) as image attachments rather than
+   *  WebKit's default image menu. See issue 430. */
+  onContextMenu?: (e: React.MouseEvent) => void;
 }) {
   const [src, setSrc] = useState<string | null>(null);
   useEffect(() => {
@@ -140,15 +168,47 @@ function PdfThumbnail({ dataBase64, attachmentId, filename, className }: {
     return () => { cancelled = true; };
   }, [dataBase64, attachmentId]);
 
+  // Both the loading-state pill and the rendered first-page thumbnail
+  // need to be keyboard-actionable when an onClick is wired — without
+  // role/tabIndex/Enter+Space handling, non-mouse users can't open the
+  // PDF.
+  const interactiveProps = onClick
+    ? {
+        role: "button" as const,
+        tabIndex: 0,
+        onKeyDown: (e: React.KeyboardEvent) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onClick();
+          }
+        },
+        "aria-label": `Open ${filename}`,
+      }
+    : {};
   if (!src) {
     return (
-      <div className={styles.messagePdf}>
+      <div
+        className={styles.messagePdf}
+        onClick={onClick}
+        onContextMenu={onContextMenu}
+        {...interactiveProps}
+      >
         <FileText size={16} />
         <span>{filename}</span>
       </div>
     );
   }
-  return <img src={src} alt={filename} className={className} />;
+  return (
+    <img
+      src={src}
+      alt={filename}
+      className={className}
+      onClick={onClick}
+      onContextMenu={onContextMenu}
+      style={onClick ? { cursor: "zoom-in" } : undefined}
+      {...interactiveProps}
+    />
+  );
 }
 
 /** Semantic colors for tool names — makes tool activity scannable at a glance. */
@@ -201,12 +261,69 @@ export function ChatPanel() {
   const processingRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const [attachmentMenu, setAttachmentMenu] = useState<{
+    x: number;
+    y: number;
+    attachment: DownloadableAttachment;
+    /** Persisted PDFs hydrate without data_base64 (it's stripped to keep
+     *  the initial IPC small). When the menu fires for one, hold the row
+     *  id so each action can lazy-load the bytes via loadAttachmentData
+     *  before downloading / copying. */
+    attachmentId?: string;
+  } | null>(null);
+
+  const openAttachmentMenu = useCallback(
+    (e: React.MouseEvent, attachment: DownloadableAttachment, attachmentId?: string) => {
+      e.preventDefault();
+      setAttachmentMenu({
+        x: e.clientX,
+        y: e.clientY,
+        attachment,
+        attachmentId,
+      });
+    },
+    [],
+  );
+
+  /** Resolves an attachment's data_base64, fetching from the backend on
+   *  demand if it was stripped during hydration. Returns a fresh object
+   *  so callers can pass it straight into download / copy helpers. */
+  const ensureAttachmentBytes = useCallback(
+    async (
+      attachment: DownloadableAttachment,
+      attachmentId?: string,
+    ): Promise<DownloadableAttachment> => {
+      if (attachment.data_base64 || !attachmentId) return attachment;
+      const { loadAttachmentData } = await import("../../services/tauri");
+      const data_base64 = await loadAttachmentData(attachmentId);
+      return { ...attachment, data_base64 };
+    },
+    [],
+  );
+
+  const [lightbox, setLightbox] = useState<{
+    attachment: DownloadableAttachment;
+    returnFocus: HTMLElement | null;
+  } | null>(null);
+
+  const openLightbox = useCallback(
+    (e: React.MouseEvent, attachment: DownloadableAttachment) => {
+      setLightbox({
+        attachment,
+        returnFocus: (e.currentTarget as HTMLElement) ?? null,
+      });
+    },
+    [],
+  );
+
+  // navigator.canShare({ files: [probe] }) doesn't change across re-renders —
+  // it's a function of the platform / webview capabilities. Compute once.
+  const shareSupported = useMemo(() => isShareSupported(), []);
+
   // Prompt history: stores past user inputs per workspace.
   const historyRef = useRef<Record<string, string[]>>({});
   const historyIndexRef = useRef(-1);
   const draftRef = useRef("");
-
-  useAgentStream();
 
   const defaultBranchesMap = useAppStore((s) => s.defaultBranches);
 
@@ -289,29 +406,20 @@ export function ChatPanel() {
     [handleContentChanged],
   );
 
-  // Spinner and elapsed timer for running agent.
-  const [spinnerIdx, setSpinnerIdx] = useState(0);
+  // Elapsed timer for running agent.
+  const promptStartTime = useAppStore(
+    (s) => (selectedWorkspaceId ? s.promptStartTime[selectedWorkspaceId] ?? null : null)
+  );
   const [elapsed, setElapsed] = useState(0);
-  const startTimeRef = useRef<number | null>(null);
   useEffect(() => {
-    if (!isRunning) {
-      startTimeRef.current = null;
-      return;
-    }
-    if (!startTimeRef.current) {
-      startTimeRef.current = Date.now();
-      setElapsed(0);
-      setSpinnerIdx(0);
-    }
+    if (!isRunning || promptStartTime == null) return;
+    setElapsed(Math.floor((Date.now() - promptStartTime) / 1000));
     const interval = setInterval(() => {
-      setSpinnerIdx((i) => (i + 1) % SPINNER_FRAMES.length);
-      if (startTimeRef.current) {
-        const newElapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
-        setElapsed((prev) => (prev === newElapsed ? prev : newElapsed));
-      }
-    }, SPINNER_INTERVAL_MS);
+      const newElapsed = Math.floor((Date.now() - promptStartTime) / 1000);
+      setElapsed((prev) => (prev === newElapsed ? prev : newElapsed));
+    }, 1000);
     return () => clearInterval(interval);
-  }, [isRunning]);
+  }, [isRunning, promptStartTime]);
 
   const formatElapsed = formatElapsedSeconds;
 
@@ -794,6 +902,7 @@ export function ChatPanel() {
       useAppStore.getState().addChatAttachments(selectedWorkspaceId, optimisticAtts);
     }
     updateWorkspace(selectedWorkspaceId, { agent_status: "Running" });
+    useAppStore.getState().setPromptStartTime(selectedWorkspaceId, Date.now());
     useAppStore.getState().clearUnreadCompletion(selectedWorkspaceId);
 
     try {
@@ -802,6 +911,10 @@ export function ChatPanel() {
         const state = useAppStore.getState();
         const selectedModel = state.selectedModel[selectedWorkspaceId] || null;
         const disable1mContext = shouldDisable1mContext(selectedModel);
+        const effort = resolveUltrathinkEffort(
+          trimmed,
+          state.effortLevel[selectedWorkspaceId],
+        );
         await sendRemoteCommand(ws.remote_connection_id, "send_chat_message", {
           workspace_id: selectedWorkspaceId,
           content: trimmed,
@@ -811,7 +924,7 @@ export function ChatPanel() {
           fast_mode: state.fastMode[selectedWorkspaceId] || false,
           thinking_enabled: state.thinkingEnabled[selectedWorkspaceId] || false,
           plan_mode: state.planMode[selectedWorkspaceId] || false,
-          effort: state.effortLevel[selectedWorkspaceId] || null,
+          effort: effort || null,
           chrome_enabled: state.chromeEnabled[selectedWorkspaceId] || false,
           disable_1m_context: disable1mContext,
         });
@@ -821,7 +934,10 @@ export function ChatPanel() {
         const fastMode = state.fastMode[selectedWorkspaceId] || false;
         const thinkingEnabled = state.thinkingEnabled[selectedWorkspaceId] || false;
         const planMode = state.planMode[selectedWorkspaceId] || false;
-        const effort = state.effortLevel[selectedWorkspaceId] || undefined;
+        const effort = resolveUltrathinkEffort(
+          trimmed,
+          state.effortLevel[selectedWorkspaceId],
+        );
         const chromeEnabled = state.chromeEnabled[selectedWorkspaceId] || false;
         const disable1mContext = shouldDisable1mContext(model ?? null);
         await sendChatMessage(
@@ -845,6 +961,7 @@ export function ChatPanel() {
       console.error("sendChatMessage failed:", errMsg);
       setError(errMsg);
       updateWorkspace(selectedWorkspaceId, { agent_status: "Idle" });
+      useAppStore.getState().clearPromptStartTime(selectedWorkspaceId);
     }
   };
 
@@ -911,6 +1028,8 @@ export function ChatPanel() {
                   workspaceId={selectedWorkspaceId}
                   isRunning={isRunning}
                   onForkTurn={isRemote ? undefined : handleFork}
+                  onAttachmentContextMenu={openAttachmentMenu}
+                  onAttachmentClick={openLightbox}
                 />
               )}
 
@@ -985,9 +1104,16 @@ export function ChatPanel() {
                   ref={processingRef}
                   className={styles.processing}
                   role="status"
-                  aria-label={`Processing, ${formatElapsed(elapsed)} elapsed`}
+                  aria-label={
+                    ws?.agent_status === "Compacting"
+                      ? `Compacting context, ${formatElapsed(elapsed)} elapsed`
+                      : `Processing, ${formatElapsed(elapsed)} elapsed`
+                  }
                 >
-                  <span className={styles.spinner} aria-hidden="true">{SPINNER_FRAMES[spinnerIdx]}</span>
+                  <LoaderCircle size={14} className={styles.spinner} aria-hidden="true" />
+                  {ws?.agent_status === "Compacting" && (
+                    <span className={styles.compactingLabel}>Compacting context…</span>
+                  )}
                   <span className={styles.elapsed}>{formatElapsed(elapsed)}</span>
                 </div>
               )}
@@ -1028,7 +1154,82 @@ export function ChatPanel() {
         historyRef={historyRef}
         historyIndexRef={historyIndexRef}
         draftRef={draftRef}
+        onAttachmentContextMenu={openAttachmentMenu}
+        onAttachmentClick={openLightbox}
       />
+      {attachmentMenu && (() => {
+        const mt = attachmentMenu.attachment.media_type;
+        const labels = buildAttachmentMenuLabels(mt);
+        // The browser-wrapper path renders bytes inside <img>, which is
+        // broken for PDFs (and would be broken for any non-image type we
+        // add later). Drop "Open in New Window" for non-images — left-
+        // click already opens the PDF in the system default viewer.
+        const isImage = mt.startsWith("image/");
+        const withBytes = () =>
+          ensureAttachmentBytes(
+            attachmentMenu.attachment,
+            attachmentMenu.attachmentId,
+          );
+        return (
+          <AttachmentContextMenu
+            x={attachmentMenu.x}
+            y={attachmentMenu.y}
+            onClose={() => setAttachmentMenu(null)}
+            items={[
+              {
+                label: labels.download,
+                onSelect: () => {
+                  withBytes()
+                    .then(downloadAttachment)
+                    .catch((err) => console.error("Download failed:", err));
+                },
+              },
+              {
+                label: labels.copy,
+                onSelect: () => {
+                  withBytes()
+                    .then(copyAttachmentToClipboard)
+                    .catch((err) => console.error("Copy failed:", err));
+                },
+              },
+              ...(isImage
+                ? [
+                    {
+                      label: labels.open,
+                      onSelect: () => {
+                        withBytes()
+                          .then(openAttachmentInBrowser)
+                          .catch((err) =>
+                            console.error("Open in browser failed:", err),
+                          );
+                      },
+                    },
+                  ]
+                : []),
+              ...(shareSupported
+                ? [
+                    {
+                      label: "Share…",
+                      onSelect: () => {
+                        withBytes()
+                          .then(shareAttachment)
+                          .catch((err) => console.error("Share failed:", err));
+                      },
+                    },
+                  ]
+                : []),
+            ]}
+          />
+        );
+      })()}
+      {lightbox && (
+        <AttachmentLightbox
+          attachment={lightbox.attachment}
+          returnFocusTo={lightbox.returnFocus}
+          onClose={() => setLightbox(null)}
+          onContextMenu={(e) => openAttachmentMenu(e, lightbox.attachment)}
+        />
+      )}
     </div>
   );
 }
@@ -1221,6 +1422,7 @@ function TurnFooter({
   assistantText,
   onFork,
   onRollback,
+  className,
 }: {
   durationMs?: number;
   inputTokens?: number;
@@ -1228,6 +1430,7 @@ function TurnFooter({
   assistantText?: string;
   onFork?: () => void;
   onRollback?: () => void;
+  className?: string;
 }) {
   const [copied, setCopied] = useState(false);
   const copyTimeoutRef = useRef<number | null>(null);
@@ -1339,7 +1542,10 @@ function TurnFooter({
   const hasMetadata = !!(tokensNode || elapsedNode);
 
   return (
-    <div className={styles.turnFooter} onClick={(e) => e.stopPropagation()}>
+    <div
+      className={`${styles.turnFooter}${className ? ` ${className}` : ""}`}
+      onClick={(e) => e.stopPropagation()}
+    >
       {tokensNode}
       {tokensNode && elapsedNode && (
         <span className={styles.turnFooterDot} aria-hidden="true">·</span>
@@ -1386,11 +1592,22 @@ function TaskProgressBar({
  */
 const EMPTY_CHECKPOINTS: import("../../types/checkpoint").ConversationCheckpoint[] = [];
 
+type RollbackModalData = {
+  workspaceId: string;
+  checkpointId: string | null;
+  messageId: string;
+  messagePreview: string;
+  messageContent: string;
+  hasFileChanges: boolean;
+};
+
 const MessagesWithTurns = memo(function MessagesWithTurns({
   messages,
   workspaceId,
   isRunning,
   onForkTurn,
+  onAttachmentContextMenu,
+  onAttachmentClick,
 }: {
   messages: ChatMessage[];
   workspaceId: string;
@@ -1398,6 +1615,20 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
   /** Handler invoked when the user forks a turn. Undefined disables the fork
    *  button (e.g. for remote workspaces where the command cannot run). */
   onForkTurn?: (checkpointId: string) => void;
+  /** Right-click handler on message-image attachments. Lifted to ChatPanel so
+   *  the context menu renders at the top of the component tree. The third
+   *  argument is the persisted attachment id, used to lazy-load bytes for
+   *  PDFs (whose data_base64 is stripped on hydration). */
+  onAttachmentContextMenu?: (
+    e: React.MouseEvent,
+    attachment: DownloadableAttachment,
+    attachmentId?: string,
+  ) => void;
+  /** Left-click handler on message-image attachments — opens the lightbox. */
+  onAttachmentClick?: (
+    e: React.MouseEvent,
+    attachment: DownloadableAttachment,
+  ) => void;
 }) {
   const completedTurns = useAppStore(
     (s) => s.completedTurns[workspaceId] ?? EMPTY_COMPLETED_TURNS
@@ -1421,15 +1652,37 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
   );
 
   // Pre-build a Map keyed by message_id for O(1) lookup in the render loop.
+  //
+  // Agent-origin attachments are persisted with `message_id` set to the *user*
+  // message that triggered the turn (FK-cascade-safe). For display they
+  // belong with the *assistant* message of the same turn — i.e. the next
+  // Assistant message after the FK anchor in chronological order. This
+  // re-route happens here so the storage shape can stay simple.
   const attachmentsByMessage = useMemo(() => {
+    // Single reverse pass: each User message maps to the most recent
+    // Assistant message that follows it. O(n) instead of O(n²).
+    const userToNextAssistant = new Map<string, string>();
+    let nextAssistantId: string | null = null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role === "Assistant") {
+        nextAssistantId = m.id;
+      } else if (m.role === "User" && nextAssistantId) {
+        userToNextAssistant.set(m.id, nextAssistantId);
+      }
+    }
     const map = new Map<string, ChatAttachment[]>();
     for (const att of chatAttachments) {
-      const list = map.get(att.message_id);
+      const targetId =
+        att.origin === "agent"
+          ? (userToNextAssistant.get(att.message_id) ?? att.message_id)
+          : att.message_id;
+      const list = map.get(targetId);
       if (list) list.push(att);
-      else map.set(att.message_id, [att]);
+      else map.set(targetId, [att]);
     }
     return map;
-  }, [chatAttachments]);
+  }, [chatAttachments, messages]);
 
   // Build an index: afterMessageIndex → array of (turn, globalIndex) pairs.
   // Only recomputed when completedTurns changes, not on every streaming update.
@@ -1442,65 +1695,33 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
     return map;
   }, [completedTurns]);
 
-  // Joined assistant text per turn, used by the "Copy output" action in the
-  // turn footer. A turn's slice is [prevTurn.afterMessageIndex, afterMessageIndex).
-  const assistantTextByTurnId = useMemo(() => {
-    const map = new Map<string, string>();
-    let prevBoundary = 0;
-    for (const turn of completedTurns) {
-      const text = messages
-        .slice(prevBoundary, turn.afterMessageIndex)
-        .filter((m) => m.role === "Assistant")
-        .map((m) => m.content)
-        .join("\n\n")
-        .trim();
-      map.set(turn.id, text);
-      prevBoundary = turn.afterMessageIndex;
-    }
-    return map;
-  }, [completedTurns, messages]);
+  const completedTurnPositions = useMemo(
+    () => new Set(completedTurns.map((turn) => turn.afterMessageIndex)),
+    [completedTurns],
+  );
 
-  // Map user message index → checkpoint for the preceding turn.
-  // Checks the message immediately before this user message (assistant or
-  // user for tool-only turns) for a matching checkpoint. Index 0 always
-  // maps to null (clear-all) when any checkpoints exist.
+  const findTriggeringUserIdx = useCallback(
+    (afterMessageIndex: number) => {
+      return findTriggeringUserIndex(messages, afterMessageIndex);
+    },
+    [messages],
+  );
+
+  // Map user message index → checkpoint for rollback buttons.
+  // Each user message maps to the latest preceding checkpoint, with the first
+  // user message mapping to null so it can clear the whole conversation.
   const rollbackCheckpointByIdx = useMemo(
     () => buildRollbackMap(messages, checkpoints),
     [messages, checkpoints],
   );
 
-  // Per-turn rollback data, keyed by turn.id. A turn's rollback target is
-  // the checkpoint captured just before the triggering user message ran.
-  // A turn's triggering user message is the first User message in its range
-  // [prevBoundary, afterMessageIndex) — the checkpoint itself is anchored to
-  // the last assistant message of the turn, so we can't use cp.message_id.
-  const rollbackByTurnId = useMemo(() => {
-    const result = new Map<
-      string,
-      {
-        workspaceId: string;
-        checkpointId: string | null;
-        messageId: string;
-        messagePreview: string;
-        messageContent: string;
-        hasFileChanges: boolean;
-      }
-    >();
-    let prevBoundary = 0;
-    for (const turn of completedTurns) {
-      let userIdx = -1;
-      for (let i = prevBoundary; i < turn.afterMessageIndex && i < messages.length; i++) {
-        if (messages[i].role === "User") {
-          userIdx = i;
-          break;
-        }
-      }
-      prevBoundary = turn.afterMessageIndex;
-      if (userIdx === -1) continue;
-      if (!rollbackCheckpointByIdx.has(userIdx)) continue;
+  const buildRollbackData = useCallback(
+    (userIdx: number): RollbackModalData | null => {
+      if (!rollbackCheckpointByIdx.has(userIdx)) return null;
       const target = rollbackCheckpointByIdx.get(userIdx) ?? null;
       const userMsg = messages[userIdx];
-      result.set(turn.id, {
+      if (!userMsg) return null;
+      return {
         workspaceId,
         checkpointId: target ? target.id : null,
         messageId: userMsg.id,
@@ -1509,16 +1730,99 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
         hasFileChanges: target
           ? checkpointHasFileChanges(target, checkpoints)
           : clearAllHasFileChanges(checkpoints),
-      });
+      };
+    },
+    [checkpoints, messages, rollbackCheckpointByIdx, workspaceId],
+  );
+
+  // Joined assistant text per turn, used by the "Copy output" action in the
+  // turn footer. CompletedTurn is only persisted for tool-using turns, so the
+  // slice starts at the nearest preceding user message instead of the previous
+  // CompletedTurn boundary.
+  const assistantTextByTurnId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const turn of completedTurns) {
+      const userIdx = findTriggeringUserIdx(turn.afterMessageIndex);
+      if (userIdx === -1) {
+        map.set(turn.id, "");
+        continue;
+      }
+      map.set(
+        turn.id,
+        assistantTextForTurn(messages, userIdx, turn.afterMessageIndex),
+      );
+    }
+    return map;
+  }, [completedTurns, findTriggeringUserIdx, messages]);
+
+  // Per-turn rollback data, keyed by turn.id. Completed turns are only
+  // persisted for tool-using turns, so the triggering user is the nearest
+  // user message before the completed turn boundary.
+  const rollbackByTurnId = useMemo(() => {
+    const result = new Map<string, RollbackModalData>();
+    for (const turn of completedTurns) {
+      const userIdx = findTriggeringUserIdx(turn.afterMessageIndex);
+      if (userIdx === -1) continue;
+      const data = buildRollbackData(userIdx);
+      if (data) result.set(turn.id, data);
     }
     return result;
-  }, [completedTurns, checkpoints, messages, workspaceId, rollbackCheckpointByIdx]);
+  }, [buildRollbackData, completedTurns, findTriggeringUserIdx]);
 
   const buildOnRollback = (turnId: string) => {
     if (isRunning) return undefined;
     const data = rollbackByTurnId.get(turnId);
     if (!data) return undefined;
     return () => openModal("rollback", data);
+  };
+
+  const plainTurnFootersByPosition = useMemo(() => {
+    return buildPlainTurnFooters(
+      messages,
+      rollbackCheckpointByIdx,
+      completedTurnPositions,
+      checkpoints,
+    );
+  }, [checkpoints, completedTurnPositions, messages, rollbackCheckpointByIdx]);
+
+  const renderPlainTurnFooter = (position: number) => {
+    const data = plainTurnFootersByPosition.get(position);
+    if (!data) return null;
+    const rollbackData = buildRollbackData(data.userIdx);
+    const onRollback =
+      !isRunning && rollbackData
+        ? () => openModal("rollback", rollbackData)
+        : undefined;
+    const onFork =
+      data.forkCheckpointId && onForkTurn
+        ? () => onForkTurn(data.forkCheckpointId!)
+        : undefined;
+    const hasRenderableTokens =
+      typeof data.inputTokens === "number" &&
+      typeof data.outputTokens === "number";
+
+    if (
+      !data.assistantText &&
+      !data.durationMs &&
+      !hasRenderableTokens &&
+      !onFork &&
+      !onRollback
+    ) {
+      return null;
+    }
+
+    return (
+      <TurnFooter
+        key={`plain-turn-footer-${data.position}`}
+        durationMs={data.durationMs}
+        inputTokens={data.inputTokens}
+        outputTokens={data.outputTokens}
+        assistantText={data.assistantText}
+        onFork={onFork}
+        onRollback={onRollback}
+        className={styles.messageTurnFooter}
+      />
+    );
   };
 
   // Compute cumulative task progress at each turn index in a single O(n) pass.
@@ -1621,7 +1925,7 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
               <ThinkingBlock content={msg.thinking} isStreaming={false} />
             )}
             <div className={styles.content}>
-              {msg.role === "User" && attachmentsByMessage.has(msg.id) && (
+              {attachmentsByMessage.has(msg.id) && (
                 <div className={styles.messageImages}>
                   {attachmentsByMessage.get(msg.id)!.map((att) =>
                     att.media_type === "application/pdf" ? (
@@ -1631,9 +1935,54 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
                         attachmentId={att.id}
                         filename={att.filename}
                         className={styles.messageImage}
+                        onClick={() => {
+                          (async () => {
+                            // Persisted attachments strip data_base64 on first
+                            // load to avoid IPC bloat — fetch on demand.
+                            let b64 = att.data_base64;
+                            if (!b64) {
+                              const { loadAttachmentData } = await import(
+                                "../../services/tauri"
+                              );
+                              b64 = await loadAttachmentData(att.id);
+                            }
+                            await openAttachmentWithDefaultApp({
+                              filename: att.filename,
+                              media_type: att.media_type,
+                              data_base64: b64,
+                            });
+                          })().catch((err) =>
+                            console.error("Failed to open PDF:", err),
+                          );
+                        }}
+                        onContextMenu={(e) =>
+                          onAttachmentContextMenu?.(
+                            e,
+                            {
+                              filename: att.filename,
+                              media_type: att.media_type,
+                              data_base64: att.data_base64,
+                            },
+                            att.id,
+                          )
+                        }
                       />
                     ) : att.media_type === "text/plain" ? (
-                      <div key={att.id} className={styles.messagePdf}>
+                      <div
+                        key={att.id}
+                        className={styles.messagePdf}
+                        onContextMenu={(e) =>
+                          onAttachmentContextMenu?.(
+                            e,
+                            {
+                              filename: att.filename,
+                              media_type: att.media_type,
+                              data_base64: att.data_base64,
+                            },
+                            att.id,
+                          )
+                        }
+                      >
                         <FileText size={14} />
                         <span>{att.filename}</span>
                         <span className={styles.textFileSize}>
@@ -1648,6 +1997,24 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
                         src={`data:${att.media_type};base64,${att.data_base64}`}
                         alt={att.filename}
                         className={styles.messageImage}
+                        onClick={(e) =>
+                          onAttachmentClick?.(e, {
+                            filename: att.filename,
+                            media_type: att.media_type,
+                            data_base64: att.data_base64,
+                          })
+                        }
+                        onContextMenu={(e) =>
+                          onAttachmentContextMenu?.(
+                            e,
+                            {
+                              filename: att.filename,
+                              media_type: att.media_type,
+                              data_base64: att.data_base64,
+                            },
+                            att.id,
+                          )
+                        }
                       />
                     ),
                   )}
@@ -1666,11 +2033,18 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
                   {preprocessContent(msg.content)}
                 </Markdown>
               ) : (
-                msg.content
+                renderUltrathinkText(msg.content, {
+                  animated: false,
+                  styles: {
+                    ultrathinkChar: styles.ultrathinkChar,
+                    ultrathinkCharAnimated: styles.ultrathinkCharAnimated,
+                  },
+                })
               )}
             </div>
           </div>
           )}
+          {renderPlainTurnFooter(idx + 1)}
         </React.Fragment>
         );
       })}
@@ -1834,6 +2208,8 @@ function ChatInputArea({
   historyRef,
   historyIndexRef,
   draftRef,
+  onAttachmentContextMenu,
+  onAttachmentClick,
 }: {
   onSend: (
     content: string,
@@ -1849,9 +2225,18 @@ function ChatInputArea({
   historyRef: React.MutableRefObject<Record<string, string[]>>;
   historyIndexRef: React.MutableRefObject<number>;
   draftRef: React.MutableRefObject<string>;
+  onAttachmentContextMenu?: (
+    e: React.MouseEvent,
+    attachment: DownloadableAttachment,
+  ) => void;
+  onAttachmentClick?: (
+    e: React.MouseEvent,
+    attachment: DownloadableAttachment,
+  ) => void;
 }) {
   const [chatInput, setChatInput] = useState("");
   const [cursorPos, setCursorPos] = useState(0);
+  const [inputScrollTop, setInputScrollTop] = useState(0);
   const [slashPickerIndex, setSlashPickerIndex] = useState(0);
   const [slashPickerDismissed, setSlashPickerDismissed] = useState(false);
   const [slashCommands, setSlashCommandsLocal] = useState<SlashCommand[]>([]);
@@ -2130,6 +2515,12 @@ function ChatInputArea({
         // Skip text/plain — pasting text should insert into the textarea,
         // not create a file attachment.
         if (item.type === "text/plain") continue;
+        // Some clipboard writers (notably `navigator.clipboard.write` with
+        // a ClipboardItem) expose the image both as a "string" item (its
+        // data URL) and a "file" item. We must check the file variant —
+        // getAsFile() returns null for string items, which would
+        // silently drop the paste.
+        if (item.kind !== "file") continue;
         if (SUPPORTED_ATTACHMENT_TYPES.has(item.type)) {
           e.preventDefault();
           const file = item.getAsFile();
@@ -2375,6 +2766,8 @@ function ChatInputArea({
     }
   };
 
+  const showUltrathinkOverlay = hasUltrathink(chatInput);
+
   return (
     <div
       className={`${styles.inputArea}${dragActive ? ` ${styles.inputDragActive}` : ""}`}
@@ -2419,11 +2812,36 @@ function ChatInputArea({
                   </span>
                 </div>
               ) : (
-                <img src={att.preview_url} alt={att.filename} />
+                <img
+                  src={att.preview_url}
+                  alt={att.filename}
+                  onClick={(e) => {
+                    // PDFs also render as an <img> here (preview_url is a blob
+                    // URL of the first-page thumbnail), but their data_base64
+                    // is PDF bytes — not renderable inside an <img>. Only open
+                    // the lightbox for actual image MIME types.
+                    if (!att.media_type.startsWith("image/")) return;
+                    onAttachmentClick?.(e, {
+                      filename: att.filename,
+                      media_type: att.media_type,
+                      data_base64: att.data_base64,
+                    });
+                  }}
+                  onContextMenu={(e) =>
+                    onAttachmentContextMenu?.(e, {
+                      filename: att.filename,
+                      media_type: att.media_type,
+                      data_base64: att.data_base64,
+                    })
+                  }
+                />
               )}
               <button
                 className={styles.attachmentRemove}
-                onClick={() => removeAttachment(att.id)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  removeAttachment(att.id);
+                }}
                 title="Remove"
               >
                 <X size={12} />
@@ -2432,25 +2850,46 @@ function ChatInputArea({
           ))}
         </div>
       )}
-      <textarea
-        ref={textareaRef}
-        // data-chat-input is the stable selector used by the global focus
-        // shortcuts (Cmd+` and Cmd+0) in useKeyboardShortcuts.ts to move
-        // focus into the prompt from anywhere in the app.
-        data-chat-input
-        className={`${styles.input}${planMode ? ` ${styles.inputPlanMode}` : ""}`}
-        value={chatInput}
-        onChange={(e) => {
-          setChatInput(e.target.value);
-          setCursorPos(e.target.selectionStart ?? 0);
-        }}
-        onSelect={(e) => {
-          setCursorPos((e.target as HTMLTextAreaElement).selectionStart ?? 0);
-        }}
-        onKeyDown={handleKeyDown}
-        onPaste={handlePaste}
-        placeholder={isRunning ? "Type to queue a message..." : "Send a message..."}
-      />
+      <div className={styles.inputTextWrap}>
+        {showUltrathinkOverlay && (
+          <div className={styles.inputHighlight} aria-hidden="true">
+            <div style={{ transform: `translateY(-${inputScrollTop}px)` }}>
+              {renderUltrathinkText(chatInput, {
+                animated: true,
+                styles: {
+                  ultrathinkChar: styles.ultrathinkChar,
+                  ultrathinkCharAnimated: styles.ultrathinkCharAnimated,
+                },
+              })}
+            </div>
+          </div>
+        )}
+        <textarea
+          ref={textareaRef}
+          // data-chat-input is the stable selector used by the global focus
+          // shortcuts (Cmd+` and Cmd+0) in useKeyboardShortcuts.ts to move
+          // focus into the prompt from anywhere in the app.
+          data-chat-input
+          className={`${styles.input}${planMode ? ` ${styles.inputPlanMode}` : ""}${
+            showUltrathinkOverlay ? ` ${styles.inputWithHighlight}` : ""
+          }`}
+          value={chatInput}
+          onChange={(e) => {
+            setChatInput(e.target.value);
+            setCursorPos(e.target.selectionStart ?? 0);
+            setInputScrollTop(e.target.scrollTop);
+          }}
+          onSelect={(e) => {
+            setCursorPos((e.target as HTMLTextAreaElement).selectionStart ?? 0);
+          }}
+          onScroll={(e) => {
+            setInputScrollTop((e.target as HTMLTextAreaElement).scrollTop);
+          }}
+          onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
+          placeholder={isRunning ? "Type to queue a message..." : "Send a message..."}
+        />
+      </div>
       <div className={styles.inputControls}>
         <div className={styles.inputControlsLeft}>
           <div className={styles.attachBtnWrap}>
@@ -2496,8 +2935,8 @@ function ChatInputArea({
             <ContextPopover
               workspaceId={selectedWorkspaceId}
               onClose={() => setContextPopoverOpen(false)}
-              onCompact={() => resetAgentSession(selectedWorkspaceId)}
-              onClear={() => clearConversation(selectedWorkspaceId, false)}
+              onCompact={() => { onSend("/compact"); }}
+              onClear={() => { onSend("/clear"); }}
             />
           )}
         </div>

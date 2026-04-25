@@ -8,8 +8,9 @@ use claudette::agent::PersistentSession;
 use parking_lot::Mutex as ParkingMutex;
 use tokio::sync::{RwLock, Semaphore};
 
-use claudette::scm_provider::PluginRegistry;
-use claudette::scm_provider::scm::{CiCheck, PullRequest};
+use claudette::env_provider::{EnvCache, EnvWatcher};
+use claudette::plugin_runtime::PluginRegistry;
+use claudette::scm::types::{CiCheck, PullRequest};
 
 use crate::commands::apps::DetectedApp;
 use crate::remote::DiscoveredServer;
@@ -52,6 +53,11 @@ pub struct AgentSessionState {
     pub needs_attention: bool,
     /// What kind of input the agent needs, if any.
     pub attention_kind: Option<AttentionKind>,
+    /// Set when the deferred attention notification has been fired for the
+    /// current attention cycle. Cleared whenever `needs_attention` is cleared
+    /// (i.e. when the user responds). Prevents repeated banner/sound when
+    /// multiple `can_use_tool` prompts queue inside a single cycle.
+    pub attention_notification_sent: bool,
     /// Long-lived process that persists MCP servers across turns.
     /// When present, subsequent turns write to this process's stdin instead of
     /// spawning new processes.
@@ -82,6 +88,24 @@ pub struct AgentSessionState {
     /// `plan_mode=false` on the next turn, so we force a teardown regardless
     /// of the requested flag. Reset after teardown.
     pub session_exited_plan: bool,
+    /// Snapshot of the env-provider resolved env `vars` map baked into
+    /// the current persistent session at spawn. Each new turn re-resolves
+    /// and compares; any divergence (user edited `.envrc`, ran
+    /// `direnv allow`, toggled a provider, changed a plugin setting)
+    /// forces a teardown so the fresh env reaches the agent subprocess.
+    /// Stored as a plain map because `EnvMap` already is one; keeping a
+    /// snapshot lets the comparison be a single equality check.
+    pub session_resolved_env: claudette::env_provider::types::EnvMap,
+    /// Lifecycle handle for the in-process MCP server bridge that powers
+    /// `mcp__claudette__send_to_user`. Created alongside `persistent_session`
+    /// at spawn time; dropped when `persistent_session = None` so the listener
+    /// task is cancelled and the socket file unlinked. `None` between spawns.
+    pub mcp_bridge: Option<Arc<claudette::agent_mcp::bridge::McpBridgeSession>>,
+    /// `id` of the user message that triggered the most recent turn, used as
+    /// the FK anchor for any agent-authored attachments produced during that
+    /// turn. Updated each time a new user message is inserted; cleared on
+    /// session teardown. See `agent_mcp_sink::ChatBridgeSink`.
+    pub last_user_msg_id: Option<String>,
 }
 
 /// Handle to an active PTY process.
@@ -109,7 +133,11 @@ pub struct LocalServerState {
     pub child: tokio::process::Child,
     /// The PID captured at spawn time for reliable synchronous cleanup.
     /// `tokio::process::Child::id()` returns `None` after the child is reaped,
-    /// so we store the PID eagerly.
+    /// so we store the PID eagerly. Only read on Unix, where `Drop` passes
+    /// it to `kill_process_sync` to send SIGTERM/SIGKILL + reap; on Windows
+    /// `child.start_kill()` alone suffices and this field is held only to
+    /// keep the struct layout consistent across platforms.
+    #[cfg_attr(windows, allow(dead_code))]
     pub pid: u32,
     /// The connection string printed by the server on startup.
     pub connection_string: String,
@@ -124,10 +152,13 @@ impl Drop for LocalServerState {
             eprintln!("[cleanup] Server process already exited");
             return;
         }
-        // Best-effort tokio-level kill (may fail if runtime is gone).
+        // Best-effort tokio-level kill (may fail if runtime is gone). On
+        // Windows this invokes `TerminateProcess`, which is immediate and
+        // leaves no zombie state — so the extra synchronous cleanup below
+        // is only meaningful on Unix where SIGTERM → grace → SIGKILL →
+        // `waitpid` is needed to reap the child.
         let _ = self.child.start_kill();
-        // Synchronous POSIX kill — works even during process teardown when the
-        // tokio runtime is no longer available.
+        #[cfg(unix)]
         kill_process_sync(self.pid);
     }
 }
@@ -139,6 +170,7 @@ impl Drop for LocalServerState {
 /// `SIGKILL` and reaps the process. This is safe to call from `Drop` impls
 /// and the `RunEvent::Exit` handler where async code cannot run. Uses raw
 /// libc calls so it does not depend on the tokio runtime.
+#[cfg(unix)]
 pub fn kill_process_sync(pid: u32) {
     use std::time::{Duration, Instant};
     let pid = pid as i32;
@@ -270,6 +302,17 @@ pub struct AppState {
     pub usage_cache: RwLock<Option<UsageCacheEntry>>,
     /// SCM provider plugin registry.
     pub plugins: RwLock<PluginRegistry>,
+    /// mtime-keyed cache of env-provider exports. One entry per
+    /// `(worktree, plugin_name)` pair, invalidated when any watched
+    /// file (`.envrc`, `mise.toml`, `.env`, `flake.lock`, etc.) changes.
+    pub env_cache: Arc<EnvCache>,
+    /// Filesystem watcher that proactively evicts `env_cache` entries
+    /// when any plugin's `watched` paths change on disk. Set at
+    /// startup from `main.rs` once the `AppHandle` is available so
+    /// the change callback can emit an `env-cache-invalidated` Tauri
+    /// event; `None` before setup finishes or if watcher construction
+    /// failed (logged, lazy mtime invalidation still covers).
+    pub env_watcher: RwLock<Option<Arc<EnvWatcher>>>,
     /// Cached PR/CI status data keyed by (repo_id, branch_name).
     pub scm_cache: ScmCache,
     /// Limits concurrent SCM CLI invocations.
@@ -278,6 +321,14 @@ pub struct AppState {
     /// call. The Update struct holds the downloaded payload + signature context
     /// and is not Serialize, so it lives here instead of crossing the IPC boundary.
     pub pending_update: tokio::sync::Mutex<Option<tauri_plugin_updater::Update>>,
+    /// CESP sound pack playback state (no-repeat + debounce tracking).
+    pub cesp_playback: Mutex<claudette::cesp::SoundPlaybackState>,
+    /// Cancellation signal for an in-flight `claude auth login` subprocess.
+    /// The waiter task owns the `Child` directly and selects between
+    /// `child.wait()` and this receiver; sending on the paired sender asks
+    /// the waiter to kill the process and emit a cancelled completion event.
+    /// `Some` while a flow is running, `None` otherwise.
+    pub auth_login_cancel: tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
 
 impl AppState {
@@ -295,9 +346,13 @@ impl AppState {
             next_tray_seq: AtomicU64::new(1),
             usage_cache: RwLock::new(None),
             plugins: RwLock::new(plugins),
+            env_cache: Arc::new(EnvCache::new()),
+            env_watcher: RwLock::new(None),
             scm_cache: ScmCache::new(),
             scm_semaphore: Arc::new(Semaphore::new(4)),
             pending_update: tokio::sync::Mutex::new(None),
+            cesp_playback: Mutex::new(claudette::cesp::SoundPlaybackState::new()),
+            auth_login_cancel: tokio::sync::Mutex::new(None),
         }
     }
 
@@ -310,12 +365,14 @@ impl AppState {
 #[cfg(unix)]
 mod tests {
     use super::*;
+    use claudette::process::CommandWindowExt as _;
 
     /// Helper: spawn a long-running `sleep` process and return its PID.
     fn spawn_sleep() -> (tokio::process::Child, u32) {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let child = tokio::process::Command::new("sleep")
+                .no_console_window()
                 .arg("3600")
                 .kill_on_drop(true)
                 .spawn()
@@ -374,6 +431,7 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let (child, pid) = rt.block_on(async {
             let child = tokio::process::Command::new("sleep")
+                .no_console_window()
                 .arg("3600")
                 .kill_on_drop(true)
                 .spawn()

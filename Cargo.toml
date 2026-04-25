@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "claudette"
-version = "0.17.0"
+version = "0.19.0"
 edition = "2024"
 description = "Claude's missing better half — a companion tool for Claude Code"
 license = "MIT"
@@ -18,16 +18,38 @@ futures = "0.3"
 rusqlite = { version = "0.34", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["process", "fs", "io-util", "time", "sync", "rt", "net", "macros"] }
+tokio = { version = "1", features = ["process", "fs", "io-util", "io-std", "time", "sync", "rt", "net", "macros"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 which = "7"
 dirs = "6"
 open = "5"
 mlua = { version = "0.10", features = ["luau", "serialize", "async", "send"] }
+flate2 = "1"
+# Cross-platform filesystem watcher used by env-provider reactive
+# invalidation. RecommendedWatcher picks FSEvents (macOS), inotify
+# (Linux), and ReadDirectoryChangesW (Windows) — single API across all
+# three target platforms.
+notify = "7"
 rand = "0.8"
 sha2 = "0.10"
+tar = "0.4"
+# Cross-platform local IPC: Unix domain sockets on macOS/Linux, Named Pipes
+# on Windows. One async API for both, used by `agent_mcp::bridge` to talk to
+# the Claudette-hosted MCP grandchild that the Claude CLI spawns over stdio.
+interprocess = { version = "2", features = ["tokio"] }
+
+[target.'cfg(windows)'.dependencies]
+# Read fresh PATH from HKCU + HKLM Environment registry keys so we pick up
+# PATH updates made after claudette started (winget/installer edits) without
+# forcing the user to log out and back in.
+winreg = "0.55"
 
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[build-dependencies]
+# Probes PATH for direnv/mise/nix so env-provider integration tests
+# can compile-out when the tool isn't installed on the build host.
+which = "7"

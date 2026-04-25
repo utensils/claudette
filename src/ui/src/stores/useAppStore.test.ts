@@ -3,6 +3,7 @@ import { useAppStore } from "./useAppStore";
 import type { AgentQuestion } from "./useAppStore";
 import type { ChatMessage } from "../types/chat";
 import type { ConversationCheckpoint } from "../types/checkpoint";
+import type { Workspace } from "../types/workspace";
 import { applyPlanModeMountDefault } from "../components/chat/applyPlanModeMountDefault";
 
 const WS_ID = "test-workspace";
@@ -158,7 +159,7 @@ describe("plugin settings routing", () => {
 
     const state = useAppStore.getState();
     expect(state.settingsOpen).toBe(true);
-    expect(state.settingsSection).toBe("plugins");
+    expect(state.settingsSection).toBe("claude-code-plugins");
     expect(state.pluginSettingsTab).toBe("installed");
     expect(state.pluginSettingsRepoId).toBe("repo-1");
     expect(state.pluginSettingsIntent).toEqual({
@@ -193,7 +194,7 @@ describe("plugin settings routing", () => {
     });
   });
 
-  it("manual plugins settings entry resets to global available view", () => {
+  it("manual claude-code-plugins settings entry resets to global available view", () => {
     useAppStore.setState({
       pluginSettingsRepoId: "repo-1",
       pluginSettingsIntent: {
@@ -207,10 +208,10 @@ describe("plugin settings routing", () => {
       pluginSettingsTab: "installed",
     });
 
-    useAppStore.getState().setSettingsSection("plugins");
+    useAppStore.getState().setSettingsSection("claude-code-plugins");
 
     const state = useAppStore.getState();
-    expect(state.settingsSection).toBe("plugins");
+    expect(state.settingsSection).toBe("claude-code-plugins");
     expect(state.pluginSettingsRepoId).toBeNull();
     expect(state.pluginSettingsIntent).toBeNull();
     expect(state.pluginSettingsTab).toBe("available");
@@ -221,15 +222,23 @@ describe("plugin settings routing", () => {
     expect(useAppStore.getState().pluginManagementEnabled).toBe(false);
   });
 
-  it("redirects plugin settings section to experimental when disabled", () => {
+  it("redirects claude-code-plugins section to experimental when management disabled", () => {
     useAppStore.setState({ pluginManagementEnabled: false });
 
-    useAppStore.getState().setSettingsSection("plugins");
+    useAppStore.getState().setSettingsSection("claude-code-plugins");
 
     const state = useAppStore.getState();
     expect(state.settingsSection).toBe("experimental");
     expect(state.pluginSettingsIntent).toBeNull();
     expect(state.pluginSettingsRepoId).toBeNull();
+  });
+
+  it("keeps the new plugins (Claudette) section accessible regardless of management flag", () => {
+    useAppStore.setState({ pluginManagementEnabled: false });
+
+    useAppStore.getState().setSettingsSection("plugins");
+
+    expect(useAppStore.getState().settingsSection).toBe("plugins");
   });
 
   it("ignores openPluginSettings when plugin management is disabled", () => {
@@ -765,6 +774,8 @@ describe("mergeRemoteData / clearRemoteData default branches", () => {
           sort_order: 0,
           branch_rename_preferences: null,
           setup_script_auto_run: false,
+          base_branch: null,
+          default_remote: null,
           path_valid: true,
           remote_connection_id: null,
         },
@@ -817,6 +828,8 @@ describe("mergeRemoteData / clearRemoteData default branches", () => {
           sort_order: 0,
           branch_rename_preferences: null,
           setup_script_auto_run: false,
+          base_branch: null,
+          default_remote: null,
           path_valid: true,
           remote_connection_id: null,
         },
@@ -832,6 +845,8 @@ describe("mergeRemoteData / clearRemoteData default branches", () => {
           sort_order: 0,
           branch_rename_preferences: null,
           setup_script_auto_run: false,
+          base_branch: null,
+          default_remote: null,
           path_valid: true,
           remote_connection_id: null,
         },
@@ -1081,6 +1096,48 @@ describe("clearLatestTurnUsage", () => {
   });
 });
 
+describe("promptStartTime (per-workspace)", () => {
+  beforeEach(() => {
+    useAppStore.setState({ promptStartTime: {} });
+  });
+
+  it("setPromptStartTime stores timestamp keyed by workspace", () => {
+    useAppStore.getState().setPromptStartTime(WS_ID, 1700000000000);
+    expect(useAppStore.getState().promptStartTime[WS_ID]).toBe(1700000000000);
+  });
+
+  it("timestamps are isolated per workspace", () => {
+    useAppStore.getState().setPromptStartTime("ws-a", 1000);
+    useAppStore.getState().setPromptStartTime("ws-b", 2000);
+    expect(useAppStore.getState().promptStartTime["ws-a"]).toBe(1000);
+    expect(useAppStore.getState().promptStartTime["ws-b"]).toBe(2000);
+  });
+
+  it("overwrites previous timestamp for same workspace", () => {
+    useAppStore.getState().setPromptStartTime(WS_ID, 1000);
+    useAppStore.getState().setPromptStartTime(WS_ID, 2000);
+    expect(useAppStore.getState().promptStartTime[WS_ID]).toBe(2000);
+  });
+
+  it("clearPromptStartTime removes entry for that workspace only", () => {
+    useAppStore.getState().setPromptStartTime("ws-a", 1000);
+    useAppStore.getState().setPromptStartTime("ws-b", 2000);
+    useAppStore.getState().clearPromptStartTime("ws-a");
+    expect(useAppStore.getState().promptStartTime["ws-a"]).toBeUndefined();
+    expect(useAppStore.getState().promptStartTime["ws-b"]).toBe(2000);
+  });
+
+  it("clearPromptStartTime is a no-op for unknown workspace", () => {
+    useAppStore.getState().setPromptStartTime(WS_ID, 1000);
+    useAppStore.getState().clearPromptStartTime("ws-never-set");
+    expect(useAppStore.getState().promptStartTime[WS_ID]).toBe(1000);
+  });
+
+  it("defaults to empty (no timestamps)", () => {
+    expect(useAppStore.getState().promptStartTime[WS_ID]).toBeUndefined();
+  });
+});
+
 describe("compactionEvents slice", () => {
   beforeEach(() => {
     useAppStore.setState({ compactionEvents: {} });
@@ -1282,5 +1339,198 @@ describe("rollbackConversation updates latestTurnUsage", () => {
     ];
     useAppStore.getState().rollbackConversation("ws1", "cp1", msgs);
     expect(useAppStore.getState().latestTurnUsage.ws1).toBeUndefined();
+  });
+});
+
+describe("selectWorkspace clears unreadCompletions", () => {
+  beforeEach(() => {
+    useAppStore.setState({
+      unreadCompletions: new Set<string>(),
+      selectedWorkspaceId: null,
+    });
+  });
+
+  it("clears unread for the selected workspace", () => {
+    useAppStore.getState().markWorkspaceAsUnread("ws-a");
+    expect(useAppStore.getState().unreadCompletions.has("ws-a")).toBe(true);
+
+    useAppStore.getState().selectWorkspace("ws-a");
+    expect(useAppStore.getState().unreadCompletions.has("ws-a")).toBe(false);
+    expect(useAppStore.getState().selectedWorkspaceId).toBe("ws-a");
+  });
+
+  it("does not clear unread for other workspaces", () => {
+    useAppStore.getState().markWorkspaceAsUnread("ws-a");
+    useAppStore.getState().markWorkspaceAsUnread("ws-b");
+
+    useAppStore.getState().selectWorkspace("ws-b");
+    expect(useAppStore.getState().unreadCompletions.has("ws-a")).toBe(true);
+    expect(useAppStore.getState().unreadCompletions.has("ws-b")).toBe(false);
+  });
+
+  it("handles selecting null (dashboard) without error", () => {
+    useAppStore.getState().markWorkspaceAsUnread("ws-a");
+    useAppStore.getState().selectWorkspace(null);
+    expect(useAppStore.getState().unreadCompletions.has("ws-a")).toBe(true);
+    expect(useAppStore.getState().selectedWorkspaceId).toBeNull();
+  });
+});
+
+function makeWorkspace(id: string, repoId: string = "r1"): Workspace {
+  return {
+    id,
+    repository_id: repoId,
+    name: `ws-${id}`,
+    branch_name: `branch-${id}`,
+    worktree_path: null,
+    status: "Active",
+    agent_status: "Idle",
+    status_line: "",
+    created_at: "2026-01-01T00:00:00Z",
+    remote_connection_id: null,
+  };
+}
+
+describe("removeWorkspace", () => {
+  beforeEach(() => {
+    useAppStore.setState({
+      workspaces: [makeWorkspace("ws-a"), makeWorkspace("ws-b")],
+      selectedWorkspaceId: "ws-a",
+      unreadCompletions: new Set(["ws-a", "ws-b"]),
+      terminalTabs: {
+        "ws-a": [{ id: 1, workspace_id: "ws-a", title: "shell", is_script_output: false, sort_order: 1, created_at: "" }],
+        "ws-b": [{ id: 2, workspace_id: "ws-b", title: "shell", is_script_output: false, sort_order: 1, created_at: "" }],
+      },
+      activeTerminalTabId: { "ws-a": 1, "ws-b": 2 },
+      workspaceTerminalCommands: {
+        "ws-a": { command: "ls", isRunning: false, exitCode: 0 },
+        "ws-b": { command: "pwd", isRunning: false, exitCode: 0 },
+      },
+    });
+  });
+
+  it("filters the workspace out of the array", () => {
+    useAppStore.getState().removeWorkspace("ws-a");
+    const ids = useAppStore.getState().workspaces.map((w) => w.id);
+    expect(ids).toEqual(["ws-b"]);
+  });
+
+  it("clears selectedWorkspaceId when the selected workspace is removed", () => {
+    useAppStore.getState().removeWorkspace("ws-a");
+    expect(useAppStore.getState().selectedWorkspaceId).toBeNull();
+  });
+
+  it("leaves selectedWorkspaceId unchanged when a different workspace is removed", () => {
+    useAppStore.getState().removeWorkspace("ws-b");
+    expect(useAppStore.getState().selectedWorkspaceId).toBe("ws-a");
+  });
+
+  it("cleans up per-workspace terminal state", () => {
+    useAppStore.getState().removeWorkspace("ws-a");
+    const s = useAppStore.getState();
+    expect(s.terminalTabs["ws-a"]).toBeUndefined();
+    expect(s.activeTerminalTabId["ws-a"]).toBeUndefined();
+    expect(s.workspaceTerminalCommands["ws-a"]).toBeUndefined();
+    // Other workspace's state is untouched.
+    expect(s.terminalTabs["ws-b"]).toBeDefined();
+  });
+
+  it("removes workspace from unreadCompletions", () => {
+    useAppStore.getState().removeWorkspace("ws-a");
+    expect(useAppStore.getState().unreadCompletions.has("ws-a")).toBe(false);
+    expect(useAppStore.getState().unreadCompletions.has("ws-b")).toBe(true);
+  });
+});
+
+describe("addChatAttachments accepts agent-origin rows", () => {
+  beforeEach(() => {
+    useAppStore.setState({ chatAttachments: {} });
+  });
+
+  it("appends agent attachments alongside user attachments under the same message", () => {
+    const wsId = "ws-1";
+    const userAtt = {
+      id: "u1",
+      message_id: "m1",
+      filename: "user.png",
+      media_type: "image/png",
+      data_base64: "AA==",
+      text_content: null,
+      width: null,
+      height: null,
+      size_bytes: 1,
+    };
+    const agentAtt = {
+      id: "a1",
+      message_id: "m1",
+      filename: "shot.png",
+      media_type: "image/png",
+      data_base64: "BB==",
+      text_content: null,
+      width: null,
+      height: null,
+      size_bytes: 1,
+      origin: "agent" as const,
+      tool_use_id: null,
+    };
+
+    useAppStore.getState().addChatAttachments(wsId, [userAtt]);
+    useAppStore.getState().addChatAttachments(wsId, [agentAtt]);
+
+    const list = useAppStore.getState().chatAttachments[wsId];
+    expect(list).toHaveLength(2);
+    expect(list[0].id).toBe("u1");
+    expect(list[1].id).toBe("a1");
+    expect(list[1].origin).toBe("agent");
+  });
+
+  it("keeps origin field intact through addChatAttachments — needed for the assistant-message re-route in ChatPanel", () => {
+    // ChatPanel routes `origin: 'agent'` rows to the next assistant message
+    // chronologically (instead of the FK anchor user message). The store
+    // must not strip or default-shift this field, otherwise the visual
+    // anchoring breaks.
+    const wsId = "ws-route";
+    useAppStore.getState().addChatAttachments(wsId, [
+      {
+        id: "a1",
+        message_id: "user-msg",
+        filename: "shot.png",
+        media_type: "image/png",
+        data_base64: "AA==",
+        text_content: null,
+        width: null,
+        height: null,
+        size_bytes: 1,
+        origin: "agent",
+        tool_use_id: null,
+      },
+    ]);
+    const att = useAppStore.getState().chatAttachments[wsId][0];
+    expect(att.origin).toBe("agent");
+    expect(att.message_id).toBe("user-msg");
+  });
+
+  it("preserves field-by-field round trip for SVG agent attachments", () => {
+    // SVG is allowed by policy; rendering uses data:image/svg+xml URL — make
+    // sure the type flows through unchanged.
+    const wsId = "ws-2";
+    useAppStore.getState().addChatAttachments(wsId, [
+      {
+        id: "svg1",
+        message_id: "m1",
+        filename: "diagram.svg",
+        media_type: "image/svg+xml",
+        data_base64: "PHN2Zy8+",
+        text_content: null,
+        width: null,
+        height: null,
+        size_bytes: 6,
+        origin: "agent",
+        tool_use_id: null,
+      },
+    ]);
+    const att = useAppStore.getState().chatAttachments[wsId][0];
+    expect(att.media_type).toBe("image/svg+xml");
+    expect(att.data_base64).toBe("PHN2Zy8+");
   });
 });

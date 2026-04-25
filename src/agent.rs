@@ -10,6 +10,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 
 use crate::env::WorkspaceEnv;
+use crate::process::CommandWindowExt as _;
 
 // ---------------------------------------------------------------------------
 // Stream event types — maps to Claude CLI `--output-format stream-json`
@@ -539,7 +540,7 @@ pub fn build_stdin_message(prompt: &str, attachments: &[FileAttachment]) -> Stri
 /// Resolve the full path to the `claude` CLI binary (async-safe).
 ///
 /// GUI apps on macOS (and some Linux desktop environments) don't inherit the
-/// user's shell PATH, so a bare `Command::new("claude")` fails with ENOENT.
+/// user's shell PATH, so a bare `Command::new("claude").no_console_window()` fails with ENOENT.
 /// We first check the current process PATH, then ask the user's login shell
 /// for its PATH, then try well-known install locations, and finally fall back
 /// to a bare `claude` command.
@@ -550,29 +551,101 @@ pub fn build_stdin_message(prompt: &str, attachments: &[FileAttachment]) -> Stri
 /// a slow shell probe that timed out on first call).
 ///
 /// The login-shell probe uses `std::process::Command` (blocking) with a
-/// 5-second timeout that kills the subprocess on expiry. We run the entire
-/// resolution inside `spawn_blocking` to avoid stalling async workers.
-async fn resolve_claude_path() -> OsString {
-    static RESOLVED: OnceLock<OsString> = OnceLock::new();
-    if let Some(cached) = RESOLVED.get() {
+/// 5-second timeout that kills the subprocess on expiry. On Unix we run
+/// the whole resolution inside `spawn_blocking` so a cold `SHELL_PATH`
+/// cache never stalls a Tokio worker — `enriched_path()` transitively
+/// calls `login_shell_path_probe()` on first use, and that probe can
+/// block for up to 5 s on slow shell-init files. (Startup also calls
+/// [`crate::env::prewarm_shell_path`] to warm the cache up front, but we
+/// keep the `spawn_blocking` wrapper as a belt-and-braces guard.)
+/// On Windows the base PATH comes from the registry — a handful of
+/// `Path::is_file` probes plus one registry read, sub-millisecond — so
+/// we run it inline.
+pub async fn resolve_claude_path() -> OsString {
+    if let Some(cached) = RESOLVED_CLAUDE_PATH.get() {
         return cached.clone();
     }
-    let resolved = tokio::task::spawn_blocking(|| {
-        resolve_claude_path_inner(
-            dirs::home_dir(),
-            std::env::var_os("PATH"),
-            login_shell_path,
-            is_executable_file,
-        )
-    })
-    .await
-    .unwrap_or_else(|_| OsString::from("claude"));
+    #[cfg(unix)]
+    let resolved = tokio::task::spawn_blocking(resolve_claude_path_sync)
+        .await
+        .unwrap_or_else(|_| OsString::from(claude_bare_name()));
+    #[cfg(not(unix))]
+    let resolved = resolve_claude_path_sync();
+
     // Only cache absolute paths — the bare "claude" fallback should allow
     // retries on subsequent calls in case the environment improves.
     if Path::new(&resolved).is_absolute() {
-        let _ = RESOLVED.set(resolved.clone());
+        let _ = RESOLVED_CLAUDE_PATH.set(resolved.clone());
     }
     resolved
+}
+
+/// Resolve the `claude` CLI path from a synchronous (non-async) context.
+///
+/// Mirrors [`crate::git::resolve_git_path_blocking`] so callers that can't
+/// `.await` (e.g. background `std::thread` startup tasks like the User-Agent
+/// cache warmer) get the same lookup order — process PATH, login-shell PATH,
+/// well-known install locations — instead of a bare `Command::new("claude")`
+/// that misses Windows npm shims (`claude.cmd`/`claude.ps1`) and the official
+/// installer paths under `%LOCALAPPDATA%`.
+///
+/// Shares the same `OnceLock` cache as [`resolve_claude_path`], so the first
+/// call from either side populates it and subsequent calls are free.
+///
+/// On a cold shell-path cache we skip [`crate::env::enriched_path`] and use
+/// the raw process PATH instead, matching `resolve_git_path_blocking`'s
+/// behaviour: this avoids stalling for up to 5 s on the login-shell probe
+/// when the caller can't afford that wait. The fallback well-known paths
+/// (npm shims, `%LOCALAPPDATA%\Programs\claude`, `~/.local/bin`, etc.) still
+/// run, so most installs resolve even without the enriched PATH.
+pub fn resolve_claude_path_blocking() -> OsString {
+    if let Some(cached) = RESOLVED_CLAUDE_PATH.get() {
+        return cached.clone();
+    }
+    let path = if crate::env::shell_path_is_cached() {
+        Some(crate::env::enriched_path())
+    } else {
+        std::env::var_os("PATH")
+    };
+    // Also gate the lazy shell-path probe inside the resolver: even with
+    // `enriched_path()` skipped above, the `login_shell_path` closure
+    // would still invoke `crate::env::shell_path()` (and pay the 5 s
+    // probe) on a process-PATH miss. Returning `None` when the cache is
+    // cold keeps the blocking helper truly non-stalling — well-known
+    // fallback paths still cover typical installs.
+    let resolved = resolve_claude_path_inner(
+        dirs::home_dir(),
+        path,
+        || {
+            if crate::env::shell_path_is_cached() {
+                login_shell_path()
+            } else {
+                None
+            }
+        },
+        is_executable_file,
+    );
+    if Path::new(&resolved).is_absolute() {
+        let _ = RESOLVED_CLAUDE_PATH.set(resolved.clone());
+    }
+    resolved
+}
+
+/// Shared cache for [`resolve_claude_path`] and [`resolve_claude_path_blocking`].
+/// Only populated for absolute paths — the bare-`claude` fallback stays
+/// uncached so the next call gets a chance to find a real install.
+static RESOLVED_CLAUDE_PATH: OnceLock<OsString> = OnceLock::new();
+
+/// Synchronous core of [`resolve_claude_path`]. Extracted so it can run
+/// inside `tokio::task::spawn_blocking` on Unix without juggling async
+/// boundaries inside the resolver itself.
+fn resolve_claude_path_sync() -> OsString {
+    resolve_claude_path_inner(
+        dirs::home_dir(),
+        Some(crate::env::enriched_path()),
+        login_shell_path,
+        is_executable_file,
+    )
 }
 
 /// Check that a path is a regular file with execute permission.
@@ -632,20 +705,7 @@ fn resolve_claude_path_inner(
     }
 
     // 3. Well-known install locations as static fallbacks.
-    let mut fallback_candidates: Vec<PathBuf> = Vec::new();
-    if let Some(ref home) = home {
-        fallback_candidates.extend([
-            home.join(".local/bin/claude"),
-            home.join(".claude/local/claude"),
-            home.join(".nix-profile/bin/claude"), // Nix single-user
-        ]);
-    }
-    fallback_candidates.extend([
-        PathBuf::from("/usr/local/bin/claude"),
-        PathBuf::from("/opt/homebrew/bin/claude"), // macOS Homebrew
-        PathBuf::from("/run/current-system/sw/bin/claude"), // NixOS system
-        PathBuf::from("/nix/var/nix/profiles/default/bin/claude"), // Nix multi-user
-    ]);
+    let fallback_candidates = claude_fallback_paths(home.as_deref());
     for p in &fallback_candidates {
         if exists(p) {
             return p.clone().into_os_string();
@@ -653,19 +713,108 @@ fn resolve_claude_path_inner(
     }
 
     // 4. Nothing found — bare name as absolute last resort.
-    OsString::from("claude")
+    //    On Windows this is `claude.exe` so `CreateProcessW` doesn't add an
+    //    unwanted `.com`/`.bat` match from PATHEXT resolution.
+    OsString::from(claude_bare_name())
 }
 
-/// Search colon-separated PATH directories for a `claude` binary.
-/// Skips non-absolute entries to prevent repo-local execution.
+/// Binary filename variants for the `claude` CLI on the current target.
+///
+/// On Windows, the official Anthropic native installer ships `claude.exe`,
+/// while `npm i -g @anthropic-ai/claude-code` produces `.cmd` and `.ps1`
+/// launcher shims in `%APPDATA%\npm\`. We probe all three so both install
+/// flows resolve. On Unix there's only the bare `claude` executable.
+#[cfg(windows)]
+fn claude_binary_variants() -> &'static [&'static str] {
+    &["claude.exe", "claude.cmd", "claude.ps1"]
+}
+
+#[cfg(not(windows))]
+fn claude_binary_variants() -> &'static [&'static str] {
+    &["claude"]
+}
+
+#[cfg(windows)]
+fn claude_bare_name() -> &'static str {
+    "claude.exe"
+}
+
+#[cfg(not(windows))]
+fn claude_bare_name() -> &'static str {
+    "claude"
+}
+
+/// Well-known install locations for the `claude` CLI on the current target.
+/// Checked in order; first extant path wins. Pure function, no IO — takes
+/// `home` as a parameter so tests can inject a fixed path.
+fn claude_fallback_paths(home: Option<&Path>) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+
+    #[cfg(windows)]
+    {
+        if let Some(home) = home {
+            // Official Anthropic Windows installer drops here; this is the
+            // most likely hit on a fresh machine.
+            out.push(home.join(".local").join("bin").join("claude.exe"));
+            // npm global install — shims live under %APPDATA%\npm, which is
+            // `$HOME/AppData/Roaming/npm` by default.
+            out.push(
+                home.join("AppData")
+                    .join("Roaming")
+                    .join("npm")
+                    .join("claude.cmd"),
+            );
+            out.push(
+                home.join("AppData")
+                    .join("Roaming")
+                    .join("npm")
+                    .join("claude.ps1"),
+            );
+            // Hypothetical future MSI target — cheap to check and harmless
+            // if absent.
+            out.push(
+                home.join("AppData")
+                    .join("Local")
+                    .join("Programs")
+                    .join("claude")
+                    .join("claude.exe"),
+            );
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        if let Some(home) = home {
+            out.push(home.join(".local/bin/claude"));
+            out.push(home.join(".claude/local/claude"));
+            out.push(home.join(".nix-profile/bin/claude"));
+        }
+        out.push(PathBuf::from("/usr/local/bin/claude"));
+        out.push(PathBuf::from("/opt/homebrew/bin/claude"));
+        out.push(PathBuf::from("/run/current-system/sw/bin/claude"));
+        out.push(PathBuf::from("/nix/var/nix/profiles/default/bin/claude"));
+    }
+
+    out
+}
+
+/// Search PATH directories for a `claude` binary, trying each platform
+/// filename variant (`claude.exe`/`claude.cmd`/`claude.ps1` on Windows,
+/// bare `claude` elsewhere).
+///
+/// Skips non-absolute entries to prevent repo-local execution
+/// (e.g. a `.` entry would otherwise let a malicious repo provide its own
+/// `claude` binary).
 fn search_path_dirs(path: &std::ffi::OsStr, exists: &impl Fn(&Path) -> bool) -> Option<OsString> {
     for dir in std::env::split_paths(path) {
         if !dir.is_absolute() {
             continue;
         }
-        let candidate = dir.join("claude");
-        if exists(&candidate) {
-            return Some(candidate.into_os_string());
+        for name in claude_binary_variants() {
+            let candidate = dir.join(name);
+            if exists(&candidate) {
+                return Some(candidate.into_os_string());
+            }
         }
     }
     None
@@ -697,6 +846,7 @@ pub async fn run_turn(
     settings: &AgentSettings,
     attachments: &[FileAttachment],
     ws_env: Option<&WorkspaceEnv>,
+    resolved_env: Option<&crate::env_provider::ResolvedEnv>,
 ) -> Result<TurnHandle, String> {
     let has_attachments = !attachments.is_empty();
     let args = build_claude_args(
@@ -711,6 +861,7 @@ pub async fn run_turn(
 
     let claude_path = resolve_claude_path().await;
     let mut cmd = Command::new(&claude_path);
+    cmd.no_console_window();
     cmd.args(&args)
         .current_dir(working_dir)
         .stdout(std::process::Stdio::piped())
@@ -735,6 +886,14 @@ pub async fn run_turn(
     cmd.env_remove("CLAUDECODE");
     cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
 
+    // Apply user-provided env-provider output (direnv / mise / nix-devshell /
+    // dotenv) BEFORE the workspace's CLAUDETTE_* markers so those always win,
+    // and BEFORE the settings-driven 1M-context toggle so the UI choice
+    // cannot be overridden by a provider that happens to export the same key.
+    if let Some(env) = resolved_env {
+        env.apply(&mut cmd);
+    }
+
     cmd.env_remove("CLAUDE_CODE_DISABLE_1M_CONTEXT");
     if settings.disable_1m_context {
         cmd.env("CLAUDE_CODE_DISABLE_1M_CONTEXT", "1");
@@ -744,9 +903,11 @@ pub async fn run_turn(
         env.apply(&mut cmd);
     }
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("Failed to spawn claude at {:?}: {e}", claude_path))?;
+    let mut child = cmd.spawn().map_err(|e| {
+        crate::missing_cli::map_spawn_err(&e, "claude", || {
+            format!("Failed to spawn claude at {:?}: {e}", claude_path)
+        })
+    })?;
 
     let pid = child
         .id()
@@ -824,10 +985,12 @@ pub async fn run_turn(
 }
 
 /// Stop an agent process by killing it.
+///
+/// Platform-specific: `kill -9 <pid>` on Unix, `taskkill /PID <pid> /T /F`
+/// on Windows. The `/T` flag terminates the whole process tree so MCP
+/// server children are reaped alongside the parent claude process.
 pub async fn stop_agent(pid: u32) -> Result<(), String> {
-    let output = tokio::process::Command::new("kill")
-        .args(["-9", &pid.to_string()])
-        .output()
+    let output = stop_agent_force(pid)
         .await
         .map_err(|e| format!("Failed to kill agent: {e}"))?;
 
@@ -841,33 +1004,101 @@ pub async fn stop_agent(pid: u32) -> Result<(), String> {
     }
 }
 
-/// Gracefully stop an agent process (SIGTERM → wait → SIGKILL).
+/// Platform-specific force-kill invocation. Returns the raw `Output` so
+/// callers can shape their own error messages (or ignore exit status
+/// when probing liveness, as `stop_agent_graceful` does on Unix).
+async fn stop_agent_force(pid: u32) -> std::io::Result<std::process::Output> {
+    #[cfg(unix)]
+    {
+        tokio::process::Command::new("kill")
+            .no_console_window()
+            .args(["-9", &pid.to_string()])
+            .output()
+            .await
+    }
+    #[cfg(windows)]
+    {
+        tokio::process::Command::new("taskkill")
+            .no_console_window()
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .output()
+            .await
+    }
+}
+
+/// Gracefully stop an agent process.
 ///
-/// Sends SIGTERM first and allows up to 500 ms for the process to exit.
-/// Falls back to SIGKILL if the deadline expires. Suitable for tearing
-/// down idle persistent sessions at turn boundaries where we don't need
-/// an instant kill.
+/// On Unix this is SIGTERM → poll up to 500 ms → SIGKILL. On Windows we
+/// issue `taskkill /PID <pid> /T` (no `/F`) first, which sends
+/// `WM_CLOSE` / a CTRL_CLOSE_EVENT equivalent and lets the child exit
+/// cleanly; if it's still alive after the poll window we escalate to
+/// `/F`. Used at idle-session teardown where we don't need an instant
+/// kill.
 pub async fn stop_agent_graceful(pid: u32) -> Result<(), String> {
-    // Send SIGTERM for graceful shutdown.
+    // Send the graceful signal. Errors here are non-fatal — the force
+    // escalation below covers any "process didn't respond" case.
+    #[cfg(unix)]
     let _ = tokio::process::Command::new("kill")
+        .no_console_window()
         .args(["-15", &pid.to_string()])
         .output()
         .await;
+    #[cfg(windows)]
+    let _ = tokio::process::Command::new("taskkill")
+        .no_console_window()
+        .args(["/PID", &pid.to_string(), "/T"])
+        .output()
+        .await;
 
-    // Poll for up to 500 ms.
+    // Poll for up to 500 ms. On Unix we use `kill -0` (permission-only
+    // probe, no signal sent) which exits non-zero once the pid is gone.
+    // On Windows `tasklist /FI "PID eq <pid>"` prints a header line
+    // plus one row while the process exists; once the process exits,
+    // it prints an "INFO: No tasks..." line to stderr, so we check for
+    // the pid in stdout.
     for _ in 0..10 {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        let probe = tokio::process::Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .output()
-            .await;
-        if probe.is_ok_and(|o| !o.status.success()) {
+        if !pid_is_alive(pid).await {
             return Ok(());
         }
     }
 
-    // Escalate to SIGKILL.
+    // Escalate to force-kill.
     stop_agent(pid).await
+}
+
+/// Best-effort liveness probe. Returns `true` if the pid appears to
+/// still be running, `false` if the probe indicates it's gone (or if
+/// the probe itself fails — a failed probe is treated as "dead" so
+/// `stop_agent_graceful` doesn't loop forever on a misbehaving OS).
+async fn pid_is_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        let probe = tokio::process::Command::new("kill")
+            .no_console_window()
+            .args(["-0", &pid.to_string()])
+            .output()
+            .await;
+        probe.is_ok_and(|o| o.status.success())
+    }
+    #[cfg(windows)]
+    {
+        let probe = tokio::process::Command::new("tasklist")
+            .no_console_window()
+            .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+            .output()
+            .await;
+        match probe {
+            Ok(o) if o.status.success() => {
+                // /NH suppresses the header; /FO CSV gives one row per
+                // match. An alive pid appears in stdout; a dead one
+                // yields an "INFO: No tasks..." message on stderr and
+                // an empty stdout.
+                !String::from_utf8_lossy(&o.stdout).trim().is_empty()
+            }
+            _ => false,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -901,6 +1132,7 @@ impl PersistentSession {
         custom_instructions: Option<&str>,
         settings: &AgentSettings,
         ws_env: Option<&WorkspaceEnv>,
+        resolved_env: Option<&crate::env_provider::ResolvedEnv>,
     ) -> Result<Self, String> {
         let args = build_persistent_args(
             session_id,
@@ -912,6 +1144,7 @@ impl PersistentSession {
 
         let claude_path = resolve_claude_path().await;
         let mut cmd = Command::new(&claude_path);
+        cmd.no_console_window();
         cmd.args(&args)
             .current_dir(working_dir)
             .stdin(std::process::Stdio::piped())
@@ -928,6 +1161,12 @@ impl PersistentSession {
         cmd.env_remove("CLAUDECODE");
         cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
 
+        // See run_turn for layering rationale — env-provider output under
+        // the CLAUDETTE_* markers, under the settings-driven context toggle.
+        if let Some(env) = resolved_env {
+            env.apply(&mut cmd);
+        }
+
         cmd.env_remove("CLAUDE_CODE_DISABLE_1M_CONTEXT");
         if settings.disable_1m_context {
             cmd.env("CLAUDE_CODE_DISABLE_1M_CONTEXT", "1");
@@ -938,10 +1177,12 @@ impl PersistentSession {
         }
 
         let mut child = cmd.spawn().map_err(|e| {
-            format!(
-                "Failed to spawn persistent session at {:?}: {e}",
-                claude_path
-            )
+            crate::missing_cli::map_spawn_err(&e, "claude", || {
+                format!(
+                    "Failed to spawn persistent session at {:?}: {e}",
+                    claude_path
+                )
+            })
         })?;
 
         let pid = child
@@ -1275,6 +1516,7 @@ pub async fn generate_branch_name(
 
     let claude_path = resolve_claude_path().await;
     let mut cmd = Command::new(&claude_path);
+    cmd.no_console_window();
     cmd.stdin(std::process::Stdio::null())
         .env("PATH", crate::env::enriched_path());
     // Run in the user's worktree so the CLI loads *their* project context.
@@ -1320,10 +1562,12 @@ pub async fn generate_branch_name(
     }
 
     let output = cmd.output().await.map_err(|e| {
-        format!(
-            "Failed to spawn claude at {:?} for branch name: {e}",
-            claude_path
-        )
+        crate::missing_cli::map_spawn_err(&e, "claude", || {
+            format!(
+                "Failed to spawn claude at {:?} for branch name: {e}",
+                claude_path
+            )
+        })
     })?;
 
     if !output.status.success() {
@@ -2163,6 +2407,7 @@ mod tests {
         None
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_resolve_process_path_wins() {
         // Process PATH is checked first and should win over everything.
@@ -2180,6 +2425,7 @@ mod tests {
         assert_eq!(result, OsString::from("/custom/bin/claude"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_resolve_shell_path_before_well_known() {
         // When process PATH misses, shell probe runs before well-known paths.
@@ -2193,6 +2439,7 @@ mod tests {
         assert_eq!(result, OsString::from("/shell/bin/claude"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_resolve_shell_probe_deferred() {
         // Shell probe should NOT run if process PATH already found claude.
@@ -2210,6 +2457,7 @@ mod tests {
         assert!(!probed.load(std::sync::atomic::Ordering::SeqCst));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_resolve_falls_back_to_well_known_home() {
         let home = PathBuf::from("/home/user");
@@ -2218,6 +2466,7 @@ mod tests {
         assert_eq!(result, expected.into_os_string());
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_resolve_falls_back_to_claude_local() {
         let home = PathBuf::from("/home/user");
@@ -2226,6 +2475,7 @@ mod tests {
         assert_eq!(result, expected.into_os_string());
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_resolve_falls_back_to_system() {
         let result = resolve_claude_path_inner(None, None, no_shell, |p| {
@@ -2234,6 +2484,7 @@ mod tests {
         assert_eq!(result, OsString::from("/usr/local/bin/claude"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_resolve_falls_back_to_homebrew() {
         let result = resolve_claude_path_inner(None, None, no_shell, |p| {
@@ -2242,6 +2493,7 @@ mod tests {
         assert_eq!(result, OsString::from("/opt/homebrew/bin/claude"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_resolve_finds_nix_profile() {
         let home = PathBuf::from("/home/user");
@@ -2250,6 +2502,7 @@ mod tests {
         assert_eq!(result, expected.into_os_string());
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_resolve_finds_nixos_system() {
         let result = resolve_claude_path_inner(None, None, no_shell, |p| {
@@ -2258,6 +2511,7 @@ mod tests {
         assert_eq!(result, OsString::from("/run/current-system/sw/bin/claude"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_resolve_home_before_system_in_fallbacks() {
         // Within the well-known fallbacks, home paths are checked before system.
@@ -2269,12 +2523,14 @@ mod tests {
         assert_eq!(result, home_path.into_os_string());
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_resolve_bare_fallback() {
         let result = resolve_claude_path_inner(None, None, no_shell, |_| false);
         assert_eq!(result, OsString::from("claude"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_resolve_skips_relative_in_process_path() {
         let result = resolve_claude_path_inner(
@@ -2290,6 +2546,7 @@ mod tests {
         assert_eq!(result, OsString::from("/abs/bin/claude"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_resolve_skips_empty_path_entry() {
         let result =
@@ -2299,6 +2556,7 @@ mod tests {
         assert_eq!(result, OsString::from("/good/bin/claude"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_resolve_all_relative_falls_through_to_bare() {
         let result = resolve_claude_path_inner(
@@ -2310,6 +2568,7 @@ mod tests {
         assert_eq!(result, OsString::from("claude"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_search_path_dirs_skips_relative() {
         let path = OsString::from(".:/tmp/evil:/good/bin");
@@ -2319,11 +2578,66 @@ mod tests {
         assert_eq!(result, Some(OsString::from("/tmp/evil/claude")));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_search_path_dirs_returns_none_for_all_relative() {
         let path = OsString::from(".:relative:./bin");
         let result = search_path_dirs(path.as_os_str(), &|_| true);
         assert_eq!(result, None);
+    }
+
+    // --- Windows-specific resolve tests ---
+
+    /// `.local\bin\claude.exe` is the location the official Anthropic
+    /// Windows installer drops the binary into. If this lookup ever
+    /// regresses, users who ran `irm https://claude.ai/install.ps1` will
+    /// see "program not found" despite the file being right there.
+    #[cfg(windows)]
+    #[test]
+    fn test_resolve_falls_back_to_anthropic_native_windows() {
+        let home = PathBuf::from(r"C:\Users\user");
+        let expected = home.join(r".local\bin\claude.exe");
+        let expected_clone = expected.clone();
+        let result =
+            resolve_claude_path_inner(Some(home), None, || None, move |p| p == expected_clone);
+        assert_eq!(result, expected.into_os_string());
+    }
+
+    /// `%APPDATA%\npm\claude.cmd` is what `npm i -g @anthropic-ai/claude-code`
+    /// produces on Windows — a `.cmd` shim, not a `.exe`. Our resolver must
+    /// accept both variants.
+    #[cfg(windows)]
+    #[test]
+    fn test_resolve_falls_back_to_npm_shim_windows() {
+        let home = PathBuf::from(r"C:\Users\user");
+        let expected = home.join(r"AppData\Roaming\npm\claude.cmd");
+        let expected_clone = expected.clone();
+        let result =
+            resolve_claude_path_inner(Some(home), None, || None, move |p| p == expected_clone);
+        assert_eq!(result, expected.into_os_string());
+    }
+
+    /// `search_path_dirs` must probe each Windows filename variant in order
+    /// within a single directory — a user who has only `claude.cmd` on PATH
+    /// (npm install) should resolve just like one with `claude.exe` (native
+    /// install).
+    #[cfg(windows)]
+    #[test]
+    fn test_search_path_dirs_tries_each_variant_windows() {
+        let path = OsString::from(r"C:\tools\npm");
+        let expected = PathBuf::from(r"C:\tools\npm\claude.cmd");
+        let expected_clone = expected.clone();
+        let result = search_path_dirs(path.as_os_str(), &move |p| p == expected_clone);
+        assert_eq!(result, Some(expected.into_os_string()));
+    }
+
+    /// The bare-name last-resort fallback must be `claude.exe` on Windows,
+    /// not `claude` — otherwise `CreateProcessW` may not resolve it even
+    /// with PATHEXT configured, depending on the caller's settings.
+    #[cfg(windows)]
+    #[test]
+    fn test_bare_name_is_exe_on_windows() {
+        assert_eq!(claude_bare_name(), "claude.exe");
     }
 
     // --- build_claude_args attachment tests ---
@@ -2763,6 +3077,7 @@ mod tests {
     async fn test_stop_agent_graceful_stops_process_before_escalation() {
         // Spawn a process that traps SIGTERM and exits cleanly.
         let mut child = tokio::process::Command::new("sh")
+            .no_console_window()
             .args(["-c", "trap 'exit 0' TERM; sleep 5"])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -2784,6 +3099,7 @@ mod tests {
 
         // kill -0 should fail for a dead process.
         let probe = tokio::process::Command::new("kill")
+            .no_console_window()
             .args(["-0", &pid.to_string()])
             .output()
             .await;

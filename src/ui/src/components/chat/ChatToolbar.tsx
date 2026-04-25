@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { BadgeDollarSign, Sparkles, Zap, Brain, BookOpen, Gauge, Eye, EyeOff, Globe } from "lucide-react";
+import { CircleDollarSign, Sparkles, Zap, Brain, BookOpen, Gauge, Eye, EyeOff, Globe } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import { resetAgentSession, setAppSetting, getAppSetting } from "../../services/tauri";
 import { ModelSelector, MODELS } from "./ModelSelector";
@@ -170,7 +170,7 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
       >
         <Sparkles size={14} />
         <span className={styles.chipLabel}>{modelLabel}</span>
-        {isExtraUsage && <BadgeDollarSign size={14} className={styles.extraUsage} />}
+        {isExtraUsage && <CircleDollarSign size={14} className={styles.extraUsage} />}
       </button>
 
       <ContextMeter workspaceId={workspaceId} />

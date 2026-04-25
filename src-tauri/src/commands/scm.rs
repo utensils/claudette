@@ -1,13 +1,15 @@
+use std::sync::Arc;
 use std::time::Instant;
 
 use futures::stream::{self, StreamExt};
 use serde::Serialize;
-use tauri::{Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use claudette::db::Database;
-use claudette::scm_provider::detect;
-use claudette::scm_provider::host_api::WorkspaceInfo;
-use claudette::scm_provider::scm::{CiCheck, PullRequest};
+use claudette::mcp_supervisor::McpSupervisor;
+use claudette::plugin_runtime::host_api::WorkspaceInfo;
+use claudette::scm::detect;
+use claudette::scm::types::{CiCheck, PullRequest};
 
 use crate::state::{AppState, ScmCacheEntry};
 
@@ -80,6 +82,7 @@ async fn lookup_workspace_context(
     {
         if let Ok(db) = Database::open(db_path) {
             let _ = db.update_workspace_branch_name(&ctx.workspace.id, &actual);
+            let _ = db.delete_scm_status_cache(&ctx.workspace.id);
         }
         ctx.workspace.branch_name = actual;
     }
@@ -113,7 +116,7 @@ pub async fn get_scm_provider(
     repo_id: String,
     state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
-    let (manual_override, repo_path) = {
+    let (manual_override, repo_path, default_remote) = {
         let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
         let key = format!("repo:{repo_id}:scm_provider");
         let manual = db.get_app_setting(&key).map_err(|e| e.to_string())?;
@@ -121,7 +124,7 @@ pub async fn get_scm_provider(
             .get_repository(&repo_id)
             .map_err(|e| e.to_string())?
             .ok_or("Repository not found")?;
-        (manual, repo.path)
+        (manual, repo.path, repo.default_remote)
     };
 
     if let Some(ref provider) = manual_override
@@ -130,7 +133,9 @@ pub async fn get_scm_provider(
         return Ok(Some(provider.clone()));
     }
 
-    let remote_url = claudette::git::get_remote_url(&repo_path).await.ok();
+    let remote_url = claudette::git::get_remote_url(&repo_path, default_remote.as_deref())
+        .await
+        .ok();
     if let Some(url) = remote_url {
         let registry = state.plugins.read().await;
         return Ok(detect::detect_provider(&url, &registry.plugins));
@@ -160,19 +165,30 @@ pub async fn load_scm_detail(
 ) -> Result<ScmDetail, String> {
     let ctx = lookup_workspace_context(&state.db_path, &workspace_id).await?;
 
-    let provider_name =
-        match resolve_provider_async(&ctx.manual_override, &ctx.repo.path, &state).await {
-            Some(name) => name,
-            None => {
-                return Ok(ScmDetail {
-                    workspace_id,
-                    pull_request: None,
-                    ci_checks: vec![],
-                    provider: None,
-                    error: None,
-                });
+    let provider_name = match resolve_provider_async(
+        &ctx.manual_override,
+        &ctx.repo.path,
+        ctx.repo.default_remote.as_deref(),
+        &state,
+    )
+    .await
+    {
+        Some(name) => name,
+        None => {
+            // Clear any stale cache row so old badges don't persist across restarts
+            // when the provider is no longer available (e.g. plugin removed).
+            if let Ok(db) = Database::open(&state.db_path) {
+                let _ = db.delete_scm_status_cache(&workspace_id);
             }
-        };
+            return Ok(ScmDetail {
+                workspace_id,
+                pull_request: None,
+                ci_checks: vec![],
+                provider: None,
+                error: None,
+            });
+        }
+    };
 
     let ws_info = make_workspace_info(&ctx.workspace, &ctx.repo);
     let cache_key = (ctx.repo.id.clone(), ctx.workspace.branch_name.clone());
@@ -249,7 +265,7 @@ pub async fn load_scm_detail(
         let cached_error = error.clone();
         let mut cache = state.scm_cache.entries.write().await;
         cache.insert(
-            cache_key,
+            cache_key.clone(),
             ScmCacheEntry {
                 pull_request: pull_request.clone(),
                 ci_checks: ci_checks.clone(),
@@ -257,6 +273,31 @@ pub async fn load_scm_detail(
                 error: cached_error,
             },
         );
+    }
+
+    // Persist to SQLite for instant display on next app launch.
+    {
+        match Database::open(&state.db_path) {
+            Ok(db) => {
+                if let Err(e) = db.upsert_scm_status_cache(&claudette::db::ScmStatusCacheRow {
+                    workspace_id: workspace_id.clone(),
+                    repo_id: cache_key.0.clone(),
+                    branch_name: cache_key.1.clone(),
+                    provider: Some(provider_name.clone()),
+                    pr_json: serde_json::to_string(&pull_request).ok(),
+                    ci_json: serde_json::to_string(&ci_checks).ok(),
+                    error: error.clone(),
+                    fetched_at: String::new(),
+                }) {
+                    eprintln!(
+                        "[scm] Failed to persist SCM cache for workspace {workspace_id}: {e}"
+                    );
+                }
+            }
+            Err(e) => {
+                eprintln!("[scm] Failed to open DB for SCM cache persistence: {e}");
+            }
+        }
     }
 
     Ok(ScmDetail {
@@ -276,13 +317,19 @@ pub async fn scm_create_pr(
     body: String,
     base: String,
     draft: bool,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<PullRequest, String> {
     let ctx = lookup_workspace_context(&state.db_path, &workspace_id).await?;
 
-    let provider = resolve_provider_async(&ctx.manual_override, &ctx.repo.path, &state)
-        .await
-        .ok_or("No SCM provider configured for this repository")?;
+    let provider = resolve_provider_async(
+        &ctx.manual_override,
+        &ctx.repo.path,
+        ctx.repo.default_remote.as_deref(),
+        &state,
+    )
+    .await
+    .ok_or("No SCM provider configured for this repository")?;
 
     let ws_info = make_workspace_info(&ctx.workspace, &ctx.repo);
     let args = serde_json::json!({
@@ -303,11 +350,17 @@ pub async fn scm_create_pr(
     let result = registry
         .call_operation(&provider, "create_pull_request", args, ws_info)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            let err = e.to_string();
+            crate::missing_cli::handle_err(&app, &err).unwrap_or(err)
+        })?;
 
     // Invalidate cache
     let cache_key = (ctx.repo.id.clone(), ctx.workspace.branch_name.clone());
     state.scm_cache.entries.write().await.remove(&cache_key);
+    if let Ok(db) = Database::open(&state.db_path) {
+        let _ = db.delete_scm_status_cache(&workspace_id);
+    }
 
     serde_json::from_value(result).map_err(|e| e.to_string())
 }
@@ -317,13 +370,19 @@ pub async fn scm_create_pr(
 pub async fn scm_merge_pr(
     workspace_id: String,
     pr_number: u64,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     let ctx = lookup_workspace_context(&state.db_path, &workspace_id).await?;
 
-    let provider = resolve_provider_async(&ctx.manual_override, &ctx.repo.path, &state)
-        .await
-        .ok_or("No SCM provider configured for this repository")?;
+    let provider = resolve_provider_async(
+        &ctx.manual_override,
+        &ctx.repo.path,
+        ctx.repo.default_remote.as_deref(),
+        &state,
+    )
+    .await
+    .ok_or("No SCM provider configured for this repository")?;
 
     let ws_info = make_workspace_info(&ctx.workspace, &ctx.repo);
     let args = serde_json::json!({"number": pr_number});
@@ -338,11 +397,17 @@ pub async fn scm_merge_pr(
     let result = registry
         .call_operation(&provider, "merge_pull_request", args, ws_info)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            let err = e.to_string();
+            crate::missing_cli::handle_err(&app, &err).unwrap_or(err)
+        })?;
 
     // Invalidate cache
     let cache_key = (ctx.repo.id.clone(), ctx.workspace.branch_name.clone());
     state.scm_cache.entries.write().await.remove(&cache_key);
+    if let Ok(db) = Database::open(&state.db_path) {
+        let _ = db.delete_scm_status_cache(&workspace_id);
+    }
 
     Ok(result)
 }
@@ -356,6 +421,9 @@ pub async fn scm_refresh(
     let ctx = lookup_workspace_context(&state.db_path, &workspace_id).await?;
     let cache_key = (ctx.repo.id, ctx.workspace.branch_name);
     state.scm_cache.entries.write().await.remove(&cache_key);
+    if let Ok(db) = Database::open(&state.db_path) {
+        let _ = db.delete_scm_status_cache(&workspace_id);
+    }
 
     load_scm_detail(workspace_id, state).await
 }
@@ -366,6 +434,7 @@ pub async fn scm_refresh(
 async fn resolve_provider_async(
     manual_override: &Option<String>,
     repo_path: &str,
+    default_remote: Option<&str>,
     state: &State<'_, AppState>,
 ) -> Option<String> {
     if let Some(provider) = manual_override
@@ -374,7 +443,9 @@ async fn resolve_provider_async(
         return Some(provider.clone());
     }
 
-    let remote_url = claudette::git::get_remote_url(repo_path).await.ok()?;
+    let remote_url = claudette::git::get_remote_url(repo_path, default_remote)
+        .await
+        .ok()?;
     let registry = state.plugins.read().await;
     detect::detect_provider(&remote_url, &registry.plugins)
 }
@@ -401,6 +472,7 @@ fn make_workspace_info(
 async fn resolve_provider_for_polling(
     manual_override: &Option<String>,
     repo_path: &str,
+    default_remote: Option<&str>,
     app_state: &AppState,
 ) -> Option<String> {
     if let Some(provider) = manual_override
@@ -409,7 +481,9 @@ async fn resolve_provider_for_polling(
         return Some(provider.clone());
     }
 
-    let remote_url = claudette::git::get_remote_url(repo_path).await.ok()?;
+    let remote_url = claudette::git::get_remote_url(repo_path, default_remote)
+        .await
+        .ok()?;
     let registry = app_state.plugins.read().await;
     detect::detect_provider(&remote_url, &registry.plugins)
 }
@@ -420,8 +494,24 @@ async fn poll_workspace_scm(app_state: &AppState, workspace_id: &str) -> Option<
         .await
         .ok()?;
 
-    let provider_name =
-        resolve_provider_for_polling(&ctx.manual_override, &ctx.repo.path, app_state).await?;
+    let provider_name = match resolve_provider_for_polling(
+        &ctx.manual_override,
+        &ctx.repo.path,
+        ctx.repo.default_remote.as_deref(),
+        app_state,
+    )
+    .await
+    {
+        Some(name) => name,
+        None => {
+            // Clear any stale cache row so old badges don't persist across restarts
+            // when the provider is no longer available (e.g. plugin removed).
+            if let Ok(db) = Database::open(&app_state.db_path) {
+                let _ = db.delete_scm_status_cache(workspace_id);
+            }
+            return None;
+        }
+    };
 
     let ws_info = make_workspace_info(&ctx.workspace, &ctx.repo);
     let cache_key = (ctx.repo.id.clone(), ctx.workspace.branch_name.clone());
@@ -492,7 +582,7 @@ async fn poll_workspace_scm(app_state: &AppState, workspace_id: &str) -> Option<
         let cached_error = error.clone();
         let mut cache = app_state.scm_cache.entries.write().await;
         cache.insert(
-            cache_key,
+            cache_key.clone(),
             ScmCacheEntry {
                 pull_request: pull_request.clone(),
                 ci_checks: ci_checks.clone(),
@@ -500,6 +590,31 @@ async fn poll_workspace_scm(app_state: &AppState, workspace_id: &str) -> Option<
                 error: cached_error,
             },
         );
+    }
+
+    // Persist to SQLite for instant display on next app launch.
+    {
+        match Database::open(&app_state.db_path) {
+            Ok(db) => {
+                if let Err(e) = db.upsert_scm_status_cache(&claudette::db::ScmStatusCacheRow {
+                    workspace_id: workspace_id.to_string(),
+                    repo_id: cache_key.0.clone(),
+                    branch_name: cache_key.1.clone(),
+                    provider: Some(provider_name.clone()),
+                    pr_json: serde_json::to_string(&pull_request).ok(),
+                    ci_json: serde_json::to_string(&ci_checks).ok(),
+                    error: error.clone(),
+                    fetched_at: String::new(),
+                }) {
+                    eprintln!(
+                        "[scm] Failed to persist SCM cache for workspace {workspace_id}: {e}"
+                    );
+                }
+            }
+            Err(e) => {
+                eprintln!("[scm] Failed to open DB for SCM cache persistence: {e}");
+            }
+        }
     }
 
     Some(ScmDetail {
@@ -589,9 +704,10 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
                         .unwrap_or(global_archive);
 
                     if should_archive
-                        && detail.pull_request.as_ref().is_some_and(|pr| {
-                            pr.state == claudette::scm_provider::scm::PrState::Merged
-                        })
+                        && detail
+                            .pull_request
+                            .as_ref()
+                            .is_some_and(|pr| pr.state == claudette::scm::types::PrState::Merged)
                     {
                         eprintln!("[scm] PR merged for workspace {} — auto-archiving", ws_id);
                         let pr_number = detail.pull_request.as_ref().map(|pr| pr.number);
@@ -610,14 +726,31 @@ pub fn start_scm_polling(app_handle: tauri::AppHandle) {
 /// Performs the same core steps as the `archive_workspace` Tauri command:
 /// removes the worktree, updates the DB status, stops any running agent,
 /// and emits a `workspace-auto-archived` event to the frontend.
+///
+/// When `git_delete_branch_on_archive` is enabled, also deletes the local
+/// branch and fully removes the workspace record (preserving lifetime stats)
+/// instead of moving it to Archived status.
 async fn auto_archive_workspace(
     handle: &tauri::AppHandle,
     app_state: &AppState,
     workspace_id: &str,
     pr_number: Option<u64>,
 ) {
-    // All DB work in a block (Database is not Send — must not hold across .await)
-    let archive_info: Option<(String, String, Option<String>, Option<String>, String)> = {
+    // Read-only DB block — capture workspace/repo info and settings.
+    // DB mutations are deferred until after async cleanup so the workspace row
+    // remains available while worktree removal and agent stop run, and the
+    // frozen summary snapshot reflects a fully-quiesced workspace.
+    struct ArchiveInfo {
+        ws_id: String,
+        ws_name: String,
+        repo_id: String,
+        branch_name: String,
+        worktree_path: Option<String>,
+        repo_path: Option<String>,
+        delete_record: bool,
+        resolved: crate::tray::ResolvedSound,
+    }
+    let archive_info: Option<ArchiveInfo> = {
         let db = match Database::open(&app_state.db_path) {
             Ok(db) => db,
             Err(e) => {
@@ -640,33 +773,53 @@ async fn auto_archive_workspace(
             .flatten()
             .map(|r| r.path);
 
-        let sound =
-            crate::tray::resolve_notification_sound(&db, crate::tray::NotificationEvent::Finished);
+        let delete_record = db
+            .get_app_setting("git_delete_branch_on_archive")
+            .ok()
+            .flatten()
+            .as_deref()
+            == Some("true");
 
-        // Update DB status
-        let _ = db.delete_terminal_tabs_for_workspace(workspace_id);
-        let _ = db.update_workspace_status(
-            workspace_id,
-            &claudette::model::WorkspaceStatus::Archived,
-            None,
+        let resolved = crate::tray::resolve_notification(
+            &db,
+            &app_state.cesp_playback,
+            crate::tray::NotificationEvent::Finished,
         );
 
-        Some((
-            ws.id.clone(),
-            ws.name.clone(),
-            ws.worktree_path.clone(),
+        Some(ArchiveInfo {
+            ws_id: ws.id.clone(),
+            ws_name: ws.name.clone(),
+            repo_id: ws.repository_id.clone(),
+            branch_name: ws.branch_name.clone(),
+            worktree_path: ws.worktree_path.clone(),
             repo_path,
-            sound,
-        ))
+            delete_record,
+            resolved,
+        })
     };
 
-    let Some((ws_id, ws_name, wt_path, repo_path, sound)) = archive_info else {
+    let Some(ArchiveInfo {
+        ws_id,
+        ws_name,
+        repo_id,
+        branch_name,
+        worktree_path: wt_path,
+        repo_path,
+        delete_record,
+        resolved,
+    }) = archive_info
+    else {
         return;
     };
 
     // Remove worktree (async — must happen outside the DB block)
     if let (Some(wt_path), Some(repo_path)) = (&wt_path, &repo_path) {
         let _ = claudette::git::remove_worktree(repo_path, wt_path, false).await;
+    }
+
+    // Delete the local branch when the setting is enabled.
+    if delete_record && let Some(repo_path) = &repo_path {
+        let _ = claudette::git::branch_delete(repo_path, &branch_name).await;
     }
 
     // Stop any running agent
@@ -679,24 +832,74 @@ async fn auto_archive_workspace(
         }
     }
 
+    // Now that async cleanup is done, persist the archive/delete mutation.
+    // Check the result so we don't emit frontend events for a state change
+    // that didn't actually land in the DB.
+    let mutation_ok = Database::open(&app_state.db_path)
+        .ok()
+        .map(|db| {
+            if delete_record {
+                db.delete_workspace_with_summary(&ws_id).is_ok()
+            } else {
+                let _ = db.delete_terminal_tabs_for_workspace(&ws_id);
+                let _ = db.delete_scm_status_cache(&ws_id);
+                db.update_workspace_status(
+                    &ws_id,
+                    &claudette::model::WorkspaceStatus::Archived,
+                    None,
+                )
+                .is_ok()
+            }
+        })
+        .unwrap_or(false);
+
+    if !mutation_ok {
+        eprintln!("[scm] DB mutation failed while auto-archiving workspace '{ws_name}' ({ws_id})");
+        return;
+    }
+
+    let deleted = delete_record;
+
+    // If the workspace record was fully deleted and no workspaces remain for this
+    // repo, clean up MCP supervisor state.
+    if deleted {
+        let supervisor = handle.state::<Arc<McpSupervisor>>();
+        let remaining = Database::open(&app_state.db_path)
+            .map(|db| db.list_workspaces().unwrap_or_default())
+            .unwrap_or_default();
+        if !remaining.iter().any(|w| w.repository_id == repo_id) {
+            supervisor.remove_repo(&repo_id).await;
+            let _ = handle.emit("mcp-status-cleared", &repo_id);
+        }
+    }
+
     // Rebuild tray and notify frontend
     crate::tray::rebuild_tray(handle);
 
+    let verb = if deleted { "deleted" } else { "archived" };
     let body = match pr_number {
         Some(num) => {
-            format!("Workspace \u{2018}{ws_name}\u{2019} archived \u{2014} PR #{num} merged")
+            format!("Workspace \u{2018}{ws_name}\u{2019} {verb} \u{2014} PR #{num} merged")
         }
-        None => format!("Workspace \u{2018}{ws_name}\u{2019} archived \u{2014} PR merged"),
+        None => format!("Workspace \u{2018}{ws_name}\u{2019} {verb} \u{2014} PR merged"),
     };
-    crate::tray::send_notification(handle, "", "Claudette", &body, &sound);
+    crate::tray::send_notification(
+        handle,
+        "",
+        "Claudette",
+        &body,
+        &resolved.sound,
+        resolved.volume,
+    );
 
     let mut payload = serde_json::json!({
         "workspace_id": ws_id,
         "workspace_name": ws_name,
+        "deleted": deleted,
     });
     if let Some(num) = pr_number {
         payload["pr_number"] = serde_json::json!(num);
     }
     let _ = handle.emit("workspace-auto-archived", payload);
-    eprintln!("[scm] Auto-archived workspace '{ws_name}' ({ws_id})");
+    eprintln!("[scm] Auto-{verb} workspace '{ws_name}' ({ws_id})");
 }

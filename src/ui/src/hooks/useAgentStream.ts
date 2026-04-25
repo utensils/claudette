@@ -70,7 +70,8 @@ export function useAgentStream() {
           pendingToolCount: (useAppStore.getState().toolActivities[wsId] || []).length,
         });
         // Only finalize if the `result` event hasn't already done so.
-        if (!turnFinalizedRef.current[wsId]) {
+        const wasFinalized = turnFinalizedRef.current[wsId];
+        if (!wasFinalized) {
           finalizeTurn(
             wsId,
             turnMessageCountRef.current[wsId] || 0,
@@ -80,7 +81,10 @@ export function useAgentStream() {
         turnMessageCountRef.current[wsId] = 0;
         turnFinalizedRef.current[wsId] = false;
         turnCheckpointIdRef.current[wsId] = undefined;
-        updateWorkspace(wsId, { agent_status: "Idle" });
+        // Natural completion emits a `result` event (wasFinalized=true) → Idle.
+        // User stop or crash has no prior `result` → Stopped.
+        updateWorkspace(wsId, { agent_status: wasFinalized ? "Idle" : "Stopped" });
+        useAppStore.getState().clearPromptStartTime(wsId);
         setStreamingContent(wsId, "");
         clearStreamingThinking(wsId);
         blockToolMapRef.current = {};
@@ -89,12 +93,6 @@ export function useAgentStream() {
         // exits immediately after emitting AskUserQuestion, so ProcessExited
         // fires before the user has a chance to answer. The question is
         // cleared when the user responds (onRespond) or sends a new message.
-
-        // Notification: mark workspace as unread if not currently selected
-        const { selectedWorkspaceId, markWorkspaceAsUnread } = useAppStore.getState();
-        if (wsId !== selectedWorkspaceId) {
-          markWorkspaceAsUnread(wsId);
-        }
 
         // Notification sound + command are handled on the Rust side
         // (in ProcessExited handler) so they work even when the webview
@@ -187,6 +185,28 @@ export function useAgentStream() {
             const inner = streamEvent.event;
             if ("type" in inner) {
               switch (inner.type) {
+                case "message_delta": {
+                  // Live meter update during streaming. Usage here is
+                  // per-assistant-message cumulative — input_tokens reflects
+                  // the prompt size for the current API call (grows across
+                  // tool-use iterations as context accumulates), and
+                  // output_tokens grows as the model generates. The `result`
+                  // event later overwrites this with iterations[0] for the
+                  // canonical per-call end-of-turn reading; this case just
+                  // fills the gap in between so the meter doesn't sit stale.
+                  if (inner.usage) {
+                    const { setLatestTurnUsage } = useAppStore.getState();
+                    setLatestTurnUsage(wsId, {
+                      inputTokens: inner.usage.input_tokens,
+                      outputTokens: inner.usage.output_tokens,
+                      cacheReadTokens:
+                        inner.usage.cache_read_input_tokens ?? undefined,
+                      cacheCreationTokens:
+                        inner.usage.cache_creation_input_tokens ?? undefined,
+                    });
+                  }
+                  break;
+                }
                 case "content_block_delta": {
                   const delta = inner.delta;
                   if ("type" in delta && delta.type === "text_delta") {
@@ -388,6 +408,8 @@ export function useAgentStream() {
             turnMessageCountRef.current[wsId] = 0;
             turnFinalizedRef.current[wsId] = true;
             updateWorkspace(wsId, { agent_status: "Idle" });
+            useAppStore.getState().clearPromptStartTime(wsId);
+            useAppStore.getState().markWorkspaceAsUnread(wsId);
             break;
           }
           case "user": {
@@ -624,4 +646,52 @@ export function useAgentStream() {
       unlisten.then((fn) => fn());
     };
   }, [updateWorkspace]);
+
+  // Listen for agent-authored attachments delivered via the
+  // `mcp__claudette__send_to_user` tool. The Rust bridge has already
+  // persisted them; we just need to mirror into the in-memory store so the
+  // chat surface re-renders. Reuses the existing user-attachment shape +
+  // rendering — origin: "agent" lets future code distinguish if needed.
+  const addChatAttachments = useAppStore((s) => s.addChatAttachments);
+  useEffect(() => {
+    let active = true;
+    const unlisten = listen<{
+      workspace_id: string;
+      message_id: string;
+      attachment: {
+        id: string;
+        message_id: string;
+        filename: string;
+        media_type: string;
+        size_bytes: number;
+        width: number | null;
+        height: number | null;
+        tool_use_id: string | null;
+        data_base64: string;
+        caption?: string | null;
+      };
+    }>("agent-attachment-created", (event) => {
+      if (!active) return;
+      const { workspace_id: wsId, attachment } = event.payload;
+      addChatAttachments(wsId, [
+        {
+          id: attachment.id,
+          message_id: attachment.message_id,
+          filename: attachment.filename,
+          media_type: attachment.media_type,
+          data_base64: attachment.data_base64,
+          text_content: null,
+          width: attachment.width,
+          height: attachment.height,
+          size_bytes: attachment.size_bytes,
+          origin: "agent",
+          tool_use_id: attachment.tool_use_id,
+        },
+      ]);
+    });
+    return () => {
+      active = false;
+      unlisten.then((fn) => fn());
+    };
+  }, [addChatAttachments]);
 }

@@ -58,3 +58,6 @@ tags
 
 # Documentation
 /docs
+
+# Claudette devshell runtime state (aws-win-* sidecars, etc.)
+/.claudette/

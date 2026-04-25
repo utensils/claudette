@@ -51,6 +51,30 @@ function App() {
         msgMap[msg.workspace_id] = msg;
       }
       setLastMessages(msgMap);
+      // Hydrate SCM summaries from persisted cache for instant sidebar display.
+      for (const row of data.scm_cache) {
+        if (row.pr_json == null) continue;
+        try {
+          const parsed: unknown = JSON.parse(row.pr_json);
+          const pr =
+            parsed !== null &&
+            typeof parsed === "object" &&
+            "number" in parsed &&
+            typeof (parsed as { number: unknown }).number === "number" &&
+            "state" in parsed &&
+            typeof (parsed as { state: unknown }).state === "string"
+              ? (parsed as import("./types/plugin").PullRequest)
+              : null;
+          useAppStore.getState().setScmSummary(row.workspace_id, {
+            hasPr: pr !== null,
+            prState: pr?.state ?? null,
+            ciState: pr?.ci_status ?? null,
+            lastUpdated: new Date(row.fetched_at.replace(" ", "T") + "Z").getTime(),
+          });
+        } catch {
+          // Corrupted cache entry — skip silently, will be refreshed by polling.
+        }
+      }
     });
     getAppSetting("terminal_font_size")
       .then((val) => {
@@ -205,17 +229,33 @@ function App() {
       }
     });
 
+    // Listen for missing-CLI events (claude/git/gh not on PATH). Routes to the
+    // MissingCliModal so users see platform-specific install guidance instead
+    // of a raw subprocess error.
+    const unlistenMissingCli = listen<import("./components/modals/MissingCliModal").MissingCliData>(
+      "missing-dependency",
+      (event) => {
+        useAppStore.getState().openModal("missingCli", event.payload as unknown as Record<string, unknown>);
+      },
+    );
+
     // Listen for workspace auto-archived events (e.g. PR merged with archive_on_merge).
-    const unlistenAutoArchived = listen<{ workspace_id: string; workspace_name: string; pr_number?: number }>("workspace-auto-archived", (event) => {
-      const { workspace_id, workspace_name, pr_number } = event.payload;
+    // When `deleted` is true the workspace record was fully removed; otherwise it moved to Archived.
+    const unlistenAutoArchived = listen<{ workspace_id: string; workspace_name: string; pr_number?: number; deleted?: boolean }>("workspace-auto-archived", (event) => {
+      const { workspace_id, workspace_name, pr_number, deleted } = event.payload;
       const store = useAppStore.getState();
-      store.updateWorkspace(workspace_id, { status: "Archived" as const });
+      if (deleted) {
+        store.removeWorkspace(workspace_id);
+      } else {
+        store.updateWorkspace(workspace_id, { status: "Archived" as const });
+      }
       if (store.selectedWorkspaceId === workspace_id) {
         store.selectWorkspace(null);
       }
+      const verb = deleted ? "deleted" : "archived";
       const msg = pr_number != null
-        ? `Workspace \u201c${workspace_name}\u201d archived \u2014 PR #${pr_number} merged`
-        : `Workspace \u201c${workspace_name}\u201d archived \u2014 PR merged`;
+        ? `Workspace \u201c${workspace_name}\u201d ${verb} \u2014 PR #${pr_number} merged`
+        : `Workspace \u201c${workspace_name}\u201d ${verb} \u2014 PR merged`;
       store.addToast(msg);
     });
 
@@ -233,6 +273,7 @@ function App() {
       unlistenResetZoom.then((fn) => fn());
       unlistenScmUpdate.then((fn) => fn());
       unlistenAutoArchived.then((fn) => fn());
+      unlistenMissingCli.then((fn) => fn());
     };
   }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setPluginManagementEnabled, setAppVersion]);
 

@@ -8,6 +8,7 @@ use crate::state::AppState;
 #[cfg(feature = "server")]
 use crate::state::LocalServerState;
 use crate::transport::ws::WebSocketTransport;
+use claudette::process::CommandWindowExt as _;
 #[cfg(feature = "server")]
 use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -281,6 +282,7 @@ pub async fn start_local_server(state: State<'_, AppState>) -> Result<LocalServe
             .map_err(|e| format!("Failed to locate current executable: {e}"))?;
 
         let mut child = tokio::process::Command::new(&server_bin)
+            .no_console_window()
             .arg("--server")
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())

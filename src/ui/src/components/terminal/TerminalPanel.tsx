@@ -1,4 +1,11 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+} from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -9,16 +16,40 @@ import {
   createTerminalTab,
   deleteTerminalTab,
   listTerminalTabs,
+  openUrl,
   spawnPty,
   writePty,
   resizePty,
   closePty,
 } from "../../services/tauri";
-import { cycleTabId, terminalKeyAction } from "./terminalShortcuts";
+import {
+  cycleTabId,
+  shouldStopTerminalEventPropagation,
+  terminalKeyAction,
+  type TerminalKeyAction,
+} from "./terminalShortcuts";
+import {
+  countLeaves,
+  neighborLeaf,
+  shouldFocusLeaf,
+} from "../../stores/terminalPaneTree";
+import { trimSelectionTrailingWhitespace } from "./terminalSelection";
 import {
   focusActiveTerminal,
   focusChatPrompt,
 } from "../../utils/focusTargets";
+import { TerminalPaneTree } from "./TerminalPaneTree";
+import {
+  collectNeededLeaves,
+  diffLeaves,
+  type LeafInstanceSnapshot,
+  type NeededLeaf,
+} from "./terminalLeafManager";
+import {
+  shouldForwardPtyResize,
+  type PtySizeSnapshot,
+} from "./terminalPtyResize";
+import { reclaimScrollLines } from "./terminalReclaim";
 import "@xterm/xterm/css/xterm.css";
 import styles from "./TerminalPanel.module.css";
 
@@ -27,50 +58,226 @@ interface PtyOutputPayload {
   data: number[];
 }
 
-interface TermInstance {
+const terminalInputEncoder = new TextEncoder();
+
+// Per-leaf xterm + PTY handle. The container is a detached <div> that we
+// appendChild into whichever target div the pane tree currently emits for
+// this leafId — that's the trick that keeps xterm alive across splits.
+interface LeafInstance {
+  leafId: string;
+  tabId: number;
+  workspaceId: string;
+  worktreePath: string;
+  container: HTMLDivElement;
   term: Terminal;
   fit: FitAddon;
   ptyId: number;
   unlisten: (() => void) | null;
-  container: HTMLDivElement;
   resizeObserver: ResizeObserver;
   fitTimer: ReturnType<typeof setTimeout> | null;
-  workspaceId: string;
-  worktreePath: string;
+  reclaimTimer: ReturnType<typeof setTimeout> | null;
+  reclaimDisposer: (() => void) | null;
+  handleCopy: (ev: ClipboardEvent) => void;
+  keyHandler: (ev: KeyboardEvent) => boolean;
+  lastPtySize: PtySizeSnapshot | null;
 }
 
-// Fit xterm only when its container has real dimensions. A hidden container
-// (display: none on the panel, or an inactive tab) has clientHeight === 0,
-// and calling fit() against it throws inside xterm.
-function safeFit(inst: TermInstance) {
+function safeFit(inst: LeafInstance) {
   if (inst.container.clientHeight > 0 && inst.container.clientWidth > 0) {
     inst.fit.fit();
   }
 }
 
-function safeFitRaw(container: HTMLElement, fit: FitAddon) {
-  if (container.clientHeight > 0 && container.clientWidth > 0) fit.fit();
+// A split triggers SIGWINCH on the underlying PTY; many shells (zsh + zle's
+// `reset-prompt`, p10k, starship's zle-line-init, etc.) respond by moving the
+// cursor to (0,0) and emitting `\e[J`, which clears the visible viewport and
+// redraws the prompt at the top. Scrollback is preserved, but the user sees
+// an empty pane with a lone prompt at the top — which reads as "the split
+// truncated my output".
+//
+// We can't stop the shell from doing that, but we can compensate after the
+// fact: once the redraw has settled, if the cursor landed high in the
+// viewport while scrollback exists below the visible window, scroll the
+// display up so the cursor sits near the bottom of the viewport and the
+// preceding history is visible again.
+// One-stop helper for the "scroll the display immediately, not on the next
+// animation frame" path we need after a split-driven reparent. The public
+// `Terminal.scrollLines` API dispatches through xterm's viewport smooth-scroll
+// animator; when the host div has just been re-attached to a different parent
+// the viewport's scrollable element isn't fully laid out yet and the call is
+// swallowed without moving `buffer.ydisp`. `_core._bufferService.scrollLines`
+// mutates `ydisp` synchronously, which is the behaviour we actually want.
+//
+// `_core` is a private implementation detail of xterm. It has been stable
+// across the 5.x line (see `xterm/src/common/services/BufferService.ts`), but
+// is not part of the published API and may move on a major xterm upgrade.
+// This single helper is the only place that reaches into `_core`; if it ever
+// breaks, the fallback below keeps behaviour correct (just not synchronous)
+// until we wire up a public-API alternative.
+interface XtermInternals {
+  _core?: {
+    _bufferService?: {
+      scrollLines(disp: number, suppressScrollEvent?: boolean): void;
+    };
+  };
 }
 
-// `closePty` is a Tauri invoke that returns a Promise<void>. Teardown
-// paths don't await it (we don't want close to block tab-switching or
-// unmount), so we need a centralized error sink; otherwise a failed close
-// would surface as an unhandled promise rejection in the webview console.
-// Failures here are best-effort by design — if the backend has already
-// dropped the PTY (e.g. child exited, state race), there's nothing more
-// we can do from the frontend.
+function scrollLinesImmediate(term: Terminal, lines: number): void {
+  const bs = (term as unknown as XtermInternals)._core?._bufferService;
+  if (bs) bs.scrollLines(lines);
+  else term.scrollLines(lines);
+}
+
+// Push the current visible rows into scrollback by writing newlines
+// directly to the xterm buffer. Why: when a pane is resized the shell
+// gets SIGWINCH and its prompt-redraw handler (zle `reset-prompt`,
+// powerlevel10k, starship's equivalent) typically emits \e[H\e[J —
+// cursor home then erase-to-end-of-display. Per VT spec, xterm erases
+// those visible rows in place and does NOT copy them to scrollback, so
+// everything the user was looking at a moment ago is destroyed. By
+// injecting blank lines ahead of the shell's redraw we make the erase
+// target a freshly-blank viewport while the real content slides safely
+// up into scrollback. The injection is synchronous inside
+// useLayoutEffect, whereas the shell's response arrives via an async
+// pty-output event — so the ordering is guaranteed.
+//
+// Two subtleties that matter for UX:
+//   - Only preserve the rows that actually have content. A pane whose
+//     viewport is mostly blank (e.g., right after a previous split
+//     where the shell has only re-drawn its prompt at the top) would
+//     otherwise have a full viewport's worth of blanks appended to
+//     scrollback on every split — scrollback bloat the user perceives
+//     as "extra spaces with each further split".
+//   - Don't push the cursor's own row (the shell's current prompt
+//     line) into scrollback. The shell will redraw the prompt at the
+//     new viewport's top on SIGWINCH; if we leave the current prompt
+//     row in place at new viewport row 0 the redraw overwrites it
+//     cleanly, rather than leaving the pre-split prompt stranded in
+//     scrollback as a duplicate immediately above the new one.
+function padViewportIntoScrollback(inst: LeafInstance) {
+  const rows = inst.term.rows;
+  if (rows <= 0) return;
+  const buf = inst.term.buffer.active;
+  // Walk the viewport bottom-up to find the last row with any
+  // non-whitespace content. Everything from row 0 through that row is
+  // what we need to preserve; rows below are already blank and the
+  // shell's \e[J will erase them without data loss.
+  let lastContentY = -1;
+  for (let y = rows - 1; y >= 0; y--) {
+    const line = buf.getLine(buf.baseY + y);
+    if (line && line.translateToString(true).length > 0) {
+      lastContentY = y;
+      break;
+    }
+  }
+  if (lastContentY < 0) return;
+  // Scroll by lastContentY — NOT lastContentY + 1. That leaves the
+  // final non-blank row in the viewport for the shell's imminent
+  // redraw to overwrite in place. For common single-line prompts,
+  // that cleanly eliminates what would otherwise be a "duplicate
+  // prompt" in scrollback; for multi-line prompts (e.g. starship's
+  // line + input-line pair) it reduces the duplicate to a single row
+  // rather than burying the full prompt block above the new one.
+  //
+  // Using the content-row count rather than the full viewport height
+  // avoids appending a viewport's worth of blank rows to scrollback
+  // each time we split a pane whose viewport has already been
+  // redrawn small (e.g. after a previous split).
+  const scrolls = lastContentY;
+  if (scrolls <= 0) return;
+  const moves = Math.max(0, rows - 1 - buf.cursorY);
+  inst.term.write("\r" + "\n".repeat(moves + scrolls));
+}
+
+function scheduleReclaimHistory(inst: LeafInstance) {
+  if (inst.reclaimDisposer) {
+    inst.reclaimDisposer();
+    inst.reclaimDisposer = null;
+  }
+  if (inst.reclaimTimer) clearTimeout(inst.reclaimTimer);
+
+  const tryReclaim = (): boolean => {
+    const buf = inst.term.buffer.active;
+    const lines = reclaimScrollLines({
+      rows: inst.term.rows,
+      cursorY: buf.cursorY,
+      baseY: buf.baseY,
+    });
+    if (lines < 0) {
+      scrollLinesImmediate(inst.term, lines);
+      return true;
+    }
+    return false;
+  };
+
+  // The shell's SIGWINCH response arrives asynchronously via pty-output;
+  // its timing is a race we can't pin down (hundreds of ms on a cold zsh,
+  // sub-20ms on warm runs). Hook onCursorMove and evaluate after every
+  // cursor update until the condition fires once, then stop.
+  const sub = inst.term.onCursorMove(() => {
+    if (tryReclaim()) {
+      sub.dispose();
+      inst.reclaimDisposer = null;
+      if (inst.reclaimTimer) {
+        clearTimeout(inst.reclaimTimer);
+        inst.reclaimTimer = null;
+      }
+    }
+  });
+  inst.reclaimDisposer = () => sub.dispose();
+  // Belt-and-suspenders: drop the listener after a second regardless, so
+  // we don't keep reacting to unrelated cursor moves far after the split.
+  inst.reclaimTimer = setTimeout(() => {
+    inst.reclaimTimer = null;
+    sub.dispose();
+    inst.reclaimDisposer = null;
+  }, 1000);
+}
+
 function closePtyBestEffort(ptyId: number) {
   void closePty(ptyId).catch((err) => {
     console.error(`Failed to close PTY ${ptyId} during teardown:`, err);
   });
 }
 
+function forwardPtyResize(
+  inst: LeafInstance,
+  nextSize: PtySizeSnapshot = { cols: inst.term.cols, rows: inst.term.rows },
+) {
+  if (inst.ptyId < 0) return;
+  if (!shouldForwardPtyResize(inst.lastPtySize, nextSize)) return;
+  inst.lastPtySize = nextSize;
+  void resizePty(inst.ptyId, nextSize.cols, nextSize.rows).catch((err) => {
+    console.error(`Failed to resize PTY ${inst.ptyId}:`, err);
+    const lastSize = inst.lastPtySize;
+    if (
+      lastSize &&
+      lastSize.cols === nextSize.cols &&
+      lastSize.rows === nextSize.rows
+    ) {
+      inst.lastPtySize = null;
+    }
+  });
+}
+
+/**
+ * TerminalPanel owns the xterm/PTY lifecycle for every pane across every
+ * tab. The Zustand `terminalPaneTrees` map provides the layout; this
+ * component reconciles instances against that layout.
+ *
+ * The xterm host divs are NOT children of any React-rendered component.
+ * Each render, a useLayoutEffect walks the DOM, finds target divs emitted
+ * by TerminalPaneTree (`[data-pane-target={leafId}]`), and appendChilds
+ * the host into the right target. That means rewriting the tree (split,
+ * close, reparent) does not destroy xterm — it just moves the host div to
+ * a new target. The `terminalLeafManager.ts` module contains the pure
+ * diff helpers that drive this, and its tests pin down the invariant that
+ * a split never tears down an existing instance.
+ */
 export const TerminalPanel = memo(function TerminalPanel() {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const workspaces = useAppStore((s) => s.workspaces);
   const terminalTabs = useAppStore((s) => s.terminalTabs);
-  // Workspace-scoped active tab. Read through the selector so each workspace
-  // preserves its own active tab independently.
   const activeTerminalTabId = useAppStore((s) =>
     s.selectedWorkspaceId ? s.activeTerminalTabId[s.selectedWorkspaceId] ?? null : null,
   );
@@ -80,21 +287,20 @@ export const TerminalPanel = memo(function TerminalPanel() {
   const setActiveTerminalTab = useAppStore((s) => s.setActiveTerminalTab);
   const toggleTerminalPanel = useAppStore((s) => s.toggleTerminalPanel);
   const terminalPanelVisible = useAppStore((s) => s.terminalPanelVisible);
+  const terminalPaneTrees = useAppStore((s) => s.terminalPaneTrees);
+  const activeTerminalPaneId = useAppStore((s) => s.activeTerminalPaneId);
+  const ensurePaneTree = useAppStore((s) => s.ensurePaneTree);
+  const splitPane = useAppStore((s) => s.splitPane);
+  const closePane = useAppStore((s) => s.closePane);
+  const setActivePane = useAppStore((s) => s.setActivePane);
+  const setPaneSizes = useAppStore((s) => s.setPaneSizes);
+  const setPanePtyId = useAppStore((s) => s.setPanePtyId);
+  const setPaneSpawnError = useAppStore((s) => s.setPaneSpawnError);
   const terminalFontSize = useAppStore((s) => s.terminalFontSize);
   const fontFamilyMono = useAppStore((s) => s.fontFamilyMono);
   const currentThemeId = useAppStore((s) => s.currentThemeId);
-  const updateTerminalTabPtyId = useAppStore((s) => s.updateTerminalTabPtyId);
 
   const autoCreatedRef = useRef<string | null>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  // Map of tab ID → terminal instance. Persists across tab switches AND
-  // across terminal-panel collapse/restore (the panel no longer unmounts).
-  const instancesRef = useRef<Map<number, TermInstance>>(new Map());
-  // Per-tab spawn-error messages; UI-only, ephemeral — not persisted.
-  const [spawnErrors, setSpawnErrors] = useState<Record<number, string>>({});
-
-  // Keep a live ref to the tabs-by-workspace map so the stable xterm key
-  // handler can read the latest value without being re-created per render.
   const terminalTabsRef = useRef(terminalTabs);
   useEffect(() => {
     terminalTabsRef.current = terminalTabs;
@@ -108,25 +314,10 @@ export const TerminalPanel = memo(function TerminalPanel() {
     activeTerminalTabIdRef.current = activeTerminalTabId;
   }, [activeTerminalTabId]);
 
-  const ws = workspaces.find((w) => w.id === selectedWorkspaceId);
   const tabs = useMemo(
     () => (selectedWorkspaceId ? terminalTabs[selectedWorkspaceId] ?? [] : []),
     [selectedWorkspaceId, terminalTabs],
   );
-
-  // Destroy a single instance: dispose xterm, unlisten, close PTY, detach DOM.
-  // Used by per-tab close AND by the tabs-no-longer-exist cleanup effect.
-  const destroyInstance = useCallback((tabId: number) => {
-    const inst = instancesRef.current.get(tabId);
-    if (!inst) return;
-    if (inst.fitTimer) clearTimeout(inst.fitTimer);
-    inst.resizeObserver.disconnect();
-    inst.term.dispose();
-    if (inst.unlisten) inst.unlisten();
-    if (inst.ptyId >= 0) closePtyBestEffort(inst.ptyId);
-    inst.container.remove();
-    instancesRef.current.delete(tabId);
-  }, []);
 
   const handleCreateTab = useCallback(async () => {
     const wsId = selectedWorkspaceIdRef.current;
@@ -151,31 +342,40 @@ export const TerminalPanel = memo(function TerminalPanel() {
     [setActiveTerminalTab],
   );
 
-  // Load terminal tabs on workspace change — but ONLY while the panel is
-  // visible. Skipping this while hidden preserves two important properties:
-  //   1. Selecting a workspace the user explicitly collapsed the panel on
-  //      doesn't auto-create a tab, which would flip terminalPanelVisible
-  //      back to true via addTerminalTab and reopen the panel uninvited.
-  //   2. DB-backed tab creation (and future remote-workspace failures) is
-  //      deferred until the user actually wants a terminal.
-  // When the user later opens the panel, this effect re-runs (terminalPanel-
-  // Visible is in its deps) and bootstraps the workspace's tabs on demand.
+  const handleCloseTab = useCallback(
+    async (tabId: number) => {
+      if (!selectedWorkspaceId) return;
+      try {
+        await deleteTerminalTab(tabId);
+        removeTerminalTab(selectedWorkspaceId, tabId);
+      } catch (err) {
+        console.error("Failed to close terminal tab:", err);
+      }
+    },
+    [selectedWorkspaceId, removeTerminalTab],
+  );
+
+  // When the panel gets hidden (most often because the user just closed
+  // the last tab via the X button or Cmd+W on the last pane) clear the
+  // auto-create guard so that the next time the user reveals the panel
+  // with no tabs, the load effect below seeds a fresh tab. Without this
+  // the guard stays keyed on the workspace forever and toggling the
+  // panel back on lands the user on an empty panel.
+  useEffect(() => {
+    if (!terminalPanelVisible) autoCreatedRef.current = null;
+  }, [terminalPanelVisible]);
+
+  // Load tabs on workspace + panel-visibility change.
   useEffect(() => {
     if (!selectedWorkspaceId || !terminalPanelVisible) return;
     const wsId = selectedWorkspaceId;
     listTerminalTabs(wsId).then(async (t) => {
       if (t.length > 0) {
         setTerminalTabs(wsId, t);
-        // Initialize this workspace's active tab if it has none, OR if the
-        // stored active id is stale (the tab was deleted elsewhere — e.g.
-        // another app instance, or a DB cascade we weren't notified of).
-        // Otherwise the visibility effect would show no tab at all.
         const currentActive = useAppStore.getState().activeTerminalTabId[wsId];
         const activeStillValid =
           currentActive != null && t.some((tab) => tab.id === currentActive);
-        if (!activeStillValid) {
-          setActiveTerminalTab(wsId, t[0].id);
-        }
+        if (!activeStillValid) setActiveTerminalTab(wsId, t[0].id);
       } else if (autoCreatedRef.current !== wsId) {
         autoCreatedRef.current = wsId;
         try {
@@ -194,18 +394,135 @@ export const TerminalPanel = memo(function TerminalPanel() {
     addTerminalTab,
   ]);
 
-  // Create the xterm instance for the active tab, spawn the PTY, wire I/O.
-  // Extracted as a function so we can re-run it from the spawn-error Retry
-  // button without tearing down and recreating the whole component.
-  const initializeTab = useCallback(
-    (tabId: number, worktreePath: string, workspaceId: string) => {
-      if (!containerRef.current) return;
-      if (instancesRef.current.has(tabId)) return;
+  // When the workspace's tab list becomes empty (e.g. user closed the last
+  // tab, triggering the panel to collapse), release the auto-create guard
+  // so the next time the panel opens for this workspace we spawn a fresh
+  // tab instead of showing an empty panel.
+  useEffect(() => {
+    if (!selectedWorkspaceId) return;
+    const wsTabs = terminalTabs[selectedWorkspaceId];
+    if (wsTabs && wsTabs.length === 0 && autoCreatedRef.current === selectedWorkspaceId) {
+      autoCreatedRef.current = null;
+    }
+  }, [selectedWorkspaceId, terminalTabs]);
 
-      const tabContainer = document.createElement("div");
-      tabContainer.style.height = "100%";
-      tabContainer.style.width = "100%";
-      containerRef.current.appendChild(tabContainer);
+  // Ensure every tab has a pane tree (ephemeral counterpart to the DB tabs).
+  useEffect(() => {
+    for (const tab of tabs) ensurePaneTree(tab.id);
+  }, [tabs, ensurePaneTree]);
+
+  // --- imperative xterm/PTY instance management ---------------------------
+
+  const instancesRef = useRef<Map<string, LeafInstance>>(new Map());
+
+  // Stable "latest handler" reference for the key event handler. The
+  // attachCustomKeyEventHandler closure captures this ref on instance
+  // creation so the freshly-registered shortcuts keep firing even if
+  // callbacks in this component identity-change between renders.
+  const keyHandlerRef = useRef<(ev: KeyboardEvent) => boolean>(() => true);
+
+  const handleActivatePane = useCallback(
+    (leafId: string) => {
+      const tabId = activeTerminalTabIdRef.current;
+      if (!tabId) return;
+      setActivePane(tabId, leafId);
+    },
+    [setActivePane],
+  );
+
+  const handleAction = useCallback(
+    (action: Exclude<TerminalKeyAction, null>) => {
+      const wsId = selectedWorkspaceIdRef.current;
+      const tabId = activeTerminalTabIdRef.current;
+      if (!wsId || !tabId) return;
+      const state = useAppStore.getState();
+      const activePaneId = state.activeTerminalPaneId[tabId] ?? null;
+
+      switch (action.kind) {
+        case "cycle":
+          cycleActiveTab(action.direction === "next" ? 1 : -1);
+          return;
+        case "new-tab":
+          void handleCreateTab();
+          return;
+        case "toggle-panel":
+          useAppStore.getState().toggleTerminalPanel();
+          requestAnimationFrame(() => {
+            const visible = useAppStore.getState().terminalPanelVisible;
+            if (visible) focusActiveTerminal();
+            else focusChatPrompt();
+          });
+          return;
+        case "focus-chat":
+          focusChatPrompt();
+          return;
+        case "split-pane": {
+          if (!activePaneId) return;
+          splitPane(tabId, activePaneId, action.direction);
+          return;
+        }
+        case "close-pane": {
+          if (!activePaneId) return;
+          const promoted = closePane(tabId, activePaneId);
+          if (promoted) return;
+          // `closePane` returns null both for "this was the sole leaf"
+          // (we should close the tab) AND for "no-op: tree missing or
+          // stale activePaneId" (we should NOT close the tab). Only fall
+          // through to close-tab when the tree genuinely has a single
+          // leaf remaining — otherwise a stale id would silently nuke a
+          // tab full of panes.
+          const tree = state.terminalPaneTrees[tabId];
+          if (tree && countLeaves(tree) === 1) void handleCloseTab(tabId);
+          return;
+        }
+        case "focus-pane": {
+          if (!activePaneId) return;
+          const tree = state.terminalPaneTrees[tabId];
+          if (!tree) return;
+          const next = neighborLeaf(tree, activePaneId, action.direction);
+          if (next) setActivePane(tabId, next);
+          return;
+        }
+        case "zoom":
+          return;
+      }
+    },
+    [
+      cycleActiveTab,
+      handleCloseTab,
+      handleCreateTab,
+      splitPane,
+      closePane,
+      setActivePane,
+    ],
+  );
+
+  // Rebuild keyHandlerRef whenever handleAction changes — xterm's
+  // attachCustomKeyEventHandler captures keyHandlerRef by closure, so this
+  // is effectively zero-cost updating.
+  useEffect(() => {
+    keyHandlerRef.current = (ev: KeyboardEvent): boolean => {
+      const action = terminalKeyAction(ev);
+      if (!action) {
+        if (shouldStopTerminalEventPropagation(ev)) {
+          ev.stopImmediatePropagation();
+          ev.stopPropagation();
+        }
+        return true;
+      }
+      ev.preventDefault();
+      if (action.kind === "zoom") return false;
+      ev.stopImmediatePropagation();
+      handleAction(action);
+      return false;
+    };
+  }, [handleAction]);
+
+  const createInstance = useCallback(
+    (spec: NeededLeaf): LeafInstance => {
+      const container = document.createElement("div");
+      container.style.width = "100%";
+      container.style.height = "100%";
 
       const monoFont =
         getComputedStyle(document.documentElement)
@@ -217,88 +534,81 @@ export const TerminalPanel = memo(function TerminalPanel() {
         theme: getTerminalTheme(),
       });
       const fit = new FitAddon();
-      const links = new WebLinksAddon();
+      const links = new WebLinksAddon((_event, url) => {
+        void openUrl(url);
+      });
       term.loadAddon(fit);
       term.loadAddon(links);
 
-      // Intercept terminal-scoped hotkeys BEFORE xterm forwards the key to
-      // the PTY. Returning false from this handler tells xterm not to send
-      // bytes, and stopImmediatePropagation prevents the window-level
-      // handler in useKeyboardShortcuts.ts from ALSO firing (which would
-      // otherwise cycle workspaces on Cmd+Shift+[/]).
-      term.attachCustomKeyEventHandler((ev) => {
-        const action = terminalKeyAction(ev);
-        if (!action) return true;
+      const keyHandler = (ev: KeyboardEvent): boolean =>
+        keyHandlerRef.current(ev);
+      term.attachCustomKeyEventHandler(keyHandler);
+      term.open(container);
+
+      const handleCopy = (ev: ClipboardEvent) => {
+        if (!term.hasSelection()) return;
+        const { clipboardData } = ev;
+        if (!clipboardData) return;
         ev.preventDefault();
-        // Zoom actions suppress PTY bytes but must NOT stop propagation —
-        // the global handler in useKeyboardShortcuts.ts processes the zoom.
-        if (action.kind === "zoom") return false;
-        ev.stopImmediatePropagation();
-        if (action.kind === "cycle") {
-          cycleActiveTab(action.direction === "next" ? 1 : -1);
-        } else if (action.kind === "new-tab") {
-          void handleCreateTab();
-        } else if (action.kind === "toggle-panel") {
-          // Cmd+` — hide panel and move focus to the chat prompt. The
-          // shells keep running (the panel is CSS-hidden, not unmounted).
-          useAppStore.getState().toggleTerminalPanel();
-          requestAnimationFrame(() => {
-            const visible = useAppStore.getState().terminalPanelVisible;
-            if (visible) focusActiveTerminal();
-            else focusChatPrompt();
-          });
-        } else if (action.kind === "focus-chat") {
-          // Cmd+0 — focus the chat prompt; leave the terminal visible.
-          focusChatPrompt();
-        }
-        return false;
+        clipboardData.setData(
+          "text/plain",
+          trimSelectionTrailingWhitespace(term.getSelection()),
+        );
+      };
+      container.addEventListener("copy", handleCopy);
+
+      let inst!: LeafInstance;
+      const resizeObserver = new ResizeObserver(() => {
+        if (inst.fitTimer) clearTimeout(inst.fitTimer);
+        inst.fitTimer = setTimeout(() => safeFit(inst), 150);
       });
-
-      term.open(tabContainer);
-      safeFitRaw(tabContainer, fit);
-
-      const instance: TermInstance = {
+      inst = {
+        leafId: spec.leafId,
+        tabId: spec.tabId,
+        workspaceId: spec.workspaceId,
+        worktreePath: spec.worktreePath,
+        container,
         term,
         fit,
         ptyId: -1,
         unlisten: null,
-        container: tabContainer,
         fitTimer: null,
-        workspaceId,
-        worktreePath,
-        // The observer debounces resizes to 150ms and skips fits when the
-        // container has no real dimensions (e.g. the panel is hidden).
-        resizeObserver: new ResizeObserver(() => {
-          if (instance.fitTimer) clearTimeout(instance.fitTimer);
-          instance.fitTimer = setTimeout(() => safeFit(instance), 150);
-        }),
+        reclaimTimer: null,
+        reclaimDisposer: null,
+        handleCopy,
+        keyHandler,
+        lastPtySize: null,
+        resizeObserver,
       };
-      instance.resizeObserver.observe(tabContainer);
-      instancesRef.current.set(tabId, instance);
+      inst.resizeObserver.observe(container);
 
+      // Spawn the PTY asynchronously. If the instance has been destroyed
+      // by the time we resolve, close the PTY we just spawned and bail.
       (async () => {
         try {
-          const currentWs = useAppStore.getState().workspaces.find((w) => w.id === workspaceId);
+          const state = useAppStore.getState();
+          const currentWs = state.workspaces.find(
+            (w) => w.id === spec.workspaceId,
+          );
           const currentRepo = currentWs
-            ? useAppStore.getState().repositories.find((r) => r.id === currentWs.repository_id)
+            ? state.repositories.find((r) => r.id === currentWs.repository_id)
             : undefined;
-          const currentDefaultBranches = useAppStore.getState().defaultBranches;
+          const defaults = state.defaultBranches;
           const ptyId = await spawnPty(
-            worktreePath,
+            spec.worktreePath,
             currentWs?.name ?? "",
-            workspaceId,
+            spec.workspaceId,
             currentRepo?.path ?? "",
-            currentWs ? (currentDefaultBranches[currentWs.repository_id] ?? "main") : "main",
+            currentWs ? (defaults[currentWs.repository_id] ?? "main") : "main",
             currentWs?.branch_name ?? "",
           );
-          const inst = instancesRef.current.get(tabId);
-          if (!inst) {
+          const stillExists = instancesRef.current.get(spec.leafId);
+          if (stillExists !== inst) {
             closePtyBestEffort(ptyId);
             return;
           }
           inst.ptyId = ptyId;
-
-          updateTerminalTabPtyId(tabId, ptyId);
+          setPanePtyId(spec.tabId, spec.leafId, ptyId);
 
           const unlistenFn = await listen<PtyOutputPayload>(
             "pty-output",
@@ -308,8 +618,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
               }
             },
           );
-          const stillExists = instancesRef.current.get(tabId);
-          if (!stillExists || stillExists !== inst) {
+          if (instancesRef.current.get(spec.leafId) !== inst) {
             unlistenFn();
             closePtyBestEffort(ptyId);
             return;
@@ -317,84 +626,179 @@ export const TerminalPanel = memo(function TerminalPanel() {
           inst.unlisten = unlistenFn;
 
           term.onData((data) => {
-            const bytes = Array.from(new TextEncoder().encode(data));
+            const bytes = Array.from(terminalInputEncoder.encode(data));
             writePty(ptyId, bytes);
           });
-
           term.onResize(({ cols, rows }) => {
-            resizePty(ptyId, cols, rows);
+            forwardPtyResize(inst, { cols, rows });
           });
 
           safeFit(inst);
-          resizePty(ptyId, term.cols, term.rows);
+          forwardPtyResize(inst);
         } catch (e) {
-          // Keep the tab around (don't delete the user's tab just because
-          // spawn failed); surface the error inline with a Retry button.
-          console.error("Failed to initialize terminal:", e);
-          destroyInstance(tabId);
-          setSpawnErrors((prev) => ({
-            ...prev,
-            [tabId]: e instanceof Error ? e.message : String(e),
-          }));
+          console.error("Failed to spawn PTY:", e);
+          const msg = e instanceof Error ? e.message : String(e);
+          setPaneSpawnError(spec.tabId, spec.leafId, msg);
+          // Leave the instance in place so the user's retry flow works —
+          // only the xterm part exists right now; the Retry button
+          // destroys and re-creates the instance.
         }
       })();
+
+      return inst;
     },
-    [
-      cycleActiveTab,
-      destroyInstance,
-      handleCreateTab,
-      terminalFontSize,
-      updateTerminalTabPtyId,
-    ],
+    [setPanePtyId, setPaneSpawnError, terminalFontSize],
   );
 
-  // Spawn instances as tabs become active. Unlike before, this does NOT run
-  // when the panel is toggled (the panel doesn't unmount anymore), so the
-  // xterm + PTY only get set up once per tab, and survive collapse/restore.
-  useEffect(() => {
-    if (!containerRef.current || !ws?.worktree_path || !activeTerminalTabId) return;
-    if (instancesRef.current.has(activeTerminalTabId)) return;
-    // Don't re-spawn tabs that have an active spawn error banner — the user
-    // must click Retry, which clears the error and calls us again.
-    if (spawnErrors[activeTerminalTabId]) return;
-    initializeTab(activeTerminalTabId, ws.worktree_path, ws.id);
-  }, [activeTerminalTabId, ws?.worktree_path, ws?.id, initializeTab, spawnErrors]);
+  const destroyInstance = useCallback((leafId: string) => {
+    const inst = instancesRef.current.get(leafId);
+    if (!inst) return;
+    if (inst.fitTimer) clearTimeout(inst.fitTimer);
+    if (inst.reclaimTimer) clearTimeout(inst.reclaimTimer);
+    if (inst.reclaimDisposer) inst.reclaimDisposer();
+    inst.resizeObserver.disconnect();
+    inst.container.removeEventListener("copy", inst.handleCopy);
+    inst.term.dispose();
+    if (inst.unlisten) inst.unlisten();
+    if (inst.ptyId >= 0) closePtyBestEffort(inst.ptyId);
+    inst.container.remove();
+    instancesRef.current.delete(leafId);
+  }, []);
 
-  // Show/hide terminal containers based on active tab and selected workspace.
-  // Instances for non-current workspaces stay in the DOM (display: none) so
-  // their shells keep running while the user is elsewhere in the app.
-  useEffect(() => {
-    const currentWorkspaceTabIds = new Set(tabs.map((t) => t.id));
-    for (const [tabId, inst] of instancesRef.current) {
-      const belongsToCurrentWorkspace = currentWorkspaceTabIds.has(tabId);
-      const isActive = tabId === activeTerminalTabId && belongsToCurrentWorkspace;
-      inst.container.style.display = isActive ? "block" : "none";
-      if (isActive) {
-        safeFit(inst);
-        inst.term.focus();
+  // Reconcile instances against the tree + reparent containers. Runs
+  // useLayoutEffect so the DOM mutation happens in the same frame as the
+  // React render, avoiding a visible flicker.
+  //
+  // IMPORTANT: we collect needed leaves across EVERY workspace's tabs, not
+  // just the currently-selected workspace. Otherwise switching workspaces
+  // would diff the previous workspace's leaves out of `needed`, destroy
+  // their instances, and close their PTYs — killing long-running commands
+  // (dev server, tailing logs, etc). The target divs for other
+  // workspaces' tabs are not currently rendered, so their containers sit
+  // detached in memory; when the user switches back, the target divs
+  // reappear and the reparent loop re-mounts them in the DOM.
+  useLayoutEffect(() => {
+    const tabSpecs: Array<{
+      id: number;
+      workspaceId: string;
+      worktreePath: string;
+    }> = [];
+    for (const [wsId, wsTabs] of Object.entries(terminalTabs)) {
+      const workspace = workspaces.find((w) => w.id === wsId);
+      const worktreePath = workspace?.worktree_path;
+      if (!worktreePath) continue;
+      for (const tab of wsTabs) {
+        tabSpecs.push({ id: tab.id, workspaceId: wsId, worktreePath });
       }
     }
-  }, [activeTerminalTabId, tabs]);
+    const needed = collectNeededLeaves(tabSpecs, terminalPaneTrees);
 
-  // Re-fit the active instance when the panel transitions hidden → visible.
-  // xterm doesn't know the container grew from 0×0 to real dimensions, so
-  // without this the terminal keeps its old (possibly 80×24) geometry.
-  useEffect(() => {
-    if (!terminalPanelVisible || !activeTerminalTabId) return;
-    const inst = instancesRef.current.get(activeTerminalTabId);
-    if (!inst) return;
-    // Run after layout so clientHeight reflects the restored panel.
-    const id = requestAnimationFrame(() => {
-      safeFit(inst);
-      if (inst.ptyId >= 0) {
-        resizePty(inst.ptyId, inst.term.cols, inst.term.rows);
+    // Build a snapshot map for diffLeaves so we stay out of the instance
+    // map's imperative inner state.
+    const snapshot = new Map<string, LeafInstanceSnapshot>();
+    for (const [id, inst] of instancesRef.current) {
+      snapshot.set(id, {
+        leafId: id,
+        tabId: inst.tabId,
+        workspaceId: inst.workspaceId,
+      });
+    }
+    const { toCreate, toDestroy } = diffLeaves(needed, snapshot);
+
+    for (const leafId of toDestroy) destroyInstance(leafId);
+    const freshLeafIds = new Set<string>();
+    for (const spec of toCreate) {
+      instancesRef.current.set(spec.leafId, createInstance(spec));
+      freshLeafIds.add(spec.leafId);
+    }
+
+    // Reparent each instance's container into its current target div.
+    for (const spec of needed) {
+      const inst = instancesRef.current.get(spec.leafId);
+      if (!inst) continue;
+      const selector = `[data-pane-target="${CSS.escape(spec.leafId)}"]`;
+      const target = document.querySelector(selector) as HTMLElement | null;
+      if (target && inst.container.parentElement !== target) {
+        const prevCols = inst.term.cols;
+        const prevRows = inst.term.rows;
+        target.appendChild(inst.container);
+        // The container may have gone from 0×0 to a real size — refit
+        // immediately so the user doesn't see an 80×24 stub.
+        safeFit(inst);
+        forwardPtyResize(inst);
+        const resized =
+          inst.term.cols !== prevCols || inst.term.rows !== prevRows;
+        if (freshLeafIds.has(spec.leafId)) {
+          // Brand-new pane: park the cursor at the bottom so the fresh
+          // prompt is visible.
+          inst.term.scrollToBottom();
+        } else if (resized && inst.ptyId >= 0) {
+          // The shell is about to receive SIGWINCH and will typically
+          // respond with \e[H\e[J (cursor home + erase to end of
+          // display), which xterm implements as an in-place erase of
+          // the visible rows — the user's recent output is NOT moved
+          // to scrollback, it's wiped. To salvage it, synchronously
+          // pad the xterm buffer with enough blank lines that the
+          // current viewport content is safely above ybase before the
+          // shell's redraw arrives (this injection happens on the
+          // microtask queue ahead of any pty-output event). Once the
+          // shell has redrawn its prompt we also slide the display up
+          // so the user can see the reclaimed scrollback above it.
+          padViewportIntoScrollback(inst);
+          scheduleReclaimHistory(inst);
+        }
       }
-      inst.term.focus();
-    });
-    return () => cancelAnimationFrame(id);
-  }, [terminalPanelVisible, activeTerminalTabId]);
+    }
 
-  // Update font size on all instances without destroying them.
+    // Apply keyboard focus to whichever leaf the store says is active
+    // for the currently-selected tab. We do this in the same
+    // useLayoutEffect (rather than a separate useEffect with a deferred
+    // timer) because rapid-fire state changes at startup or during a
+    // split were cancelling the deferred focus calls before they could
+    // run. Doing the focus synchronously here — after reparent, in the
+    // same render cycle — guarantees exactly one focus attempt per
+    // applied layout change.
+    if (terminalPanelVisible && activeTerminalTabId != null) {
+      const focusedLeafId = activeTerminalPaneId[activeTerminalTabId];
+      if (focusedLeafId) {
+        const inst = instancesRef.current.get(focusedLeafId);
+        if (
+          inst &&
+          shouldFocusLeaf(
+            focusedLeafId,
+            inst.tabId,
+            activeTerminalPaneId,
+            activeTerminalTabId,
+            terminalPanelVisible,
+          )
+        ) {
+          // The helper textarea is what xterm's own click-focus
+          // path uses; calling term.focus() directly can no-op on
+          // the very first mount. We deliberately don't scrollToBottom
+          // here — if the user was reading scrollback, clicking a pane
+          // to focus it (or any other action that triggers a
+          // re-focus, like a pane split that promotes a sibling)
+          // should leave their scroll position alone.
+          const helper = inst.container.querySelector(
+            ".xterm-helper-textarea",
+          ) as HTMLTextAreaElement | null;
+          if (helper) helper.focus({ preventScroll: true });
+          else inst.term.focus();
+        }
+      }
+    }
+  }, [
+    terminalTabs,
+    workspaces,
+    terminalPaneTrees,
+    activeTerminalPaneId,
+    activeTerminalTabId,
+    terminalPanelVisible,
+    createInstance,
+    destroyInstance,
+  ]);
+
+  // Font / theme propagation across all live instances.
   useEffect(() => {
     for (const inst of instancesRef.current.values()) {
       inst.term.options.fontSize = terminalFontSize;
@@ -402,7 +806,6 @@ export const TerminalPanel = memo(function TerminalPanel() {
     }
   }, [terminalFontSize]);
 
-  // Update terminal theme and font on all instances when the app theme changes.
   useEffect(() => {
     const theme = getTerminalTheme();
     const monoFont =
@@ -414,82 +817,55 @@ export const TerminalPanel = memo(function TerminalPanel() {
       inst.term.options.fontFamily = monoFont;
       safeFit(inst);
     }
-  }, [currentThemeId]);
+  }, [currentThemeId, fontFamilyMono]);
 
-  // Update terminal font family when user changes monospace font preference.
+  // Refit on panel-visibility / tab-switch transitions. Focus is handled
+  // by the dedicated active-leaf effect below, which respects the
+  // per-tab active pane rather than indiscriminately focusing the first
+  // xterm helper textarea it finds.
   useEffect(() => {
-    const monoFont =
-      getComputedStyle(document.documentElement)
-        .getPropertyValue("--font-mono")
-        .trim() || "monospace";
-    for (const inst of instancesRef.current.values()) {
-      inst.term.options.fontFamily = monoFont;
-      safeFit(inst);
-    }
-  }, [fontFamilyMono]);
-
-  // Cleanup instances for tabs that no longer exist in any workspace. This
-  // covers BOTH per-tab close (removeTerminalTab) AND workspace deletion
-  // (removeWorkspace / removeRepository in the store drops the workspace's
-  // `terminalTabs` entry, which removes all its tab ids from this set).
-  useEffect(() => {
-    const allTabIds = new Set(
-      Object.values(terminalTabs).flatMap((wsTabs) => wsTabs.map((t) => t.id)),
-    );
-    // Snapshot keys — destroyInstance mutates the map.
-    for (const tabId of [...instancesRef.current.keys()]) {
-      if (!allTabIds.has(tabId)) destroyInstance(tabId);
-    }
-    // Also clear any spawn-error entries for tabs that have disappeared.
-    setSpawnErrors((prev) => {
-      const next: Record<number, string> = {};
-      let changed = false;
-      for (const [idStr, msg] of Object.entries(prev)) {
-        const id = Number(idStr);
-        if (allTabIds.has(id)) next[id] = msg;
-        else changed = true;
+    if (!terminalPanelVisible) return;
+    const id = requestAnimationFrame(() => {
+      for (const inst of instancesRef.current.values()) {
+        safeFit(inst);
       }
-      return changed ? next : prev;
     });
-  }, [terminalTabs, destroyInstance]);
+    return () => cancelAnimationFrame(id);
+  }, [terminalPanelVisible, activeTerminalTabId]);
 
-  // Cleanup all instances on component unmount only. Snapshot the keys first
-  // because `destroyInstance` mutates the map during iteration.
+  // Destroy everything on unmount.
   useEffect(() => {
     const instances = instancesRef.current;
     return () => {
-      for (const tabId of [...instances.keys()]) destroyInstance(tabId);
+      for (const leafId of [...instances.keys()]) destroyInstance(leafId);
       instances.clear();
     };
   }, [destroyInstance]);
 
-  const handleCloseTab = useCallback(
-    async (tabId: number) => {
-      if (!selectedWorkspaceId) return;
-      destroyInstance(tabId);
-      try {
-        await deleteTerminalTab(tabId);
-        removeTerminalTab(selectedWorkspaceId, tabId);
-      } catch (err) {
-        console.error("Failed to close terminal tab:", err);
-      }
+  const handleLayout = useCallback(
+    (splitId: string, sizes: [number, number]) => {
+      const tabId = activeTerminalTabIdRef.current;
+      if (!tabId) return;
+      setPaneSizes(tabId, splitId, sizes);
+      // react-resizable-panels updates layout before emitting onLayoutChanged,
+      // so the ResizeObserver on every affected container will fire and
+      // debounce-fit. No immediate action required here.
     },
-    [selectedWorkspaceId, removeTerminalTab, destroyInstance],
+    [setPaneSizes],
   );
 
-  const handleRetrySpawn = useCallback(
-    (tabId: number) => {
-      if (!ws?.worktree_path || !selectedWorkspaceId) return;
-      setSpawnErrors((prev) => {
-        const { [tabId]: _removed, ...rest } = prev;
-        return rest;
-      });
-      // Call directly; the spawn effect will also re-run because
-      // `spawnErrors[tabId]` just cleared, but initializeTab is idempotent
-      // (it bails if an instance already exists).
-      initializeTab(tabId, ws.worktree_path, selectedWorkspaceId);
+  const handleRetryLeaf = useCallback(
+    (leafId: string) => {
+      const tabId = activeTerminalTabIdRef.current;
+      if (!tabId) return;
+      setPaneSpawnError(tabId, leafId, null);
+      // Tear the instance down so the next useLayoutEffect recreates it.
+      destroyInstance(leafId);
+      // Force a re-run of the reconciliation. Updating state via
+      // setPaneSpawnError above already triggers a store change, so React
+      // will rerun useLayoutEffect naturally.
     },
-    [ws?.worktree_path, selectedWorkspaceId, initializeTab],
+    [setPaneSpawnError, destroyInstance],
   );
 
   return (
@@ -523,23 +899,29 @@ export const TerminalPanel = memo(function TerminalPanel() {
           −
         </button>
       </div>
-      <div className={styles.termContainer} ref={containerRef}>
-        {activeTerminalTabId !== null && spawnErrors[activeTerminalTabId] && (
-          <div className={styles.spawnError} role="alert">
-            <div className={styles.spawnErrorTitle}>Failed to start shell</div>
-            <div className={styles.spawnErrorMessage}>
-              {spawnErrors[activeTerminalTabId]}
-            </div>
-            <button
-              className={styles.spawnErrorRetry}
-              onClick={() => handleRetrySpawn(activeTerminalTabId)}
+      <div className={styles.termContainer}>
+        {tabs.map((tab) => {
+          const tree = terminalPaneTrees[tab.id];
+          if (!tree) return null;
+          const isActiveTab = tab.id === activeTerminalTabId;
+          return (
+            <div
+              key={tab.id}
+              className={styles.paneRoot}
+              style={{ display: isActiveTab ? "block" : "none" }}
             >
-              Retry
-            </button>
-          </div>
-        )}
+              <TerminalPaneTree
+                tabId={tab.id}
+                node={tree}
+                activePaneId={activeTerminalPaneId[tab.id] ?? null}
+                onActivatePane={handleActivatePane}
+                onLayout={handleLayout}
+                onRetryLeaf={handleRetryLeaf}
+              />
+            </div>
+          );
+        })}
       </div>
     </div>
   );
 });
-

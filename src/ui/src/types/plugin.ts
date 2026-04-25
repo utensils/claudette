@@ -41,3 +41,14 @@ export interface ScmSummary {
   ciState: "success" | "failure" | "pending" | null;
   lastUpdated: number;
 }
+
+export interface ScmStatusCacheRow {
+  workspace_id: string;
+  repo_id: string;
+  branch_name: string;
+  provider: string | null;
+  pr_json: string | null;
+  ci_json: string | null;
+  error: string | null;
+  fetched_at: string;
+}

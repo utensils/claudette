@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::process::Command as TokioCommand;
 
 use claudette::agent;
@@ -17,6 +17,7 @@ use claudette::model::{AgentStatus, Workspace, WorkspaceStatus};
 use claudette::names::NameGenerator;
 
 use crate::state::AppState;
+use claudette::process::CommandWindowExt as _;
 
 #[derive(Serialize, Clone)]
 pub struct SetupResult {
@@ -106,9 +107,10 @@ pub async fn create_workspace(
         .find(|r| r.id == repo_id)
         .ok_or("Repository not found")?;
 
-    // Capture setup script info before moving repo fields.
     let repo_path = repo.path.clone();
     let settings_setup_script = repo.setup_script.clone();
+    let repo_base_branch = repo.base_branch.clone();
+    let repo_default_remote = repo.default_remote.clone();
 
     let (prefix_mode, prefix_custom) = read_branch_prefix_settings(&db);
     let prefix = resolve_branch_prefix(&prefix_mode, &prefix_custom).await;
@@ -117,9 +119,15 @@ pub async fn create_workspace(
     let worktree_path: PathBuf = worktree_base.join(&repo.path_slug).join(&name);
     let worktree_path_str = worktree_path.to_string_lossy().to_string();
 
-    let actual_path = git::create_worktree(&repo_path, &branch_name, &worktree_path_str)
-        .await
-        .map_err(|e| e.to_string())?;
+    let actual_path = git::create_worktree(
+        &repo_path,
+        &branch_name,
+        &worktree_path_str,
+        repo.base_branch.as_deref(),
+        repo.default_remote.as_deref(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
     let ws = Workspace {
         id: uuid::Uuid::new_v4().to_string(),
@@ -145,16 +153,30 @@ pub async fn create_workspace(
     let setup_result = if skip_setup.unwrap_or(false) {
         None
     } else {
+        let resolved_env = resolve_env_for_workspace(&state, &ws, &repo_path).await;
         resolve_and_run_setup(
             &ws,
             Path::new(&repo_path),
             Path::new(&actual_path),
             settings_setup_script.as_deref(),
+            repo_base_branch.as_deref(),
+            repo_default_remote.as_deref(),
+            resolved_env.as_ref(),
         )
         .await
     };
 
     crate::tray::rebuild_tray(&app);
+
+    let app_state = app.state::<crate::state::AppState>();
+    let resolved = crate::tray::resolve_notification(
+        &db,
+        &app_state.cesp_playback,
+        crate::tray::NotificationEvent::SessionStart,
+    );
+    if resolved.sound != "None" {
+        crate::commands::settings::play_notification_sound(resolved.sound, Some(resolved.volume));
+    }
 
     Ok(CreateWorkspaceResult {
         workspace: ws,
@@ -216,6 +238,9 @@ async fn resolve_and_run_setup(
     repo_path: &Path,
     worktree_path: &Path,
     settings_script: Option<&str>,
+    base_branch: Option<&str>,
+    default_remote: Option<&str>,
+    resolved_env: Option<&claudette::env_provider::ResolvedEnv>,
 ) -> Option<SetupResult> {
     // 1. Check .claudette.json
     let (script, source) = match config::load_config(repo_path) {
@@ -255,21 +280,38 @@ async fn resolve_and_run_setup(
 
     // 2. Build workspace env vars now that we know a script will run.
     let repo_path_str = repo_path.to_string_lossy();
-    let default_branch = git::default_branch(&repo_path_str)
-        .await
-        .unwrap_or_else(|_| "main".to_string());
+    let default_branch = match base_branch {
+        Some(b) => b.to_string(),
+        None => git::default_branch(&repo_path_str, default_remote)
+            .await
+            .unwrap_or_else(|_| "main".to_string()),
+    };
     let ws_env = WorkspaceEnv::from_workspace(ws, &repo_path_str, default_branch);
 
     // 3. Execute the script in its own process group so we can kill the
     //    entire tree on timeout (prevents orphan grandchild processes).
+    //    `process_group` is a Unix-only extension; on Windows the timeout
+    //    path falls back to `child.kill().await` which only terminates the
+    //    immediate child. Windows also lacks a built-in `sh`, so setup
+    //    scripts won't spawn there without a user-installed shell — the
+    //    grandchild-leak on timeout is moot until that is addressed.
     let mut cmd = TokioCommand::new("sh");
+    cmd.no_console_window();
     cmd.arg("-c")
         .arg(&script)
         .current_dir(worktree_path)
         .env("PATH", claudette::env::enriched_path())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .process_group(0);
+        .stderr(std::process::Stdio::piped());
+    #[cfg(unix)]
+    cmd.process_group(0);
+    // Env-provider layer (direnv/mise/dotenv/nix-devshell) first so the
+    // user's setup commands can rely on tools/vars from those sources
+    // (e.g. `bun install` finding `node` from a mise-managed toolchain),
+    // then WorkspaceEnv on top so CLAUDETTE_* markers always win.
+    if let Some(env) = resolved_env {
+        env.apply(&mut cmd);
+    }
     ws_env.apply(&mut cmd);
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -285,6 +327,8 @@ async fn resolve_and_run_setup(
         }
     };
 
+    // Only used on Unix to send SIGKILL to the process group on timeout.
+    #[cfg(unix)]
     let pid = child.id();
 
     // 3. Read stdout/stderr concurrently with waiting to avoid pipe buffer
@@ -340,7 +384,11 @@ async fn resolve_and_run_setup(
             timed_out: false,
         }),
         Err(_) => {
-            // Timeout — kill the entire process group, then reap the child.
+            // Timeout — kill the entire process group on Unix (SIGKILL to
+            // -pgid hits every descendant). Windows has no process-group
+            // signal; `child.kill()` below calls `TerminateProcess` on
+            // the immediate child only.
+            #[cfg(unix)]
             if let Some(pgid) = pid {
                 unsafe {
                     libc::kill(-(pgid as i32), libc::SIGKILL);
@@ -383,15 +431,60 @@ pub async fn run_workspace_setup(
         .find(|r| r.id == ws.repository_id)
         .ok_or("Repository not found")?;
 
+    let resolved_env = resolve_env_for_workspace(&state, ws, &repo.path).await;
     let result = resolve_and_run_setup(
         ws,
         Path::new(&repo.path),
         Path::new(worktree_path),
         repo.setup_script.as_deref(),
+        repo.base_branch.as_deref(),
+        repo.default_remote.as_deref(),
+        resolved_env.as_ref(),
     )
     .await;
 
     Ok(result)
+}
+
+/// Resolve the env-provider layer for a workspace, producing a
+/// [`claudette::env_provider::ResolvedEnv`] merged from all detected
+/// providers (direnv, mise, dotenv, nix-devshell).
+///
+/// Returns `None` when the workspace has no worktree path yet (which
+/// shouldn't happen by the time we're about to spawn, but keeps the
+/// call sites defensive).
+async fn resolve_env_for_workspace(
+    state: &AppState,
+    ws: &Workspace,
+    repo_path: &str,
+) -> Option<claudette::env_provider::ResolvedEnv> {
+    let worktree = ws.worktree_path.as_deref()?;
+    let ws_info = claudette::plugin_runtime::host_api::WorkspaceInfo {
+        id: ws.id.clone(),
+        name: ws.name.clone(),
+        branch: ws.branch_name.clone(),
+        worktree_path: worktree.to_string(),
+        repo_path: repo_path.to_string(),
+    };
+    let disabled = Database::open(&state.db_path)
+        .map(|db| crate::commands::env::load_disabled_providers(&db, &ws.repository_id))
+        .unwrap_or_default();
+    let registry = state.plugins.read().await;
+    let resolved = claudette::env_provider::resolve_with_registry(
+        &registry,
+        &state.env_cache,
+        Path::new(worktree),
+        &ws_info,
+        &disabled,
+    )
+    .await;
+    crate::commands::env::register_resolved_with_watcher(
+        state,
+        Path::new(worktree),
+        &resolved.sources,
+    )
+    .await;
+    Some(resolved)
 }
 
 #[tauri::command]
@@ -399,7 +492,8 @@ pub async fn archive_workspace(
     id: String,
     app: AppHandle,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+    supervisor: State<'_, Arc<McpSupervisor>>,
+) -> Result<bool, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
 
     let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
@@ -414,8 +508,17 @@ pub async fn archive_workspace(
         .find(|r| r.id == ws.repository_id)
         .ok_or("Repository not found")?;
 
+    let repo_id = ws.repository_id.clone();
+
     if let Some(ref wt_path) = ws.worktree_path {
         let _ = git::remove_worktree(&repo.path, wt_path, false).await;
+        // The worktree is gone — drop env-provider watches + cache
+        // for it so we don't hold stale OS watch slots or emit
+        // invalidation events for a path that no longer exists.
+        if let Some(watcher) = state.env_watcher.read().await.as_ref() {
+            watcher.unregister(Path::new(wt_path), None);
+        }
+        state.env_cache.invalidate(Path::new(wt_path), None);
     }
 
     // Optionally delete the branch if the user has enabled this setting.
@@ -445,14 +548,32 @@ pub async fn archive_workspace(
         let _ = db.end_agent_session(sid, true);
     }
 
+    if delete_branch {
+        // Branch is gone — nothing left to restore. Fully delete the record while
+        // preserving lifetime stats in `deleted_workspace_summaries`.
+        db.delete_workspace_with_summary(&id)
+            .map_err(|e| e.to_string())?;
+
+        // If this was the last workspace for the repo, clean up MCP supervisor state.
+        let remaining = db.list_workspaces().unwrap_or_default();
+        if !remaining.iter().any(|w| w.repository_id == repo_id) {
+            supervisor.remove_repo(&repo_id).await;
+            let _ = app.emit("mcp-status-cleared", &repo_id);
+        }
+
+        crate::tray::rebuild_tray(&app);
+        return Ok(true);
+    }
+
     db.delete_terminal_tabs_for_workspace(&id)
         .map_err(|e| e.to_string())?;
+    db.delete_scm_status_cache(&id).map_err(|e| e.to_string())?;
     db.update_workspace_status(&id, &WorkspaceStatus::Archived, None)
         .map_err(|e| e.to_string())?;
 
     crate::tray::rebuild_tray(&app);
 
-    Ok(())
+    Ok(false)
 }
 
 #[tauri::command]
@@ -501,18 +622,14 @@ pub async fn delete_workspace(
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
 
     let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
-    let ws = workspaces
-        .iter()
-        .find(|w| w.id == id)
-        .ok_or("Workspace not found")?;
+    let Some(ws) = workspaces.iter().find(|w| w.id == id) else {
+        return Ok(());
+    };
 
     let repo_id = ws.repository_id.clone();
 
     let repos = db.list_repositories().map_err(|e| e.to_string())?;
-    let repo = repos
-        .iter()
-        .find(|r| r.id == repo_id)
-        .ok_or("Repository not found")?;
+    let repo = repos.iter().find(|r| r.id == repo_id);
 
     // Stop any running agent and clear session so tray state stays consistent.
     {
@@ -524,13 +641,26 @@ pub async fn delete_workspace(
         }
     }
 
-    // Remove worktree if active.
-    if let Some(ref wt_path) = ws.worktree_path {
-        let _ = git::remove_worktree(&repo.path, wt_path, true).await;
+    if let Some(repo) = repo {
+        // Remove worktree if active.
+        if let Some(ref wt_path) = ws.worktree_path {
+            let _ = git::remove_worktree(&repo.path, wt_path, true).await;
+        }
+
+        // Best-effort branch delete. Force-deletes even if unmerged commits exist.
+        let _ = git::branch_delete(&repo.path, &ws.branch_name).await;
     }
 
-    // Best-effort branch delete. Force-deletes even if unmerged commits exist.
-    let _ = git::branch_delete(&repo.path, &ws.branch_name).await;
+    // Drop any env-provider watch + cache entry rooted at this
+    // workspace's worktree. Keeps OS watch count bounded across
+    // workspace churn and prevents invalidation events for a path
+    // Claudette no longer knows about.
+    if let Some(ref wt_path) = ws.worktree_path {
+        if let Some(watcher) = state.env_watcher.read().await.as_ref() {
+            watcher.unregister(Path::new(wt_path), None);
+        }
+        state.env_cache.invalidate(Path::new(wt_path), None);
+    }
 
     // Cascade deletes chat messages and terminal tabs. Materializes a frozen
     // summary row into `deleted_workspace_summaries` in the same transaction so
@@ -545,6 +675,35 @@ pub async fn delete_workspace(
         supervisor.remove_repo(&repo_id).await;
         let _ = app.emit("mcp-status-cleared", &repo_id);
     }
+
+    crate::tray::rebuild_tray(&app);
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn rename_workspace(
+    id: String,
+    new_name: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let trimmed = new_name.trim().to_string();
+    if !is_valid_workspace_name(&trimmed) {
+        return Err("Invalid workspace name. Use letters, numbers, and hyphens only.".into());
+    }
+    if trimmed.len() > 60 {
+        return Err("Workspace name must be 60 characters or fewer".into());
+    }
+
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    db.update_workspace_name(&id, &trimmed).map_err(|e| {
+        if e.to_string().contains("UNIQUE constraint failed") {
+            "A workspace with this name already exists in this repository".into()
+        } else {
+            e.to_string()
+        }
+    })?;
 
     crate::tray::rebuild_tray(&app);
 
@@ -575,26 +734,28 @@ pub fn generate_workspace_name() -> GeneratedWorkspaceName {
     }
 }
 
+/// Re-read the current branch for every active workspace and return the set
+/// of workspaces whose stored `branch_name` is now stale. Any drift is also
+/// persisted back to the DB so external branch renames (`git branch -m`,
+/// `git checkout -b`, etc.) made from the integrated terminal or elsewhere
+/// stop the DB from diverging from git reality.
 #[tauri::command]
 pub async fn refresh_branches(state: State<'_, AppState>) -> Result<Vec<(String, String)>, String> {
-    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
+    claudette::workspace_sync::reconcile_all_workspace_branches(&state.db_path).await
+}
 
-    let mut updates = Vec::new();
-
-    for ws in &workspaces {
-        if ws.status != WorkspaceStatus::Active {
-            continue;
-        }
-        if let Some(ref wt_path) = ws.worktree_path
-            && let Ok(branch) = git::current_branch(wt_path).await
-            && branch != ws.branch_name
-        {
-            updates.push((ws.id.clone(), branch));
-        }
-    }
-
-    Ok(updates)
+/// Re-read the current branch for a single workspace, persist any change, and
+/// return the new branch name (or `None` if nothing changed or the workspace
+/// isn't active). Used for event-driven refreshes — e.g. when the user selects
+/// a workspace or focuses its terminal panel — so sidebar state tracks
+/// external `git` operations without waiting on the 5s poll.
+#[tauri::command]
+pub async fn refresh_workspace_branch(
+    workspace_id: String,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    claudette::workspace_sync::reconcile_single_workspace_branch(&state.db_path, &workspace_id)
+        .await
 }
 
 #[derive(Serialize)]
@@ -809,6 +970,7 @@ pub async fn open_workspace_in_terminal(worktree_path: String) -> Result<(), Str
         let mut errors = Vec::new();
         for (terminal, args) in &terminals {
             let mut cmd = tokio::process::Command::new(terminal);
+            cmd.no_console_window();
             for arg in args {
                 cmd.arg(arg);
             }
@@ -845,6 +1007,7 @@ pub async fn open_workspace_in_terminal(worktree_path: String) -> Result<(), Str
         );
 
         tokio::process::Command::new("osascript")
+            .no_console_window()
             .arg("-e")
             .arg(&script)
             .spawn()

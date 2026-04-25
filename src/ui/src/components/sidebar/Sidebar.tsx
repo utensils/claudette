@@ -1,8 +1,10 @@
 import { memo, useRef, useState, useMemo, useCallback, useEffect } from "react";
 import { useAppStore } from "../../stores/useAppStore";
+import { isAgentBusy } from "../../utils/agentStatus";
 import {
   archiveWorkspace,
   reorderRepositories,
+  renameWorkspace,
   restoreWorkspace,
   generateWorkspaceName,
   createWorkspace,
@@ -15,10 +17,9 @@ import {
   pairWithServer,
   startLocalServer,
 } from "../../services/tauri";
-import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, BadgeCheck, BadgeInfo, BadgeQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, GitPullRequestArrow, GitPullRequestDraft, GitMerge, GitPullRequestClosed } from "lucide-react";
+import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, CircleStop, LoaderCircle, GitPullRequestArrow, GitPullRequestDraft, GitMerge, GitPullRequestClosed } from "lucide-react";
 import { RepoIcon } from "../shared/RepoIcon";
 import { UpdateBanner } from "../layout/UpdateBanner";
-import { useSpinnerFrame } from "../../hooks/useSpinnerFrame";
 import { getScmSortPriority } from "../../utils/scmSortPriority";
 import styles from "./Sidebar.module.css";
 
@@ -52,6 +53,7 @@ export const Sidebar = memo(function Sidebar() {
   const openModal = useAppStore((s) => s.openModal);
   const openSettings = useAppStore((s) => s.openSettings);
   const updateWorkspace = useAppStore((s) => s.updateWorkspace);
+  const removeWorkspace = useAppStore((s) => s.removeWorkspace);
   const unreadCompletions = useAppStore((s) => s.unreadCompletions);
   const agentQuestions = useAppStore((s) => s.agentQuestions);
   const planApprovals = useAppStore((s) => s.planApprovals);
@@ -87,15 +89,10 @@ export const Sidebar = memo(function Sidebar() {
   const DRAG_THRESHOLD = 5; // px before drag activates
   const workspaceTerminalCommands = useAppStore((s) => s.workspaceTerminalCommands);
 
-  const anyRunning = useMemo(
-    () =>
-      workspaces.some(
-        (ws) =>
-          ws.agent_status === "Running" || ws.agent_status === "Compacting",
-      ),
-    [workspaces],
-  );
-  const spinnerChar = useSpinnerFrame(anyRunning);
+  const [renamingWsId, setRenamingWsId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  const renameCancelledRef = useRef(false);
 
   const creatingRef = useRef(false);
   const archivingRef = useRef<Set<string>>(new Set());
@@ -229,19 +226,23 @@ export const Sidebar = memo(function Sidebar() {
     if (archivingRef.current.has(wsId)) return;
     archivingRef.current.add(wsId);
     try {
-      await archiveWorkspace(wsId);
-      updateWorkspace(wsId, {
-        status: "Archived",
-        worktree_path: null,
-        agent_status: "Stopped",
-      });
+      const deleted = await archiveWorkspace(wsId);
+      if (deleted) {
+        removeWorkspace(wsId);
+      } else {
+        updateWorkspace(wsId, {
+          status: "Archived",
+          worktree_path: null,
+          agent_status: "Stopped",
+        });
+      }
       if (useAppStore.getState().selectedWorkspaceId === wsId) selectWorkspace(null);
     } catch (e) {
       console.error("Failed to archive workspace:", e);
     } finally {
       archivingRef.current.delete(wsId);
     }
-  }, [updateWorkspace, selectWorkspace]);
+  }, [updateWorkspace, removeWorkspace, selectWorkspace]);
 
   const handleRestore = useCallback(async (wsId: string) => {
     if (restoringRef.current.has(wsId)) return;
@@ -256,11 +257,27 @@ export const Sidebar = memo(function Sidebar() {
     }
   }, [updateWorkspace]);
 
+  const handleRenameSubmit = useCallback(async (wsId: string) => {
+    const trimmed = renameValue.trim();
+    const ws = workspaces.find((w) => w.id === wsId);
+    if (!trimmed || trimmed === ws?.name) {
+      setRenamingWsId(null);
+      return;
+    }
+    try {
+      await renameWorkspace(wsId, trimmed);
+      updateWorkspace(wsId, { name: trimmed });
+    } catch (e) {
+      console.error("Failed to rename workspace:", e);
+    }
+    setRenamingWsId(null);
+  }, [renameValue, workspaces, updateWorkspace]);
+
   const renderWorkspace = (ws: typeof workspaces[number]) => {
     const badge: "ask" | "plan" | "done" | null =
       agentQuestions[ws.id] ? "ask" :
       planApprovals[ws.id] ? "plan" :
-      unreadCompletions.has(ws.id) && ws.agent_status !== "Running" ? "done" :
+      unreadCompletions.has(ws.id) && !isAgentBusy(ws.agent_status) ? "done" :
       null;
     return (
       <div
@@ -272,15 +289,15 @@ export const Sidebar = memo(function Sidebar() {
       >
         {badge === "done" ? (
           <span className={styles.badgeDone} title="Completed" aria-label="Completed" role="img">
-            <BadgeCheck size={14} />
+            <CircleCheck size={14} />
           </span>
         ) : badge === "plan" ? (
           <span className={styles.badgePlan} title="Plan approval needed" aria-label="Plan approval needed" role="img">
-            <BadgeInfo size={14} />
+            <CircleAlert size={14} />
           </span>
         ) : badge === "ask" ? (
           <span className={styles.badgeAsk} title="Question requires attention" aria-label="Question requires attention" role="img">
-            <BadgeQuestionMark size={14} />
+            <CircleQuestionMark size={14} />
           </span>
         ) : ws.agent_status === "Running" || ws.agent_status === "Compacting" ? (
           <span
@@ -288,9 +305,16 @@ export const Sidebar = memo(function Sidebar() {
             aria-hidden="true"
             title={ws.agent_status === "Compacting" ? "Compacting context…" : "Running"}
           >
-            {spinnerChar}
+            <LoaderCircle size={14} />
           </span>
         ) : (() => {
+          if (ws.status === "Archived") {
+            return (
+              <span className={styles.statusIcon} title="Archived">
+                <Archive size={14} style={{ color: "var(--text-dim)" }} />
+              </span>
+            );
+          }
           const summary = scmSummary[ws.id];
           if (summary?.hasPr) {
             const prState = summary.prState;
@@ -312,16 +336,54 @@ export const Sidebar = memo(function Sidebar() {
               </span>
             );
           }
-          return (
-            <span className={styles.statusIcon} title={ws.agent_status === "Stopped" ? "Stopped" : "Idle"}>
-              <CircleDashed size={14} style={{ color: ws.agent_status === "Stopped" ? "var(--status-stopped)" : "var(--text-dim)" }} />
+          return ws.agent_status === "Stopped" ? (
+            <span className={styles.statusIcon} title="Stopped">
+              <CircleStop size={14} style={{ color: "var(--status-stopped)" }} />
+            </span>
+          ) : (
+            <span className={styles.statusIcon} title="Idle">
+              <CircleDashed size={14} style={{ color: "var(--text-dim)" }} />
             </span>
           );
         })()}
         <div className={styles.wsInfo}>
-          <span className={styles.wsName}>
-            {ws.name}
-          </span>
+          {renamingWsId === ws.id ? (
+            <input
+              ref={renameInputRef}
+              className={styles.wsNameInput}
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onBlur={() => {
+                if (renameCancelledRef.current) {
+                  renameCancelledRef.current = false;
+                  return;
+                }
+                handleRenameSubmit(ws.id);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleRenameSubmit(ws.id);
+                if (e.key === "Escape") {
+                  renameCancelledRef.current = true;
+                  setRenamingWsId(null);
+                }
+              }}
+              autoFocus
+              onClick={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
+              aria-label="Rename workspace"
+            />
+          ) : (
+            <span
+              className={styles.wsName}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                setRenamingWsId(ws.id);
+                setRenameValue(ws.name);
+              }}
+            >
+              {ws.name}
+            </span>
+          )}
           <span className={styles.wsBranch}>{ws.branch_name}</span>
           {(() => {
             const commandState = workspaceTerminalCommands[ws.id];
@@ -471,7 +533,7 @@ export const Sidebar = memo(function Sidebar() {
           if (bucketWorkspaces.length === 0) return null;
           const groupKey = `status:${key}`;
           const collapsed = statusGroupCollapsed[groupKey];
-          const runningCount = bucketWorkspaces.filter((ws) => ws.agent_status === "Running").length;
+          const runningCount = bucketWorkspaces.filter((ws) => isAgentBusy(ws.agent_status)).length;
           return (
             <div key={groupKey} className={styles.statusGroup}>
               <div
@@ -565,7 +627,7 @@ export const Sidebar = memo(function Sidebar() {
             .filter((ws) => ws.repository_id === repo.id)
             .sort((a, b) => getScmSortPriority(scmSummary[a.id]) - getScmSortPriority(scmSummary[b.id]));
           const runningCount = repoWorkspaces.filter(
-            (ws) => ws.agent_status === "Running"
+            (ws) => isAgentBusy(ws.agent_status)
           ).length;
 
           return (
@@ -747,7 +809,7 @@ export const Sidebar = memo(function Sidebar() {
               {!collapsed && creatingWorkspace && creatingWorkspace.repoId === repo.id && (
                 <div className={`${styles.wsItem} ${styles.wsItemLoading}`}>
                   <span className={styles.statusSpinner} aria-hidden="true">
-                    {spinnerChar}
+                    <LoaderCircle size={14} />
                   </span>
                   <div className={styles.wsInfo}>
                     <span className={`${styles.wsName} ${styles.wsNamePlaceholder}`}>
@@ -956,9 +1018,6 @@ function RemoteConnectionGroup({
     (w) => w.remote_connection_id === conn.id
   );
 
-  const anyRunning = remoteWorkspaces.some((ws) => ws.agent_status === "Running");
-  const spinnerChar = useSpinnerFrame(anyRunning);
-
   const handleCreateWorkspace = async (repoId: string) => {
     if (creatingRef.current.has(repoId)) return;
     creatingRef.current.add(repoId);
@@ -1086,9 +1145,9 @@ function RemoteConnectionGroup({
                     className={`${styles.wsItem} ${selectedWorkspaceId === ws.id ? styles.wsSelected : ""}`}
                     onClick={() => selectWorkspace(ws.id)}
                   >
-                    {ws.agent_status === "Running" ? (
+                    {isAgentBusy(ws.agent_status) ? (
                       <span className={styles.statusSpinner} aria-hidden="true">
-                        {spinnerChar}
+                        <LoaderCircle size={14} />
                       </span>
                     ) : (
                       <span

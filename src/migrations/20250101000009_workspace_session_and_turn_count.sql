@@ -1,0 +1,2 @@
+ALTER TABLE workspaces ADD COLUMN session_id TEXT;
+ALTER TABLE workspaces ADD COLUMN turn_count INTEGER NOT NULL DEFAULT 0;

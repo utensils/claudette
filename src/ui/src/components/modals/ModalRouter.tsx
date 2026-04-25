@@ -10,6 +10,7 @@ import { ConfirmSetupScriptModal } from "./ConfirmSetupScriptModal";
 import { McpSelectionModal } from "./McpSelectionModal";
 import { ImportWorktreesModal } from "./ImportWorktreesModal";
 import { ConfirmNightlyChannelModal } from "./ConfirmNightlyChannelModal";
+import { MissingCliModal } from "./MissingCliModal";
 
 export function ModalRouter() {
   const activeModal = useAppStore((s) => s.activeModal);
@@ -37,6 +38,8 @@ export function ModalRouter() {
       return <ImportWorktreesModal />;
     case "confirmNightlyChannel":
       return <ConfirmNightlyChannelModal />;
+    case "missingCli":
+      return <MissingCliModal />;
     default:
       return null;
   }

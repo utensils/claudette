@@ -26,6 +26,20 @@ export interface ChatAttachment {
   width: number | null;
   height: number | null;
   size_bytes: number;
+  /** Whether the user composed this attachment or the agent delivered it via
+   *  `mcp__claudette__send_to_user`. Defaults to `"user"` for legacy rows. */
+  origin?: "user" | "agent";
+  /** For `origin === "agent"`: the MCP tool_use_id this delivery belongs to,
+   *  if known. v1 leaves this null; reserved for future per-tool-call grouping. */
+  tool_use_id?: string | null;
+}
+
+/** Payload of the `agent-attachment-created` Tauri event. The Rust bridge
+ *  emits this whenever the agent calls `mcp__claudette__send_to_user`. */
+export interface AgentAttachmentEvent {
+  workspace_id: string;
+  message_id: string;
+  attachment: ChatAttachment & { caption?: string | null };
 }
 
 /** Payload shape for sending attachment data to the backend. */

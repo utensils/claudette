@@ -1,0 +1,43 @@
+.copyButton {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: var(--chat-input-bg, transparent);
+  border: 1px solid var(--divider);
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 5px;
+  border-radius: 6px;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1;
+  line-height: 0;
+}
+
+/* pre already has position: relative from ChatPanel.module.css */
+pre:hover > .copyButton {
+  opacity: 0.7;
+}
+
+pre:hover > .copyButton:hover {
+  opacity: 1;
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.copyButton:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 1px;
+}
+
+.copyButton:active {
+  opacity: 1;
+}
+
+.copied {
+  color: var(--accent-primary);
+}

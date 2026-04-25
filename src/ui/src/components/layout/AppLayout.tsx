@@ -12,6 +12,7 @@ import { ModalRouter } from "../modals/ModalRouter";
 import { SettingsPage } from "../settings/SettingsPage";
 import { ResizeHandle } from "./ResizeHandle";
 import { ToastContainer } from "./Toast";
+import { useAgentStream } from "../../hooks/useAgentStream";
 import { useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
 import { useBranchRefresh } from "../../hooks/useBranchRefresh";
 import { useAutoUpdater } from "../../hooks/useAutoUpdater";
@@ -33,9 +34,11 @@ export function AppLayout() {
   const fuzzyFinderOpen = useAppStore((s) => s.fuzzyFinderOpen);
   const commandPaletteOpen = useAppStore((s) => s.commandPaletteOpen);
 
+  useAgentStream();
   useKeyboardShortcuts();
   useBranchRefresh();
   useAutoUpdater();
+
 
   const showDiff = diffSelectedFile !== null;
 

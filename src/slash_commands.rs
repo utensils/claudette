@@ -151,6 +151,14 @@ pub fn native_command_registry(plugin_management_enabled: bool) -> Vec<SlashComm
         kind: Some(NativeKind::LocalAction),
     });
     commands.push(SlashCommand {
+        name: "compact".to_string(),
+        description: "Compact the conversation context".to_string(),
+        source: "builtin".to_string(),
+        aliases: Vec::new(),
+        argument_hint: None,
+        kind: Some(NativeKind::PromptExpansion),
+    });
+    commands.push(SlashCommand {
         name: "plan".to_string(),
         description: "Show, toggle, or open the current plan".to_string(),
         source: "builtin".to_string(),
@@ -783,6 +791,7 @@ mod tests {
         assert!(names.contains(&"version"));
         // Workspace-control commands are unconditional too.
         assert!(names.contains(&"clear"));
+        assert!(names.contains(&"compact"));
         assert!(names.contains(&"plan"));
         assert!(names.contains(&"model"));
         assert!(names.contains(&"permissions"));

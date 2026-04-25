@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::process::CommandWindowExt as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -360,6 +361,7 @@ pub async fn run_claude_plugin_command(
     let current_dir = plugin_command_cwd(repo_path);
 
     let output = tokio::process::Command::new(&claude_path)
+        .no_console_window()
         .args(args)
         .current_dir(current_dir)
         .stdout(std::process::Stdio::piped())
@@ -1253,6 +1255,7 @@ fn read_secure_storage_object() -> Result<Value, String> {
     {
         let account = std::env::var("USER").unwrap_or_else(|_| "root".to_string());
         let output = std::process::Command::new("security")
+            .no_console_window()
             .args([
                 "find-generic-password",
                 "-s",
@@ -1292,6 +1295,7 @@ fn write_secure_storage_object(value: &Value) -> Result<(), String> {
         let json = serde_json::to_string(value)
             .map_err(|e| format!("Failed to serialize keychain payload: {e}"))?;
         let output = std::process::Command::new("security")
+            .no_console_window()
             .args([
                 "add-generic-password",
                 "-U",

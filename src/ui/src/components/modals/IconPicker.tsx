@@ -3,7 +3,7 @@ import { icons } from "lucide-react";
 import styles from "./IconPicker.module.css";
 
 const CURATED_ICONS = [
-  "anchor","antenna","apple","archive","at-sign","atom","award","badge","badge-check",
+  "anchor","antenna","apple","archive","at-sign","atom","award","badge",
   "banana","barcode","battery","beaker","beer","bell","bike","binary","bird","book",
   "book-open","bookmark","bot","box","braces","brackets","brain","briefcase","brush",
   "bug","building","building-2","cake","calendar","calendar-days","camera","candy","car",

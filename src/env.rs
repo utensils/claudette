@@ -11,6 +11,7 @@
 //! It also defines [`WorkspaceEnv`], the set of `CLAUDETTE_*` environment
 //! variables injected into every subprocess.
 
+use crate::process::CommandWindowExt as _;
 use std::ffi::OsString;
 use std::path::Path;
 use std::sync::OnceLock;
@@ -30,24 +31,67 @@ pub fn shell_path() -> Option<&'static OsString> {
     SHELL_PATH.get_or_init(login_shell_path_probe).as_ref()
 }
 
+/// Is the login-shell PATH cache already populated?
+///
+/// Used by async-context callers (`resolve_git_path_blocking`) that want
+/// to benefit from the enriched PATH when available but must avoid
+/// triggering the 5-second shell probe inline on a Tokio worker. On
+/// Windows there is no shell probe to warm, so this is always `true`.
+#[cfg(unix)]
+pub fn shell_path_is_cached() -> bool {
+    SHELL_PATH.get().is_some()
+}
+
+#[cfg(not(unix))]
+pub fn shell_path_is_cached() -> bool {
+    true
+}
+
+/// Force the login-shell PATH probe to run to completion, populating the
+/// [`SHELL_PATH`] cache. Call this once at app startup from a thread
+/// where a 5-second block is acceptable (a plain `std::thread::spawn` at
+/// Tauri setup time — never the Tokio runtime) so later async callers
+/// of [`enriched_path`] never pay the probe cost on a worker thread.
+///
+/// Idempotent: the `OnceLock::get_or_init` inside [`shell_path`]
+/// guarantees only the first call runs the probe, so repeated
+/// invocations are cheap no-ops.
+///
+/// On Windows this is a no-op — the Windows "base PATH" comes from the
+/// registry and is read fresh on every `enriched_path()` call, there is
+/// no shell probe to warm.
+pub fn prewarm_shell_path() {
+    #[cfg(unix)]
+    {
+        let _ = shell_path();
+    }
+}
+
 /// Build a PATH string that merges the login-shell PATH with the process PATH.
 ///
-/// If the login shell probe succeeded, its PATH is used as the base with any
-/// additional process-PATH entries appended (deduped). If it failed, the
-/// process PATH is returned unchanged.
+/// On Unix, the login shell is probed once (cached) and its PATH becomes the
+/// base — this catches GUI-launched apps that don't inherit the user's shell
+/// profile.
 ///
-/// This ensures that both user-installed tools (from shell profile) and any
-/// extra entries set by the launching context (e.g. Tauri dev server) are
-/// available.
+/// On Windows, we instead read the current `HKCU\Environment\Path` +
+/// `HKLM\...\Environment\Path` from the registry on every call. That gives us
+/// "fresh" PATH values after a `winget` / installer update without requiring
+/// the user to log out and back in — the process env block we inherited at
+/// launch is frozen, but the registry always reflects the current truth.
+///
+/// Process PATH is then appended (deduped) so any entries the launching
+/// context added beyond the registry (e.g. Tauri dev server) are preserved.
 pub fn enriched_path() -> OsString {
     let process_path = std::env::var_os("PATH").unwrap_or_default();
-    let Some(shell) = shell_path() else {
-        return process_path;
+
+    let base = match base_path() {
+        Some(p) => p,
+        None => return process_path,
     };
 
-    // Start with shell PATH entries, then append any non-empty process-PATH
-    // entries that aren't already present.
-    let mut merged_dirs: Vec<std::path::PathBuf> = std::env::split_paths(shell)
+    // Start with the base (login-shell on Unix, registry on Windows) and
+    // append any non-empty process-PATH entries not already present.
+    let mut merged_dirs: Vec<std::path::PathBuf> = std::env::split_paths(&base)
         .filter(|dir| !dir.as_os_str().is_empty())
         .collect();
 
@@ -58,6 +102,132 @@ pub fn enriched_path() -> OsString {
     }
 
     std::env::join_paths(&merged_dirs).unwrap_or(process_path)
+}
+
+#[cfg(unix)]
+fn base_path() -> Option<OsString> {
+    shell_path().cloned()
+}
+
+#[cfg(windows)]
+fn base_path() -> Option<OsString> {
+    windows_registry_path()
+}
+
+/// Read the current `Path` value from `HKCU\Environment` +
+/// `HKLM\...\Environment`, expand any `%VAR%` references against the current
+/// process env, and return the merged string.
+///
+/// We do NOT cache this — the whole point is to see changes made after
+/// claudette started (winget installs, user edits via System Properties).
+/// The cost is two registry reads + string operations, which is
+/// sub-millisecond and only runs on subprocess-spawn paths.
+///
+/// Returns `None` only when both keys fail to open (pathological state; we
+/// fall back to the frozen process PATH in that case).
+#[cfg(windows)]
+pub fn windows_registry_path() -> Option<OsString> {
+    use winreg::RegKey;
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+
+    // Machine PATH first, user PATH after — matches how Windows itself
+    // builds the effective PATH when a new session starts.
+    let machine = hklm
+        .open_subkey(r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment")
+        .and_then(|k| k.get_value::<String, _>("Path"))
+        .ok();
+    let user = hkcu
+        .open_subkey("Environment")
+        .and_then(|k| k.get_value::<String, _>("Path"))
+        .ok();
+
+    if machine.is_none() && user.is_none() {
+        return None;
+    }
+
+    let combined = match (machine, user) {
+        (Some(m), Some(u)) if !u.is_empty() => format!("{m};{u}"),
+        (Some(m), _) => m,
+        (None, Some(u)) => u,
+        (None, None) => unreachable!(),
+    };
+
+    Some(OsString::from(expand_env_vars_windows(&combined)))
+}
+
+/// Expand `%VAR%` placeholders against the current process env.
+/// Case-insensitive match on the var name (Windows convention). Unknown
+/// placeholders are left as-is so the string is still usable for diagnosis.
+#[cfg(windows)]
+fn expand_env_vars_windows(input: &str) -> String {
+    // Case-insensitive lookup — Windows env-var names are
+    // case-insensitive so `%PATH%` and `%Path%` must resolve the same
+    // way.
+    expand_env_vars_with_lookup(input, |name| {
+        std::env::vars_os().find_map(|(k, v)| {
+            if k.to_string_lossy().eq_ignore_ascii_case(name) {
+                Some(v.to_string_lossy().into_owned())
+            } else {
+                None
+            }
+        })
+    })
+}
+
+/// Pure, platform-agnostic implementation of `%VAR%` expansion.
+/// Accepting the env lookup as a closure lets the Unicode-correctness and
+/// boundary-handling tests run on every CI target (Linux/macOS) rather
+/// than being gated behind `#[cfg(windows)]` and effectively never
+/// executed. The Windows wrapper supplies a real case-insensitive
+/// `std::env::vars_os` lookup on top of this.
+///
+/// Implementation note: we operate on byte indices so we can slice out
+/// `%NAME%` spans, but we copy literal text via `&input[..]` slices —
+/// never by casting a single byte to `char`. An earlier version did
+/// `out.push(bytes[i] as char)`, which mojibakes any non-ASCII byte
+/// (e.g. `é` (`0xC3 0xA9`) became `Ã©`), so `which_in_enriched_path`
+/// stopped finding binaries under non-ASCII user-profile paths.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn expand_env_vars_with_lookup<F>(input: &str, lookup: F) -> String
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let mut out = String::with_capacity(input.len());
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && let Some(end) = bytes[i + 1..].iter().position(|&b| b == b'%')
+        {
+            let name = &input[i + 1..i + 1 + end];
+            match lookup(name) {
+                Some(value) => out.push_str(&value),
+                None => {
+                    // Unknown var — leave the original `%NAME%` in place.
+                    out.push('%');
+                    out.push_str(name);
+                    out.push('%');
+                }
+            }
+            i += 1 + end + 1;
+            continue;
+        }
+        // Copy the next UTF-8 scalar via its byte range — never cast a
+        // single byte to `char`. `char_indices` gives us the next char
+        // boundary; combined with the `input[i..j]` slice this is a
+        // zero-cost copy of the exact UTF-8 bytes.
+        let ch = input[i..]
+            .chars()
+            .next()
+            .expect("i is within bytes.len() so at least one char remains");
+        let ch_len = ch.len_utf8();
+        out.push_str(&input[i..i + ch_len]);
+        i += ch_len;
+    }
+    out
 }
 
 /// Probe the login shell for its PATH.
@@ -84,6 +254,7 @@ fn login_shell_path_probe() -> Option<OsString> {
     };
 
     let mut child = std::process::Command::new(&shell)
+        .no_console_window()
         .args(["-l", "-c", cmd_arg])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -208,6 +379,12 @@ impl WorkspaceEnv {
 mod tests {
     use super::*;
 
+    /// `/usr/bin` is a Unix-only expectation. On Windows PATH has a
+    /// completely different shape (`C:\Windows\System32;...`) — the
+    /// `enriched_path_is_nonempty` / `..._contains_no_empty_entries`
+    /// tests below give us the platform-agnostic invariants we
+    /// actually care about.
+    #[cfg(unix)]
     #[test]
     fn enriched_path_includes_process_path() {
         let enriched = enriched_path();
@@ -304,6 +481,7 @@ mod tests {
     fn apply_std_sets_env_on_command() {
         let env = sample_env();
         let mut cmd = std::process::Command::new("echo");
+        cmd.no_console_window();
         env.apply_std(&mut cmd);
 
         let envs: Vec<_> = cmd.get_envs().collect();
@@ -315,5 +493,240 @@ mod tests {
             std::ffi::OsStr::new("CLAUDETTE_ROOT_PATH"),
             Some(std::ffi::OsStr::new("/home/user/repo"))
         )));
+    }
+
+    // -----------------------------------------------------------------------
+    // Windows env-var expansion tests
+    // -----------------------------------------------------------------------
+    //
+    // The registry stores PATH entries like `%SystemRoot%\System32`
+    // unexpanded (REG_EXPAND_SZ). Since Rust's `std::env::split_paths`
+    // does not expand `%VAR%` references, we have to do it ourselves
+    // before handing the value back. These tests exercise the corner
+    // cases of that hand-rolled expander without requiring a real
+    // Windows environment.
+
+    // ---- Pre-warm guarantees ---------------------------------------------
+
+    /// `prewarm_shell_path` must be safe to call repeatedly — startup
+    /// code is allowed to fire it on a std thread and forget about it,
+    /// so any re-entrancy (two callers racing, a caller that also calls
+    /// `shell_path` directly) must not panic or re-run the underlying
+    /// probe. We assert both invariants here.
+    #[test]
+    fn prewarm_shell_path_is_idempotent() {
+        prewarm_shell_path();
+        prewarm_shell_path();
+        // A follow-up direct call must still succeed without panicking
+        // — `shell_path` returns `Option<&'static OsString>`, and the
+        // underlying `OnceLock` value is frozen by the first invocation.
+        let _ = shell_path();
+    }
+
+    /// After prewarm runs to completion on Unix, further calls into
+    /// `enriched_path` must not need to spawn a shell. We can't observe
+    /// the probe directly, but we can assert the `SHELL_PATH` cache is
+    /// populated (either with `Some(path)` or `None` if the probe
+    /// failed) — both states stop future callers from re-probing.
+    #[cfg(unix)]
+    #[test]
+    fn prewarm_populates_shell_path_cache_on_unix() {
+        prewarm_shell_path();
+        assert!(
+            SHELL_PATH.get().is_some(),
+            "prewarm must populate the SHELL_PATH OnceLock on Unix",
+        );
+    }
+
+    /// `shell_path_is_cached` is the signal async callers
+    /// (`resolve_git_path_blocking`) use to decide whether they can
+    /// safely call `enriched_path()` without risking the 5 s shell
+    /// probe. On Windows it must always be `true` — no shell probe
+    /// exists on that platform, so there's nothing to wait for.
+    #[cfg(not(unix))]
+    #[test]
+    fn shell_path_is_cached_is_always_true_on_non_unix() {
+        assert!(shell_path_is_cached());
+    }
+
+    /// On Unix the answer depends on whether the probe has run yet.
+    /// Since these tests share a process-wide `OnceLock`, the truthful
+    /// post-prewarm state is the only one we can assert without races
+    /// — but we at least verify the function returns and the value is
+    /// monotonically `true` after the first `prewarm_shell_path()`.
+    #[cfg(unix)]
+    #[test]
+    fn shell_path_is_cached_is_true_after_prewarm() {
+        prewarm_shell_path();
+        assert!(shell_path_is_cached());
+    }
+
+    // ---- Platform-agnostic expansion tests --------------------------------
+    //
+    // `expand_env_vars_windows` is Windows-gated (it reads the real process
+    // env), but the expansion *logic* is shared with
+    // `expand_env_vars_with_lookup`, which takes the env lookup as a
+    // closure. Testing the inner function lets CI (which runs on Linux and
+    // macOS) catch regressions in boundary handling, Unicode preservation,
+    // and edge cases — otherwise these guards would silently never execute.
+
+    /// Regression guard for the original mojibake bug: the expander must
+    /// preserve multi-byte UTF-8 literal text byte-for-byte. The earlier
+    /// `bytes[i] as char` cast would corrupt every non-ASCII code point
+    /// (`é` (`0xC3 0xA9`) turned into `Ã©`), so Windows user profiles with
+    /// accents, umlauts, CJK, or emoji stopped being searchable.
+    #[test]
+    fn expand_lookup_preserves_non_ascii_literal() {
+        let input = r"C:\Users\éßΩ漢\bin;D:\🎉\tools";
+        assert_eq!(
+            expand_env_vars_with_lookup(input, |_| None),
+            input,
+            "non-ASCII literal text must round-trip byte-for-byte"
+        );
+    }
+
+    /// Non-ASCII inside a variable's *value* must also survive — makes
+    /// sure the substitution path (not just literal copy) is UTF-8 clean.
+    #[test]
+    fn expand_lookup_preserves_non_ascii_in_value() {
+        let out = expand_env_vars_with_lookup(r"%HOME%\bin", |name| {
+            if name.eq_ignore_ascii_case("HOME") {
+                Some(r"C:\Users\éß漢".to_string())
+            } else {
+                None
+            }
+        });
+        assert_eq!(out, r"C:\Users\éß漢\bin");
+    }
+
+    /// Non-ASCII literal text both *before* and *after* a `%VAR%` span
+    /// exercises the boundary between literal-copy and substitution
+    /// modes — the mojibake bug was on the literal-copy path, so this is
+    /// the scenario that would have caught it in the wild.
+    #[test]
+    fn expand_lookup_non_ascii_around_substitution() {
+        let out = expand_env_vars_with_lookup("前%X%後", |name| {
+            (name == "X").then(|| "MID".to_string())
+        });
+        assert_eq!(out, "前MID後");
+    }
+
+    /// A defined var must substitute its value.
+    #[test]
+    fn expand_lookup_replaces_defined_var() {
+        let out = expand_env_vars_with_lookup(r"%FOO%\bin", |name| {
+            (name == "FOO").then(|| r"C:\x".to_string())
+        });
+        assert_eq!(out, r"C:\x\bin");
+    }
+
+    /// An unknown var must pass through as-is so the resolved PATH is
+    /// still human-readable for diagnosis.
+    #[test]
+    fn expand_lookup_leaves_unknown_var_intact() {
+        let out = expand_env_vars_with_lookup("%MISSING%", |_| None);
+        assert_eq!(out, "%MISSING%");
+    }
+
+    /// A lone trailing `%` is not a var reference and must be preserved.
+    #[test]
+    fn expand_lookup_tolerates_unmatched_percent() {
+        let out = expand_env_vars_with_lookup(r"C:\foo%", |_| None);
+        assert_eq!(out, r"C:\foo%");
+    }
+
+    /// Empty input must return empty output (no panic on the char
+    /// advance path).
+    #[test]
+    fn expand_lookup_handles_empty_input() {
+        assert_eq!(expand_env_vars_with_lookup("", |_| None), "");
+    }
+
+    // ---- Windows-only (reads real process env) ----------------------------
+
+    /// Bare strings with no `%VAR%` references must pass through byte-for-
+    /// byte — that's the overwhelmingly common case on most machines.
+    #[cfg(windows)]
+    #[test]
+    fn expand_passthrough_without_vars() {
+        assert_eq!(
+            expand_env_vars_windows(r"C:\Windows;C:\Users\user\.local\bin"),
+            r"C:\Windows;C:\Users\user\.local\bin"
+        );
+    }
+
+    /// A defined env var must be substituted. We lean on `SystemRoot`,
+    /// which is guaranteed to exist on any real Windows session that
+    /// could reach this code.
+    #[cfg(windows)]
+    #[test]
+    fn expand_replaces_defined_var() {
+        let system_root =
+            std::env::var("SystemRoot").expect("SystemRoot must be defined in a Windows test env");
+        let expanded = expand_env_vars_windows(r"%SystemRoot%\System32");
+        assert_eq!(expanded, format!(r"{system_root}\System32"));
+    }
+
+    /// Case-insensitive match: Windows env-var names are not
+    /// case-sensitive, so `%systemroot%` and `%SystemRoot%` must resolve
+    /// to the same value.
+    #[cfg(windows)]
+    #[test]
+    fn expand_is_case_insensitive() {
+        let upper = expand_env_vars_windows(r"%SYSTEMROOT%\System32");
+        let lower = expand_env_vars_windows(r"%systemroot%\System32");
+        assert_eq!(upper, lower);
+    }
+
+    /// An unknown var must be left as-is rather than turning into an
+    /// empty string — a user reading the resolved PATH should still be
+    /// able to see *which* var failed to resolve.
+    #[cfg(windows)]
+    #[test]
+    fn expand_leaves_unknown_var_intact() {
+        let nonce = "CLAUDETTE_TEST_NONEXISTENT_VAR_XYZ_9876";
+        // Safety: the env-var name is unique to this test so clearing
+        // it is guaranteed not to race with other tests.
+        // (And we don't rely on any prior value.)
+        let out = expand_env_vars_windows(&format!(r"prefix;%{nonce}%;suffix"));
+        assert_eq!(out, format!(r"prefix;%{nonce}%;suffix"));
+    }
+
+    /// A lone `%` at end-of-string is not a var reference and must be
+    /// preserved. Without this guard the expander could read past the
+    /// input or emit empty output.
+    #[cfg(windows)]
+    #[test]
+    fn expand_tolerates_unmatched_percent() {
+        assert_eq!(expand_env_vars_windows(r"C:\foo%"), r"C:\foo%");
+    }
+
+    /// Regression guard: an earlier version cast UTF-8 bytes to `char`
+    /// one-at-a-time while copying the literal text between `%VAR%`
+    /// references, which corrupted every non-ASCII code point into
+    /// mojibake (`é` → `Ã©`). Windows user profiles routinely contain
+    /// non-ASCII characters — Spanish, German, CJK, emoji in new
+    /// installs — so this must round-trip cleanly.
+    #[cfg(windows)]
+    #[test]
+    fn expand_preserves_non_ascii_literal_text() {
+        // Multi-byte chars in the literal spans (both sides of %VAR%
+        // and around it). We don't resolve any var here — the point is
+        // that passthrough text itself is byte-correct.
+        let input = r"C:\Users\éßΩ漢\bin;D:\🎉\tools";
+        assert_eq!(expand_env_vars_windows(input), input);
+    }
+
+    /// Non-ASCII inside the *value* of an expanded var must survive too.
+    /// We prepend a short ASCII string, interpolate a real env var
+    /// (SystemRoot), and append a CJK tail so the boundary handling
+    /// between UTF-8 literal text and var expansion gets exercised.
+    #[cfg(windows)]
+    #[test]
+    fn expand_preserves_non_ascii_around_var_substitution() {
+        let system_root =
+            std::env::var("SystemRoot").expect("SystemRoot must be defined in a Windows test env");
+        let out = expand_env_vars_windows(r"前%SystemRoot%後");
+        assert_eq!(out, format!("前{system_root}後"));
     }
 }

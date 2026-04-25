@@ -8,7 +8,9 @@ allowed-tools: Bash Read Grep Glob
 
 # Claudette Debug
 
-Execute JavaScript inside the running Claudette Tauri webview via a TCP debug server on `127.0.0.1:19432`. Dev-build only (`#[cfg(debug_assertions)]`).
+Execute JavaScript inside the running Claudette Tauri webview via a TCP debug server on `127.0.0.1`. Dev-build only (`#[cfg(debug_assertions)]`).
+
+The server listens on port **19432 by default**, but the devshell `dev` helper auto-selects a free port (and writes a discovery file) so multiple dev instances can run in parallel against different branches. `debug-eval.sh` discovers the right instance automatically — you do not need to know the port. Details in [Port discovery](#port-discovery) below.
 
 ## Quick Start
 
@@ -26,11 +28,24 @@ Execute JavaScript inside the running Claudette Tauri webview via a TCP debug se
 
 ## Prerequisites
 
-- App running via `cargo tauri dev` (debug TCP server starts automatically)
-- Port 19432 available on localhost
+- App running via the devshell `dev` helper (or `cargo tauri dev`) — debug TCP server starts automatically
 - `python3` in PATH (used by eval helper)
 
-**Do NOT launch the installed app.** Never run `osascript -e 'tell application "Claudette" to activate'`, `open -a Claudette`, or double-click `/Applications/Claudette.app`. The debug TCP server on port 19432 only exists in dev builds (gated by `#[cfg(debug_assertions)]`); the installed release build has no debug server and eval calls against it will fail or silently target the wrong process. If the dev build is not already running, ask the user to start `cargo tauri dev` — do not start it yourself and do not fall back to the installed app.
+**Do NOT launch the installed app.** Never run `osascript -e 'tell application "Claudette" to activate'`, `open -a Claudette`, or double-click `/Applications/Claudette.app`. The debug TCP server only exists in dev builds (gated by `#[cfg(debug_assertions)]`); the installed release build has no debug server and eval calls against it will fail or silently target the wrong process. If the dev build is not already running, ask the user to start `dev` — do not start it yourself and do not fall back to the installed app.
+
+## Port discovery
+
+With the devshell `dev` helper, each dev instance probes for a free Vite port (starting at 1420) and a free debug port (starting at 19432), then writes `${TMPDIR:-/tmp}/claudette-dev/<pid>.json` with fields `{pid, debug_port, vite_port, cwd, branch, started_at}`. The file is removed on clean exit.
+
+`debug-eval.sh` resolves the port in this order:
+1. `$CLAUDETTE_DEBUG_PORT` (explicit override)
+2. Live discovery file whose `cwd` is an ancestor of the current `$PWD` (matches the worktree you're running the command from)
+3. The single live instance, if exactly one is running
+4. Legacy default `19432`
+
+If multiple instances are running and none match `$PWD`, the script exits with a list of `{pid, port, branch, cwd}` and asks the user to set `CLAUDETTE_DEBUG_PORT` or run from inside the target worktree. Stale files from crashed instances are cleaned up on access.
+
+To force a specific instance: `CLAUDETTE_DEBUG_PORT=19433 debug-eval.sh '...'`.
 
 ## Scripts
 
@@ -48,12 +63,13 @@ All scripts live in `${CLAUDE_SKILL_DIR}/scripts/`:
 ## Architecture
 
 ```
-Terminal ──TCP:19432──> debug server ──eval()──> webview JS context
-                                                      |
-Terminal <──TCP────── debug server <──invoke── webview (result callback)
+Terminal ──TCP:<port>──> debug server ──eval()──> webview JS context
+                                                       |
+Terminal <──TCP─────── debug server <──invoke── webview (result callback)
 ```
 
 - **TCP server**: `src-tauri/src/commands/debug.rs` — wraps JS in async IIFE, evals in webview, 10s timeout
+- **Port**: `19432` by default, overridable via `$CLAUDETTE_DEBUG_PORT` (set by the devshell `dev` helper per-instance)
 - **Input cap**: 1 MB max per eval request
 
 ## How to Execute JS

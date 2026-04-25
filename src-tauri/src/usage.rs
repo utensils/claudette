@@ -1,5 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use claudette::process::CommandWindowExt as _;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
@@ -132,8 +133,17 @@ static USER_AGENT_CACHE: std::sync::OnceLock<String> = std::sync::OnceLock::new(
 /// Pre-warm the User-Agent cache at startup. Uses `std::process::Command`
 /// (sync) and is intended to run on a background `std::thread`, not tokio,
 /// since the tokio runtime may not be available during Tauri's `setup()`.
+///
+/// Goes through `claudette::agent::resolve_claude_path_blocking` instead of
+/// a bare `Command::new("claude")` so npm-installed Windows shims
+/// (`claude.cmd` / `claude.ps1`) and the official installer paths under
+/// `%LOCALAPPDATA%` are honoured. Without the resolver the warm step
+/// silently no-ops on those installs and every later usage call pays the
+/// full UA detection cost on the first hit.
 pub fn warm_user_agent_cache_sync() {
-    let output = std::process::Command::new("claude")
+    let claude_path = claudette::agent::resolve_claude_path_blocking();
+    let output = std::process::Command::new(&claude_path)
+        .no_console_window()
         .arg("--version")
         .env("PATH", claudette::env::enriched_path())
         .output();
@@ -169,6 +179,7 @@ async fn read_credentials_platform() -> Result<CredentialFile, String> {
     // Claude Code stores credentials under $USER, not a fixed account name.
     let user = std::env::var("USER").unwrap_or_else(|_| "root".to_string());
     let output = tokio::process::Command::new("security")
+        .no_console_window()
         .args([
             "find-generic-password",
             "-s",

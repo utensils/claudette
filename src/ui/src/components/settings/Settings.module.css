@@ -429,6 +429,7 @@
   border-radius: 10px;
   background: color-mix(in srgb, var(--sidebar-bg) 78%, transparent);
   overflow: hidden;
+  flex-shrink: 0;
 }
 
 .pluginCardSelected {
@@ -454,6 +455,17 @@
   align-items: center;
   color: var(--text-primary);
   font-weight: 500;
+}
+
+.packNameLink {
+  cursor: pointer;
+  text-decoration: none;
+  color: inherit;
+}
+
+.packNameLink:hover {
+  text-decoration: underline;
+  color: var(--accent-primary);
 }
 
 .pluginBadge {
@@ -741,6 +753,7 @@
   font-size: 13px;
   color: var(--text-primary);
   cursor: pointer;
+  width: fit-content;
 }
 
 .radioLabel input[type="radio"] {
@@ -823,10 +836,34 @@
 
 .usageRefreshBtn {
   composes: iconBtn;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
   font-size: 12px;
+}
+
+.usageRefreshBtnPrimary {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: var(--on-accent);
+}
+
+.usageRefreshBtnPrimary:hover {
+  background: var(--accent-dim);
+  border-color: var(--accent-dim);
+}
+
+.usageActions {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.usageErrorMessage {
+  max-width: 420px;
+  line-height: 1.5;
 }
 
 .usageTimestamp {
@@ -975,6 +1012,167 @@
   color: var(--text-dim);
 }
 
+/* ── Env-provider error card ── */
+
+.envDetailsBtn {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  border: 1px solid var(--sidebar-border);
+  background: none;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.envDetailsBtn:hover {
+  background: var(--accent-bg);
+}
+
+.envErrorCard {
+  margin: 4px 8px 8px 22px;
+  padding: 10px 12px;
+  border-left: 2px solid var(--status-stopped);
+  background: var(--error-hover);
+  border-radius: 0 4px 4px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.envErrorSummary {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.envErrorHint {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.envErrorCmdRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.envErrorCmd {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  padding: 5px 8px;
+  background: var(--selected-bg);
+  border-radius: 3px;
+  color: var(--text-primary);
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.envErrorCopyBtn {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 3px;
+  border: 1px solid var(--sidebar-border);
+  background: none;
+  color: var(--text-primary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.envErrorCopyBtn:hover {
+  background: var(--accent-bg);
+}
+
+.pluginSettingsForm {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.pluginSettingRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.pluginSettingLabel {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+
+.textInput {
+  margin-top: 4px;
+  width: 100%;
+  font-size: 12px;
+  padding: 5px 8px;
+  border-radius: 3px;
+  border: 1px solid var(--sidebar-border);
+  background: var(--input-bg, var(--selected-bg));
+  color: var(--text-primary);
+  font-family: inherit;
+}
+
+.textInput:focus {
+  outline: none;
+  border-color: var(--accent-color, var(--text-primary));
+}
+
+.envErrorRunBtn {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 3px;
+  border: 1px solid var(--accent-color, var(--text-primary));
+  background: var(--accent-bg);
+  color: var(--text-primary);
+  cursor: pointer;
+  flex-shrink: 0;
+  font-weight: 500;
+}
+
+.envErrorRunBtn:hover:not(:disabled) {
+  background: var(--hover-bg);
+}
+
+.envErrorRunBtn:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+
+.envErrorDetails {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.envErrorDetails summary {
+  cursor: pointer;
+  user-select: none;
+  padding: 2px 0;
+}
+
+.envErrorDetails summary:hover {
+  color: var(--text-primary);
+}
+
+.envErrorPre {
+  margin: 6px 0;
+  padding: 8px 10px;
+  background: var(--selected-bg);
+  border-radius: 3px;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
 /* Group label for MCP source sections */
 .mcpGroupLabel {
   padding: 8px 8px 4px;
@@ -1022,6 +1220,45 @@
 
 .mcpToggleOn .mcpToggleKnob {
   transform: translateX(16px);
+}
+
+/* ── Sound pack browser list (scrollable) ── */
+
+.packBrowserList {
+  composes: pluginList;
+  max-height: 480px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* ── Volume slider ── */
+
+.volumeSlider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 140px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--divider);
+  outline: none;
+  cursor: pointer;
+}
+
+.volumeSlider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  cursor: pointer;
+}
+
+.volumeValue {
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  color: var(--text-dim);
+  min-width: 36px;
+  text-align: right;
 }
 
 /* ── Placeholder ── */
@@ -1104,4 +1341,96 @@
   margin-left: var(--space-6);
   margin-top: var(--space-1);
   max-width: 260px;
+}
+
+/* ── Mode-specific block (animated height) ── */
+
+.modeBlock {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 180ms ease;
+}
+
+.modeBlockCollapsed {
+  grid-template-rows: 0fr;
+}
+
+.modeBlockInner {
+  overflow: hidden;
+}
+
+/* ── Empty-state card (Mode B: sound packs, none installed) ── */
+
+.emptyStateCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 20px 24px;
+  margin: 8px 0;
+  border-radius: var(--radius-lg);
+  background: var(--purple-bg);
+  border: 1px solid var(--purple-border);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.emptyStateCard:hover {
+  background: var(--purple-bg-hover);
+  border-color: var(--purple-border-hover);
+}
+
+.emptyStateTitle {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.emptyStateSubtitle {
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.emptyStateCta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 6px 14px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--purple-btn-bg);
+  color: var(--purple-text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  align-self: flex-start;
+  transition: background 0.15s ease;
+}
+
+.emptyStateCta:hover {
+  background: var(--purple-btn-bg-hover);
+}
+
+/* ── Browse more link (Mode C: text link next to pack dropdown) ── */
+
+.browseMoreLink {
+  color: var(--text-dim);
+  font-size: 13px;
+  cursor: pointer;
+  border: none;
+  background: none;
+  padding: 0;
+  transition: color 0.12s ease;
+  white-space: nowrap;
+}
+
+.browseMoreLink:hover {
+  color: var(--text-muted);
+}
+
+/* ── De-emphasized event rows (Mode B: no pack installed) ── */
+
+.eventRowDisabled {
+  opacity: 0.45;
+  pointer-events: none;
 }

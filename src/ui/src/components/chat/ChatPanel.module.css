@@ -313,15 +313,22 @@
   line-height: 1.55;
   margin: 12px 0;
   cursor: text;
-  user-select: text;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .content pre code {
   background: none !important;
   color: inherit;
-  padding: 0;
+  padding: 0 !important;
   font-size: inherit;
-  display: inline;
+  -webkit-user-select: text;
+  user-select: text;
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
 }
 
 /* Inline code — accent tint */
@@ -559,12 +566,21 @@
 }
 
 .spinner {
-  font-size: 14px;
+  display: block;
   color: var(--accent-primary);
-  width: 14px;
-  text-align: center;
-  font-family: var(--font-mono);
   filter: drop-shadow(0 0 3px rgba(var(--accent-primary-rgb), 0.4));
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
 }
 
 .elapsed {
@@ -572,6 +588,18 @@
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   font-family: var(--font-mono);
+}
+
+.compactingLabel {
+  color: var(--accent-primary);
+  font-size: 12px;
+  font-weight: 500;
+  animation: compactingPulse 1.6s ease-in-out infinite;
+}
+
+@keyframes compactingPulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
 }
 
 /* Tool activities — compact inline annotations */
@@ -653,6 +681,10 @@
   color: var(--text-dim);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+}
+
+.messageTurnFooter {
+  margin: -2px 0 6px;
 }
 
 .turnFooterElapsed {
@@ -906,6 +938,25 @@
   position: relative;
 }
 
+.inputTextWrap {
+  position: relative;
+}
+
+.inputHighlight {
+  position: absolute;
+  inset: 0;
+  max-height: 160px;
+  overflow: hidden;
+  padding: 14px 18px 8px;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  line-height: var(--lh-body);
+  pointer-events: none;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .input {
   flex: 1;
   background: transparent;
@@ -919,6 +970,14 @@
   resize: none;
   min-height: 52px;
   max-height: 160px;
+  overflow-x: hidden;
+  width: 100%;
+  position: relative;
+}
+
+.inputWithHighlight {
+  color: transparent;
+  caret-color: var(--text-primary);
 }
 
 .input:focus-visible {
@@ -936,6 +995,29 @@
 
 .inputPlanMode:focus {
   border-bottom-color: rgba(var(--accent-primary-rgb), 0.6);
+}
+
+.ultrathinkChar {
+  color: var(--ultrathink-color);
+}
+
+.ultrathinkCharAnimated {
+  animation: ultrathink-shimmer 1.8s ease-in-out infinite;
+}
+
+@keyframes ultrathink-shimmer {
+  0%, 100% {
+    color: var(--ultrathink-color);
+  }
+  50% {
+    color: var(--ultrathink-shimmer);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ultrathinkCharAnimated {
+    animation: none;
+  }
 }
 
 .sendBtn {
@@ -1016,6 +1098,7 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
+  cursor: pointer;
 }
 
 .attachmentRemove {

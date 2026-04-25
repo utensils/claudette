@@ -1,0 +1,79 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10001;
+  background: var(--overlay-bg-heavy);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 32px 24px;
+  gap: 12px;
+  user-select: none;
+}
+
+.imageWrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-width: calc(100vw - 64px);
+  max-height: calc(100vh - 128px);
+  outline: none;
+}
+
+.image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: var(--shadow-lg);
+  cursor: default;
+}
+
+/* SVGs that only declare a viewBox (no width/height attrs on <svg>) have no
+   intrinsic pixel dimensions when loaded through <img>, so the lightbox
+   collapses to 0×0. Force a generous floor so the rendered SVG fills the
+   wrap and scales up via the existing max-width/max-height ceiling. */
+.imageSvg {
+  min-width: min(480px, calc(100vw - 64px));
+  min-height: min(480px, calc(100vh - 128px));
+}
+
+.caption {
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: center;
+  max-width: calc(100vw - 64px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-shadow: var(--shadow-sm);
+}
+
+.closeBtn {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-pill);
+  border: none;
+  background: var(--overlay-bg-heavy);
+  color: var(--text-primary);
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  transition: background var(--transition-fast);
+}
+
+.closeBtn:hover,
+.closeBtn:focus-visible {
+  background: var(--overlay-bg-heavy);
+  outline: 1px solid var(--text-primary);
+  outline-offset: 1px;
+}

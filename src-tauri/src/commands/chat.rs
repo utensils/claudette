@@ -17,7 +17,110 @@ use claudette::model::{
 use claudette::snapshot;
 use claudette::{base64_decode, base64_encode};
 
+use crate::agent_mcp_sink::ChatBridgeSink;
 use crate::state::{AgentSessionState, AppState, PendingPermission};
+use claudette::agent_mcp::bridge::{BridgeHandle, McpBridgeSession};
+
+/// Build a fresh bridge for a workspace and return an `mcp_config` JSON with
+/// the synthetic `claudette` MCP server entry merged in. The Claude CLI will
+/// spawn `claudette-tauri --agent-mcp` as a stdio child of itself and pass it
+/// the per-session socket address + token via env vars; the grandchild then
+/// connects back to the parent over the local socket.
+async fn start_bridge_and_inject_mcp(
+    app: &AppHandle,
+    db_path: &std::path::Path,
+    workspace_id: &str,
+    base_mcp_config: Option<String>,
+) -> Result<(Arc<McpBridgeSession>, Option<String>), String> {
+    let sink = Arc::new(ChatBridgeSink {
+        app: app.clone(),
+        db_path: db_path.to_path_buf(),
+        workspace_id: workspace_id.to_string(),
+    });
+    let bridge = Arc::new(McpBridgeSession::start(sink).await?);
+    let merged = inject_claudette_mcp_entry(base_mcp_config, bridge.handle())?;
+    Ok((bridge, merged))
+}
+
+fn inject_claudette_mcp_entry(
+    base: Option<String>,
+    handle: &BridgeHandle,
+) -> Result<Option<String>, String> {
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("current_exe: {e}"))?
+        .to_string_lossy()
+        .to_string();
+
+    let entry = serde_json::json!({
+        "type": "stdio",
+        "command": exe,
+        "args": ["--agent-mcp"],
+        "env": {
+            claudette::agent_mcp::server::ENV_SOCKET_ADDR: handle.socket_addr,
+            claudette::agent_mcp::server::ENV_TOKEN: handle.token,
+        }
+    });
+
+    let mut wrapper: serde_json::Value = match base.as_deref() {
+        Some(s) => serde_json::from_str(s).map_err(|e| format!("parse mcp_config: {e}"))?,
+        None => serde_json::json!({"mcpServers": {}}),
+    };
+    let servers = wrapper
+        .get_mut("mcpServers")
+        .and_then(|v| v.as_object_mut())
+        .ok_or_else(|| "mcp_config missing `mcpServers` object".to_string())?;
+    servers.insert(claudette::agent_mcp::server::SERVER_NAME.to_string(), entry);
+    Ok(Some(wrapper.to_string()))
+}
+
+/// How long to wait between emitting `agent-permission-prompt` and firing the
+/// attention system notification. This is the window in which the webview
+/// picks up the event, runs the Zustand setter, and paints the question/plan
+/// card. 300ms is a compromise: long enough to cover typical React render
+/// plus a macOS window-show animation (when the user had the window hidden),
+/// short enough that the notification still feels tied to the trigger.
+const ATTENTION_NOTIFY_DELAY_MS: u64 = 300;
+
+async fn fire_completion_notification(
+    db_path: &std::path::Path,
+    cesp_playback: &std::sync::Mutex<claudette::cesp::SoundPlaybackState>,
+    event: crate::tray::NotificationEvent,
+    ws_id: &str,
+) {
+    let Ok(db) = Database::open(db_path) else {
+        return;
+    };
+    let resolved = crate::tray::resolve_notification(&db, cesp_playback, event);
+    if resolved.sound != "None" {
+        crate::commands::settings::play_notification_sound(resolved.sound, Some(resolved.volume));
+    }
+    if let Ok(Some(cmd)) = db.get_app_setting("notification_command")
+        && !cmd.is_empty()
+        && let Some(fresh_ws) = db
+            .list_workspaces()
+            .ok()
+            .and_then(|wss| wss.into_iter().find(|w| w.id == ws_id))
+    {
+        let repo = db.get_repository(&fresh_ws.repository_id).ok().flatten();
+        let repo_path = repo.as_ref().map(|r| r.path.as_str()).unwrap_or_default();
+        let default_branch = match repo.as_ref().and_then(|r| r.base_branch.as_deref()) {
+            Some(b) => b.to_string(),
+            None => git::default_branch(
+                repo_path,
+                repo.as_ref().and_then(|r| r.default_remote.as_deref()),
+            )
+            .await
+            .unwrap_or_else(|_| "main".into()),
+        };
+        let fresh_env = WorkspaceEnv::from_workspace(&fresh_ws, repo_path, default_branch);
+        if let Some(mut command) =
+            crate::commands::settings::build_notification_command(&cmd, &fresh_env)
+            && let Ok(child) = command.spawn()
+        {
+            crate::commands::settings::spawn_and_reap(child);
+        }
+    }
+}
 
 /// Frontend-facing input for a file attachment (base64-encoded).
 #[derive(Clone, Deserialize)]
@@ -40,6 +143,13 @@ pub struct AttachmentResponse {
     pub width: Option<i32>,
     pub height: Option<i32>,
     pub size_bytes: i64,
+    /// `"user"` for composer-supplied attachments, `"agent"` for ones the
+    /// agent delivered via `mcp__claudette__send_to_user`. The frontend
+    /// uses this to re-route agent attachments under the assistant message
+    /// instead of the user message they were FK-anchored to. Without this
+    /// on reload, persisted agent attachments display as "from you".
+    pub origin: claudette::model::AttachmentOrigin,
+    pub tool_use_id: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -268,6 +378,8 @@ pub async fn send_chat_message(
                 size_bytes,
                 data,
                 created_at: now_iso(),
+                origin: claudette::model::AttachmentOrigin::User,
+                tool_use_id: None,
             });
             cli_atts.push(FileAttachment {
                 media_type: input.media_type.clone(),
@@ -343,6 +455,7 @@ pub async fn send_chat_message(
                 custom_instructions: instructions.clone(),
                 needs_attention: false,
                 attention_kind: None,
+                attention_notification_sent: false,
                 persistent_session: None,
                 mcp_config_dirty: false,
                 session_plan_mode: false,
@@ -350,6 +463,9 @@ pub async fn send_chat_message(
                 session_disable_1m_context: false,
                 pending_permissions: std::collections::HashMap::new(),
                 session_exited_plan: false,
+                session_resolved_env: Default::default(),
+                mcp_bridge: None,
+                last_user_msg_id: None,
             };
         }
 
@@ -360,6 +476,7 @@ pub async fn send_chat_message(
             custom_instructions: instructions,
             needs_attention: false,
             attention_kind: None,
+            attention_notification_sent: false,
             persistent_session: None,
             mcp_config_dirty: false,
             session_plan_mode: false,
@@ -367,6 +484,9 @@ pub async fn send_chat_message(
             session_disable_1m_context: false,
             pending_permissions: std::collections::HashMap::new(),
             session_exited_plan: false,
+            session_resolved_env: Default::default(),
+            mcp_bridge: None,
+            last_user_msg_id: None,
         }
     });
 
@@ -404,6 +524,11 @@ pub async fn send_chat_message(
     }
     let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
 
+    // The user message has been persisted; record its id as the FK anchor
+    // for any agent-authored attachments produced during this turn (see
+    // `agent_mcp_sink::ChatBridgeSink`).
+    session.last_user_msg_id = Some(user_msg.id.clone());
+
     // MCP config changed while a previous turn was in flight — tear down the
     // persistent session so the next spawn picks up updated --mcp-config.
     // The session is idle between turns so a graceful SIGTERM is sufficient.
@@ -412,6 +537,9 @@ pub async fn send_chat_message(
         let to_deny_mcp = drain_pending_permissions(session);
         let stale_pid = session.persistent_session.as_ref().map(|ps| ps.pid());
         session.persistent_session = None;
+        // Tear down the agent-MCP bridge alongside the persistent session.
+        // Drop runs the listener cancellation + socket file unlink.
+        session.mcp_bridge = None;
         // Clear active_pid alongside persistent_session so a failed respawn
         // can't leave the next turn with a stale PID that the kernel may
         // have recycled (would get SIGKILLed by the stale-process branch).
@@ -431,7 +559,26 @@ pub async fn send_chat_message(
     }
     let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
 
-    let custom_instructions = session.custom_instructions.clone();
+    // The `send_to_user` built-in plugin is user-toggleable in Settings →
+    // Plugins. When disabled we skip both the synthetic MCP injection
+    // (further down, before spawn) and the system-prompt nudge here, so the
+    // agent has neither the tool nor any hint it exists.
+    let send_to_user_enabled = claudette::agent_mcp::is_builtin_plugin_enabled(&db, "send_to_user");
+
+    // Prepend the agent-MCP nudge to the user's repo-level instructions so
+    // the model knows to reach for `mcp__claudette__send_to_user` when the
+    // user asks for an inline file delivery. The nudge is session-level
+    // (only applied on fresh spawns via `--append-system-prompt`); on resume
+    // turns the original spawn's prompt is already in the CLI process.
+    let custom_instructions = if send_to_user_enabled {
+        let nudge = claudette::agent_mcp::SYSTEM_PROMPT_NUDGE;
+        match session.custom_instructions.as_deref() {
+            Some(existing) if !existing.trim().is_empty() => Some(format!("{nudge}\n\n{existing}")),
+            _ => Some(nudge.to_string()),
+        }
+    } else {
+        session.custom_instructions.clone()
+    };
     session.turn_count += 1;
     session.needs_attention = false;
     session.attention_kind = None;
@@ -485,6 +632,7 @@ pub async fn send_chat_message(
         let to_deny_drift = drain_pending_permissions(session);
         let stale_pid = session.persistent_session.as_ref().map(|ps| ps.pid());
         session.persistent_session = None;
+        session.mcp_bridge = None;
         // Clear active_pid alongside persistent_session. A concurrent turn
         // streaming this process at drift time would leave active_pid set;
         // without this clear, a failed respawn + next turn would SIGKILL a
@@ -516,12 +664,88 @@ pub async fn send_chat_message(
     )
     .await;
 
-    // Build workspace env vars for the agent subprocess.
     let repo_path = repo.as_ref().map(|r| r.path.as_str()).unwrap_or("");
-    let default_branch = git::default_branch(repo_path)
+    let default_branch = match repo.as_ref().and_then(|r| r.base_branch.as_deref()) {
+        Some(b) => b.to_string(),
+        None => git::default_branch(
+            repo_path,
+            repo.as_ref().and_then(|r| r.default_remote.as_deref()),
+        )
         .await
-        .unwrap_or_else(|_| "main".to_string());
+        .unwrap_or_else(|_| "main".to_string()),
+    };
     let ws_env = WorkspaceEnv::from_workspace(ws, repo_path, default_branch);
+
+    // Resolve the env-provider layer (direnv / mise / dotenv / nix-devshell)
+    // once per turn. The mtime-keyed cache makes this essentially free on
+    // turns where nothing changed; on the first turn or after the user
+    // edits `.envrc` / `mise.toml` / etc., it re-runs the affected plugin.
+    let ws_info_for_env = claudette::plugin_runtime::host_api::WorkspaceInfo {
+        id: ws.id.clone(),
+        name: ws.name.clone(),
+        branch: ws.branch_name.clone(),
+        worktree_path: worktree_path.clone(),
+        repo_path: repo_path.to_string(),
+    };
+    let disabled_env_providers = {
+        let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+        let repo_id = repo.as_ref().map(|r| r.id.as_str()).unwrap_or("");
+        crate::commands::env::load_disabled_providers(&db, repo_id)
+    };
+    let resolved_env = {
+        let registry = state.plugins.read().await;
+        claudette::env_provider::resolve_with_registry(
+            &registry,
+            &state.env_cache,
+            std::path::Path::new(&worktree_path),
+            &ws_info_for_env,
+            &disabled_env_providers,
+        )
+        .await
+    };
+    crate::commands::env::register_resolved_with_watcher(
+        &state,
+        std::path::Path::new(&worktree_path),
+        &resolved_env.sources,
+    )
+    .await;
+
+    // Env-provider drift teardown: the env baked into the current
+    // persistent session is fixed at spawn time; Claude's subprocess
+    // won't see `.envrc` / `mise.toml` / `direnv allow` changes until
+    // it's respawned. Compare the freshly-resolved vars against the
+    // snapshot stored at spawn and teardown on any divergence. The
+    // mtime-keyed cache makes this re-resolve nearly free on quiet
+    // turns, so the check costs nothing in the common case.
+    if session.persistent_session.is_some() && session.session_resolved_env != resolved_env.vars {
+        eprintln!(
+            "[chat] env-provider output changed ({} vars before, {} after) — tearing down persistent session for {workspace_id}",
+            session.session_resolved_env.len(),
+            resolved_env.vars.len(),
+        );
+        let to_deny_env = drain_pending_permissions(session);
+        let stale_pid = session.persistent_session.as_ref().map(|ps| ps.pid());
+        session.persistent_session = None;
+        session.mcp_bridge = None;
+        session.active_pid = None;
+        session.session_exited_plan = false;
+        if stale_pid.is_some() || to_deny_env.is_some() {
+            drop(agents);
+            if let Some((ref ps, drained)) = to_deny_env {
+                deny_drained_permissions(
+                    drained,
+                    ps,
+                    "Session restarted because workspace env changed.",
+                )
+                .await;
+            }
+            if let Some(pid) = stale_pid {
+                let _ = agent::stop_agent_graceful(pid).await;
+            }
+            agents = state.agents.write().await;
+        }
+    }
+    let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
 
     // Use persistent session to keep MCP servers alive across turns.
     // First turn or after restart: start a PersistentSession.
@@ -531,28 +755,34 @@ pub async fn send_chat_message(
     let saved_turn_count = session.turn_count;
 
     // Helper: start a persistent session, using --resume for restored sessions.
+    // Routes claude-missing errors through the missing-CLI dialog emitter so
+    // both the initial-start and respawn paths surface the same guidance.
     let ws_env_for_persistent = ws_env.clone();
-    let start_persistent = |worktree: String,
-                            sid: String,
-                            is_resume: bool,
-                            tools: Vec<String>,
-                            instructions: Option<String>,
-                            settings: AgentSettings| {
+    let resolved_env_for_persistent = resolved_env.clone();
+    let app_for_persistent = app.clone();
+    let start_persistent = move |worktree: String,
+                                 sid: String,
+                                 is_resume: bool,
+                                 tools: Vec<String>,
+                                 instructions: Option<String>,
+                                 settings: AgentSettings| {
         let env = ws_env_for_persistent.clone();
+        let resolved = resolved_env_for_persistent.clone();
+        let app = app_for_persistent.clone();
         async move {
-            let ps = Arc::new(
-                PersistentSession::start(
-                    std::path::Path::new(&worktree),
-                    &sid,
-                    is_resume,
-                    &tools,
-                    instructions.as_deref(),
-                    &settings,
-                    Some(&env),
-                )
-                .await?,
-            );
-            Ok::<Arc<PersistentSession>, String>(ps)
+            let started = PersistentSession::start(
+                std::path::Path::new(&worktree),
+                &sid,
+                is_resume,
+                &tools,
+                instructions.as_deref(),
+                &settings,
+                Some(&env),
+                Some(&resolved),
+            )
+            .await
+            .map_err(|e| crate::missing_cli::handle_err(&app, &e).unwrap_or(e))?;
+            Ok::<Arc<PersistentSession>, String>(Arc::new(started))
         }
     };
 
@@ -565,7 +795,23 @@ pub async fn send_chat_message(
                 // avoid blocking other workspaces during process startup.
                 eprintln!("[chat] Persistent session failed, respawning: {e}");
                 session.persistent_session = None;
+                session.mcp_bridge = None;
                 drop(agents);
+
+                let mut respawn_settings = agent_settings.clone();
+                let bridge = if send_to_user_enabled {
+                    let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
+                        &app,
+                        &state.db_path,
+                        &workspace_id,
+                        agent_settings.mcp_config.clone(),
+                    )
+                    .await?;
+                    respawn_settings.mcp_config = mcp_with_claudette;
+                    Some(b)
+                } else {
+                    None
+                };
 
                 let is_resume = saved_turn_count > 1;
                 let (ps, final_sid) = match start_persistent(
@@ -574,7 +820,7 @@ pub async fn send_chat_message(
                     is_resume,
                     allowed_tools.clone(),
                     custom_instructions.clone(),
-                    agent_settings.clone(),
+                    respawn_settings.clone(),
                 )
                 .await
                 {
@@ -588,7 +834,7 @@ pub async fn send_chat_message(
                             false,
                             allowed_tools.clone(),
                             custom_instructions.clone(),
-                            agent_settings.clone(),
+                            respawn_settings.clone(),
                         )
                         .await?;
                         (ps, fresh)
@@ -603,6 +849,7 @@ pub async fn send_chat_message(
                 agents = state.agents.write().await;
                 let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
                 session.persistent_session = Some(ps);
+                session.mcp_bridge = bridge;
                 session.session_id = final_sid;
                 session.session_plan_mode = agent_settings.plan_mode;
                 session.session_allowed_tools = allowed_tools.clone();
@@ -612,6 +859,7 @@ pub async fn send_chat_message(
                 // spawn-time flags above so the latch can't leak across
                 // respawns (including paths that skip the drift branch).
                 session.session_exited_plan = false;
+                session.session_resolved_env = resolved_env.vars.clone();
                 handle
             }
         }
@@ -629,13 +877,33 @@ pub async fn send_chat_message(
         // Drop lock before async process spawn.
         drop(agents);
 
+        // Start the agent-MCP bridge and merge the synthetic `claudette`
+        // server entry into the spawn-time `--mcp-config` JSON when the
+        // built-in `send_to_user` plugin is enabled. The bridge is stored
+        // on the session below so it lives exactly as long as the
+        // persistent CLI process.
+        let mut spawn_settings = agent_settings.clone();
+        let bridge = if send_to_user_enabled {
+            let (b, mcp_with_claudette) = start_bridge_and_inject_mcp(
+                &app,
+                &state.db_path,
+                &workspace_id,
+                agent_settings.mcp_config.clone(),
+            )
+            .await?;
+            spawn_settings.mcp_config = mcp_with_claudette;
+            Some(b)
+        } else {
+            None
+        };
+
         let (ps, final_sid) = match start_persistent(
             worktree_path.clone(),
             sid.clone(),
             is_resume,
             allowed_tools.clone(),
             custom_instructions.clone(),
-            agent_settings.clone(),
+            spawn_settings.clone(),
         )
         .await
         {
@@ -650,7 +918,7 @@ pub async fn send_chat_message(
                     false,
                     allowed_tools.clone(),
                     custom_instructions.clone(),
-                    agent_settings.clone(),
+                    spawn_settings.clone(),
                 )
                 .await?;
                 (ps, fresh_sid)
@@ -665,6 +933,7 @@ pub async fn send_chat_message(
                     session.session_id = String::new();
                 }
                 drop(agents);
+                let e = crate::missing_cli::handle_err(&app, &e).unwrap_or(e);
                 return Err(e);
             }
         };
@@ -673,12 +942,14 @@ pub async fn send_chat_message(
         agents = state.agents.write().await;
         let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
         session.persistent_session = Some(ps);
+        session.mcp_bridge = bridge;
         session.session_id = final_sid.clone();
         session.session_plan_mode = agent_settings.plan_mode;
         session.session_allowed_tools = allowed_tools.clone();
         session.session_disable_1m_context = agent_settings.disable_1m_context;
         // See the sibling reset above — fresh process, fresh latch.
         session.session_exited_plan = false;
+        session.session_resolved_env = resolved_env.vars.clone();
         let _ = db.save_agent_session(&workspace_id, &final_sid, session.turn_count);
         handle
     };
@@ -692,6 +963,7 @@ pub async fn send_chat_message(
         // IGNORE), then bump turn_count + last_message_at. Runs for every
         // turn so resumed-from-DB sessions get their row lazily created too.
         let _ = db.insert_agent_session(&session.session_id, &workspace_id, &ws.repository_id);
+        let _ = db.reopen_agent_session(&session.session_id);
         let _ = db.update_agent_session_turn(&session.session_id, session.turn_count);
         if db
             .get_app_setting("first_session_at")
@@ -792,9 +1064,8 @@ pub async fn send_chat_message(
         // to None after each persistence so per-message counts stay distinct
         // across multi-message turns.
         let mut latest_usage: Option<claudette::agent::TokenUsage> = None;
-        let mut pending_attention_kind: Option<crate::state::AttentionKind>;
+        let mut notified_via_result = false;
         while let Some(event) = rx.recv().await {
-            pending_attention_kind = None;
             // Track whether the CLI initialized successfully.
             if let AgentEvent::Stream(StreamEvent::System { subtype, .. }) = &event
                 && subtype == "init"
@@ -882,6 +1153,67 @@ pub async fn send_chat_message(
                         "input": input,
                     });
                     let _ = app.emit("agent-permission-prompt", &payload);
+
+                    // Fire the system notification after the frontend has the
+                    // data it needs to render the card. We emit
+                    // `agent-permission-prompt` synchronously above; the
+                    // short sleep gives the webview time to pick up the event
+                    // and paint before the notification sound/banner arrives.
+                    // Tied to ControlRequest (not the earlier ContentBlockStart)
+                    // because the card is driven by this event, not the
+                    // streaming tool_use block.
+                    //
+                    // The task is detached, so it must defend against state
+                    // changes during the sleep:
+                    //   - If the user already responded (or the session was
+                    //     stopped/cleared), the matching pending_permission is
+                    //     gone and a notification would be misleading.
+                    //   - If a different pending prompt in the same cycle has
+                    //     already triggered the notification, dedupe via
+                    //     `attention_notification_sent`.
+                    let kind = if tool_name == "AskUserQuestion" {
+                        crate::state::AttentionKind::Ask
+                    } else {
+                        crate::state::AttentionKind::Plan
+                    };
+                    let app_for_notify = app.clone();
+                    let ws_id_for_notify = ws_id.clone();
+                    let tool_use_id_for_notify = tool_use_id.clone();
+                    let request_id_for_notify = request_id.clone();
+                    let tool_name_for_notify = tool_name.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(
+                            ATTENTION_NOTIFY_DELAY_MS,
+                        ))
+                        .await;
+
+                        let app_state = app_for_notify.state::<AppState>();
+                        let should_notify = {
+                            let mut agents = app_state.agents.write().await;
+                            let Some(session) = agents.get_mut(&ws_id_for_notify) else {
+                                return;
+                            };
+                            if session.attention_notification_sent {
+                                false
+                            } else {
+                                let still_pending = session
+                                    .pending_permissions
+                                    .get(&tool_use_id_for_notify)
+                                    .is_some_and(|p| {
+                                        p.request_id == request_id_for_notify
+                                            && p.tool_name == tool_name_for_notify
+                                    });
+                                if still_pending {
+                                    session.attention_notification_sent = true;
+                                }
+                                still_pending
+                            }
+                        };
+
+                        if should_notify {
+                            crate::tray::notify_attention(&app_for_notify, &ws_id_for_notify, kind);
+                        }
+                    });
                 } else {
                     let app_state = app.state::<AppState>();
                     let agents = app_state.agents.read().await;
@@ -916,9 +1248,10 @@ pub async fn send_chat_message(
             }
 
             // Detect tool calls that require user input (question, plan approval).
-            // Capture whether we need to notify — the actual notification is
-            // deferred until after the event is emitted to the frontend so the
-            // UI updates before the system notification appears.
+            // The tray state flip happens here (on ContentBlockStart) so the
+            // icon/menu update is immediate. The *notification* itself fires
+            // later, from the ControlRequest branch, once the frontend has the
+            // data it needs to render the question/plan card.
             if let AgentEvent::Stream(StreamEvent::Stream {
                 event:
                     InnerStreamEvent::ContentBlockStart {
@@ -935,7 +1268,6 @@ pub async fn send_chat_message(
                 };
                 let app_state = app.state::<AppState>();
                 let mut agents = app_state.agents.write().await;
-                let already_notified = agents.get(&ws_id).is_some_and(|s| s.needs_attention);
                 if let Some(session) = agents.get_mut(&ws_id) {
                     session.needs_attention = true;
                     session.attention_kind = Some(kind);
@@ -945,12 +1277,6 @@ pub async fn send_chat_message(
                     if name == "ExitPlanMode" {
                         session.session_exited_plan = true;
                     }
-                }
-                drop(agents);
-                // Only send notification once per attention cycle — skip if
-                // we already notified the user about this workspace.
-                if !already_notified {
-                    pending_attention_kind = Some(kind);
                 }
             }
 
@@ -1031,9 +1357,9 @@ pub async fn send_chat_message(
             // When a persistent turn completes (Result event), clear active_pid
             // so the workspace shows as idle. The persistent process stays alive
             // for the next turn — only active_pid is cleared, not persistent_session.
-            if let AgentEvent::Stream(StreamEvent::Result { .. }) = &event {
+            if let AgentEvent::Stream(StreamEvent::Result { subtype, .. }) = &event {
                 let app_state = app.state::<AppState>();
-                let session_id_for_capture = {
+                let (session_id_for_capture, needs_attention) = {
                     let mut agents = app_state.agents.write().await;
                     if let Some(session) = agents.get_mut(&ws_id)
                         && session.active_pid == Some(spawned_pid)
@@ -1041,10 +1367,12 @@ pub async fn send_chat_message(
                     {
                         session.active_pid = None;
                     }
-                    agents
+                    let sid = agents
                         .get(&ws_id)
                         .map(|s| s.session_id.clone())
-                        .unwrap_or_default()
+                        .unwrap_or_default();
+                    let attn = agents.get(&ws_id).is_some_and(|s| s.needs_attention);
+                    (sid, attn)
                 };
                 // Rebuild tray so it reflects the idle state. Without this,
                 // the tray stays stuck on "Running" because the persistent
@@ -1065,6 +1393,16 @@ pub async fn send_chat_message(
                     &wt_path,
                 )
                 .await;
+                if !needs_attention {
+                    let event = if subtype == "success" {
+                        crate::tray::NotificationEvent::Finished
+                    } else {
+                        crate::tray::NotificationEvent::Error
+                    };
+                    fire_completion_notification(&db_path, &app_state.cesp_playback, event, &ws_id)
+                        .await;
+                    notified_via_result = true;
+                }
             }
 
             // Track per-assistant-message cumulative usage as the CLI streams it.
@@ -1108,8 +1446,12 @@ pub async fn send_chat_message(
                     // exited. A new turn may have already replaced it.
                     session.active_pid = None;
                     // Process died — clear persistent session so the next turn
-                    // spawns a fresh one.
+                    // spawns a fresh one. Drop the agent-MCP bridge alongside
+                    // (RAII unlinks the socket file) so a subsequent spawn
+                    // gets a fresh socket + token rather than reusing a bridge
+                    // whose grandchild is gone.
                     session.persistent_session = None;
+                    session.mcp_bridge = None;
                     ended_own_session = true;
                 }
                 // Close out the agent_sessions row for post-init exits too, so
@@ -1141,56 +1483,16 @@ pub async fn send_chat_message(
                     )
                     .await;
                 }
-                // Play notification sound + run command if the window is not focused.
-                // This runs on the Rust side so it works even when the webview
-                // is suspended (window hidden / close-to-tray).
                 let needs_attention_now = agents.get(&ws_id).is_some_and(|s| s.needs_attention);
-                let window_focused = app
-                    .get_webview_window("main")
-                    .and_then(|w| w.is_focused().ok())
-                    .unwrap_or(false);
-                // Skip if user is actively watching (window focused) or if this
-                // is an attention event (notify_attention already handled it).
-                if !window_focused
-                    && !needs_attention_now
-                    && let Ok(db) = Database::open(&db_path)
-                {
-                    let sound = crate::tray::resolve_notification_sound(
-                        &db,
-                        crate::tray::NotificationEvent::Finished,
-                    );
-                    if sound != "None" {
-                        crate::commands::settings::play_notification_sound(sound);
-                    }
-                    // Run notification command if configured — uses the same
-                    // tested helper as the settings test button and tray path.
-                    // Rebuild WorkspaceEnv from the DB so it reflects any
-                    // renames that happened during the turn (try_auto_rename).
-                    if let Ok(Some(cmd)) = db.get_app_setting("notification_command")
-                        && !cmd.is_empty()
-                        && let Some(fresh_ws) = db
-                            .list_workspaces()
-                            .ok()
-                            .and_then(|wss| wss.into_iter().find(|w| w.id == ws_id))
-                    {
-                        let repo_path = db
-                            .get_repository(&fresh_ws.repository_id)
-                            .ok()
-                            .flatten()
-                            .map(|r| r.path)
-                            .unwrap_or_default();
-                        let default_branch = git::default_branch(&repo_path)
-                            .await
-                            .unwrap_or_else(|_| "main".into());
-                        let fresh_env =
-                            WorkspaceEnv::from_workspace(&fresh_ws, &repo_path, default_branch);
-                        if let Some(mut command) =
-                            crate::commands::settings::build_notification_command(&cmd, &fresh_env)
-                            && let Ok(child) = command.spawn()
-                        {
-                            crate::commands::settings::spawn_and_reap(child);
-                        }
-                    }
+                let app_state = app.state::<crate::state::AppState>();
+                if !needs_attention_now && !notified_via_result {
+                    let event = if exit_code == Some(0) {
+                        crate::tray::NotificationEvent::Finished
+                    } else {
+                        crate::tray::NotificationEvent::Error
+                    };
+                    fire_completion_notification(&db_path, &app_state.cesp_playback, event, &ws_id)
+                        .await;
                 }
 
                 drop(agents);
@@ -1341,18 +1643,38 @@ pub async fn send_chat_message(
                 event,
             };
             let _ = app.emit("agent-stream", &payload);
-
-            // Send attention notification AFTER emitting the event to the
-            // frontend — this gives the UI time to update before the system
-            // notification / sound fires, so the badge is already visible
-            // when the user sees the notification.
-            if let Some(kind) = pending_attention_kind {
-                crate::tray::notify_attention(&app, &ws_id, kind);
-            }
         }
     });
 
     Ok(())
+}
+
+/// What `take_stop_snapshot` hands back: permissions to deny, pid to kill,
+/// and the session id to mark ended in the DB.
+type StopSnapshot = (
+    Option<(Arc<PersistentSession>, Vec<PendingPermission>)>,
+    Option<u32>,
+    Option<String>,
+);
+
+/// Mutations performed on an agent session when the user clicks Stop.
+///
+/// Stop interrupts the in-flight turn — it takes `active_pid` so the caller
+/// can kill the process and drains pending permission requests so the caller
+/// can deny them. It deliberately does NOT clear `session_id`, `turn_count`,
+/// or `persistent_session`: those are owned by `reset_agent_session` and
+/// `clear_conversation`. Preserving them is what lets the next
+/// `send_chat_message` resume via `--resume` instead of spawning a fresh
+/// conversation. The now-dead `persistent_session` handle is fine — on the
+/// next turn `send_turn` detects the broken pipe and respawns with
+/// `--resume <session_id>`.
+fn take_stop_snapshot(session: &mut AgentSessionState) -> StopSnapshot {
+    let drained = drain_pending_permissions(session);
+    let ended_sid = Some(session.session_id.clone());
+    let pid = session.active_pid.take();
+    session.needs_attention = false;
+    session.attention_kind = None;
+    (drained, pid, ended_sid)
 }
 
 #[tauri::command]
@@ -1367,16 +1689,7 @@ pub async fn stop_agent(
     let (to_deny_stop, pid_to_kill, ended_sid) = {
         let mut agents = state.agents.write().await;
         match agents.get_mut(&workspace_id) {
-            Some(session) => {
-                let drained = drain_pending_permissions(session);
-                let ended_sid = Some(session.session_id.clone());
-                // Clear persistent session and reset session state so the next
-                // turn starts completely fresh (not --resume with a stale ID).
-                session.persistent_session = None;
-                session.turn_count = 0;
-                session.session_id = String::new();
-                (drained, session.active_pid.take(), ended_sid)
-            }
+            Some(session) => take_stop_snapshot(session),
             None => (None, None, None),
         }
     };
@@ -1388,11 +1701,10 @@ pub async fn stop_agent(
         agent::stop_agent(pid).await?;
     }
 
-    // Clear persisted session from DB too. `stop_agent` aborts an in-flight
-    // turn (SIGTERM on the live pid + deny mid-turn permission prompts), so
-    // the session did not complete successfully — record it as a failure.
+    // Record the interrupted turn as a failure for analytics, but leave the
+    // workspace's session_id / turn_count rows intact so an app restart after
+    // stop still resumes via --resume.
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    let _ = db.clear_agent_session(&workspace_id);
     if let Some(sid) = ended_sid.as_deref().filter(|s| !s.is_empty()) {
         let _ = db.end_agent_session(sid, false);
     }
@@ -1580,9 +1892,12 @@ pub async fn clear_conversation(
             .iter()
             .find(|r| r.id == ws.repository_id)
             .ok_or("Repository not found")?;
-        let base = git::default_branch(&repo.path)
-            .await
-            .map_err(|e| e.to_string())?;
+        let base = match repo.base_branch.as_deref() {
+            Some(b) => b.to_string(),
+            None => git::default_branch(&repo.path, repo.default_remote.as_deref())
+                .await
+                .map_err(|e| e.to_string())?,
+        };
         let merge_base = claudette::diff::merge_base(wt, &ws.branch_name, &base)
             .await
             .map_err(|e| e.to_string())?;
@@ -1784,6 +2099,9 @@ pub async fn submit_agent_answer(
             .pending_permissions
             .remove(&tool_use_id)
             .expect("checked above");
+        session.needs_attention = false;
+        session.attention_kind = None;
+        session.attention_notification_sent = false;
         (pending, ps)
     };
 
@@ -1850,6 +2168,9 @@ pub async fn submit_plan_approval(
             .pending_permissions
             .remove(&tool_use_id)
             .expect("checked above");
+        session.needs_attention = false;
+        session.attention_kind = None;
+        session.attention_notification_sent = false;
         (pending, ps)
     };
 
@@ -1960,6 +2281,8 @@ pub async fn load_attachments_for_workspace(
                 width: a.width,
                 height: a.height,
                 size_bytes: a.size_bytes,
+                origin: a.origin,
+                tool_use_id: a.tool_use_id,
             });
         }
     }
@@ -2063,6 +2386,8 @@ pub async fn read_file_as_base64(path: String) -> Result<AttachmentResponse, Str
             width: None,
             height: None,
             size_bytes,
+            origin: claudette::model::AttachmentOrigin::User,
+            tool_use_id: None,
         })
     } else {
         // Unknown extension — attempt to read as text.
@@ -2083,6 +2408,8 @@ pub async fn read_file_as_base64(path: String) -> Result<AttachmentResponse, Str
                     width: None,
                     height: None,
                     size_bytes,
+                    origin: claudette::model::AttachmentOrigin::User,
+                    tool_use_id: None,
                 })
             }
             Err(_) => Err(format!("Unsupported binary file type: .{ext}")),
@@ -2103,6 +2430,77 @@ fn now_iso() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
     format!("{}", dur.as_secs())
+}
+
+#[cfg(test)]
+mod mcp_inject_tests {
+    use super::inject_claudette_mcp_entry;
+    use claudette::agent_mcp::bridge::BridgeHandle;
+
+    fn handle() -> BridgeHandle {
+        BridgeHandle {
+            socket_addr: "/tmp/cmcp/abc.sock".into(),
+            token: "secret".into(),
+        }
+    }
+
+    #[test]
+    fn inject_into_empty_config_creates_wrapper() {
+        let merged = inject_claudette_mcp_entry(None, &handle())
+            .unwrap()
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&merged).unwrap();
+        assert!(v["mcpServers"]["claudette"]["command"].is_string());
+        let args = v["mcpServers"]["claudette"]["args"].as_array().unwrap();
+        assert_eq!(args[0], "--agent-mcp");
+        let env = &v["mcpServers"]["claudette"]["env"];
+        assert_eq!(env["CLAUDETTE_MCP_SOCKET"], "/tmp/cmcp/abc.sock");
+        assert_eq!(env["CLAUDETTE_MCP_TOKEN"], "secret");
+    }
+
+    #[test]
+    fn inject_preserves_existing_servers() {
+        let base = serde_json::json!({
+            "mcpServers": {
+                "playwright": {"type": "stdio", "command": "npx", "args": ["pw"]}
+            }
+        })
+        .to_string();
+        let merged = inject_claudette_mcp_entry(Some(base), &handle())
+            .unwrap()
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&merged).unwrap();
+        assert!(v["mcpServers"]["playwright"]["command"].is_string());
+        assert_eq!(
+            v["mcpServers"]["claudette"]["env"]["CLAUDETTE_MCP_TOKEN"],
+            "secret"
+        );
+    }
+
+    #[test]
+    fn inject_overwrites_collision_with_claudette_name() {
+        // If a user happened to define an MCP server called `claudette`, our
+        // injected entry takes precedence — it's not user-configurable and
+        // we control the wire-up.
+        let base = serde_json::json!({
+            "mcpServers": {
+                "claudette": {"type": "stdio", "command": "rogue"}
+            }
+        })
+        .to_string();
+        let merged = inject_claudette_mcp_entry(Some(base), &handle())
+            .unwrap()
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(v["mcpServers"]["claudette"]["args"][0], "--agent-mcp");
+        assert_ne!(v["mcpServers"]["claudette"]["command"], "rogue");
+    }
+
+    #[test]
+    fn inject_rejects_malformed_base_json() {
+        let res = inject_claudette_mcp_entry(Some("not-json".into()), &handle());
+        assert!(res.is_err());
+    }
 }
 
 #[cfg(test)]
@@ -2369,5 +2767,82 @@ mod tests {
         let input = json!({});
         let response = build_permission_response(&s(&["*", "Read"]), false, false, "Edit", &input);
         assert_eq!(response["behavior"], "deny");
+    }
+
+    use super::take_stop_snapshot;
+    use crate::state::AgentSessionState;
+    use std::collections::HashMap;
+
+    fn fresh_session(session_id: &str, turn_count: u32, pid: Option<u32>) -> AgentSessionState {
+        AgentSessionState {
+            session_id: session_id.to_string(),
+            turn_count,
+            active_pid: pid,
+            custom_instructions: None,
+            needs_attention: false,
+            attention_kind: None,
+            attention_notification_sent: false,
+            persistent_session: None,
+            mcp_config_dirty: false,
+            session_plan_mode: false,
+            session_allowed_tools: Vec::new(),
+            session_disable_1m_context: false,
+            pending_permissions: HashMap::new(),
+            session_exited_plan: false,
+            session_resolved_env: Default::default(),
+            mcp_bridge: None,
+            last_user_msg_id: None,
+        }
+    }
+
+    #[test]
+    fn take_stop_snapshot_preserves_session_identity_for_resume() {
+        // Regression guard for the bug where Stop wiped session_id/turn_count,
+        // causing the next send to start a brand-new conversation instead of
+        // resuming. Stop must leave those fields intact so send_chat_message
+        // can spawn the CLI with --resume <session_id>.
+        let mut session = fresh_session("sess-abc", 7, Some(12345));
+
+        let (drained, pid, ended_sid) = take_stop_snapshot(&mut session);
+
+        // Caller receives the pid to kill and the sid to log.
+        assert!(drained.is_none(), "no pending permissions to drain");
+        assert_eq!(pid, Some(12345));
+        assert_eq!(ended_sid.as_deref(), Some("sess-abc"));
+
+        // Session identity is preserved — this is the fix.
+        assert_eq!(session.session_id, "sess-abc");
+        assert_eq!(session.turn_count, 7);
+        assert!(session.persistent_session.is_none());
+
+        // active_pid is consumed so the caller can kill without racing.
+        assert!(session.active_pid.is_none());
+    }
+
+    #[test]
+    fn take_stop_snapshot_is_idempotent_when_already_stopped() {
+        // A double-stop (e.g. user clicks Stop twice) must not corrupt state.
+        let mut session = fresh_session("sess-abc", 7, None);
+
+        let (_, pid, ended_sid) = take_stop_snapshot(&mut session);
+
+        assert!(pid.is_none());
+        assert_eq!(ended_sid.as_deref(), Some("sess-abc"));
+        assert_eq!(session.session_id, "sess-abc");
+        assert_eq!(session.turn_count, 7);
+    }
+
+    #[test]
+    fn take_stop_snapshot_clears_attention_flags() {
+        use crate::state::AttentionKind;
+
+        let mut session = fresh_session("sess-abc", 3, Some(999));
+        session.needs_attention = true;
+        session.attention_kind = Some(AttentionKind::Ask);
+
+        take_stop_snapshot(&mut session);
+
+        assert!(!session.needs_attention);
+        assert!(session.attention_kind.is_none());
     }
 }

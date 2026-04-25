@@ -116,6 +116,19 @@ jobs:
             rust-target: x86_64-unknown-linux-gnu
             bundles: appimage,deb
             label: linux-x86_64
+          # Windows ships bare `.exe` assets only (no MSI/NSIS bundle).
+          # The tauri-action step is skipped on Windows and we drive
+          # cargo directly against the native MSVC toolchain baked into
+          # GitHub's Windows runners. `windows-11-arm` is GA and native,
+          # so ARM64 builds aren't cross-compiled.
+          - platform: windows-latest
+            rust-target: x86_64-pc-windows-msvc
+            bundles: ""
+            label: windows-x86_64
+          - platform: windows-11-arm
+            rust-target: aarch64-pc-windows-msvc
+            bundles: ""
+            label: windows-aarch64
 
     name: Build (${{ matrix.label }})
     runs-on: ${{ matrix.platform }}
@@ -164,12 +177,16 @@ jobs:
           bun-version: "latest"
 
       - name: Install frontend dependencies
+        shell: bash
         run: cd src/ui && bun install --frozen-lockfile
 
       - name: Generate icons
+        shell: bash
         run: npx @tauri-apps/cli icon assets/logo.png
 
-      - name: Build and upload desktop app
+      # ---- macOS + Linux: tauri-action drives the bundled build ------------
+      - name: Build and upload desktop app (non-Windows)
+        if: ${{ !startsWith(matrix.platform, 'windows') }}
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -188,16 +205,65 @@ jobs:
           prerelease: true
           args: --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundles }}
 
+      # ---- Windows: direct cargo build, ship the bare .exe -----------------
+      # `custom-protocol` is the feature flag that tells tauri-build to
+      # embed `frontendDist` (otherwise the release binary tries to
+      # contact the devUrl at startup and shows "localhost refused to
+      # connect"). `tauri-action` sets this automatically via
+      # `cargo tauri build`; since we're bypassing it on Windows, we
+      # pass the flag explicitly.
+      - name: Build desktop exe (Windows)
+        if: startsWith(matrix.platform, 'windows')
+        shell: bash
+        run: |
+          cd src/ui && bun run build && cd ../..
+          cargo build --release -p claudette-tauri \
+            --features tauri/custom-protocol \
+            --target ${{ matrix.rust-target }}
+
+      # Zip the bare .exe before upload. Raw unsigned .exe downloads
+      # trigger aggressive SmartScreen + browser warnings ("file not
+      # commonly downloaded / could harm your device"); shipping inside
+      # a .zip is the customary Windows distribution shape and keeps
+      # Mark-of-the-Web attached to the archive rather than the binary.
+      # `Compress-Archive` is a built-in PowerShell cmdlet on every
+      # Windows runner — no external deps.
+      - name: Upload desktop exe (Windows)
+        if: startsWith(matrix.platform, 'windows')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BIN="target/${{ matrix.rust-target }}/release/claudette.exe"
+          ASSET="claudette-${{ matrix.label }}.zip"
+          cp "$BIN" claudette.exe
+          powershell -NoProfile -Command "Compress-Archive -Path 'claudette.exe' -DestinationPath '$ASSET' -Force"
+          gh release upload nightly "$ASSET" --clobber
+
       - name: Build headless server
+        shell: bash
         run: cargo build --release -p claudette-server --target ${{ matrix.rust-target }}
 
-      - name: Upload headless server binary
+      - name: Upload headless server binary (non-Windows)
+        if: ${{ !startsWith(matrix.platform, 'windows') }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           BIN="target/${{ matrix.rust-target }}/release/claudette-server"
           ASSET="claudette-server-${{ matrix.label }}"
           cp "$BIN" "$ASSET"
+          gh release upload nightly "$ASSET" --clobber
+
+      - name: Upload headless server binary (Windows)
+        if: startsWith(matrix.platform, 'windows')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BIN="target/${{ matrix.rust-target }}/release/claudette-server.exe"
+          ASSET="claudette-server-${{ matrix.label }}.zip"
+          cp "$BIN" claudette-server.exe
+          powershell -NoProfile -Command "Compress-Archive -Path 'claudette-server.exe' -DestinationPath '$ASSET' -Force"
           gh release upload nightly "$ASSET" --clobber
 
   # Nightly builds are not announced to Discord — too noisy. Stable releases only.

@@ -240,11 +240,16 @@ async fn handle_load_initial_data(state: &ServerState) -> Result<serde_json::Val
         .map(|r| {
             let id = r.id.clone();
             let path = r.path.clone();
+            let base = r.base_branch.clone();
+            let remote = r.default_remote.clone();
             async move {
-                claudette::git::default_branch(&path)
-                    .await
-                    .ok()
-                    .map(|b| (id, b))
+                let branch = match base {
+                    Some(b) => Some(b),
+                    None => claudette::git::default_branch(&path, remote.as_deref())
+                        .await
+                        .ok(),
+                };
+                branch.map(|b| (id, b))
             }
         })
         .collect();
@@ -419,9 +424,15 @@ async fn handle_send_chat_message(
 
     // Build workspace env vars for the agent subprocess.
     let repo_path = repo.as_ref().map(|r| r.path.as_str()).unwrap_or("");
-    let default_branch = claudette::git::default_branch(repo_path)
+    let default_branch = match repo.as_ref().and_then(|r| r.base_branch.as_deref()) {
+        Some(b) => b.to_string(),
+        None => claudette::git::default_branch(
+            repo_path,
+            repo.as_ref().and_then(|r| r.default_remote.as_deref()),
+        )
         .await
-        .unwrap_or_else(|_| "main".to_string());
+        .unwrap_or_else(|_| "main".to_string()),
+    };
     let ws_env = claudette::env::WorkspaceEnv::from_workspace(ws, repo_path, default_branch);
 
     let turn_handle = agent::run_turn(
@@ -434,6 +445,11 @@ async fn handle_send_chat_message(
         &agent_settings,
         &[], // Attachments not yet supported over remote transport
         Some(&ws_env),
+        // Env-provider activation is not wired into the remote server path in
+        // v1 — it requires a PluginRegistry + EnvCache in ServerState, which
+        // is a separate follow-up. Local desktop agents already get it via
+        // claudette-tauri's AppState.
+        None,
     )
     .await?;
 
@@ -609,9 +625,15 @@ async fn handle_create_workspace(
     let worktree_path = worktree_base_dir.join(&repo.path_slug).join(name);
 
     // Create git worktree.
-    claudette::git::create_worktree(&repo.path, &branch_name, &worktree_path.to_string_lossy())
-        .await
-        .map_err(|e| format!("{e:?}"))?;
+    claudette::git::create_worktree(
+        &repo.path,
+        &branch_name,
+        &worktree_path.to_string_lossy(),
+        repo.base_branch.as_deref(),
+        repo.default_remote.as_deref(),
+    )
+    .await
+    .map_err(|e| format!("{e:?}"))?;
 
     let workspace = Workspace {
         id: uuid::Uuid::new_v4().to_string(),
@@ -684,9 +706,12 @@ async fn handle_load_diff_files(
         .map_err(|e| e.to_string())?
         .ok_or("Repository not found")?;
 
-    let base_branch = claudette::git::default_branch(&repo.path)
-        .await
-        .map_err(|e| format!("{e:?}"))?;
+    let base_branch = match repo.base_branch.as_deref() {
+        Some(b) => b.to_string(),
+        None => claudette::git::default_branch(&repo.path, repo.default_remote.as_deref())
+            .await
+            .map_err(|e| format!("{e:?}"))?,
+    };
 
     let merge_base = claudette::diff::merge_base(worktree_path, "HEAD", &base_branch)
         .await
@@ -748,16 +773,18 @@ async fn handle_spawn_pty(
         && let Ok(wss) = db.list_workspaces()
         && let Some(ws) = wss.iter().find(|w| w.id == workspace_id)
     {
-        let repo_path = db
-            .get_repository(&ws.repository_id)
-            .ok()
-            .flatten()
-            .map(|r| r.path)
-            .unwrap_or_default();
-        let default_branch = claudette::git::default_branch(&repo_path)
+        let repo = db.get_repository(&ws.repository_id).ok().flatten();
+        let repo_path = repo.as_ref().map(|r| r.path.as_str()).unwrap_or_default();
+        let default_branch = match repo.as_ref().and_then(|r| r.base_branch.as_deref()) {
+            Some(b) => b.to_string(),
+            None => claudette::git::default_branch(
+                repo_path,
+                repo.as_ref().and_then(|r| r.default_remote.as_deref()),
+            )
             .await
-            .unwrap_or_else(|_| "main".into());
-        let ws_env = claudette::env::WorkspaceEnv::from_workspace(ws, &repo_path, default_branch);
+            .unwrap_or_else(|_| "main".into()),
+        };
+        let ws_env = claudette::env::WorkspaceEnv::from_workspace(ws, repo_path, default_branch);
         for (k, v) in ws_env.vars() {
             cmd.env(k, v);
         }

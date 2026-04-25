@@ -114,7 +114,10 @@
 .sl-markdown-content .tech-stack h2,
 .sl-markdown-content .tech-stack p,
 .sl-markdown-content .cta-section h2,
-.sl-markdown-content .cta-section p {
+.sl-markdown-content .cta-section p,
+.sl-markdown-content .screenshots-section h2,
+.sl-markdown-content .screenshots-section h3,
+.sl-markdown-content .screenshots-section p {
   margin-top: 0;
 }
 
@@ -323,6 +326,67 @@
   color: #e07850;
 }
 
+/* Screenshots section */
+.screenshots-section {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 4rem 1.5rem;
+}
+
+.screenshots-section h2 {
+  text-align: center;
+  font-size: 2rem;
+  margin-bottom: 0.5rem;
+}
+
+.screenshots-section .section-subtitle {
+  text-align: center;
+  color: var(--sl-color-gray-3);
+  margin-bottom: 2.5rem;
+  font-size: 1.1rem;
+}
+
+.screenshots-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: 2rem;
+}
+
+.screenshots-grid .screenshot {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.screenshots-grid .screenshot img {
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+  box-shadow:
+    0 20px 60px rgba(224, 120, 80, 0.15),
+    0 8px 24px rgba(0, 0, 0, 0.5);
+  display: block;
+}
+
+.screenshots-grid .screenshot figcaption {
+  margin-top: 1rem;
+  text-align: center;
+}
+
+.screenshots-grid .screenshot figcaption h3 {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin: 0 0 0.25rem;
+  color: var(--sl-color-white);
+}
+
+.screenshots-grid .screenshot figcaption p {
+  font-size: 0.95rem;
+  color: var(--sl-color-gray-3);
+  line-height: 1.5;
+  margin: 0;
+}
+
 /* Responsive */
 @media (max-width: 900px) {
   .features-grid {
@@ -341,5 +405,8 @@
   .stats-divider {
     width: 3rem;
     height: 1px;
+  }
+  .screenshots-grid {
+    grid-template-columns: 1fr;
   }
 }

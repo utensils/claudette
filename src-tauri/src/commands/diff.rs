@@ -37,9 +37,12 @@ pub async fn load_diff_files(
         .find(|r| r.id == ws.repository_id)
         .ok_or("Repository not found")?;
 
-    let base_branch = git::default_branch(&repo.path)
-        .await
-        .map_err(|e| e.to_string())?;
+    let base_branch = match repo.base_branch.as_deref() {
+        Some(b) => b.to_string(),
+        None => git::default_branch(&repo.path, repo.default_remote.as_deref())
+            .await
+            .map_err(|e| e.to_string())?,
+    };
 
     let merge_base = diff::merge_base(worktree_path, "HEAD", &base_branch)
         .await

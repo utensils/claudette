@@ -42,6 +42,7 @@ export interface InitialData {
   worktree_base_dir: string;
   default_branches: Record<string, string>;
   last_messages: ChatMessage[];
+  scm_cache: ScmStatusCacheRow[];
 }
 
 export function loadInitialData(): Promise<InitialData> {
@@ -61,7 +62,9 @@ export function updateRepositorySettings(
   setupScript: string | null,
   customInstructions: string | null,
   branchRenamePreferences: string | null,
-  setupScriptAutoRun: boolean
+  setupScriptAutoRun: boolean,
+  baseBranch: string | null,
+  defaultRemote: string | null
 ): Promise<void> {
   return invoke("update_repository_settings", {
     id,
@@ -71,6 +74,8 @@ export function updateRepositorySettings(
     customInstructions,
     branchRenamePreferences,
     setupScriptAutoRun,
+    baseBranch,
+    defaultRemote,
   });
 }
 
@@ -88,6 +93,14 @@ export function getRepoConfig(repoId: string): Promise<RepoConfigInfo> {
 
 export function getDefaultBranch(repoId: string): Promise<string | null> {
   return invoke("get_default_branch", { repoId });
+}
+
+export function listGitRemotes(repoId: string): Promise<string[]> {
+  return invoke("list_git_remotes", { repoId });
+}
+
+export function listGitRemoteBranches(repoId: string): Promise<string[]> {
+  return invoke("list_git_remote_branches", { repoId });
 }
 
 export function reorderRepositories(ids: string[]): Promise<void> {
@@ -126,12 +139,16 @@ export function runWorkspaceSetup(
   return invoke("run_workspace_setup", { workspaceId });
 }
 
-export function archiveWorkspace(id: string): Promise<void> {
+export function archiveWorkspace(id: string): Promise<boolean> {
   return invoke("archive_workspace", { id });
 }
 
 export function restoreWorkspace(id: string): Promise<string> {
   return invoke("restore_workspace", { id });
+}
+
+export function renameWorkspace(id: string, newName: string): Promise<void> {
+  return invoke("rename_workspace", { id, newName });
 }
 
 export function deleteWorkspace(id: string): Promise<void> {
@@ -150,6 +167,12 @@ export function generateWorkspaceName(): Promise<GeneratedWorkspaceName> {
 
 export function refreshBranches(): Promise<[string, string][]> {
   return invoke("refresh_branches");
+}
+
+export function refreshWorkspaceBranch(
+  workspaceId: string,
+): Promise<string | null> {
+  return invoke("refresh_workspace_branch", { workspaceId });
 }
 
 export function openWorkspaceInTerminal(worktreePath: string): Promise<void> {
@@ -694,8 +717,11 @@ export function listSystemFonts(): Promise<string[]> {
   return invoke("list_system_fonts");
 }
 
-export function playNotificationSound(sound: string): Promise<void> {
-  return invoke("play_notification_sound", { sound });
+export function playNotificationSound(
+  sound: string,
+  volume?: number,
+): Promise<void> {
+  return invoke("play_notification_sound", { sound, volume });
 }
 
 export function runNotificationCommand(
@@ -714,6 +740,47 @@ export function runNotificationCommand(
     defaultBranch,
     branchName,
   });
+}
+
+// -- Sound Packs (CESP) --
+
+import type { RegistryPack, InstalledSoundPack } from "../types/soundpacks";
+
+export function cespFetchRegistry(): Promise<RegistryPack[]> {
+  return invoke("cesp_fetch_registry");
+}
+
+export function cespListInstalled(): Promise<InstalledSoundPack[]> {
+  return invoke("cesp_list_installed");
+}
+
+export function cespInstallPack(
+  name: string,
+  sourceRepo: string,
+  sourceRef: string,
+  sourcePath: string,
+): Promise<InstalledSoundPack> {
+  return invoke("cesp_install_pack", { name, sourceRepo, sourceRef, sourcePath });
+}
+
+export function cespUpdatePack(
+  name: string,
+  sourceRepo: string,
+  sourceRef: string,
+  sourcePath: string,
+): Promise<InstalledSoundPack> {
+  return invoke("cesp_update_pack", { name, sourceRepo, sourceRef, sourcePath });
+}
+
+export function cespDeletePack(name: string): Promise<void> {
+  return invoke("cesp_delete_pack", { name });
+}
+
+export function cespPreviewSound(
+  packName: string,
+  category: string,
+): Promise<void> {
+  return invoke("cesp_preview_sound", { packName, category });
 }
 
 // -- Remote --
@@ -805,6 +872,16 @@ export function openReleaseNotes(): Promise<void> {
   return invoke("open_release_notes");
 }
 
+// -- Auth --
+
+export function claudeAuthLogin(): Promise<void> {
+  return invoke("claude_auth_login");
+}
+
+export function cancelClaudeAuthLogin(): Promise<void> {
+  return invoke("cancel_claude_auth_login");
+}
+
 // -- Metrics --
 
 export function getDashboardMetrics(): Promise<DashboardMetrics> {
@@ -823,7 +900,7 @@ export function getAnalyticsMetrics(): Promise<AnalyticsMetrics> {
 
 // -- SCM Plugins --
 
-import type { PluginInfo, ScmDetail, PullRequest } from "../types/plugin";
+import type { PluginInfo, ScmDetail, PullRequest, ScmStatusCacheRow } from "../types/plugin";
 
 export function listScmProviders(): Promise<PluginInfo[]> {
   return invoke("list_scm_providers");

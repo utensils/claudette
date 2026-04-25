@@ -1,0 +1,9 @@
+{
+  "name": "env-nix-devshell",
+  "display_name": "Nix devshell",
+  "version": "1.0.0",
+  "description": "Activate a Nix flake or shell.nix devshell for workspace subprocesses",
+  "kind": "env-provider",
+  "required_clis": ["nix"],
+  "operations": ["detect", "export"]
+}

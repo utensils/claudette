@@ -1,9 +1,35 @@
-import { useEffect, useCallback } from "react";
-import { RefreshCw } from "lucide-react";
+import { useEffect, useCallback, useState } from "react";
+import { RefreshCw, LogIn, X } from "lucide-react";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useAppStore } from "../../../stores/useAppStore";
-import { getClaudeCodeUsage, openUsageSettings } from "../../../services/tauri";
+import {
+  getClaudeCodeUsage,
+  openUsageSettings,
+  claudeAuthLogin,
+  cancelClaudeAuthLogin,
+} from "../../../services/tauri";
 import type { UsageLimit, ExtraUsage } from "../../../types/usage";
 import styles from "../Settings.module.css";
+
+type AuthLoginState =
+  | { status: "idle" }
+  | { status: "running"; manualUrl: string | null }
+  | { status: "success" }
+  | { status: "error"; error: string };
+
+type AuthLoginProgress = { stream: "stdout" | "stderr"; line: string };
+type AuthLoginComplete = { success: boolean; error: string | null };
+
+const AUTH_URL_PATTERN = /https?:\/\/[^\s]+/;
+
+function isAuthError(error: string): boolean {
+  if (error.includes("ENV_AUTH:")) return false;
+  return (
+    error.includes("Token refresh failed") ||
+    error.includes("credentials not found") ||
+    error.includes("expired or been revoked")
+  );
+}
 
 function barColor(pct: number): string {
   if (pct >= 85) return "var(--status-stopped)";
@@ -145,31 +171,98 @@ function ExtraUsageSection({ extra }: { extra: ExtraUsage }) {
   );
 }
 
+type FetchState =
+  | { status: "loading" }
+  | { status: "success" }
+  | { status: "error"; error: string };
+
 export function UsageSettings() {
   const usage = useAppStore((s) => s.claudeCodeUsage);
-  const loading = useAppStore((s) => s.claudeCodeUsageLoading);
-  const error = useAppStore((s) => s.claudeCodeUsageError);
   const setUsage = useAppStore((s) => s.setClaudeCodeUsage);
-  const setLoading = useAppStore((s) => s.setClaudeCodeUsageLoading);
-  const setError = useAppStore((s) => s.setClaudeCodeUsageError);
+  const [fetchState, setFetchState] = useState<FetchState>({ status: "loading" });
+  const [authState, setAuthState] = useState<AuthLoginState>({ status: "idle" });
 
   const fetchUsage = useCallback(async () => {
-    setLoading(true);
+    setFetchState({ status: "loading" });
     try {
       const data = await getClaudeCodeUsage();
       setUsage(data);
+      setFetchState({ status: "success" });
     } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoading(false);
+      setFetchState({ status: "error", error: String(e) });
     }
-  }, [setUsage, setLoading, setError]);
+  }, [setUsage]);
 
   useEffect(() => {
     // Always fetch on mount — the Rust 5-minute cache prevents API flooding.
     // This ensures reopening settings shows fresh data.
     fetchUsage();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    // Subscribe to auth-login events once; they only fire while a flow is running.
+    const unlisteners: UnlistenFn[] = [];
+    let cancelled = false;
+
+    listen<AuthLoginProgress>("auth://login-progress", (event) => {
+      const { line } = event.payload;
+      const match = line.match(AUTH_URL_PATTERN);
+      if (!match) return;
+      setAuthState((current) => {
+        if (current.status !== "running" || current.manualUrl !== null) return current;
+        return { status: "running", manualUrl: match[0] };
+      });
+    })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisteners.push(fn);
+      })
+      .catch((err) => {
+        console.error("Failed to subscribe to auth://login-progress", err);
+      });
+
+    listen<AuthLoginComplete>("auth://login-complete", (event) => {
+      const { success, error } = event.payload;
+      if (success) {
+        setAuthState({ status: "success" });
+        fetchUsage();
+      } else {
+        setAuthState({
+          status: "error",
+          error: error ?? "Sign-in failed.",
+        });
+      }
+    })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisteners.push(fn);
+      })
+      .catch((err) => {
+        console.error("Failed to subscribe to auth://login-complete", err);
+      });
+
+    return () => {
+      cancelled = true;
+      unlisteners.forEach((fn) => fn());
+    };
+  }, [fetchUsage]);
+
+  const startAuthLogin = useCallback(async () => {
+    setAuthState({ status: "running", manualUrl: null });
+    try {
+      await claudeAuthLogin();
+    } catch (e) {
+      setAuthState({ status: "error", error: String(e) });
+    }
+  }, []);
+
+  const cancelAuthLogin = useCallback(async () => {
+    try {
+      await cancelClaudeAuthLogin();
+    } catch (e) {
+      setAuthState({ status: "error", error: String(e) });
+    }
+  }, []);
 
   const limits: { title: string; limit: UsageLimit }[] = [];
   if (usage?.usage.five_hour) {
@@ -189,18 +282,57 @@ export function UsageSettings() {
     <div>
       <h2 className={styles.sectionTitle}>Usage</h2>
 
-      {loading && !usage && (
+      {fetchState.status === "loading" && !usage && authState.status !== "running" && (
         <div className={styles.usageEmptyState}>Loading usage data...</div>
       )}
 
-      {error && !usage && (
+      {authState.status === "running" && (
         <div className={styles.usageEmptyState}>
-          <span>{error.includes("ENV_AUTH:") ? error.replace("ENV_AUTH:", "") : error}</span>
-          {!error.includes("ENV_AUTH:") && (
-            <button className={styles.usageRefreshBtn} onClick={fetchUsage}>
-              <RefreshCw size={12} /> Retry
-            </button>
+          <span>Signing in to Claude Code…</span>
+          <span className={styles.usageTimestamp}>
+            Complete the flow in your browser. This panel will refresh when sign-in finishes.
+          </span>
+          {authState.manualUrl && (
+            <a
+              className={styles.usageManageLink}
+              href={authState.manualUrl}
+              target="_blank"
+              rel="noreferrer"
+            >
+              If the browser didn't open, click here
+            </a>
           )}
+          <button className={styles.usageRefreshBtn} onClick={cancelAuthLogin}>
+            <X size={12} /> Cancel
+          </button>
+        </div>
+      )}
+
+      {fetchState.status === "error" && !usage && authState.status !== "running" && (
+        <div className={styles.usageEmptyState}>
+          <span className={styles.usageErrorMessage}>
+            {fetchState.error.includes("ENV_AUTH:")
+              ? fetchState.error.replace("ENV_AUTH:", "")
+              : fetchState.error}
+          </span>
+          {authState.status === "error" && (
+            <span className={styles.usageTimestamp}>{authState.error}</span>
+          )}
+          <div className={styles.usageActions}>
+            {isAuthError(fetchState.error) && (
+              <button
+                className={`${styles.usageRefreshBtn} ${styles.usageRefreshBtnPrimary}`}
+                onClick={startAuthLogin}
+              >
+                <LogIn size={12} /> Sign in
+              </button>
+            )}
+            {!fetchState.error.includes("ENV_AUTH:") && (
+              <button className={styles.usageRefreshBtn} onClick={fetchUsage}>
+                <RefreshCw size={12} /> Retry
+              </button>
+            )}
+          </div>
         </div>
       )}
 

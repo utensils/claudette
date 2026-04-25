@@ -22,6 +22,12 @@ pub struct Repository {
     pub branch_rename_preferences: Option<String>,
     /// When true, setup scripts run automatically without a confirmation modal.
     pub setup_script_auto_run: bool,
+    /// Explicit remote-tracking branch to use as the base for new workspaces
+    /// (e.g. "origin/main"). None means auto-detect via git.
+    pub base_branch: Option<String>,
+    /// Explicit remote name for push/pull/PR operations (e.g. "origin").
+    /// None means auto-detect (first configured remote).
+    pub default_remote: Option<String>,
     /// Runtime-only: whether the repo path still exists on disk. Not persisted.
     pub path_valid: bool,
 }

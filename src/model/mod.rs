@@ -1,4 +1,5 @@
 mod attachment;
+pub mod cesp;
 mod chat_message;
 mod checkpoint;
 pub mod diff;
@@ -8,7 +9,11 @@ mod repository;
 mod terminal_tab;
 mod workspace;
 
-pub use attachment::Attachment;
+pub use attachment::{Attachment, AttachmentOrigin};
+pub use cesp::{
+    CespCategorySounds, CespManifest, CespSound, InstalledPack, InstalledPackMeta, RegistryIndex,
+    RegistryPack,
+};
 pub use chat_message::{ChatMessage, ChatRole};
 pub use checkpoint::{CheckpointFile, CompletedTurnData, ConversationCheckpoint, TurnToolActivity};
 pub use metrics::{
