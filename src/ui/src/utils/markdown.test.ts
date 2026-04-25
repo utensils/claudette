@@ -1,7 +1,15 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createElement } from "react";
 import type { ReactElement } from "react";
-import { EXTERNAL_SCHEMES, trimTrailingCodeNewline, MARKDOWN_COMPONENTS } from "./markdown";
+import { renderToStaticMarkup } from "react-dom/server";
+
+vi.mock("./highlight", () => ({
+  getCachedHighlight: vi.fn(),
+  highlightCode: vi.fn(),
+}));
+
+import { EXTERNAL_SCHEMES, MARKDOWN_COMPONENTS, HighlightedCode } from "./markdown";
+import { getCachedHighlight, highlightCode } from "./highlight";
 
 describe("EXTERNAL_SCHEMES", () => {
   it("matches http URLs", () => {
@@ -47,97 +55,100 @@ describe("EXTERNAL_SCHEMES", () => {
   });
 });
 
-describe("trimTrailingCodeNewline", () => {
-  it("strips a trailing newline from a single string child", () => {
-    expect(trimTrailingCodeNewline("const x = 1;\n")).toEqual(["const x = 1;"]);
+describe("MARKDOWN_COMPONENTS.code wiring", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const CodeOverride = MARKDOWN_COMPONENTS.code as (props: any) => ReactElement;
+
+  it("returns a HighlightedCode element forwarding className and children", () => {
+    const el = CodeOverride({
+      node: undefined,
+      className: "language-rust",
+      children: "fn main() {}",
+    });
+    expect(el.type).toBe(HighlightedCode);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const props = (el as unknown as { props: any }).props;
+    expect(props.className).toBe("language-rust");
+    expect(props.children).toBe("fn main() {}");
   });
 
-  it("strips multiple trailing newlines", () => {
-    expect(trimTrailingCodeNewline("const x = 1;\n\n\n")).toEqual(["const x = 1;"]);
-  });
-
-  it("preserves internal newlines", () => {
-    expect(trimTrailingCodeNewline("a\nb\nc\n")).toEqual(["a\nb\nc"]);
-  });
-
-  it("drops a trailing whitespace-only text node", () => {
-    const span = createElement("span", { key: "k" }, "code");
-    const result = trimTrailingCodeNewline([span, "\n"]) as React.ReactNode[];
-    expect(result).toHaveLength(1);
-    expect((result[0] as React.ReactElement).type).toBe("span");
-  });
-
-  it("trims trailing newline from the last text node after a span", () => {
-    const span = createElement("span", { key: "k" }, "const");
-    const result = trimTrailingCodeNewline([span, " x = 1;\n"]) as React.ReactNode[];
-    expect(result).toHaveLength(2);
-    expect((result[0] as React.ReactElement).type).toBe("span");
-    expect(result[1]).toBe(" x = 1;");
-  });
-
-  it("returns the original children reference when there is no trailing newline", () => {
-    const span = createElement("span", { key: "k" }, "const");
-    const input: React.ReactNode = [span, " x = 1;"];
-    expect(trimTrailingCodeNewline(input)).toBe(input);
-  });
-
-  it("returns the original string unchanged when no trailing newline", () => {
-    expect(trimTrailingCodeNewline("code")).toBe("code");
-  });
-
-  it("returns the original input when children are empty", () => {
-    expect(trimTrailingCodeNewline([])).toEqual([]);
-    expect(trimTrailingCodeNewline(null)).toBe(null);
-  });
-
-  it("returns children unchanged when last child is a non-string element", () => {
-    const span = createElement("span", { key: "k" }, "code");
-    const input: React.ReactNode = [span];
-    expect(trimTrailingCodeNewline(input)).toBe(input);
+  it("strips the `node` prop before forwarding", () => {
+    const el = CodeOverride({
+      node: { fake: true },
+      className: "language-ts",
+      children: "const x = 1",
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const props = (el as unknown as { props: any }).props;
+    expect(props.node).toBeUndefined();
   });
 });
 
-describe("MARKDOWN_COMPONENTS.code", () => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const CodeComponent = MARKDOWN_COMPONENTS.code as (props: any) => ReactElement;
-
-  function renderCode(props: Record<string, unknown>): ReactElement {
-    return CodeComponent({ node: undefined, ...props });
-  }
-  function propsOf(el: ReactElement): Record<string, unknown> {
-    return (el as unknown as { props: Record<string, unknown> }).props;
-  }
-
-  it("strips trailing newline from fenced code blocks (hljs class)", () => {
-    const span = createElement("span", { className: "hljs-keyword", key: "k" }, "const");
-    const el = renderCode({ className: "hljs language-js", children: [span, " x = 1;\n"] });
-    expect(el.type).toBe("code");
-    expect(propsOf(el).className).toBe("hljs language-js");
-    const kids = propsOf(el).children as React.ReactNode[];
-    expect(kids).toHaveLength(2);
-    expect(kids[1]).toBe(" x = 1;");
+describe("HighlightedCode", () => {
+  beforeEach(() => {
+    vi.mocked(getCachedHighlight).mockReset();
+    vi.mocked(highlightCode).mockReset();
+    vi.mocked(getCachedHighlight).mockReturnValue(null);
+    vi.mocked(highlightCode).mockResolvedValue(null);
   });
 
-  it("strips trailing newline from fenced code blocks (language- class)", () => {
-    const el = renderCode({ className: "language-python", children: "print('hello')\n" });
-    expect(el.type).toBe("code");
-    const kids = propsOf(el).children as React.ReactNode[];
-    expect(kids).toHaveLength(1);
-    expect(kids[0]).toBe("print('hello')");
+  it("renders inline <code> when there is no language class", () => {
+    const html = renderToStaticMarkup(
+      createElement(HighlightedCode, { children: "x" }),
+    );
+    expect(html).toBe("<code>x</code>");
+    expect(getCachedHighlight).not.toHaveBeenCalled();
   });
 
-  it("does NOT strip newlines from inline code (no language class)", () => {
-    const el = renderCode({ children: "some code" });
-    expect(propsOf(el).children).toBe("some code");
+  it("renders plain <code> when language is set but no cached highlight", () => {
+    vi.mocked(getCachedHighlight).mockReturnValue(null);
+    const html = renderToStaticMarkup(
+      createElement(HighlightedCode, {
+        className: "language-rust",
+        children: "fn main() {}",
+      }),
+    );
+    expect(html).toBe('<code class="language-rust">fn main() {}</code>');
+    expect(getCachedHighlight).toHaveBeenCalledWith("fn main() {}", "rust");
   });
 
-  it("does NOT strip newlines when className is undefined", () => {
-    const el = renderCode({ className: undefined, children: "inline\n" });
-    expect(propsOf(el).children).toBe("inline\n");
+  it("renders dangerouslySetInnerHTML when cache returns highlighted HTML", () => {
+    vi.mocked(getCachedHighlight).mockReturnValue('<span style="--shiki-light:black">fn</span>');
+    const html = renderToStaticMarkup(
+      createElement(HighlightedCode, {
+        className: "language-rust",
+        children: "fn",
+      }),
+    );
+    expect(html).toBe('<code class="language-rust"><span style="--shiki-light:black">fn</span></code>');
   });
 
   it("preserves className on the rendered code element", () => {
-    const el = renderCode({ className: "hljs language-rust", children: "fn main() {}\n" });
-    expect(propsOf(el).className).toBe("hljs language-rust");
+    const html = renderToStaticMarkup(
+      createElement(HighlightedCode, {
+        className: "language-typescript",
+        children: "const x = 1",
+      }),
+    );
+    expect(html).toContain('class="language-typescript"');
+  });
+
+  it("treats className without language- prefix as inline code", () => {
+    const html = renderToStaticMarkup(
+      createElement(HighlightedCode, { className: "math", children: "1+1" }),
+    );
+    expect(html).toBe('<code class="math">1+1</code>');
+    expect(getCachedHighlight).not.toHaveBeenCalled();
+  });
+
+  it("extracts language with hyphen (language-shell-script)", () => {
+    vi.mocked(getCachedHighlight).mockReturnValue(null);
+    renderToStaticMarkup(
+      createElement(HighlightedCode, {
+        className: "language-shell-script",
+        children: "echo hi",
+      }),
+    );
+    expect(getCachedHighlight).toHaveBeenCalledWith("echo hi", "shell-script");
   });
 });

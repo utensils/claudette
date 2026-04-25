@@ -23,8 +23,9 @@ const css = readFileSync(
  *   2. <code> re-enables user-select so the text itself remains selectable.
  *   3. <code> uses width: fit-content so its bounding box is only as wide
  *      as the visible text.
- *   4. <code> uses padding: 0 !important to override highlight.js's
- *      pre code.hljs { padding: 1em } which inflates the element rect.
+ *   4. <code> uses padding: 0 !important so the element rect matches the
+ *      visible text bounds — keeps the selection rect tight regardless of
+ *      what the highlighter (Shiki, or anything else) emits.
  */
 
 function extractBlock(selector: string): string {
@@ -53,7 +54,7 @@ describe("code-block selection CSS (regression for stair-step bug)", () => {
     expect(codeBlock).toMatch(/max-width:\s*100%/);
   });
 
-  it("zeroes code padding with !important to override highlight.js", () => {
+  it("zeroes code padding with !important so selection rect matches text bounds", () => {
     expect(codeBlock).toMatch(/padding:\s*0\s*!important/);
   });
 

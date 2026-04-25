@@ -1043,3 +1043,28 @@ select:disabled {
   opacity: 1;
   transition: opacity 0.5s ease;
 }
+
+/*
+ * Shiki dual-theme code highlighting.
+ *
+ * The Shiki worker emits each token span with both `--shiki-light` and
+ * `--shiki-dark` CSS variables and no inline `color`. The rules below pick
+ * the correct variable based on the active color scheme. Built-in themes
+ * are matched by `[data-theme]`; user themes signal their scheme via an
+ * inline `color-scheme: light|dark` on `<html>` (set in theme.ts:applyTheme).
+ *
+ * Selector targets only the Shiki-emitted token spans (those carrying the
+ * `--shiki-light` custom property inline). The line-wrapper spans Shiki
+ * also emits don't carry that property, so they harmlessly miss this rule
+ * and inherit `currentColor`. Using the inline-style attribute selector
+ * keeps the rule independent of CSS-module class hashing.
+ */
+pre code [style*="--shiki-light"] {
+  color: var(--shiki-dark);
+}
+[data-theme="default-light"] pre code [style*="--shiki-light"],
+[data-theme="rose-pine-dawn"] pre code [style*="--shiki-light"],
+[data-theme="solarized-light"] pre code [style*="--shiki-light"],
+html[style*="color-scheme: light"] pre code [style*="--shiki-light"] {
+  color: var(--shiki-light);
+}

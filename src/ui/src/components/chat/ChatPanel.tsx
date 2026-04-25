@@ -1,7 +1,6 @@
 import React, { createContext, memo, useContext, useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { isAgentBusy } from "../../utils/agentStatus";
-import Markdown from "react-markdown";
-import { preprocessContent, MARKDOWN_COMPONENTS, REHYPE_PLUGINS, REMARK_PLUGINS } from "../../utils/markdown";
+import { MessageMarkdown } from "./MessageMarkdown";
 import { AlertCircle, FileText, GitBranch, LoaderCircle, Mic, Plus, RotateCcw, Send, Split, Square, X } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import type { ToolActivity, CompletedTurn } from "../../stores/useAppStore";
@@ -31,6 +30,7 @@ import {
 import { applySelectedModel } from "./applySelectedModel";
 import { MODELS } from "./modelRegistry";
 import { roleClassKey, shouldRenderAsMarkdown } from "./messageRendering";
+import { StreamingContext } from "./StreamingContext";
 import { findLatestPlanFilePath } from "./planFilePath";
 import type { PermissionLevel } from "../../stores/useAppStore";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -1307,13 +1307,9 @@ const StreamingMessage = memo(function StreamingMessage({
       aria-busy={isStreaming}
     >
       <div className={styles.content}>
-        <Markdown
-          remarkPlugins={REMARK_PLUGINS}
-          rehypePlugins={REHYPE_PLUGINS}
-          components={MARKDOWN_COMPONENTS}
-        >
-          {preprocessContent(displayed)}
-        </Markdown>
+        <StreamingContext.Provider value={isStreaming || pendingText.length > 0}>
+          <MessageMarkdown content={displayed} />
+        </StreamingContext.Provider>
         {showCaret && <span className={caretStyles.caret} aria-hidden="true" />}
       </div>
     </div>
@@ -2030,13 +2026,7 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
                 // setup-script output, and other multi-line system notes
                 // preserve headings, lists, and code blocks instead of
                 // collapsing newlines into a single paragraph.
-                <Markdown
-                  remarkPlugins={REMARK_PLUGINS}
-                  rehypePlugins={REHYPE_PLUGINS}
-                  components={MARKDOWN_COMPONENTS}
-                >
-                  {preprocessContent(msg.content)}
-                </Markdown>
+                <MessageMarkdown content={msg.content} />
               ) : (
                 renderUltrathinkText(msg.content, {
                   animated: false,

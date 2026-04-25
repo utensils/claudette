@@ -7,10 +7,6 @@ import {
 } from "../styles/themes";
 import { listUserThemes } from "../services/tauri";
 
-// Vite ?url imports — resolved to asset URLs without injecting CSS
-import hljsDarkUrl from "highlight.js/styles/github-dark.min.css?url";
-import hljsLightUrl from "highlight.js/styles/github.min.css?url";
-
 // localStorage key used by index.html's pre-hydration script to set
 // data-theme before React mounts. Keep in sync with that script.
 const THEME_CACHE_KEY = "claudette.theme";
@@ -148,18 +144,6 @@ function clearThemeableInlineVars(): void {
   root.style.removeProperty("color-scheme");
 }
 
-function updateHljsStylesheet(scheme: string): void {
-  const isLight = scheme === "light";
-  let link = document.getElementById("hljs-theme") as HTMLLinkElement | null;
-  if (!link) {
-    link = document.createElement("link");
-    link.id = "hljs-theme";
-    link.rel = "stylesheet";
-    document.head.appendChild(link);
-  }
-  link.href = isLight ? hljsLightUrl : hljsDarkUrl;
-}
-
 function cacheDataTheme(attr: string): void {
   // Mirror the data-theme attribute we just wrote so the pre-hydration
   // script in index.html can restore it before React mounts. For user JSON
@@ -188,8 +172,6 @@ export function applyTheme(theme: ThemeDefinition): void {
     clearThemeableInlineVars();
     dataThemeAttr = theme.id;
     root.setAttribute("data-theme", dataThemeAttr);
-    const meta = BUILTIN_THEME_META.find((m) => m.id === theme.id);
-    updateHljsStylesheet(meta?.colorScheme ?? "dark");
   } else {
     // User-provided JSON theme. Mark data-theme so any default-dark rules
     // still apply as a baseline; inline vars override.
@@ -205,7 +187,6 @@ export function applyTheme(theme: ThemeDefinition): void {
     }
     const scheme = theme.colors["color-scheme"] ?? "dark";
     root.style.setProperty("color-scheme", scheme);
-    updateHljsStylesheet(scheme);
   }
 
   cacheDataTheme(dataThemeAttr);

@@ -297,7 +297,7 @@
   font-style: italic;
 }
 
-/* Code blocks — override highlight.js theme background */
+/* Code blocks — Claudette palette + Shiki token coloring (theme.css) */
 .content pre {
   position: relative;
   background: var(--chat-input-bg) !important;
