@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.19.0](https://github.com/utensils/claudette/compare/v0.18.0...v0.19.0) (2026-04-25)
+
+
+### Features
+
+* **chat:** lightbox preview for attachment images (single-click → full-size) ([#425](https://github.com/utensils/claudette/issues/425)) ([c92bf03](https://github.com/utensils/claudette/commit/c92bf03b1ccb8994f7ee93e771cb1bba213e5923))
+* **env-direnv:** honor DIRENV_WATCHES + slow nix-devshell test ([#415](https://github.com/utensils/claudette/issues/415)) ([6d59f6a](https://github.com/utensils/claudette/commit/6d59f6a41b557772ac659a1fe984c605b53c5a6c))
+* **env-provider:** reactive fs-watcher invalidation + proactive warmup on repo add ([#416](https://github.com/utensils/claudette/issues/416)) ([99b857a](https://github.com/utensils/claudette/commit/99b857a7e6ec4c538f9c1e4fcfa3b1d40ef48a5d))
+* persist SCM status to SQLite for instant display on app reload ([#381](https://github.com/utensils/claudette/issues/381)) ([aa09c2a](https://github.com/utensils/claudette/commit/aa09c2acd12b9b169690bcc63fe8ce51db05bf2f))
+* **plugins:** plugin runtime kinds + env-provider system + repo-level env panel ([#406](https://github.com/utensils/claudette/issues/406)) ([6f356b3](https://github.com/utensils/claudette/commit/6f356b37f6e1340195b2035376cca8db670fa429))
+* **repo:** add per-repository base branch and default remote settings ([#386](https://github.com/utensils/claudette/issues/386)) ([f4f69cd](https://github.com/utensils/claudette/commit/f4f69cd74cd49b74dbe6edb078e78f74d7fdf458))
+* **settings:** auto-delete workspace record when branch is deleted on archive ([#400](https://github.com/utensils/claudette/issues/400)) ([6aa8fd3](https://github.com/utensils/claudette/commit/6aa8fd37c57e1877f7ba63f0483ca04b975b9525))
+* **sidebar:** show badge-check icon when agent completes work ([#391](https://github.com/utensils/claudette/issues/391)) ([060b6da](https://github.com/utensils/claudette/commit/060b6daf3c03c38ba42cab4b11d1b97fd7aa0868))
+* **terminal:** add split-pane support to the integrated terminal ([#414](https://github.com/utensils/claudette/issues/414)) ([723fb96](https://github.com/utensils/claudette/commit/723fb96c0e6bc1f2bd869e2bf85f851b7169931d))
+* **ux:** dialog with install guidance when a required CLI is missing ([#417](https://github.com/utensils/claudette/issues/417)) ([0e7f075](https://github.com/utensils/claudette/commit/0e7f075c080835f99a56b47ebea69bbf3089f46b))
+* **windows:** native Windows support + CI/CD ([#383](https://github.com/utensils/claudette/issues/383)) ([74a019d](https://github.com/utensils/claudette/commit/74a019db2e828e65ac070d4ea5aa9ea3f711c72f))
+
+
+### Bug Fixes
+
+* **chat:** preserve session context when stopping agent ([#398](https://github.com/utensils/claudette/issues/398)) ([81c5b6e](https://github.com/utensils/claudette/commit/81c5b6eaf2382f4cea2b688e45a980f2108f097e))
+* **chat:** remove horizontal scrollbar from input composer ([#404](https://github.com/utensils/claudette/issues/404)) ([5b8e737](https://github.com/utensils/claudette/commit/5b8e737e5e24bbe4b10a5c49c5faba1df306730e)), closes [#388](https://github.com/utensils/claudette/issues/388)
+* **chat:** show rollback footer for plain turns ([#426](https://github.com/utensils/claudette/issues/426)) ([acc1de9](https://github.com/utensils/claudette/commit/acc1de9448ce782e2d4a57ee0d38296d928bc47a))
+* **notifications:** defer attention notify until UI has the prompt event ([#402](https://github.com/utensils/claudette/issues/402)) ([e4d0fe1](https://github.com/utensils/claudette/commit/e4d0fe1818ee0a5441f24f2a880ac258ee09fd5f))
+* **notifications:** prevent active sound pack from resetting on restart ([#384](https://github.com/utensils/claudette/issues/384)) ([37ccfd9](https://github.com/utensils/claudette/commit/37ccfd955e6fa8f88bd45a0f1f194ba98c9c60c2))
+* **repository:** show friendly message on duplicate repo path ([#393](https://github.com/utensils/claudette/issues/393)) ([4165c08](https://github.com/utensils/claudette/commit/4165c083924c02916958bd17ac641acb4cf582bc))
+* **sidebar:** persist external branch renames to DB and refresh on select ([#405](https://github.com/utensils/claudette/issues/405)) ([f5c1aef](https://github.com/utensils/claudette/commit/f5c1aefe0bcbbb1356e03bf98f340447662625b0))
+* **sidebar:** remove deleted workspace from sidebar and handle re-delete gracefully ([#377](https://github.com/utensils/claudette/issues/377)) ([dad6842](https://github.com/utensils/claudette/commit/dad68427722c41fc7aef902936978af60ad97d39))
+* **terminal:** trim trailing whitespace per line on terminal copy ([#403](https://github.com/utensils/claudette/issues/403)) ([1b7d72e](https://github.com/utensils/claudette/commit/1b7d72ecbf0c46786c60329e1a589fc934351a8d))
+* **usage:** eliminate stale error flash on first open ([#394](https://github.com/utensils/claudette/issues/394)) ([12aa9ec](https://github.com/utensils/claudette/commit/12aa9ec5f4ecc0298e285d035e13fc78438986f8))
+
 ## [0.18.0](https://github.com/utensils/claudette/compare/v0.17.0...v0.18.0) (2026-04-23)
 
 
