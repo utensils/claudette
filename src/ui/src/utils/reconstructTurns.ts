@@ -1,7 +1,69 @@
-import type { CompletedTurn } from "../stores/useAppStore";
+import type { CompletedTurn, TurnSegment } from "../stores/useAppStore";
 import type { ChatMessage } from "../types/chat";
-import type { CompletedTurnData } from "../types/checkpoint";
+import type {
+  CompletedTurnData,
+  TurnToolActivityData,
+} from "../types/checkpoint";
 import { debugChat } from "./chatDebug";
+import { isSubagentTool } from "./toolClassification";
+
+/**
+ * Rebuild the segment list for a completed turn from the persisted
+ * `group_id` on each activity. Rows that share a `group_id` collapse into
+ * one tool-group (or a subagent segment if the group is a lone Task/Agent
+ * call). Legacy rows — all `group_id` missing/null — fall back to a single
+ * tool-group covering every activity so pre-migration turns still render.
+ */
+function deriveSegmentsFromActivities(
+  activities: TurnToolActivityData[],
+): TurnSegment[] | undefined {
+  if (activities.length === 0) return undefined;
+
+  const anyGroupId = activities.some(
+    (a) => a.group_id !== null && a.group_id !== undefined,
+  );
+  if (!anyGroupId) return undefined;
+
+  const segments: TurnSegment[] = [];
+  let currentKey: number | null = null;
+  let currentBucket: TurnToolActivityData[] = [];
+
+  const flush = () => {
+    if (currentBucket.length === 0) return;
+    const first = currentBucket[0];
+    const isSoloSubagent =
+      currentBucket.length === 1 && isSubagentTool(first.tool_name);
+    if (isSoloSubagent) {
+      segments.push({
+        kind: "subagent",
+        id: `seg-sub-${first.tool_use_id}`,
+        toolUseId: first.tool_use_id,
+      });
+    } else {
+      segments.push({
+        kind: "tool-group",
+        id: `seg-grp-${first.tool_use_id}`,
+        toolUseIds: currentBucket.map((a) => a.tool_use_id),
+      });
+    }
+    currentBucket = [];
+  };
+
+  for (const a of activities) {
+    const key = a.group_id ?? null;
+    if (currentBucket.length === 0 || key === currentKey) {
+      currentBucket.push(a);
+      currentKey = key;
+    } else {
+      flush();
+      currentBucket.push(a);
+      currentKey = key;
+    }
+  }
+  flush();
+
+  return segments.length > 0 ? segments : undefined;
+}
 
 /**
  * Reconstruct CompletedTurn[] from persisted turn data and loaded messages.
@@ -77,6 +139,7 @@ export function reconstructCompletedTurns(
         collapsed: true,
         summary: a.summary,
       })),
+      segments: deriveSegmentsFromActivities(td.activities),
       messageCount: td.message_count,
       collapsed: true,
       afterMessageIndex,

@@ -4,7 +4,8 @@ import { HighlightedPlainText } from "./HighlightedPlainText";
 import { ChatSearchBar } from "./ChatSearchBar";
 import { AlertCircle, FileText, GitBranch, LoaderCircle, Mic, Plus, RotateCcw, Send, Split, Square, X } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
-import type { ToolActivity, CompletedTurn } from "../../stores/useAppStore";
+import type { ToolActivity, CompletedTurn, TurnSegment } from "../../stores/useAppStore";
+import { isSubagentTool } from "../../utils/toolClassification";
 import {
   loadChatHistory,
   loadAttachmentsForSession,
@@ -247,6 +248,7 @@ const ScrollContext = createContext<{
 // causing Object.is to return false and triggering unnecessary component re-renders.
 const EMPTY_COMPLETED_TURNS: CompletedTurn[] = [];
 const EMPTY_ACTIVITIES: ToolActivity[] = [];
+const EMPTY_TURN_SEGMENTS: TurnSegment[] = [];
 const EMPTY_ATTACHMENTS: ChatAttachment[] = [];
 
 export function ChatPanel() {
@@ -1391,6 +1393,218 @@ const StreamingMessage = memo(function StreamingMessage({
 /**
  * Render a single completed turn summary (collapsible tool call list).
  */
+/** Flat one-line row for a single tool call inside a tool-group or the
+ *  legacy flat turn body. Extracted so both renderers share the exact markup
+ *  they used to inline. */
+function ToolActivityRow({
+  act,
+  searchQuery,
+}: {
+  act: ToolActivity;
+  searchQuery?: string;
+}) {
+  const text = act.summary || extractToolSummary(act.toolName, act.inputJson);
+  return (
+    <div className={styles.toolActivity}>
+      <div className={styles.toolHeader}>
+        <span
+          className={styles.toolName}
+          style={{ color: toolColor(act.toolName) }}
+        >
+          {act.toolName}
+        </span>
+        {(act.summary || act.inputJson) && (
+          <span className={styles.toolSummary}>
+            <HighlightedPlainText text={text} query={searchQuery ?? ""} />
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** A tool-group segment: a mini sub-box with its own collapse chevron
+ *  holding every tool call that belongs to this group. */
+function ToolGroupBox({
+  activities,
+  searchQuery,
+}: {
+  activities: ToolActivity[];
+  searchQuery?: string;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+  // Force-expand when the active search query matches inside any of this
+  // group's activity summaries — otherwise marks would land in detached
+  // DOM and the search counter would tick up with nothing visible.
+  const queryHasMatch =
+    !!searchQuery &&
+    activities.some(
+      (a) =>
+        a.summary &&
+        a.summary.toLowerCase().includes(searchQuery.toLowerCase()),
+    );
+  const isExpanded = !collapsed || queryHasMatch;
+  return (
+    <div className={styles.toolGroupBox}>
+      <div
+        className={styles.toolGroupHeader}
+        role="button"
+        tabIndex={0}
+        aria-expanded={isExpanded}
+        onClick={(e) => {
+          e.stopPropagation();
+          setCollapsed((c) => !c);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            e.stopPropagation();
+            setCollapsed((c) => !c);
+          }
+        }}
+      >
+        <span className={styles.toolChevron}>{isExpanded ? "⌄" : "›"}</span>
+        <span>
+          {activities.length} tool call{activities.length !== 1 ? "s" : ""}
+        </span>
+      </div>
+      {isExpanded && (
+        <div className={styles.toolGroupBody}>
+          {activities.map((act) => (
+            <ToolActivityRow
+              key={act.toolUseId}
+              act={act}
+              searchQuery={searchQuery}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A subagent segment: a standalone card for a `Task` or `Agent` tool call.
+ *  Currently renders the same input/summary that a tool-group row would;
+ *  the distinct card is the mount point for future per-subagent streaming. */
+function SubagentCard({ activity }: { activity: ToolActivity }) {
+  const summary =
+    activity.summary ||
+    extractToolSummary(activity.toolName, activity.inputJson);
+  return (
+    <div className={styles.subagentCard}>
+      <div className={styles.subagentHeader}>
+        <span
+          className={styles.subagentLabel}
+          style={{ color: toolColor(activity.toolName) }}
+        >
+          {activity.toolName}
+        </span>
+        {summary && <span className={styles.subagentSummary}>{summary}</span>}
+      </div>
+    </div>
+  );
+}
+
+/** Render the body of a turn (completed or in-progress) as its ordered
+ *  segments. When `segments` is undefined — legacy turns without the
+ *  `group_id` column populated — falls back to a single flat tool list so
+ *  older history still displays sensibly. When there is exactly one
+ *  tool-group covering every activity the renderer also uses the flat list
+ *  to keep visual parity with the pre-segment UI. */
+function TurnSegmentedBody({
+  segments,
+  activities,
+  searchQuery,
+}: {
+  segments?: TurnSegment[];
+  activities: ToolActivity[];
+  searchQuery?: string;
+}) {
+  const byId = useMemo(() => {
+    const m = new Map<string, ToolActivity>();
+    for (const a of activities) m.set(a.toolUseId, a);
+    return m;
+  }, [activities]);
+
+  const flatten =
+    !segments ||
+    segments.length === 0 ||
+    (segments.length === 1 &&
+      segments[0].kind === "tool-group" &&
+      segments[0].toolUseIds.length === activities.length);
+
+  if (flatten) {
+    return (
+      <div className={styles.turnActivities}>
+        {activities.map((act) => (
+          <ToolActivityRow
+            key={act.toolUseId}
+            act={act}
+            searchQuery={searchQuery}
+          />
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className={styles.turnSegments}>
+      {segments!.map((seg) => {
+        if (seg.kind === "subagent") {
+          const act = byId.get(seg.toolUseId);
+          if (!act) return null;
+          return <SubagentCard key={seg.id} activity={act} />;
+        }
+        const acts = seg.toolUseIds
+          .map((id) => byId.get(id))
+          .filter((a): a is ToolActivity => !!a);
+        if (acts.length === 0) return null;
+        return (
+          <ToolGroupBox
+            key={seg.id}
+            activities={acts}
+            searchQuery={searchQuery}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+/** Synthesise segments for an in-progress turn when the live stream hasn't
+ *  populated `turnSegments` yet (e.g. early in a new turn before the first
+ *  tool_use arrives, or for workspaces whose state pre-dates this slice
+ *  being tracked). Keeps the live renderer from blank-flashing while the
+ *  stream catches up. */
+function synthesiseLiveSegments(activities: ToolActivity[]): TurnSegment[] {
+  if (activities.length === 0) return [];
+  const segments: TurnSegment[] = [];
+  let currentIds: string[] = [];
+  const flush = () => {
+    if (currentIds.length === 0) return;
+    segments.push({
+      kind: "tool-group",
+      id: `live-grp-${currentIds[0]}`,
+      toolUseIds: [...currentIds],
+    });
+    currentIds = [];
+  };
+  for (const a of activities) {
+    if (isSubagentTool(a.toolName)) {
+      flush();
+      segments.push({
+        kind: "subagent",
+        id: `live-sub-${a.toolUseId}`,
+        toolUseId: a.toolUseId,
+      });
+    } else {
+      currentIds.push(a.toolUseId);
+    }
+  }
+  flush();
+  return segments;
+}
+
 function TurnSummary({
   turn,
   collapsed,
@@ -1464,25 +1678,11 @@ function TurnSummary({
           </span>
         </div>
         {isExpanded && (
-          <div className={styles.turnActivities}>
-            {turn.activities.map((act: ToolActivity) => (
-              <div key={act.toolUseId} className={styles.toolActivity}>
-                <div className={styles.toolHeader}>
-                  <span className={styles.toolName} style={{ color: toolColor(act.toolName) }}>
-                    {act.toolName}
-                  </span>
-                  {(act.summary || act.inputJson) && (
-                    <span className={styles.toolSummary}>
-                      <HighlightedPlainText
-                        text={act.summary || extractToolSummary(act.toolName, act.inputJson)}
-                        query={searchQuery}
-                      />
-                    </span>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
+          <TurnSegmentedBody
+            segments={turn.segments}
+            activities={turn.activities}
+            searchQuery={searchQuery}
+          />
         )}
       </div>
       {taskProgress && taskProgress.totalCount > 0 && (
@@ -2192,6 +2392,9 @@ const ToolActivitiesSection = memo(function ToolActivitiesSection({
   const activities = useAppStore(
     (s) => s.toolActivities[sessionId] ?? EMPTY_ACTIVITIES
   );
+  const liveSegments = useAppStore(
+    (s) => s.turnSegments[sessionId] ?? EMPTY_TURN_SEGMENTS,
+  );
   const [collapsed, setCollapsed] = useState(true);
 
   // Auto-collapse when a new turn starts (activities goes from 0 to non-zero)
@@ -2217,6 +2420,23 @@ const ToolActivitiesSection = memo(function ToolActivitiesSection({
     );
   const isExpanded = !collapsed || queryHasMatch;
 
+  // Prefer segments the stream handler built live. Fall back to synthesis if
+  // the store has no segments yet (race early in turn) OR if segments don't
+  // yet cover every activity (segment update lags behind a freshly-appended
+  // tool entry — the missing tool would otherwise vanish from the UI).
+  const segmentToolUseIds = new Set(
+    liveSegments.flatMap((seg) =>
+      seg.kind === "tool-group" ? seg.toolUseIds : [seg.toolUseId],
+    ),
+  );
+  const segmentsCoverAll = activities.every((a) =>
+    segmentToolUseIds.has(a.toolUseId),
+  );
+  const segments =
+    liveSegments.length > 0 && segmentsCoverAll
+      ? liveSegments
+      : synthesiseLiveSegments(activities);
+
   return (
     <div className={styles.toolActivities} aria-live="polite" aria-atomic="true">
       <div className={styles.turnSummary}>
@@ -2241,20 +2461,11 @@ const ToolActivitiesSection = memo(function ToolActivitiesSection({
           </span>
         </div>
         {isExpanded && (
-          <div className={styles.turnActivities}>
-            {activities.map((act: ToolActivity) => (
-              <div key={act.toolUseId} className={styles.toolActivity}>
-                <div className={styles.toolHeader}>
-                  <span className={styles.toolName} style={{ color: toolColor(act.toolName) }}>{act.toolName}</span>
-                  {act.summary && (
-                    <span className={styles.toolSummary}>
-                      <HighlightedPlainText text={act.summary} query={searchQuery} />
-                    </span>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
+          <TurnSegmentedBody
+            segments={segments}
+            activities={activities}
+            searchQuery={searchQuery}
+          />
         )}
       </div>
     </div>

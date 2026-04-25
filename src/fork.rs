@@ -373,6 +373,7 @@ fn copy_history(
                     result_text: a.result_text.clone(),
                     summary: a.summary.clone(),
                     sort_order: a.sort_order,
+                    group_id: a.group_id,
                 })
                 .collect();
             db.insert_turn_tool_activities(&remapped)?;
@@ -553,6 +554,7 @@ mod tests {
             result_text: "ok".into(),
             summary: "read file".into(),
             sort_order: 0,
+            group_id: None,
         }])
         .unwrap();
         db.insert_turn_tool_activities(&[TurnToolActivity {
@@ -564,6 +566,7 @@ mod tests {
             result_text: "ok".into(),
             summary: "edit file".into(),
             sort_order: 0,
+            group_id: None,
         }])
         .unwrap();
         db

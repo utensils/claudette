@@ -35,6 +35,12 @@ pub struct TurnToolActivity {
     pub result_text: String,
     pub summary: String,
     pub sort_order: i32,
+    /// Index of the segment this activity belongs to within its turn. Rows
+    /// sharing a `group_id` are rendered as one tool-group; distinct values
+    /// become distinct groups or subagent cards. `None` on pre-migration rows
+    /// — the reader treats those as a single group covering the whole turn.
+    #[serde(default)]
+    pub group_id: Option<i32>,
 }
 
 /// Grouped checkpoint + activities for loading completed turns.

@@ -1862,8 +1862,8 @@ impl Database {
         let tx = self.conn.unchecked_transaction()?;
         {
             let mut stmt = tx.prepare(
-                "INSERT INTO turn_tool_activities (id, checkpoint_id, tool_use_id, tool_name, input_json, result_text, summary, sort_order)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO turn_tool_activities (id, checkpoint_id, tool_use_id, tool_name, input_json, result_text, summary, sort_order, group_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             )?;
             for a in activities {
                 stmt.execute(params![
@@ -1875,6 +1875,7 @@ impl Database {
                     a.result_text,
                     a.summary,
                     a.sort_order,
+                    a.group_id,
                 ])?;
             }
         }
@@ -1908,8 +1909,8 @@ impl Database {
         )?;
         {
             let mut stmt = tx.prepare(
-                "INSERT INTO turn_tool_activities (id, checkpoint_id, tool_use_id, tool_name, input_json, result_text, summary, sort_order)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO turn_tool_activities (id, checkpoint_id, tool_use_id, tool_name, input_json, result_text, summary, sort_order, group_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             )?;
             for a in activities {
                 stmt.execute(params![
@@ -1921,6 +1922,7 @@ impl Database {
                     a.result_text,
                     a.summary,
                     a.sort_order,
+                    a.group_id,
                 ])?;
             }
         }
@@ -1940,7 +1942,8 @@ impl Database {
         // Then load all activities for this workspace in one query.
         let mut stmt = self.conn.prepare(
             "SELECT ta.id, ta.checkpoint_id, ta.tool_use_id, ta.tool_name,
-                    ta.input_json, ta.result_text, ta.summary, ta.sort_order
+                    ta.input_json, ta.result_text, ta.summary, ta.sort_order,
+                    ta.group_id
              FROM turn_tool_activities ta
              JOIN conversation_checkpoints cp ON ta.checkpoint_id = cp.id
              WHERE cp.workspace_id = ?1
@@ -1957,6 +1960,7 @@ impl Database {
                     result_text: row.get(5)?,
                     summary: row.get(6)?,
                     sort_order: row.get(7)?,
+                    group_id: row.get(8)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -2034,7 +2038,8 @@ impl Database {
 
         let mut stmt = self.conn.prepare(
             "SELECT ta.id, ta.checkpoint_id, ta.tool_use_id, ta.tool_name,
-                    ta.input_json, ta.result_text, ta.summary, ta.sort_order
+                    ta.input_json, ta.result_text, ta.summary, ta.sort_order,
+                    ta.group_id, ta.anchor_ordinal
              FROM turn_tool_activities ta
              JOIN conversation_checkpoints cp ON ta.checkpoint_id = cp.id
              WHERE cp.chat_session_id = ?1
@@ -2051,6 +2056,8 @@ impl Database {
                     result_text: row.get(5)?,
                     summary: row.get(6)?,
                     sort_order: row.get(7)?,
+                    group_id: row.get(8)?,
+                    anchor_ordinal: row.get(9)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -3847,6 +3854,7 @@ mod tests {
             result_text: "ok".into(),
             summary: format!("{tool} test.rs"),
             sort_order: order,
+            group_id: None,
         }
     }
 
@@ -3885,6 +3893,49 @@ mod tests {
 
         let turns = db.list_completed_turns("w1").unwrap();
         assert!(turns.is_empty());
+    }
+
+    #[test]
+    fn test_tool_activity_group_id_round_trip() {
+        // `group_id` is a new (2026-04-24) column backing the turn-segment
+        // feature. Inserting with assorted values — `Some(i)`, `None`, and a
+        // repeated index — must read back identically; any loss here would
+        // collapse segments in the UI (all rows grouped together).
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+
+        let mk = |id: &str, order: i32, group: Option<i32>| TurnToolActivity {
+            id: id.into(),
+            checkpoint_id: "cp1".into(),
+            tool_use_id: format!("tu_{id}"),
+            tool_name: "Read".into(),
+            input_json: "{}".into(),
+            result_text: "".into(),
+            summary: "".into(),
+            sort_order: order,
+            group_id: group,
+        };
+
+        db.insert_turn_tool_activities(&[
+            mk("a1", 0, Some(0)),
+            mk("a2", 1, Some(0)),
+            mk("a3", 2, Some(1)),
+            mk("a4", 3, None), // legacy-style row; nullable column
+        ])
+        .unwrap();
+
+        let turns = db.list_completed_turns("w1").unwrap();
+        assert_eq!(turns.len(), 1);
+        let acts = &turns[0].activities;
+        assert_eq!(acts.len(), 4);
+        // Row-by-row: ordering preserved by sort_order, group_id preserved verbatim.
+        assert_eq!(acts[0].group_id, Some(0));
+        assert_eq!(acts[1].group_id, Some(0));
+        assert_eq!(acts[2].group_id, Some(1));
+        assert_eq!(acts[3].group_id, None);
     }
 
     #[test]

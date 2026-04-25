@@ -714,6 +714,85 @@
   margin: 0;
 }
 
+/*
+ * Segmented body: when a turn contains more than one tool-group (because text
+ * or thinking interleaved) or any subagent call, each segment renders as its
+ * own mini sub-box under the turn-level header.
+ */
+.turnSegments {
+  border-top: 1px solid var(--divider);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.toolGroupBox {
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.toolGroupHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: transparent;
+  font-size: 11px;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.toolGroupHeader:hover {
+  background: var(--hover-bg-subtle);
+}
+
+.toolGroupBody {
+  border-top: 1px solid var(--divider);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.subagentCard {
+  border: 1px solid var(--accent-dim, var(--divider));
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--hover-bg-subtle);
+}
+
+.subagentHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.subagentHeader:hover {
+  background: var(--hover-bg-subtle);
+}
+
+.subagentLabel {
+  font-weight: 600;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.subagentSummary {
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
 /* Footer below a completed turn: elapsed time + copy + fork actions. */
 .turnFooter {
   display: flex;
