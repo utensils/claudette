@@ -12,14 +12,13 @@ import styles from "./ChatToolbar.module.css";
 
 interface ChatToolbarProps {
   sessionId: string;
-  workspaceId: string;
   disabled: boolean;
 }
 
 const isMac = typeof navigator !== "undefined" && navigator.platform.startsWith("Mac");
 const mod = isMac ? "⌘" : "Ctrl+";
 
-export function ChatToolbar({ sessionId, workspaceId, disabled }: ChatToolbarProps) {
+export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
   const selectedModel = useAppStore((s) => s.selectedModel[sessionId] ?? "opus");
   const fastMode = useAppStore((s) => s.fastMode[sessionId] ?? false);
   const thinkingEnabled = useAppStore((s) => s.thinkingEnabled[sessionId] ?? false);
@@ -174,7 +173,7 @@ export function ChatToolbar({ sessionId, workspaceId, disabled }: ChatToolbarPro
         {isExtraUsage && <CircleDollarSign size={14} className={styles.extraUsage} />}
       </button>
 
-      <ContextMeter sessionId={sessionId} workspaceId={workspaceId} />
+      <ContextMeter sessionId={sessionId} />
 
       {isFastSupported(selectedModel) && (
         <button

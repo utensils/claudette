@@ -137,9 +137,9 @@ export function useAgentStream() {
             ) {
               const m = streamEvent.compact_metadata;
               const store = useAppStore.getState();
-              const afterMessageIndex = (store.chatMessages[wsId] ?? []).length;
+              const afterMessageIndex = (store.chatMessages[sessionId] ?? []).length;
 
-              addCompactionEvent(wsId, {
+              addCompactionEvent(sessionId, {
                 timestamp: new Date().toISOString(),
                 trigger: m.trigger,
                 preTokens: m.pre_tokens,
@@ -176,14 +176,14 @@ export function useAgentStream() {
                 cache_read_tokens: m.post_tokens,
                 cache_creation_tokens: null,
               };
-              store.addChatMessage(wsId, liveSentinel);
+              store.addChatMessage(sessionId, liveSentinel);
 
               // Drop the ContextMeter to the post-compaction baseline
               // during the live session. Zeros (not undefined) keep
               // `computeMeterState` from hiding the meter — the CLI has
               // reset the working context, so showing 0+postTokens+0
               // reflects the actual post-compaction state.
-              store.setLatestTurnUsage(wsId, {
+              store.setLatestTurnUsage(sessionId, {
                 inputTokens: 0,
                 outputTokens: 0,
                 cacheReadTokens: m.post_tokens,
@@ -211,7 +211,7 @@ export function useAgentStream() {
                   // fills the gap in between so the meter doesn't sit stale.
                   if (inner.usage) {
                     const { setLatestTurnUsage } = useAppStore.getState();
-                    setLatestTurnUsage(wsId, {
+                    setLatestTurnUsage(sessionId, {
                       inputTokens: inner.usage.input_tokens,
                       outputTokens: inner.usage.output_tokens,
                       cacheReadTokens:
@@ -414,8 +414,8 @@ export function useAgentStream() {
             const meterUsage = pickMeterUsageFromResult(streamEvent);
             const { setLatestTurnUsage, clearLatestTurnUsage } =
               useAppStore.getState();
-            if (meterUsage) setLatestTurnUsage(wsId, meterUsage);
-            else clearLatestTurnUsage(wsId);
+            if (meterUsage) setLatestTurnUsage(sessionId, meterUsage);
+            else clearLatestTurnUsage(sessionId);
             turnMessageCountRef.current[sessionId] = 0;
             turnFinalizedRef.current[sessionId] = true;
             updateChatSession(sessionId, { agent_status: "Idle" });
@@ -577,7 +577,7 @@ export function useAgentStream() {
       checkpoint: ConversationCheckpoint;
     }>("checkpoint-created", (event) => {
       if (!active) return;
-      const { workspace_id: wsId, session_id: sessionId, checkpoint } = event.payload;
+      const { session_id: sessionId, checkpoint } = event.payload;
       addCheckpoint(sessionId, checkpoint);
       turnCheckpointIdRef.current[sessionId] = checkpoint.id;
 
@@ -648,8 +648,8 @@ export function useAgentStream() {
           const callUsage = extractLatestCallUsage(filtered);
           const { setLatestTurnUsage, clearLatestTurnUsage } =
             useAppStore.getState();
-          if (callUsage) setLatestTurnUsage(wsId, callUsage);
-          else clearLatestTurnUsage(wsId);
+          if (callUsage) setLatestTurnUsage(sessionId, callUsage);
+          else clearLatestTurnUsage(sessionId);
         })
         .catch((e) => console.error("Failed to reload messages after checkpoint:", e));
     });

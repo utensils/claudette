@@ -6,7 +6,6 @@ import styles from "./ContextMeter.module.css";
 
 interface ContextMeterProps {
   sessionId: string;
-  workspaceId: string;
 }
 
 function fillClassForBand(band: Band): string {
@@ -33,8 +32,8 @@ function fillClassForBand(band: Band): string {
  * lives in `contextMeterLogic.ts` so this component is a thin presentational
  * wrapper.
  */
-export function ContextMeter({ sessionId, workspaceId }: ContextMeterProps) {
-  const usage = useAppStore((s) => s.latestTurnUsage[workspaceId]);
+export function ContextMeter({ sessionId }: ContextMeterProps) {
+  const usage = useAppStore((s) => s.latestTurnUsage[sessionId]);
   const selectedModel = useAppStore((s) => s.selectedModel[sessionId]);
 
   const model = MODELS.find((m) => m.id === selectedModel);

@@ -4214,20 +4214,21 @@ mod tests {
         db.insert_agent_commits_batch("w1", "r1", Some("s1"), &[commit])
             .unwrap();
 
+        let sess_id = db.default_session_id_for_workspace("w1").unwrap().unwrap();
         for (id, role) in [("m1", "user"), ("m3", "user"), ("m4", "system")] {
             db.conn
                 .execute(
-                    "INSERT INTO chat_messages (id, workspace_id, role, content, cost_usd)
-                     VALUES (?1, 'w1', ?2, 'x', 0.01)",
-                    params![id, role],
+                    "INSERT INTO chat_messages (id, workspace_id, session_id, role, content, cost_usd)
+                     VALUES (?1, 'w1', ?2, ?3, 'x', 0.01)",
+                    params![id, sess_id, role],
                 )
                 .unwrap();
         }
         db.conn
             .execute(
-                "INSERT INTO chat_messages (id, workspace_id, role, content, cost_usd, input_tokens, output_tokens)
-                 VALUES ('m2', 'w1', 'assistant', 'x', 0.01, 12000, 3000)",
-                [],
+                "INSERT INTO chat_messages (id, workspace_id, session_id, role, content, cost_usd, input_tokens, output_tokens)
+                 VALUES ('m2', 'w1', ?1, 'assistant', 'x', 0.01, 12000, 3000)",
+                params![sess_id],
             )
             .unwrap();
         db.conn

@@ -580,6 +580,12 @@ mod tests {
             [ws_id, repo_id],
         )
         .unwrap();
+        conn.execute(
+            "INSERT INTO chat_sessions (id, workspace_id, name, sort_order, status)
+             VALUES (?1 || '-sess', ?1, 'Main', 0, 'active')",
+            [ws_id],
+        )
+        .unwrap();
     }
 
     fn exec(conn: &Connection, sql: &str) {
@@ -665,8 +671,8 @@ mod tests {
         insert_workspace(&conn, "ws1", "r");
         exec(
             &conn,
-            "INSERT INTO chat_messages (id, workspace_id, role, content, cost_usd)
-             VALUES ('m1', 'ws1', 'assistant', 'hi', 1.25)",
+            "INSERT INTO chat_messages (id, workspace_id, session_id, role, content, cost_usd)
+             VALUES ('m1', 'ws1', 'ws1-sess', 'assistant', 'hi', 1.25)",
         );
         exec(
             &conn,
@@ -700,10 +706,10 @@ mod tests {
 
         exec(
             &conn,
-            "INSERT INTO chat_messages (id, workspace_id, role, content, input_tokens, output_tokens)
-             VALUES ('m1', 'ws1', 'assistant', 'hi', 5000, 1000),
-                    ('m2', 'ws1', 'assistant', 'ok', 3000, 500),
-                    ('m3', 'ws2', 'assistant', 'yo', 2000, NULL)",
+            "INSERT INTO chat_messages (id, workspace_id, session_id, role, content, input_tokens, output_tokens)
+             VALUES ('m1', 'ws1', 'ws1-sess', 'assistant', 'hi', 5000, 1000),
+                    ('m2', 'ws1', 'ws1-sess', 'assistant', 'ok', 3000, 500),
+                    ('m3', 'ws2', 'ws2-sess', 'assistant', 'yo', 2000, NULL)",
         );
 
         let ids = vec!["ws1".to_string(), "ws2".to_string(), "missing".to_string()];
@@ -750,8 +756,8 @@ mod tests {
         );
         exec(
             &conn,
-            "INSERT INTO chat_messages (id, workspace_id, role, content, cost_usd, input_tokens, output_tokens)
-             VALUES ('m1', 'wsA', 'assistant', 'hi', 2.0, 5000, 1000)",
+            "INSERT INTO chat_messages (id, workspace_id, session_id, role, content, cost_usd, input_tokens, output_tokens)
+             VALUES ('m1', 'wsA', 'wsA-sess', 'assistant', 'hi', 2.0, 5000, 1000)",
         );
         exec(
             &conn,
@@ -916,9 +922,9 @@ mod tests {
         insert_workspace(&conn, "ws1", "r");
         exec(
             &conn,
-            "INSERT INTO chat_messages (id, workspace_id, role, content, input_tokens, output_tokens)
-             VALUES ('m1', 'ws1', 'assistant', 'hi', 10000, 2000),
-                    ('m2', 'ws1', 'assistant', 'bye', 8000, 1500)",
+            "INSERT INTO chat_messages (id, workspace_id, session_id, role, content, input_tokens, output_tokens)
+             VALUES ('m1', 'ws1', 'ws1-sess', 'assistant', 'hi', 10000, 2000),
+                    ('m2', 'ws1', 'ws1-sess', 'assistant', 'bye', 8000, 1500)",
         );
         exec(
             &conn,
@@ -938,8 +944,8 @@ mod tests {
         insert_workspace(&conn, "ws1", "r");
         exec(
             &conn,
-            "INSERT INTO chat_messages (id, workspace_id, role, content, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens)
-             VALUES ('m1', 'ws1', 'assistant', 'hi', 1000, 500, 9000, 0)",
+            "INSERT INTO chat_messages (id, workspace_id, session_id, role, content, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens)
+             VALUES ('m1', 'ws1', 'ws1-sess', 'assistant', 'hi', 1000, 500, 9000, 0)",
         );
         let m = dashboard_metrics(&path).unwrap();
         // cache_reads=9000, denom=1000+0+9000=10000, rate=0.9
@@ -954,9 +960,9 @@ mod tests {
         insert_workspace(&conn, "ws1", "r");
         exec(
             &conn,
-            "INSERT INTO chat_messages (id, workspace_id, role, content, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens)
-             VALUES ('m1', 'ws1', 'assistant', 'hi', 2000, 500, 8000, 0),
-                    ('m2', 'ws1', 'system', 'COMPACTION:auto:200000:80000:5000', NULL, NULL, 80000, NULL)",
+            "INSERT INTO chat_messages (id, workspace_id, session_id, role, content, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens)
+             VALUES ('m1', 'ws1', 'ws1-sess', 'assistant', 'hi', 2000, 500, 8000, 0),
+                    ('m2', 'ws1', 'ws1-sess', 'system', 'COMPACTION:auto:200000:80000:5000', NULL, NULL, 80000, NULL)",
         );
         let m = dashboard_metrics(&path).unwrap();
         // Only the assistant message counts: cache_reads=8000, denom=2000+0+8000=10000
@@ -971,8 +977,8 @@ mod tests {
         insert_workspace(&conn, "ws1", "r");
         exec(
             &conn,
-            "INSERT INTO chat_messages (id, workspace_id, role, content, input_tokens, output_tokens)
-             VALUES ('m1', 'ws1', 'assistant', 'hi', 5000, 1000)",
+            "INSERT INTO chat_messages (id, workspace_id, session_id, role, content, input_tokens, output_tokens)
+             VALUES ('m1', 'ws1', 'ws1-sess', 'assistant', 'hi', 5000, 1000)",
         );
         let m = dashboard_metrics(&path).unwrap();
         assert_eq!(m.tokens_daily_30d.len(), 30);
