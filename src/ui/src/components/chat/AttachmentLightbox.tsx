@@ -53,13 +53,18 @@ export function isBackdropDismiss(
 }
 
 /**
- * Pure: does this attachment need the SVG fallback minimum size in the
- * lightbox? SVGs that only declare a viewBox (no width/height on the root
- * <svg>) collapse to 0×0 when loaded through <img>, because the data URL
- * sandbox doesn't expose intrinsic dimensions. Force a floor for those.
+ * Pure: should the lightbox apply the SVG fallback minimum size to this
+ * attachment? Returns true for *any* `image/svg+xml` regardless of
+ * whether the root `<svg>` declares explicit width/height — detecting the
+ * viewBox-only subset would require decoding the data URL and parsing
+ * the markup, which is more work than the value justifies. The
+ * `min-width`/`min-height` floor is a no-op for SVGs that already render
+ * larger than the floor (max-width / max-height still cap them), so
+ * applying it broadly is safe.
  *
- * Raster types always carry intrinsic pixel dimensions, so they don't need
- * the fallback — applying it would also blow up tiny pixel-art images.
+ * Raster types always carry intrinsic pixel dimensions, so they don't
+ * need the fallback — and applying a 480px floor would visibly upscale
+ * tiny pixel-art images.
  */
 export function needsSvgFallbackSize(mediaType: string): boolean {
   return mediaType === "image/svg+xml";
