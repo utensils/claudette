@@ -211,6 +211,32 @@ export function applyTheme(theme: ThemeDefinition): void {
   cacheDataTheme(dataThemeAttr);
 }
 
+/**
+ * Returns the data-theme attribute value that applyTheme() would set for a given theme.
+ * Built-in themes use their own ID; user JSON themes layer on top of DEFAULT_THEME_ID.
+ */
+export function getThemeDataAttr(theme: ThemeDefinition): string {
+  return BUILTIN_THEME_IDS.has(theme.id) ? theme.id : DEFAULT_THEME_ID;
+}
+
+/**
+ * Cache theme mode settings in localStorage so the pre-hydration script in
+ * index.html can pick the right data-theme attribute before React mounts.
+ */
+export function cacheThemePreference(
+  mode: "light" | "dark" | "system",
+  darkAttr: string,
+  lightAttr: string,
+): void {
+  try {
+    localStorage.setItem("claudette.theme_mode", mode);
+    localStorage.setItem("claudette.theme_dark_attr", darkAttr);
+    localStorage.setItem("claudette.theme_light_attr", lightAttr);
+  } catch {
+    // localStorage may be blocked in some sandboxes.
+  }
+}
+
 export async function loadAllThemes(): Promise<ThemeDefinition[]> {
   let userThemes: ThemeDefinition[] = [];
   try {

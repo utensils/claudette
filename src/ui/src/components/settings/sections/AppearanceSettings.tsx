@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useAppStore } from "../../../stores/useAppStore";
 import { setAppSetting } from "../../../services/tauri";
-import { applyTheme, applyUserFonts, clearUserFont, loadAllThemes, findTheme } from "../../../utils/theme";
+import { applyTheme, applyUserFonts, clearUserFont, loadAllThemes, findTheme, cacheThemePreference, getThemeDataAttr } from "../../../utils/theme";
 import {
   UI_FONT_SIZE_MIN,
   UI_FONT_SIZE_MAX,
@@ -13,8 +13,13 @@ import { FontSelect } from "../FontSelect";
 import styles from "../Settings.module.css";
 
 export function AppearanceSettings() {
-  const currentThemeId = useAppStore((s) => s.currentThemeId);
   const setCurrentThemeId = useAppStore((s) => s.setCurrentThemeId);
+  const themeMode = useAppStore((s) => s.themeMode);
+  const setThemeMode = useAppStore((s) => s.setThemeMode);
+  const themeDark = useAppStore((s) => s.themeDark);
+  const setThemeDark = useAppStore((s) => s.setThemeDark);
+  const themeLight = useAppStore((s) => s.themeLight);
+  const setThemeLight = useAppStore((s) => s.setThemeLight);
   const terminalFontSize = useAppStore((s) => s.terminalFontSize);
   const setTerminalFontSize = useAppStore((s) => s.setTerminalFontSize);
   const uiFontSize = useAppStore((s) => s.uiFontSize);
@@ -66,15 +71,73 @@ export function AppearanceSettings() {
     loadAllThemes().then(setAvailableThemes).catch(() => {});
   }, []);
 
-  const handleThemeChange = async (id: string) => {
-    const theme = findTheme(availableThemes, id);
+  const handleModeChange = async (mode: "light" | "dark" | "system") => {
+    if (availableThemes.length === 0) return;
+    const systemIsDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    const effectiveId =
+      mode === "system" ? (systemIsDark ? themeDark : themeLight) :
+      mode === "light" ? themeLight : themeDark;
+    const theme = findTheme(availableThemes, effectiveId);
     applyTheme(theme);
-    // Re-apply user font overrides on top of new theme.
     applyUserFonts(fontFamilySans, fontFamilyMono, uiFontSize);
-    setCurrentThemeId(id);
+    setThemeMode(mode);
+    setCurrentThemeId(theme.id);
+    cacheThemePreference(
+      mode,
+      getThemeDataAttr(findTheme(availableThemes, themeDark)),
+      getThemeDataAttr(findTheme(availableThemes, themeLight)),
+    );
     try {
       setError(null);
-      await setAppSetting("theme", id);
+      await setAppSetting("theme_mode", mode);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const handleDarkThemeChange = async (id: string) => {
+    const theme = findTheme(availableThemes, id);
+    const isEffective =
+      themeMode === "dark" ||
+      (themeMode === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    if (isEffective) {
+      applyTheme(theme);
+      applyUserFonts(fontFamilySans, fontFamilyMono, uiFontSize);
+      setCurrentThemeId(id);
+    }
+    setThemeDark(id);
+    cacheThemePreference(
+      themeMode,
+      getThemeDataAttr(theme),
+      getThemeDataAttr(findTheme(availableThemes, themeLight)),
+    );
+    try {
+      setError(null);
+      await setAppSetting("theme_dark", id);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const handleLightThemeChange = async (id: string) => {
+    const theme = findTheme(availableThemes, id);
+    const isEffective =
+      themeMode === "light" ||
+      (themeMode === "system" && !window.matchMedia("(prefers-color-scheme: dark)").matches);
+    if (isEffective) {
+      applyTheme(theme);
+      applyUserFonts(fontFamilySans, fontFamilyMono, uiFontSize);
+      setCurrentThemeId(id);
+    }
+    setThemeLight(id);
+    cacheThemePreference(
+      themeMode,
+      getThemeDataAttr(findTheme(availableThemes, themeDark)),
+      getThemeDataAttr(theme),
+    );
+    try {
+      setError(null);
+      await setAppSetting("theme_light", id);
     } catch (e) {
       setError(String(e));
     }
@@ -195,25 +258,90 @@ export function AppearanceSettings() {
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>Color theme</div>
-          <div className={styles.settingDescription}>
-            Add custom themes to ~/.claudette/themes/
-          </div>
+          <div className={styles.settingLabel}>Theme mode</div>
         </div>
         <div className={styles.settingControl}>
           <select
             className={styles.select}
-            value={currentThemeId}
-            onChange={(e) => handleThemeChange(e.target.value)}
+            value={themeMode}
+            onChange={(e) => handleModeChange(e.target.value as "light" | "dark" | "system")}
           >
-            {availableThemes.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
+            <option value="dark">Dark</option>
+            <option value="light">Light</option>
+            <option value="system">Follow system</option>
           </select>
         </div>
       </div>
+
+      {themeMode !== "system" ? (
+        <div className={styles.settingRow}>
+          <div className={styles.settingInfo}>
+            <div className={styles.settingLabel}>Color theme</div>
+            <div className={styles.settingDescription}>
+              Add custom themes to ~/.claudette/themes/
+            </div>
+          </div>
+          <div className={styles.settingControl}>
+            <select
+              className={styles.select}
+              value={themeMode === "dark" ? themeDark : themeLight}
+              onChange={(e) =>
+                themeMode === "dark"
+                  ? handleDarkThemeChange(e.target.value)
+                  : handleLightThemeChange(e.target.value)
+              }
+            >
+              {availableThemes.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className={styles.settingRow}>
+            <div className={styles.settingInfo}>
+              <div className={styles.settingLabel}>Dark theme</div>
+              <div className={styles.settingDescription}>
+                Add custom themes to ~/.claudette/themes/
+              </div>
+            </div>
+            <div className={styles.settingControl}>
+              <select
+                className={styles.select}
+                value={themeDark}
+                onChange={(e) => handleDarkThemeChange(e.target.value)}
+              >
+                {availableThemes.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className={styles.settingRow}>
+            <div className={styles.settingInfo}>
+              <div className={styles.settingLabel}>Light theme</div>
+            </div>
+            <div className={styles.settingControl}>
+              <select
+                className={styles.select}
+                value={themeLight}
+                onChange={(e) => handleLightThemeChange(e.target.value)}
+              >
+                {availableThemes.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </>
+      )}
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
