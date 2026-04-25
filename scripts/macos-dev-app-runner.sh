@@ -4,18 +4,95 @@
 # TCC speech permissions can abort raw executables before errors are
 # recoverable. Running the dev binary from a real .app bundle gives macOS the
 # Info.plist privacy strings it requires for Speech and microphone prompts.
+if [ -z "${BASH_VERSION:-}" ]; then
+  exec /usr/bin/env bash "$0" "$@"
+fi
+
 set -euo pipefail
 
 if [ "$#" -lt 1 ]; then
-  echo "usage: macos-dev-app-runner.sh <binary> [args...]" >&2
+  echo "usage: macos-dev-app-runner.sh <binary>|run [cargo/app args...]" >&2
   exit 64
 fi
 
-binary="$1"
-shift
-
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
-bundle_dir="${CLAUDETTE_DEV_APP_BUNDLE:-$repo_root/target/debug/Claudette Dev.app}"
+
+if [ -f "$1" ]; then
+  binary="$1"
+  shift
+  app_args=("$@")
+else
+  if [ "$1" != "run" ]; then
+    echo "unsupported Tauri runner command: $1" >&2
+    exit 64
+  fi
+  shift
+
+  build_args=(build --manifest-path "$repo_root/src-tauri/Cargo.toml")
+  app_args=()
+  profile=debug
+  target_triple=""
+  in_app_args=false
+
+  while [ "$#" -gt 0 ]; do
+    if [ "$in_app_args" = true ]; then
+      app_args+=("$1")
+      shift
+      continue
+    fi
+
+    case "$1" in
+      --)
+        in_app_args=true
+        shift
+        ;;
+      --release)
+        profile=release
+        build_args+=("$1")
+        shift
+        ;;
+      --target)
+        if [ "$#" -lt 2 ]; then
+          echo "missing value for --target" >&2
+          exit 64
+        fi
+        build_args+=("$1" "$2")
+        target_triple="$2"
+        shift 2
+        ;;
+      --target=*)
+        build_args+=("$1")
+        target_triple="${1#--target=}"
+        shift
+        ;;
+      *)
+        build_args+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  cargo "${build_args[@]}"
+
+  target_dir="${CARGO_TARGET_DIR:-$repo_root/target}"
+  if [[ "$target_dir" != /* ]]; then
+    target_dir="$repo_root/$target_dir"
+  fi
+
+  if [ -n "$target_triple" ]; then
+    binary="$target_dir/$target_triple/$profile/claudette"
+  else
+    binary="$target_dir/$profile/claudette"
+  fi
+fi
+
+if [ ! -f "$binary" ]; then
+  echo "built binary not found: $binary" >&2
+  exit 66
+fi
+
+binary_dir="$(cd "$(dirname "$binary")" && pwd)"
+bundle_dir="${CLAUDETTE_DEV_APP_BUNDLE:-$binary_dir/Claudette Dev.app}"
 contents_dir="$bundle_dir/Contents"
 macos_dir="$contents_dir/MacOS"
 resources_dir="$contents_dir/Resources"
@@ -69,4 +146,4 @@ if command -v codesign >/dev/null 2>&1; then
   fi
 fi
 
-exec "$bundle_executable" "$@"
+exec "$bundle_executable" "${app_args[@]}"
