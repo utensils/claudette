@@ -190,6 +190,7 @@ export function Dashboard() {
   const agentQuestions = useAppStore((s) => s.agentQuestions);
   const planApprovals = useAppStore((s) => s.planApprovals);
   const unreadCompletions = useAppStore((s) => s.unreadCompletions);
+  const sessionsByWorkspace = useAppStore((s) => s.sessionsByWorkspace);
 
   const fetchDashboardMetrics = useAppStore((s) => s.fetchDashboardMetrics);
   const fetchAnalyticsMetrics = useAppStore((s) => s.fetchAnalyticsMetrics);
@@ -244,9 +245,12 @@ export function Dashboard() {
 
   const sortedWorkspaces = useMemo(() => {
     const rows = activeWorkspaces.map((ws) => {
+      const wsSessions = sessionsByWorkspace[ws.id] ?? [];
+      const hasQuestion = wsSessions.some((s) => agentQuestions[s.id]);
+      const hasPlan = wsSessions.some((s) => planApprovals[s.id]);
       const badge: "ask" | "plan" | "done" | null =
-        agentQuestions[ws.id] ? "ask" :
-        planApprovals[ws.id] ? "plan" :
+        hasQuestion ? "ask" :
+        hasPlan ? "plan" :
         unreadCompletions.has(ws.id) && !isAgentBusy(ws.agent_status) ? "done" :
         null;
       const groupKey = badge ? 0 : isAgentBusy(ws.agent_status) ? 1 : 2;
@@ -258,7 +262,7 @@ export function Dashboard() {
       return b.lastUsed.localeCompare(a.lastUsed);
     });
     return rows;
-  }, [activeWorkspaces, agentQuestions, planApprovals, unreadCompletions, lastMessages]);
+  }, [activeWorkspaces, agentQuestions, planApprovals, unreadCompletions, lastMessages, sessionsByWorkspace]);
 
   if (activeWorkspaces.length === 0) {
     return (

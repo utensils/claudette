@@ -205,7 +205,7 @@ function SessionTab({ session, isActive, onSelect, onClose, onRename }: TabProps
         }
       }}
     >
-      <span className={styles.icon}>
+      <span className={`${styles.icon} ${session.needs_attention ? styles.pulse : ""}`}>
         <SessionStatusIcon status={statusFor(session)} size={12} />
       </span>
       {editing ? (

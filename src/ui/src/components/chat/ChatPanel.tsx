@@ -98,7 +98,6 @@ import {
 } from "../../utils/compactionSentinel";
 import { PanelToggles } from "../shared/PanelToggles";
 import { SessionTabs } from "./SessionTabs";
-import { ChatToolbar } from "./ChatToolbar";
 import { deriveTasks, processActivities, turnHasTaskActivity, hasTaskActivity } from "../../hooks/useTaskTracker";
 import type { TaskTrackerResult, TrackedTask } from "../../hooks/useTaskTracker";
 import { ScrollToBottomPill } from "./ScrollToBottomPill";
@@ -1618,6 +1617,7 @@ const EMPTY_CHECKPOINTS: import("../../types/checkpoint").ConversationCheckpoint
 
 type RollbackModalData = {
   workspaceId: string;
+  sessionId: string;
   checkpointId: string | null;
   messageId: string;
   messagePreview: string;
@@ -1754,7 +1754,7 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
       if (!userMsg) return null;
       return {
         workspaceId,
-        sessionId: activeSessionId,
+        sessionId,
         checkpointId: target ? target.id : null,
         messageId: userMsg.id,
         messagePreview: userMsg.content.slice(0, 100),
@@ -1764,7 +1764,7 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
           : clearAllHasFileChanges(checkpoints),
       };
     },
-    [checkpoints, messages, rollbackCheckpointByIdx, workspaceId, activeSessionId],
+    [checkpoints, messages, rollbackCheckpointByIdx, workspaceId, sessionId],
   );
 
   // Joined assistant text per turn, used by the "Copy output" action in the
@@ -3133,11 +3133,6 @@ function ChatInputArea({
             />
           )}
         </div>
-        <ChatToolbar
-          sessionId={sessionId}
-          workspaceId={selectedWorkspaceId}
-          disabled={isRunning}
-        />
       </div>
     </div>
   );

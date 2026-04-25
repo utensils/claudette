@@ -1005,6 +1005,11 @@ select:disabled {
   to   { opacity: 1; transform: scale(1); }
 }
 
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
 /* Window drag regions for custom titlebar (Overlay mode) */
 [data-tauri-drag-region] {
   -webkit-app-region: drag;

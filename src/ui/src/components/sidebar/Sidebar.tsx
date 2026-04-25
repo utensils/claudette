@@ -57,6 +57,7 @@ export const Sidebar = memo(function Sidebar() {
   const unreadCompletions = useAppStore((s) => s.unreadCompletions);
   const agentQuestions = useAppStore((s) => s.agentQuestions);
   const planApprovals = useAppStore((s) => s.planApprovals);
+  const sessionsByWorkspace = useAppStore((s) => s.sessionsByWorkspace);
   const scmSummary = useAppStore((s) => s.scmSummary);
   const setRepositories = useAppStore((s) => s.setRepositories);
   const metaKeyHeld = useAppStore((s) => s.metaKeyHeld);
@@ -279,9 +280,12 @@ export const Sidebar = memo(function Sidebar() {
   }, [renameValue, workspaces, updateWorkspace]);
 
   const renderWorkspace = (ws: typeof workspaces[number]) => {
+    const wsSessions = sessionsByWorkspace[ws.id] ?? [];
+    const hasQuestion = wsSessions.some((s) => agentQuestions[s.id]);
+    const hasPlan = wsSessions.some((s) => planApprovals[s.id]);
     const badge: "ask" | "plan" | "done" | null =
-      agentQuestions[ws.id] ? "ask" :
-      planApprovals[ws.id] ? "plan" :
+      hasQuestion ? "ask" :
+      hasPlan ? "plan" :
       unreadCompletions.has(ws.id) && !isAgentBusy(ws.agent_status) ? "done" :
       null;
     return (
