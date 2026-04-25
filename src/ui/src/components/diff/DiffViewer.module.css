@@ -61,7 +61,8 @@
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
-  min-width: max-content;
+  width: max-content;
+  min-width: 100%;
 }
 
 .hunkHeader {
@@ -121,6 +122,15 @@
   padding-left: 4px;
 }
 
+/* When the diff language is active, highlight.js emits .hljs-addition /
+   .hljs-deletion spans with their own backgrounds. Neutralize them so
+   our per-row diff colours (lineAdded / lineRemoved) show through. */
+.lineContent :global(.hljs-addition),
+.lineContent :global(.hljs-deletion) {
+  background: transparent !important;
+  padding: 0;
+}
+
 .sbsCell .lineContent {
   overflow-x: auto;
   overflow-y: hidden;
@@ -132,6 +142,7 @@
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
+  min-width: 100%;
 }
 
 .sbsRow {
