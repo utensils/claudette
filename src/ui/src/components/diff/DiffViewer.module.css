@@ -122,16 +122,11 @@
   padding-left: 4px;
 }
 
-/* highlight.js themes set .hljs { background, padding } which would
-   override our per-row diff backgrounds (added/removed/empty) and break
-   the flex layout. Keep the text colors, drop everything else. */
-.lineContent.hljs {
-  background: transparent !important;
-  padding: 0 0 0 4px;
-}
-
-.lineContent .hljs-addition,
-.lineContent .hljs-deletion {
+/* When the diff language is active, highlight.js emits .hljs-addition /
+   .hljs-deletion spans with their own backgrounds. Neutralize them so
+   our per-row diff colours (lineAdded / lineRemoved) show through. */
+.lineContent :global(.hljs-addition),
+.lineContent :global(.hljs-deletion) {
   background: transparent !important;
   padding: 0;
 }

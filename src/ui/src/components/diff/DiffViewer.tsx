@@ -22,7 +22,7 @@ const LineContent = memo(function LineContent({
   if (html !== null) {
     return (
       <span
-        className={`${styles.lineContent} hljs`}
+        className={styles.lineContent}
         dangerouslySetInnerHTML={{ __html: html }}
       />
     );
