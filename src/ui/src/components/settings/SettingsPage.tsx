@@ -69,7 +69,18 @@ export function SettingsPage() {
       <div className={styles.dragRegion} data-tauri-drag-region />
       <SettingsSidebar />
       <div className={styles.content}>
-        <Suspense fallback={null}>
+        <Suspense
+          fallback={
+            <div
+              role="status"
+              aria-live="polite"
+              aria-busy="true"
+              style={{ padding: "1rem", color: "var(--text-dim)" }}
+            >
+              Loading settings…
+            </div>
+          }
+        >
           <SectionContent section={settingsSection} />
         </Suspense>
       </div>

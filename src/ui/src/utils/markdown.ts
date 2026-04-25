@@ -16,7 +16,7 @@ ansiUp.use_classes = false;
 
 /** Convert ANSI escape codes in text to HTML span tags. */
 export function ansiToHtml(text: string): string {
-  if (!text.includes("\x1b") && !text.includes("")) return text;
+  if (!text.includes("\x1b")) return text;
   return ansiUp.ansi_to_html(text);
 }
 
@@ -147,8 +147,13 @@ export function HighlightedCode({
   children,
   ...props
 }: HighlightedCodeProps): React.ReactElement {
+  // Capture the full fence info string (up to whitespace), not just the
+  // [\w-]+ subset. Languages with non-word characters in their canonical
+  // names (e.g. `c++`, `f#`, `objective-c++`) need the full token so the
+  // worker's LANG_ALIASES table can normalize them; otherwise a `c++`
+  // fence collapses to `c` and gets highlighted as plain C.
   const lang = typeof className === "string"
-    ? className.match(/language-([\w-]+)/)?.[1] ?? null
+    ? (className.match(/(?:^|\s)language-([^\s]+)/)?.[1] ?? null)
     : null;
   const isStreaming = useContext(StreamingContext);
   // Memoize so re-renders that don't change `children` skip the recursive walk
@@ -199,6 +204,19 @@ export function HighlightedCode({
       className,
       dangerouslySetInnerHTML: { __html: cached },
     });
+  }
+  if (lang) {
+    // Render the extracted text with the trailing newline that
+    // react-markdown emits before the closing fence stripped — otherwise
+    // mid-stream blocks (cache miss) and the brief window before the
+    // worker resolves show a phantom blank/selection line at the bottom.
+    // The cache key already trims (see highlight.ts), so this only
+    // affects the displayed text path.
+    return createElement(
+      "code",
+      { ...props, className },
+      code.replace(/\n+$/, ""),
+    );
   }
   return createElement("code", { ...props, className }, children);
 }
