@@ -83,6 +83,11 @@ import { ThinkingBlock } from "./ThinkingBlock";
 import { CompactionDivider } from "./CompactionDivider";
 import { SyntheticContinuationMessage } from "./SyntheticContinuationMessage";
 import {
+  hasUltrathink,
+  renderUltrathinkText,
+  resolveUltrathinkEffort,
+} from "./ultrathink";
+import {
   extractCompactionEvents,
   parseCompactionSentinel,
   parseSyntheticSummarySentinel,
@@ -841,6 +846,10 @@ export function ChatPanel() {
         const state = useAppStore.getState();
         const selectedModel = state.selectedModel[selectedWorkspaceId] || null;
         const disable1mContext = shouldDisable1mContext(selectedModel);
+        const effort = resolveUltrathinkEffort(
+          trimmed,
+          state.effortLevel[selectedWorkspaceId],
+        );
         await sendRemoteCommand(ws.remote_connection_id, "send_chat_message", {
           workspace_id: selectedWorkspaceId,
           content: trimmed,
@@ -850,7 +859,7 @@ export function ChatPanel() {
           fast_mode: state.fastMode[selectedWorkspaceId] || false,
           thinking_enabled: state.thinkingEnabled[selectedWorkspaceId] || false,
           plan_mode: state.planMode[selectedWorkspaceId] || false,
-          effort: state.effortLevel[selectedWorkspaceId] || null,
+          effort: effort || null,
           chrome_enabled: state.chromeEnabled[selectedWorkspaceId] || false,
           disable_1m_context: disable1mContext,
         });
@@ -860,7 +869,10 @@ export function ChatPanel() {
         const fastMode = state.fastMode[selectedWorkspaceId] || false;
         const thinkingEnabled = state.thinkingEnabled[selectedWorkspaceId] || false;
         const planMode = state.planMode[selectedWorkspaceId] || false;
-        const effort = state.effortLevel[selectedWorkspaceId] || undefined;
+        const effort = resolveUltrathinkEffort(
+          trimmed,
+          state.effortLevel[selectedWorkspaceId],
+        );
         const chromeEnabled = state.chromeEnabled[selectedWorkspaceId] || false;
         const disable1mContext = shouldDisable1mContext(model ?? null);
         await sendChatMessage(
@@ -1861,7 +1873,13 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
                   {preprocessContent(msg.content)}
                 </Markdown>
               ) : (
-                msg.content
+                renderUltrathinkText(msg.content, {
+                  animated: false,
+                  styles: {
+                    ultrathinkChar: styles.ultrathinkChar,
+                    ultrathinkCharAnimated: styles.ultrathinkCharAnimated,
+                  },
+                })
               )}
             </div>
           </div>
@@ -2058,6 +2076,7 @@ function ChatInputArea({
 }) {
   const [chatInput, setChatInput] = useState("");
   const [cursorPos, setCursorPos] = useState(0);
+  const [inputScrollTop, setInputScrollTop] = useState(0);
   const [slashPickerIndex, setSlashPickerIndex] = useState(0);
   const [slashPickerDismissed, setSlashPickerDismissed] = useState(false);
   const [slashCommands, setSlashCommandsLocal] = useState<SlashCommand[]>([]);
@@ -2587,6 +2606,8 @@ function ChatInputArea({
     }
   };
 
+  const showUltrathinkOverlay = hasUltrathink(chatInput);
+
   return (
     <div
       className={`${styles.inputArea}${dragActive ? ` ${styles.inputDragActive}` : ""}`}
@@ -2669,25 +2690,46 @@ function ChatInputArea({
           ))}
         </div>
       )}
-      <textarea
-        ref={textareaRef}
-        // data-chat-input is the stable selector used by the global focus
-        // shortcuts (Cmd+` and Cmd+0) in useKeyboardShortcuts.ts to move
-        // focus into the prompt from anywhere in the app.
-        data-chat-input
-        className={`${styles.input}${planMode ? ` ${styles.inputPlanMode}` : ""}`}
-        value={chatInput}
-        onChange={(e) => {
-          setChatInput(e.target.value);
-          setCursorPos(e.target.selectionStart ?? 0);
-        }}
-        onSelect={(e) => {
-          setCursorPos((e.target as HTMLTextAreaElement).selectionStart ?? 0);
-        }}
-        onKeyDown={handleKeyDown}
-        onPaste={handlePaste}
-        placeholder={isRunning ? "Type to queue a message..." : "Send a message..."}
-      />
+      <div className={styles.inputTextWrap}>
+        {showUltrathinkOverlay && (
+          <div className={styles.inputHighlight} aria-hidden="true">
+            <div style={{ transform: `translateY(-${inputScrollTop}px)` }}>
+              {renderUltrathinkText(chatInput, {
+                animated: true,
+                styles: {
+                  ultrathinkChar: styles.ultrathinkChar,
+                  ultrathinkCharAnimated: styles.ultrathinkCharAnimated,
+                },
+              })}
+            </div>
+          </div>
+        )}
+        <textarea
+          ref={textareaRef}
+          // data-chat-input is the stable selector used by the global focus
+          // shortcuts (Cmd+` and Cmd+0) in useKeyboardShortcuts.ts to move
+          // focus into the prompt from anywhere in the app.
+          data-chat-input
+          className={`${styles.input}${planMode ? ` ${styles.inputPlanMode}` : ""}${
+            showUltrathinkOverlay ? ` ${styles.inputWithHighlight}` : ""
+          }`}
+          value={chatInput}
+          onChange={(e) => {
+            setChatInput(e.target.value);
+            setCursorPos(e.target.selectionStart ?? 0);
+            setInputScrollTop(e.target.scrollTop);
+          }}
+          onSelect={(e) => {
+            setCursorPos((e.target as HTMLTextAreaElement).selectionStart ?? 0);
+          }}
+          onScroll={(e) => {
+            setInputScrollTop((e.target as HTMLTextAreaElement).scrollTop);
+          }}
+          onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
+          placeholder={isRunning ? "Type to queue a message..." : "Send a message..."}
+        />
+      </div>
       <div className={styles.inputControls}>
         <div className={styles.inputControlsLeft}>
           <div className={styles.attachBtnWrap}>

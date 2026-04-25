@@ -97,6 +97,22 @@
   --tool-agent:          #f08080;  /* sub-agent dispatch */
   --tool-task:           #e6c84d;  /* in-progress tasks */
 
+  /* ---- Ultrathink easter egg ---- */
+  --ultrathink-red:             rgb(235,95,87);
+  --ultrathink-orange:          rgb(245,139,87);
+  --ultrathink-yellow:          rgb(250,195,95);
+  --ultrathink-green:           rgb(145,200,130);
+  --ultrathink-blue:            rgb(130,170,220);
+  --ultrathink-indigo:          rgb(155,130,200);
+  --ultrathink-violet:          rgb(200,130,180);
+  --ultrathink-red-shimmer:     rgb(250,155,147);
+  --ultrathink-orange-shimmer:  rgb(255,185,137);
+  --ultrathink-yellow-shimmer:  rgb(255,225,155);
+  --ultrathink-green-shimmer:   rgb(185,230,180);
+  --ultrathink-blue-shimmer:    rgb(180,205,240);
+  --ultrathink-indigo-shimmer:  rgb(195,180,230);
+  --ultrathink-violet-shimmer:  rgb(230,180,210);
+
   /* ---- Diff ---- */
   --diff-added-bg:       rgba(60, 180, 90, 0.12);
   --diff-removed-bg:     rgba(220, 60, 60, 0.12);

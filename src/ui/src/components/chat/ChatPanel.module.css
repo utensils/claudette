@@ -931,6 +931,25 @@
   position: relative;
 }
 
+.inputTextWrap {
+  position: relative;
+}
+
+.inputHighlight {
+  position: absolute;
+  inset: 0;
+  max-height: 160px;
+  overflow: hidden;
+  padding: 14px 18px 8px;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  line-height: var(--lh-body);
+  pointer-events: none;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .input {
   flex: 1;
   background: transparent;
@@ -945,6 +964,13 @@
   min-height: 52px;
   max-height: 160px;
   overflow-x: hidden;
+  width: 100%;
+  position: relative;
+}
+
+.inputWithHighlight {
+  color: transparent;
+  caret-color: var(--text-primary);
 }
 
 .input:focus-visible {
@@ -962,6 +988,29 @@
 
 .inputPlanMode:focus {
   border-bottom-color: rgba(var(--accent-primary-rgb), 0.6);
+}
+
+.ultrathinkChar {
+  color: var(--ultrathink-color);
+}
+
+.ultrathinkCharAnimated {
+  animation: ultrathink-shimmer 1.8s ease-in-out infinite;
+}
+
+@keyframes ultrathink-shimmer {
+  0%, 100% {
+    color: var(--ultrathink-color);
+  }
+  50% {
+    color: var(--ultrathink-shimmer);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ultrathinkCharAnimated {
+    animation: none;
+  }
 }
 
 .sendBtn {
