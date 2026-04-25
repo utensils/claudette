@@ -120,7 +120,9 @@
 
 /* Hover-revealed action (e.g. discard) for unstaged/untracked rows. Hidden
  * by default to keep the row uncluttered; appears on hover/focus or when
- * the row is selected so keyboard users can reach it. */
+ * the row is selected. `pointer-events: none` while hidden prevents the
+ * invisible button area on the right edge of the row from being clicked
+ * accidentally and triggering a destructive discard. */
 .rowAction {
   display: inline-flex;
   align-items: center;
@@ -135,6 +137,7 @@
   border-radius: 4px;
   cursor: pointer;
   opacity: 0;
+  pointer-events: none;
   transition: opacity var(--transition-fast),
     color var(--transition-fast),
     background var(--transition-fast);
@@ -145,6 +148,7 @@
 .fileSelected .rowAction,
 .rowAction:focus-visible {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .rowAction:hover {

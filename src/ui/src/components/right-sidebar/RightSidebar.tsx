@@ -13,10 +13,11 @@ import {
 import { TaskList } from "./TaskList";
 import { ScmPanel } from "./ScmPanel";
 import { PrStatusBanner } from "./PrStatusBanner";
-import { DiscardChangesConfirm } from "./DiscardChangesConfirm";
+import {
+  DiscardChangesConfirm,
+  type DiscardableLayer,
+} from "./DiscardChangesConfirm";
 import styles from "./RightSidebar.module.css";
-
-type DiscardableLayer = "unstaged" | "untracked";
 
 function isDiscardableLayer(layer: DiffLayer | undefined): layer is DiscardableLayer {
   return layer === "unstaged" || layer === "untracked";

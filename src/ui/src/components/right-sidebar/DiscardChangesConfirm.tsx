@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { Modal } from "../modals/Modal";
 import shared from "../modals/shared.module.css";
 import type { DiffLayer } from "../../types/diff";
 
+export type DiscardableLayer = Extract<DiffLayer, "unstaged" | "untracked">;
+
 interface DiscardChangesConfirmProps {
   filePath: string;
-  layer: DiffLayer;
+  layer: DiscardableLayer;
   onConfirm: () => Promise<void>;
   onClose: () => void;
 }
@@ -37,17 +39,6 @@ export function DiscardChangesConfirm({
     if (loading) return;
     onClose();
   };
-
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Enter" && !loading) {
-        e.preventDefault();
-        void handleConfirm();
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [loading, handleConfirm]);
 
   const isUntracked = layer === "untracked";
   const title = isUntracked ? "Delete untracked file?" : "Discard changes?";
@@ -83,6 +74,12 @@ export function DiscardChangesConfirm({
           onClick={handleConfirm}
           disabled={loading}
           type="button"
+          // Auto-focus the primary action so Enter activates it via the
+          // browser's native button keyboard handling. A window-level
+          // keydown listener was tried earlier but raced with other
+          // global Enter handlers in the app and could double-fire the
+          // confirm if the button was already focused.
+          autoFocus
         >
           {loading ? `${action}ing…` : action}
         </button>
