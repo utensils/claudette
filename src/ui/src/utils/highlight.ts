@@ -89,6 +89,18 @@ export function highlightCode(code: string, lang: string): Promise<string | null
   });
 }
 
+/**
+ * Spawn the worker and kick off Shiki + Oniguruma WASM + theme registration
+ * eagerly so the first user-visible code block doesn't pay the cold-start
+ * cost. Idempotent — subsequent calls are no-ops once the worker exists.
+ * Called from the app entry point (main.tsx) so warm-up overlaps with the
+ * rest of app boot rather than blocking the first render of a workspace.
+ */
+export function prewarmHighlighter(): void {
+  if (worker) return;
+  void highlightCode("", "text");
+}
+
 // Reset module state when Vite hot-reloads this file in dev so we don't leak
 // the previous Worker instance across HMR boundaries.
 if (import.meta.hot) {

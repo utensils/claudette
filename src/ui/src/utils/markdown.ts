@@ -159,15 +159,31 @@ export function HighlightedCode({
     if (!lang) return;
     if (cached != null) return;
     let cancelled = false;
-    const delay = isStreaming ? STREAMING_DEBOUNCE_MS : 0;
-    const timer = setTimeout(() => {
-      void highlightCode(code, lang).then((result) => {
-        if (!cancelled && result != null) forceUpdate();
-      });
-    }, delay);
+
+    if (isStreaming) {
+      // Stream-time: debounce so RAF-driven `code` changes on the active
+      // block reset the timer and never reach the worker. Stable blocks
+      // settle within STREAMING_DEBOUNCE_MS and dispatch once.
+      const timer = setTimeout(() => {
+        void highlightCode(code, lang).then((result) => {
+          if (!cancelled && result != null) forceUpdate();
+        });
+      }, STREAMING_DEBOUNCE_MS);
+      return () => {
+        cancelled = true;
+        clearTimeout(timer);
+      };
+    }
+
+    // Outside streaming (workspace switch, completed message render): skip
+    // the setTimeout entirely. The browser's 4–15ms clamp on `setTimeout(0)`
+    // would otherwise add visible latency to every code block on every
+    // workspace mount before any postMessage is queued.
+    void highlightCode(code, lang).then((result) => {
+      if (!cancelled && result != null) forceUpdate();
+    });
     return () => {
       cancelled = true;
-      clearTimeout(timer);
     };
   }, [code, lang, isStreaming, cached]);
 
