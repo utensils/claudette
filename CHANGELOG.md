@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.20.0](https://github.com/utensils/claudette/compare/v0.19.0...v0.20.0) (2026-04-26)
+
+
+### Features
+
+* **chat:** agent-authored inline attachments via in-process MCP bridge ([#431](https://github.com/utensils/claudette/issues/431)) ([ee348ce](https://github.com/utensils/claudette/commit/ee348ceb8781a8002c861f44b35b6e5b0b07558f))
+* **chat:** hide 1M context models when CLAUDE_CODE_DISABLE_1M_CONTEXT is set ([#440](https://github.com/utensils/claudette/issues/440)) ([6588f1e](https://github.com/utensils/claudette/commit/6588f1ebf5d2577e0d826aa22594a670d7286d58))
+* **chat:** voice input providers (apple speech + bundled whisper) ([#438](https://github.com/utensils/claudette/issues/438)) ([a1d5a61](https://github.com/utensils/claudette/commit/a1d5a61d38a697dd89e3f8c67c6b39cd2d955951))
+* **db:** tolerate "already exists" errors in migration runner ([#448](https://github.com/utensils/claudette/issues/448)) ([b53e431](https://github.com/utensils/claudette/commit/b53e431db3f57da84e4749f5d278636d3c25bc9a))
+* **release:** add native linux-aarch64 builds ([#445](https://github.com/utensils/claudette/issues/445)) ([77e95f9](https://github.com/utensils/claudette/commit/77e95f9abb69819a4c779ce76ab2192b87d656ce))
+* **server:** thread env-provider ResolvedEnv through remote handler ([#446](https://github.com/utensils/claudette/issues/446)) ([9a1ab96](https://github.com/utensils/claudette/commit/9a1ab968fc7114c1ad11234aeb0d87699a746d61))
+* **sidebar:** discard changes from unstaged + untracked files ([#444](https://github.com/utensils/claudette/issues/444)) ([c333258](https://github.com/utensils/claudette/commit/c3332581e35258f51b8db8b6cfff547c9edf044f))
+
+
+### Bug Fixes
+
+* **chat:** attachment context menus + SVG lightbox preview ([#434](https://github.com/utensils/claudette/issues/434)) ([7b2e709](https://github.com/utensils/claudette/commit/7b2e709399fe8e3e689dba5bdcae827b5e95405e))
+* **chat:** clean code-block selection rectangle ([#435](https://github.com/utensils/claudette/issues/435)) ([5b9c1b6](https://github.com/utensils/claudette/commit/5b9c1b66015205252d106e08119229d6fb61eeaa))
+* **chat:** eliminate stair-step code block selection + add copy button ([5b9c1b6](https://github.com/utensils/claudette/commit/5b9c1b66015205252d106e08119229d6fb61eeaa))
+* input tweak ([8f79887](https://github.com/utensils/claudette/commit/8f79887e2468221557e65477103bcaa8aad09f48))
+* **updater:** keep nightly available during in-progress builds ([#443](https://github.com/utensils/claudette/issues/443)) ([344bc8f](https://github.com/utensils/claudette/commit/344bc8f30d921d9feba80481d405ea0b49a5a1f0))
+* **updater:** rewrite latest.json URLs after staging promote ([#449](https://github.com/utensils/claudette/issues/449)) ([ab6171f](https://github.com/utensils/claudette/commit/ab6171fa4631c28958500b303b3ca7753499f943))
+
+
+### Performance Improvements
+
+* **chat:** workerize Shiki + memoize markdown render path ([#439](https://github.com/utensils/claudette/issues/439)) ([2c0628d](https://github.com/utensils/claudette/commit/2c0628dfb005597932a1af430d1f16c92632893d))
+
 ## [0.19.0](https://github.com/utensils/claudette/compare/v0.18.0...v0.19.0) (2026-04-25)
 
 
