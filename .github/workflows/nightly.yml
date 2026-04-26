@@ -332,15 +332,38 @@ jobs:
           # `tauri-action` generated `latest.json` while the release was
           # tagged `nightly-staging`, so the asset URLs inside the manifest
           # are hardcoded to `releases/download/nightly-staging/...`. Once
-          # we delete the staging tag below those URLs 404, breaking the
-          # in-app updater's download step (the manifest is reachable but
-          # `download_and_install` fails on the asset fetch). The Tauri
-          # signature covers the binary file contents — not the URL field —
-          # so rewriting the URLs here does not invalidate verification.
-          curl -fsSL -o latest.json \
-            "https://github.com/${GITHUB_REPOSITORY}/releases/download/nightly/latest.json"
-          sed -i 's|releases/download/nightly-staging/|releases/download/nightly/|g' latest.json
-          gh release upload nightly latest.json --clobber --repo "$GITHUB_REPOSITORY"
+          # the release is retagged to `nightly` above, those old URLs 404,
+          # breaking the in-app updater's download step (the manifest is
+          # reachable but `download_and_install` fails on the asset fetch).
+          # The Tauri signature covers the binary file contents — not the
+          # URL field — so rewriting the URLs here does not invalidate
+          # verification.
+          #
+          # Retry the fetch+rewrite+upload sequence a few times so a
+          # transient network or GitHub API failure does not leave the
+          # promoted release published with a stale manifest. Also verify
+          # the substitution actually took before uploading.
+          for attempt in 1 2 3; do
+            rm -f latest.json
+            if ! curl -fsSL -o latest.json \
+              "https://github.com/${GITHUB_REPOSITORY}/releases/download/nightly/latest.json"; then
+              echo "latest.json fetch attempt $attempt failed"
+            else
+              sed -i 's|releases/download/nightly-staging/|releases/download/nightly/|g' latest.json
+              if grep -q 'releases/download/nightly-staging/' latest.json; then
+                echo "::warning::latest.json still contains nightly-staging URLs after rewrite"
+              elif gh release upload nightly latest.json --clobber --repo "$GITHUB_REPOSITORY"; then
+                break
+              fi
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Failed to refresh latest.json for nightly after 3 attempts"
+              exit 1
+            fi
+            backoff=$((attempt * 5))
+            echo "latest.json refresh attempt $attempt failed; retrying in ${backoff}s"
+            sleep "$backoff"
+          done
 
           # `gh release edit --tag` creates the new tag (`nightly`) at the
           # release's target commit but leaves the old `nightly-staging`
