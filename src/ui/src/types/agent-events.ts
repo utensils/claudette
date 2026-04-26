@@ -1,7 +1,7 @@
 /** Payload shape emitted from the Rust backend via Tauri events. */
 export interface AgentStreamPayload {
   workspace_id: string;
-  session_id: string;
+  chat_session_id: string;
   event: AgentEvent;
 }
 

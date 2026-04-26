@@ -442,7 +442,7 @@ async fn handle_send_chat_message(
     let user_msg = ChatMessage {
         id: uuid::Uuid::new_v4().to_string(),
         workspace_id: workspace_id.clone(),
-        session_id: chat_session_id.clone(),
+        chat_session_id: chat_session_id.clone(),
         role: ChatRole::User,
         content: content.to_string(),
         cost_usd: None,
@@ -520,7 +520,7 @@ async fn handle_send_chat_message(
         };
         AgentSessionState {
             workspace_id: workspace_id_owned,
-            claude_session_id: uuid::Uuid::new_v4().to_string(),
+            session_id: uuid::Uuid::new_v4().to_string(),
             turn_count: 0,
             active_pid: None,
             custom_instructions: instructions,
@@ -535,7 +535,7 @@ async fn handle_send_chat_message(
     // reset the session on divergence so this turn launches with the new
     // env. The Tauri path uses a long-lived PersistentSession; the remote
     // handler re-launches `claude --print` per turn, so a reset just means
-    // clearing turn_count / claude_session_id before the rest of this function
+    // clearing turn_count / session_id before the rest of this function
     // continues with `is_resume = false` and re-runs the session-init
     // branch (`run_turn` is called below with the fresh state).
     if session.turn_count > 0 && session.session_resolved_env != resolved_env.vars {
@@ -544,14 +544,14 @@ async fn handle_send_chat_message(
             session.session_resolved_env.len(),
             resolved_env.vars.len(),
         );
-        session.claude_session_id = uuid::Uuid::new_v4().to_string();
+        session.session_id = uuid::Uuid::new_v4().to_string();
         session.turn_count = 0;
         session.active_pid = None;
         session.session_resolved_env = Default::default();
     }
 
     let is_resume = session.turn_count > 0;
-    let claude_session_id = session.claude_session_id.clone();
+    let session_id = session.session_id.clone();
     let custom_instructions = session.custom_instructions.clone();
     session.turn_count += 1;
 
@@ -578,7 +578,7 @@ async fn handle_send_chat_message(
 
     let turn_handle = agent::run_turn(
         std::path::Path::new(&worktree_path),
-        &claude_session_id,
+        &session_id,
         &prompt,
         is_resume,
         &allowed_tools,
@@ -674,7 +674,7 @@ async fn handle_send_chat_message(
                     let msg = ChatMessage {
                         id: uuid::Uuid::new_v4().to_string(),
                         workspace_id: ws_id.clone(),
-                        session_id: chat_session_id_for_stream.clone(),
+                        chat_session_id: chat_session_id_for_stream.clone(),
                         role: ChatRole::Assistant,
                         content: full_text,
                         cost_usd: None,
@@ -743,7 +743,7 @@ async fn handle_stop_agent(
     let msg = ChatMessage {
         id: uuid::Uuid::new_v4().to_string(),
         workspace_id,
-        session_id: chat_session_id,
+        chat_session_id,
         role: ChatRole::System,
         content: "Agent stopped".to_string(),
         cost_usd: None,

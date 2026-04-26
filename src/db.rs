@@ -236,19 +236,19 @@ impl Database {
                 let sid = uuid::Uuid::new_v4().to_string();
                 tx.execute(
                     "INSERT INTO chat_sessions
-                        (id, workspace_id, claude_session_id, name, name_edited,
+                        (id, workspace_id, session_id, name, name_edited,
                          turn_count, sort_order, status)
                      VALUES (?1, ?2, ?3, 'Main', 0, ?4, 0, 'active')",
                     params![sid, ws_id, claude_sid, tc],
                 )?;
                 tx.execute(
-                    "UPDATE chat_messages SET session_id = ?1
-                     WHERE workspace_id = ?2 AND session_id IS NULL",
+                    "UPDATE chat_messages SET chat_session_id = ?1
+                     WHERE workspace_id = ?2 AND chat_session_id IS NULL",
                     params![sid, ws_id],
                 )?;
                 tx.execute(
-                    "UPDATE conversation_checkpoints SET session_id = ?1
-                     WHERE workspace_id = ?2 AND session_id IS NULL",
+                    "UPDATE conversation_checkpoints SET chat_session_id = ?1
+                     WHERE workspace_id = ?2 AND chat_session_id IS NULL",
                     params![sid, ws_id],
                 )?;
             }
@@ -258,7 +258,7 @@ impl Database {
         let has_null_sessions: bool = self
             .conn
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE session_id IS NULL)",
+                "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE chat_session_id IS NULL)",
                 [],
                 |row| row.get(0),
             )
@@ -266,19 +266,19 @@ impl Database {
 
         if has_null_sessions {
             self.conn.execute_batch(
-                "UPDATE chat_messages SET session_id = (
+                "UPDATE chat_messages SET chat_session_id = (
                      SELECT cs.id FROM chat_sessions cs
                      WHERE cs.workspace_id = chat_messages.workspace_id
                      ORDER BY cs.sort_order, cs.created_at LIMIT 1
                  )
-                 WHERE session_id IS NULL;
+                 WHERE chat_session_id IS NULL;
 
-                 UPDATE conversation_checkpoints SET session_id = (
+                 UPDATE conversation_checkpoints SET chat_session_id = (
                      SELECT cs.id FROM chat_sessions cs
                      WHERE cs.workspace_id = conversation_checkpoints.workspace_id
                      ORDER BY cs.sort_order, cs.created_at LIMIT 1
                  )
-                 WHERE session_id IS NULL;",
+                 WHERE chat_session_id IS NULL;",
             )?;
         }
 
@@ -595,7 +595,7 @@ impl Database {
         // invariant (≥1 active session per workspace) holds from creation.
         tx.execute(
             "INSERT INTO chat_sessions
-                (id, workspace_id, claude_session_id, name, name_edited,
+                (id, workspace_id, session_id, name, name_edited,
                  turn_count, sort_order, status)
              VALUES (?1, ?2, NULL, 'New chat', 0, 0, 0, 'active')",
             params![uuid::Uuid::new_v4().to_string(), ws.id],
@@ -615,7 +615,7 @@ impl Database {
             )?;
             let mut session_stmt = tx.prepare(
                 "INSERT INTO chat_sessions
-                    (id, workspace_id, claude_session_id, name, name_edited,
+                    (id, workspace_id, session_id, name, name_edited,
                      turn_count, sort_order, status)
                  VALUES (?1, ?2, NULL, 'New chat', 0, 0, 0, 'active')",
             )?;
@@ -1108,13 +1108,13 @@ impl Database {
     pub fn insert_chat_message(&self, msg: &ChatMessage) -> Result<(), rusqlite::Error> {
         self.conn.execute(
             "INSERT INTO chat_messages (
-                id, workspace_id, session_id, role, content, cost_usd, duration_ms, thinking,
+                id, workspace_id, chat_session_id, role, content, cost_usd, duration_ms, thinking,
                 input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 msg.id,
                 msg.workspace_id,
-                msg.session_id,
+                msg.chat_session_id,
                 msg.role.as_str(),
                 msg.content,
                 msg.cost_usd,
@@ -1131,11 +1131,11 @@ impl Database {
 
     fn parse_chat_message_row(row: &rusqlite::Row) -> rusqlite::Result<ChatMessage> {
         let role_str: String = row.get(3)?;
-        let session_id: String = row.get::<_, Option<String>>(2)?.unwrap_or_default();
+        let chat_session_id: String = row.get::<_, Option<String>>(2)?.unwrap_or_default();
         Ok(ChatMessage {
             id: row.get(0)?,
             workspace_id: row.get(1)?,
-            session_id,
+            chat_session_id,
             role: role_str.parse().unwrap(),
             content: row.get(4)?,
             cost_usd: row.get(5)?,
@@ -1149,7 +1149,7 @@ impl Database {
         })
     }
 
-    const CHAT_MESSAGE_COLS: &str = "id, workspace_id, session_id, role, content, cost_usd, \
+    const CHAT_MESSAGE_COLS: &str = "id, workspace_id, chat_session_id, role, content, cost_usd, \
          duration_ms, created_at, thinking, input_tokens, output_tokens, cache_read_tokens, \
          cache_creation_tokens";
 
@@ -1167,17 +1167,17 @@ impl Database {
         rows.collect()
     }
 
-    /// List all chat messages for a single session, ordered chronologically.
+    /// List all chat messages for a single chat session, ordered chronologically.
     pub fn list_chat_messages_for_session(
         &self,
-        session_id: &str,
+        chat_session_id: &str,
     ) -> Result<Vec<ChatMessage>, rusqlite::Error> {
         let sql = format!(
-            "SELECT {} FROM chat_messages WHERE session_id = ?1 ORDER BY created_at, rowid",
+            "SELECT {} FROM chat_messages WHERE chat_session_id = ?1 ORDER BY created_at, rowid",
             Self::CHAT_MESSAGE_COLS
         );
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(params![session_id], Self::parse_chat_message_row)?;
+        let rows = stmt.query_map(params![chat_session_id], Self::parse_chat_message_row)?;
         rows.collect()
     }
 
@@ -1244,21 +1244,21 @@ impl Database {
         Ok(())
     }
 
-    /// Delete all messages for a single session. Cascades to attachments.
+    /// Delete all messages for a single chat session. Cascades to attachments.
     pub fn delete_chat_messages_for_session(
         &self,
-        session_id: &str,
+        chat_session_id: &str,
     ) -> Result<(), rusqlite::Error> {
         self.conn.execute(
-            "DELETE FROM chat_messages WHERE session_id = ?1",
-            params![session_id],
+            "DELETE FROM chat_messages WHERE chat_session_id = ?1",
+            params![chat_session_id],
         )?;
         Ok(())
     }
 
     // --- Chat Sessions ---
 
-    const CHAT_SESSION_COLS: &str = "id, workspace_id, claude_session_id, name, name_edited, \
+    const CHAT_SESSION_COLS: &str = "id, workspace_id, session_id, name, name_edited, \
          turn_count, sort_order, status, created_at, archived_at";
 
     fn parse_chat_session_row(row: &rusqlite::Row) -> rusqlite::Result<ChatSession> {
@@ -1266,7 +1266,7 @@ impl Database {
         Ok(ChatSession {
             id: row.get(0)?,
             workspace_id: row.get(1)?,
-            claude_session_id: row.get(2)?,
+            session_id: row.get(2)?,
             name: row.get(3)?,
             name_edited: row.get::<_, i32>(4)? != 0,
             turn_count: row.get(5)?,
@@ -1293,7 +1293,7 @@ impl Database {
         let id = uuid::Uuid::new_v4().to_string();
         self.conn.execute(
             "INSERT INTO chat_sessions
-                (id, workspace_id, claude_session_id, name, name_edited,
+                (id, workspace_id, session_id, name, name_edited,
                  turn_count, sort_order, status)
              VALUES (?1, ?2, NULL, 'New chat', 0, 0, ?3, 'active')",
             params![id, workspace_id, sort_order],
@@ -1304,14 +1304,14 @@ impl Database {
 
     pub fn get_chat_session(
         &self,
-        session_id: &str,
+        chat_session_id: &str,
     ) -> Result<Option<ChatSession>, rusqlite::Error> {
         let sql = format!(
             "SELECT {} FROM chat_sessions WHERE id = ?1",
             Self::CHAT_SESSION_COLS
         );
         self.conn
-            .query_row(&sql, params![session_id], Self::parse_chat_session_row)
+            .query_row(&sql, params![chat_session_id], Self::parse_chat_session_row)
             .optional()
     }
 
@@ -1345,10 +1345,14 @@ impl Database {
 
     /// Rename a session. Sets `name_edited = 1` so Haiku auto-naming never
     /// overwrites the new name.
-    pub fn rename_chat_session(&self, session_id: &str, name: &str) -> Result<(), rusqlite::Error> {
+    pub fn rename_chat_session(
+        &self,
+        chat_session_id: &str,
+        name: &str,
+    ) -> Result<(), rusqlite::Error> {
         self.conn.execute(
             "UPDATE chat_sessions SET name = ?1, name_edited = 1 WHERE id = ?2",
-            params![name, session_id],
+            params![name, chat_session_id],
         )?;
         Ok(())
     }
@@ -1357,13 +1361,13 @@ impl Database {
     /// already renamed the session. Returns `true` if the name was written.
     pub fn set_session_name_from_haiku(
         &self,
-        session_id: &str,
+        chat_session_id: &str,
         name: &str,
     ) -> Result<bool, rusqlite::Error> {
         let rows = self.conn.execute(
             "UPDATE chat_sessions SET name = ?1
              WHERE id = ?2 AND name_edited = 0",
-            params![name, session_id],
+            params![name, chat_session_id],
         )?;
         Ok(rows > 0)
     }
@@ -1372,35 +1376,35 @@ impl Database {
     /// restart. Replaces the old workspace-scoped `save_agent_session`.
     pub fn save_chat_session_state(
         &self,
+        chat_session_id: &str,
         session_id: &str,
-        claude_session_id: &str,
         turn_count: u32,
     ) -> Result<(), rusqlite::Error> {
         self.conn.execute(
-            "UPDATE chat_sessions SET claude_session_id = ?1, turn_count = ?2 WHERE id = ?3",
-            params![claude_session_id, turn_count, session_id],
+            "UPDATE chat_sessions SET session_id = ?1, turn_count = ?2 WHERE id = ?3",
+            params![session_id, turn_count, chat_session_id],
         )?;
         Ok(())
     }
 
     /// Clear Claude CLI state (e.g. after a reset or failed init).
-    pub fn clear_chat_session_claude_state(&self, session_id: &str) -> Result<(), rusqlite::Error> {
+    pub fn clear_chat_session_state(&self, chat_session_id: &str) -> Result<(), rusqlite::Error> {
         self.conn.execute(
             "UPDATE chat_sessions
-             SET claude_session_id = NULL, turn_count = 0 WHERE id = ?1",
-            params![session_id],
+             SET session_id = NULL, turn_count = 0 WHERE id = ?1",
+            params![chat_session_id],
         )?;
         Ok(())
     }
 
     /// Archive a session (soft-delete). Messages and checkpoints remain so
     /// they can be restored or purged later.
-    pub fn archive_chat_session(&self, session_id: &str) -> Result<(), rusqlite::Error> {
+    pub fn archive_chat_session(&self, chat_session_id: &str) -> Result<(), rusqlite::Error> {
         self.conn.execute(
             "UPDATE chat_sessions
              SET status = 'archived', archived_at = datetime('now')
              WHERE id = ?1",
-            params![session_id],
+            params![chat_session_id],
         )?;
         Ok(())
     }
@@ -1413,7 +1417,7 @@ impl Database {
     /// replacement was needed, `None` otherwise.
     pub fn archive_chat_session_ensuring_active(
         &self,
-        session_id: &str,
+        chat_session_id: &str,
         workspace_id: &str,
     ) -> Result<Option<ChatSession>, rusqlite::Error> {
         let tx = self.conn.unchecked_transaction()?;
@@ -1421,7 +1425,7 @@ impl Database {
             "UPDATE chat_sessions
              SET status = 'archived', archived_at = datetime('now')
              WHERE id = ?1",
-            params![session_id],
+            params![chat_session_id],
         )?;
         let remaining: i64 = tx.query_row(
             "SELECT COUNT(*) FROM chat_sessions
@@ -1438,7 +1442,7 @@ impl Database {
             let id = uuid::Uuid::new_v4().to_string();
             tx.execute(
                 "INSERT INTO chat_sessions
-                    (id, workspace_id, claude_session_id, name, name_edited,
+                    (id, workspace_id, session_id, name, name_edited,
                      turn_count, sort_order, status)
                  VALUES (?1, ?2, NULL, 'New chat', 0, 0, ?3, 'active')",
                 params![id, workspace_id, sort_order],
@@ -1489,12 +1493,12 @@ impl Database {
 
     /// Is this session the first (sort_order = 0) session for its workspace?
     /// Used to gate workspace-level branch auto-rename.
-    pub fn is_initial_session(&self, session_id: &str) -> Result<bool, rusqlite::Error> {
+    pub fn is_initial_session(&self, chat_session_id: &str) -> Result<bool, rusqlite::Error> {
         let sort_order: Option<i32> = self
             .conn
             .query_row(
                 "SELECT sort_order FROM chat_sessions WHERE id = ?1",
-                params![session_id],
+                params![chat_session_id],
                 |row| row.get(0),
             )
             .optional()?;
@@ -1626,12 +1630,12 @@ impl Database {
     pub fn insert_checkpoint(&self, cp: &ConversationCheckpoint) -> Result<(), rusqlite::Error> {
         self.conn.execute(
             "INSERT INTO conversation_checkpoints
-                (id, workspace_id, session_id, message_id, commit_hash, turn_index, message_count)
+                (id, workspace_id, chat_session_id, message_id, commit_hash, turn_index, message_count)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 cp.id,
                 cp.workspace_id,
-                cp.session_id,
+                cp.chat_session_id,
                 cp.message_id,
                 cp.commit_hash,
                 cp.turn_index,
@@ -1645,7 +1649,7 @@ impl Database {
         Ok(ConversationCheckpoint {
             id: row.get(0)?,
             workspace_id: row.get(1)?,
-            session_id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+            chat_session_id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
             message_id: row.get(3)?,
             commit_hash: row.get(4)?,
             has_file_state: row.get(5)?,
@@ -1656,7 +1660,7 @@ impl Database {
     }
 
     /// SQL column list for checkpoint queries, including a subquery for has_file_state.
-    const CHECKPOINT_COLS: &str = "id, workspace_id, session_id, message_id, commit_hash, \
+    const CHECKPOINT_COLS: &str = "id, workspace_id, chat_session_id, message_id, commit_hash, \
          EXISTS(SELECT 1 FROM checkpoint_files WHERE checkpoint_id = conversation_checkpoints.id) AS has_file_state, \
          turn_index, message_count, created_at";
 
@@ -1675,14 +1679,14 @@ impl Database {
 
     pub fn list_checkpoints_for_session(
         &self,
-        session_id: &str,
+        chat_session_id: &str,
     ) -> Result<Vec<ConversationCheckpoint>, rusqlite::Error> {
         let sql = format!(
-            "SELECT {} FROM conversation_checkpoints WHERE session_id = ?1 ORDER BY turn_index",
+            "SELECT {} FROM conversation_checkpoints WHERE chat_session_id = ?1 ORDER BY turn_index",
             Self::CHECKPOINT_COLS
         );
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(params![session_id], Self::parse_checkpoint_row)?;
+        let rows = stmt.query_map(params![chat_session_id], Self::parse_checkpoint_row)?;
         rows.collect()
     }
 
@@ -1690,12 +1694,12 @@ impl Database {
     /// rollback — everything after the chosen turn is pruned.
     pub fn delete_session_checkpoints_after(
         &self,
-        session_id: &str,
+        chat_session_id: &str,
         turn_index: i32,
     ) -> Result<usize, rusqlite::Error> {
         let deleted = self.conn.execute(
-            "DELETE FROM conversation_checkpoints WHERE session_id = ?1 AND turn_index > ?2",
-            params![session_id, turn_index],
+            "DELETE FROM conversation_checkpoints WHERE chat_session_id = ?1 AND turn_index > ?2",
+            params![chat_session_id, turn_index],
         )?;
         Ok(deleted)
     }
@@ -2005,18 +2009,18 @@ impl Database {
     }
 
     /// Delete all messages inserted after `after_message_id` *within the
-    /// given session*. The rowid-ordering match is scoped to that session so
-    /// a rollback in tab A cannot prune messages in tab B.
+    /// given chat session*. The rowid-ordering match is scoped to that
+    /// chat session so a rollback in tab A cannot prune messages in tab B.
     pub fn delete_session_messages_after(
         &self,
-        session_id: &str,
+        chat_session_id: &str,
         after_message_id: &str,
     ) -> Result<usize, rusqlite::Error> {
         let deleted = self.conn.execute(
             "DELETE FROM chat_messages
-             WHERE session_id = ?1
+             WHERE chat_session_id = ?1
                AND rowid > (SELECT rowid FROM chat_messages WHERE id = ?2)",
-            params![session_id, after_message_id],
+            params![chat_session_id, after_message_id],
         )?;
         Ok(deleted)
     }
@@ -2024,20 +2028,20 @@ impl Database {
     /// Session-scoped variant of [`Self::list_completed_turns`].
     pub fn list_completed_turns_for_session(
         &self,
-        session_id: &str,
+        chat_session_id: &str,
     ) -> Result<Vec<CompletedTurnData>, rusqlite::Error> {
-        let checkpoints = self.list_checkpoints_for_session(session_id)?;
+        let checkpoints = self.list_checkpoints_for_session(chat_session_id)?;
 
         let mut stmt = self.conn.prepare(
             "SELECT ta.id, ta.checkpoint_id, ta.tool_use_id, ta.tool_name,
                     ta.input_json, ta.result_text, ta.summary, ta.sort_order
              FROM turn_tool_activities ta
              JOIN conversation_checkpoints cp ON ta.checkpoint_id = cp.id
-             WHERE cp.session_id = ?1
+             WHERE cp.chat_session_id = ?1
              ORDER BY cp.turn_index, ta.sort_order",
         )?;
         let activities: Vec<TurnToolActivity> = stmt
-            .query_map(params![session_id], |row| {
+            .query_map(params![chat_session_id], |row| {
                 Ok(TurnToolActivity {
                     id: row.get(0)?,
                     checkpoint_id: row.get(1)?,
@@ -2762,14 +2766,14 @@ mod tests {
         role: ChatRole,
         content: &str,
     ) -> ChatMessage {
-        let session_id = db
+        let chat_session_id = db
             .default_session_id_for_workspace(ws_id)
             .unwrap()
             .expect("workspace must have a default session for tests");
         ChatMessage {
             id: id.into(),
             workspace_id: ws_id.into(),
-            session_id,
+            chat_session_id,
             role,
             content: content.into(),
             cost_usd: None,
@@ -3613,14 +3617,14 @@ mod tests {
         msg_id: &str,
         turn: i32,
     ) -> ConversationCheckpoint {
-        let session_id = db
+        let chat_session_id = db
             .default_session_id_for_workspace(ws_id)
             .unwrap()
             .expect("workspace must have a default session for tests");
         ConversationCheckpoint {
             id: id.into(),
             workspace_id: ws_id.into(),
-            session_id,
+            chat_session_id,
             message_id: msg_id.into(),
             commit_hash: Some(format!("abc{turn}")),
             has_file_state: false,
@@ -4214,7 +4218,7 @@ mod tests {
         for (id, role) in [("m1", "user"), ("m3", "user"), ("m4", "system")] {
             db.conn
                 .execute(
-                    "INSERT INTO chat_messages (id, workspace_id, session_id, role, content, cost_usd)
+                    "INSERT INTO chat_messages (id, workspace_id, chat_session_id, role, content, cost_usd)
                      VALUES (?1, 'w1', ?2, ?3, 'x', 0.01)",
                     params![id, sess_id, role],
                 )
@@ -4222,7 +4226,7 @@ mod tests {
         }
         db.conn
             .execute(
-                "INSERT INTO chat_messages (id, workspace_id, session_id, role, content, cost_usd, input_tokens, output_tokens)
+                "INSERT INTO chat_messages (id, workspace_id, chat_session_id, role, content, cost_usd, input_tokens, output_tokens)
                  VALUES ('m2', 'w1', ?1, 'assistant', 'x', 0.01, 12000, 3000)",
                 params![sess_id],
             )
@@ -4833,12 +4837,12 @@ mod tests {
         // tracking row so re-running migrations will re-apply it.
         db.execute_batch(
             "PRAGMA foreign_keys=OFF;
-             DROP INDEX IF EXISTS idx_chat_messages_session;
-             DROP INDEX IF EXISTS idx_checkpoints_session;
+             DROP INDEX IF EXISTS idx_chat_messages_chat_session;
+             DROP INDEX IF EXISTS idx_checkpoints_chat_session;
              DROP INDEX IF EXISTS idx_chat_sessions_ws;
              DROP INDEX IF EXISTS idx_chat_sessions_active;
-             ALTER TABLE chat_messages DROP COLUMN session_id;
-             ALTER TABLE conversation_checkpoints DROP COLUMN session_id;
+             ALTER TABLE chat_messages DROP COLUMN chat_session_id;
+             ALTER TABLE conversation_checkpoints DROP COLUMN chat_session_id;
              DROP TABLE chat_sessions;
              DELETE FROM schema_migrations WHERE id = '20260422000000_chat_sessions';
              PRAGMA foreign_keys=ON;",
@@ -4870,7 +4874,7 @@ mod tests {
         struct SessionRow {
             id: String,
             workspace_id: String,
-            claude_session_id: Option<String>,
+            session_id: Option<String>,
             name: String,
             turn_count: i64,
             sort_order: i32,
@@ -4882,7 +4886,7 @@ mod tests {
             let mut stmt = db
                 .conn()
                 .prepare(
-                    "SELECT id, workspace_id, claude_session_id, name, turn_count, sort_order, status
+                    "SELECT id, workspace_id, session_id, name, turn_count, sort_order, status
                      FROM chat_sessions ORDER BY workspace_id",
                 )
                 .unwrap();
@@ -4890,7 +4894,7 @@ mod tests {
                 Ok(SessionRow {
                     id: row.get(0)?,
                     workspace_id: row.get(1)?,
-                    claude_session_id: row.get(2)?,
+                    session_id: row.get(2)?,
                     name: row.get(3)?,
                     turn_count: row.get(4)?,
                     sort_order: row.get(5)?,
@@ -4907,7 +4911,7 @@ mod tests {
             .iter()
             .find(|r| r.workspace_id == "w1")
             .unwrap();
-        assert_eq!(w1.claude_session_id.as_deref(), Some("claude-abc"));
+        assert_eq!(w1.session_id.as_deref(), Some("claude-abc"));
         assert_eq!(w1.name, "Main");
         assert_eq!(w1.turn_count, 3);
         assert_eq!(w1.sort_order, 0);
@@ -4917,14 +4921,14 @@ mod tests {
             .iter()
             .find(|r| r.workspace_id == "w2")
             .unwrap();
-        assert!(w2.claude_session_id.is_none());
+        assert!(w2.session_id.is_none());
         assert_eq!(w2.turn_count, 0);
 
-        // Messages and checkpoint point at w1's session.
-        let w1_session_id = w1.id.clone();
+        // Messages and checkpoint point at w1's chat session.
+        let w1_chat_session_id = w1.id.clone();
         let msg_sessions: Vec<Option<String>> = db
             .conn()
-            .prepare("SELECT session_id FROM chat_messages WHERE workspace_id = 'w1'")
+            .prepare("SELECT chat_session_id FROM chat_messages WHERE workspace_id = 'w1'")
             .unwrap()
             .query_map([], |row| row.get(0))
             .unwrap()
@@ -4934,34 +4938,34 @@ mod tests {
         assert!(
             msg_sessions
                 .iter()
-                .all(|s| s.as_deref() == Some(&w1_session_id))
+                .all(|s| s.as_deref() == Some(&w1_chat_session_id))
         );
 
         let cp_session: Option<String> = db
             .conn()
             .query_row(
-                "SELECT session_id FROM conversation_checkpoints WHERE id = 'cp1'",
+                "SELECT chat_session_id FROM conversation_checkpoints WHERE id = 'cp1'",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(cp_session.as_deref(), Some(w1_session_id.as_str()));
+        assert_eq!(cp_session.as_deref(), Some(w1_chat_session_id.as_str()));
     }
 
     #[test]
-    fn test_save_chat_session_state_persists_claude_session_id() {
+    fn test_save_chat_session_state_persists_session_id() {
         let db = Database::open_in_memory().unwrap();
         db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
             .unwrap();
         db.insert_workspace(&make_workspace("w1", "r1", "ws"))
             .unwrap();
         let sess = db.create_chat_session("w1").unwrap();
-        assert!(sess.claude_session_id.is_none());
+        assert!(sess.session_id.is_none());
 
         db.save_chat_session_state(&sess.id, "claude-sid-1", 3)
             .unwrap();
         let reloaded = db.get_chat_session(&sess.id).unwrap().unwrap();
-        assert_eq!(reloaded.claude_session_id.as_deref(), Some("claude-sid-1"));
+        assert_eq!(reloaded.session_id.as_deref(), Some("claude-sid-1"));
         assert_eq!(reloaded.turn_count, 3);
     }
 

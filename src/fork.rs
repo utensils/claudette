@@ -275,7 +275,7 @@ fn copy_history(
     // The new workspace was just created and always has exactly one default
     // session. Anchor every copied message/checkpoint to it so the forked
     // conversation is reachable from the new workspace's initial tab.
-    let new_session_id = db
+    let new_chat_session_id = db
         .default_session_id_for_workspace(new_ws_id)?
         .ok_or_else(|| {
             ForkError::InconsistentHistory(format!(
@@ -292,7 +292,7 @@ fn copy_history(
         let copied = ChatMessage {
             id: new_id,
             workspace_id: new_ws_id.to_string(),
-            session_id: new_session_id.clone(),
+            chat_session_id: new_chat_session_id.clone(),
             role: msg.role.clone(),
             content: msg.content.clone(),
             cost_usd: msg.cost_usd,
@@ -327,7 +327,7 @@ fn copy_history(
         let new_cp = ConversationCheckpoint {
             id: new_cp_id.clone(),
             workspace_id: new_ws_id.to_string(),
-            session_id: new_session_id.clone(),
+            chat_session_id: new_chat_session_id.clone(),
             message_id: new_msg_id.clone(),
             commit_hash: cp.commit_hash.clone(),
             // `has_file_state` is derived by the DB from the presence of
@@ -475,14 +475,14 @@ mod tests {
         role: ChatRole,
         content: &str,
     ) -> ChatMessage {
-        let session_id = db
+        let chat_session_id = db
             .default_session_id_for_workspace(ws)
             .unwrap()
             .expect("workspace must have a default session for tests");
         ChatMessage {
             id: id.into(),
             workspace_id: ws.into(),
-            session_id,
+            chat_session_id,
             role,
             content: content.into(),
             cost_usd: None,
@@ -504,14 +504,14 @@ mod tests {
         turn: i32,
         commit: Option<&str>,
     ) -> ConversationCheckpoint {
-        let session_id = db
+        let chat_session_id = db
             .default_session_id_for_workspace(ws)
             .unwrap()
             .expect("workspace must have a default session for tests");
         ConversationCheckpoint {
             id: id.into(),
             workspace_id: ws.into(),
-            session_id,
+            chat_session_id,
             message_id: msg.into(),
             commit_hash: commit.map(String::from),
             has_file_state: false,

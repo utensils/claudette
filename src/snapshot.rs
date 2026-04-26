@@ -377,7 +377,7 @@ mod tests {
         VALUES ('ws1', 'r1', 'test', 'main', 'active'); \
         INSERT INTO chat_sessions (id, workspace_id, name, sort_order, status) \
         VALUES ('s1', 'ws1', 'Main', 0, 'active'); \
-        INSERT INTO conversation_checkpoints (id, workspace_id, session_id, message_id, turn_index, message_count) \
+        INSERT INTO conversation_checkpoints (id, workspace_id, chat_session_id, message_id, turn_index, message_count) \
         VALUES ('cp1', 'ws1', 's1', 'm1', 0, 0);";
 
     #[tokio::test]

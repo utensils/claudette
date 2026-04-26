@@ -484,7 +484,7 @@ export function ChatPanel() {
     const sessionId = activeSessionId;
     const loadHistory = currentWs?.remote_connection_id
       ? sendRemoteCommand(currentWs.remote_connection_id, "load_chat_history", {
-          session_id: sessionId,
+          chat_session_id: sessionId,
         }).then((data) => (data as { messages?: ChatMessage[] })?.messages ?? data as ChatMessage[])
       : loadChatHistory(sessionId);
 
@@ -738,7 +738,7 @@ export function ChatPanel() {
           addChatMessage(sessionId, {
             id: crypto.randomUUID(),
             workspace_id: workspaceId,
-            session_id: sessionId,
+            chat_session_id: sessionId,
             role: "System",
             content: text,
             cost_usd: null,
@@ -913,7 +913,7 @@ export function ChatPanel() {
     addChatMessage(sessionId, {
       id: optimisticMsgId,
       workspace_id: selectedWorkspaceId,
-      session_id: sessionId,
+      chat_session_id: sessionId,
       role: "User",
       content: trimmed,
       cost_usd: null,
@@ -961,7 +961,7 @@ export function ChatPanel() {
           state.effortLevel[sessionId],
         );
         await sendRemoteCommand(ws.remote_connection_id, "send_chat_message", {
-          session_id: sessionId,
+          chat_session_id: sessionId,
           content: trimmed,
           mentioned_files: mentionedFilesArray,
           permission_level: permissionLevel,
@@ -1020,7 +1020,7 @@ export function ChatPanel() {
     try {
       if (ws?.remote_connection_id) {
         await sendRemoteCommand(ws.remote_connection_id, "stop_agent", {
-          session_id: sessionId,
+          chat_session_id: sessionId,
         });
       } else {
         await stopAgent(sessionId);

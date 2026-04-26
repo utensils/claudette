@@ -156,7 +156,7 @@ pub struct AttachmentResponse {
 #[derive(Clone, Serialize)]
 struct AgentStreamPayload {
     workspace_id: String,
-    session_id: String,
+    chat_session_id: String,
     event: AgentEvent,
 }
 
@@ -307,7 +307,7 @@ pub async fn send_chat_message(
     let user_msg = ChatMessage {
         id: message_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         workspace_id: workspace_id.clone(),
-        session_id: chat_session_id.clone(),
+        chat_session_id: chat_session_id.clone(),
         role: ChatRole::User,
         content: content.clone(),
         cost_usd: None,
@@ -463,11 +463,11 @@ pub async fn send_chat_message(
     let session = agents.entry(chat_session_id.clone()).or_insert_with(|| {
         // Try restoring a persisted session from the chat_sessions row.
         if let Ok(Some(chat_session)) = db.get_chat_session(&chat_session_id)
-            && let Some(claude_sid) = chat_session.claude_session_id.clone()
+            && let Some(claude_sid) = chat_session.session_id.clone()
         {
             return AgentSessionState {
                 workspace_id: workspace_id.clone(),
-                claude_session_id: claude_sid,
+                session_id: claude_sid,
                 turn_count: chat_session.turn_count,
                 active_pid: None,
                 custom_instructions: instructions.clone(),
@@ -489,7 +489,7 @@ pub async fn send_chat_message(
 
         AgentSessionState {
             workspace_id: workspace_id.clone(),
-            claude_session_id: uuid::Uuid::new_v4().to_string(),
+            session_id: uuid::Uuid::new_v4().to_string(),
             turn_count: 0,
             active_pid: None,
             custom_instructions: instructions,
@@ -770,7 +770,7 @@ pub async fn send_chat_message(
     // First turn or after restart: start a PersistentSession.
     // Subsequent turns in same session: reuse the existing process via stdin.
     let existing_persistent = session.persistent_session.clone();
-    let saved_session_id = session.claude_session_id.clone();
+    let saved_session_id = session.session_id.clone();
     let saved_turn_count = session.turn_count;
 
     // Helper: start a persistent session, using --resume for restored sessions.
@@ -859,7 +859,7 @@ pub async fn send_chat_message(
                         (ps, fresh)
                     }
                     Err(e2) => {
-                        let _ = db.clear_chat_session_claude_state(&chat_session_id);
+                        let _ = db.clear_chat_session_state(&chat_session_id);
                         return Err(e2);
                     }
                 };
@@ -869,7 +869,7 @@ pub async fn send_chat_message(
                 let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
                 session.persistent_session = Some(ps);
                 session.mcp_bridge = bridge;
-                session.claude_session_id = final_sid;
+                session.session_id = final_sid;
                 session.session_plan_mode = agent_settings.plan_mode;
                 session.session_allowed_tools = allowed_tools.clone();
                 session.session_disable_1m_context = agent_settings.disable_1m_context;
@@ -890,7 +890,7 @@ pub async fn send_chat_message(
             saved_session_id.clone()
         } else {
             let fresh = uuid::Uuid::new_v4().to_string();
-            session.claude_session_id = fresh.clone();
+            session.session_id = fresh.clone();
             fresh
         };
         // Drop lock before async process spawn.
@@ -947,11 +947,11 @@ pub async fn send_chat_message(
                 // so the next attempt doesn't try --resume with a dead
                 // session ID. Must be per-session (not workspace-scoped)
                 // because other tabs in this workspace may still be live.
-                let _ = db.clear_chat_session_claude_state(&chat_session_id);
+                let _ = db.clear_chat_session_state(&chat_session_id);
                 agents = state.agents.write().await;
                 if let Some(session) = agents.get_mut(&chat_session_id) {
                     session.turn_count = 0;
-                    session.claude_session_id = String::new();
+                    session.session_id = String::new();
                 }
                 drop(agents);
                 let e = crate::missing_cli::handle_err(&app, &e).unwrap_or(e);
@@ -964,7 +964,7 @@ pub async fn send_chat_message(
         let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
         session.persistent_session = Some(ps);
         session.mcp_bridge = bridge;
-        session.claude_session_id = final_sid.clone();
+        session.session_id = final_sid.clone();
         session.session_plan_mode = agent_settings.plan_mode;
         session.session_allowed_tools = allowed_tools.clone();
         session.session_disable_1m_context = agent_settings.disable_1m_context;
@@ -979,15 +979,11 @@ pub async fn send_chat_message(
     {
         let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
         session.active_pid = Some(spawned_pid);
-        let _ = db.save_chat_session_state(
-            &chat_session_id,
-            &session.claude_session_id,
-            session.turn_count,
-        );
         let _ =
-            db.insert_agent_session(&session.claude_session_id, &workspace_id, &ws.repository_id);
-        let _ = db.reopen_agent_session(&session.claude_session_id);
-        let _ = db.update_agent_session_turn(&session.claude_session_id, session.turn_count);
+            db.save_chat_session_state(&chat_session_id, &session.session_id, session.turn_count);
+        let _ = db.insert_agent_session(&session.session_id, &workspace_id, &ws.repository_id);
+        let _ = db.reopen_agent_session(&session.session_id);
+        let _ = db.update_agent_session_turn(&session.session_id, session.turn_count);
         if db
             .get_app_setting("first_session_at")
             .ok()
@@ -1132,7 +1128,7 @@ pub async fn send_chat_message(
                 let msg = ChatMessage {
                     id: uuid::Uuid::new_v4().to_string(),
                     workspace_id: ws_id.clone(),
-                    session_id: chat_session_id_for_stream.clone(),
+                    chat_session_id: chat_session_id_for_stream.clone(),
                     role: ChatRole::System,
                     content: sentinel,
                     cost_usd: None,
@@ -1187,7 +1183,7 @@ pub async fn send_chat_message(
                     drop(agents);
                     let payload = serde_json::json!({
                         "workspace_id": &ws_id,
-                        "session_id": &chat_session_id_for_stream,
+                        "chat_session_id": &chat_session_id_for_stream,
                         "tool_use_id": tool_use_id,
                         "tool_name": tool_name,
                         "input": input,
@@ -1351,7 +1347,7 @@ pub async fn send_chat_message(
                 let msg = ChatMessage {
                     id: uuid::Uuid::new_v4().to_string(),
                     workspace_id: ws_id.clone(),
-                    session_id: chat_session_id_for_stream.clone(),
+                    chat_session_id: chat_session_id_for_stream.clone(),
                     role: ChatRole::System,
                     content: sentinel,
                     cost_usd: None,
@@ -1411,7 +1407,7 @@ pub async fn send_chat_message(
                     }
                     let sid = agents
                         .get(&chat_session_id_for_stream)
-                        .map(|s| s.claude_session_id.clone())
+                        .map(|s| s.session_id.clone())
                         .unwrap_or_default();
                     let attn = agents
                         .get(&chat_session_id_for_stream)
@@ -1468,7 +1464,7 @@ pub async fn send_chat_message(
                 // below can reference the session we just finished.
                 let ended_session_id: Option<String> = agents
                     .get(&chat_session_id_for_stream)
-                    .map(|s| s.claude_session_id.clone());
+                    .map(|s| s.session_id.clone());
                 // Track whether this exit actually belongs to the live session
                 // in `agents` — if a newer turn has replaced `active_pid`, the
                 // old exit is stale and we must not end the (now-new) session
@@ -1482,7 +1478,7 @@ pub async fn send_chat_message(
                     // workspace may still be live.
                     agents.remove(&chat_session_id_for_stream);
                     if let Ok(db) = Database::open(&db_path) {
-                        let _ = db.clear_chat_session_claude_state(&chat_session_id_for_stream);
+                        let _ = db.clear_chat_session_state(&chat_session_id_for_stream);
                         if let Some(ref sid) = ended_session_id {
                             let _ = db.end_agent_session(sid, false);
                         }
@@ -1606,7 +1602,7 @@ pub async fn send_chat_message(
                     let msg = ChatMessage {
                         id: msg_id.clone(),
                         workspace_id: ws_id.clone(),
-                        session_id: chat_session_id_for_stream.clone(),
+                        chat_session_id: chat_session_id_for_stream.clone(),
                         role: ChatRole::Assistant,
                         content: full_text,
                         cost_usd: None,
@@ -1657,7 +1653,7 @@ pub async fn send_chat_message(
                 let checkpoint = ConversationCheckpoint {
                     id: uuid::Uuid::new_v4().to_string(),
                     workspace_id: ws_id.clone(),
-                    session_id: chat_session_id_for_stream.clone(),
+                    chat_session_id: chat_session_id_for_stream.clone(),
                     message_id: anchor_msg_id.to_string(),
                     commit_hash: None,
                     has_file_state: false, // Updated after snapshot succeeds
@@ -1684,7 +1680,7 @@ pub async fn send_chat_message(
                     cp_payload.has_file_state = has_files;
                     let payload = serde_json::json!({
                         "workspace_id": &ws_id,
-                        "session_id": &chat_session_id_for_stream,
+                        "chat_session_id": &chat_session_id_for_stream,
                         "checkpoint": &cp_payload,
                     });
                     let _ = app.emit("checkpoint-created", &payload);
@@ -1693,7 +1689,7 @@ pub async fn send_chat_message(
 
             let payload = AgentStreamPayload {
                 workspace_id: ws_id.clone(),
-                session_id: chat_session_id_for_stream.clone(),
+                chat_session_id: chat_session_id_for_stream.clone(),
                 event,
             };
             let _ = app.emit("agent-stream", &payload);
@@ -1724,7 +1720,7 @@ type StopSnapshot = (
 /// `--resume <session_id>`.
 fn take_stop_snapshot(session: &mut AgentSessionState) -> StopSnapshot {
     let drained = drain_pending_permissions(session);
-    let ended_sid = Some(session.claude_session_id.clone());
+    let ended_sid = Some(session.session_id.clone());
     let pid = session.active_pid.take();
     session.needs_attention = false;
     session.attention_kind = None;
@@ -1777,7 +1773,7 @@ pub async fn stop_agent(
     let msg = ChatMessage {
         id: uuid::Uuid::new_v4().to_string(),
         workspace_id,
-        session_id: chat_session_id,
+        chat_session_id,
         role: ChatRole::System,
         content: "Agent stopped".to_string(),
         cost_usd: None,
@@ -1804,7 +1800,7 @@ pub async fn reset_agent_session(
     let chat_session_id = session_id;
 
     // Drain pending permissions under the lock, remove the session, capture
-    // its claude_session_id and any active PID; the deny sends, process kill,
+    // its session_id and any active PID; the deny sends, process kill,
     // and DB session-end happen after release.
     let (to_deny_reset, ended_sid, pid_to_kill) = {
         let mut agents = state.agents.write().await;
@@ -1812,7 +1808,7 @@ pub async fn reset_agent_session(
             .get_mut(&chat_session_id)
             .and_then(drain_pending_permissions);
         let removed = agents.remove(&chat_session_id);
-        let ended_sid = removed.as_ref().map(|s| s.claude_session_id.clone());
+        let ended_sid = removed.as_ref().map(|s| s.session_id.clone());
         let pid_to_kill = removed.and_then(|s| s.active_pid);
         (drained, ended_sid, pid_to_kill)
     };
@@ -1826,7 +1822,7 @@ pub async fn reset_agent_session(
 
     // Clear persisted claude state so the next turn starts fresh. Reset
     // discards in-flight state, so record as a failure.
-    db.clear_chat_session_claude_state(&chat_session_id)
+    db.clear_chat_session_state(&chat_session_id)
         .map_err(|e| e.to_string())?;
     if let Some(sid) = ended_sid.as_deref().filter(|s| !s.is_empty()) {
         let _ = db.end_agent_session(sid, false);
@@ -1863,9 +1859,10 @@ pub async fn rollback_to_checkpoint(
         .ok_or("Checkpoint not found")?;
     // Scope the rollback to the given session — prevents a rollback in tab A
     // from pruning messages in tab B. For pre-v20 checkpoints (empty
-    // session_id) we accept the caller's session_id as authoritative, since
-    // the backfill would have assigned all such messages to a single session.
-    if !checkpoint.session_id.is_empty() && checkpoint.session_id != chat_session_id {
+    // chat_session_id) we accept the caller's chat_session_id as
+    // authoritative, since the backfill would have assigned all such
+    // messages to a single session.
+    if !checkpoint.chat_session_id.is_empty() && checkpoint.chat_session_id != chat_session_id {
         return Err("Checkpoint does not belong to this session".into());
     }
 
@@ -1925,12 +1922,12 @@ pub async fn rollback_to_checkpoint(
     // Rollback discards the session's prior work — record as a failure.
     let ended_sid = {
         let mut agents = state.agents.write().await;
-        agents.remove(&chat_session_id).map(|s| s.claude_session_id)
+        agents.remove(&chat_session_id).map(|s| s.session_id)
     };
     if let Some(sid) = ended_sid.as_deref() {
         let _ = db.end_agent_session(sid, false);
     }
-    db.clear_chat_session_claude_state(&chat_session_id)
+    db.clear_chat_session_state(&chat_session_id)
         .map_err(|e| e.to_string())?;
 
     // Return the truncated message list for this session.
@@ -2005,12 +2002,12 @@ pub async fn clear_conversation(
     // prior work, so it did not run to completion — record as a failure.
     let ended_sid = {
         let mut agents = state.agents.write().await;
-        agents.remove(&chat_session_id).map(|s| s.claude_session_id)
+        agents.remove(&chat_session_id).map(|s| s.session_id)
     };
     if let Some(sid) = ended_sid.as_deref() {
         let _ = db.end_agent_session(sid, false);
     }
-    db.clear_chat_session_claude_state(&chat_session_id)
+    db.clear_chat_session_state(&chat_session_id)
         .map_err(|e| e.to_string())?;
 
     // Return empty list.
@@ -3025,7 +3022,7 @@ mod tests {
     fn fresh_session(session_id: &str, turn_count: u32, pid: Option<u32>) -> AgentSessionState {
         AgentSessionState {
             workspace_id: String::new(),
-            claude_session_id: session_id.to_string(),
+            session_id: session_id.to_string(),
             turn_count,
             active_pid: pid,
             custom_instructions: None,
@@ -3061,7 +3058,7 @@ mod tests {
         assert_eq!(ended_sid.as_deref(), Some("sess-abc"));
 
         // Session identity is preserved — this is the fix.
-        assert_eq!(session.claude_session_id, "sess-abc");
+        assert_eq!(session.session_id, "sess-abc");
         assert_eq!(session.turn_count, 7);
         assert!(session.persistent_session.is_none());
 
@@ -3078,7 +3075,7 @@ mod tests {
 
         assert!(pid.is_none());
         assert_eq!(ended_sid.as_deref(), Some("sess-abc"));
-        assert_eq!(session.claude_session_id, "sess-abc");
+        assert_eq!(session.session_id, "sess-abc");
         assert_eq!(session.turn_count, 7);
     }
 

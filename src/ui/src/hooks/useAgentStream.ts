@@ -70,7 +70,7 @@ export function useAgentStream() {
     let active = true;
     const unlisten = listen<AgentStreamPayload>("agent-stream", (event) => {
       if (!active) return;
-      const { workspace_id: wsId, session_id: sessionId, event: agentEvent } =
+      const { workspace_id: wsId, chat_session_id: sessionId, event: agentEvent } =
         event.payload;
 
       if ("ProcessExited" in agentEvent) {
@@ -164,7 +164,7 @@ export function useAgentStream() {
               const liveSentinel: ChatMessage = {
                 id: crypto.randomUUID(),
                 workspace_id: wsId,
-                session_id: sessionId,
+                chat_session_id: sessionId,
                 role: "System",
                 content: sentinel,
                 cost_usd: null,
@@ -369,7 +369,7 @@ export function useAgentStream() {
               addChatMessage(sessionId, {
                 id: messageId,
                 workspace_id: wsId,
-                session_id: sessionId,
+                chat_session_id: sessionId,
                 role: "Assistant",
                 content: text,
                 cost_usd: null,
@@ -483,14 +483,14 @@ export function useAgentStream() {
     let active = true;
     const unlisten = listen<{
       workspace_id: string;
-      session_id: string;
+      chat_session_id: string;
       tool_use_id: string;
       tool_name: string;
       input: unknown;
     }>("agent-permission-prompt", (event) => {
       if (!active) return;
       const {
-        session_id: sessionId,
+        chat_session_id: sessionId,
         tool_use_id: toolUseId,
         tool_name: toolName,
         input,
@@ -573,11 +573,11 @@ export function useAgentStream() {
     let active = true;
     const unlisten = listen<{
       workspace_id: string;
-      session_id: string;
+      chat_session_id: string;
       checkpoint: ConversationCheckpoint;
     }>("checkpoint-created", (event) => {
       if (!active) return;
-      const { session_id: sessionId, checkpoint } = event.payload;
+      const { chat_session_id: sessionId, checkpoint } = event.payload;
       addCheckpoint(sessionId, checkpoint);
       turnCheckpointIdRef.current[sessionId] = checkpoint.id;
 

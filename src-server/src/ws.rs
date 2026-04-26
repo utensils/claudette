@@ -41,10 +41,10 @@ pub struct ServerState {
 pub struct AgentSessionState {
     /// The workspace this session belongs to.
     pub workspace_id: String,
-    /// Claude CLI `--resume` UUID for this agent session. Named
-    /// `claude_session_id` (not `session_id`) to avoid confusion with the
-    /// `chat_sessions.id` that keys `ServerState.agents`.
-    pub claude_session_id: String,
+    /// Claude CLI `--resume` UUID for this agent session. This is the CLI
+    /// session ID; the `chat_sessions.id` that keys `ServerState.agents`
+    /// is referred to as `chat_session_id` to keep the two distinct.
+    pub session_id: String,
     pub turn_count: u32,
     pub active_pid: Option<u32>,
     pub custom_instructions: Option<String>,

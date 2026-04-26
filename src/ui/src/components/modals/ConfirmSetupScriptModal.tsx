@@ -36,7 +36,7 @@ export function ConfirmSetupScriptModal() {
         addChatMessage(sessionId, {
           id: crypto.randomUUID(),
           workspace_id: workspaceId,
-          session_id: sessionId,
+          chat_session_id: sessionId,
           role: "System",
           content: `Setup script (${label}) ${status}${sr.output ? `:\n${sr.output}` : ""}`,
           cost_usd: null,
@@ -54,7 +54,7 @@ export function ConfirmSetupScriptModal() {
       addChatMessage(sessionId, {
         id: crypto.randomUUID(),
         workspace_id: workspaceId,
-        session_id: sessionId,
+        chat_session_id: sessionId,
         role: "System",
         content: `Setup script failed: ${e}`,
         cost_usd: null,

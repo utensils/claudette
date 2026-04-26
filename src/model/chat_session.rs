@@ -70,7 +70,7 @@ pub struct ChatSession {
     pub id: String,
     pub workspace_id: String,
     /// Claude CLI `--resume` UUID. `None` until the first turn completes.
-    pub claude_session_id: Option<String>,
+    pub session_id: Option<String>,
     pub name: String,
     /// `true` once the user renames the session — Haiku auto-naming never
     /// overwrites a user-edited name.

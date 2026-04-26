@@ -737,7 +737,7 @@ mod tests {
     fn session(pid: Option<u32>, attention: bool) -> AgentSessionState {
         AgentSessionState {
             workspace_id: "ws1".to_string(),
-            claude_session_id: "test".to_string(),
+            session_id: "test".to_string(),
             turn_count: 1,
             active_pid: pid,
             custom_instructions: None,

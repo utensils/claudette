@@ -122,7 +122,7 @@ export const Sidebar = memo(function Sidebar() {
         addChatMessage(sessionId, {
           id: crypto.randomUUID(),
           workspace_id: result.workspace.id,
-          session_id: sessionId,
+          chat_session_id: sessionId,
           role: "System",
           content: generated.message,
           cost_usd: null,
@@ -148,7 +148,7 @@ export const Sidebar = memo(function Sidebar() {
                 addChatMessage(sessionId, {
                   id: crypto.randomUUID(),
                   workspace_id: wsId,
-                  session_id: sessionId,
+                  chat_session_id: sessionId,
                   role: "System",
                   content: `Setup script (${lbl}) ${status}${sr.output ? `:\n${sr.output}` : ""}`,
                   cost_usd: null, duration_ms: null,
@@ -161,7 +161,7 @@ export const Sidebar = memo(function Sidebar() {
               addChatMessage(sessionId, {
                 id: crypto.randomUUID(),
                 workspace_id: wsId,
-                session_id: sessionId,
+                chat_session_id: sessionId,
                 role: "System",
                 content: `Setup script failed: ${err}`,
                 cost_usd: null, duration_ms: null,

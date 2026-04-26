@@ -559,8 +559,8 @@ pub async fn archive_workspace(
         let mut pids = Vec::new();
         for key in to_remove {
             if let Some(session) = agents.remove(&key) {
-                if !session.claude_session_id.is_empty() {
-                    sids.push(session.claude_session_id);
+                if !session.session_id.is_empty() {
+                    sids.push(session.session_id);
                 }
                 if let Some(pid) = session.active_pid {
                     pids.push(pid);

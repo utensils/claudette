@@ -3,7 +3,7 @@ export type ChatRole = "User" | "Assistant" | "System";
 export interface ChatMessage {
   id: string;
   workspace_id: string;
-  session_id: string;
+  chat_session_id: string;
   role: ChatRole;
   content: string;
   cost_usd: number | null;
@@ -24,7 +24,7 @@ export type SessionAgentStatus = "Idle" | "Running" | "Stopped";
 export interface ChatSession {
   id: string;
   workspace_id: string;
-  claude_session_id: string | null;
+  session_id: string | null;
   name: string;
   name_edited: boolean;
   turn_count: number;

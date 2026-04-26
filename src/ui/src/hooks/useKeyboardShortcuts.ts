@@ -90,7 +90,7 @@ export function useKeyboardShortcuts() {
               // per-session command now — pass the active session id.
               const stopPromise = ws.remote_connection_id
                 ? sendRemoteCommand(ws.remote_connection_id, "stop_agent", {
-                    session_id: sessionId,
+                    chat_session_id: sessionId,
                   })
                 : stopAgent(sessionId);
               stopPromise.catch(console.error);
