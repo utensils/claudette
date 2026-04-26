@@ -337,20 +337,42 @@ jobs:
           done
 
           sed -i 's|releases/download/nightly-staging/|releases/download/nightly/|g' latest.json
-          # Hard-fail if the rewrite was a no-op — retrying with the same
-          # input won't help, and shipping a manifest with staging URLs
-          # would break the updater for every nightly user.
+          # Hard-fail if the rewrite was a no-op AND staging URLs are still
+          # present — retrying with the same input won't help, and shipping
+          # a manifest with staging URLs would break the updater. (A no-op
+          # because the manifest was already rewritten on a prior crashed
+          # run is fine: grep will find nothing, and we proceed.)
           if grep -q 'releases/download/nightly-staging/' latest.json; then
             echo "::error::latest.json still contains nightly-staging URLs after rewrite; aborting"
             exit 1
           fi
+
+          # Upload the rewritten manifest back to `nightly-staging` *before*
+          # we touch `nightly`. Assets follow the release when its tag
+          # changes, so when the retag below succeeds the corrected manifest
+          # appears at the `nightly/...` URL atomically — no separate
+          # post-retag upload that could fail and leave a broken manifest
+          # live on the promoted release.
+          for attempt in 1 2 3; do
+            if gh release upload nightly-staging latest.json --clobber --repo "$GITHUB_REPOSITORY"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Failed to upload rewritten latest.json to nightly-staging after 3 attempts"
+              exit 1
+            fi
+            backoff=$((attempt * 5))
+            echo "latest.json upload attempt $attempt failed; retrying in ${backoff}s"
+            sleep "$backoff"
+          done
 
           gh release delete nightly --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
 
           # Retry the retag a few times to ride out transient API hiccups
           # (rate limits, brief outages). If all retries fail, the workflow
           # exits non-zero and a follow-up run can recover by re-promoting
-          # the still-intact `nightly-staging` release.
+          # the still-intact `nightly-staging` release (which now carries
+          # the already-rewritten manifest).
           for attempt in 1 2 3; do
             if gh release edit nightly-staging \
               --repo "$GITHUB_REPOSITORY" \
@@ -365,23 +387,6 @@ jobs:
             fi
             echo "Promotion attempt $attempt failed; retrying in 5s"
             sleep 5
-          done
-
-          # Upload the URL-rewritten latest.json over the one tauri-action
-          # produced. `gh release upload` talks to the GitHub API by tag,
-          # which is consistent immediately after the retag (no public-CDN
-          # propagation in the path).
-          for attempt in 1 2 3; do
-            if gh release upload nightly latest.json --clobber --repo "$GITHUB_REPOSITORY"; then
-              break
-            fi
-            if [ "$attempt" -eq 3 ]; then
-              echo "::error::Failed to upload rewritten latest.json after 3 attempts"
-              exit 1
-            fi
-            backoff=$((attempt * 5))
-            echo "latest.json upload attempt $attempt failed; retrying in ${backoff}s"
-            sleep "$backoff"
           done
 
           # `gh release edit --tag` creates the new tag (`nightly`) at the

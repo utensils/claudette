@@ -31,7 +31,7 @@ export function UpdateBanner() {
       dismiss();
     };
     return (
-      <div className={styles.banner}>
+      <div className={styles.banner} role="alert">
         <span className={`${styles.message} ${styles.errorMessage}`}>
           Update failed: {updateError}
         </span>

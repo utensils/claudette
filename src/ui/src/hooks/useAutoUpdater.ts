@@ -57,11 +57,24 @@ export async function installNow(): Promise<void> {
 /**
  * User-initiated retry after a failed install. The Rust side `take()`s the
  * pending update on the previous attempt, so we must re-run the check to
- * repopulate it before another install can succeed.
+ * repopulate it before another install can succeed. Also un-dismiss the
+ * banner and clear install-when-idle — otherwise a retry triggered from the
+ * error banner would run invisibly, since clearing the error in a dismissed
+ * state causes UpdateBanner to render nothing.
  */
 export async function retryInstall(): Promise<void> {
-  useAppStore.getState().setUpdateError(null);
+  const store = useAppStore.getState();
+  store.setUpdateError(null);
+  store.setUpdateDismissed(false);
+  store.setUpdateInstallWhenIdle(false);
+
   const result = await checkForUpdate();
+  if (result === "error") {
+    useAppStore
+      .getState()
+      .setUpdateError("Failed to check for updates. Please try again.");
+    return;
+  }
   if (result === "available") await installNow();
 }
 

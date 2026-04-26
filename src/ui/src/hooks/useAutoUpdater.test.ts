@@ -11,6 +11,8 @@ const {
   mockSetUpdateDownloading,
   mockSetUpdateProgress,
   mockSetUpdateError,
+  mockSetUpdateDismissed,
+  mockSetUpdateInstallWhenIdle,
   storeState,
 } = vi.hoisted(() => ({
   mockCheckForUpdatesWithChannel: vi.fn(),
@@ -22,12 +24,16 @@ const {
   mockSetUpdateDownloading: vi.fn(),
   mockSetUpdateProgress: vi.fn(),
   mockSetUpdateError: vi.fn(),
+  mockSetUpdateDismissed: vi.fn(),
+  mockSetUpdateInstallWhenIdle: vi.fn(),
   storeState: {
     setUpdateAvailable: vi.fn(),
     setUpdateChannel: vi.fn(),
     setUpdateDownloading: vi.fn(),
     setUpdateProgress: vi.fn(),
     setUpdateError: vi.fn(),
+    setUpdateDismissed: vi.fn(),
+    setUpdateInstallWhenIdle: vi.fn(),
     updateDownloading: false,
     updateAvailable: false,
     workspaces: [] as { agent_status: string }[],
@@ -41,6 +47,8 @@ storeState.setUpdateChannel = mockSetUpdateChannel;
 storeState.setUpdateDownloading = mockSetUpdateDownloading;
 storeState.setUpdateProgress = mockSetUpdateProgress;
 storeState.setUpdateError = mockSetUpdateError;
+storeState.setUpdateDismissed = mockSetUpdateDismissed;
+storeState.setUpdateInstallWhenIdle = mockSetUpdateInstallWhenIdle;
 
 vi.mock("../services/tauri", () => ({
   checkForUpdatesWithChannel: mockCheckForUpdatesWithChannel,
@@ -227,6 +235,36 @@ describe("retryInstall", () => {
     await retryInstall();
 
     expect(mockSetUpdateError).toHaveBeenCalledWith(null);
+    expect(mockInstallPendingUpdate).not.toHaveBeenCalled();
+  });
+
+  it("un-dismisses the banner and clears install-when-idle so the retry is visible", async () => {
+    // If the user previously chose "When Idle" (which sets dismissed=true)
+    // and then an install fails, retrying must un-dismiss the banner —
+    // otherwise clearing the error makes UpdateBanner render null and the
+    // retry runs invisibly with no progress indicator.
+    mockCheckForUpdatesWithChannel.mockResolvedValue({ version: "2.0.0" });
+    mockInstallPendingUpdate.mockResolvedValue(undefined);
+
+    await retryInstall();
+
+    expect(mockSetUpdateDismissed).toHaveBeenCalledWith(false);
+    expect(mockSetUpdateInstallWhenIdle).toHaveBeenCalledWith(false);
+  });
+
+  it("re-surfaces a check failure as an error so the user is not left with a blank banner", async () => {
+    // The retry clears the previous install error, then re-runs the check.
+    // If the check itself fails (e.g. network down), we must repopulate
+    // updateError or the banner disappears and the user has no signal that
+    // anything happened.
+    mockCheckForUpdatesWithChannel.mockRejectedValue(new Error("network down"));
+
+    await retryInstall();
+
+    expect(mockSetUpdateError).toHaveBeenNthCalledWith(1, null);
+    expect(mockSetUpdateError).toHaveBeenLastCalledWith(
+      expect.stringContaining("Failed to check for updates")
+    );
     expect(mockInstallPendingUpdate).not.toHaveBeenCalled();
   });
 });

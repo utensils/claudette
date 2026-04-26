@@ -14,7 +14,7 @@
 }
 
 .errorMessage {
-  color: var(--error, var(--text-primary));
+  color: var(--status-stopped);
   word-break: break-word;
 }
 
