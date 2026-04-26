@@ -9,6 +9,7 @@
 //! that `apply()` is called against the spawned command — the two
 //! behaviours the issue specifies.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -85,8 +86,17 @@ fn make_workspace(repo_id: &str, worktree: &str) -> Workspace {
     }
 }
 
-#[tokio::test]
-async fn server_resolves_envrc_and_applies_to_spawned_command() {
+/// Build a `ServerState` with the fixture plugin and an `.envrc` in
+/// the worktree. Shared setup for the resolve and apply tests below so
+/// CI failures on either side point at the same minimal scaffolding.
+async fn setup_state_with_envrc() -> (
+    Arc<ServerState>,
+    Repository,
+    Workspace,
+    tempfile::TempDir, // plugin_dir kept alive
+    tempfile::TempDir, // worktree kept alive
+    tempfile::TempDir, // db_dir kept alive
+) {
     let plugin_dir = tempfile::tempdir().unwrap();
     write_fixture_plugin(plugin_dir.path());
     let plugins = PluginRegistry::discover(plugin_dir.path());
@@ -110,9 +120,23 @@ async fn server_resolves_envrc_and_applies_to_spawned_command() {
 
     let repo = make_repo(&worktree.path().to_string_lossy());
     let ws = make_workspace(&repo.id, &worktree.path().to_string_lossy());
+    (state, repo, ws, plugin_dir, worktree, db_dir)
+}
 
-    let resolved =
-        resolve_workspace_env(&state, &ws, Some(&repo), &ws.worktree_path.clone().unwrap()).await;
+#[tokio::test]
+async fn server_resolves_envrc_to_foo_bar() {
+    // Cross-platform resolve assertion: regardless of the host OS, the
+    // fixture plugin's `export` must contribute `FOO=bar` to the merged
+    // env when `.envrc` is present in the worktree.
+    let (state, repo, ws, _pd, _wt, _db_dir) = setup_state_with_envrc().await;
+    let resolved = resolve_workspace_env(
+        &state,
+        &ws,
+        Some(&repo),
+        &ws.worktree_path.clone().unwrap(),
+        HashSet::new(),
+    )
+    .await;
 
     assert_eq!(
         resolved.vars.get("FOO").and_then(|v| v.as_deref()),
@@ -120,25 +144,39 @@ async fn server_resolves_envrc_and_applies_to_spawned_command() {
         "fixture plugin should export FOO=bar (sources: {:?})",
         resolved.sources
     );
+}
 
-    // Now exercise the apply path: the handler hands the resolved env to
+#[cfg(unix)]
+#[tokio::test]
+async fn server_applies_resolved_env_to_spawned_command() {
+    // Verifies the apply path: the handler hands the resolved env to
     // `agent::run_turn`, which calls `ResolvedEnv::apply` on a Command
-    // before spawning. We replicate that here against `sh -c 'echo $FOO'`
-    // and assert the child sees the var.
-    #[cfg(unix)]
-    {
-        let mut cmd = tokio::process::Command::new("sh");
-        cmd.arg("-c").arg("printf '%s' \"$FOO\"");
-        // Drop FOO from the parent env so we can't accidentally pass.
-        cmd.env_remove("FOO");
-        resolved.apply(&mut cmd);
-        let output = cmd.output().await.unwrap();
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout),
-            "bar",
-            "spawned command should inherit FOO from resolved env"
-        );
-    }
+    // before spawning. We replicate that here against `sh -c "echo $FOO"`
+    // and assert the child sees the var. Gated to Unix because the
+    // assertion shells out to `sh`; the equivalent Windows surface
+    // (`cmd /C echo %FOO%`) is left as a follow-up if the server ships
+    // a Windows port.
+    let (state, repo, ws, _pd, _wt, _db_dir) = setup_state_with_envrc().await;
+    let resolved = resolve_workspace_env(
+        &state,
+        &ws,
+        Some(&repo),
+        &ws.worktree_path.clone().unwrap(),
+        HashSet::new(),
+    )
+    .await;
+
+    let mut cmd = tokio::process::Command::new("sh");
+    cmd.arg("-c").arg("printf '%s' \"$FOO\"");
+    // Drop FOO from the parent env so we can't accidentally pass.
+    cmd.env_remove("FOO");
+    resolved.apply(&mut cmd);
+    let output = cmd.output().await.unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "bar",
+        "spawned command should inherit FOO from resolved env"
+    );
 }
 
 #[tokio::test]
@@ -157,8 +195,14 @@ async fn server_without_plugin_registry_returns_empty_env() {
 
     let repo = make_repo(&worktree.path().to_string_lossy());
     let ws = make_workspace(&repo.id, &worktree.path().to_string_lossy());
-    let resolved =
-        resolve_workspace_env(&state, &ws, Some(&repo), &ws.worktree_path.clone().unwrap()).await;
+    let resolved = resolve_workspace_env(
+        &state,
+        &ws,
+        Some(&repo),
+        &ws.worktree_path.clone().unwrap(),
+        HashSet::new(),
+    )
+    .await;
 
     assert!(
         resolved.vars.is_empty(),
@@ -170,12 +214,14 @@ async fn server_without_plugin_registry_returns_empty_env() {
 
 #[tokio::test]
 async fn server_skips_disabled_provider_per_repo() {
-    // Per-repo disable lives in app_settings. The handler reads it via
-    // `load_disabled_providers` and passes the set to
-    // `resolve_with_registry`, which short-circuits before running the
-    // plugin's detect/export. This test plants a "disabled" setting and
-    // verifies the fixture plugin's FOO export does NOT reach the merged
-    // env.
+    // Per-repo disable lives in app_settings. The handler reads the
+    // setting synchronously and passes a `HashSet` of disabled names to
+    // `resolve_workspace_env`, which forwards them to the dispatcher to
+    // short-circuit detect/export. This test passes the disabled set
+    // directly (rather than going through the app_settings round-trip)
+    // since the handler-side `load_disabled_providers` is unit-tested
+    // separately and the integration concern here is "does the server
+    // honor a disabled plugin?".
     let plugin_dir = tempfile::tempdir().unwrap();
     write_fixture_plugin(plugin_dir.path());
     let plugins = PluginRegistry::discover(plugin_dir.path());
@@ -185,9 +231,7 @@ async fn server_skips_disabled_provider_per_repo() {
 
     let db_dir = tempfile::tempdir().unwrap();
     let db_path = db_dir.path().join("test.db");
-    let db = claudette::db::Database::open(&db_path).unwrap();
-    db.set_app_setting("repo:repo-1:env_provider:env-fixture:enabled", "false")
-        .unwrap();
+    let _ = claudette::db::Database::open(&db_path).unwrap();
 
     let state = Arc::new(ServerState::new_with_plugins(
         db_path,
@@ -197,8 +241,16 @@ async fn server_skips_disabled_provider_per_repo() {
 
     let repo = make_repo(&worktree.path().to_string_lossy());
     let ws = make_workspace(&repo.id, &worktree.path().to_string_lossy());
-    let resolved =
-        resolve_workspace_env(&state, &ws, Some(&repo), &ws.worktree_path.clone().unwrap()).await;
+    let mut disabled = HashSet::new();
+    disabled.insert("env-fixture".to_string());
+    let resolved = resolve_workspace_env(
+        &state,
+        &ws,
+        Some(&repo),
+        &ws.worktree_path.clone().unwrap(),
+        disabled,
+    )
+    .await;
 
     assert!(
         !resolved.vars.contains_key("FOO"),

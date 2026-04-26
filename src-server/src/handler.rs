@@ -215,11 +215,19 @@ fn load_disabled_providers(db: &Database, repo_id: &str) -> std::collections::Ha
 /// applies as a no-op on the spawned command. That matches the
 /// behaviour of `resolve_with_registry` against an empty registry and
 /// keeps deployments without plugins working unchanged.
+///
+/// `disabled` is the per-repo set of disabled env-provider names
+/// (typically from [`load_disabled_providers`]). Computing it
+/// synchronously in the caller avoids holding `&Database` (which is
+/// not `Sync`) across the `.await` on the plugin-registry lock —
+/// `handle_request` is invoked from inside `tokio::spawn`, so its
+/// future tree must stay `Send`.
 pub async fn resolve_workspace_env(
     state: &ServerState,
     ws: &claudette::model::Workspace,
     repo: Option<&claudette::model::Repository>,
     worktree_path: &str,
+    disabled: std::collections::HashSet<String>,
 ) -> claudette::env_provider::ResolvedEnv {
     let Some(plugins_lock) = state.plugins.as_ref() else {
         return claudette::env_provider::ResolvedEnv::default();
@@ -231,10 +239,6 @@ pub async fn resolve_workspace_env(
         branch: ws.branch_name.clone(),
         worktree_path: worktree_path.to_string(),
         repo_path: repo.map(|r| r.path.clone()).unwrap_or_default(),
-    };
-    let disabled = match open_db(state) {
-        Ok(db) => load_disabled_providers(&db, repo.map(|r| r.id.as_str()).unwrap_or("")),
-        Err(_) => Default::default(),
     };
     let registry = plugins_lock.read().await;
     claudette::env_provider::resolve_with_registry(
@@ -454,8 +458,19 @@ async fn handle_send_chat_message(
     // the first turn or after the user edits `.envrc` / `mise.toml` / etc.,
     // it re-runs the affected plugin. Resolution happens before any
     // `state.agents` lock is taken so the registry RwLock can be acquired
-    // without nested-lock concerns.
-    let resolved_env = resolve_workspace_env(state, ws, repo.as_ref(), &worktree_path).await;
+    // without nested-lock concerns. The disabled-provider set is read
+    // synchronously here from the already-open `db` so we avoid both a
+    // duplicate SQLite connection and a non-`Send` borrow across `.await`.
+    let disabled_env_providers =
+        load_disabled_providers(&db, repo.as_ref().map(|r| r.id.as_str()).unwrap_or(""));
+    let resolved_env = resolve_workspace_env(
+        state,
+        ws,
+        repo.as_ref(),
+        &worktree_path,
+        disabled_env_providers,
+    )
+    .await;
 
     let mut agents = state.agents.write().await;
     let session = agents.entry(workspace_id.to_string()).or_insert_with(|| {
@@ -482,11 +497,12 @@ async fn handle_send_chat_message(
     // env is fixed at spawn time, so the subprocess won't see `.envrc` /
     // `mise.toml` / `direnv allow` changes until it's respawned. Compare
     // the freshly-resolved vars against the snapshot stored at spawn and
-    // reset the session on divergence so the next turn launches with the
-    // new env. The Tauri path uses a long-lived PersistentSession; the
-    // remote handler re-launches `claude --print` per turn, so a reset
-    // just means clearing turn_count / session_id and re-running this
-    // function's session-init branch on the next iteration.
+    // reset the session on divergence so this turn launches with the new
+    // env. The Tauri path uses a long-lived PersistentSession; the remote
+    // handler re-launches `claude --print` per turn, so a reset just means
+    // clearing turn_count / session_id before the rest of this function
+    // continues with `is_resume = false` and re-runs the session-init
+    // branch (`run_turn` is called below with the fresh state).
     if session.turn_count > 0 && session.session_resolved_env != resolved_env.vars {
         eprintln!(
             "[handler] env-provider output changed ({} vars before, {} after) — resetting session for {workspace_id}",
