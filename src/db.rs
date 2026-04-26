@@ -1131,10 +1131,6 @@ impl Database {
 
     fn parse_chat_message_row(row: &rusqlite::Row) -> rusqlite::Result<ChatMessage> {
         let role_str: String = row.get(3)?;
-        // session_id should be non-null after the v25 backfill. Tolerate NULL
-        // gracefully (default to empty string) so a stale row inserted by a
-        // build that predates chat_sessions can't crash the entire query.
-        // The self-healing step in migrate() will repair these on next startup.
         let session_id: String = row.get::<_, Option<String>>(2)?.unwrap_or_default();
         Ok(ChatMessage {
             id: row.get(0)?,
@@ -1649,7 +1645,7 @@ impl Database {
         Ok(ConversationCheckpoint {
             id: row.get(0)?,
             workspace_id: row.get(1)?,
-            session_id: row.get::<_, String>(2)?,
+            session_id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
             message_id: row.get(3)?,
             commit_hash: row.get(4)?,
             has_file_state: row.get(5)?,
