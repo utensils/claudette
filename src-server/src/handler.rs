@@ -535,7 +535,7 @@ async fn handle_send_chat_message(
     // reset the session on divergence so this turn launches with the new
     // env. The Tauri path uses a long-lived PersistentSession; the remote
     // handler re-launches `claude --print` per turn, so a reset just means
-    // clearing turn_count / session_id before the rest of this function
+    // clearing turn_count / claude_session_id before the rest of this function
     // continues with `is_resume = false` and re-runs the session-init
     // branch (`run_turn` is called below with the fresh state).
     if session.turn_count > 0 && session.session_resolved_env != resolved_env.vars {
@@ -544,7 +544,7 @@ async fn handle_send_chat_message(
             session.session_resolved_env.len(),
             resolved_env.vars.len(),
         );
-        session.session_id = uuid::Uuid::new_v4().to_string();
+        session.claude_session_id = uuid::Uuid::new_v4().to_string();
         session.turn_count = 0;
         session.active_pid = None;
         session.session_resolved_env = Default::default();
