@@ -486,6 +486,23 @@
   margin: 8px 0 16px;
 }
 
+/* Cmd/Ctrl+F search highlights. Lives inside ChatPanel.module.css with
+   :global() so the wrapper components in this folder (and the post-render
+   DOM walker in HighlightedMessageMarkdown) can style raw <mark> tags
+   without needing to import CSS modules. */
+.messages :global(mark.cc-search-match) {
+  background: var(--accent-bg-strong);
+  color: inherit;
+  border-radius: var(--radius-xs);
+  padding: 0 1px;
+}
+
+.messages :global(mark.cc-search-match.cc-search-match-active) {
+  background: var(--accent-primary);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
 /* Blockquotes — subtle card with left accent */
 .content blockquote {
   border-left: 2px solid var(--text-faint);

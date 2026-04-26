@@ -26,6 +26,11 @@ export function useKeyboardShortcuts() {
   const planMode = useAppStore(
     (s) => (selectedWorkspaceId ? s.planMode[selectedWorkspaceId] ?? false : false),
   );
+  const chatSearchOpen = useAppStore(
+    (s) => (selectedWorkspaceId ? s.chatSearch[selectedWorkspaceId]?.open ?? false : false),
+  );
+  const openChatSearch = useAppStore((s) => s.openChatSearch);
+  const closeChatSearch = useAppStore((s) => s.closeChatSearch);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -56,6 +61,11 @@ export function useKeyboardShortcuts() {
           toggleFuzzyFinder();
         } else if (useAppStore.getState().settingsOpen) {
           return;
+        } else if (chatSearchOpen && selectedWorkspaceId) {
+          // Close the search bar and put focus back in the composer so
+          // Esc lands the user where they were before Cmd+F.
+          closeChatSearch(selectedWorkspaceId);
+          focusChatPrompt();
         } else if (diffSelectedFile) {
           setDiffSelectedFile(null);
         } else if (selectedWorkspaceId) {
@@ -153,6 +163,25 @@ export function useKeyboardShortcuts() {
       if (e.code === "Minus") {
         e.preventDefault();
         adjustUiFontSize(-1);
+        return;
+      }
+
+      // Cmd/Ctrl + F — open the in-chat search bar for the current workspace.
+      // Suppressed while any overlay owns focus so the hotkey doesn't steal
+      // from settings / fuzzy finder / modal inputs.
+      if (e.code === "KeyF" && !e.shiftKey && !e.altKey) {
+        if (!selectedWorkspaceId) return;
+        const state = useAppStore.getState();
+        if (
+          state.settingsOpen ||
+          state.activeModal ||
+          state.commandPaletteOpen ||
+          state.fuzzyFinderOpen
+        ) {
+          return;
+        }
+        e.preventDefault();
+        openChatSearch(selectedWorkspaceId);
         return;
       }
 
@@ -265,5 +294,8 @@ export function useKeyboardShortcuts() {
     selectedWorkspaceId,
     setPlanMode,
     planMode,
+    chatSearchOpen,
+    openChatSearch,
+    closeChatSearch,
   ]);
 }

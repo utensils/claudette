@@ -322,6 +322,86 @@ describe("agentQuestion lifecycle (per-workspace)", () => {
   });
 });
 
+describe("chatSearch (per-workspace)", () => {
+  beforeEach(() => {
+    useAppStore.setState({ chatSearch: {} });
+  });
+
+  it("defaults to undefined (no entry until first open)", () => {
+    expect(useAppStore.getState().chatSearch[WS_ID]).toBeUndefined();
+  });
+
+  it("openChatSearch initializes with empty query and -1 matchIndex", () => {
+    useAppStore.getState().openChatSearch(WS_ID);
+    expect(useAppStore.getState().chatSearch[WS_ID]).toEqual({
+      open: true,
+      query: "",
+      matchIndex: -1,
+    });
+  });
+
+  it("openChatSearch preserves prior query on re-open", () => {
+    useAppStore.getState().openChatSearch(WS_ID);
+    useAppStore.getState().setChatSearchQuery(WS_ID, "todo");
+    useAppStore.getState().closeChatSearch(WS_ID);
+    useAppStore.getState().openChatSearch(WS_ID);
+    expect(useAppStore.getState().chatSearch[WS_ID]?.query).toBe("todo");
+    expect(useAppStore.getState().chatSearch[WS_ID]?.open).toBe(true);
+  });
+
+  it("closeChatSearch keeps the entry but flips open=false", () => {
+    useAppStore.getState().openChatSearch(WS_ID);
+    useAppStore.getState().setChatSearchQuery(WS_ID, "todo");
+    useAppStore.getState().closeChatSearch(WS_ID);
+    expect(useAppStore.getState().chatSearch[WS_ID]).toEqual({
+      open: false,
+      query: "todo",
+      matchIndex: -1,
+    });
+  });
+
+  it("setChatSearchQuery resets matchIndex to -1", () => {
+    useAppStore.getState().openChatSearch(WS_ID);
+    useAppStore.getState().setChatSearchQuery(WS_ID, "todo");
+    useAppStore.getState().setChatSearchMatchIndex(WS_ID, 4);
+    expect(useAppStore.getState().chatSearch[WS_ID]?.matchIndex).toBe(4);
+    useAppStore.getState().setChatSearchQuery(WS_ID, "todos");
+    expect(useAppStore.getState().chatSearch[WS_ID]?.matchIndex).toBe(-1);
+  });
+
+  it("setChatSearchMatchIndex updates without touching query", () => {
+    useAppStore.getState().openChatSearch(WS_ID);
+    useAppStore.getState().setChatSearchQuery(WS_ID, "hello");
+    useAppStore.getState().setChatSearchMatchIndex(WS_ID, 2);
+    expect(useAppStore.getState().chatSearch[WS_ID]).toEqual({
+      open: true,
+      query: "hello",
+      matchIndex: 2,
+    });
+  });
+
+  it("search state is isolated per workspace", () => {
+    useAppStore.getState().openChatSearch("ws-a");
+    useAppStore.getState().openChatSearch("ws-b");
+    useAppStore.getState().setChatSearchQuery("ws-a", "alpha");
+    useAppStore.getState().setChatSearchQuery("ws-b", "beta");
+    expect(useAppStore.getState().chatSearch["ws-a"]?.query).toBe("alpha");
+    expect(useAppStore.getState().chatSearch["ws-b"]?.query).toBe("beta");
+  });
+
+  it("rollbackConversation drops chatSearch entry for the workspace", () => {
+    useAppStore.getState().openChatSearch(WS_ID);
+    useAppStore.getState().setChatSearchQuery(WS_ID, "stale");
+    useAppStore.setState({
+      checkpoints: { [WS_ID]: [makeCheckpoint("cp1", WS_ID, "m1", 0)] },
+    });
+
+    useAppStore.getState().rollbackConversation(WS_ID, "cp1", []);
+
+    expect(useAppStore.getState().chatSearch[WS_ID]).toBeUndefined();
+  });
+});
+
 describe("applyPlanModeMountDefault", () => {
   // ChatToolbar delegates its mount-time "apply global default" step to this
   // helper. The contract: only touch the store if the runtime value is
