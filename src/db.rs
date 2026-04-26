@@ -158,12 +158,36 @@ impl Database {
                 continue;
             }
             let tx = conn.unchecked_transaction()?;
-            tx.execute_batch(m.sql)?;
-            tx.execute(
-                "INSERT INTO schema_migrations (id) VALUES (?1)",
-                params![m.id],
-            )?;
-            tx.commit()?;
+            match tx.execute_batch(m.sql) {
+                Ok(()) => {
+                    tx.execute(
+                        "INSERT INTO schema_migrations (id) VALUES (?1)",
+                        params![m.id],
+                    )?;
+                    tx.commit()?;
+                }
+                Err(e) if is_already_exists_error(&e) => {
+                    // The schema object the migration tried to create (table /
+                    // index / column) is already present — the most common
+                    // cause is a developer who hand-applied the SQL or merged
+                    // a branch whose migrations they had already run. Drop
+                    // the aborted transaction and record the migration as
+                    // applied so the runner doesn't wedge the app on every
+                    // subsequent boot.
+                    drop(tx);
+                    eprintln!(
+                        "[migrations] {} skipped: schema object already present ({e}); marking applied",
+                        m.id,
+                    );
+                    let tx = conn.unchecked_transaction()?;
+                    tx.execute(
+                        "INSERT INTO schema_migrations (id) VALUES (?1)",
+                        params![m.id],
+                    )?;
+                    tx.commit()?;
+                }
+                Err(e) => return Err(e),
+            }
         }
         Ok(())
     }
@@ -196,6 +220,26 @@ pub fn is_duplicate_repository_path_error(err: &rusqlite::Error) -> bool {
     } else {
         false
     }
+}
+
+/// Returns true when `err` is a benign "object already exists" failure from a
+/// DDL statement: `CREATE TABLE/INDEX/VIEW/TRIGGER` against an existing
+/// object, or `ALTER TABLE ADD COLUMN` against an existing column. SQLite
+/// reports all of these under the generic primary code `SQLITE_ERROR` (which
+/// rusqlite maps to `ErrorCode::Unknown`), so we additionally match on the
+/// message text. The error can surface as either `SqliteFailure` (step-time)
+/// or `SqlInputError` (prepare-time, on `modern_sqlite` builds), so both
+/// variants are checked.
+fn is_already_exists_error(err: &rusqlite::Error) -> bool {
+    let (code, msg) = match err {
+        rusqlite::Error::SqliteFailure(code, Some(msg)) => (code.code, msg.as_str()),
+        rusqlite::Error::SqlInputError { error, msg, .. } => (error.code, msg.as_str()),
+        _ => return false,
+    };
+    if code != rusqlite::ErrorCode::Unknown {
+        return false;
+    }
+    msg.contains("already exists") || msg.contains("duplicate column name")
 }
 
 impl Database {
@@ -4034,6 +4078,138 @@ mod tests {
         assert!(
             !present,
             "failed migration must not leave tracking row in schema_migrations",
+        );
+    }
+
+    #[test]
+    fn test_migration_skips_when_table_already_exists() {
+        // Simulates the dev case: a migration's CREATE TABLE targets an object
+        // a developer already created out of band. The runner must mark the
+        // migration applied and continue, not propagate the error.
+        let db = Database::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE dup_t (x INTEGER);").unwrap();
+        let synthetic = [Migration {
+            id: "29991231235959_synthetic_dup_table",
+            sql: "CREATE TABLE dup_t (x INTEGER);",
+            legacy_version: None,
+        }];
+        db.migrate_with(&synthetic)
+            .expect("already-exists must be tolerated");
+        let present: bool = db
+            .conn()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE id = ?1)",
+                params![synthetic[0].id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            present,
+            "tolerated migration must still be recorded in schema_migrations",
+        );
+    }
+
+    #[test]
+    fn test_migration_skips_when_column_already_exists() {
+        // `repositories.icon` is added by the released migration #3, so it's
+        // present after `open_in_memory`. A synthetic migration that tries to
+        // add it again must be tolerated.
+        let db = Database::open_in_memory().unwrap();
+        let synthetic = [Migration {
+            id: "29991231235959_synthetic_dup_column",
+            sql: "ALTER TABLE repositories ADD COLUMN icon TEXT;",
+            legacy_version: None,
+        }];
+        db.migrate_with(&synthetic)
+            .expect("duplicate column must be tolerated");
+        let present: bool = db
+            .conn()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE id = ?1)",
+                params![synthetic[0].id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(present);
+    }
+
+    #[test]
+    fn test_migration_propagates_non_already_exists_errors() {
+        // Real schema mistakes (here: targeting a missing table) must still
+        // surface as errors — leniency is scoped to "already exists" /
+        // "duplicate column name" only.
+        let db = Database::open_in_memory().unwrap();
+        let bad = [Migration {
+            id: "29991231235959_synthetic_no_such_table",
+            sql: "INSERT INTO __no_such_table__ VALUES (1);",
+            legacy_version: None,
+        }];
+        let err = db.migrate_with(&bad);
+        assert!(err.is_err(), "non-tolerable errors must bubble up");
+        let present: bool = db
+            .conn()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE id = ?1)",
+                params![bad[0].id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(!present);
+    }
+
+    #[test]
+    fn test_is_already_exists_error_classifier() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE t (a INTEGER, b INTEGER UNIQUE);")
+            .unwrap();
+
+        // CREATE TABLE over an existing table.
+        let err = conn
+            .execute_batch("CREATE TABLE t (a INTEGER);")
+            .unwrap_err();
+        assert!(
+            super::is_already_exists_error(&err),
+            "expected duplicate-table error to be tolerated, got {err:?}",
+        );
+
+        // ALTER TABLE ADD COLUMN over an existing column.
+        let err = conn
+            .execute_batch("ALTER TABLE t ADD COLUMN a INTEGER;")
+            .unwrap_err();
+        assert!(
+            super::is_already_exists_error(&err),
+            "expected duplicate-column error to be tolerated, got {err:?}",
+        );
+
+        // CREATE INDEX over an existing index.
+        conn.execute_batch("CREATE INDEX idx_t_a ON t(a);").unwrap();
+        let err = conn
+            .execute_batch("CREATE INDEX idx_t_a ON t(a);")
+            .unwrap_err();
+        assert!(
+            super::is_already_exists_error(&err),
+            "expected duplicate-index error to be tolerated, got {err:?}",
+        );
+
+        // No such table — must NOT be tolerated.
+        let err = conn
+            .execute_batch("INSERT INTO __no_such_table__ VALUES (1);")
+            .unwrap_err();
+        assert!(
+            !super::is_already_exists_error(&err),
+            "no-such-table is not an already-exists case, got {err:?}",
+        );
+
+        // UNIQUE constraint violation — must NOT be tolerated (different
+        // primary code).
+        conn.execute_batch("INSERT INTO t (a, b) VALUES (1, 1);")
+            .unwrap();
+        let err = conn
+            .execute_batch("INSERT INTO t (a, b) VALUES (2, 1);")
+            .unwrap_err();
+        assert!(
+            !super::is_already_exists_error(&err),
+            "constraint violations are not already-exists, got {err:?}",
         );
     }
 
