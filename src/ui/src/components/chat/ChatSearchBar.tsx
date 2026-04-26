@@ -97,7 +97,16 @@ export function ChatSearchBar({ workspaceId, scopeRef }: Props) {
     if (matchIndex < 0 || matchIndex >= marks.length) return;
     const active = marks[matchIndex];
     active.classList.add(ACTIVE_CLASS);
-    active.scrollIntoView({ block: "center", behavior: "smooth" });
+    // Skip the smooth scroll for users who've opted into reduced motion —
+    // the cycle would otherwise force a noticeable animation despite their
+    // OS-level preference.
+    const prefersReducedMotion =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    active.scrollIntoView({
+      block: "center",
+      behavior: prefersReducedMotion ? "auto" : "smooth",
+    });
   }, [open, query, matchIndex, matchCount, scopeRef]);
 
   const handleClose = () => {
@@ -124,11 +133,14 @@ export function ChatSearchBar({ workspaceId, scopeRef }: Props) {
 
   // Counter rules: show "n / N" when there are matches, "No matches" when
   // the query is non-empty but unmatched, blank when the query is empty.
+  // `matchIndex` can briefly be -1 between a query change and the clamping
+  // effect that lands on 0 — clamp here so the user never sees "0 / N".
+  const displayMatchIndex = matchIndex < 0 ? 0 : matchIndex;
   const counter = !query
     ? ""
     : matchCount === 0
       ? "No matches"
-      : `${matchIndex + 1} / ${matchCount}`;
+      : `${displayMatchIndex + 1} / ${matchCount}`;
 
   return (
     <div
@@ -160,6 +172,7 @@ export function ChatSearchBar({ workspaceId, scopeRef }: Props) {
         onKeyDownCapture={(e) => {
           if ((e.metaKey || e.ctrlKey) && e.code === "KeyF") {
             e.preventDefault();
+            e.stopPropagation();
             inputRef.current?.select();
           }
         }}

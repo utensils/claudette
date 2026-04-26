@@ -997,8 +997,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => {
       const prev = s.chatSearch[wsId];
       // Preserve query/matchIndex so re-opening restores the previous search.
-      if (!prev) return {};
-      if (!prev.open) return {};
+      // Return the existing state reference for no-op paths so Zustand's
+      // identity check skips the listener notification entirely.
+      if (!prev) return s;
+      if (!prev.open) return s;
       return {
         chatSearch: {
           ...s.chatSearch,
@@ -1025,8 +1027,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   setChatSearchMatchIndex: (wsId, idx) =>
     set((s) => {
       const prev = s.chatSearch[wsId];
-      if (!prev) return {};
-      if (prev.matchIndex === idx) return {};
+      if (!prev) return s;
+      if (prev.matchIndex === idx) return s;
       return {
         chatSearch: {
           ...s.chatSearch,

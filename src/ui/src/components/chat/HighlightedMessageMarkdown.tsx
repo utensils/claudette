@@ -111,17 +111,22 @@ function applyHighlights(root: HTMLElement, query: string): void {
 
 function removeHighlights(root: HTMLElement): void {
   const marks = root.querySelectorAll<HTMLElement>(`mark.${SEARCH_MARK_CLASS}`);
+  if (marks.length === 0) return;
+  // Collect every parent we touched so we can normalize each one only once
+  // at the end. Calling Node.normalize() per-mark inside the loop is O(N²)
+  // when many matches share the same parent — each call walks all of that
+  // parent's children to merge adjacent text nodes.
+  const parentsToNormalize = new Set<Node>();
   for (const mark of Array.from(marks)) {
     const parent = mark.parentNode;
     if (!parent) continue;
-    // Replace <mark>text</mark> with a single TextNode and merge with
-    // adjacent siblings so the parent ends up indistinguishable from
-    // before the highlight pass — react-markdown's reconciliation can
-    // then reuse the same DOM on the next render.
     parent.replaceChild(
       document.createTextNode(mark.textContent ?? ""),
       mark,
     );
+    parentsToNormalize.add(parent);
+  }
+  for (const parent of parentsToNormalize) {
     parent.normalize();
   }
 }
