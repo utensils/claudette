@@ -160,8 +160,12 @@ impl Database {
             let tx = conn.unchecked_transaction()?;
             match tx.execute_batch(m.sql) {
                 Ok(()) => {
+                    // `OR IGNORE` makes the ledger write idempotent so two
+                    // connections opened during first boot can't wedge each
+                    // other on a UNIQUE-constraint failure if both compute
+                    // `applied` before either commits.
                     tx.execute(
-                        "INSERT INTO schema_migrations (id) VALUES (?1)",
+                        "INSERT OR IGNORE INTO schema_migrations (id) VALUES (?1)",
                         params![m.id],
                     )?;
                     tx.commit()?;
@@ -181,7 +185,7 @@ impl Database {
                     );
                     let tx = conn.unchecked_transaction()?;
                     tx.execute(
-                        "INSERT INTO schema_migrations (id) VALUES (?1)",
+                        "INSERT OR IGNORE INTO schema_migrations (id) VALUES (?1)",
                         params![m.id],
                     )?;
                     tx.commit()?;
