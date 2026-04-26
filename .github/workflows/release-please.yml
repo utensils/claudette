@@ -78,6 +78,12 @@ jobs:
             rust-target: x86_64-unknown-linux-gnu
             bundles: appimage,deb
             label: linux-x86_64
+          # GitHub-hosted aarch64 Linux runner (`ubuntu-22.04-arm`) is GA and
+          # native, so this is a real ARM64 build — no QEMU / cross toolchain.
+          - platform: ubuntu-22.04-arm
+            rust-target: aarch64-unknown-linux-gnu
+            bundles: appimage,deb
+            label: linux-aarch64
           # Windows ships bare `.exe` assets only (no MSI/NSIS bundle).
           # The tauri-action step is skipped on Windows and we drive
           # cargo directly against the native MSVC toolchain baked into

@@ -185,7 +185,7 @@ A single sandboxed Lua runtime (`src/plugin_runtime/`) serves multiple plugin ki
 - See GitHub Issue #5 for the full MVP PRD
 - See GitHub Issue #11 for the Workspace Management TDD
 - P0 features: workspace management, agent chat, diff viewer, integrated terminal, checkpoints, git/GitHub integration, scripts, repo settings
-- Target platforms: macOS (Apple Silicon + Intel), Linux (x86_64, Wayland + X11), and Windows (x86_64 + ARM64)
+- Target platforms: macOS (Apple Silicon + Intel), Linux (x86_64 + aarch64, Wayland + X11), and Windows (x86_64 + ARM64)
 
 ## Debugging (dev builds only)
 
