@@ -85,6 +85,12 @@
   50% { opacity: 0.4; }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .icon.pulse {
+    animation: none;
+  }
+}
+
 .name {
   flex: 1;
   min-width: 0;

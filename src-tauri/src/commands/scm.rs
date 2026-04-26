@@ -823,20 +823,22 @@ async fn auto_archive_workspace(
     }
 
     // Stop any running agents for sessions belonging to this workspace.
-    {
+    // Collect PIDs under the lock, drop the lock, then perform the async
+    // process teardowns to avoid stalling other agent operations.
+    let pids_to_stop: Vec<u32> = {
         let mut agents = app_state.agents.write().await;
         let to_remove: Vec<String> = agents
             .iter()
             .filter(|(_, s)| s.workspace_id == ws_id)
             .map(|(k, _)| k.clone())
             .collect();
-        for key in to_remove {
-            if let Some(session) = agents.remove(&key)
-                && let Some(pid) = session.active_pid
-            {
-                let _ = claudette::agent::stop_agent(pid).await;
-            }
-        }
+        to_remove
+            .into_iter()
+            .filter_map(|key| agents.remove(&key).and_then(|s| s.active_pid))
+            .collect()
+    };
+    for pid in pids_to_stop {
+        let _ = claudette::agent::stop_agent(pid).await;
     }
 
     // Now that async cleanup is done, persist the archive/delete mutation.

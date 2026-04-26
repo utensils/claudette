@@ -943,6 +943,10 @@ export function ChatPanel() {
         const state = useAppStore.getState();
         const selectedModel = state.selectedModel[sessionId] || null;
         const disable1mContext = shouldDisable1mContext(selectedModel);
+        const effort = resolveUltrathinkEffort(
+          trimmed,
+          state.effortLevel[sessionId],
+        );
         await sendRemoteCommand(ws.remote_connection_id, "send_chat_message", {
           session_id: sessionId,
           content: trimmed,
@@ -952,7 +956,7 @@ export function ChatPanel() {
           fast_mode: state.fastMode[sessionId] || false,
           thinking_enabled: state.thinkingEnabled[sessionId] || false,
           plan_mode: state.planMode[sessionId] || false,
-          effort: state.effortLevel[sessionId] || null,
+          effort: effort ?? null,
           chrome_enabled: state.chromeEnabled[sessionId] || false,
           disable_1m_context: disable1mContext,
         });

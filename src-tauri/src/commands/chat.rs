@@ -1762,9 +1762,10 @@ pub async fn stop_agent(
         agent::stop_agent(pid).await?;
     }
 
-    // Clear persisted session state for this chat session. Stop aborts an
-    // in-flight turn, so the session did not complete — record as failure.
-    let _ = db.clear_chat_session_claude_state(&chat_session_id);
+    // Stop aborts an in-flight turn but deliberately preserves the persisted
+    // Claude resume UUID and turn count so the next turn can continue the
+    // conversation via `--resume`. Only the agent_sessions audit row is closed
+    // out as a failure.
     if let Some(sid) = ended_sid.as_deref().filter(|s| !s.is_empty()) {
         let _ = db.end_agent_session(sid, false);
     }
@@ -1801,19 +1802,25 @@ pub async fn reset_agent_session(
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let chat_session_id = session_id;
 
-    // Drain pending permissions under the lock, then remove the session and
-    // capture its id; deny sends + the DB session-end happen after release.
-    let (to_deny_reset, ended_sid) = {
+    // Drain pending permissions under the lock, remove the session, capture
+    // its claude_session_id and any active PID; the deny sends, process kill,
+    // and DB session-end happen after release.
+    let (to_deny_reset, ended_sid, pid_to_kill) = {
         let mut agents = state.agents.write().await;
         let drained = agents
             .get_mut(&chat_session_id)
             .and_then(drain_pending_permissions);
-        let ended_sid = agents.remove(&chat_session_id).map(|s| s.claude_session_id);
-        (drained, ended_sid)
+        let removed = agents.remove(&chat_session_id);
+        let ended_sid = removed.as_ref().map(|s| s.claude_session_id.clone());
+        let pid_to_kill = removed.and_then(|s| s.active_pid);
+        (drained, ended_sid, pid_to_kill)
     };
 
     if let Some((ref ps, drained)) = to_deny_reset {
         deny_drained_permissions(drained, ps, "Session reset.").await;
+    }
+    if let Some(pid) = pid_to_kill {
+        let _ = agent::stop_agent(pid).await;
     }
 
     // Clear persisted claude state so the next turn starts fresh. Reset

@@ -720,17 +720,20 @@ export const useAppStore = create<AppState>((set, get) => ({
     }),
   updateChatSession: (sessionId, updates) =>
     set((s) => {
-      const next = { ...s.sessionsByWorkspace };
-      for (const [wsId, sessions] of Object.entries(next)) {
+      for (const [wsId, sessions] of Object.entries(s.sessionsByWorkspace)) {
         const idx = sessions.findIndex((x) => x.id === sessionId);
         if (idx >= 0) {
           const updated = [...sessions];
           updated[idx] = { ...updated[idx], ...updates };
-          next[wsId] = updated;
-          break;
+          return {
+            sessionsByWorkspace: {
+              ...s.sessionsByWorkspace,
+              [wsId]: updated,
+            },
+          };
         }
       }
-      return { sessionsByWorkspace: next };
+      return s;
     }),
   removeChatSession: (sessionId) =>
     set((s) => {

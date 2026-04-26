@@ -805,21 +805,23 @@ async fn handle_archive_workspace(
     state: &ServerState,
     workspace_id: &str,
 ) -> Result<serde_json::Value, String> {
-    // Stop any running agents for sessions in this workspace.
-    {
+    // Stop any running agents for sessions in this workspace. Collect the
+    // PIDs to stop under the lock, then drop the lock before awaiting any
+    // process teardowns to avoid blocking unrelated requests.
+    let pids_to_stop: Vec<u32> = {
         let mut agents = state.agents.write().await;
         let to_remove: Vec<String> = agents
             .iter()
             .filter(|(_, s)| s.workspace_id == workspace_id)
             .map(|(k, _)| k.clone())
             .collect();
-        for key in to_remove {
-            if let Some(mut session) = agents.remove(&key)
-                && let Some(pid) = session.active_pid.take()
-            {
-                let _ = agent::stop_agent(pid).await;
-            }
-        }
+        to_remove
+            .into_iter()
+            .filter_map(|key| agents.remove(&key).and_then(|s| s.active_pid))
+            .collect()
+    };
+    for pid in pids_to_stop {
+        let _ = agent::stop_agent(pid).await;
     }
 
     let db = open_db(state)?;
