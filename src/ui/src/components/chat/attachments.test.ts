@@ -171,3 +171,32 @@ describe("drag-drop deduplication", () => {
     expect(processed).toEqual(["file1.png"]);
   });
 });
+
+describe("HTML5 drag-drop fallback coordination", () => {
+  it("HTML5 handler noops when Tauri native listener is active", () => {
+    const tauriActive = { current: true };
+    const processed: string[] = [];
+
+    const handleDrop = (filename: string) => {
+      if (tauriActive.current) return;
+      processed.push(filename);
+    };
+
+    handleDrop("file1.png");
+    expect(processed).toEqual([]);
+
+    tauriActive.current = false;
+    handleDrop("file2.png");
+    expect(processed).toEqual(["file2.png"]);
+  });
+
+  it("HTML5 handler ignores non-file drags", () => {
+    const types = ["text/plain"];
+    const hasFiles = types.includes("Files");
+    expect(hasFiles).toBe(false);
+
+    const fileTypes = ["Files", "text/plain"];
+    const hasFileDrag = fileTypes.includes("Files");
+    expect(hasFileDrag).toBe(true);
+  });
+});

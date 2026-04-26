@@ -2735,6 +2735,7 @@ function ChatInputArea({
   // event is processed by both the old and new listeners, duplicating files.
   const addAttachmentRef = useRef(addAttachment);
   addAttachmentRef.current = addAttachment;
+  const tauriDragListenerActive = useRef(false);
 
   useEffect(() => {
     if (isRemote) return;
@@ -2743,7 +2744,7 @@ function ChatInputArea({
 
     import("@tauri-apps/api/webview").then(({ getCurrentWebview }) => {
       if (cancelled) return;
-      getCurrentWebview()
+      return getCurrentWebview()
         .onDragDropEvent((event) => {
           if (cancelled) return;
           if (event.payload.type === "enter" || event.payload.type === "over") {
@@ -2768,21 +2769,76 @@ function ChatInputArea({
         })
         .then((fn) => {
           if (cancelled) {
-            fn(); // Already cleaned up — unlisten immediately
+            fn();
           } else {
             unlisten = fn;
+            tauriDragListenerActive.current = true;
           }
         });
     }).catch((err) => {
-      console.warn("Failed to register drag-drop listener:", err);
+      console.error(
+        "[drag-drop] Tauri native listener failed, falling back to HTML5:",
+        err instanceof Error ? err.message : err,
+      );
+      tauriDragListenerActive.current = false;
       setDragActive(false);
     });
 
     return () => {
       cancelled = true;
+      tauriDragListenerActive.current = false;
       unlisten?.();
     };
-  }, [isRemote]); // Stable dep — no re-registration on callback changes
+  }, [isRemote]);
+
+  // HTML5 file-drop fallback: activates only when the Tauri native handler
+  // failed to register (tauriDragListenerActive is false). The global dragover
+  // preventDefault is always active to suppress the browser's default
+  // file-navigation behavior.
+  useEffect(() => {
+    if (isRemote) return;
+
+    const preventNav = (e: DragEvent) => {
+      e.preventDefault();
+    };
+
+    const handleDragEnter = (e: DragEvent) => {
+      if (tauriDragListenerActive.current) return;
+      if (!e.dataTransfer?.types.includes("Files")) return;
+      e.preventDefault();
+      setDragActive(true);
+    };
+
+    const handleDragLeave = (e: DragEvent) => {
+      if (tauriDragListenerActive.current) return;
+      if (e.relatedTarget) return;
+      setDragActive(false);
+    };
+
+    const handleDrop = (e: DragEvent) => {
+      if (tauriDragListenerActive.current) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setDragActive(false);
+      const files = e.dataTransfer?.files;
+      if (!files || files.length === 0) return;
+      for (const file of Array.from(files)) {
+        addAttachmentRef.current(file, file.name);
+      }
+    };
+
+    document.addEventListener("dragover", preventNav);
+    document.addEventListener("dragenter", handleDragEnter);
+    document.addEventListener("dragleave", handleDragLeave);
+    document.addEventListener("drop", handleDrop);
+
+    return () => {
+      document.removeEventListener("dragover", preventNav);
+      document.removeEventListener("dragenter", handleDragEnter);
+      document.removeEventListener("dragleave", handleDragLeave);
+      document.removeEventListener("drop", handleDrop);
+    };
+  }, [isRemote]);
 
   const handleAttachClick = useCallback(async () => {
     const selected = await open({ multiple: true });
