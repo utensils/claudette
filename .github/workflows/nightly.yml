@@ -307,6 +307,44 @@ jobs:
             exit 1
           fi
 
+          # `tauri-action` generated `latest.json` while the release was
+          # tagged `nightly-staging`, so its embedded asset URLs are
+          # hardcoded to `releases/download/nightly-staging/...`. After the
+          # retag below those URLs would 404, breaking the in-app updater's
+          # download step. The Tauri signature covers binary contents — not
+          # the URL field — so rewriting URLs here does not invalidate
+          # verification.
+          #
+          # Fetch and rewrite *before* the retag, while staging still
+          # exists. We upload the rewritten file after the retag. This avoids
+          # depending on the freshly-retagged `nightly/...` URL being
+          # reachable via the public CDN, whose propagation delay previously
+          # exceeded our retry window and left a stale manifest live (#449
+          # follow-up). Aborting here is safe — `nightly` is still intact.
+          for attempt in 1 2 3; do
+            rm -f latest.json
+            if curl -fsSL -o latest.json \
+              "https://github.com/${GITHUB_REPOSITORY}/releases/download/nightly-staging/latest.json"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Failed to fetch nightly-staging/latest.json after 3 attempts"
+              exit 1
+            fi
+            backoff=$((attempt * 5))
+            echo "latest.json fetch attempt $attempt failed; retrying in ${backoff}s"
+            sleep "$backoff"
+          done
+
+          sed -i 's|releases/download/nightly-staging/|releases/download/nightly/|g' latest.json
+          # Hard-fail if the rewrite was a no-op — retrying with the same
+          # input won't help, and shipping a manifest with staging URLs
+          # would break the updater for every nightly user.
+          if grep -q 'releases/download/nightly-staging/' latest.json; then
+            echo "::error::latest.json still contains nightly-staging URLs after rewrite; aborting"
+            exit 1
+          fi
+
           gh release delete nightly --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
 
           # Retry the retag a few times to ride out transient API hiccups
@@ -329,39 +367,20 @@ jobs:
             sleep 5
           done
 
-          # `tauri-action` generated `latest.json` while the release was
-          # tagged `nightly-staging`, so the asset URLs inside the manifest
-          # are hardcoded to `releases/download/nightly-staging/...`. Once
-          # the release is retagged to `nightly` above, those old URLs 404,
-          # breaking the in-app updater's download step (the manifest is
-          # reachable but `download_and_install` fails on the asset fetch).
-          # The Tauri signature covers the binary file contents — not the
-          # URL field — so rewriting the URLs here does not invalidate
-          # verification.
-          #
-          # Retry the fetch+rewrite+upload sequence a few times so a
-          # transient network or GitHub API failure does not leave the
-          # promoted release published with a stale manifest. Also verify
-          # the substitution actually took before uploading.
+          # Upload the URL-rewritten latest.json over the one tauri-action
+          # produced. `gh release upload` talks to the GitHub API by tag,
+          # which is consistent immediately after the retag (no public-CDN
+          # propagation in the path).
           for attempt in 1 2 3; do
-            rm -f latest.json
-            if ! curl -fsSL -o latest.json \
-              "https://github.com/${GITHUB_REPOSITORY}/releases/download/nightly/latest.json"; then
-              echo "latest.json fetch attempt $attempt failed"
-            else
-              sed -i 's|releases/download/nightly-staging/|releases/download/nightly/|g' latest.json
-              if grep -q 'releases/download/nightly-staging/' latest.json; then
-                echo "::warning::latest.json still contains nightly-staging URLs after rewrite"
-              elif gh release upload nightly latest.json --clobber --repo "$GITHUB_REPOSITORY"; then
-                break
-              fi
+            if gh release upload nightly latest.json --clobber --repo "$GITHUB_REPOSITORY"; then
+              break
             fi
             if [ "$attempt" -eq 3 ]; then
-              echo "::error::Failed to refresh latest.json for nightly after 3 attempts"
+              echo "::error::Failed to upload rewritten latest.json after 3 attempts"
               exit 1
             fi
             backoff=$((attempt * 5))
-            echo "latest.json refresh attempt $attempt failed; retrying in ${backoff}s"
+            echo "latest.json upload attempt $attempt failed; retrying in ${backoff}s"
             sleep "$backoff"
           done
 
