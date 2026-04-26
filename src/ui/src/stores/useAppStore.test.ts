@@ -396,7 +396,7 @@ describe("chatSearch (per-workspace)", () => {
       checkpoints: { [WS_ID]: [makeCheckpoint("cp1", WS_ID, "m1", 0)] },
     });
 
-    useAppStore.getState().rollbackConversation(WS_ID, "cp1", []);
+    useAppStore.getState().rollbackConversation(WS_ID, WS_ID, "cp1", []);
 
     expect(useAppStore.getState().chatSearch[WS_ID]).toBeUndefined();
   });
