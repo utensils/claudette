@@ -9,13 +9,13 @@ import styles from "./SegmentedMeter.module.css";
 const CELL_COUNT = 10;
 
 interface SegmentedMeterProps {
-  workspaceId: string;
+  sessionId: string;
   onClick: () => void;
 }
 
-export function SegmentedMeter({ workspaceId, onClick }: SegmentedMeterProps) {
-  const usage = useAppStore((s) => s.latestTurnUsage[workspaceId]);
-  const selectedModel = useAppStore((s) => s.selectedModel[workspaceId]);
+export function SegmentedMeter({ sessionId, onClick }: SegmentedMeterProps) {
+  const usage = useAppStore((s) => s.latestTurnUsage[sessionId]);
+  const selectedModel = useAppStore((s) => s.selectedModel[sessionId]);
 
   const model = MODELS.find((m) => m.id === selectedModel);
   const state = computeMeterState(usage, model?.contextWindowTokens);

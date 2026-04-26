@@ -3,6 +3,7 @@ export type ChatRole = "User" | "Assistant" | "System";
 export interface ChatMessage {
   id: string;
   workspace_id: string;
+  session_id: string;
   role: ChatRole;
   content: string;
   cost_usd: number | null;
@@ -13,6 +14,27 @@ export interface ChatMessage {
   output_tokens: number | null;
   cache_read_tokens: number | null;
   cache_creation_tokens: number | null;
+}
+
+export type SessionStatus = "Active" | "Archived";
+export type SessionAttentionKind = "Ask" | "Plan";
+export type SessionAgentStatus = "Idle" | "Running" | "Stopped";
+
+/** A chat session (tab) within a workspace. Matches the Rust `ChatSession` struct. */
+export interface ChatSession {
+  id: string;
+  workspace_id: string;
+  claude_session_id: string | null;
+  name: string;
+  name_edited: boolean;
+  turn_count: number;
+  sort_order: number;
+  status: SessionStatus;
+  created_at: string;
+  archived_at: string | null;
+  agent_status: SessionAgentStatus;
+  needs_attention: boolean;
+  attention_kind: SessionAttentionKind | null;
 }
 
 /** A persisted attachment returned from the backend (base64-encoded). */

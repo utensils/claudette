@@ -1,0 +1,173 @@
+.tabBar {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  gap: 4px;
+  padding: 0 8px;
+  background: transparent;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-subtle) transparent;
+}
+
+.tabBar::-webkit-scrollbar {
+  height: 4px;
+}
+
+.tabBar::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: 2px;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  min-width: 0;
+  max-width: 220px;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  position: relative;
+  transition: color 80ms ease;
+}
+
+.tab::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 0;
+  height: 1px;
+  background: transparent;
+  transition: background 80ms ease;
+}
+
+.tab:hover:not(.active) {
+  color: var(--text-primary);
+}
+
+.active {
+  color: var(--text-primary);
+}
+
+.active::after {
+  background: var(--accent-primary);
+}
+
+.icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  opacity: 0.75;
+}
+
+.active .icon {
+  opacity: 1;
+}
+
+.icon.pulse {
+  animation: pulse-badge 2s ease-in-out infinite;
+  opacity: 1;
+}
+
+@keyframes pulse-badge {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .icon.pulse {
+    animation: none;
+  }
+}
+
+.name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nameInput {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: 1px solid var(--accent-primary);
+  border-radius: 3px;
+  padding: 0 2px;
+  font: inherit;
+  color: var(--text-primary);
+}
+
+.closeBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: var(--text-dim);
+  cursor: pointer;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 80ms ease, background 80ms ease, color 80ms ease;
+}
+
+.tab:hover .closeBtn,
+.tab:focus-within .closeBtn {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.closeBtn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.addBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  margin-left: 2px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color 80ms ease;
+  flex-shrink: 0;
+}
+
+.addBtn:hover {
+  color: var(--text-primary);
+}
+
+.parallelHint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 4px;
+  color: var(--accent-primary);
+  opacity: 0.7;
+}

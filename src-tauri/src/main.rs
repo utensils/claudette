@@ -468,7 +468,7 @@ fn main() {
             commands::files::open_attachment_with_default_app,
             // Chat
             commands::chat::load_chat_history,
-            commands::chat::load_attachments_for_workspace,
+            commands::chat::load_attachments_for_session,
             commands::chat::load_attachment_data,
             commands::chat::read_file_as_base64,
             commands::chat::send_chat_message,
@@ -482,6 +482,11 @@ fn main() {
             commands::chat::clear_conversation,
             commands::chat::save_turn_tool_activities,
             commands::chat::load_completed_turns,
+            commands::chat::list_chat_sessions,
+            commands::chat::get_chat_session,
+            commands::chat::create_chat_session,
+            commands::chat::rename_chat_session,
+            commands::chat::archive_chat_session,
             // Plan
             commands::plan::read_plan_file,
             // Metrics

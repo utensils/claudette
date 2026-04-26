@@ -12,6 +12,7 @@ import {
   getRepoConfig,
   runWorkspaceSetup,
 } from "../../services/tauri";
+import { applySelectedModel } from "../chat/applySelectedModel";
 import type { ThemeDefinition } from "../../types/theme";
 import { scoreCommand } from "./searchScore";
 import {
@@ -24,7 +25,6 @@ import {
   type Command,
   type CommandCategory,
 } from "./commands";
-import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "../chat/modelCapabilities";
 import styles from "./CommandPalette.module.css";
 
 interface GroupedCommands {
@@ -41,6 +41,14 @@ export function CommandPalette() {
   const toggleFuzzyFinder = useAppStore((s) => s.toggleFuzzyFinder);
   const openModal = useAppStore((s) => s.openModal);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  // Active chat session within the selected workspace. Agent-scoped
+  // commands (stop, reset, model-change teardown) run against a session
+  // id, not the workspace id.
+  const selectedSessionId = useAppStore((s) =>
+    s.selectedWorkspaceId
+      ? s.selectedSessionIdByWorkspaceId[s.selectedWorkspaceId] ?? null
+      : null,
+  );
   const workspaces = useAppStore((s) => s.workspaces);
   const addWorkspace = useAppStore((s) => s.addWorkspace);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
@@ -57,19 +65,19 @@ export function CommandPalette() {
   }, [selectedWorkspaceId, workspaces]);
 
   const thinkingEnabled = useAppStore(
-    (s) => (selectedWorkspaceId ? s.thinkingEnabled[selectedWorkspaceId] ?? false : false),
+    (s) => (selectedSessionId ? s.thinkingEnabled[selectedSessionId] ?? false : false),
   );
   const planMode = useAppStore(
-    (s) => (selectedWorkspaceId ? s.planMode[selectedWorkspaceId] ?? false : false),
+    (s) => (selectedSessionId ? s.planMode[selectedSessionId] ?? false : false),
   );
   const fastMode = useAppStore(
-    (s) => (selectedWorkspaceId ? s.fastMode[selectedWorkspaceId] ?? false : false),
+    (s) => (selectedSessionId ? s.fastMode[selectedSessionId] ?? false : false),
   );
   const effortLevel = useAppStore(
-    (s) => (selectedWorkspaceId ? s.effortLevel[selectedWorkspaceId] ?? "auto" : "auto"),
+    (s) => (selectedSessionId ? s.effortLevel[selectedSessionId] ?? "auto" : "auto"),
   );
   const selectedModel = useAppStore(
-    (s) => (selectedWorkspaceId ? s.selectedModel[selectedWorkspaceId] ?? "opus" : "opus"),
+    (s) => (selectedSessionId ? s.selectedModel[selectedSessionId] ?? "opus" : "opus"),
   );
   const setThinkingEnabled = useAppStore((s) => s.setThinkingEnabled);
   const setPlanMode = useAppStore((s) => s.setPlanMode);
@@ -111,10 +119,12 @@ export function CommandPalette() {
       const result = await createWorkspaceService(repoId, generated.slug, true);
       addWorkspace(result.workspace);
       selectWorkspace(result.workspace.id);
+      const sessionId = result.default_session_id;
       if (generated.message) {
-        addChatMessage(result.workspace.id, {
+        addChatMessage(sessionId, {
           id: crypto.randomUUID(),
           workspace_id: result.workspace.id,
+          session_id: sessionId,
           role: "System",
           content: generated.message,
           cost_usd: null,
@@ -137,9 +147,10 @@ export function CommandPalette() {
               if (sr) {
                 const lbl = sr.source === "repo" ? ".claudette.json" : "settings";
                 const status = sr.success ? "completed" : sr.timed_out ? "timed out" : "failed";
-                addChatMessage(wsId, {
+                addChatMessage(sessionId, {
                   id: crypto.randomUUID(),
                   workspace_id: wsId,
+                  session_id: sessionId,
                   role: "System",
                   content: `Setup script (${lbl}) ${status}${sr.output ? `:\n${sr.output}` : ""}`,
                   cost_usd: null, duration_ms: null,
@@ -149,9 +160,10 @@ export function CommandPalette() {
                 });
               }
             }).catch((err) => {
-              addChatMessage(wsId, {
+              addChatMessage(sessionId, {
                 id: crypto.randomUUID(),
                 workspace_id: wsId,
+                session_id: sessionId,
                 role: "System",
                 content: `Setup script failed: ${err}`,
                 cost_usd: null, duration_ms: null,
@@ -163,6 +175,7 @@ export function CommandPalette() {
           } else {
             openModal("confirmSetupScript", {
               workspaceId: result.workspace.id,
+              sessionId,
               repoId,
               script,
               source,
@@ -225,6 +238,7 @@ export function CommandPalette() {
         enterModelMode,
         enterEffortMode,
         selectedWorkspaceId,
+        selectedSessionId,
         currentRepoId,
         createWorkspace: handleCreateWorkspace,
         thinkingEnabled,
@@ -237,14 +251,14 @@ export function CommandPalette() {
         setEffortLevel,
         selectedModel,
         persistSetting: (key: string, value: string) => setAppSetting(key, value).catch(console.error),
-        stopAgent: (wsId: string) => stopAgent(wsId),
-        resetAgentSession: (wsId: string) => resetAgentSession(wsId),
-        clearAgentQuestion: (wsId: string) => clearAgentQuestion(wsId),
-        clearPlanApproval: (wsId: string) => clearPlanApproval(wsId),
+        stopAgent: (sessionId: string) => stopAgent(sessionId),
+        resetAgentSession: (sessionId: string) => resetAgentSession(sessionId),
+        clearAgentQuestion: (sessionId: string) => clearAgentQuestion(sessionId),
+        clearPlanApproval: (sessionId: string) => clearPlanApproval(sessionId),
         updateWorkspace: (id: string, updates: Record<string, unknown>) => updateWorkspace(id, updates),
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [themes, selectedWorkspaceId, currentRepoId, thinkingEnabled, planMode, fastMode, effortLevel, selectedModel, enterThemeMode, applyThemeById, handleCreateWorkspace],
+    [themes, selectedWorkspaceId, selectedSessionId, currentRepoId, thinkingEnabled, planMode, fastMode, effortLevel, selectedModel, enterThemeMode, applyThemeById, handleCreateWorkspace],
   );
 
   // Build sub-menu command lists
@@ -258,35 +272,13 @@ export function CommandPalette() {
     () => buildModelCommands(
       selectedModel,
       async (model: string) => {
-        if (!selectedWorkspaceId || model === selectedModel) return;
-        useAppStore.getState().setSelectedModel(selectedWorkspaceId, model);
-        await setAppSetting(`model:${selectedWorkspaceId}`, model);
-        await resetAgentSession(selectedWorkspaceId);
-        clearAgentQuestion(selectedWorkspaceId);
-        clearPlanApproval(selectedWorkspaceId);
-        // Turn off fast mode if the new model doesn't support it.
-        const store = useAppStore.getState();
-        if (store.fastMode[selectedWorkspaceId] && !isFastSupported(model)) {
-          store.setFastMode(selectedWorkspaceId, false);
-          await setAppSetting(`fast_mode:${selectedWorkspaceId}`, "false");
-        }
-        // Downgrade effort when switching to a model with less support.
-        const currentEffort = store.effortLevel[selectedWorkspaceId];
-        if (!isEffortSupported(model)) {
-          store.setEffortLevel(selectedWorkspaceId, "auto");
-          await setAppSetting(`effort_level:${selectedWorkspaceId}`, "auto");
-        } else if (currentEffort === "xhigh" && !isXhighEffortAllowed(model)) {
-          store.setEffortLevel(selectedWorkspaceId, "high");
-          await setAppSetting(`effort_level:${selectedWorkspaceId}`, "high");
-        } else if (currentEffort === "max" && !isMaxEffortAllowed(model)) {
-          store.setEffortLevel(selectedWorkspaceId, "high");
-          await setAppSetting(`effort_level:${selectedWorkspaceId}`, "high");
-        }
+        if (!selectedSessionId || model === selectedModel) return;
+        await applySelectedModel(selectedSessionId, model);
       },
       close,
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectedModel, selectedWorkspaceId],
+    [selectedModel, selectedSessionId],
   );
 
   const effortCommands = useMemo(
@@ -294,14 +286,14 @@ export function CommandPalette() {
       selectedModel,
       effortLevel,
       async (level: string) => {
-        if (!selectedWorkspaceId) return;
-        useAppStore.getState().setEffortLevel(selectedWorkspaceId, level);
-        await setAppSetting(`effort_level:${selectedWorkspaceId}`, level);
+        if (!selectedSessionId) return;
+        useAppStore.getState().setEffortLevel(selectedSessionId, level);
+        await setAppSetting(`effort_level:${selectedSessionId}`, level);
       },
       close,
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectedModel, effortLevel, selectedWorkspaceId],
+    [selectedModel, effortLevel, selectedSessionId],
   );
 
   // Active command list based on mode

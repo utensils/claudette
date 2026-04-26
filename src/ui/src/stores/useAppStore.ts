@@ -12,6 +12,7 @@ import type {
   ChatMessage,
   ChatAttachment,
   AttachmentInput,
+  ChatSession,
   DiffFile,
   FileDiff,
   DiffViewMode,
@@ -53,6 +54,28 @@ import type {
 } from "../types/plugins";
 
 export type PermissionLevel = "readonly" | "standard" | "full";
+
+/** Return a new sessionsByWorkspace map with `needs_attention` / `attention_kind`
+ *  cleared for the given session id. Returns the original map when the session
+ *  isn't found so callers can compare referential equality. */
+function clearSessionAttention(
+  map: Record<string, ChatSession[]>,
+  sessionId: string,
+): Record<string, ChatSession[]> {
+  for (const [wsId, sessions] of Object.entries(map)) {
+    const idx = sessions.findIndex((s) => s.id === sessionId);
+    if (idx >= 0) {
+      const updated = [...sessions];
+      updated[idx] = {
+        ...updated[idx],
+        needs_attention: false,
+        attention_kind: null,
+      };
+      return { ...map, [wsId]: updated };
+    }
+  }
+  return map;
+}
 
 export interface ToolActivity {
   toolUseId: string;
@@ -106,13 +129,13 @@ export interface AgentQuestionItem {
 }
 
 export interface AgentQuestion {
-  workspaceId: string;
+  sessionId: string;
   toolUseId: string;
   questions: AgentQuestionItem[];
 }
 
 export interface PlanApproval {
-  workspaceId: string;
+  sessionId: string;
   toolUseId: string;
   planFilePath: string | null;
   allowedPrompts: Array<{ tool: string; prompt: string }>;
@@ -149,6 +172,18 @@ interface AppState {
   updateWorkspace: (id: string, updates: Partial<Workspace>) => void;
   removeWorkspace: (id: string) => void;
   selectWorkspace: (id: string | null) => void;
+
+  // -- Chat sessions (tabs) --
+  sessionsByWorkspace: Record<string, ChatSession[]>;
+  selectedSessionIdByWorkspaceId: Record<string, string>;
+  setSessionsForWorkspace: (wsId: string, sessions: ChatSession[]) => void;
+  addChatSession: (session: ChatSession) => void;
+  updateChatSession: (
+    sessionId: string,
+    updates: Partial<ChatSession>,
+  ) => void;
+  removeChatSession: (sessionId: string) => void;
+  selectSession: (workspaceId: string, sessionId: string) => void;
 
   // -- Chat --
   chatMessages: Record<string, ChatMessage[]>;
@@ -223,15 +258,15 @@ interface AppState {
     partialJson: string,
   ) => void;
 
-  // -- Agent Questions (per-workspace) --
+  // -- Agent Questions (per-session) --
   agentQuestions: Record<string, AgentQuestion>;
   setAgentQuestion: (q: AgentQuestion) => void;
-  clearAgentQuestion: (wsId: string) => void;
+  clearAgentQuestion: (sessionId: string) => void;
 
-  // -- Plan Approvals (per-workspace) --
+  // -- Plan Approvals (per-session) --
   planApprovals: Record<string, PlanApproval>;
   setPlanApproval: (p: PlanApproval) => void;
-  clearPlanApproval: (wsId: string) => void;
+  clearPlanApproval: (sessionId: string) => void;
 
   // -- Queued Messages (sent while agent is running, dispatched when idle) --
   queuedMessages: Record<
@@ -255,7 +290,8 @@ interface AppState {
   setCheckpoints: (wsId: string, cps: ConversationCheckpoint[]) => void;
   addCheckpoint: (wsId: string, cp: ConversationCheckpoint) => void;
   rollbackConversation: (
-    wsId: string,
+    sessionId: string,
+    workspaceId: string,
     checkpointId: string,
     messages: ChatMessage[],
   ) => void;
@@ -650,6 +686,88 @@ export const useAppStore = create<AppState>((set, get) => ({
       return updates;
     }),
 
+  // -- Chat sessions (tabs) --
+  sessionsByWorkspace: {},
+  selectedSessionIdByWorkspaceId: {},
+  setSessionsForWorkspace: (wsId, sessions) =>
+    set((s) => {
+      const next = { ...s.sessionsByWorkspace, [wsId]: sessions };
+      const nextSelected = { ...s.selectedSessionIdByWorkspaceId };
+      const selected = nextSelected[wsId];
+      const activeSessions = sessions.filter((x) => x.status === "Active");
+      const selectedIsActive =
+        selected && activeSessions.some((x) => x.id === selected);
+      if (!selectedIsActive && activeSessions.length > 0) {
+        nextSelected[wsId] = activeSessions[0].id;
+      }
+      return {
+        sessionsByWorkspace: next,
+        selectedSessionIdByWorkspaceId: nextSelected,
+      };
+    }),
+  addChatSession: (session) =>
+    set((s) => {
+      const existing = s.sessionsByWorkspace[session.workspace_id] ?? [];
+      if (existing.some((x) => x.id === session.id)) {
+        return s;
+      }
+      return {
+        sessionsByWorkspace: {
+          ...s.sessionsByWorkspace,
+          [session.workspace_id]: [...existing, session],
+        },
+      };
+    }),
+  updateChatSession: (sessionId, updates) =>
+    set((s) => {
+      for (const [wsId, sessions] of Object.entries(s.sessionsByWorkspace)) {
+        const idx = sessions.findIndex((x) => x.id === sessionId);
+        if (idx >= 0) {
+          const updated = [...sessions];
+          updated[idx] = { ...updated[idx], ...updates };
+          return {
+            sessionsByWorkspace: {
+              ...s.sessionsByWorkspace,
+              [wsId]: updated,
+            },
+          };
+        }
+      }
+      return s;
+    }),
+  removeChatSession: (sessionId) =>
+    set((s) => {
+      const next = { ...s.sessionsByWorkspace };
+      const nextSelected = { ...s.selectedSessionIdByWorkspaceId };
+      for (const [wsId, sessions] of Object.entries(next)) {
+        if (sessions.some((x) => x.id === sessionId)) {
+          next[wsId] = sessions.filter((x) => x.id !== sessionId);
+          if (nextSelected[wsId] === sessionId) {
+            const firstActive = next[wsId].find(
+              (x) => x.status === "Active",
+            );
+            if (firstActive) {
+              nextSelected[wsId] = firstActive.id;
+            } else {
+              delete nextSelected[wsId];
+            }
+          }
+          break;
+        }
+      }
+      return {
+        sessionsByWorkspace: next,
+        selectedSessionIdByWorkspaceId: nextSelected,
+      };
+    }),
+  selectSession: (workspaceId, sessionId) =>
+    set((s) => ({
+      selectedSessionIdByWorkspaceId: {
+        ...s.selectedSessionIdByWorkspaceId,
+        [workspaceId]: sessionId,
+      },
+    })),
+
   // -- Chat --
   chatMessages: {},
   chatAttachments: {},
@@ -933,28 +1051,33 @@ export const useAppStore = create<AppState>((set, get) => ({
       },
     })),
 
-  // -- Agent Questions (per-workspace) --
+  // -- Agent Questions (per-session) --
   agentQuestions: {},
   setAgentQuestion: (q) =>
     set((s) => ({
-      agentQuestions: { ...s.agentQuestions, [q.workspaceId]: q },
+      agentQuestions: { ...s.agentQuestions, [q.sessionId]: q },
     })),
-  clearAgentQuestion: (wsId) =>
+  clearAgentQuestion: (sessionId) =>
     set((s) => {
-      const { [wsId]: _, ...rest } = s.agentQuestions;
-      return { agentQuestions: rest };
+      const { [sessionId]: _, ...rest } = s.agentQuestions;
+      // Also clear the corresponding ChatSession attention flag so the tab
+      // icon + sidebar aggregate update immediately, without waiting for a
+      // list_chat_sessions refresh.
+      const nextSessions = clearSessionAttention(s.sessionsByWorkspace, sessionId);
+      return { agentQuestions: rest, sessionsByWorkspace: nextSessions };
     }),
 
-  // -- Plan Approvals (per-workspace) --
+  // -- Plan Approvals (per-session) --
   planApprovals: {},
   setPlanApproval: (p) =>
     set((s) => ({
-      planApprovals: { ...s.planApprovals, [p.workspaceId]: p },
+      planApprovals: { ...s.planApprovals, [p.sessionId]: p },
     })),
-  clearPlanApproval: (wsId) =>
+  clearPlanApproval: (sessionId) =>
     set((s) => {
-      const { [wsId]: _, ...rest } = s.planApprovals;
-      return { planApprovals: rest };
+      const { [sessionId]: _, ...rest } = s.planApprovals;
+      const nextSessions = clearSessionAttention(s.sessionsByWorkspace, sessionId);
+      return { planApprovals: rest, sessionsByWorkspace: nextSessions };
     }),
 
   // -- Queued Messages --
@@ -985,16 +1108,16 @@ export const useAppStore = create<AppState>((set, get) => ({
         [wsId]: [...(s.checkpoints[wsId] || []), cp],
       },
     })),
-  rollbackConversation: (wsId, checkpointId, messages) =>
+  rollbackConversation: (sessionId, workspaceId, checkpointId, messages) =>
     set((s) => {
-      const { [wsId]: _q, ...restQuestions } = s.agentQuestions;
-      const { [wsId]: _p, ...restApprovals } = s.planApprovals;
+      const { [sessionId]: _q, ...restQuestions } = s.agentQuestions;
+      const { [sessionId]: _p, ...restApprovals } = s.planApprovals;
       // Update lastMessages so workspace preview cards stay in sync.
       const lastMsg =
         messages.length > 0 ? messages[messages.length - 1] : undefined;
-      const { [wsId]: _lm, ...restLastMessages } = s.lastMessages;
+      const { [workspaceId]: _lm, ...restLastMessages } = s.lastMessages;
       const updatedLastMessages = lastMsg
-        ? { ...s.lastMessages, [wsId]: lastMsg }
+        ? { ...s.lastMessages, [workspaceId]: lastMsg }
         : restLastMessages;
       // Recompute the meter's latestTurnUsage from the rolled-back message
       // list. Write if the last assistant message has token data; delete
@@ -1002,32 +1125,29 @@ export const useAppStore = create<AppState>((set, get) => ({
       const nextCall = extractLatestCallUsage(messages);
       let latestTurnUsage = s.latestTurnUsage;
       if (nextCall) {
-        latestTurnUsage = { ...s.latestTurnUsage, [wsId]: nextCall };
-      } else if (wsId in s.latestTurnUsage) {
+        latestTurnUsage = { ...s.latestTurnUsage, [sessionId]: nextCall };
+      } else if (sessionId in s.latestTurnUsage) {
         const next = { ...s.latestTurnUsage };
-        delete next[wsId];
+        delete next[sessionId];
         latestTurnUsage = next;
       }
-      // Re-derive compactionEvents too — rollback's message truncation
-      // might drop compactions. Empty array for rolled-back-to-empty is
-      // fine (the slice is additive; empty == no dividers to render).
       const nextCompactionEvents = {
         ...s.compactionEvents,
-        [wsId]: extractCompactionEvents(messages),
+        [sessionId]: extractCompactionEvents(messages),
       };
       return {
-        chatMessages: { ...s.chatMessages, [wsId]: messages },
+        chatMessages: { ...s.chatMessages, [sessionId]: messages },
         lastMessages: updatedLastMessages,
-        completedTurns: { ...s.completedTurns, [wsId]: [] },
-        toolActivities: { ...s.toolActivities, [wsId]: [] },
-        streamingContent: { ...s.streamingContent, [wsId]: "" },
-        streamingThinking: { ...s.streamingThinking, [wsId]: "" },
+        completedTurns: { ...s.completedTurns, [sessionId]: [] },
+        toolActivities: { ...s.toolActivities, [sessionId]: [] },
+        streamingContent: { ...s.streamingContent, [sessionId]: "" },
+        streamingThinking: { ...s.streamingThinking, [sessionId]: "" },
         agentQuestions: restQuestions,
         planApprovals: restApprovals,
         checkpoints: {
           ...s.checkpoints,
-          [wsId]: (() => {
-            const current = s.checkpoints[wsId] || [];
+          [sessionId]: (() => {
+            const current = s.checkpoints[sessionId] || [];
             const target = current.find((c) => c.id === checkpointId);
             // If target not found (e.g. clear-all sentinel), clear everything.
             if (!target) return [];
@@ -1727,6 +1847,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       slashCommandsByWorkspace: { ...s.slashCommandsByWorkspace, [wsId]: cmds },
     })),
 }));
+
+/**
+ * Returns the session id currently selected inside the active workspace.
+ * Null when no workspace is selected or when that workspace has no active
+ * session yet (e.g. the sessions list is still loading).
+ */
+export const selectActiveSessionId = (s: AppState): string | null => {
+  const wsId = s.selectedWorkspaceId;
+  if (!wsId) return null;
+  return s.selectedSessionIdByWorkspaceId[wsId] ?? null;
+};
 
 // Expose store on window in dev builds for debug_eval_js access.
 if (import.meta.env.DEV && typeof window !== "undefined") {

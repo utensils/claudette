@@ -42,9 +42,17 @@ pub struct PendingPermission {
     pub original_input: serde_json::Value,
 }
 
-/// Per-workspace agent session state managed on the Rust side.
+/// Per-session agent state managed on the Rust side. One of these per
+/// active chat session (i.e. per tab). The parent workspace is tracked so
+/// tray/notification code can aggregate across sessions in the same worktree.
 pub struct AgentSessionState {
-    pub session_id: String,
+    /// The workspace this session belongs to. Used for reverse lookups:
+    /// worktree path for spawning, tray grouping, notification routing.
+    pub workspace_id: String,
+    /// Claude CLI `--resume` UUID. Empty until the first turn completes.
+    /// Named `claude_session_id` (not `session_id`) to avoid ambiguity with
+    /// the `chat_sessions.id` that keys `AppState.agents`.
+    pub claude_session_id: String,
     pub turn_count: u32,
     /// PID of the currently running agent process, if any.
     pub active_pid: Option<u32>,
@@ -279,7 +287,9 @@ impl ScmCache {
 pub struct AppState {
     pub db_path: PathBuf,
     pub worktree_base_dir: RwLock<PathBuf>,
-    /// Agent sessions keyed by workspace_id.
+    /// Agent sessions keyed by `chat_sessions.id` (the tab/session id).
+    /// Each value carries its owning `workspace_id` for reverse lookups
+    /// (tray aggregation, notifications, worktree path resolution).
     pub agents: RwLock<HashMap<String, AgentSessionState>>,
     /// Active PTY processes keyed by pty_id.
     pub ptys: RwLock<HashMap<u64, PtyHandle>>,

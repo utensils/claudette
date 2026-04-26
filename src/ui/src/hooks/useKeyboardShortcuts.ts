@@ -22,9 +22,14 @@ export function useKeyboardShortcuts() {
   const setDiffSelectedFile = useAppStore((s) => s.setDiffSelectedFile);
   const diffSelectedFile = useAppStore((s) => s.diffSelectedFile);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const activeSessionId = useAppStore((s) =>
+    s.selectedWorkspaceId
+      ? s.selectedSessionIdByWorkspaceId[s.selectedWorkspaceId] ?? null
+      : null,
+  );
   const setPlanMode = useAppStore((s) => s.setPlanMode);
   const planMode = useAppStore(
-    (s) => (selectedWorkspaceId ? s.planMode[selectedWorkspaceId] ?? false : false),
+    (s) => (activeSessionId ? s.planMode[activeSessionId] ?? false : false),
   );
 
   useEffect(() => {
@@ -38,11 +43,11 @@ export function useKeyboardShortcuts() {
       const isInteractive = activeTag === "input" || activeTag === "textarea" ||
         activeTag === "select" || activeTag === "button";
       if (
-        e.key === "Tab" && e.shiftKey && !mod && selectedWorkspaceId &&
+        e.key === "Tab" && e.shiftKey && !mod && activeSessionId &&
         !activeModal && !commandPaletteOpen && !fuzzyFinderOpen && !isInteractive
       ) {
         e.preventDefault();
-        setPlanMode(selectedWorkspaceId, !planMode);
+        setPlanMode(activeSessionId, !planMode);
         return;
       }
 
@@ -64,18 +69,25 @@ export function useKeyboardShortcuts() {
             (w) => w.id === selectedWorkspaceId,
           );
           if (ws && isAgentBusy(ws.agent_status)) {
-            // Clear queued message — user is taking manual control.
-            useAppStore.getState().clearQueuedMessage(selectedWorkspaceId);
-            // Route through remote or local stop path.
-            const stopPromise = ws.remote_connection_id
-              ? sendRemoteCommand(ws.remote_connection_id, "stop_agent", {
-                  workspace_id: selectedWorkspaceId,
-                })
-              : stopAgent(selectedWorkspaceId);
-            stopPromise.catch(console.error);
-            useAppStore.getState().updateWorkspace(selectedWorkspaceId, {
-              agent_status: "Stopped",
-            });
+            const sessionId =
+              useAppStore.getState().selectedSessionIdByWorkspaceId[
+                selectedWorkspaceId
+              ];
+            if (sessionId) {
+              // Clear queued message — user is taking manual control.
+              useAppStore.getState().clearQueuedMessage(sessionId);
+              // Route through remote or local stop path. `stop_agent` is a
+              // per-session command now — pass the active session id.
+              const stopPromise = ws.remote_connection_id
+                ? sendRemoteCommand(ws.remote_connection_id, "stop_agent", {
+                    session_id: sessionId,
+                  })
+                : stopAgent(sessionId);
+              stopPromise.catch(console.error);
+              useAppStore.getState().updateWorkspace(selectedWorkspaceId, {
+                agent_status: "Stopped",
+              });
+            }
           }
         }
         return;
@@ -263,6 +275,7 @@ export function useKeyboardShortcuts() {
     setDiffSelectedFile,
     diffSelectedFile,
     selectedWorkspaceId,
+    activeSessionId,
     setPlanMode,
     planMode,
   ]);

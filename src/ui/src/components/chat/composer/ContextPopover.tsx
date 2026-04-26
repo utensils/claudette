@@ -8,7 +8,7 @@ import { estimateCost, formatCost } from "./formatCost";
 import styles from "./ContextPopover.module.css";
 
 interface ContextPopoverProps {
-  workspaceId: string;
+  sessionId: string;
   onClose: () => void;
   onCompact: () => void;
   onClear: () => void;
@@ -26,10 +26,10 @@ const SEGMENT_COLORS = [
   "var(--accent-dim)",
 ];
 
-export function ContextPopover({ workspaceId, onClose, onCompact, onClear }: ContextPopoverProps) {
+export function ContextPopover({ sessionId, onClose, onCompact, onClear }: ContextPopoverProps) {
   const popoverRef = useRef<HTMLDivElement>(null);
-  const usage = useAppStore((s) => s.latestTurnUsage[workspaceId]);
-  const selectedModel = useAppStore((s) => s.selectedModel[workspaceId]);
+  const usage = useAppStore((s) => s.latestTurnUsage[sessionId]);
+  const selectedModel = useAppStore((s) => s.selectedModel[sessionId]);
 
   const model = MODELS.find((m) => m.id === selectedModel);
   const state = computeMeterState(usage, model?.contextWindowTokens);

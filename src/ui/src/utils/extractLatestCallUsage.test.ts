@@ -6,6 +6,7 @@ function msg(overrides: Partial<ChatMessage>): ChatMessage {
   return {
     id: overrides.id ?? "m",
     workspace_id: overrides.workspace_id ?? "ws",
+    session_id: overrides.session_id ?? "ws",
     role: overrides.role ?? "Assistant",
     content: overrides.content ?? "",
     cost_usd: overrides.cost_usd ?? null,

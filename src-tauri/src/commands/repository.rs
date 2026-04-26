@@ -252,10 +252,10 @@ pub async fn remove_repository(
     // Clean up in-memory agent sessions for this repo's workspaces
     // so the tray doesn't show stale running/attention state.
     {
+        let repo_workspace_ids: std::collections::HashSet<String> =
+            repo_workspaces.iter().map(|w| w.id.clone()).collect();
         let mut agents = state.agents.write().await;
-        for ws in &repo_workspaces {
-            agents.remove(&ws.id);
-        }
+        agents.retain(|_, session| !repo_workspace_ids.contains(&session.workspace_id));
     }
 
     // Cascade delete handles workspaces, chat messages, terminal tabs.

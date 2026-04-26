@@ -11,26 +11,26 @@ import { ContextMeter } from "./ContextMeter";
 import styles from "./ChatToolbar.module.css";
 
 interface ChatToolbarProps {
-  workspaceId: string;
+  sessionId: string;
   disabled: boolean;
 }
 
 const isMac = typeof navigator !== "undefined" && navigator.platform.startsWith("Mac");
 const mod = isMac ? "⌘" : "Ctrl+";
 
-export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
-  const selectedModel = useAppStore((s) => s.selectedModel[workspaceId] ?? "opus");
-  const fastMode = useAppStore((s) => s.fastMode[workspaceId] ?? false);
-  const thinkingEnabled = useAppStore((s) => s.thinkingEnabled[workspaceId] ?? false);
-  const planMode = useAppStore((s) => s.planMode[workspaceId] ?? false);
-  const effortLevel = useAppStore((s) => s.effortLevel[workspaceId] ?? "auto");
-  const chromeEnabled = useAppStore((s) => s.chromeEnabled[workspaceId] ?? false);
+export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
+  const selectedModel = useAppStore((s) => s.selectedModel[sessionId] ?? "opus");
+  const fastMode = useAppStore((s) => s.fastMode[sessionId] ?? false);
+  const thinkingEnabled = useAppStore((s) => s.thinkingEnabled[sessionId] ?? false);
+  const planMode = useAppStore((s) => s.planMode[sessionId] ?? false);
+  const effortLevel = useAppStore((s) => s.effortLevel[sessionId] ?? "auto");
+  const chromeEnabled = useAppStore((s) => s.chromeEnabled[sessionId] ?? false);
   const modelSelectorOpen = useAppStore((s) => s.modelSelectorOpen);
   const setSelectedModel = useAppStore((s) => s.setSelectedModel);
   const setFastMode = useAppStore((s) => s.setFastMode);
   const setThinkingEnabled = useAppStore((s) => s.setThinkingEnabled);
   const setPlanMode = useAppStore((s) => s.setPlanMode);
-  const showThinkingBlocks = useAppStore((s) => s.showThinkingBlocks[workspaceId] === true);
+  const showThinkingBlocks = useAppStore((s) => s.showThinkingBlocks[sessionId] === true);
   const setEffortLevel = useAppStore((s) => s.setEffortLevel);
   const setChromeEnabled = useAppStore((s) => s.setChromeEnabled);
   const setShowThinkingBlocks = useAppStore((s) => s.setShowThinkingBlocks);
@@ -42,17 +42,17 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
   const [loaded, setLoaded] = useState(false);
   const [effortSelectorOpen, setEffortSelectorOpen] = useState(false);
 
-  // Load persisted settings on mount / workspace change.
+  // Load persisted settings on mount / session change.
   useEffect(() => {
     let cancelled = false;
     async function load() {
       const [model, fast, thinking, effort, showThinking, chrome, defModel, defFast, defThinking, defPlan, defEffort, defShowThinking, defChrome] = await Promise.all([
-        getAppSetting(`model:${workspaceId}`),
-        getAppSetting(`fast_mode:${workspaceId}`),
-        getAppSetting(`thinking_enabled:${workspaceId}`),
-        getAppSetting(`effort_level:${workspaceId}`),
-        getAppSetting(`show_thinking:${workspaceId}`),
-        getAppSetting(`chrome_enabled:${workspaceId}`),
+        getAppSetting(`model:${sessionId}`),
+        getAppSetting(`fast_mode:${sessionId}`),
+        getAppSetting(`thinking_enabled:${sessionId}`),
+        getAppSetting(`effort_level:${sessionId}`),
+        getAppSetting(`show_thinking:${sessionId}`),
+        getAppSetting(`chrome_enabled:${sessionId}`),
         getAppSetting("default_model"),
         getAppSetting("default_fast_mode"),
         getAppSetting("default_thinking"),
@@ -63,12 +63,12 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
       ]);
       if (cancelled) return;
       const loadedModel = model ?? defModel ?? "opus";
-      setSelectedModel(workspaceId, loadedModel);
+      setSelectedModel(sessionId, loadedModel);
       const effectiveFast = isFastSupported(loadedModel) && (fast === "true" || (!fast && defFast === "true"));
       const effectiveThinking = thinking === "true" || (!thinking && defThinking === "true");
-      setFastMode(workspaceId, effectiveFast);
-      setThinkingEnabled(workspaceId, effectiveThinking);
-      applyPlanModeMountDefault(workspaceId, defPlan === "true");
+      setFastMode(sessionId, effectiveFast);
+      setThinkingEnabled(sessionId, effectiveThinking);
+      applyPlanModeMountDefault(sessionId, defPlan === "true");
       // Normalize effort against the loaded model to prevent stale values.
       const effectiveEffort = effort ?? defEffort;
       if (effectiveEffort) {
@@ -79,66 +79,66 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
             : effectiveEffort === "max" && !isMaxEffortAllowed(loadedModel)
               ? "high"
               : effectiveEffort;
-        setEffortLevel(workspaceId, normalized);
+        setEffortLevel(sessionId, normalized);
       }
-      setShowThinkingBlocks(workspaceId, showThinking === "true" || (!showThinking && defShowThinking === "true"));
-      setChromeEnabled(workspaceId, chrome === "true" || (!chrome && defChrome === "true"));
+      setShowThinkingBlocks(sessionId, showThinking === "true" || (!showThinking && defShowThinking === "true"));
+      setChromeEnabled(sessionId, chrome === "true" || (!chrome && defChrome === "true"));
       setLoaded(true);
     }
     load();
     return () => { cancelled = true; };
-  }, [workspaceId, setSelectedModel, setFastMode, setThinkingEnabled, setEffortLevel, setShowThinkingBlocks, setChromeEnabled]);
+  }, [sessionId, setSelectedModel, setFastMode, setThinkingEnabled, setEffortLevel, setShowThinkingBlocks, setChromeEnabled]);
 
   const handleModelSelect = useCallback(
     async (model: string) => {
       if (model !== selectedModel) {
-        await applySelectedModel(workspaceId, model);
+        await applySelectedModel(sessionId, model);
       }
       setModelSelectorOpen(false);
     },
-    [workspaceId, selectedModel, setModelSelectorOpen],
+    [sessionId, selectedModel, setModelSelectorOpen],
   );
 
   const handleEffortSelect = useCallback(
     async (level: string) => {
-      setEffortLevel(workspaceId, level);
-      await setAppSetting(`effort_level:${workspaceId}`, level);
+      setEffortLevel(sessionId, level);
+      await setAppSetting(`effort_level:${sessionId}`, level);
       setEffortSelectorOpen(false);
     },
-    [workspaceId, setEffortLevel],
+    [sessionId, setEffortLevel],
   );
 
   const toggleFast = useCallback(async () => {
     const next = !fastMode;
-    setFastMode(workspaceId, next);
-    await setAppSetting(`fast_mode:${workspaceId}`, String(next));
-  }, [workspaceId, fastMode, setFastMode]);
+    setFastMode(sessionId, next);
+    await setAppSetting(`fast_mode:${sessionId}`, String(next));
+  }, [sessionId, fastMode, setFastMode]);
 
   const toggleThinking = useCallback(async () => {
     const next = !thinkingEnabled;
-    setThinkingEnabled(workspaceId, next);
-    await setAppSetting(`thinking_enabled:${workspaceId}`, String(next));
-  }, [workspaceId, thinkingEnabled, setThinkingEnabled]);
+    setThinkingEnabled(sessionId, next);
+    await setAppSetting(`thinking_enabled:${sessionId}`, String(next));
+  }, [sessionId, thinkingEnabled, setThinkingEnabled]);
 
   const toggleShowThinking = useCallback(async () => {
     const next = !showThinkingBlocks;
-    setShowThinkingBlocks(workspaceId, next);
-    await setAppSetting(`show_thinking:${workspaceId}`, String(next));
-  }, [workspaceId, showThinkingBlocks, setShowThinkingBlocks]);
+    setShowThinkingBlocks(sessionId, next);
+    await setAppSetting(`show_thinking:${sessionId}`, String(next));
+  }, [sessionId, showThinkingBlocks, setShowThinkingBlocks]);
 
   const togglePlan = useCallback(() => {
-    setPlanMode(workspaceId, !planMode);
-  }, [workspaceId, planMode, setPlanMode]);
+    setPlanMode(sessionId, !planMode);
+  }, [sessionId, planMode, setPlanMode]);
 
   const toggleChrome = useCallback(async () => {
     const next = !chromeEnabled;
-    setChromeEnabled(workspaceId, next);
-    await setAppSetting(`chrome_enabled:${workspaceId}`, String(next));
+    setChromeEnabled(sessionId, next);
+    await setAppSetting(`chrome_enabled:${sessionId}`, String(next));
     // Chrome is session-level — reset session so the next turn picks up the change.
-    await resetAgentSession(workspaceId);
-    clearAgentQuestion(workspaceId);
-    clearPlanApproval(workspaceId);
-  }, [workspaceId, chromeEnabled, setChromeEnabled, clearAgentQuestion, clearPlanApproval]);
+    await resetAgentSession(sessionId);
+    clearAgentQuestion(sessionId);
+    clearPlanApproval(sessionId);
+  }, [sessionId, chromeEnabled, setChromeEnabled, clearAgentQuestion, clearPlanApproval]);
 
   // Keyboard shortcuts.
   useEffect(() => {
@@ -173,7 +173,7 @@ export function ChatToolbar({ workspaceId, disabled }: ChatToolbarProps) {
         {isExtraUsage && <CircleDollarSign size={14} className={styles.extraUsage} />}
       </button>
 
-      <ContextMeter workspaceId={workspaceId} />
+      <ContextMeter sessionId={sessionId} />
 
       {isFastSupported(selectedModel) && (
         <button

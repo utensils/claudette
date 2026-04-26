@@ -5,7 +5,7 @@ import { buildMeterTooltip, computeMeterState, type Band } from "./contextMeterL
 import styles from "./ContextMeter.module.css";
 
 interface ContextMeterProps {
-  workspaceId: string;
+  sessionId: string;
 }
 
 function fillClassForBand(band: Band): string {
@@ -32,9 +32,9 @@ function fillClassForBand(band: Band): string {
  * lives in `contextMeterLogic.ts` so this component is a thin presentational
  * wrapper.
  */
-export function ContextMeter({ workspaceId }: ContextMeterProps) {
-  const usage = useAppStore((s) => s.latestTurnUsage[workspaceId]);
-  const selectedModel = useAppStore((s) => s.selectedModel[workspaceId]);
+export function ContextMeter({ sessionId }: ContextMeterProps) {
+  const usage = useAppStore((s) => s.latestTurnUsage[sessionId]);
+  const selectedModel = useAppStore((s) => s.selectedModel[sessionId]);
 
   const model = MODELS.find((m) => m.id === selectedModel);
   const state = computeMeterState(usage, model?.contextWindowTokens);

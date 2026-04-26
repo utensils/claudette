@@ -822,14 +822,23 @@ async fn auto_archive_workspace(
         let _ = claudette::git::branch_delete(repo_path, &branch_name).await;
     }
 
-    // Stop any running agent
-    {
+    // Stop any running agents for sessions belonging to this workspace.
+    // Collect PIDs under the lock, drop the lock, then perform the async
+    // process teardowns to avoid stalling other agent operations.
+    let pids_to_stop: Vec<u32> = {
         let mut agents = app_state.agents.write().await;
-        if let Some(session) = agents.remove(&ws_id)
-            && let Some(pid) = session.active_pid
-        {
-            let _ = claudette::agent::stop_agent(pid).await;
-        }
+        let to_remove: Vec<String> = agents
+            .iter()
+            .filter(|(_, s)| s.workspace_id == ws_id)
+            .map(|(k, _)| k.clone())
+            .collect();
+        to_remove
+            .into_iter()
+            .filter_map(|key| agents.remove(&key).and_then(|s| s.active_pid))
+            .collect()
+    };
+    for pid in pids_to_stop {
+        let _ = claudette::agent::stop_agent(pid).await;
     }
 
     // Now that async cleanup is done, persist the archive/delete mutation.

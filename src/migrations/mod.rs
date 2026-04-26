@@ -135,6 +135,11 @@ pub const MIGRATIONS: &[Migration] = &[
         legacy_version: Some(24),
     },
     Migration {
+        id: "20260422000000_chat_sessions",
+        sql: include_str!("20260422000000_chat_sessions.sql"),
+        legacy_version: Some(25),
+    },
+    Migration {
         id: "20260423000001_repository_base_branch_and_default_remote",
         sql: include_str!("20260423000001_repository_base_branch_and_default_remote.sql"),
         legacy_version: None,

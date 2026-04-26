@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::migrations::{MIGRATIONS, Migration};
 use crate::model::{
-    Attachment, AttachmentOrigin, ChatMessage, CheckpointFile, CompletedTurnData,
-    ConversationCheckpoint, RemoteConnection, Repository, TerminalTab, TurnToolActivity, Workspace,
-    WorkspaceStatus,
+    AgentStatus, Attachment, AttachmentOrigin, ChatMessage, ChatSession, CheckpointFile,
+    CompletedTurnData, ConversationCheckpoint, RemoteConnection, Repository, TerminalTab,
+    TurnToolActivity, Workspace, WorkspaceStatus,
 };
 
 fn row_to_attachment(row: &rusqlite::Row) -> rusqlite::Result<Attachment> {
@@ -92,9 +92,17 @@ impl Database {
         self.conn.execute_batch(sql)
     }
 
+    /// Re-run migrations. Intended for test setup only — lets a test rewind
+    /// the DB to an older `user_version` and exercise a specific migration.
+    #[cfg(test)]
+    pub fn run_migrations_for_test(&self) -> Result<(), rusqlite::Error> {
+        self.migrate()
+    }
+
     fn migrate(&self) -> Result<(), rusqlite::Error> {
         self.bootstrap_and_backfill(MIGRATIONS)?;
-        Self::run_migrations(&self.conn, MIGRATIONS)
+        Self::run_migrations(&self.conn, MIGRATIONS)?;
+        self.heal_orphaned_sessions()
     }
 
     /// Ensure `schema_migrations` exists; seed it from `PRAGMA user_version`
@@ -193,6 +201,87 @@ impl Database {
                 Err(e) => return Err(e),
             }
         }
+        Ok(())
+    }
+
+    fn heal_orphaned_sessions(&self) -> Result<(), rusqlite::Error> {
+        let has_orphaned_ws = self
+            .conn
+            .query_row(
+                "SELECT EXISTS(
+                     SELECT 1 FROM workspaces w
+                     WHERE NOT EXISTS (
+                         SELECT 1 FROM chat_sessions cs WHERE cs.workspace_id = w.id
+                     )
+                 )",
+                [],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap_or(false);
+
+        if has_orphaned_ws {
+            let tx = self.conn.unchecked_transaction()?;
+            let orphaned: Vec<(String, Option<String>, i64)> = {
+                let mut stmt = tx.prepare(
+                    "SELECT w.id, w.session_id, w.turn_count
+                     FROM workspaces w
+                     WHERE NOT EXISTS (
+                         SELECT 1 FROM chat_sessions cs WHERE cs.workspace_id = w.id
+                     )",
+                )?;
+                stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+                    .collect::<Result<Vec<_>, _>>()?
+            };
+            for (ws_id, claude_sid, tc) in &orphaned {
+                let sid = uuid::Uuid::new_v4().to_string();
+                tx.execute(
+                    "INSERT INTO chat_sessions
+                        (id, workspace_id, claude_session_id, name, name_edited,
+                         turn_count, sort_order, status)
+                     VALUES (?1, ?2, ?3, 'Main', 0, ?4, 0, 'active')",
+                    params![sid, ws_id, claude_sid, tc],
+                )?;
+                tx.execute(
+                    "UPDATE chat_messages SET session_id = ?1
+                     WHERE workspace_id = ?2 AND session_id IS NULL",
+                    params![sid, ws_id],
+                )?;
+                tx.execute(
+                    "UPDATE conversation_checkpoints SET session_id = ?1
+                     WHERE workspace_id = ?2 AND session_id IS NULL",
+                    params![sid, ws_id],
+                )?;
+            }
+            tx.commit()?;
+        }
+
+        let has_null_sessions: bool = self
+            .conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE session_id IS NULL)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+
+        if has_null_sessions {
+            self.conn.execute_batch(
+                "UPDATE chat_messages SET session_id = (
+                     SELECT cs.id FROM chat_sessions cs
+                     WHERE cs.workspace_id = chat_messages.workspace_id
+                     ORDER BY cs.sort_order, cs.created_at LIMIT 1
+                 )
+                 WHERE session_id IS NULL;
+
+                 UPDATE conversation_checkpoints SET session_id = (
+                     SELECT cs.id FROM chat_sessions cs
+                     WHERE cs.workspace_id = conversation_checkpoints.workspace_id
+                     ORDER BY cs.sort_order, cs.created_at LIMIT 1
+                 )
+                 WHERE session_id IS NULL;",
+            )?;
+        }
+
         Ok(())
     }
 }
@@ -488,7 +577,8 @@ impl Database {
     // --- Workspaces ---
 
     pub fn insert_workspace(&self, ws: &Workspace) -> Result<(), rusqlite::Error> {
-        self.conn.execute(
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
             "INSERT INTO workspaces (id, repository_id, name, branch_name, worktree_path, status, status_line)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
@@ -501,19 +591,36 @@ impl Database {
                 ws.status_line,
             ],
         )?;
+        // Every workspace starts with one active session so the multi-session
+        // invariant (≥1 active session per workspace) holds from creation.
+        tx.execute(
+            "INSERT INTO chat_sessions
+                (id, workspace_id, claude_session_id, name, name_edited,
+                 turn_count, sort_order, status)
+             VALUES (?1, ?2, NULL, 'New chat', 0, 0, 0, 'active')",
+            params![uuid::Uuid::new_v4().to_string(), ws.id],
+        )?;
+        tx.commit()?;
         Ok(())
     }
 
     /// Insert multiple workspaces atomically. All succeed or none are committed.
+    /// Each workspace is seeded with one active chat session.
     pub fn insert_workspaces_batch(&self, workspaces: &[Workspace]) -> Result<(), rusqlite::Error> {
         let tx = self.conn.unchecked_transaction()?;
         {
-            let mut stmt = tx.prepare(
+            let mut ws_stmt = tx.prepare(
                 "INSERT INTO workspaces (id, repository_id, name, branch_name, worktree_path, status, status_line)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             )?;
+            let mut session_stmt = tx.prepare(
+                "INSERT INTO chat_sessions
+                    (id, workspace_id, claude_session_id, name, name_edited,
+                     turn_count, sort_order, status)
+                 VALUES (?1, ?2, NULL, 'New chat', 0, 0, 0, 'active')",
+            )?;
             for ws in workspaces {
-                stmt.execute(params![
+                ws_stmt.execute(params![
                     ws.id,
                     ws.repository_id,
                     ws.name,
@@ -522,6 +629,7 @@ impl Database {
                     ws.status.as_str(),
                     ws.status_line,
                 ])?;
+                session_stmt.execute(params![uuid::Uuid::new_v4().to_string(), ws.id])?;
             }
         }
         tx.commit()?;
@@ -1000,12 +1108,13 @@ impl Database {
     pub fn insert_chat_message(&self, msg: &ChatMessage) -> Result<(), rusqlite::Error> {
         self.conn.execute(
             "INSERT INTO chat_messages (
-                id, workspace_id, role, content, cost_usd, duration_ms, thinking,
+                id, workspace_id, session_id, role, content, cost_usd, duration_ms, thinking,
                 input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 msg.id,
                 msg.workspace_id,
+                msg.session_id,
                 msg.role.as_str(),
                 msg.content,
                 msg.cost_usd,
@@ -1020,33 +1129,55 @@ impl Database {
         Ok(())
     }
 
+    fn parse_chat_message_row(row: &rusqlite::Row) -> rusqlite::Result<ChatMessage> {
+        let role_str: String = row.get(3)?;
+        let session_id: String = row.get::<_, Option<String>>(2)?.unwrap_or_default();
+        Ok(ChatMessage {
+            id: row.get(0)?,
+            workspace_id: row.get(1)?,
+            session_id,
+            role: role_str.parse().unwrap(),
+            content: row.get(4)?,
+            cost_usd: row.get(5)?,
+            duration_ms: row.get(6)?,
+            created_at: row.get(7)?,
+            thinking: row.get(8)?,
+            input_tokens: row.get(9)?,
+            output_tokens: row.get(10)?,
+            cache_read_tokens: row.get(11)?,
+            cache_creation_tokens: row.get(12)?,
+        })
+    }
+
+    const CHAT_MESSAGE_COLS: &str = "id, workspace_id, session_id, role, content, cost_usd, \
+         duration_ms, created_at, thinking, input_tokens, output_tokens, cache_read_tokens, \
+         cache_creation_tokens";
+
     #[allow(dead_code)]
     pub fn list_chat_messages(
         &self,
         workspace_id: &str,
     ) -> Result<Vec<ChatMessage>, rusqlite::Error> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, workspace_id, role, content, cost_usd, duration_ms, created_at, thinking,
-                    input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens
-             FROM chat_messages WHERE workspace_id = ?1 ORDER BY created_at, rowid",
-        )?;
-        let rows = stmt.query_map(params![workspace_id], |row| {
-            let role_str: String = row.get(2)?;
-            Ok(ChatMessage {
-                id: row.get(0)?,
-                workspace_id: row.get(1)?,
-                role: role_str.parse().unwrap(),
-                content: row.get(3)?,
-                cost_usd: row.get(4)?,
-                duration_ms: row.get(5)?,
-                created_at: row.get(6)?,
-                thinking: row.get(7)?,
-                input_tokens: row.get(8)?,
-                output_tokens: row.get(9)?,
-                cache_read_tokens: row.get(10)?,
-                cache_creation_tokens: row.get(11)?,
-            })
-        })?;
+        let sql = format!(
+            "SELECT {} FROM chat_messages WHERE workspace_id = ?1 ORDER BY created_at, rowid",
+            Self::CHAT_MESSAGE_COLS
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![workspace_id], Self::parse_chat_message_row)?;
+        rows.collect()
+    }
+
+    /// List all chat messages for a single session, ordered chronologically.
+    pub fn list_chat_messages_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<ChatMessage>, rusqlite::Error> {
+        let sql = format!(
+            "SELECT {} FROM chat_messages WHERE session_id = ?1 ORDER BY created_at, rowid",
+            Self::CHAT_MESSAGE_COLS
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![session_id], Self::parse_chat_message_row)?;
         rows.collect()
     }
 
@@ -1081,34 +1212,23 @@ impl Database {
     /// Uses a correlated subquery with rowid tie-breaking to guarantee exactly
     /// one row per workspace even when multiple messages share the same timestamp.
     pub fn last_message_per_workspace(&self) -> Result<Vec<ChatMessage>, rusqlite::Error> {
-        let mut stmt = self.conn.prepare(
-            "SELECT m.id, m.workspace_id, m.role, m.content, m.cost_usd, m.duration_ms, m.created_at, m.thinking,
-                    m.input_tokens, m.output_tokens, m.cache_read_tokens, m.cache_creation_tokens
-             FROM chat_messages m
+        // Prefix each column with `m.` so the correlated subquery references are unambiguous.
+        let prefixed: String = Self::CHAT_MESSAGE_COLS
+            .split(", ")
+            .map(|c| format!("m.{}", c.trim()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT {prefixed} FROM chat_messages m
              WHERE m.rowid = (
                  SELECT rowid FROM chat_messages c2
                  WHERE c2.workspace_id = m.workspace_id
                  ORDER BY c2.created_at DESC, c2.rowid DESC
                  LIMIT 1
-             )",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            let role_str: String = row.get(2)?;
-            Ok(ChatMessage {
-                id: row.get(0)?,
-                workspace_id: row.get(1)?,
-                role: role_str.parse().unwrap(),
-                content: row.get(3)?,
-                cost_usd: row.get(4)?,
-                duration_ms: row.get(5)?,
-                created_at: row.get(6)?,
-                thinking: row.get(7)?,
-                input_tokens: row.get(8)?,
-                output_tokens: row.get(9)?,
-                cache_read_tokens: row.get(10)?,
-                cache_creation_tokens: row.get(11)?,
-            })
-        })?;
+             )"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map([], Self::parse_chat_message_row)?;
         rows.collect()
     }
 
@@ -1122,6 +1242,263 @@ impl Database {
             params![workspace_id],
         )?;
         Ok(())
+    }
+
+    /// Delete all messages for a single session. Cascades to attachments.
+    pub fn delete_chat_messages_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "DELETE FROM chat_messages WHERE session_id = ?1",
+            params![session_id],
+        )?;
+        Ok(())
+    }
+
+    // --- Chat Sessions ---
+
+    const CHAT_SESSION_COLS: &str = "id, workspace_id, claude_session_id, name, name_edited, \
+         turn_count, sort_order, status, created_at, archived_at";
+
+    fn parse_chat_session_row(row: &rusqlite::Row) -> rusqlite::Result<ChatSession> {
+        let status_str: String = row.get(7)?;
+        Ok(ChatSession {
+            id: row.get(0)?,
+            workspace_id: row.get(1)?,
+            claude_session_id: row.get(2)?,
+            name: row.get(3)?,
+            name_edited: row.get::<_, i32>(4)? != 0,
+            turn_count: row.get(5)?,
+            sort_order: row.get(6)?,
+            status: status_str.parse().unwrap(),
+            created_at: row.get(8)?,
+            archived_at: row.get(9)?,
+            agent_status: AgentStatus::Idle,
+            needs_attention: false,
+            attention_kind: None,
+        })
+    }
+
+    /// Insert a new active session. Returns the inserted row.
+    pub fn create_chat_session(&self, workspace_id: &str) -> Result<ChatSession, rusqlite::Error> {
+        // New sessions land at the end of the tab list. Surface DB errors so
+        // a transient lock/read failure doesn't collapse the next sort_order
+        // to 0 and produce duplicate tab-order values.
+        let sort_order: i32 = self.conn.query_row(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM chat_sessions WHERE workspace_id = ?1",
+            params![workspace_id],
+            |row| row.get(0),
+        )?;
+        let id = uuid::Uuid::new_v4().to_string();
+        self.conn.execute(
+            "INSERT INTO chat_sessions
+                (id, workspace_id, claude_session_id, name, name_edited,
+                 turn_count, sort_order, status)
+             VALUES (?1, ?2, NULL, 'New chat', 0, 0, ?3, 'active')",
+            params![id, workspace_id, sort_order],
+        )?;
+        self.get_chat_session(&id)?
+            .ok_or_else(|| rusqlite::Error::QueryReturnedNoRows)
+    }
+
+    pub fn get_chat_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<ChatSession>, rusqlite::Error> {
+        let sql = format!(
+            "SELECT {} FROM chat_sessions WHERE id = ?1",
+            Self::CHAT_SESSION_COLS
+        );
+        self.conn
+            .query_row(&sql, params![session_id], Self::parse_chat_session_row)
+            .optional()
+    }
+
+    /// List sessions for a workspace. `include_archived` toggles whether
+    /// archived sessions are returned. Active sessions are always first,
+    /// then archived; within each group, ordered by sort_order, then
+    /// created_at as a stable tie-break.
+    pub fn list_chat_sessions_for_workspace(
+        &self,
+        workspace_id: &str,
+        include_archived: bool,
+    ) -> Result<Vec<ChatSession>, rusqlite::Error> {
+        let sql = if include_archived {
+            format!(
+                "SELECT {} FROM chat_sessions WHERE workspace_id = ?1
+                 ORDER BY (status = 'archived'), sort_order, created_at",
+                Self::CHAT_SESSION_COLS
+            )
+        } else {
+            format!(
+                "SELECT {} FROM chat_sessions
+                 WHERE workspace_id = ?1 AND status = 'active'
+                 ORDER BY sort_order, created_at",
+                Self::CHAT_SESSION_COLS
+            )
+        };
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![workspace_id], Self::parse_chat_session_row)?;
+        rows.collect()
+    }
+
+    /// Rename a session. Sets `name_edited = 1` so Haiku auto-naming never
+    /// overwrites the new name.
+    pub fn rename_chat_session(&self, session_id: &str, name: &str) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE chat_sessions SET name = ?1, name_edited = 1 WHERE id = ?2",
+            params![name, session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Write a Haiku-generated session name — only if the user has not
+    /// already renamed the session. Returns `true` if the name was written.
+    pub fn set_session_name_from_haiku(
+        &self,
+        session_id: &str,
+        name: &str,
+    ) -> Result<bool, rusqlite::Error> {
+        let rows = self.conn.execute(
+            "UPDATE chat_sessions SET name = ?1
+             WHERE id = ?2 AND name_edited = 0",
+            params![name, session_id],
+        )?;
+        Ok(rows > 0)
+    }
+
+    /// Persist per-session Claude CLI state so turns can be resumed after a
+    /// restart. Replaces the old workspace-scoped `save_agent_session`.
+    pub fn save_chat_session_state(
+        &self,
+        session_id: &str,
+        claude_session_id: &str,
+        turn_count: u32,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE chat_sessions SET claude_session_id = ?1, turn_count = ?2 WHERE id = ?3",
+            params![claude_session_id, turn_count, session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Clear Claude CLI state (e.g. after a reset or failed init).
+    pub fn clear_chat_session_claude_state(&self, session_id: &str) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE chat_sessions
+             SET claude_session_id = NULL, turn_count = 0 WHERE id = ?1",
+            params![session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Archive a session (soft-delete). Messages and checkpoints remain so
+    /// they can be restored or purged later.
+    pub fn archive_chat_session(&self, session_id: &str) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE chat_sessions
+             SET status = 'archived', archived_at = datetime('now')
+             WHERE id = ?1",
+            params![session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Archive a session while preserving the "workspace has ≥1 active
+    /// session" invariant. Runs archive + remaining-count + conditional
+    /// replacement create as a single transaction so observers never see a
+    /// transient zero-sessions window and a crash mid-sequence can't persist
+    /// a tab-less workspace. Returns the newly created session if a
+    /// replacement was needed, `None` otherwise.
+    pub fn archive_chat_session_ensuring_active(
+        &self,
+        session_id: &str,
+        workspace_id: &str,
+    ) -> Result<Option<ChatSession>, rusqlite::Error> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE chat_sessions
+             SET status = 'archived', archived_at = datetime('now')
+             WHERE id = ?1",
+            params![session_id],
+        )?;
+        let remaining: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM chat_sessions
+             WHERE workspace_id = ?1 AND status = 'active'",
+            params![workspace_id],
+            |row| row.get(0),
+        )?;
+        let fresh = if remaining == 0 {
+            let sort_order: i32 = tx.query_row(
+                "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM chat_sessions WHERE workspace_id = ?1",
+                params![workspace_id],
+                |row| row.get(0),
+            )?;
+            let id = uuid::Uuid::new_v4().to_string();
+            tx.execute(
+                "INSERT INTO chat_sessions
+                    (id, workspace_id, claude_session_id, name, name_edited,
+                     turn_count, sort_order, status)
+                 VALUES (?1, ?2, NULL, 'New chat', 0, 0, ?3, 'active')",
+                params![id, workspace_id, sort_order],
+            )?;
+            let sql = format!(
+                "SELECT {} FROM chat_sessions WHERE id = ?1",
+                Self::CHAT_SESSION_COLS
+            );
+            Some(tx.query_row(&sql, params![id], Self::parse_chat_session_row)?)
+        } else {
+            None
+        };
+        tx.commit()?;
+        Ok(fresh)
+    }
+
+    /// Return the "default" session id for a workspace: the first active
+    /// session, ordered by sort_order. Returns `None` when no active session
+    /// exists (caller can create one to enforce the ≥1 invariant).
+    pub fn default_session_id_for_workspace(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Option<String>, rusqlite::Error> {
+        self.conn
+            .query_row(
+                "SELECT id FROM chat_sessions
+                 WHERE workspace_id = ?1 AND status = 'active'
+                 ORDER BY sort_order, created_at LIMIT 1",
+                params![workspace_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+    }
+
+    /// Count of active sessions for a workspace. Used to enforce the
+    /// "every workspace has ≥1 active session" invariant when archiving.
+    pub fn active_session_count_for_workspace(
+        &self,
+        workspace_id: &str,
+    ) -> Result<i64, rusqlite::Error> {
+        self.conn.query_row(
+            "SELECT COUNT(*) FROM chat_sessions
+             WHERE workspace_id = ?1 AND status = 'active'",
+            params![workspace_id],
+            |row| row.get(0),
+        )
+    }
+
+    /// Is this session the first (sort_order = 0) session for its workspace?
+    /// Used to gate workspace-level branch auto-rename.
+    pub fn is_initial_session(&self, session_id: &str) -> Result<bool, rusqlite::Error> {
+        let sort_order: Option<i32> = self
+            .conn
+            .query_row(
+                "SELECT sort_order FROM chat_sessions WHERE id = ?1",
+                params![session_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(sort_order == Some(0))
     }
 
     // --- Attachments ---
@@ -1248,11 +1625,13 @@ impl Database {
 
     pub fn insert_checkpoint(&self, cp: &ConversationCheckpoint) -> Result<(), rusqlite::Error> {
         self.conn.execute(
-            "INSERT INTO conversation_checkpoints (id, workspace_id, message_id, commit_hash, turn_index, message_count)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO conversation_checkpoints
+                (id, workspace_id, session_id, message_id, commit_hash, turn_index, message_count)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 cp.id,
                 cp.workspace_id,
+                cp.session_id,
                 cp.message_id,
                 cp.commit_hash,
                 cp.turn_index,
@@ -1266,17 +1645,18 @@ impl Database {
         Ok(ConversationCheckpoint {
             id: row.get(0)?,
             workspace_id: row.get(1)?,
-            message_id: row.get(2)?,
-            commit_hash: row.get(3)?,
-            has_file_state: row.get(4)?,
-            turn_index: row.get(5)?,
-            message_count: row.get(6)?,
-            created_at: row.get(7)?,
+            session_id: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+            message_id: row.get(3)?,
+            commit_hash: row.get(4)?,
+            has_file_state: row.get(5)?,
+            turn_index: row.get(6)?,
+            message_count: row.get(7)?,
+            created_at: row.get(8)?,
         })
     }
 
     /// SQL column list for checkpoint queries, including a subquery for has_file_state.
-    const CHECKPOINT_COLS: &str = "id, workspace_id, message_id, commit_hash, \
+    const CHECKPOINT_COLS: &str = "id, workspace_id, session_id, message_id, commit_hash, \
          EXISTS(SELECT 1 FROM checkpoint_files WHERE checkpoint_id = conversation_checkpoints.id) AS has_file_state, \
          turn_index, message_count, created_at";
 
@@ -1291,6 +1671,33 @@ impl Database {
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params![workspace_id], Self::parse_checkpoint_row)?;
         rows.collect()
+    }
+
+    pub fn list_checkpoints_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<ConversationCheckpoint>, rusqlite::Error> {
+        let sql = format!(
+            "SELECT {} FROM conversation_checkpoints WHERE session_id = ?1 ORDER BY turn_index",
+            Self::CHECKPOINT_COLS
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![session_id], Self::parse_checkpoint_row)?;
+        rows.collect()
+    }
+
+    /// Delete checkpoints for a session after a given turn index. Used for
+    /// rollback — everything after the chosen turn is pruned.
+    pub fn delete_session_checkpoints_after(
+        &self,
+        session_id: &str,
+        turn_index: i32,
+    ) -> Result<usize, rusqlite::Error> {
+        let deleted = self.conn.execute(
+            "DELETE FROM conversation_checkpoints WHERE session_id = ?1 AND turn_index > ?2",
+            params![session_id, turn_index],
+        )?;
+        Ok(deleted)
     }
 
     pub fn get_checkpoint(
@@ -1376,31 +1783,18 @@ impl Database {
             return Ok(Vec::new());
         };
 
-        let mut stmt = self.conn.prepare(
-            "SELECT id, workspace_id, role, content, cost_usd, duration_ms, created_at, thinking,
-                    input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens
-             FROM chat_messages
+        let sql = format!(
+            "SELECT {} FROM chat_messages
              WHERE workspace_id = ?1
                AND (created_at < ?2 OR (created_at = ?2 AND rowid <= ?3))
              ORDER BY created_at, rowid",
+            Self::CHAT_MESSAGE_COLS
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(
+            params![workspace_id, created_at, rowid],
+            Self::parse_chat_message_row,
         )?;
-        let rows = stmt.query_map(params![workspace_id, created_at, rowid], |row| {
-            let role_str: String = row.get(2)?;
-            Ok(ChatMessage {
-                id: row.get(0)?,
-                workspace_id: row.get(1)?,
-                role: role_str.parse().unwrap(),
-                content: row.get(3)?,
-                cost_usd: row.get(4)?,
-                duration_ms: row.get(5)?,
-                created_at: row.get(6)?,
-                thinking: row.get(7)?,
-                input_tokens: row.get(8)?,
-                output_tokens: row.get(9)?,
-                cache_read_tokens: row.get(10)?,
-                cache_creation_tokens: row.get(11)?,
-            })
-        })?;
         rows.collect()
     }
 
@@ -1608,6 +2002,81 @@ impl Database {
             params![workspace_id, after_message_id],
         )?;
         Ok(deleted)
+    }
+
+    /// Delete all messages inserted after `after_message_id` *within the
+    /// given session*. The rowid-ordering match is scoped to that session so
+    /// a rollback in tab A cannot prune messages in tab B.
+    pub fn delete_session_messages_after(
+        &self,
+        session_id: &str,
+        after_message_id: &str,
+    ) -> Result<usize, rusqlite::Error> {
+        let deleted = self.conn.execute(
+            "DELETE FROM chat_messages
+             WHERE session_id = ?1
+               AND rowid > (SELECT rowid FROM chat_messages WHERE id = ?2)",
+            params![session_id, after_message_id],
+        )?;
+        Ok(deleted)
+    }
+
+    /// Session-scoped variant of [`Self::list_completed_turns`].
+    pub fn list_completed_turns_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<CompletedTurnData>, rusqlite::Error> {
+        let checkpoints = self.list_checkpoints_for_session(session_id)?;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT ta.id, ta.checkpoint_id, ta.tool_use_id, ta.tool_name,
+                    ta.input_json, ta.result_text, ta.summary, ta.sort_order
+             FROM turn_tool_activities ta
+             JOIN conversation_checkpoints cp ON ta.checkpoint_id = cp.id
+             WHERE cp.session_id = ?1
+             ORDER BY cp.turn_index, ta.sort_order",
+        )?;
+        let activities: Vec<TurnToolActivity> = stmt
+            .query_map(params![session_id], |row| {
+                Ok(TurnToolActivity {
+                    id: row.get(0)?,
+                    checkpoint_id: row.get(1)?,
+                    tool_use_id: row.get(2)?,
+                    tool_name: row.get(3)?,
+                    input_json: row.get(4)?,
+                    result_text: row.get(5)?,
+                    summary: row.get(6)?,
+                    sort_order: row.get(7)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut activity_map: std::collections::HashMap<String, Vec<TurnToolActivity>> =
+            std::collections::HashMap::new();
+        for a in activities {
+            activity_map
+                .entry(a.checkpoint_id.clone())
+                .or_default()
+                .push(a);
+        }
+
+        Ok(checkpoints
+            .into_iter()
+            .filter_map(|cp| {
+                let acts = activity_map.remove(&cp.id).unwrap_or_default();
+                if acts.is_empty() {
+                    return None;
+                }
+                Some(CompletedTurnData {
+                    checkpoint_id: cp.id,
+                    message_id: cp.message_id,
+                    turn_index: cp.turn_index,
+                    message_count: cp.message_count,
+                    commit_hash: cp.commit_hash,
+                    activities: acts,
+                })
+            })
+            .collect())
     }
 
     // --- Terminal Tabs ---
@@ -2201,7 +2670,7 @@ mod tests {
             .unwrap();
         db.insert_workspace(&make_workspace("w2", "r1", "never-talked"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "hi"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "hi"))
             .unwrap();
         db.conn
             .execute_batch(
@@ -2283,10 +2752,24 @@ mod tests {
 
     // --- Chat message tests ---
 
-    fn make_chat_msg(id: &str, ws_id: &str, role: ChatRole, content: &str) -> ChatMessage {
+    /// Build a `ChatMessage` anchored to the workspace's default active
+    /// session. Tests use `insert_workspace`, which seeds one active session,
+    /// so this resolves cleanly.
+    fn make_chat_msg(
+        db: &Database,
+        id: &str,
+        ws_id: &str,
+        role: ChatRole,
+        content: &str,
+    ) -> ChatMessage {
+        let session_id = db
+            .default_session_id_for_workspace(ws_id)
+            .unwrap()
+            .expect("workspace must have a default session for tests");
         ChatMessage {
             id: id.into(),
             workspace_id: ws_id.into(),
+            session_id,
             role,
             content: content.into(),
             cost_usd: None,
@@ -2312,10 +2795,16 @@ mod tests {
     #[test]
     fn test_insert_and_list_chat_messages() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "hello"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "hello"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m2", "w1", ChatRole::Assistant, "hi there"))
-            .unwrap();
+        db.insert_chat_message(&make_chat_msg(
+            &db,
+            "m2",
+            "w1",
+            ChatRole::Assistant,
+            "hi there",
+        ))
+        .unwrap();
         let msgs = db.list_chat_messages("w1").unwrap();
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].content, "hello");
@@ -2327,9 +2816,9 @@ mod tests {
         let db = setup_db_with_workspace();
         db.insert_workspace(&make_workspace("w2", "r1", "feature"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "for w1"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "for w1"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m2", "w2", ChatRole::User, "for w2"))
+        db.insert_chat_message(&make_chat_msg(&db, "m2", "w2", ChatRole::User, "for w2"))
             .unwrap();
         let msgs = db.list_chat_messages("w1").unwrap();
         assert_eq!(msgs.len(), 1);
@@ -2339,8 +2828,14 @@ mod tests {
     #[test]
     fn test_update_chat_message_content() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::Assistant, "partial"))
-            .unwrap();
+        db.insert_chat_message(&make_chat_msg(
+            &db,
+            "m1",
+            "w1",
+            ChatRole::Assistant,
+            "partial",
+        ))
+        .unwrap();
         db.update_chat_message_content("m1", "partial response complete")
             .unwrap();
         let msgs = db.list_chat_messages("w1").unwrap();
@@ -2350,7 +2845,7 @@ mod tests {
     #[test]
     fn test_update_chat_message_cost() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::Assistant, "done"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "done"))
             .unwrap();
         db.update_chat_message_cost("m1", 0.005, 2000).unwrap();
         let msgs = db.list_chat_messages("w1").unwrap();
@@ -2361,9 +2856,9 @@ mod tests {
     #[test]
     fn test_delete_chat_messages_for_workspace() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "msg1"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "msg1"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m2", "w1", ChatRole::Assistant, "msg2"))
+        db.insert_chat_message(&make_chat_msg(&db, "m2", "w1", ChatRole::Assistant, "msg2"))
             .unwrap();
         db.delete_chat_messages_for_workspace("w1").unwrap();
         let msgs = db.list_chat_messages("w1").unwrap();
@@ -2373,9 +2868,9 @@ mod tests {
     #[test]
     fn test_chat_messages_cascade_on_workspace_delete() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "hello"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "hello"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m2", "w1", ChatRole::Assistant, "hi"))
+        db.insert_chat_message(&make_chat_msg(&db, "m2", "w1", ChatRole::Assistant, "hi"))
             .unwrap();
         db.delete_workspace("w1").unwrap();
         let msgs = db.list_chat_messages("w1").unwrap();
@@ -2385,11 +2880,17 @@ mod tests {
     #[test]
     fn test_chat_message_role_roundtrip() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "user msg"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "user msg"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m2", "w1", ChatRole::Assistant, "asst msg"))
-            .unwrap();
-        db.insert_chat_message(&make_chat_msg("m3", "w1", ChatRole::System, "sys msg"))
+        db.insert_chat_message(&make_chat_msg(
+            &db,
+            "m2",
+            "w1",
+            ChatRole::Assistant,
+            "asst msg",
+        ))
+        .unwrap();
+        db.insert_chat_message(&make_chat_msg(&db, "m3", "w1", ChatRole::System, "sys msg"))
             .unwrap();
         let msgs = db.list_chat_messages("w1").unwrap();
         assert_eq!(msgs[0].role, ChatRole::User);
@@ -2400,7 +2901,7 @@ mod tests {
     #[test]
     fn test_chat_message_tokens_round_trip() {
         let db = setup_db_with_workspace();
-        let mut msg = make_chat_msg("mt1", "w1", ChatRole::Assistant, "hello");
+        let mut msg = make_chat_msg(&db, "mt1", "w1", ChatRole::Assistant, "hello");
         msg.input_tokens = Some(1234);
         msg.output_tokens = Some(56);
         msg.cache_read_tokens = Some(100_000);
@@ -2418,7 +2919,7 @@ mod tests {
     #[test]
     fn test_chat_message_tokens_null_round_trip() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("mt2", "w1", ChatRole::Assistant, "hi"))
+        db.insert_chat_message(&make_chat_msg(&db, "mt2", "w1", ChatRole::Assistant, "hi"))
             .unwrap();
 
         let msgs = db.list_chat_messages("w1").unwrap();
@@ -2450,8 +2951,14 @@ mod tests {
     #[test]
     fn test_insert_and_list_attachments() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "look at this"))
-            .unwrap();
+        db.insert_chat_message(&make_chat_msg(
+            &db,
+            "m1",
+            "w1",
+            ChatRole::User,
+            "look at this",
+        ))
+        .unwrap();
         db.insert_attachment(&make_attachment("a1", "m1", "screenshot.png"))
             .unwrap();
 
@@ -2472,7 +2979,7 @@ mod tests {
     #[test]
     fn test_attachment_cascade_on_message_delete() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "img"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "img"))
             .unwrap();
         db.insert_attachment(&make_attachment("a1", "m1", "pic.png"))
             .unwrap();
@@ -2486,11 +2993,11 @@ mod tests {
     #[test]
     fn test_attachment_cascade_on_delete_messages_after() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "first"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "first"))
             .unwrap();
         db.insert_attachment(&make_attachment("a1", "m1", "first.png"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m2", "w1", ChatRole::User, "second"))
+        db.insert_chat_message(&make_chat_msg(&db, "m2", "w1", ChatRole::User, "second"))
             .unwrap();
         db.insert_attachment(&make_attachment("a2", "m2", "second.png"))
             .unwrap();
@@ -2510,7 +3017,7 @@ mod tests {
     #[test]
     fn test_insert_attachments_batch() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "images"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "images"))
             .unwrap();
 
         let attachments = vec![
@@ -2534,7 +3041,7 @@ mod tests {
     #[test]
     fn test_get_attachment_by_id() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "hello"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "hello"))
             .unwrap();
         db.insert_attachment(&make_attachment("a1", "m1", "doc.pdf"))
             .unwrap();
@@ -2554,11 +3061,11 @@ mod tests {
     #[test]
     fn test_list_attachments_for_messages_batch() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "msg1"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "msg1"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m2", "w1", ChatRole::User, "msg2"))
+        db.insert_chat_message(&make_chat_msg(&db, "m2", "w1", ChatRole::User, "msg2"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m3", "w1", ChatRole::User, "msg3"))
+        db.insert_chat_message(&make_chat_msg(&db, "m3", "w1", ChatRole::User, "msg3"))
             .unwrap();
         db.insert_attachment(&make_attachment("a1", "m1", "pic1.png"))
             .unwrap();
@@ -2579,7 +3086,7 @@ mod tests {
     #[test]
     fn test_insert_agent_attachment_round_trips_with_tool_use_id() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::Assistant, "here"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "here"))
             .unwrap();
         let att = Attachment {
             id: "ag1".into(),
@@ -2606,7 +3113,7 @@ mod tests {
     #[test]
     fn test_list_attachments_by_tool_use_id_filters_correctly() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::Assistant, "x"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "x"))
             .unwrap();
         let mk = |id: &str, tuid: Option<&str>| Attachment {
             id: id.into(),
@@ -2645,7 +3152,7 @@ mod tests {
         // Verifies row_to_attachment correctly populates origin for legacy
         // rows inserted via the User-shaped path.
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "hi"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "hi"))
             .unwrap();
         db.insert_attachment(&make_attachment("a1", "m1", "u.png"))
             .unwrap();
@@ -2659,7 +3166,7 @@ mod tests {
         // Migration adds `origin TEXT NOT NULL DEFAULT 'user'` so any pre-
         // existing row is implicitly user-supplied without a backfill step.
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "img"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "img"))
             .unwrap();
         db.insert_attachment(&make_attachment("a1", "m1", "u.png"))
             .unwrap();
@@ -2691,7 +3198,7 @@ mod tests {
         // strings must be rejected at write time so the column can be trusted
         // as an enum from Rust's side.
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "x"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "x"))
             .unwrap();
         let res = db.conn.execute(
             "INSERT INTO attachments (id, message_id, filename, media_type, data, size_bytes, origin)
@@ -2706,7 +3213,7 @@ mod tests {
         // Direct-SQL canary: confirms an agent-origin row with a tool_use_id
         // can be written. The Rust API for this lands in slice 2.
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::Assistant, "here"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "here"))
             .unwrap();
         db.conn.execute(
             "INSERT INTO attachments (id, message_id, filename, media_type, data, size_bytes, origin, tool_use_id)
@@ -2897,11 +3404,18 @@ mod tests {
         let db = setup_db_with_workspace();
         db.insert_workspace(&make_workspace("w2", "r1", "feature"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "first"))
-            .unwrap();
-        db.insert_chat_message(&make_chat_msg("m2", "w1", ChatRole::Assistant, "second"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "first"))
             .unwrap();
         db.insert_chat_message(&make_chat_msg(
+            &db,
+            "m2",
+            "w1",
+            ChatRole::Assistant,
+            "second",
+        ))
+        .unwrap();
+        db.insert_chat_message(&make_chat_msg(
+            &db,
             "m3",
             "w2",
             ChatRole::User,
@@ -2923,9 +3437,9 @@ mod tests {
     fn test_last_message_per_workspace_same_timestamp() {
         let db = setup_db_with_workspace();
         // Insert two messages with identical timestamps — the later rowid should win.
-        let mut m1 = make_chat_msg("m1", "w1", ChatRole::User, "first");
+        let mut m1 = make_chat_msg(&db, "m1", "w1", ChatRole::User, "first");
         m1.created_at = "2026-01-01 00:00:00".into();
-        let mut m2 = make_chat_msg("m2", "w1", ChatRole::Assistant, "second");
+        let mut m2 = make_chat_msg(&db, "m2", "w1", ChatRole::Assistant, "second");
         m2.created_at = "2026-01-01 00:00:00".into();
         db.insert_chat_message(&m1).unwrap();
         db.insert_chat_message(&m2).unwrap();
@@ -3090,10 +3604,23 @@ mod tests {
 
     // --- Conversation checkpoint tests ---
 
-    fn make_checkpoint(id: &str, ws_id: &str, msg_id: &str, turn: i32) -> ConversationCheckpoint {
+    /// Build a `ConversationCheckpoint` anchored to the workspace's default
+    /// active session.
+    fn make_checkpoint(
+        db: &Database,
+        id: &str,
+        ws_id: &str,
+        msg_id: &str,
+        turn: i32,
+    ) -> ConversationCheckpoint {
+        let session_id = db
+            .default_session_id_for_workspace(ws_id)
+            .unwrap()
+            .expect("workspace must have a default session for tests");
         ConversationCheckpoint {
             id: id.into(),
             workspace_id: ws_id.into(),
+            session_id,
             message_id: msg_id.into(),
             commit_hash: Some(format!("abc{turn}")),
             has_file_state: false,
@@ -3106,18 +3633,18 @@ mod tests {
     #[test]
     fn test_checkpoint_crud() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "q1"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "q1"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m2", "w1", ChatRole::Assistant, "a1"))
+        db.insert_chat_message(&make_chat_msg(&db, "m2", "w1", ChatRole::Assistant, "a1"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m3", "w1", ChatRole::User, "q2"))
+        db.insert_chat_message(&make_chat_msg(&db, "m3", "w1", ChatRole::User, "q2"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m4", "w1", ChatRole::Assistant, "a2"))
+        db.insert_chat_message(&make_chat_msg(&db, "m4", "w1", ChatRole::Assistant, "a2"))
             .unwrap();
 
-        db.insert_checkpoint(&make_checkpoint("cp1", "w1", "m2", 0))
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m2", 0))
             .unwrap();
-        db.insert_checkpoint(&make_checkpoint("cp2", "w1", "m4", 1))
+        db.insert_checkpoint(&make_checkpoint(&db, "cp2", "w1", "m4", 1))
             .unwrap();
 
         // list
@@ -3139,15 +3666,15 @@ mod tests {
     #[test]
     fn test_delete_messages_after() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "q1"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "q1"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m2", "w1", ChatRole::Assistant, "a1"))
+        db.insert_chat_message(&make_chat_msg(&db, "m2", "w1", ChatRole::Assistant, "a1"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m3", "w1", ChatRole::User, "q2"))
+        db.insert_chat_message(&make_chat_msg(&db, "m3", "w1", ChatRole::User, "q2"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m4", "w1", ChatRole::Assistant, "a2"))
+        db.insert_chat_message(&make_chat_msg(&db, "m4", "w1", ChatRole::Assistant, "a2"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m5", "w1", ChatRole::User, "q3"))
+        db.insert_chat_message(&make_chat_msg(&db, "m5", "w1", ChatRole::User, "q3"))
             .unwrap();
 
         let deleted = db.delete_messages_after("w1", "m2").unwrap();
@@ -3162,9 +3689,9 @@ mod tests {
     #[test]
     fn test_delete_messages_after_last_message_deletes_nothing() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "q1"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "q1"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m2", "w1", ChatRole::Assistant, "a1"))
+        db.insert_chat_message(&make_chat_msg(&db, "m2", "w1", ChatRole::Assistant, "a1"))
             .unwrap();
 
         let deleted = db.delete_messages_after("w1", "m2").unwrap();
@@ -3177,18 +3704,18 @@ mod tests {
     #[test]
     fn test_delete_checkpoints_after() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::Assistant, "a1"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m2", "w1", ChatRole::Assistant, "a2"))
+        db.insert_chat_message(&make_chat_msg(&db, "m2", "w1", ChatRole::Assistant, "a2"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m3", "w1", ChatRole::Assistant, "a3"))
+        db.insert_chat_message(&make_chat_msg(&db, "m3", "w1", ChatRole::Assistant, "a3"))
             .unwrap();
 
-        db.insert_checkpoint(&make_checkpoint("cp1", "w1", "m1", 0))
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
             .unwrap();
-        db.insert_checkpoint(&make_checkpoint("cp2", "w1", "m2", 1))
+        db.insert_checkpoint(&make_checkpoint(&db, "cp2", "w1", "m2", 1))
             .unwrap();
-        db.insert_checkpoint(&make_checkpoint("cp3", "w1", "m3", 2))
+        db.insert_checkpoint(&make_checkpoint(&db, "cp3", "w1", "m3", 2))
             .unwrap();
 
         let deleted = db.delete_checkpoints_after("w1", 0).unwrap();
@@ -3202,9 +3729,9 @@ mod tests {
     #[test]
     fn test_checkpoint_cascade_on_workspace_delete() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::Assistant, "a1"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
             .unwrap();
-        db.insert_checkpoint(&make_checkpoint("cp1", "w1", "m1", 0))
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
             .unwrap();
 
         db.delete_workspace("w1").unwrap();
@@ -3238,9 +3765,9 @@ mod tests {
     #[test]
     fn test_insert_and_list_tool_activities() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::Assistant, "a1"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
             .unwrap();
-        db.insert_checkpoint(&make_checkpoint("cp1", "w1", "m1", 0))
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
             .unwrap();
 
         let activities = vec![
@@ -3259,9 +3786,9 @@ mod tests {
     #[test]
     fn test_tool_activities_cascade_on_checkpoint_delete() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::Assistant, "a1"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
             .unwrap();
-        db.insert_checkpoint(&make_checkpoint("cp1", "w1", "m1", 0))
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
             .unwrap();
         db.insert_turn_tool_activities(&[make_tool_activity("a1", "cp1", "Read", 0)])
             .unwrap();
@@ -3275,13 +3802,13 @@ mod tests {
     #[test]
     fn test_list_completed_turns_groups_by_checkpoint() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::Assistant, "a1"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m2", "w1", ChatRole::Assistant, "a2"))
+        db.insert_chat_message(&make_chat_msg(&db, "m2", "w1", ChatRole::Assistant, "a2"))
             .unwrap();
-        db.insert_checkpoint(&make_checkpoint("cp1", "w1", "m1", 0))
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
             .unwrap();
-        db.insert_checkpoint(&make_checkpoint("cp2", "w1", "m2", 1))
+        db.insert_checkpoint(&make_checkpoint(&db, "cp2", "w1", "m2", 1))
             .unwrap();
 
         db.insert_turn_tool_activities(&[
@@ -3302,13 +3829,13 @@ mod tests {
     #[test]
     fn test_list_messages_up_to_includes_boundary() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "a"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "a"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m2", "w1", ChatRole::Assistant, "b"))
+        db.insert_chat_message(&make_chat_msg(&db, "m2", "w1", ChatRole::Assistant, "b"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m3", "w1", ChatRole::User, "c"))
+        db.insert_chat_message(&make_chat_msg(&db, "m3", "w1", ChatRole::User, "c"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m4", "w1", ChatRole::Assistant, "d"))
+        db.insert_chat_message(&make_chat_msg(&db, "m4", "w1", ChatRole::Assistant, "d"))
             .unwrap();
 
         let msgs = db.list_messages_up_to("w1", "m2").unwrap();
@@ -3319,7 +3846,7 @@ mod tests {
     #[test]
     fn test_list_messages_up_to_missing_returns_empty() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::User, "a"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "a"))
             .unwrap();
         let msgs = db.list_messages_up_to("w1", "nonexistent").unwrap();
         assert!(msgs.is_empty());
@@ -3328,17 +3855,17 @@ mod tests {
     #[test]
     fn test_list_checkpoints_up_to() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::Assistant, "a"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m2", "w1", ChatRole::Assistant, "b"))
+        db.insert_chat_message(&make_chat_msg(&db, "m2", "w1", ChatRole::Assistant, "b"))
             .unwrap();
-        db.insert_chat_message(&make_chat_msg("m3", "w1", ChatRole::Assistant, "c"))
+        db.insert_chat_message(&make_chat_msg(&db, "m3", "w1", ChatRole::Assistant, "c"))
             .unwrap();
-        db.insert_checkpoint(&make_checkpoint("cp1", "w1", "m1", 0))
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
             .unwrap();
-        db.insert_checkpoint(&make_checkpoint("cp2", "w1", "m2", 1))
+        db.insert_checkpoint(&make_checkpoint(&db, "cp2", "w1", "m2", 1))
             .unwrap();
-        db.insert_checkpoint(&make_checkpoint("cp3", "w1", "m3", 2))
+        db.insert_checkpoint(&make_checkpoint(&db, "cp3", "w1", "m3", 2))
             .unwrap();
 
         let up_to_1 = db.list_checkpoints_up_to("w1", 1).unwrap();
@@ -3350,9 +3877,9 @@ mod tests {
     #[test]
     fn test_update_checkpoint_message_count() {
         let db = setup_db_with_workspace();
-        db.insert_chat_message(&make_chat_msg("m1", "w1", ChatRole::Assistant, "a1"))
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
             .unwrap();
-        db.insert_checkpoint(&make_checkpoint("cp1", "w1", "m1", 0))
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
             .unwrap();
 
         db.update_checkpoint_message_count("cp1", 3).unwrap();
@@ -3683,20 +4210,21 @@ mod tests {
         db.insert_agent_commits_batch("w1", "r1", Some("s1"), &[commit])
             .unwrap();
 
+        let sess_id = db.default_session_id_for_workspace("w1").unwrap().unwrap();
         for (id, role) in [("m1", "user"), ("m3", "user"), ("m4", "system")] {
             db.conn
                 .execute(
-                    "INSERT INTO chat_messages (id, workspace_id, role, content, cost_usd)
-                     VALUES (?1, 'w1', ?2, 'x', 0.01)",
-                    params![id, role],
+                    "INSERT INTO chat_messages (id, workspace_id, session_id, role, content, cost_usd)
+                     VALUES (?1, 'w1', ?2, ?3, 'x', 0.01)",
+                    params![id, sess_id, role],
                 )
                 .unwrap();
         }
         db.conn
             .execute(
-                "INSERT INTO chat_messages (id, workspace_id, role, content, cost_usd, input_tokens, output_tokens)
-                 VALUES ('m2', 'w1', 'assistant', 'x', 0.01, 12000, 3000)",
-                [],
+                "INSERT INTO chat_messages (id, workspace_id, session_id, role, content, cost_usd, input_tokens, output_tokens)
+                 VALUES ('m2', 'w1', ?1, 'assistant', 'x', 0.01, 12000, 3000)",
+                params![sess_id],
             )
             .unwrap();
         db.conn
@@ -4295,5 +4823,197 @@ mod tests {
         let rows = db.load_all_scm_status_cache().unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].pr_json, Some("null".into()));
+    }
+
+    #[test]
+    fn test_chat_sessions_migration_backfills_sessions() {
+        let db = Database::open_in_memory().unwrap();
+
+        // Rewind: drop chat_sessions structures and remove the migration
+        // tracking row so re-running migrations will re-apply it.
+        db.execute_batch(
+            "PRAGMA foreign_keys=OFF;
+             DROP INDEX IF EXISTS idx_chat_messages_session;
+             DROP INDEX IF EXISTS idx_checkpoints_session;
+             DROP INDEX IF EXISTS idx_chat_sessions_ws;
+             DROP INDEX IF EXISTS idx_chat_sessions_active;
+             ALTER TABLE chat_messages DROP COLUMN session_id;
+             ALTER TABLE conversation_checkpoints DROP COLUMN session_id;
+             DROP TABLE chat_sessions;
+             DELETE FROM schema_migrations WHERE id = '20260422000000_chat_sessions';
+             PRAGMA foreign_keys=ON;",
+        )
+        .unwrap();
+
+        // Seed: repo + two workspaces, one with an existing claude session
+        // and turn count + messages + checkpoint; one fresh.
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        db.execute_batch(
+            "INSERT INTO workspaces (id, repository_id, name, branch_name, worktree_path, status, status_line)
+                 VALUES ('w1', 'r1', 'first-ws', 'r1/first-ws', NULL, 'active', '');
+             INSERT INTO workspaces (id, repository_id, name, branch_name, worktree_path, status, status_line)
+                 VALUES ('w2', 'r1', 'second-ws', 'r1/second-ws', NULL, 'active', '');
+             UPDATE workspaces SET session_id = 'claude-abc', turn_count = 3 WHERE id = 'w1';
+             INSERT INTO chat_messages (id, workspace_id, role, content)
+                 VALUES ('m1', 'w1', 'user', 'hello');
+             INSERT INTO chat_messages (id, workspace_id, role, content)
+                 VALUES ('m2', 'w1', 'assistant', 'hi');
+             INSERT INTO conversation_checkpoints (id, workspace_id, message_id, turn_index)
+                 VALUES ('cp1', 'w1', 'm2', 0);",
+        )
+        .unwrap();
+
+        // Re-run migrations — the chat_sessions migration should re-apply.
+        db.run_migrations_for_test().unwrap();
+
+        struct SessionRow {
+            id: String,
+            workspace_id: String,
+            claude_session_id: Option<String>,
+            name: String,
+            turn_count: i64,
+            sort_order: i32,
+            status: String,
+        }
+
+        // Both workspaces should now have exactly one "Main" session.
+        let session_rows: Vec<SessionRow> = {
+            let mut stmt = db
+                .conn()
+                .prepare(
+                    "SELECT id, workspace_id, claude_session_id, name, turn_count, sort_order, status
+                     FROM chat_sessions ORDER BY workspace_id",
+                )
+                .unwrap();
+            stmt.query_map([], |row| {
+                Ok(SessionRow {
+                    id: row.get(0)?,
+                    workspace_id: row.get(1)?,
+                    claude_session_id: row.get(2)?,
+                    name: row.get(3)?,
+                    turn_count: row.get(4)?,
+                    sort_order: row.get(5)?,
+                    status: row.get(6)?,
+                })
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+        };
+        assert_eq!(session_rows.len(), 2);
+        // w1: claude session and turn count forwarded.
+        let w1 = session_rows
+            .iter()
+            .find(|r| r.workspace_id == "w1")
+            .unwrap();
+        assert_eq!(w1.claude_session_id.as_deref(), Some("claude-abc"));
+        assert_eq!(w1.name, "Main");
+        assert_eq!(w1.turn_count, 3);
+        assert_eq!(w1.sort_order, 0);
+        assert_eq!(w1.status, "active");
+        // w2: empty session + zero turns.
+        let w2 = session_rows
+            .iter()
+            .find(|r| r.workspace_id == "w2")
+            .unwrap();
+        assert!(w2.claude_session_id.is_none());
+        assert_eq!(w2.turn_count, 0);
+
+        // Messages and checkpoint point at w1's session.
+        let w1_session_id = w1.id.clone();
+        let msg_sessions: Vec<Option<String>> = db
+            .conn()
+            .prepare("SELECT session_id FROM chat_messages WHERE workspace_id = 'w1'")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(msg_sessions.len(), 2);
+        assert!(
+            msg_sessions
+                .iter()
+                .all(|s| s.as_deref() == Some(&w1_session_id))
+        );
+
+        let cp_session: Option<String> = db
+            .conn()
+            .query_row(
+                "SELECT session_id FROM conversation_checkpoints WHERE id = 'cp1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(cp_session.as_deref(), Some(w1_session_id.as_str()));
+    }
+
+    #[test]
+    fn test_save_chat_session_state_persists_claude_session_id() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w1", "r1", "ws"))
+            .unwrap();
+        let sess = db.create_chat_session("w1").unwrap();
+        assert!(sess.claude_session_id.is_none());
+
+        db.save_chat_session_state(&sess.id, "claude-sid-1", 3)
+            .unwrap();
+        let reloaded = db.get_chat_session(&sess.id).unwrap().unwrap();
+        assert_eq!(reloaded.claude_session_id.as_deref(), Some("claude-sid-1"));
+        assert_eq!(reloaded.turn_count, 3);
+    }
+
+    #[test]
+    fn test_archive_chat_session_ensuring_active_creates_replacement() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w1", "r1", "ws"))
+            .unwrap();
+        // insert_workspace auto-creates one active session — archive it.
+        let only = db
+            .list_chat_sessions_for_workspace("w1", false)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+
+        let fresh = db
+            .archive_chat_session_ensuring_active(&only.id, "w1")
+            .unwrap();
+        let fresh = fresh.expect("replacement session must be created");
+        assert_ne!(fresh.id, only.id);
+
+        let actives = db.list_chat_sessions_for_workspace("w1", false).unwrap();
+        assert_eq!(actives.len(), 1);
+        assert_eq!(actives[0].id, fresh.id);
+    }
+
+    #[test]
+    fn test_archive_chat_session_ensuring_active_skips_when_siblings_exist() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w1", "r1", "ws"))
+            .unwrap();
+        let first = db
+            .list_chat_sessions_for_workspace("w1", false)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        let _second = db.create_chat_session("w1").unwrap();
+
+        let fresh = db
+            .archive_chat_session_ensuring_active(&first.id, "w1")
+            .unwrap();
+        assert!(
+            fresh.is_none(),
+            "should not create a replacement when siblings remain",
+        );
+        let actives = db.list_chat_sessions_for_workspace("w1", false).unwrap();
+        assert_eq!(actives.len(), 1);
     }
 }

@@ -32,6 +32,12 @@ pub struct SetupResult {
 #[derive(Serialize)]
 pub struct CreateWorkspaceResult {
     pub workspace: Workspace,
+    /// The id of the chat session auto-created alongside the workspace. All
+    /// per-conversation state (messages, streaming, tool activities) is keyed
+    /// by session id after the multi-session refactor, so callers need this
+    /// to post initial system messages (setup script status, etc.) to the
+    /// new workspace's chat.
+    pub default_session_id: String,
     pub setup_result: Option<SetupResult>,
 }
 
@@ -178,8 +184,16 @@ pub async fn create_workspace(
         crate::commands::settings::play_notification_sound(resolved.sound, Some(resolved.volume));
     }
 
+    // `insert_workspace` auto-creates one active chat session; fetch its id
+    // so the caller can post initial system messages to the new chat.
+    let default_session_id = db
+        .default_session_id_for_workspace(&ws.id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Workspace insert did not create a default chat session")?;
+
     Ok(CreateWorkspaceResult {
         workspace: ws,
+        default_session_id,
         setup_result,
     })
 }
@@ -532,19 +546,33 @@ pub async fn archive_workspace(
         let _ = git::branch_delete(&repo.path, &ws.branch_name).await;
     }
 
-    // Stop any running agent and clear session so tray state stays consistent.
-    let ended_sid = {
+    // Stop any running agents and clear sessions so tray state stays consistent.
+    // Collect PIDs and session IDs under the lock, then stop processes outside it.
+    let (ended_sids, pids_to_stop): (Vec<String>, Vec<u32>) = {
         let mut agents = state.agents.write().await;
-        if let Some(session) = agents.remove(&id) {
-            if let Some(pid) = session.active_pid {
-                let _ = claudette::agent::stop_agent(pid).await;
+        let to_remove: Vec<String> = agents
+            .iter()
+            .filter(|(_, s)| s.workspace_id == id)
+            .map(|(k, _)| k.clone())
+            .collect();
+        let mut sids = Vec::new();
+        let mut pids = Vec::new();
+        for key in to_remove {
+            if let Some(session) = agents.remove(&key) {
+                if !session.claude_session_id.is_empty() {
+                    sids.push(session.claude_session_id);
+                }
+                if let Some(pid) = session.active_pid {
+                    pids.push(pid);
+                }
             }
-            Some(session.session_id)
-        } else {
-            None
         }
+        (sids, pids)
     };
-    if let Some(sid) = ended_sid.as_deref().filter(|s| !s.is_empty()) {
+    for pid in pids_to_stop {
+        let _ = claudette::agent::stop_agent(pid).await;
+    }
+    for sid in &ended_sids {
         let _ = db.end_agent_session(sid, true);
     }
 
@@ -631,14 +659,22 @@ pub async fn delete_workspace(
     let repos = db.list_repositories().map_err(|e| e.to_string())?;
     let repo = repos.iter().find(|r| r.id == repo_id);
 
-    // Stop any running agent and clear session so tray state stays consistent.
-    {
+    // Stop any running agents and clear sessions so tray state stays consistent.
+    // Collect PIDs under the lock, then stop processes outside it.
+    let pids_to_stop: Vec<u32> = {
         let mut agents = state.agents.write().await;
-        if let Some(session) = agents.remove(&id)
-            && let Some(pid) = session.active_pid
-        {
-            let _ = claudette::agent::stop_agent(pid).await;
-        }
+        let to_remove: Vec<String> = agents
+            .iter()
+            .filter(|(_, s)| s.workspace_id == id)
+            .map(|(k, _)| k.clone())
+            .collect();
+        to_remove
+            .into_iter()
+            .filter_map(|key| agents.remove(&key).and_then(|s| s.active_pid))
+            .collect()
+    };
+    for pid in pids_to_stop {
+        let _ = claudette::agent::stop_agent(pid).await;
     }
 
     if let Some(repo) = repo {

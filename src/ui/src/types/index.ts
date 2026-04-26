@@ -4,7 +4,17 @@ export type {
   WorkspaceStatus,
   AgentStatus,
 } from "./workspace";
-export type { ChatMessage, ChatRole, ChatAttachment, AttachmentInput, PendingAttachment } from "./chat";
+export type {
+  ChatMessage,
+  ChatRole,
+  ChatAttachment,
+  AttachmentInput,
+  PendingAttachment,
+  ChatSession,
+  SessionStatus,
+  SessionAttentionKind,
+  SessionAgentStatus,
+} from "./chat";
 export type {
   DiffFile,
   DiffLayer,

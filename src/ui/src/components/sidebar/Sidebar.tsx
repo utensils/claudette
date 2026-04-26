@@ -57,6 +57,7 @@ export const Sidebar = memo(function Sidebar() {
   const unreadCompletions = useAppStore((s) => s.unreadCompletions);
   const agentQuestions = useAppStore((s) => s.agentQuestions);
   const planApprovals = useAppStore((s) => s.planApprovals);
+  const sessionsByWorkspace = useAppStore((s) => s.sessionsByWorkspace);
   const scmSummary = useAppStore((s) => s.scmSummary);
   const setRepositories = useAppStore((s) => s.setRepositories);
   const metaKeyHeld = useAppStore((s) => s.metaKeyHeld);
@@ -116,10 +117,12 @@ export const Sidebar = memo(function Sidebar() {
 
       addWorkspace(result.workspace);
       selectWorkspace(result.workspace.id);
+      const sessionId = result.default_session_id;
       if (generated.message) {
-        addChatMessage(result.workspace.id, {
+        addChatMessage(sessionId, {
           id: crypto.randomUUID(),
           workspace_id: result.workspace.id,
+          session_id: sessionId,
           role: "System",
           content: generated.message,
           cost_usd: null,
@@ -142,9 +145,10 @@ export const Sidebar = memo(function Sidebar() {
               if (sr) {
                 const lbl = sr.source === "repo" ? ".claudette.json" : "settings";
                 const status = sr.success ? "completed" : sr.timed_out ? "timed out" : "failed";
-                addChatMessage(wsId, {
+                addChatMessage(sessionId, {
                   id: crypto.randomUUID(),
                   workspace_id: wsId,
+                  session_id: sessionId,
                   role: "System",
                   content: `Setup script (${lbl}) ${status}${sr.output ? `:\n${sr.output}` : ""}`,
                   cost_usd: null, duration_ms: null,
@@ -154,9 +158,10 @@ export const Sidebar = memo(function Sidebar() {
                 });
               }
             }).catch((err) => {
-              addChatMessage(wsId, {
+              addChatMessage(sessionId, {
                 id: crypto.randomUUID(),
                 workspace_id: wsId,
+                session_id: sessionId,
                 role: "System",
                 content: `Setup script failed: ${err}`,
                 cost_usd: null, duration_ms: null,
@@ -168,6 +173,7 @@ export const Sidebar = memo(function Sidebar() {
           } else {
             openModal("confirmSetupScript", {
               workspaceId: result.workspace.id,
+              sessionId,
               repoId,
               script,
               source,
@@ -274,9 +280,12 @@ export const Sidebar = memo(function Sidebar() {
   }, [renameValue, workspaces, updateWorkspace]);
 
   const renderWorkspace = (ws: typeof workspaces[number]) => {
+    const wsSessions = sessionsByWorkspace[ws.id] ?? [];
+    const hasQuestion = wsSessions.some((s) => agentQuestions[s.id]);
+    const hasPlan = wsSessions.some((s) => planApprovals[s.id]);
     const badge: "ask" | "plan" | "done" | null =
-      agentQuestions[ws.id] ? "ask" :
-      planApprovals[ws.id] ? "plan" :
+      hasQuestion ? "ask" :
+      hasPlan ? "plan" :
       unreadCompletions.has(ws.id) && !isAgentBusy(ws.agent_status) ? "done" :
       null;
     return (

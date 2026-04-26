@@ -87,24 +87,28 @@ export interface CommandContext {
 
   // Workspace context
   selectedWorkspaceId: string | null;
+  // Active chat session within the selected workspace. Agent commands
+  // (stop/reset) run against a session, so this must be resolved before
+  // any agent-scoped entry is rendered.
+  selectedSessionId: string | null;
   currentRepoId: string | null;
   createWorkspace: (repoId: string) => Promise<void>;
 
-  // Agent (workspace-specific)
+  // Agent (session-scoped toolbar state and lifecycle)
   thinkingEnabled: boolean;
-  setThinkingEnabled: (wsId: string, enabled: boolean) => void;
+  setThinkingEnabled: (sessionId: string, enabled: boolean) => void;
   planMode: boolean;
-  setPlanMode: (wsId: string, enabled: boolean) => void;
+  setPlanMode: (sessionId: string, enabled: boolean) => void;
   fastMode: boolean;
-  setFastMode: (wsId: string, enabled: boolean) => void;
+  setFastMode: (sessionId: string, enabled: boolean) => void;
   effortLevel: string;
-  setEffortLevel: (wsId: string, level: string) => void;
+  setEffortLevel: (sessionId: string, level: string) => void;
   selectedModel: string;
   persistSetting: (key: string, value: string) => void;
-  stopAgent: (wsId: string) => Promise<void>;
-  resetAgentSession: (wsId: string) => Promise<void>;
-  clearAgentQuestion: (wsId: string) => void;
-  clearPlanApproval: (wsId: string) => void;
+  stopAgent: (sessionId: string) => Promise<void>;
+  resetAgentSession: (sessionId: string) => Promise<void>;
+  clearAgentQuestion: (sessionId: string) => void;
+  clearPlanApproval: (sessionId: string) => void;
   updateWorkspace: (id: string, updates: Record<string, unknown>) => void;
 }
 
@@ -240,9 +244,10 @@ export function buildCommands(ctx: CommandContext): Command[] {
     execute: () => { ctx.resetZoom(); ctx.close(); },
   });
 
-  // -- Agent (only when workspace selected) --
+  // -- Agent (only when a session is active) --
   const wsId = ctx.selectedWorkspaceId;
-  if (wsId) {
+  const sessId = ctx.selectedSessionId;
+  if (wsId && sessId) {
     cmds.push({
       id: "toggle-thinking",
       name: `${ctx.thinkingEnabled ? "Disable" : "Enable"} Thinking Mode`,
@@ -252,8 +257,8 @@ export function buildCommands(ctx: CommandContext): Command[] {
       keywords: ["think", "reasoning", "extended"],
       execute: () => {
         const next = !ctx.thinkingEnabled;
-        ctx.setThinkingEnabled(wsId, next);
-        ctx.persistSetting(`thinking_enabled:${wsId}`, String(next));
+        ctx.setThinkingEnabled(sessId, next);
+        ctx.persistSetting(`thinking_enabled:${sessId}`, String(next));
         ctx.close();
       },
     });
@@ -263,7 +268,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
       category: "agent",
       icon: BookOpen,
       keywords: ["planning", "architect"],
-      execute: () => { ctx.setPlanMode(wsId, !ctx.planMode); ctx.close(); },
+      execute: () => { ctx.setPlanMode(sessId, !ctx.planMode); ctx.close(); },
     });
     if (isFastSupported(ctx.selectedModel)) {
       cmds.push({
@@ -274,8 +279,8 @@ export function buildCommands(ctx: CommandContext): Command[] {
         keywords: ["speed", "quick"],
         execute: () => {
           const next = !ctx.fastMode;
-          ctx.setFastMode(wsId, next);
-          ctx.persistSetting(`fast_mode:${wsId}`, String(next));
+          ctx.setFastMode(sessId, next);
+          ctx.persistSetting(`fast_mode:${sessId}`, String(next));
           ctx.close();
         },
       });
@@ -308,7 +313,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
       icon: Square,
       keywords: ["kill", "cancel", "abort"],
       execute: () => {
-        ctx.stopAgent(wsId).then(() => ctx.updateWorkspace(wsId, { agent_status: "Stopped" }));
+        ctx.stopAgent(sessId).then(() => ctx.updateWorkspace(wsId, { agent_status: "Stopped" }));
         ctx.close();
       },
     });
@@ -319,7 +324,7 @@ export function buildCommands(ctx: CommandContext): Command[] {
       category: "agent",
       icon: RotateCcw,
       keywords: ["restart", "new", "clear"],
-      execute: () => { ctx.resetAgentSession(wsId); ctx.clearAgentQuestion(wsId); ctx.clearPlanApproval(wsId); ctx.close(); },
+      execute: () => { ctx.resetAgentSession(sessId); ctx.clearAgentQuestion(sessId); ctx.clearPlanApproval(sessId); ctx.close(); },
     });
   }
 

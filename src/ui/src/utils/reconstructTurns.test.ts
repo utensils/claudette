@@ -10,6 +10,7 @@ function makeMsg(
   return {
     id,
     workspace_id: "ws",
+    session_id: "ws",
     role,
     content: "",
     cost_usd: null,
