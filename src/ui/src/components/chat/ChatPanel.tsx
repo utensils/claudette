@@ -1032,14 +1032,15 @@ export function ChatPanel() {
         </div>
       </div>
 
-      <ScrollContext.Provider value={scrollContextValue}>
+      <div className={styles.messagesWrapper}>
+        {selectedWorkspaceId && (
+          <ChatSearchBar
+            workspaceId={selectedWorkspaceId}
+            scopeRef={messagesContainerRef}
+          />
+        )}
+        <ScrollContext.Provider value={scrollContextValue}>
         <div className={styles.messages} ref={messagesContainerRef}>
-          {selectedWorkspaceId && (
-            <ChatSearchBar
-              workspaceId={selectedWorkspaceId}
-              scopeRef={messagesContainerRef}
-            />
-          )}
           {messages.length === 0 && !hasStreaming ? (
             <div className={styles.empty}>
               Send a message to start a conversation
@@ -1163,6 +1164,7 @@ export function ChatPanel() {
           )}
         </div>
       </ScrollContext.Provider>
+      </div>
 
       <ScrollToBottomPill
         visible={!isAtBottom && messages.length > 0}

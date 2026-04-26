@@ -1,6 +1,14 @@
 .bar {
-  position: sticky;
+  /* Absolute (overlay) rather than sticky so the bar appearing/disappearing
+     doesn't push the messages list down by its height — opening Cmd+F would
+     otherwise shift every visible message by ~40px, which the issue calls
+     out as "portal-positioned to avoid layout shift". The .messages parent
+     uses `contain: layout style`, which already establishes a containing
+     block for absolute descendants — no need for `position: relative`. */
+  position: absolute;
   top: 0;
+  left: 0;
+  right: 0;
   z-index: 5;
   display: flex;
   align-items: center;
@@ -8,6 +16,8 @@
   padding: 6px 10px;
   background: var(--chat-header-bg);
   border-bottom: 1px solid var(--divider);
+  /* Subtle translucency so the bar reads as floating over content rather
+     than as a hard separator. backdrop-filter blurs whatever's behind it. */
   backdrop-filter: blur(8px);
 }
 

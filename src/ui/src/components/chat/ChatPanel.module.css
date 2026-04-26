@@ -96,6 +96,18 @@
 
 
 /* Messages area */
+/* Wraps the search bar + scrolling messages list. The bar is absolutely
+   positioned over the top of this wrapper so opening Cmd+F doesn't push
+   the messages list down. The wrapper itself participates in the chat
+   panel's flex column with `flex: 1` like .messages used to. */
+.messagesWrapper {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  position: relative;
+}
+
 .messages {
   flex: 1;
   overflow-y: auto;
@@ -489,18 +501,31 @@
 /* Cmd/Ctrl+F search highlights. Lives inside ChatPanel.module.css with
    :global() so the wrapper components in this folder (and the post-render
    DOM walker in HighlightedMessageMarkdown) can style raw <mark> tags
-   without needing to import CSS modules. */
+   without needing to import CSS modules.
+
+   Critical: every property here must be width-neutral. Padding, margins,
+   border, and bolder font-weight all change inline metrics — when the
+   user types, marks appear/disappear per keystroke and any width-changing
+   style reflows the surrounding text. The user perceives this as text
+   "jumping around" with every keystroke. Background color, text color,
+   and box-shadow do not affect layout, so they're safe. */
 .messages :global(mark.cc-search-match) {
   background: var(--accent-bg-strong);
   color: inherit;
-  border-radius: var(--radius-xs);
-  padding: 0 1px;
+  /* No padding, border-radius (with padding), border, margin, or font-
+     weight change here — see comment above. The flat background reads
+     fine because matched text sits flush against accent-tinted bg. */
 }
 
 .messages :global(mark.cc-search-match.cc-search-match-active) {
   background: var(--accent-primary);
   color: var(--on-accent);
-  font-weight: 600;
+  /* box-shadow is render-only (no layout impact) so we use it to add a
+     subtle ring around the active match without shifting any character.
+     Bold weight would be more visually prominent but bold metrics are
+     wider than regular, which would reflow text every time the user
+     cycles to a new match. */
+  box-shadow: 0 0 0 1px var(--accent-primary);
 }
 
 /* Blockquotes — subtle card with left accent */
