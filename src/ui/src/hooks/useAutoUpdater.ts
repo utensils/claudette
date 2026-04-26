@@ -47,10 +47,22 @@ export async function installNow(): Promise<void> {
     // fall through to the catch on the next tick.
   } catch (e) {
     console.error("[updater] Install failed:", e);
-    useAppStore.getState().setUpdateDownloading(false);
-    useAppStore.getState().setUpdateProgress(0);
-    checkForUpdate();
+    const s = useAppStore.getState();
+    s.setUpdateDownloading(false);
+    s.setUpdateProgress(0);
+    s.setUpdateError(String(e));
   }
+}
+
+/**
+ * User-initiated retry after a failed install. The Rust side `take()`s the
+ * pending update on the previous attempt, so we must re-run the check to
+ * repopulate it before another install can succeed.
+ */
+export async function retryInstall(): Promise<void> {
+  useAppStore.getState().setUpdateError(null);
+  const result = await checkForUpdate();
+  if (result === "available") await installNow();
 }
 
 export function installWhenIdle(): void {

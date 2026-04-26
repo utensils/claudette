@@ -577,12 +577,14 @@ interface AppState {
   updateDownloading: boolean;
   updateProgress: number;
   updateChannel: "stable" | "nightly";
+  updateError: string | null;
   setUpdateAvailable: (available: boolean, version: string | null) => void;
   setUpdateDismissed: (dismissed: boolean) => void;
   setUpdateInstallWhenIdle: (enabled: boolean) => void;
   setUpdateDownloading: (downloading: boolean) => void;
   setUpdateProgress: (progress: number) => void;
   setUpdateChannel: (channel: "stable" | "nightly") => void;
+  setUpdateError: (error: string | null) => void;
 
   // -- App info --
   appVersion: string | null;
@@ -1896,18 +1898,23 @@ export const useAppStore = create<AppState>((set, get) => ({
   updateDownloading: false,
   updateProgress: 0,
   updateChannel: "stable",
+  updateError: null,
   setUpdateAvailable: (available, version) =>
     set((state) => ({
       updateAvailable: available,
       updateVersion: version,
       updateDismissed:
         version === state.updateVersion ? state.updateDismissed : false,
+      updateError: null,
     })),
   setUpdateDismissed: (dismissed) => set({ updateDismissed: dismissed }),
   setUpdateInstallWhenIdle: (enabled) =>
     set({ updateInstallWhenIdle: enabled }),
   setUpdateDownloading: (downloading) =>
-    set({ updateDownloading: downloading }),
+    set((state) => ({
+      updateDownloading: downloading,
+      updateError: downloading ? null : state.updateError,
+    })),
   setUpdateProgress: (progress) => set({ updateProgress: progress }),
   setUpdateChannel: (channel) =>
     set({
@@ -1916,7 +1923,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       updateVersion: null,
       updateDismissed: false,
       updateInstallWhenIdle: false,
+      updateError: null,
     }),
+  setUpdateError: (error) => set({ updateError: error }),
 
   // -- App info --
   appVersion: null,

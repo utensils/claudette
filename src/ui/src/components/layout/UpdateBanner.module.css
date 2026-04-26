@@ -13,6 +13,11 @@
   color: var(--text-primary);
 }
 
+.errorMessage {
+  color: var(--error, var(--text-primary));
+  word-break: break-word;
+}
+
 .version {
   color: var(--accent-primary);
   font-weight: 600;
