@@ -127,8 +127,11 @@ jobs:
       - name: cargo build --release (claudette-tauri)
         run: cargo build --release -p claudette-tauri --features tauri/custom-protocol --target aarch64-unknown-linux-gnu
 
+      # Match the main `test` job's feature set (`cargo llvm-cov ... --all-features`)
+      # so this smoke test exercises the same code paths on aarch64 that CI
+      # exercises on x86_64.
       - name: cargo test (library crates)
-        run: cargo test -p claudette -p claudette-server --target aarch64-unknown-linux-gnu
+        run: cargo test -p claudette -p claudette-server --all-features --target aarch64-unknown-linux-gnu
 
   # Native Windows build check on both supported targets. We compile the
   # full workspace (including the Tauri bin, which pulls in WebView2 +
