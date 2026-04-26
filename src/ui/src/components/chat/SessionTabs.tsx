@@ -117,7 +117,7 @@ export function SessionTabs({ workspaceId }: Props) {
         type="button"
         className={styles.addBtn}
         onClick={handleCreate}
-        title="New session (Cmd+T)"
+        title="New session"
         aria-label="New session"
       >
         <Plus size={14} />

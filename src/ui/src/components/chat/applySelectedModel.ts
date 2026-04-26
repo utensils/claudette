@@ -46,6 +46,6 @@ export async function applySelectedModel(
     await setAppSetting(`effort_level:${sessionId}`, "high");
   } else if (prevEffort === "max" && !isMaxEffortAllowed(model)) {
     store.setEffortLevel(sessionId, "high");
-    await setAppSetting(`effort_level:${sessionId}`, "high")
+    await setAppSetting(`effort_level:${sessionId}`, "high");
   }
 }

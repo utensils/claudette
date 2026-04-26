@@ -764,7 +764,7 @@ pub async fn send_chat_message(
             agents = state.agents.write().await;
         }
     }
-    let session = agents.get_mut(&workspace_id).ok_or("Session lost")?;
+    let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
 
     // Use persistent session to keep MCP servers alive across turns.
     // First turn or after restart: start a PersistentSession.
@@ -1218,6 +1218,7 @@ pub async fn send_chat_message(
                     };
                     let app_for_notify = app.clone();
                     let ws_id_for_notify = ws_id.clone();
+                    let session_id_for_notify = chat_session_id_for_stream.clone();
                     let tool_use_id_for_notify = tool_use_id.clone();
                     let request_id_for_notify = request_id.clone();
                     let tool_name_for_notify = tool_name.clone();
@@ -1230,7 +1231,7 @@ pub async fn send_chat_message(
                         let app_state = app_for_notify.state::<AppState>();
                         let should_notify = {
                             let mut agents = app_state.agents.write().await;
-                            let Some(session) = agents.get_mut(&ws_id_for_notify) else {
+                            let Some(session) = agents.get_mut(&session_id_for_notify) else {
                                 return;
                             };
                             if session.attention_notification_sent {
