@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { MODELS } from "./modelRegistry";
+import { MODELS, is1mContextModel, get1mFallback } from "./modelRegistry";
 
 describe("modelRegistry", () => {
   it("every model has a positive integer contextWindowTokens", () => {
@@ -27,5 +27,55 @@ describe("modelRegistry", () => {
     for (const m of standard) {
       expect(m.contextWindowTokens, m.id).toBe(200_000);
     }
+  });
+
+  describe("is1mContextModel", () => {
+    it("returns true for 1M-context models", () => {
+      const oneM = MODELS.filter((m) => m.contextWindowTokens >= 1_000_000);
+      expect(oneM.length).toBeGreaterThan(0);
+      for (const m of oneM) {
+        expect(is1mContextModel(m.id), m.id).toBe(true);
+      }
+    });
+
+    it("returns false for standard-context models", () => {
+      const standard = MODELS.filter((m) => m.contextWindowTokens < 1_000_000);
+      expect(standard.length).toBeGreaterThan(0);
+      for (const m of standard) {
+        expect(is1mContextModel(m.id), m.id).toBe(false);
+      }
+    });
+
+    it("returns false for unknown model IDs", () => {
+      expect(is1mContextModel("unknown-model")).toBe(false);
+    });
+  });
+
+  describe("get1mFallback", () => {
+    it("maps 1M models to their 200K equivalents", () => {
+      expect(get1mFallback("opus")).toBe("claude-opus-4-7");
+      expect(get1mFallback("claude-sonnet-4-6[1m]")).toBe("sonnet");
+      expect(get1mFallback("claude-opus-4-6[1m]")).toBe("claude-opus-4-6");
+    });
+
+    it("returns non-1M models unchanged", () => {
+      expect(get1mFallback("sonnet")).toBe("sonnet");
+      expect(get1mFallback("claude-opus-4-7")).toBe("claude-opus-4-7");
+      expect(get1mFallback("haiku")).toBe("haiku");
+    });
+
+    it("returns unknown model IDs unchanged", () => {
+      expect(get1mFallback("unknown-model")).toBe("unknown-model");
+    });
+
+    it("every 1M model has a fallback that exists in the registry", () => {
+      const oneM = MODELS.filter((m) => m.contextWindowTokens >= 1_000_000);
+      for (const m of oneM) {
+        const fallback = get1mFallback(m.id);
+        const target = MODELS.find((t) => t.id === fallback);
+        expect(target, `${m.id} → ${fallback} not in MODELS`).toBeDefined();
+        expect(target!.contextWindowTokens, `${m.id} → ${fallback} should be non-1M`).toBeLessThan(1_000_000);
+      }
+    });
   });
 });

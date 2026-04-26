@@ -586,6 +586,7 @@ fn main() {
             commands::env::reload_env,
             commands::env::set_env_provider_enabled,
             commands::env::run_env_trust,
+            commands::env::get_host_env_flags,
             // Claudette Lua plugins (SCM + env-provider) settings surface
             commands::plugins_runtime::list_claudette_plugins,
             commands::plugins_runtime::set_claudette_plugin_enabled,

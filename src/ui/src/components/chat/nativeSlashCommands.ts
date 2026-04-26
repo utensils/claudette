@@ -3,6 +3,7 @@ import type { NativeSlashKind, SlashCommand } from "../../services/tauri";
 import type { PermissionLevel } from "../../stores/useAppStore";
 import { parsePluginSlashCommand } from "./pluginSlashCommand";
 import { MODELS } from "./modelRegistry";
+import { useAppStore } from "../../stores/useAppStore";
 
 export type { NativeSlashKind };
 
@@ -476,10 +477,14 @@ const modelHandler: NativeHandler = {
       ctx.addLocalMessage("/model: no active workspace");
       return handled;
     }
+    const { disable1mContext } = useAppStore.getState();
+    const available = disable1mContext
+      ? MODELS.filter((m) => m.contextWindowTokens < 1_000_000)
+      : MODELS;
     const arg = args.trim();
-    const modelIds = MODELS.map((m) => m.id);
+    const modelIds = available.map((m) => m.id);
     if (arg === "") {
-      const lines = MODELS.map((m) => {
+      const lines = available.map((m) => {
         const marker = m.id === ctx.selectedModel ? "•" : " ";
         return ` ${marker} ${m.id} — ${m.label}`;
       }).join("\n");
@@ -487,7 +492,7 @@ const modelHandler: NativeHandler = {
       return handled;
     }
     const normalized = arg.toLowerCase();
-    const match = MODELS.find((m) => m.id.toLowerCase() === normalized);
+    const match = available.find((m) => m.id.toLowerCase() === normalized);
     if (!match) {
       ctx.addLocalMessage(
         `/model: unknown model "${arg}". Valid options: ${modelIds.join(", ")}`,

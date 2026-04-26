@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import { CircleDollarSign, ChevronRight } from "lucide-react";
 import styles from "./ModelSelector.module.css";
 import { MODELS, type Model } from "./modelRegistry";
+import { useAppStore } from "../../stores/useAppStore";
 
-export { MODELS } from "./modelRegistry";
+export { MODELS, is1mContextModel, get1mFallback } from "./modelRegistry";
 
 interface ModelSelectorProps {
   selected: string;
@@ -16,8 +17,12 @@ export function ModelSelector({
   onSelect,
   onClose,
 }: ModelSelectorProps) {
-  const primary = MODELS.filter((m) => !m.legacy);
-  const legacy = MODELS.filter((m) => m.legacy);
+  const disable1mContext = useAppStore((s) => s.disable1mContext);
+  const visibleModels = disable1mContext
+    ? MODELS.filter((m) => m.contextWindowTokens < 1_000_000)
+    : MODELS;
+  const primary = visibleModels.filter((m) => !m.legacy);
+  const legacy = visibleModels.filter((m) => m.legacy);
   const selectedIsLegacy = legacy.some((m) => m.id === selected);
 
   const [moreOpen, setMoreOpen] = useState(selectedIsLegacy);

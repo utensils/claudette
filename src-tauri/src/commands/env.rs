@@ -574,6 +574,23 @@ pub fn spawn_repo_env_warmup(app: AppHandle, repo_id: String) {
     });
 }
 
+/// Flags derived from the host process environment that the frontend needs
+/// to adjust UI behaviour.
+#[derive(Serialize)]
+pub struct HostEnvFlags {
+    pub disable_1m_context: bool,
+}
+
+/// Return environment-derived flags from the host process. Unlike app
+/// settings (stored in the database), these reflect the environment in
+/// which Claudette was launched and cannot be changed at runtime.
+#[tauri::command]
+pub fn get_host_env_flags() -> HostEnvFlags {
+    HostEnvFlags {
+        disable_1m_context: std::env::var("CLAUDE_CODE_DISABLE_1M_CONTEXT").is_ok(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

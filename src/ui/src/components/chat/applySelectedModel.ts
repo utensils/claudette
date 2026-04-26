@@ -6,6 +6,7 @@ import {
   isMaxEffortAllowed,
   isXhighEffortAllowed,
 } from "./modelCapabilities";
+import { is1mContextModel, get1mFallback } from "./modelRegistry";
 
 /**
  * Apply a model change for a workspace.
@@ -24,26 +25,29 @@ export async function applySelectedModel(
   nextModel: string,
 ): Promise<void> {
   const store = useAppStore.getState();
-  store.setSelectedModel(workspaceId, nextModel);
-  await setAppSetting(`model:${workspaceId}`, nextModel);
+  const model = store.disable1mContext && is1mContextModel(nextModel)
+    ? get1mFallback(nextModel)
+    : nextModel;
+  store.setSelectedModel(workspaceId, model);
+  await setAppSetting(`model:${workspaceId}`, model);
   await resetAgentSession(workspaceId);
   store.clearAgentQuestion(workspaceId);
   store.clearPlanApproval(workspaceId);
 
   const prevFastMode = store.fastMode[workspaceId] ?? false;
-  if (prevFastMode && !isFastSupported(nextModel)) {
+  if (prevFastMode && !isFastSupported(model)) {
     store.setFastMode(workspaceId, false);
     await setAppSetting(`fast_mode:${workspaceId}`, "false");
   }
 
   const prevEffort = store.effortLevel[workspaceId] ?? "auto";
-  if (!isEffortSupported(nextModel)) {
+  if (!isEffortSupported(model)) {
     store.setEffortLevel(workspaceId, "auto");
     await setAppSetting(`effort_level:${workspaceId}`, "auto");
-  } else if (prevEffort === "xhigh" && !isXhighEffortAllowed(nextModel)) {
+  } else if (prevEffort === "xhigh" && !isXhighEffortAllowed(model)) {
     store.setEffortLevel(workspaceId, "high");
     await setAppSetting(`effort_level:${workspaceId}`, "high");
-  } else if (prevEffort === "max" && !isMaxEffortAllowed(nextModel)) {
+  } else if (prevEffort === "max" && !isMaxEffortAllowed(model)) {
     store.setEffortLevel(workspaceId, "high");
     await setAppSetting(`effort_level:${workspaceId}`, "high");
   }

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { CircleDollarSign, Sparkles, BookOpen } from "lucide-react";
 import { useAppStore } from "../../../stores/useAppStore";
 import { getAppSetting, setAppSetting } from "../../../services/tauri";
-import { ModelSelector, MODELS } from "../ModelSelector";
+import { ModelSelector, MODELS, is1mContextModel, get1mFallback } from "../ModelSelector";
 import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "../modelCapabilities";
 import { applySelectedModel } from "../applySelectedModel";
 import { applyPlanModeMountDefault } from "../applyPlanModeMountDefault";
@@ -18,6 +18,7 @@ interface ComposerToolbarProps {
 
 export function ComposerToolbar({ workspaceId, disabled }: ComposerToolbarProps) {
   const selectedModel = useAppStore((s) => s.selectedModel[workspaceId] ?? "opus");
+  const disable1mContext = useAppStore((s) => s.disable1mContext);
   const thinkingEnabled = useAppStore((s) => s.thinkingEnabled[workspaceId] ?? false);
   const planMode = useAppStore((s) => s.planMode[workspaceId] ?? false);
   const modelSelectorOpen = useAppStore((s) => s.modelSelectorOpen);
@@ -107,6 +108,13 @@ export function ComposerToolbar({ workspaceId, disabled }: ComposerToolbarProps)
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
   }, [disabled, toggleThinking]);
+
+  useEffect(() => {
+    if (!loaded || !disable1mContext) return;
+    if (is1mContextModel(selectedModel)) {
+      void applySelectedModel(workspaceId, get1mFallback(selectedModel));
+    }
+  }, [loaded, disable1mContext, selectedModel, workspaceId]);
 
   const currentModel = MODELS.find((m) => m.id === selectedModel);
   const modelLabel = currentModel?.label ?? selectedModel;

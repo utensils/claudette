@@ -494,6 +494,8 @@ interface AppState {
   setUsageInsightsEnabled: (enabled: boolean) => void;
   pluginManagementEnabled: boolean;
   setPluginManagementEnabled: (enabled: boolean) => void;
+  disable1mContext: boolean;
+  setDisable1mContext: (v: boolean) => void;
 
   // -- Claude Code Usage --
   claudeCodeUsage: ClaudeCodeUsage | null;
@@ -1638,6 +1640,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       pluginSettingsRepoId: enabled ? state.pluginSettingsRepoId : null,
       pluginSettingsTab: enabled ? state.pluginSettingsTab : "available",
     })),
+  disable1mContext: false,
+  setDisable1mContext: (v) => set({ disable1mContext: v }),
 
   // -- Claude Code Usage --
   claudeCodeUsage: null,
