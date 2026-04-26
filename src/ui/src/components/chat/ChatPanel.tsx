@@ -1,6 +1,8 @@
 import React, { createContext, memo, useContext, useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { isAgentBusy } from "../../utils/agentStatus";
-import { MessageMarkdown } from "./MessageMarkdown";
+import { HighlightedMessageMarkdown } from "./HighlightedMessageMarkdown";
+import { HighlightedPlainText } from "./HighlightedPlainText";
+import { ChatSearchBar } from "./ChatSearchBar";
 import { AlertCircle, FileText, GitBranch, LoaderCircle, Mic, Plus, RotateCcw, Send, Split, Square, X } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import type { ToolActivity, CompletedTurn } from "../../stores/useAppStore";
@@ -265,6 +267,17 @@ export function ChatPanel() {
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const processingRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Cmd/Ctrl+F search bar state. `searchQuery` flows down to message
+  // renderers as the highlight trigger; an empty string short-circuits the
+  // wrappers' DOM-walk pass entirely, so search-off has zero render cost.
+  const chatSearchOpen = useAppStore(
+    (s) => (selectedWorkspaceId ? s.chatSearch[selectedWorkspaceId]?.open ?? false : false),
+  );
+  const chatSearchQuery = useAppStore(
+    (s) => (selectedWorkspaceId ? s.chatSearch[selectedWorkspaceId]?.query ?? "" : ""),
+  );
+  const searchQuery = chatSearchOpen ? chatSearchQuery : "";
 
   const [attachmentMenu, setAttachmentMenu] = useState<{
     x: number;
@@ -1019,7 +1032,14 @@ export function ChatPanel() {
         </div>
       </div>
 
-      <ScrollContext.Provider value={scrollContextValue}>
+      <div className={styles.messagesWrapper}>
+        {selectedWorkspaceId && (
+          <ChatSearchBar
+            workspaceId={selectedWorkspaceId}
+            scopeRef={messagesContainerRef}
+          />
+        )}
+        <ScrollContext.Provider value={scrollContextValue}>
         <div className={styles.messages} ref={messagesContainerRef}>
           {messages.length === 0 && !hasStreaming ? (
             <div className={styles.empty}>
@@ -1035,6 +1055,7 @@ export function ChatPanel() {
                   onForkTurn={isRemote ? undefined : handleFork}
                   onAttachmentContextMenu={openAttachmentMenu}
                   onAttachmentClick={openLightbox}
+                  searchQuery={searchQuery}
                 />
               )}
 
@@ -1043,13 +1064,14 @@ export function ChatPanel() {
               )}
 
               {selectedWorkspaceId && (hasStreaming || hasPendingTypewriter) && (
-                <StreamingMessage workspaceId={selectedWorkspaceId} />
+                <StreamingMessage workspaceId={selectedWorkspaceId} searchQuery={searchQuery} />
               )}
 
               {selectedWorkspaceId && activitiesCount > 0 && (
                 <ToolActivitiesSection
                   workspaceId={selectedWorkspaceId}
                   isRunning={isRunning ?? false}
+                  searchQuery={searchQuery}
                 />
               )}
 
@@ -1142,6 +1164,7 @@ export function ChatPanel() {
           )}
         </div>
       </ScrollContext.Provider>
+      </div>
 
       <ScrollToBottomPill
         visible={!isAtBottom && messages.length > 0}
@@ -1266,8 +1289,10 @@ const StreamingThinkingBlock = memo(function StreamingThinkingBlock({
  */
 const StreamingMessage = memo(function StreamingMessage({
   workspaceId,
+  searchQuery,
 }: {
   workspaceId: string;
+  searchQuery: string;
 }) {
   const streaming = useAppStore(
     (s) => s.streamingContent[workspaceId] || ""
@@ -1308,7 +1333,7 @@ const StreamingMessage = memo(function StreamingMessage({
     >
       <div className={styles.content}>
         <StreamingContext.Provider value={isStreaming || pendingText.length > 0}>
-          <MessageMarkdown content={displayed} />
+          <HighlightedMessageMarkdown content={displayed} query={searchQuery} />
         </StreamingContext.Provider>
         {showCaret && <span className={caretStyles.caret} aria-hidden="true" />}
       </div>
@@ -1609,6 +1634,7 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
   onForkTurn,
   onAttachmentContextMenu,
   onAttachmentClick,
+  searchQuery,
 }: {
   messages: ChatMessage[];
   workspaceId: string;
@@ -1630,6 +1656,9 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
     e: React.MouseEvent,
     attachment: DownloadableAttachment,
   ) => void;
+  /** Active chat-search query (Cmd/Ctrl+F). Empty string when the bar is
+   *  closed; non-empty values trigger highlight wrappers on each message. */
+  searchQuery: string;
 }) {
   const completedTurns = useAppStore(
     (s) => s.completedTurns[workspaceId] ?? EMPTY_COMPLETED_TURNS
@@ -2026,7 +2055,13 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
                 // setup-script output, and other multi-line system notes
                 // preserve headings, lists, and code blocks instead of
                 // collapsing newlines into a single paragraph.
-                <MessageMarkdown content={msg.content} />
+                <HighlightedMessageMarkdown content={msg.content} query={searchQuery} />
+              ) : searchQuery ? (
+                // While the search bar is open, render user messages as plain
+                // highlighted text so matches inside them get marked. The
+                // ultrathink rainbow animation is suppressed in this mode —
+                // searchability wins over the easter egg.
+                <HighlightedPlainText text={msg.content} query={searchQuery} />
               ) : (
                 renderUltrathinkText(msg.content, {
                   animated: false,
@@ -2070,9 +2105,11 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
 const ToolActivitiesSection = memo(function ToolActivitiesSection({
   workspaceId,
   isRunning,
+  searchQuery,
 }: {
   workspaceId: string;
   isRunning: boolean;
+  searchQuery: string;
 }) {
   const activities = useAppStore(
     (s) => s.toolActivities[workspaceId] ?? EMPTY_ACTIVITIES
@@ -2121,7 +2158,7 @@ const ToolActivitiesSection = memo(function ToolActivitiesSection({
                   <span className={styles.toolName} style={{ color: toolColor(act.toolName) }}>{act.toolName}</span>
                   {act.summary && (
                     <span className={styles.toolSummary}>
-                      {act.summary}
+                      <HighlightedPlainText text={act.summary} query={searchQuery} />
                     </span>
                   )}
                 </div>

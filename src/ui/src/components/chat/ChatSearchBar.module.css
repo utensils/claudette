@@ -1,0 +1,73 @@
+.bar {
+  /* Absolute (overlay) rather than sticky so the bar appearing/disappearing
+     doesn't push the messages list down by its height — opening Cmd+F would
+     otherwise shift every visible message by ~40px, which the issue calls
+     out as "portal-positioned to avoid layout shift". The .messages parent
+     uses `contain: layout style`, which already establishes a containing
+     block for absolute descendants — no need for `position: relative`. */
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--chat-header-bg);
+  border-bottom: 1px solid var(--divider);
+  /* Subtle translucency so the bar reads as floating over content rather
+     than as a hard separator. backdrop-filter blurs whatever's behind it. */
+  backdrop-filter: blur(8px);
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  background: var(--chat-input-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  outline: none;
+}
+
+.input:focus {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 1px var(--accent-bg-strong);
+}
+
+.counter {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 56px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.iconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  color: var(--text-muted);
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.iconButton:hover:not(:disabled) {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.iconButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}

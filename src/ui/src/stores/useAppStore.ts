@@ -119,6 +119,19 @@ export interface PlanApproval {
 }
 
 /**
+ * Per-workspace state for the in-chat Cmd/Ctrl+F search bar.
+ * `query` is preserved when the bar is closed so re-opening with the same
+ * workspace selected restores the previous search.
+ * `matchIndex` is the active match's 0-based index across all hits in the
+ * current workspace; -1 when there are no matches yet.
+ */
+export interface ChatSearchState {
+  open: boolean;
+  query: string;
+  matchIndex: number;
+}
+
+/**
  * Token usage from the most recent completed turn for a workspace.
  * Lives as its own slice (`latestTurnUsage`) rather than being derived from
  * `completedTurns` because `finalizeTurn` early-returns for tool-free turns
@@ -232,6 +245,13 @@ interface AppState {
   planApprovals: Record<string, PlanApproval>;
   setPlanApproval: (p: PlanApproval) => void;
   clearPlanApproval: (wsId: string) => void;
+
+  // -- Chat Search (per-workspace) --
+  chatSearch: Record<string, ChatSearchState>;
+  openChatSearch: (wsId: string) => void;
+  closeChatSearch: (wsId: string) => void;
+  setChatSearchQuery: (wsId: string, query: string) => void;
+  setChatSearchMatchIndex: (wsId: string, idx: number) => void;
 
   // -- Queued Messages (sent while agent is running, dispatched when idle) --
   queuedMessages: Record<
@@ -957,6 +977,66 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { planApprovals: rest };
     }),
 
+  // -- Chat Search (per-workspace) --
+  chatSearch: {},
+  openChatSearch: (wsId) =>
+    set((s) => {
+      const prev = s.chatSearch[wsId];
+      return {
+        chatSearch: {
+          ...s.chatSearch,
+          [wsId]: {
+            open: true,
+            query: prev?.query ?? "",
+            matchIndex: prev?.matchIndex ?? -1,
+          },
+        },
+      };
+    }),
+  closeChatSearch: (wsId) =>
+    set((s) => {
+      const prev = s.chatSearch[wsId];
+      // Preserve query/matchIndex so re-opening restores the previous search.
+      // Return the existing state reference for no-op paths so Zustand's
+      // identity check skips the listener notification entirely.
+      if (!prev) return s;
+      if (!prev.open) return s;
+      return {
+        chatSearch: {
+          ...s.chatSearch,
+          [wsId]: { ...prev, open: false },
+        },
+      };
+    }),
+  setChatSearchQuery: (wsId, query) =>
+    set((s) => {
+      const prev = s.chatSearch[wsId] ?? {
+        open: true,
+        query: "",
+        matchIndex: -1,
+      };
+      // Reset matchIndex on every query change — the new query produces a
+      // fresh match set, so any prior index is meaningless.
+      return {
+        chatSearch: {
+          ...s.chatSearch,
+          [wsId]: { ...prev, query, matchIndex: -1 },
+        },
+      };
+    }),
+  setChatSearchMatchIndex: (wsId, idx) =>
+    set((s) => {
+      const prev = s.chatSearch[wsId];
+      if (!prev) return s;
+      if (prev.matchIndex === idx) return s;
+      return {
+        chatSearch: {
+          ...s.chatSearch,
+          [wsId]: { ...prev, matchIndex: idx },
+        },
+      };
+    }),
+
   // -- Queued Messages --
   queuedMessages: {},
   setQueuedMessage: (wsId, content, mentionedFiles, attachments) =>
@@ -989,6 +1069,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => {
       const { [wsId]: _q, ...restQuestions } = s.agentQuestions;
       const { [wsId]: _p, ...restApprovals } = s.planApprovals;
+      const { [wsId]: _cs, ...restChatSearch } = s.chatSearch;
       // Update lastMessages so workspace preview cards stay in sync.
       const lastMsg =
         messages.length > 0 ? messages[messages.length - 1] : undefined;
@@ -1024,6 +1105,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         streamingThinking: { ...s.streamingThinking, [wsId]: "" },
         agentQuestions: restQuestions,
         planApprovals: restApprovals,
+        chatSearch: restChatSearch,
         checkpoints: {
           ...s.checkpoints,
           [wsId]: (() => {
