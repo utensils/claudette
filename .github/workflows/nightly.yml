@@ -337,6 +337,12 @@ jobs:
         run: |
           set -euo pipefail
 
+          cleanup_staging() {
+            gh release delete "$STAGING_TAG" --yes --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/${STAGING_TAG}" 2>/dev/null || true
+          }
+          trap cleanup_staging EXIT
+
           if ! gh release view "$STAGING_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "::error::${STAGING_TAG} release is not reachable; aborting promotion"
             exit 1
@@ -387,6 +393,3 @@ jobs:
             --draft=false
 
           .github/scripts/validate-public-latest.sh "$GITHUB_REPOSITORY" nightly
-
-          gh release delete "$STAGING_TAG" --yes --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
-          gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/${STAGING_TAG}" 2>/dev/null || true

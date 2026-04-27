@@ -329,6 +329,7 @@ jobs:
         run: .github/scripts/validate-public-latest.sh "${{ github.repository }}" "${{ needs.resolve-tag.outputs.tag }}"
 
       - name: Delete staging release
+        if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

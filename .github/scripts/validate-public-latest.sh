@@ -14,7 +14,40 @@ LATEST_URL="https://github.com/${REPO}/releases/download/${TAG}/latest.json"
 rm -rf "$WORK_DIR"
 mkdir -p "$WORK_DIR"
 
-curl -fsSL "$LATEST_URL" -o "$WORK_DIR/latest.json"
+curl_with_retry() {
+  local label="$1"
+  shift
+
+  local attempt=1
+  local max_attempts=8
+  local delay=5
+  local status=0
+
+  while true; do
+    if curl -fsSL "$@"; then
+      return 0
+    fi
+
+    status=$?
+    if [ "$attempt" -ge "$max_attempts" ]; then
+      echo "::error::failed to validate ${label} after ${attempt} attempts (curl ${status})" >&2
+      return "$status"
+    fi
+
+    echo "::warning::failed to validate ${label} on attempt ${attempt} (curl ${status}); retrying in ${delay}s" >&2
+    sleep "$delay"
+
+    attempt=$((attempt + 1))
+    if [ "$delay" -lt 30 ]; then
+      delay=$((delay * 2))
+      if [ "$delay" -gt 30 ]; then
+        delay=30
+      fi
+    fi
+  done
+}
+
+curl_with_retry "$LATEST_URL" "$LATEST_URL" -o "$WORK_DIR/latest.json"
 
 python3 - "$WORK_DIR/latest.json" "$WORK_DIR/urls.txt" "$REPO" "$TAG" <<'PY'
 import json
@@ -73,5 +106,5 @@ PY
 
 while IFS= read -r url; do
   echo "validating $url"
-  curl -fsSL -r 0-0 -o /dev/null "$url"
+  curl_with_retry "$url" -r 0-0 -o /dev/null "$url"
 done < "$WORK_DIR/urls.txt"
