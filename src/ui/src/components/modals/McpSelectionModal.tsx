@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import {
   detectMcpServers,
@@ -15,7 +16,6 @@ const SOURCE_LABELS: Record<string, string> = {
   repo_local_config: ".claude.json",
 };
 
-/** Infer transport type from the config object for display. */
 function getTransportType(config: Record<string, unknown>): string {
   if (config.url) {
     const url = String(config.url);
@@ -27,7 +27,6 @@ function getTransportType(config: Record<string, unknown>): string {
   return "unknown";
 }
 
-/** Get a one-line summary of the config for display. */
 function getConfigSummary(config: Record<string, unknown>): string {
   if (config.command) {
     const args = Array.isArray(config.args) ? config.args.join(" ") : "";
@@ -38,6 +37,8 @@ function getConfigSummary(config: Record<string, unknown>): string {
 }
 
 export function McpSelectionModal() {
+  const { t } = useTranslation("modals");
+  const { t: tCommon } = useTranslation("common");
   const closeModal = useAppStore((s) => s.closeModal);
   const modalData = useAppStore((s) => s.modalData);
   const repoId = modalData.repoId as string;
@@ -48,16 +49,12 @@ export function McpSelectionModal() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Accept pre-fetched detected servers via modalData to avoid redundant detection.
   const prefetchedMcps = modalData.detectedMcps as McpServer[] | undefined;
 
   useEffect(() => {
     if (!repoId) return;
     setLoading(true);
 
-    // Load both detected and already-saved servers, then merge.
-    // Already-saved servers stay selected; newly detected ones are also
-    // pre-selected (opt-out default).
     const detectPromise = prefetchedMcps
       ? Promise.resolve(prefetchedMcps)
       : detectMcpServers(repoId);
@@ -65,8 +62,6 @@ export function McpSelectionModal() {
       .then(([detected, saved]) => {
         const savedNames = new Set(saved.map((s) => s.name));
 
-        // Build merged list: start with detected servers, then add any
-        // saved servers that were NOT re-detected (source may have changed).
         const merged = new Map<string, McpServer>();
         for (const s of detected) {
           merged.set(s.name, s);
@@ -89,11 +84,8 @@ export function McpSelectionModal() {
 
         const all = Array.from(merged.values());
         setServers(all);
-        // Pre-select everything: already-saved + newly detected.
         setSelected(new Set(all.map((s) => s.name)));
 
-        // If nothing to show and nothing was saved, close automatically
-        // (first-time add-repo with no MCPs).
         if (all.length === 0 && savedNames.size === 0) {
           closeModal();
         }
@@ -127,21 +119,21 @@ export function McpSelectionModal() {
 
   if (loading) {
     return (
-      <Modal title="MCP servers" onClose={closeModal}>
-        <div className={styles.loading}>Detecting MCP servers...</div>
+      <Modal title={t("mcp_servers_title")} onClose={closeModal}>
+        <div className={styles.loading}>{t("mcp_servers_detecting")}</div>
       </Modal>
     );
   }
 
   if (servers.length === 0) {
     return (
-      <Modal title="MCP servers" onClose={closeModal}>
+      <Modal title={t("mcp_servers_title")} onClose={closeModal}>
         <p className={styles.description}>
-          No non-portable MCP servers detected for this repository.
+          {t("mcp_servers_none_found")}
         </p>
         <div className={shared.actions}>
           <button className={shared.btn} onClick={closeModal}>
-            Close
+            {tCommon("close")}
           </button>
         </div>
       </Modal>
@@ -149,10 +141,9 @@ export function McpSelectionModal() {
   }
 
   return (
-    <Modal title="MCP servers detected" onClose={closeModal}>
+    <Modal title={t("mcp_servers_detected_title")} onClose={closeModal}>
       <p className={styles.description}>
-        These MCP servers are configured for this project but won't be
-        automatically available in workspaces. Select which to include:
+        {t("mcp_servers_detected_desc")}
       </p>
 
       <div className={styles.serverList}>
@@ -185,14 +176,14 @@ export function McpSelectionModal() {
 
       <div className={shared.actions}>
         <button className={shared.btn} onClick={closeModal}>
-          Skip
+          {tCommon("skip")}
         </button>
         <button
           className={shared.btnPrimary}
           onClick={handleSave}
           disabled={saving}
         >
-          {saving ? "Saving..." : "Save Selections"}
+          {saving ? t("mcp_servers_saving") : t("mcp_servers_confirm")}
         </button>
       </div>
     </Modal>

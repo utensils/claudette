@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { CircleDollarSign, Sparkles, Zap, Brain, BookOpen, Gauge, Eye, EyeOff, Globe } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import { resetAgentSession, setAppSetting, getAppSetting } from "../../services/tauri";
@@ -38,6 +39,7 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
   const clearAgentQuestion = useAppStore((s) => s.clearAgentQuestion);
   const clearPlanApproval = useAppStore((s) => s.clearPlanApproval);
   const metaKeyHeld = useAppStore((s) => s.metaKeyHeld);
+  const { t } = useTranslation("chat");
 
   const [loaded, setLoaded] = useState(false);
   const [effortSelectorOpen, setEffortSelectorOpen] = useState(false);
@@ -166,7 +168,7 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
         className={`${styles.chip}`}
         onClick={() => setModelSelectorOpen(!modelSelectorOpen)}
         disabled={disabled}
-        title={isExtraUsage ? "Change model (extra usage: 1M context billed at API rates)" : "Change model"}
+        title={isExtraUsage ? t("change_model_extra_usage") : t("change_model")}
       >
         <Sparkles size={14} />
         <span className={styles.chipLabel}>{modelLabel}</span>
@@ -180,7 +182,7 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
           className={`${styles.chip} ${fastMode ? styles.chipActive : ""}`}
           onClick={toggleFast}
           disabled={disabled}
-          title={`${fastMode ? "Disable" : "Enable"} fast mode (faster output, same model)`}
+          title={fastMode ? t("fast_mode_disable") : t("fast_mode_enable")}
           aria-pressed={fastMode}
         >
           <Zap size={14} />
@@ -191,18 +193,18 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
         className={`${styles.chip} ${thinkingEnabled ? styles.chipActive : ""}`}
         onClick={toggleThinking}
         disabled={disabled}
-        title={`${thinkingEnabled ? "Disable" : "Enable"} extended thinking (forces reasoning on every turn)`}
+        title={thinkingEnabled ? t("thinking_disable") : t("thinking_enable")}
         aria-pressed={thinkingEnabled}
       >
         <Brain size={14} />
-        <span className={styles.chipLabel}>Thinking</span>
+        <span className={styles.chipLabel}>{t("thinking_chip")}</span>
         <kbd className={`shortcut-badge ${metaKeyHeld ? "shortcut-badge-visible" : ""}`} aria-hidden="true">{mod}T</kbd>
       </button>
 
       <button
         className={`${styles.chip} ${showThinkingBlocks ? styles.chipActive : ""}`}
         onClick={toggleShowThinking}
-        title={`${showThinkingBlocks ? "Hide" : "Show"} thinking traces in chat`}
+        title={showThinkingBlocks ? t("hide_thinking") : t("show_thinking")}
         aria-pressed={showThinkingBlocks}
       >
         {showThinkingBlocks ? <Eye size={14} /> : <EyeOff size={14} />}
@@ -213,7 +215,7 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
           className={styles.chip}
           onClick={() => setEffortSelectorOpen(!effortSelectorOpen)}
           disabled={disabled}
-          title="Set effort level"
+          title={t("set_effort")}
         >
           <Gauge size={14} />
           <span className={styles.chipLabel}>{effortLabel}</span>
@@ -224,11 +226,11 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
         className={`${styles.chip} ${planMode ? styles.chipActive : ""}`}
         onClick={togglePlan}
         disabled={disabled}
-        title={`${planMode ? "Disable" : "Enable"} plan mode`}
+        title={planMode ? t("plan_mode_disable") : t("plan_mode_enable")}
         aria-pressed={planMode}
       >
         <BookOpen size={14} />
-        <span className={styles.chipLabel}>Plan</span>
+        <span className={styles.chipLabel}>{t("plan_chip")}</span>
         <kbd className={`shortcut-badge ${metaKeyHeld ? "shortcut-badge-visible" : ""}`} aria-hidden="true">⇧Tab</kbd>
       </button>
 
@@ -236,11 +238,11 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
         className={`${styles.chip} ${chromeEnabled ? styles.chipActive : ""}`}
         onClick={toggleChrome}
         disabled={disabled}
-        title={`${chromeEnabled ? "Disable" : "Enable"} Chrome browser mode`}
+        title={chromeEnabled ? t("chrome_mode_disable") : t("chrome_mode_enable")}
         aria-pressed={chromeEnabled}
       >
         <Globe size={14} />
-        <span className={styles.chipLabel}>Chrome</span>
+        <span className={styles.chipLabel}>{t("chrome_chip")}</span>
       </button>
 
       {modelSelectorOpen && (

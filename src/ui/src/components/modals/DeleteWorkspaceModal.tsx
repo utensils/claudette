@@ -1,10 +1,13 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { deleteWorkspace } from "../../services/tauri";
 import { Modal } from "./Modal";
 import shared from "./shared.module.css";
 
 export function DeleteWorkspaceModal() {
+  const { t } = useTranslation("modals");
+  const { t: tCommon } = useTranslation("common");
   const closeModal = useAppStore((s) => s.closeModal);
   const modalData = useAppStore((s) => s.modalData);
   const removeWorkspace = useAppStore((s) => s.removeWorkspace);
@@ -25,21 +28,20 @@ export function DeleteWorkspaceModal() {
   };
 
   return (
-    <Modal title="Delete workspace" onClose={closeModal}>
+    <Modal title={t("delete_workspace_title")} onClose={closeModal}>
       <div className={shared.warning}>
-        Are you sure you want to delete <strong>{wsName}</strong>? The branch
-        and any unmerged commits will be permanently deleted.
+        {t("delete_workspace_warning_pre")} <strong>{wsName}</strong>{t("delete_workspace_warning_post")}
       </div>
       <div className={shared.actions}>
         <button className={shared.btn} onClick={closeModal}>
-          Cancel
+          {tCommon("cancel")}
         </button>
         <button
           className={shared.btnDanger}
           onClick={handleDelete}
           disabled={loading}
         >
-          {loading ? "Deleting..." : "Delete"}
+          {loading ? t("delete_workspace_deleting") : t("delete_workspace_confirm")}
         </button>
       </div>
     </Modal>

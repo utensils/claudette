@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { Paperclip, Settings } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import {
@@ -39,6 +40,7 @@ export function AttachMenu({
   onClose,
   isRemote,
 }: AttachMenuProps) {
+  const { t } = useTranslation("chat");
   const mcpStatus = useAppStore((s) =>
     repoId ? s.mcpStatus[repoId] : undefined,
   );
@@ -128,14 +130,14 @@ export function AttachMenu({
           disabled={isRemote}
           title={
             isRemote
-              ? "Attachments not supported for remote workspaces"
+              ? t("attachments_not_supported")
               : undefined
           }
         >
           <span className={styles.menuIcon}>
             <Paperclip size={14} />
           </span>
-          Add files
+          {t("add_files")}
         </button>
 
         {/* Connectors — servers grouped by source with toggle switches */}
@@ -179,7 +181,7 @@ export function AttachMenu({
                             >
                               {server.name}
                             </span>
-                            <span className={styles.reconnectHint}>retry</span>
+                            <span className={styles.reconnectHint}>{t("mcp_retry")}</span>
                           </button>
                         ) : (
                           <div className={styles.serverInfo}>
@@ -197,7 +199,7 @@ export function AttachMenu({
                         <button
                           className={`${styles.toggle} ${server.enabled ? styles.toggleOn : ""}`}
                           onClick={() => handleToggle(server, !server.enabled)}
-                          aria-label={`${server.enabled ? "Disable" : "Enable"} ${server.name}`}
+                          aria-label={server.enabled ? t("mcp_disable_aria", { name: server.name }) : t("mcp_enable_aria", { name: server.name })}
                           role="switch"
                           aria-checked={server.enabled}
                         >
@@ -220,7 +222,7 @@ export function AttachMenu({
               <span className={styles.menuIcon}>
                 <Settings size={14} />
               </span>
-              Manage connectors
+              {t("manage_connectors")}
             </button>
           </>
         )}

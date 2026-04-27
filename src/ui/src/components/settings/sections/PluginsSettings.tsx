@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "../../../stores/useAppStore";
 import {
@@ -25,11 +26,6 @@ import type {
 import type { VoiceDownloadProgress, VoiceProviderInfo } from "../../../types/voice";
 import styles from "../Settings.module.css";
 
-const KIND_LABELS: Record<ClaudettePluginKind, string> = {
-  scm: "Source control",
-  "env-provider": "Environment providers",
-};
-
 const KIND_ORDER: ClaudettePluginKind[] = ["scm", "env-provider"];
 
 function formatBytes(bytes: number): string {
@@ -38,17 +34,8 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
-/**
- * Plugins settings section — shows Claudette's own Lua plugins (SCM
- * providers + env providers) with global enable/disable toggles and
- * per-plugin setting forms.
- *
- * Distinct from the "Claude Code Plugins" section, which manages
- * the Claude Code marketplace. These plugins are bundled with
- * Claudette (or dropped into `~/.claudette/plugins/`) and run inside
- * Claudette's sandboxed Lua VM.
- */
 export function PluginsSettings() {
+  const { t } = useTranslation("settings");
   const [plugins, setPlugins] = useState<ClaudettePluginInfo[] | null>(null);
   const [builtins, setBuiltins] = useState<BuiltinPluginInfo[] | null>(null);
   const [voiceProviders, setVoiceProviders] = useState<VoiceProviderInfo[] | null>(null);
@@ -146,10 +133,6 @@ export function PluginsSettings() {
     void refresh();
   }, [refresh]);
 
-  // Auto-expand the targeted voice provider when the user is redirected
-  // here from the chat mic button to grant permissions / install a model.
-  // Consumes the focus signal so it only fires on the redirect, not on
-  // every subsequent re-render.
   const voiceProviderFocus = useAppStore((s) => s.voiceProviderFocus);
   const focusVoiceProvider = useAppStore((s) => s.focusVoiceProvider);
   useEffect(() => {
@@ -220,21 +203,21 @@ export function PluginsSettings() {
       const warnings = await reseedBundledPlugins();
       setReseedMessage(
         warnings.length === 0
-          ? "Bundled plugins reseeded."
-          : `Reseeded with ${warnings.length} warning(s): ${warnings.join("; ")}`,
+          ? t("plugins_reseeded")
+          : t("plugins_reseeded_warnings", { count: warnings.length, warnings: warnings.join("; ") }),
       );
       await refresh();
     } catch (e) {
       setError(String(e));
     }
-  }, [refresh]);
+  }, [refresh, t]);
 
   if (error) {
     return (
       <div>
-        <h2 className={styles.sectionTitle}>Plugins</h2>
+        <h2 className={styles.sectionTitle}>{t("plugins_title")}</h2>
         <div className={styles.mcpError} role="alert">
-          Failed to load plugins: {error}
+          {t("plugins_load_error", { error })}
         </div>
       </div>
     );
@@ -243,8 +226,8 @@ export function PluginsSettings() {
   if (loading && plugins === null) {
     return (
       <div>
-        <h2 className={styles.sectionTitle}>Plugins</h2>
-        <div className={styles.settingDescription}>Loading…</div>
+        <h2 className={styles.sectionTitle}>{t("plugins_title")}</h2>
+        <div className={styles.settingDescription}>{t("plugins_loading")}</div>
       </div>
     );
   }
@@ -257,22 +240,17 @@ export function PluginsSettings() {
 
   return (
     <div>
-      <h2 className={styles.sectionTitle}>Plugins</h2>
+      <h2 className={styles.sectionTitle}>{t("plugins_title")}</h2>
       <div className={styles.settingDescription}>
-        Claudette's built-in plugins — source-control providers and
-        environment activators. Toggle a plugin off to disable it
-        globally; open a row to configure its behaviour.{" "}
-        <em>(Not to be confused with Claude Code Plugins, which manages
-        marketplace extensions for the Claude CLI itself.)</em>
+        {t("plugins_desc")}{" "}
+        <em>{t("plugins_desc_note")}</em>
       </div>
 
       {builtins && builtins.length > 0 && (
         <div className={styles.fieldGroup}>
-          <div className={styles.mcpGroupLabel}>Built-in Claudette plugins</div>
+          <div className={styles.mcpGroupLabel}>{t("plugins_builtins_label")}</div>
           <div className={styles.mcpList}>
             {builtins.map((p) => {
-              // Namespace the expanded key so a future Lua plugin named the
-              // same as a built-in can't accidentally co-toggle.
               const key = `builtin:${p.name}`;
               return (
                 <BuiltinPluginRow
@@ -290,7 +268,7 @@ export function PluginsSettings() {
 
       {voiceProviders && voiceProviders.length > 0 && (
         <div className={styles.fieldGroup}>
-          <div className={styles.mcpGroupLabel}>Voice providers</div>
+          <div className={styles.mcpGroupLabel}>{t("plugins_voice_label")}</div>
           <div className={styles.mcpList}>
             {voiceProviders.map((provider) => {
               const key = `voice:${provider.id}`;
@@ -318,15 +296,14 @@ export function PluginsSettings() {
       )}
 
       {grouped.length === 0 && (
-        <div className={styles.settingDescription}>
-          No plugins discovered. This shouldn't happen — bundled plugins
-          are seeded on first run. Try the Reseed button below.
-        </div>
+        <div className={styles.settingDescription}>{t("plugins_none")}</div>
       )}
 
       {grouped.map(({ kind, items }) => (
         <div key={kind} className={styles.fieldGroup}>
-          <div className={styles.mcpGroupLabel}>{KIND_LABELS[kind]}</div>
+          <div className={styles.mcpGroupLabel}>
+            {kind === "scm" ? t("plugins_kind_scm") : t("plugins_kind_env_provider")}
+          </div>
           <div className={styles.mcpList}>
             {items.map((plugin) => (
               <PluginRow
@@ -350,7 +327,7 @@ export function PluginsSettings() {
           className={styles.iconBtn}
           onClick={handleReseed}
         >
-          Reload bundled plugins
+          {t("plugins_reload")}
         </button>
         {reseedMessage && (
           <span className={styles.settingDescription}>{reseedMessage}</span>
@@ -391,6 +368,7 @@ function VoiceProviderRow({
   onPrepare,
   onRemoveModel,
 }: VoiceProviderRowProps) {
+  const { t } = useTranslation("settings");
   const dotColor = !provider.enabled
     ? "var(--text-faint)"
     : provider.status === "ready"
@@ -438,7 +416,7 @@ function VoiceProviderRow({
             onClick={onToggleExpand}
             aria-expanded={expanded}
           >
-            {expanded ? "Hide details" : "Details"}
+            {expanded ? t("plugins_hide_details") : t("plugins_details")}
           </button>
           {!provider.selected && provider.enabled && (
             <button
@@ -446,7 +424,7 @@ function VoiceProviderRow({
               className={styles.envDetailsBtn}
               onClick={onSelect}
             >
-              Use
+              {t("plugins_voice_use")}
             </button>
           )}
           <button
@@ -455,7 +433,7 @@ function VoiceProviderRow({
             onClick={() => onToggleEnabled(!provider.enabled)}
             role="switch"
             aria-checked={provider.enabled}
-            aria-label={`${provider.enabled ? "Disable" : "Enable"} ${provider.name}`}
+            aria-label={provider.enabled ? t("plugins_disable_aria", { name: provider.name }) : t("plugins_enable_aria", { name: provider.name })}
           >
             <span className={styles.mcpToggleKnob} />
           </button>
@@ -469,17 +447,17 @@ function VoiceProviderRow({
           <div className={styles.envErrorHint}>{provider.privacyLabel}</div>
           {provider.modelSizeLabel && (
             <div className={styles.envErrorHint}>
-              Model size: {provider.modelSizeLabel}
+              {t("plugins_voice_model_size", { label: provider.modelSizeLabel })}
             </div>
           )}
           {provider.cachePath && (
             <div className={styles.envErrorHint}>
-              Cache path: <code>{provider.cachePath}</code>
+              {t("plugins_voice_cache_path")} <code>{provider.cachePath}</code>
             </div>
           )}
           {provider.acceleratorLabel && (
             <div className={styles.envErrorHint}>
-              Acceleration: {provider.acceleratorLabel}
+              {t("plugins_voice_acceleration", { label: provider.acceleratorLabel })}
             </div>
           )}
           {provider.error && (
@@ -491,10 +469,12 @@ function VoiceProviderRow({
           )}
           {progress && (provider.status === "downloading" || preparing) && (
             <div className={styles.envErrorHint}>
-              Downloading {progress.filename}:{" "}
-              {progress.percent === null
-                ? formatBytes(progress.overallDownloadedBytes)
-                : `${Math.round(progress.percent * 100)}%`}
+              {t("plugins_voice_downloading_progress", {
+                filename: progress.filename,
+                progress: progress.percent === null
+                  ? formatBytes(progress.overallDownloadedBytes)
+                  : `${Math.round(progress.percent * 100)}%`,
+              })}
             </div>
           )}
           <div className={styles.buttonRow}>
@@ -505,7 +485,7 @@ function VoiceProviderRow({
                 onClick={onPrepare}
                 disabled={preparing}
               >
-                {preparing ? "Downloading…" : "Download model"}
+                {preparing ? t("plugins_voice_downloading") : t("plugins_voice_download_model")}
               </button>
             )}
             {canPreparePlatform && (
@@ -515,12 +495,12 @@ function VoiceProviderRow({
                 onClick={onPrepare}
                 disabled={preparing}
               >
-                {preparing ? "Preparing…" : "Set up permissions"}
+                {preparing ? t("plugins_voice_preparing") : t("plugins_voice_setup_permissions")}
               </button>
             )}
             {provider.status === "downloading" && (
               <button type="button" className={styles.iconBtn} disabled>
-                Downloading…
+                {t("plugins_voice_downloading")}
               </button>
             )}
             {provider.canRemoveModel && (
@@ -529,7 +509,7 @@ function VoiceProviderRow({
                 className={styles.iconBtn}
                 onClick={onRemoveModel}
               >
-                Remove model
+                {t("plugins_voice_remove_model")}
               </button>
             )}
           </div>
@@ -546,6 +526,7 @@ function PluginRow({
   onToggleEnabled,
   onSettingChange,
 }: PluginRowProps) {
+  const { t } = useTranslation("settings");
   const hasSettings = plugin.settings_schema.length > 0;
   const hasCliIssue = !plugin.cli_available;
   const dotColor = !plugin.enabled
@@ -554,10 +535,10 @@ function PluginRow({
       ? "var(--status-stopped)"
       : "var(--status-running)";
   const badge = !plugin.enabled
-    ? "disabled"
+    ? t("plugins_badge_disabled")
     : hasCliIssue
-      ? "cli missing"
-      : "loaded";
+      ? t("plugins_badge_cli_missing")
+      : t("plugins_badge_loaded");
 
   return (
     <div>
@@ -586,7 +567,7 @@ function PluginRow({
               onClick={onToggleExpand}
               aria-expanded={expanded}
             >
-              {expanded ? "Hide details" : "Details"}
+              {expanded ? t("plugins_hide_details") : t("plugins_details")}
             </button>
           )}
           <button
@@ -595,7 +576,7 @@ function PluginRow({
             onClick={() => onToggleEnabled(!plugin.enabled)}
             role="switch"
             aria-checked={plugin.enabled}
-            aria-label={`${plugin.enabled ? "Disable" : "Enable"} ${plugin.display_name}`}
+            aria-label={plugin.enabled ? t("plugins_disable_aria", { name: plugin.display_name }) : t("plugins_enable_aria", { name: plugin.display_name })}
           >
             <span className={styles.mcpToggleKnob} />
           </button>
@@ -608,7 +589,7 @@ function PluginRow({
           </div>
           {plugin.required_clis.length > 0 && (
             <div className={styles.envErrorHint}>
-              Requires:{" "}
+              {t("plugins_requires")}{" "}
               {plugin.required_clis.map((cli, i) => (
                 <span key={cli}>
                   {i > 0 && ", "}
@@ -619,7 +600,7 @@ function PluginRow({
                 <>
                   {" "}
                   <strong style={{ color: "var(--status-stopped)" }}>
-                    (not found on PATH)
+                    {t("plugins_cli_not_found")}
                   </strong>
                 </>
               )}
@@ -722,12 +703,6 @@ function SettingInput({
   );
 }
 
-/**
- * Row for a built-in (Rust-implemented) Claudette plugin. Simpler than the
- * Lua plugin row because there's no manifest, no setting fields, no CLI
- * dependency — just a description (behind a Details toggle, matching the
- * Lua-plugin row layout) and an enable/disable switch.
- */
 interface BuiltinPluginRowProps {
   plugin: BuiltinPluginInfo;
   expanded: boolean;
@@ -741,10 +716,11 @@ export function BuiltinPluginRow({
   onToggleExpand,
   onToggleEnabled,
 }: BuiltinPluginRowProps) {
+  const { t } = useTranslation("settings");
   const dotColor = plugin.enabled
     ? "var(--status-running)"
     : "var(--text-faint)";
-  const badge = plugin.enabled ? "loaded" : "disabled";
+  const badge = plugin.enabled ? t("plugins_badge_loaded") : t("plugins_badge_disabled");
   return (
     <div>
       <div className={styles.mcpRow}>
@@ -768,7 +744,7 @@ export function BuiltinPluginRow({
             onClick={onToggleExpand}
             aria-expanded={expanded}
           >
-            {expanded ? "Hide details" : "Details"}
+            {expanded ? t("plugins_hide_details") : t("plugins_details")}
           </button>
           <button
             type="button"
@@ -776,7 +752,7 @@ export function BuiltinPluginRow({
             onClick={() => onToggleEnabled(!plugin.enabled)}
             role="switch"
             aria-checked={plugin.enabled}
-            aria-label={`${plugin.enabled ? "Disable" : "Enable"} ${plugin.title}`}
+            aria-label={plugin.enabled ? t("plugins_disable_aria", { name: plugin.title }) : t("plugins_enable_aria", { name: plugin.title })}
           >
             <span className={styles.mcpToggleKnob} />
           </button>

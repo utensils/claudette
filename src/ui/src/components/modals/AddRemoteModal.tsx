@@ -1,10 +1,13 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { addRemoteConnection } from "../../services/tauri";
 import { Modal } from "./Modal";
 import shared from "./shared.module.css";
 
 export function AddRemoteModal() {
+  const { t } = useTranslation("modals");
+  const { t: tCommon } = useTranslation("common");
   const closeModal = useAppStore((s) => s.closeModal);
   const addRemote = useAppStore((s) => s.addRemoteConnection);
   const addActiveId = useAppStore((s) => s.addActiveRemoteId);
@@ -33,32 +36,32 @@ export function AddRemoteModal() {
   };
 
   return (
-    <Modal title="Add remote server" onClose={closeModal}>
+    <Modal title={t("add_remote_title")} onClose={closeModal}>
       <div className={shared.field}>
-        <label className={shared.label}>Connection string</label>
+        <label className={shared.label}>{t("add_remote_conn_label")}</label>
         <input
           className={shared.input}
           value={connectionString}
           onChange={(e) => setConnectionString(e.target.value)}
-          placeholder="claudette://hostname:7683/pairing-token"
+          placeholder={t("add_remote_conn_placeholder")}
           onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
           autoFocus
         />
         <div className={shared.smallHint}>
-          Paste the connection string shown by claudette-server on the remote machine.
+          {t("add_remote_conn_hint")}
         </div>
         {error && <div className={shared.error}>{error}</div>}
       </div>
       <div className={shared.actions}>
         <button className={shared.btn} onClick={closeModal}>
-          Cancel
+          {tCommon("cancel")}
         </button>
         <button
           className={shared.btnPrimary}
           onClick={handleSubmit}
           disabled={loading || !connectionString.trim()}
         >
-          {loading ? "Connecting..." : "Connect"}
+          {loading ? t("add_remote_connecting") : t("add_remote_confirm")}
         </button>
       </div>
     </Modal>

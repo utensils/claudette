@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import {
   discoverWorktrees,
@@ -17,6 +18,8 @@ interface WorktreeRow extends DiscoveredWorktree {
 }
 
 export function ImportWorktreesModal() {
+  const { t } = useTranslation("modals");
+  const { t: tCommon } = useTranslation("common");
   const closeModal = useAppStore((s) => s.closeModal);
   const openModal = useAppStore((s) => s.openModal);
   const addWorkspace = useAppStore((s) => s.addWorkspace);
@@ -101,21 +104,21 @@ export function ImportWorktreesModal() {
 
   if (loading) {
     return (
-      <Modal title="Import worktrees" onClose={chainOrClose}>
-        <div className={styles.loading}>Scanning for existing worktrees...</div>
+      <Modal title={t("import_worktrees_title")} onClose={chainOrClose}>
+        <div className={styles.loading}>{t("import_worktrees_scanning")}</div>
       </Modal>
     );
   }
 
   if (rows.length === 0) {
     return (
-      <Modal title="Import worktrees" onClose={chainOrClose}>
+      <Modal title={t("import_worktrees_title")} onClose={chainOrClose}>
         <p className={styles.description}>
-          No existing worktrees found for this repository.
+          {t("import_worktrees_none_found")}
         </p>
         <div className={shared.actions}>
           <button className={shared.btn} onClick={chainOrClose}>
-            Close
+            {tCommon("close")}
           </button>
         </div>
       </Modal>
@@ -123,10 +126,9 @@ export function ImportWorktreesModal() {
   }
 
   return (
-    <Modal title="Existing worktrees found" onClose={chainOrClose}>
+    <Modal title={t("import_worktrees_found_title")} onClose={chainOrClose}>
       <p className={styles.description}>
-        These git worktrees already exist for this repository.
-        Select which ones to import as workspaces:
+        {t("import_worktrees_found_desc")}
       </p>
 
       <div className={styles.worktreeList}>
@@ -169,7 +171,7 @@ export function ImportWorktreesModal() {
 
       <div className={shared.actions}>
         <button className={shared.btn} onClick={chainOrClose}>
-          Skip
+          {tCommon("skip")}
         </button>
         <button
           className={shared.btnPrimary}
@@ -177,8 +179,10 @@ export function ImportWorktreesModal() {
           disabled={importing || selected.size === 0 || !allNamesValid}
         >
           {importing
-            ? "Importing..."
-            : `Import ${selected.size} Workspace${selected.size !== 1 ? "s" : ""}`}
+            ? t("import_worktrees_importing")
+            : selected.size === 1
+              ? t("import_worktrees_confirm_singular", { count: selected.size })
+              : t("import_worktrees_confirm_plural", { count: selected.size })}
         </button>
       </div>
     </Modal>

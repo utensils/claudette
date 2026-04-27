@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   getAppSetting,
   setAppSetting,
@@ -9,6 +10,7 @@ import styles from "../Settings.module.css";
 type PrefixMode = "username" | "custom" | "none";
 
 export function GitSettings() {
+  const { t } = useTranslation("settings");
   const [prefixMode, setPrefixMode] = useState<PrefixMode>("username");
   const [customPrefix, setCustomPrefix] = useState("");
   const [gitUsername, setGitUsername] = useState<string | null>(null);
@@ -71,19 +73,19 @@ export function GitSettings() {
   };
 
   const usernameLabel = gitUsername
-    ? `Git username (${gitUsername})`
-    : "Git username";
+    ? t("git_prefix_username", { username: gitUsername })
+    : t("git_prefix_username_no_git");
 
   return (
     <div>
-      <h2 className={styles.sectionTitle}>Git</h2>
+      <h2 className={styles.sectionTitle}>{t("git_title")}</h2>
 
       {error && <div className={styles.error}>{error}</div>}
 
       <div className={styles.fieldGroup}>
-        <div className={styles.fieldLabel}>Branch name prefix</div>
+        <div className={styles.fieldLabel}>{t("git_branch_prefix")}</div>
         <div className={`${styles.fieldHint} ${styles.fieldHintSpacedWide}`}>
-          Prefix for new workspace branch names.
+          {t("git_branch_prefix_desc")}
         </div>
 
         <label className={styles.radioLabel}>
@@ -103,7 +105,7 @@ export function GitSettings() {
             checked={prefixMode === "custom"}
             onChange={() => handleModeChange("custom")}
           />
-          <span>Custom</span>
+          <span>{t("git_prefix_custom")}</span>
         </label>
 
         {prefixMode === "custom" && (
@@ -112,7 +114,7 @@ export function GitSettings() {
             value={customPrefix}
             onChange={(e) => setCustomPrefix(e.target.value)}
             onBlur={handleCustomPrefixBlur}
-            placeholder="e.g. feature/ or myname/"
+            placeholder={t("git_prefix_placeholder")}
           />
         )}
 
@@ -123,19 +125,19 @@ export function GitSettings() {
             checked={prefixMode === "none"}
             onChange={() => handleModeChange("none")}
           />
-          <span>None</span>
+          <span>{t("git_prefix_none")}</span>
         </label>
       </div>
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>Delete branch on archive</div>
+          <div className={styles.settingLabel}>{t("git_delete_branch")}</div>
           <div className={styles.settingDescription}>
-            Delete the local branch when archiving a workspace.
+            {t("git_delete_branch_desc")}
           </div>
           {deleteBranch && (
             <div className={`${styles.settingDescription} ${styles.gitWarning}`}>
-              The branch will be permanently deleted, including any unmerged commits.
+              {t("git_delete_warning")}
             </div>
           )}
         </div>
@@ -144,7 +146,7 @@ export function GitSettings() {
             className={styles.toggle}
             role="switch"
             aria-checked={deleteBranch}
-            aria-label="Delete branch on archive"
+            aria-label={t("git_delete_branch_aria")}
             data-checked={deleteBranch}
             onClick={handleDeleteBranchToggle}
           >

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { AgentQuestion } from "../../stores/useAppStore";
 import styles from "./AgentQuestionCard.module.css";
 
@@ -16,6 +17,7 @@ export function AgentQuestionCard({
   question,
   onRespond,
 }: AgentQuestionCardProps) {
+  const { t } = useTranslation("chat");
   const total = question.questions.length;
   const isSingleQuestion = total === 1;
 
@@ -59,7 +61,7 @@ export function AgentQuestionCard({
 
     return (
       <div className={styles.card}>
-        <div className={styles.label}>Agent Question</div>
+        <div className={styles.label}>{t("agent_question_title")}</div>
         <div className={styles.questionBlock}>
           {q.header && <div className={styles.header}>{q.header}</div>}
           <div className={styles.question}>{q.question}</div>
@@ -95,10 +97,10 @@ export function AgentQuestionCard({
               if (chosen.length > 0) respondSingle(chosen.join(", "));
             }}
           >
-            Submit answer
+            {t("agent_question_submit_answer")}
           </button>
         )}
-        <div className={styles.divider}>Or type your response below</div>
+        <div className={styles.divider}>{t("agent_question_or_type")}</div>
         <div className={styles.freeformRow}>
           <textarea
             className={styles.freeformInput}
@@ -111,7 +113,7 @@ export function AgentQuestionCard({
                 if (text) respondSingle(text);
               }
             }}
-            placeholder="Type a response..."
+            placeholder={t("agent_question_placeholder")}
             rows={1}
           />
           <button
@@ -122,7 +124,7 @@ export function AgentQuestionCard({
             }}
             disabled={!freeform.trim()}
           >
-            Send
+            {t("agent_question_send")}
           </button>
         </div>
       </div>
@@ -229,11 +231,11 @@ export function AgentQuestionCard({
 
   return (
     <div className={styles.card}>
-      <div className={styles.label}>Agent Question</div>
+      <div className={styles.label}>{t("agent_question_title")}</div>
 
       <div className={styles.progressBar}>
         <span className={styles.progressText}>
-          {currentIndex + 1} of {total}
+          {t("agent_question_progress", { current: currentIndex + 1, total })}
         </span>
         <div className={styles.progressTrack}>
           <div
@@ -269,7 +271,7 @@ export function AgentQuestionCard({
         )}
       </div>
 
-      <div className={styles.divider}>Or type your response below</div>
+      <div className={styles.divider}>{t("agent_question_or_type")}</div>
 
       <div className={styles.freeformRow}>
         <textarea
@@ -282,7 +284,7 @@ export function AgentQuestionCard({
               handleNext();
             }
           }}
-          placeholder="Type a response..."
+          placeholder={t("agent_question_placeholder")}
           rows={1}
         />
       </div>
@@ -293,14 +295,14 @@ export function AgentQuestionCard({
           onClick={handleBack}
           disabled={isFirst}
         >
-          Back
+          {t("agent_question_back")}
         </button>
         <button
           className={styles.navBtn}
           onClick={handleNext}
           disabled={!canAdvance}
         >
-          {isLast ? "Submit" : "Next"}
+          {isLast ? t("agent_question_submit") : t("agent_question_next")}
         </button>
       </div>
     </div>

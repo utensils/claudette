@@ -1,4 +1,5 @@
 import { useEffect, useCallback, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { RefreshCw, LogIn, X } from "lucide-react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useAppStore } from "../../../stores/useAppStore";
@@ -38,12 +39,10 @@ function barColor(pct: number): string {
 }
 
 function formatResetTime(resetsAt: string | number): string {
-  // Handle ISO 8601 strings or unix timestamps (seconds or milliseconds).
   let resetMs: number;
   if (typeof resetsAt === "string") {
     resetMs = new Date(resetsAt).getTime();
   } else {
-    // If the number looks like seconds (< year 2100 in seconds), convert.
     resetMs = resetsAt < 1e12 ? resetsAt * 1000 : resetsAt;
   }
   const diffSec = (resetMs - Date.now()) / 1000;
@@ -82,6 +81,7 @@ function UsageBar({
   title: string;
   limit: UsageLimit;
 }) {
+  const { t } = useTranslation("settings");
   const pct = Math.min(limit.utilization, 100);
   const color = barColor(pct);
 
@@ -90,7 +90,7 @@ function UsageBar({
       <div className={styles.usageCardHeader}>
         <span className={styles.usageCardTitle}>{title}</span>
         <span className={styles.usageCardValue} style={{ color }}>
-          {Math.floor(pct)}% used
+          {t("usage_pct_used", { pct: Math.floor(pct) })}
         </span>
       </div>
       <div className={styles.usageBarTrack}>
@@ -104,27 +104,27 @@ function UsageBar({
   );
 }
 
-
-
 function ExtraUsageSection({ extra }: { extra: ExtraUsage }) {
+  const { t } = useTranslation("settings");
+
   if (!extra.is_enabled) {
     return (
       <>
-        <div className={styles.usageExtraHeader}>Extra Usage</div>
+        <div className={styles.usageExtraHeader}>{t("usage_extra_title")}</div>
         <div className={styles.usageCard}>
           <div className={styles.usageCardHeader}>
             <span className={`${styles.usageCardTitle} ${styles.usageDimColor}`}>
-              Not enabled
+              {t("usage_extra_not_enabled")}
             </span>
             <button
               className={styles.usageManageLink}
               onClick={() => void openUsageSettings().catch(() => {})}
             >
-              Enable
+              {t("usage_extra_enable")}
             </button>
           </div>
           <div className={styles.usageReset}>
-            Turn on extra usage to keep using Claude when you hit your limit
+            {t("usage_extra_not_enabled_hint")}
           </div>
         </div>
       </>
@@ -139,20 +139,20 @@ function ExtraUsageSection({ extra }: { extra: ExtraUsage }) {
   return (
     <>
       <div className={`${styles.usageCardHeader} ${styles.usageHeaderPadded}`}>
-        <div className={styles.usageExtraHeader}>Extra Usage</div>
+        <div className={styles.usageExtraHeader}>{t("usage_extra_title")}</div>
         <button
           className={styles.usageManageLink}
           onClick={() => void openUsageSettings().catch(() => {})}
         >
-          Manage
+          {t("usage_extra_manage")}
         </button>
       </div>
       <div className={styles.usageCard}>
         <div className={styles.usageCardHeader}>
-          <span className={styles.usageCardTitle}>Monthly spend</span>
+          <span className={styles.usageCardTitle}>{t("usage_monthly_spend")}</span>
           <span className={styles.usageCardValue} style={{ color: barColor(pct) }}>
             ${usedDollars.toFixed(2)}
-            {limitDollars !== null ? ` / $${limitDollars.toFixed(2)}` : " (unlimited)"}
+            {limitDollars !== null ? ` / $${limitDollars.toFixed(2)}` : t("usage_unlimited")}
           </span>
         </div>
         {hasLimit && (
@@ -177,6 +177,8 @@ type FetchState =
   | { status: "error"; error: string };
 
 export function UsageSettings() {
+  const { t } = useTranslation("settings");
+  const { t: tCommon } = useTranslation("common");
   const usage = useAppStore((s) => s.claudeCodeUsage);
   const setUsage = useAppStore((s) => s.setClaudeCodeUsage);
   const [fetchState, setFetchState] = useState<FetchState>({ status: "loading" });
@@ -194,13 +196,10 @@ export function UsageSettings() {
   }, [setUsage]);
 
   useEffect(() => {
-    // Always fetch on mount — the Rust 5-minute cache prevents API flooding.
-    // This ensures reopening settings shows fresh data.
     fetchUsage();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    // Subscribe to auth-login events once; they only fire while a flow is running.
     const unlisteners: UnlistenFn[] = [];
     let cancelled = false;
 
@@ -266,31 +265,31 @@ export function UsageSettings() {
 
   const limits: { title: string; limit: UsageLimit }[] = [];
   if (usage?.usage.five_hour) {
-    limits.push({ title: "Current session", limit: usage.usage.five_hour });
+    limits.push({ title: t("usage_limit_session"), limit: usage.usage.five_hour });
   }
   if (usage?.usage.seven_day) {
-    limits.push({ title: "Current week (all models)", limit: usage.usage.seven_day });
+    limits.push({ title: t("usage_limit_week_all"), limit: usage.usage.seven_day });
   }
   if (usage?.usage.seven_day_sonnet) {
-    limits.push({ title: "Current week (Sonnet)", limit: usage.usage.seven_day_sonnet });
+    limits.push({ title: t("usage_limit_week_sonnet"), limit: usage.usage.seven_day_sonnet });
   }
   if (usage?.usage.seven_day_opus) {
-    limits.push({ title: "Current week (Opus)", limit: usage.usage.seven_day_opus });
+    limits.push({ title: t("usage_limit_week_opus"), limit: usage.usage.seven_day_opus });
   }
 
   return (
     <div>
-      <h2 className={styles.sectionTitle}>Usage</h2>
+      <h2 className={styles.sectionTitle}>{t("usage_title")}</h2>
 
       {fetchState.status === "loading" && !usage && authState.status !== "running" && (
-        <div className={styles.usageEmptyState}>Loading usage data...</div>
+        <div className={styles.usageEmptyState}>{t("usage_loading")}</div>
       )}
 
       {authState.status === "running" && (
         <div className={styles.usageEmptyState}>
-          <span>Signing in to Claude Code…</span>
+          <span>{t("usage_signing_in")}</span>
           <span className={styles.usageTimestamp}>
-            Complete the flow in your browser. This panel will refresh when sign-in finishes.
+            {t("usage_signing_in_hint")}
           </span>
           {authState.manualUrl && (
             <a
@@ -299,11 +298,11 @@ export function UsageSettings() {
               target="_blank"
               rel="noreferrer"
             >
-              If the browser didn't open, click here
+              {t("usage_manual_url")}
             </a>
           )}
           <button className={styles.usageRefreshBtn} onClick={cancelAuthLogin}>
-            <X size={12} /> Cancel
+            <X size={12} /> {t("usage_cancel")}
           </button>
         </div>
       )}
@@ -324,12 +323,12 @@ export function UsageSettings() {
                 className={`${styles.usageRefreshBtn} ${styles.usageRefreshBtnPrimary}`}
                 onClick={startAuthLogin}
               >
-                <LogIn size={12} /> Sign in
+                <LogIn size={12} /> {t("usage_sign_in")}
               </button>
             )}
             {!fetchState.error.includes("ENV_AUTH:") && (
               <button className={styles.usageRefreshBtn} onClick={fetchUsage}>
-                <RefreshCw size={12} /> Retry
+                <RefreshCw size={12} /> {tCommon("retry")}
               </button>
             )}
           </div>
@@ -353,7 +352,7 @@ export function UsageSettings() {
 
           {limits.length === 0 && !usage.usage.extra_usage && (
             <div className={styles.usageEmptyState}>
-              No usage data available yet. Usage appears after your first Claude Code interaction.
+              {t("usage_no_data")}
             </div>
           )}
 
@@ -367,7 +366,7 @@ export function UsageSettings() {
 
           <div className={styles.usageFooter}>
             <span className={styles.usageTimestamp}>
-              Last updated {formatTimestamp(usage.fetched_at)}
+              {t("usage_last_updated", { time: formatTimestamp(usage.fetched_at) })}
             </span>
           </div>
         </div>

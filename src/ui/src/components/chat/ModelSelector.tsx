@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { CircleDollarSign, ChevronRight } from "lucide-react";
 import styles from "./ModelSelector.module.css";
 import { MODELS, type Model } from "./modelRegistry";
@@ -17,6 +18,7 @@ export function ModelSelector({
   onSelect,
   onClose,
 }: ModelSelectorProps) {
+  const { t } = useTranslation("chat");
   const disable1mContext = useAppStore((s) => s.disable1mContext);
   const visibleModels = disable1mContext
     ? MODELS.filter((m) => m.contextWindowTokens < 1_000_000)
@@ -70,7 +72,7 @@ export function ModelSelector({
               aria-expanded={moreOpen}
               onClick={() => setMoreOpen((v) => !v)}
             >
-              More
+              {t("more_models")}
               <ChevronRight
                 size={14}
                 className={`${styles.chevron} ${moreOpen ? styles.chevronOpen : ""}`}
@@ -104,6 +106,7 @@ function ModelRow({
   selected: boolean;
   onSelect: (id: string) => void;
 }) {
+  const { t } = useTranslation("chat");
   return (
     <button
       type="button"
@@ -115,7 +118,7 @@ function ModelRow({
       {model.extraUsage && (
         <span
           className={styles.extraUsage}
-          title="Extra usage: 1M context requests are billed at API rates beyond your subscription plan allocation"
+          title={t("mcp_extra_usage_tip")}
         >
           <CircleDollarSign size={14} />
         </span>

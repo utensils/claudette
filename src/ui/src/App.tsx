@@ -11,6 +11,7 @@ import { useMcpStatus } from "./hooks/useMcpStatus";
 import { AppLayout } from "./components/layout/AppLayout";
 import { findLeafByPtyId } from "./stores/terminalPaneTree";
 import type { CommandEvent } from "./types";
+import i18n from "./i18n";
 import "./styles/theme.css";
 
 function App() {
@@ -195,6 +196,9 @@ function App() {
     getAppSetting("plugin_management_enabled")
       .then((val) => { if (val === "true") setPluginManagementEnabled(true); })
       .catch(() => {});
+    getAppSetting("language")
+      .then((lang) => { if (lang && lang !== i18n.language) void i18n.changeLanguage(lang); })
+      .catch(() => {});
     getHostEnvFlags()
       .then(({ disable_1m_context }) => { if (disable_1m_context) setDisable1mContext(true); })
       .catch(() => {});
@@ -361,10 +365,13 @@ function App() {
       if (store.selectedWorkspaceId === workspace_id) {
         store.selectWorkspace(null);
       }
-      const verb = deleted ? "deleted" : "archived";
-      const msg = pr_number != null
-        ? `Workspace \u201c${workspace_name}\u201d ${verb} \u2014 PR #${pr_number} merged`
-        : `Workspace \u201c${workspace_name}\u201d ${verb} \u2014 PR merged`;
+      const msg = deleted
+        ? pr_number != null
+          ? i18n.t("sidebar:auto_deleted_merged", { name: workspace_name, prNumber: pr_number })
+          : i18n.t("sidebar:auto_deleted_merged_nopr", { name: workspace_name })
+        : pr_number != null
+          ? i18n.t("sidebar:auto_archived_merged", { name: workspace_name, prNumber: pr_number })
+          : i18n.t("sidebar:auto_archived_merged_nopr", { name: workspace_name });
       store.addToast(msg);
     });
 

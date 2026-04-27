@@ -1,4 +1,5 @@
 import React, { createContext, memo, useContext, useEffect, useRef, useState, useMemo, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { HighlightedMessageMarkdown } from "./HighlightedMessageMarkdown";
 import { HighlightedPlainText } from "./HighlightedPlainText";
 import { ChatSearchBar } from "./ChatSearchBar";
@@ -251,6 +252,7 @@ const EMPTY_ACTIVITIES: ToolActivity[] = [];
 const EMPTY_ATTACHMENTS: ChatAttachment[] = [];
 
 export function ChatPanel() {
+  const { t } = useTranslation("chat");
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const activeSessionId = useAppStore((s) =>
     s.selectedWorkspaceId
@@ -1173,13 +1175,13 @@ export function ChatPanel() {
                   role="status"
                   aria-label={
                     ws?.agent_status === "Compacting"
-                      ? `Compacting context, ${formatElapsed(elapsed)} elapsed`
-                      : `Processing, ${formatElapsed(elapsed)} elapsed`
+                      ? t("compacting_aria", { elapsed: formatElapsed(elapsed) })
+                      : t("processing_aria", { elapsed: formatElapsed(elapsed) })
                   }
                 >
                   <LoaderCircle size={14} className={styles.spinner} aria-hidden="true" />
                   {ws?.agent_status === "Compacting" && (
-                    <span className={styles.compactingLabel}>Compacting context…</span>
+                    <span className={styles.compactingLabel}>{t("compacting_label")}</span>
                   )}
                   <span className={styles.elapsed}>{formatElapsed(elapsed)}</span>
                 </div>
@@ -1187,12 +1189,12 @@ export function ChatPanel() {
 
               {queuedMessage && activeSessionId && (
                 <div className={styles.queuedMessage}>
-                  <span className={styles.queuedLabel}>Queued</span>
+                  <span className={styles.queuedLabel}>{t("queued_label")}</span>
                   <span className={styles.queuedContent}>{queuedMessage.content}</span>
                   <button
                     className={styles.queuedCancel}
                     onClick={() => clearQueuedMessage(activeSessionId)}
-                    title="Cancel queued message"
+                    title={t("cancel_queued")}
                   >
                     ×
                   </button>
@@ -1550,6 +1552,7 @@ function TurnFooter({
   onRollback?: () => void;
   className?: string;
 }) {
+  const { t } = useTranslation("chat");
   const [copied, setCopied] = useState(false);
   const copyTimeoutRef = useRef<number | null>(null);
   useEffect(() => {
@@ -1609,8 +1612,8 @@ function TurnFooter({
         type="button"
         className={styles.turnFooterButton}
         onClick={handleCopy}
-        title={copied ? "Copied" : "Copy output"}
-        aria-label="Copy agent output"
+        title={copied ? t("copy_output_done") : t("copy_output")}
+        aria-label={t("copy_agent_output_aria")}
       >
         {copied ? (
           // Checkmark feedback for ~1.2s after successful copy.
@@ -1633,8 +1636,8 @@ function TurnFooter({
         type="button"
         className={styles.turnFooterButton}
         onClick={handleFork}
-        title="Fork workspace at this turn"
-        aria-label="Fork workspace at this turn"
+        title={t("fork_workspace")}
+        aria-label={t("fork_workspace")}
       >
         <Split size={14} />
       </button>,
@@ -1647,8 +1650,8 @@ function TurnFooter({
         type="button"
         className={styles.turnFooterButton}
         onClick={handleRollback}
-        title="Roll back to before this turn"
-        aria-label="Roll back to before this turn"
+        title={t("rollback_turn")}
+        aria-label={t("rollback_turn")}
       >
         <RotateCcw size={14} />
       </button>,
@@ -1760,6 +1763,7 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
    *  closed; non-empty values trigger highlight wrappers on each message. */
   searchQuery: string;
 }) {
+  const { t } = useTranslation("chat");
   const completedTurns = useAppStore(
     (s) => s.completedTurns[sessionId] ?? EMPTY_COMPLETED_TURNS
   );
@@ -2056,7 +2060,7 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
           {msg.id === pendingMessageId ? null : (
           <div className={`${styles.message} ${styles[roleClassKey(msg.role, msg.content)]}`}>
             {msg.role === "User" && (
-              <div className={styles.roleLabel}>You</div>
+              <div className={styles.roleLabel}>{t("you_label")}</div>
             )}
             {msg.role === "Assistant" && msg.thinking && showThinkingBlocks && (
               <ThinkingBlock content={msg.thinking} isStreaming={false} searchQuery={searchQuery} />
@@ -2400,6 +2404,7 @@ function ChatInputArea({
   const [workspaceFiles, setWorkspaceFiles] = useState<FileEntry[]>([]);
   const [filesLoaded, setFilesLoaded] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const { t } = useTranslation("chat");
   const filesCache = useRef<Record<string, FileEntry[]>>({});
   const mentionedFilesRef = useRef<Set<string>>(new Set());
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
@@ -3168,7 +3173,7 @@ function ChatInputArea({
           }}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          placeholder={isRunning ? "Type to queue a message..." : "Send a message..."}
+          placeholder={isRunning ? t("composer_placeholder_queued") : t("composer_placeholder_idle")}
         />
       </div>
       <div className={styles.inputControls}>
@@ -3177,7 +3182,7 @@ function ChatInputArea({
             <button
               className={`${styles.attachBtn} ${attachMenuOpen ? styles.attachBtnActive : ""}`}
               onClick={() => setAttachMenuOpen((v) => !v)}
-              title="Add files or connectors"
+              title={t("add_files_connectors")}
             >
               <Plus size={16} />
             </button>
@@ -3220,7 +3225,7 @@ function ChatInputArea({
                 className={styles.voiceStatusSpinner}
                 aria-hidden="true"
               />
-              <span>Starting…</span>
+              <span>{t("voice_starting")}</span>
             </div>
           )}
           {voice.state === "transcribing" && (
@@ -3232,8 +3237,8 @@ function ChatInputArea({
               />
               <span>
                 {voice.activeProvider?.name
-                  ? `Transcribing with ${voice.activeProvider.name}`
-                  : "Transcribing"}
+                  ? t("voice_transcribing_with", { provider: voice.activeProvider.name })
+                  : t("voice_transcribing")}
               </span>
             </div>
           )}
@@ -3253,7 +3258,7 @@ function ChatInputArea({
                 type="button"
                 className={styles.voiceErrorBtn}
                 onClick={() => voice.cancel()}
-                title={`${voice.error}\n\nClick to dismiss`}
+                title={`${voice.error ?? ""}\n\nClick to dismiss`}
               >
                 <AlertCircle size={12} className={styles.voiceErrorIcon} aria-hidden="true" />
                 <span className={styles.voiceErrorText}>{voice.error}</span>
@@ -3275,21 +3280,21 @@ function ChatInputArea({
             disabled={isRunning}
             title={
               voice.state === "recording"
-                ? "Stop voice input"
+                ? t("voice_stop")
                 : voice.state === "transcribing"
-                  ? "Discard transcription"
+                  ? t("voice_discard")
                   : voice.state === "starting"
-                    ? "Cancel"
-                    : "Voice input"
+                    ? t("voice_cancel")
+                    : t("voice_input")
             }
             aria-label={
               voice.state === "recording"
-                ? "Stop voice input"
+                ? t("voice_stop")
                 : voice.state === "transcribing"
-                  ? "Discard transcription"
+                  ? t("voice_discard")
                   : voice.state === "starting"
-                    ? "Cancel"
-                    : "Voice input"
+                    ? t("voice_cancel")
+                    : t("voice_input")
             }
           >
             {voice.state === "transcribing" ? (
@@ -3304,8 +3309,8 @@ function ChatInputArea({
             className={`${styles.sendBtn} ${isRunning ? styles.sendBtnStop : ""}`}
             onClick={isRunning ? onStop : handleSend}
             disabled={!isRunning && !chatInput.trim() && pendingAttachments.length === 0}
-            title={isRunning ? "Stop agent" : "Send message"}
-            aria-label={isRunning ? "Stop agent" : "Send message"}
+            title={isRunning ? t("stop_agent") : t("send_message")}
+            aria-label={isRunning ? t("stop_agent") : t("send_message")}
           >
             {isRunning ? <Square size={16} /> : <Send size={16} />}
           </button>

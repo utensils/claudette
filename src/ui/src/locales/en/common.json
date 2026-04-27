@@ -1,0 +1,21 @@
+{
+  "cancel": "Cancel",
+  "save": "Save",
+  "delete": "Delete",
+  "close": "Close",
+  "browse": "Browse",
+  "copy": "Copy",
+  "copied": "Copied",
+  "add": "Add",
+  "edit": "Edit",
+  "loading": "Loading…",
+  "error": "Error",
+  "open": "Open",
+  "none": "None",
+  "custom": "Custom",
+  "more": "More",
+  "retry": "Retry",
+  "skip": "Skip",
+  "done": "Done",
+  "back_to_app": "← Back to app"
+}

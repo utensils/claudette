@@ -1,9 +1,12 @@
+import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { stopLocalServer } from "../../services/tauri";
 import { Modal } from "./Modal";
 import shared from "./shared.module.css";
 
 export function ShareModal() {
+  const { t } = useTranslation("modals");
+  const { t: tCommon } = useTranslation("common");
   const closeModal = useAppStore((s) => s.closeModal);
   const connectionString = useAppStore((s) => s.localServerConnectionString);
   const setRunning = useAppStore((s) => s.setLocalServerRunning);
@@ -27,9 +30,9 @@ export function ShareModal() {
   };
 
   return (
-    <Modal title="Share this machine" onClose={closeModal}>
+    <Modal title={t("share_title")} onClose={closeModal}>
       <div className={shared.field}>
-        <label className={shared.label}>Connection string</label>
+        <label className={shared.label}>{t("share_conn_label")}</label>
         <div className={shared.inputRow}>
           <input
             className={shared.input}
@@ -38,19 +41,19 @@ export function ShareModal() {
             onClick={(e) => (e.target as HTMLInputElement).select()}
           />
           <button className={shared.btn} onClick={handleCopy}>
-            Copy
+            {tCommon("copy")}
           </button>
         </div>
         <div className={shared.smallHint}>
-          Share this string with others so they can connect to your workspaces from their Claudette app.
+          {t("share_conn_hint")}
         </div>
       </div>
       <div className={shared.actions}>
         <button className={shared.btn} onClick={handleStop}>
-          Stop sharing
+          {t("share_stop")}
         </button>
         <button className={shared.btnPrimary} onClick={closeModal}>
-          Done
+          {tCommon("done")}
         </button>
       </div>
     </Modal>

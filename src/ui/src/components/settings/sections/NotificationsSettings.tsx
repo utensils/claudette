@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   getAppSetting,
   setAppSetting,
@@ -12,45 +13,40 @@ import type { InstalledSoundPack } from "../../../types/soundpacks";
 import { SoundPackBrowser } from "./SoundPackBrowser";
 import styles from "../Settings.module.css";
 
-interface SoundEvent {
-  key: string;
-  cespCategory: string;
-  label: string;
-  description: string;
-}
-
-const SOUND_EVENTS: SoundEvent[] = [
+const SOUND_EVENTS = [
   {
     key: "notification_sound_ask",
     cespCategory: "input.required",
-    label: "Agent question",
-    description: "Sound when an agent needs your input",
+    labelKey: "notifications_sound_ask_label" as const,
+    descKey: "notifications_sound_ask_desc" as const,
   },
   {
     key: "notification_sound_plan",
     cespCategory: "task.acknowledge",
-    label: "Plan ready",
-    description: "Sound when an agent has a plan for review",
+    labelKey: "notifications_sound_plan_label" as const,
+    descKey: "notifications_sound_plan_desc" as const,
   },
   {
     key: "notification_sound_finished",
     cespCategory: "task.complete",
-    label: "Work complete",
-    description: "Sound when an agent finishes its task",
+    labelKey: "notifications_sound_finished_label" as const,
+    descKey: "notifications_sound_finished_desc" as const,
   },
   {
     key: "notification_sound_error",
     cespCategory: "task.error",
-    label: "Error",
-    description: "Sound when an agent encounters an error",
+    labelKey: "notifications_sound_error_label" as const,
+    descKey: "notifications_sound_error_desc" as const,
   },
   {
     key: "notification_sound_session_start",
     cespCategory: "session.start",
-    label: "Session start",
-    description: "Sound when a new session begins",
+    labelKey: "notifications_sound_session_start_label" as const,
+    descKey: "notifications_sound_session_start_desc" as const,
   },
 ];
+
+type SoundEvent = (typeof SOUND_EVENTS)[number];
 
 async function resolveSound(eventKey: string): Promise<string> {
   const perEvent = await getAppSetting(eventKey);
@@ -63,6 +59,7 @@ async function resolveSound(eventKey: string): Promise<string> {
 }
 
 export function NotificationsSettings() {
+  const { t } = useTranslation("settings");
   const [soundSource, setSoundSource] = useState<"system" | "openpeon">(
     "system",
   );
@@ -253,14 +250,14 @@ export function NotificationsSettings() {
 
   return (
     <div>
-      <h2 className={styles.sectionTitle}>Notifications</h2>
+      <h2 className={styles.sectionTitle}>{t("notifications_title")}</h2>
 
       {/* 1. Sound source */}
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>Sound source</div>
+          <div className={styles.settingLabel}>{t("notifications_sound_source")}</div>
           <div className={styles.settingDescription}>
-            Choose between system notification sounds or community sound packs.
+            {t("notifications_sound_source_desc")}
           </div>
         </div>
         <div className={styles.settingControl}>
@@ -271,7 +268,7 @@ export function NotificationsSettings() {
               checked={!isOpenPeon}
               onChange={() => handleSoundSourceChange("system")}
             />
-            System sounds
+            {t("notifications_system_sounds")}
           </label>
           <label className={styles.radioLabel}>
             <input
@@ -280,7 +277,7 @@ export function NotificationsSettings() {
               checked={isOpenPeon}
               onChange={() => handleSoundSourceChange("openpeon")}
             />
-            Sound packs (OpenPeon)
+            {t("notifications_openpeon")}
           </label>
         </div>
       </div>
@@ -305,21 +302,20 @@ export function NotificationsSettings() {
               }}
             >
               <div className={styles.emptyStateTitle}>
-                No sound packs installed yet
+                {t("notifications_no_packs_title")}
               </div>
               <div className={styles.emptyStateSubtitle}>
-                Browse 100+ community sound packs to customize your
-                notifications.
+                {t("notifications_no_packs_sub")}
               </div>
-              <span className={styles.emptyStateCta}>Browse packs →</span>
+              <span className={styles.emptyStateCta}>{t("notifications_browse_packs")}</span>
             </div>
           ) : isOpenPeon ? (
             /* Mode C: active pack selector + browse link */
             <div className={styles.settingRow}>
               <div className={styles.settingInfo}>
-                <div className={styles.settingLabel}>Active pack</div>
+                <div className={styles.settingLabel}>{t("notifications_active_pack")}</div>
                 <div className={styles.settingDescription}>
-                  Choose which installed sound pack to use.
+                  {t("notifications_active_pack_desc")}
                 </div>
               </div>
               <div className={styles.settingControl}>
@@ -339,7 +335,7 @@ export function NotificationsSettings() {
                     className={styles.browseMoreLink}
                     onClick={() => setShowBrowser(true)}
                   >
-                    Browse more →
+                    {t("notifications_browse_more")}
                   </button>
                 </div>
               </div>
@@ -353,11 +349,10 @@ export function NotificationsSettings() {
               >
                 <div className={styles.settingInfo}>
                   <div className={styles.settingLabel}>
-                    Sound pack registry
+                    {t("notifications_sound_registry")}
                   </div>
                   <div className={styles.settingDescription}>
-                    Install, update, or remove sound packs from the OpenPeon
-                    registry.
+                    {t("notifications_sound_registry_desc")}
                   </div>
                 </div>
                 <div className={styles.settingControl}>
@@ -365,7 +360,7 @@ export function NotificationsSettings() {
                     className={styles.iconBtn}
                     onClick={() => setShowBrowser(false)}
                   >
-                    Close
+                    {t("notifications_sound_registry_close")}
                   </button>
                 </div>
               </div>
@@ -381,9 +376,9 @@ export function NotificationsSettings() {
       {/* 3. Volume */}
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>Volume</div>
+          <div className={styles.settingLabel}>{t("notifications_volume")}</div>
           <div className={styles.settingDescription}>
-            Master volume for notification sound playback.
+            {t("notifications_volume_desc")}
           </div>
         </div>
         <div className={styles.settingControl}>
@@ -397,7 +392,7 @@ export function NotificationsSettings() {
               onChange={(e) => handleVolumeChange(Number(e.target.value))}
               onPointerUp={handleVolumeCommit}
               onKeyUp={handleVolumeCommit}
-              aria-label="Notification volume"
+              aria-label={t("notifications_volume_aria")}
             />
             <span className={styles.volumeValue}>{volume}%</span>
           </div>
@@ -407,9 +402,9 @@ export function NotificationsSettings() {
       {/* 4. Mute all sounds */}
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>Mute all sounds</div>
+          <div className={styles.settingLabel}>{t("notifications_mute")}</div>
           <div className={styles.settingDescription}>
-            Silence all notification sounds without changing other settings.
+            {t("notifications_mute_desc")}
           </div>
         </div>
         <div className={styles.settingControl}>
@@ -419,7 +414,7 @@ export function NotificationsSettings() {
             onClick={handleMuteToggle}
             role="switch"
             aria-checked={muted}
-            aria-label="Mute all sounds"
+            aria-label={t("notifications_mute")}
           >
             <span className={styles.toggleKnob} />
           </button>
@@ -432,11 +427,11 @@ export function NotificationsSettings() {
         style={{ borderBottom: "none", paddingBottom: 4 }}
       >
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>Event sounds</div>
+          <div className={styles.settingLabel}>{t("notifications_event_sounds")}</div>
           <div className={styles.settingDescription}>
             {noPacks
-              ? "Install a pack to configure event sounds."
-              : "Configure the sound played for each notification event."}
+              ? t("notifications_event_sounds_desc_install")
+              : t("notifications_event_sounds_desc_configure")}
           </div>
         </div>
       </div>
@@ -448,10 +443,10 @@ export function NotificationsSettings() {
         >
           <div className={styles.settingInfo}>
             <div className={styles.settingLabel} style={{ fontSize: 13 }}>
-              {event.label}
+              {t(event.labelKey)}
             </div>
             <div className={styles.settingDescription}>
-              {event.description}
+              {t(event.descKey)}
             </div>
           </div>
           <div className={styles.settingControl}>
@@ -475,7 +470,7 @@ export function NotificationsSettings() {
                   className={styles.settingDescription}
                   style={{ margin: 0 }}
                 >
-                  {noPacks ? "— no pack —" : "From active pack"}
+                  {noPacks ? t("notifications_no_pack") : t("notifications_from_active_pack")}
                 </span>
               )}
               {!noPacks && (
@@ -483,8 +478,8 @@ export function NotificationsSettings() {
                   className={styles.iconBtn}
                   onClick={() => handlePreview(event)}
                   disabled={isOpenPeon && !activePack}
-                  title={`Preview ${event.label}`}
-                  aria-label={`Preview ${event.label} sound`}
+                  title={t("notifications_preview", { label: t(event.labelKey) })}
+                  aria-label={t("notifications_preview_aria", { label: t(event.labelKey) })}
                 >
                   &#9654;
                 </button>
@@ -499,11 +494,9 @@ export function NotificationsSettings() {
       {/* 6. Notification command */}
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>Notification command</div>
+          <div className={styles.settingLabel}>{t("notifications_command")}</div>
           <div className={styles.settingDescription}>
-            Run a shell command when a notification arrives. Workspace
-            environment variables ($CLAUDETTE_WORKSPACE_NAME,
-            $CLAUDETTE_WORKSPACE_PATH, etc.) are set.
+            {t("notifications_command_desc")}
           </div>
         </div>
         <div className={styles.settingControl}>
@@ -513,7 +506,7 @@ export function NotificationsSettings() {
               value={notificationCommand}
               onChange={(e) => setNotificationCommand(e.target.value)}
               onBlur={handleCommandBlur}
-              placeholder={'e.g. say "done"'}
+              placeholder={t("notifications_command_placeholder")}
               autoCorrect="off"
               autoCapitalize="off"
               spellCheck={false}
@@ -522,8 +515,8 @@ export function NotificationsSettings() {
               className={styles.iconBtn}
               disabled={!notificationCommand.trim()}
               onClick={handleTestCommand}
-              title="Test command"
-              aria-label="Test command"
+              title={t("notifications_test_command")}
+              aria-label={t("notifications_test_command")}
             >
               &#9654;
             </button>

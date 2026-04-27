@@ -1,10 +1,13 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { runWorkspaceSetup, setSetupScriptAutoRun } from "../../services/tauri";
 import { Modal } from "./Modal";
 import shared from "./shared.module.css";
 
 export function ConfirmSetupScriptModal() {
+  const { t } = useTranslation("modals");
+  const { t: tCommon } = useTranslation("common");
   const closeModal = useAppStore((s) => s.closeModal);
   const modalData = useAppStore((s) => s.modalData);
   const addChatMessage = useAppStore((s) => s.addChatMessage);
@@ -73,13 +76,12 @@ export function ConfirmSetupScriptModal() {
   const label = source === "repo" ? ".claudette.json" : "repo settings";
 
   return (
-    <Modal title="Review setup script" onClose={closeModal}>
+    <Modal title={t("setup_script_title")} onClose={closeModal}>
       <div className={shared.warning}>
-        This workspace has a setup script from <strong>{label}</strong> that
-        will be executed. Please review it before proceeding.
+        {t("setup_script_warning_pre")} <strong>{label}</strong> {t("setup_script_warning_post")}
       </div>
       <div className={shared.field}>
-        <label className={shared.label}>Script</label>
+        <label className={shared.label}>{t("setup_script_label")}</label>
         <pre className={shared.scriptPreview}>{script}</pre>
       </div>
       <div className={shared.field}>
@@ -89,19 +91,19 @@ export function ConfirmSetupScriptModal() {
             checked={alwaysRun}
             onChange={(e) => setAlwaysRun(e.target.checked)}
           />
-          Always run setup scripts for this repo
+          {t("setup_script_always_run")}
         </label>
       </div>
       <div className={shared.actions}>
         <button className={shared.btn} onClick={closeModal}>
-          Skip
+          {tCommon("skip")}
         </button>
         <button
           className={shared.btnPrimary}
           onClick={handleRun}
           disabled={loading}
         >
-          {loading ? "Running..." : "Run Script"}
+          {loading ? t("setup_script_running") : t("setup_script_confirm")}
         </button>
       </div>
     </Modal>

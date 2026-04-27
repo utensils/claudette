@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../../stores/useAppStore";
 import { setAppSetting } from "../../../services/tauri";
 import { applyTheme, applyUserFonts, clearUserFont, loadAllThemes, findTheme, cacheThemePreference, getThemeDataAttr } from "../../../utils/theme";
@@ -13,6 +14,7 @@ import { FontSelect } from "../FontSelect";
 import styles from "../Settings.module.css";
 
 export function AppearanceSettings() {
+  const { t } = useTranslation("settings");
   const setCurrentThemeId = useAppStore((s) => s.setCurrentThemeId);
   const themeMode = useAppStore((s) => s.themeMode);
   const setThemeMode = useAppStore((s) => s.setThemeMode);
@@ -261,19 +263,18 @@ export function AppearanceSettings() {
       | undefined)
       ?.platform?.toLowerCase()
       .startsWith("mac") ?? navigator.platform.startsWith("Mac");
-  const modKey = isMac ? "\u2318" : "Ctrl";
 
   return (
     <div>
-      <h2 className={styles.sectionTitle}>Appearance</h2>
+      <h2 className={styles.sectionTitle}>{t("appearance_title")}</h2>
 
       {error && <div className={styles.error}>{error}</div>}
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>Follow system</div>
+          <div className={styles.settingLabel}>{t("appearance_follow_system")}</div>
           <div className={styles.settingDescription}>
-            Automatically switch themes based on your OS setting
+            {t("appearance_follow_system_desc")}
           </div>
         </div>
         <div className={styles.settingControl}>
@@ -281,7 +282,7 @@ export function AppearanceSettings() {
             className={styles.toggle}
             role="switch"
             aria-checked={isFollowSystem}
-            aria-label="Follow system appearance"
+            aria-label={t("appearance_follow_system_aria")}
             data-checked={isFollowSystem}
             onClick={handleFollowSystemToggle}
           >
@@ -293,9 +294,9 @@ export function AppearanceSettings() {
       {themeMode !== "system" ? (
         <div className={styles.settingRow}>
           <div className={styles.settingInfo}>
-            <div className={styles.settingLabel}>Color theme</div>
+            <div className={styles.settingLabel}>{t("appearance_color_theme")}</div>
             <div className={styles.settingDescription}>
-              Add custom themes to ~/.claudette/themes/
+              {t("appearance_color_theme_desc")}
             </div>
           </div>
           <div className={styles.settingControl}>
@@ -308,9 +309,9 @@ export function AppearanceSettings() {
                   : handleLightThemeChange(e.target.value)
               }
             >
-              {availableThemes.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
+              {availableThemes.map((theme) => (
+                <option key={theme.id} value={theme.id}>
+                  {theme.name}
                 </option>
               ))}
             </select>
@@ -320,9 +321,9 @@ export function AppearanceSettings() {
         <>
           <div className={styles.settingRow}>
             <div className={styles.settingInfo}>
-              <div className={styles.settingLabel}>Dark theme</div>
+              <div className={styles.settingLabel}>{t("appearance_dark_theme")}</div>
               <div className={styles.settingDescription}>
-                Add custom themes to ~/.claudette/themes/
+                {t("appearance_color_theme_desc")}
               </div>
             </div>
             <div className={styles.settingControl}>
@@ -331,9 +332,9 @@ export function AppearanceSettings() {
                 value={themeDark}
                 onChange={(e) => handleDarkThemeChange(e.target.value)}
               >
-                {availableThemes.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
+                {availableThemes.map((theme) => (
+                  <option key={theme.id} value={theme.id}>
+                    {theme.name}
                   </option>
                 ))}
               </select>
@@ -341,7 +342,7 @@ export function AppearanceSettings() {
           </div>
           <div className={styles.settingRow}>
             <div className={styles.settingInfo}>
-              <div className={styles.settingLabel}>Light theme</div>
+              <div className={styles.settingLabel}>{t("appearance_light_theme")}</div>
             </div>
             <div className={styles.settingControl}>
               <select
@@ -349,9 +350,9 @@ export function AppearanceSettings() {
                 value={themeLight}
                 onChange={(e) => handleLightThemeChange(e.target.value)}
               >
-                {availableThemes.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
+                {availableThemes.map((theme) => (
+                  <option key={theme.id} value={theme.id}>
+                    {theme.name}
                   </option>
                 ))}
               </select>
@@ -362,10 +363,13 @@ export function AppearanceSettings() {
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>UI font size</div>
+          <div className={styles.settingLabel}>{t("appearance_ui_font_size")}</div>
           <div className={styles.settingDescription}>
-            {UI_FONT_SIZE_MIN}–{UI_FONT_SIZE_MAX}px (default:{" "}
-            {UI_FONT_SIZE_DEFAULT}). {modKey}+/– to adjust.
+            {t(isMac ? "appearance_ui_font_size_desc_mac" : "appearance_ui_font_size_desc_other", {
+              min: UI_FONT_SIZE_MIN,
+              max: UI_FONT_SIZE_MAX,
+              default: UI_FONT_SIZE_DEFAULT,
+            })}
           </div>
         </div>
         <div className={styles.settingControl}>
@@ -383,8 +387,8 @@ export function AppearanceSettings() {
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>Terminal font size</div>
-          <div className={styles.settingDescription}>8–24px (default: 11)</div>
+          <div className={styles.settingLabel}>{t("appearance_terminal_font_size")}</div>
+          <div className={styles.settingDescription}>{t("appearance_terminal_font_size_desc")}</div>
         </div>
         <div className={styles.settingControl}>
           <input
@@ -401,10 +405,9 @@ export function AppearanceSettings() {
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>Show running commands in sidebar</div>
+          <div className={styles.settingLabel}>{t("appearance_show_running_commands")}</div>
           <div className={styles.settingDescription}>
-            Display a collapsible list of foreground processes running in each
-            workspace's terminals. Off by default.
+            {t("appearance_show_running_commands_desc")}
           </div>
         </div>
         <div className={styles.settingControl}>
@@ -412,7 +415,7 @@ export function AppearanceSettings() {
             className={styles.toggle}
             role="switch"
             aria-checked={showSidebarRunningCommands}
-            aria-label="Show running commands in sidebar"
+            aria-label={t("appearance_show_running_commands")}
             data-checked={showSidebarRunningCommands}
             onClick={async () => {
               const next = !showSidebarRunningCommands;
@@ -433,9 +436,9 @@ export function AppearanceSettings() {
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>Interface font</div>
+          <div className={styles.settingLabel}>{t("appearance_interface_font")}</div>
           <div className={styles.settingDescription}>
-            Font for UI text. Themes may set a default.
+            {t("appearance_interface_font_desc")}
           </div>
         </div>
         <div className={styles.settingControl}>
@@ -450,16 +453,16 @@ export function AppearanceSettings() {
       {showCustomSans && (
         <div className={styles.settingRow}>
           <div className={styles.settingInfo}>
-            <div className={styles.settingLabel}>Custom interface font</div>
+            <div className={styles.settingLabel}>{t("appearance_custom_interface_font")}</div>
             <div className={styles.settingDescription}>
-              Enter a font name installed on your system
+              {t("appearance_custom_interface_font_desc")}
             </div>
           </div>
           <div className={styles.settingControl}>
             <input
               className={styles.input}
               type="text"
-              placeholder="e.g. Avenir Next"
+              placeholder={t("appearance_interface_font_placeholder")}
               value={customSans}
               onChange={(e) => setCustomSans(e.target.value)}
               onBlur={handleCustomSansBlur}
@@ -470,9 +473,9 @@ export function AppearanceSettings() {
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>Monospace font</div>
+          <div className={styles.settingLabel}>{t("appearance_monospace_font")}</div>
           <div className={styles.settingDescription}>
-            Font for terminal and code blocks.
+            {t("appearance_monospace_font_desc")}
           </div>
         </div>
         <div className={styles.settingControl}>
@@ -488,16 +491,16 @@ export function AppearanceSettings() {
       {showCustomMono && (
         <div className={styles.settingRow}>
           <div className={styles.settingInfo}>
-            <div className={styles.settingLabel}>Custom monospace font</div>
+            <div className={styles.settingLabel}>{t("appearance_custom_monospace_font")}</div>
             <div className={styles.settingDescription}>
-              Enter a font name installed on your system
+              {t("appearance_custom_monospace_font_desc")}
             </div>
           </div>
           <div className={styles.settingControl}>
             <input
               className={styles.input}
               type="text"
-              placeholder="e.g. Fira Code"
+              placeholder={t("appearance_monospace_font_placeholder")}
               value={customMono}
               onChange={(e) => setCustomMono(e.target.value)}
               onBlur={handleCustomMonoBlur}

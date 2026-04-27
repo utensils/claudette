@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useAppStore } from "../../stores/useAppStore";
 import { addRepository, getDefaultBranch, discoverWorktrees } from "../../services/tauri";
@@ -7,6 +8,8 @@ import { Modal } from "./Modal";
 import shared from "./shared.module.css";
 
 export function AddRepoModal() {
+  const { t } = useTranslation("modals");
+  const { t: tCommon } = useTranslation("common");
   const closeModal = useAppStore((s) => s.closeModal);
   const openModal = useAppStore((s) => s.openModal);
   const addRepo = useAppStore((s) => s.addRepository);
@@ -35,13 +38,11 @@ export function AddRepoModal() {
     try {
       const repo = await addRepository(path.trim());
       addRepo(repo);
-      // Fetch default branch for the new repo.
       getDefaultBranch(repo.id).then((branch) => {
         if (branch) {
           setDefaultBranches({ ...defaultBranches, [repo.id]: branch });
         }
       });
-      // Detect existing worktrees and MCP servers (both best-effort).
       let mcps: Awaited<ReturnType<typeof detectMcpServers>> = [];
       try {
         mcps = await detectMcpServers(repo.id);
@@ -75,34 +76,34 @@ export function AddRepoModal() {
   };
 
   return (
-    <Modal title="Add repository" onClose={closeModal}>
+    <Modal title={t("add_repo_title")} onClose={closeModal}>
       <div className={shared.field}>
-        <label className={shared.label}>Repository path</label>
+        <label className={shared.label}>{t("add_repo_path_label")}</label>
         <div className={shared.inputRow}>
           <input
             className={shared.input}
             value={path}
             onChange={(e) => setPath(e.target.value)}
-            placeholder="/path/to/repository"
+            placeholder={t("add_repo_path_placeholder")}
             onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
             autoFocus
           />
           <button className={shared.btn} onClick={handleBrowse}>
-            Browse
+            {tCommon("browse")}
           </button>
         </div>
         {error && <div className={shared.error}>{error}</div>}
       </div>
       <div className={shared.actions}>
         <button className={shared.btn} onClick={closeModal}>
-          Cancel
+          {tCommon("cancel")}
         </button>
         <button
           className={shared.btnPrimary}
           onClick={handleSubmit}
           disabled={loading || !path.trim()}
         >
-          {loading ? "Adding..." : "Add"}
+          {loading ? t("add_repo_adding") : t("add_repo_confirm")}
         </button>
       </div>
     </Modal>

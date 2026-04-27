@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { openUrl } from "../../services/tauri";
 import { Modal } from "./Modal";
@@ -49,12 +50,11 @@ function isMissingCliData(value: unknown): value is MissingCliData {
 }
 
 export function MissingCliModal() {
+  const { t } = useTranslation("modals");
+  const { t: tCommon } = useTranslation("common");
   const closeModal = useAppStore((s) => s.closeModal);
   const modalData = useAppStore((s) => s.modalData);
   const [copied, setCopied] = useState<number | null>(null);
-  // Track the pending "Copied" reset so it can be cancelled on unmount and
-  // on repeat clicks — otherwise a timer could fire after the modal closes
-  // and call setState on an unmounted component.
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(
@@ -93,10 +93,10 @@ export function MissingCliModal() {
   };
 
   return (
-    <Modal title={`${data.display_name} not installed`} onClose={closeModal}>
+    <Modal title={t("missing_cli_title", { name: data.display_name })} onClose={closeModal}>
       <p className={styles.purpose}>{data.purpose}</p>
       <div className={styles.platformLine}>
-        Detected platform: <strong>{platformLabel}</strong>
+        {t("missing_cli_platform_pre")} <strong>{platformLabel}</strong>
       </div>
       {data.install_options.length > 0 ? (
         <ul className={styles.optionList}>
@@ -111,7 +111,7 @@ export function MissingCliModal() {
                     className={shared.btn}
                     onClick={() => void handleCopy(opt.command!, idx)}
                   >
-                    {copied === idx ? "Copied" : "Copy"}
+                    {copied === idx ? t("missing_cli_copied") : tCommon("copy")}
                   </button>
                 </div>
               )}
@@ -129,13 +129,12 @@ export function MissingCliModal() {
         </ul>
       ) : (
         <div className={shared.warning}>
-          No installation guidance is available for this tool — please consult
-          its documentation.
+          {t("missing_cli_no_guidance")}
         </div>
       )}
       <div className={shared.actions}>
         <button className={shared.btnPrimary} onClick={closeModal}>
-          Close
+          {tCommon("close")}
         </button>
       </div>
     </Modal>

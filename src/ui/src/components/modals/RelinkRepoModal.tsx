@@ -1,10 +1,13 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { relinkRepository } from "../../services/tauri";
 import { Modal } from "./Modal";
 import shared from "./shared.module.css";
 
 export function RelinkRepoModal() {
+  const { t } = useTranslation("modals");
+  const { t: tCommon } = useTranslation("common");
   const closeModal = useAppStore((s) => s.closeModal);
   const modalData = useAppStore((s) => s.modalData);
   const updateRepo = useAppStore((s) => s.updateRepository);
@@ -32,18 +35,17 @@ export function RelinkRepoModal() {
   };
 
   return (
-    <Modal title="Re-link repository" onClose={closeModal}>
+    <Modal title={t("relink_title")} onClose={closeModal}>
       <div className={shared.warning}>
-        Path for <strong>{repoName}</strong> is no longer valid. Provide the new
-        location.
+        {t("relink_warning_pre")} <strong>{repoName}</strong> {t("relink_warning_post")}
       </div>
       <div className={shared.field}>
-        <label className={shared.label}>New path</label>
+        <label className={shared.label}>{t("relink_new_path_label")}</label>
         <input
           className={shared.input}
           value={path}
           onChange={(e) => setPath(e.target.value)}
-          placeholder="/new/path/to/repository"
+          placeholder={t("relink_new_path_placeholder")}
           onKeyDown={(e) => e.key === "Enter" && handleRelink()}
           autoFocus
         />
@@ -51,14 +53,14 @@ export function RelinkRepoModal() {
       </div>
       <div className={shared.actions}>
         <button className={shared.btn} onClick={closeModal}>
-          Cancel
+          {tCommon("cancel")}
         </button>
         <button
           className={shared.btnPrimary}
           onClick={handleRelink}
           disabled={loading || !path.trim()}
         >
-          {loading ? "Re-linking..." : "Re-link"}
+          {loading ? t("relink_relinking") : t("relink_confirm")}
         </button>
       </div>
     </Modal>

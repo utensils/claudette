@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../../stores/useAppStore";
 import { updateRepositorySettings, getRepoConfig, getAppSetting, setAppSetting, listGitRemotes, listGitRemoteBranches, getDefaultBranch } from "../../../services/tauri";
 import {
@@ -22,6 +23,7 @@ interface RepoSettingsProps {
 }
 
 export function RepoSettings({ repoId }: RepoSettingsProps) {
+  const { t } = useTranslation("settings");
   const openModal = useAppStore((s) => s.openModal);
   const activeModal = useAppStore((s) => s.activeModal);
   const updateRepo = useAppStore((s) => s.updateRepository);
@@ -32,9 +34,6 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
   const repo = repositories.find((r) => r.id === repoId);
   const repoMcpStatus = mcpStatus[repoId];
 
-  // Stable reference for EnvPanel so its effects (keyed on the target
-  // object) don't re-fire on every RepoSettings re-render. Only the
-  // repoId string matters for resolution.
   const envTarget = useMemo(
     () => ({ kind: "repo" as const, repo_id: repoId }),
     [repoId],
@@ -112,14 +111,12 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
   }, [repoId]);
 
   useEffect(() => {
-    // Load saved servers, and auto-detect + save if none exist yet.
     loadRepositoryMcps(repoId)
       .then(async (saved) => {
         if (saved.length > 0) {
           setMcpServers(saved);
           return;
         }
-        // No saved servers — auto-detect and save so they appear immediately.
         try {
           const detected = await detectMcpServers(repoId);
           if (detected.length > 0) {
@@ -134,7 +131,6 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
       .catch(() => setMcpServers([]));
   }, [repoId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Refresh MCP list when the selection modal closes (user may have saved new MCPs).
   const prevModal = useRef(activeModal);
   useEffect(() => {
     if (prevModal.current === "mcpSelection" && activeModal === null) {
@@ -143,7 +139,6 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
     prevModal.current = activeModal;
   }, [activeModal, refreshMcpServers]);
 
-  // Close icon picker on click outside
   useEffect(() => {
     if (!iconPickerOpen) return;
     const handler = (e: MouseEvent) => {
@@ -158,7 +153,6 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
     return () => document.removeEventListener("mousedown", handler);
   }, [iconPickerOpen]);
 
-  // Use refs for current local state so save always reads latest values
   const nameRef = useRef(name);
   const iconRef = useRef(icon);
   const setupScriptRef = useRef(setupScript);
@@ -241,7 +235,6 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
           base_branch: finalBaseBranch,
           default_remote: finalDefaultRemote,
         });
-        // Refresh the displayed default branch when either override changes.
         if (updates.base_branch !== undefined || updates.default_remote !== undefined) {
           getDefaultBranch(repoId)
             .then((branch) => {
@@ -262,7 +255,7 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
   if (!repo) {
     return (
       <div>
-        <h2 className={styles.sectionTitle}>Repository not found</h2>
+        <h2 className={styles.sectionTitle}>{t("repo_not_found")}</h2>
       </div>
     );
   }
@@ -279,8 +272,8 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
           <button
             className={styles.repoIconButton}
             onClick={() => setIconPickerOpen(!iconPickerOpen)}
-            title="Change icon"
-            aria-label="Change repository icon"
+            title={t("repo_change_icon_title")}
+            aria-label={t("repo_change_icon_aria")}
           >
             {icon ? (
               <RepoIcon icon={icon} size={20} />
@@ -306,15 +299,15 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
           value={name}
           onChange={(e) => setName(e.target.value)}
           onBlur={() => save({ name })}
-          aria-label="Repository display name"
+          aria-label={t("repo_display_name_aria")}
         />
       </div>
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>Branch new workspaces from</div>
+          <div className={styles.settingLabel}>{t("repo_branch_from")}</div>
           <div className={styles.settingDescription}>
-            Each workspace is an isolated copy of your codebase.
+            {t("repo_branch_from_desc")}
           </div>
         </div>
         <div className={styles.settingControl}>
@@ -329,7 +322,7 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
           >
             {baseBranch && !availableBranches.includes(baseBranch) && (
               <option key={baseBranch} value={baseBranch}>
-                {baseBranch} (missing)
+                {t("repo_branch_missing", { branch: baseBranch })}
               </option>
             )}
             {availableBranches.map((b) => (
@@ -343,9 +336,9 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>Remote origin</div>
+          <div className={styles.settingLabel}>{t("repo_remote_origin")}</div>
           <div className={styles.settingDescription}>
-            Where should we push, pull, and create PRs?
+            {t("repo_remote_origin_desc")}
           </div>
         </div>
         <div className={styles.settingControl}>
@@ -360,7 +353,7 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
           >
             {defaultRemote && !availableRemotes.includes(defaultRemote) && (
               <option key={defaultRemote} value={defaultRemote}>
-                {defaultRemote} (missing)
+                {t("repo_branch_missing", { branch: defaultRemote })}
               </option>
             )}
             {availableRemotes.map((r) => (
@@ -373,38 +366,36 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
       </div>
 
       <div className={styles.fieldGroup}>
-        <div className={styles.fieldLabel}>Setup script</div>
+        <div className={styles.fieldLabel}>{t("repo_setup_script")}</div>
         {repoConfig?.parse_error && (
           <div className={styles.error}>{repoConfig.parse_error}</div>
         )}
         {repoScriptOverrides && (
           <div className={styles.overrideNotice}>
-            This repo includes a <code>.claudette.json</code> that defines a
-            setup script. Repo-level scripts take precedence over your personal
-            setup script.
+            {t("repo_script_override_notice")}
           </div>
         )}
         {repoConfig?.has_config_file && repoConfig.setup_script && (
           <div>
             <div className={styles.overriddenLabel}>
-              From .claudette.json (read-only):
+              {t("repo_from_config")}
             </div>
             <pre className={styles.readOnlyPre}>{repoConfig.setup_script}</pre>
           </div>
         )}
         <div className={styles.overriddenLabel}>
-          Personal setup script{repoScriptOverrides ? " (overridden)" : ""}:
+          {repoScriptOverrides ? t("repo_personal_script_overridden") : t("repo_personal_script")}
         </div>
         <textarea
           className={`${styles.textarea}${repoScriptOverrides ? ` ${styles.overriddenInput}` : ""}`}
           value={setupScript}
           onChange={(e) => setSetupScript(e.target.value)}
           onBlur={() => save({ setup_script: setupScript.trim() || null })}
-          placeholder="e.g. mise trust && mise install"
+          placeholder={t("repo_setup_script_placeholder")}
           rows={3}
         />
         <div className={styles.fieldHint}>
-          Runs automatically when a new workspace is created.
+          {t("repo_setup_script_hint")}
         </div>
         <label className={styles.autoRunLabel}>
           <input
@@ -415,35 +406,32 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
               save({ setup_script_auto_run: e.target.checked });
             }}
           />
-          Skip confirmation when running setup scripts
+          {t("repo_autorun_label")}
         </label>
       </div>
 
       <div className={styles.fieldGroup}>
-        <div className={styles.fieldLabel}>Environment</div>
+        <div className={styles.fieldLabel}>{t("repo_environment")}</div>
         <EnvPanel target={envTarget} />
       </div>
 
       <div className={styles.fieldGroup}>
-        <div className={styles.fieldLabel}>Custom instructions</div>
+        <div className={styles.fieldLabel}>{t("repo_custom_instructions")}</div>
         {repoInstructionsOverrides && (
           <div className={styles.overrideNotice}>
-            This repo includes a <code>.claudette.json</code> that defines
-            custom instructions. Repo-level instructions take precedence over
-            your personal instructions.
+            {t("repo_instructions_override_notice")}
           </div>
         )}
         {repoConfig?.has_config_file && repoConfig.instructions && (
           <div>
             <div className={styles.overriddenLabel}>
-              From .claudette.json (read-only):
+              {t("repo_from_config")}
             </div>
             <pre className={styles.readOnlyPre}>{repoConfig.instructions}</pre>
           </div>
         )}
         <div className={styles.overriddenLabel}>
-          Personal instructions
-          {repoInstructionsOverrides ? " (overridden)" : ""}:
+          {repoInstructionsOverrides ? t("repo_personal_instructions_overridden") : t("repo_personal_instructions")}
         </div>
         <textarea
           className={`${styles.textarea}${repoInstructionsOverrides ? ` ${styles.overriddenInput}` : ""}`}
@@ -454,19 +442,18 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
               custom_instructions: customInstructions.trim() || null,
             })
           }
-          placeholder="e.g. Always use TypeScript. Prefer functional components."
+          placeholder={t("repo_custom_instructions_placeholder")}
           rows={4}
         />
         <div className={styles.fieldHint}>
-          Appended to the agent's system prompt at the start of every chat.
+          {t("repo_custom_instructions_hint")}
         </div>
       </div>
 
       <div className={styles.fieldGroup}>
-        <div className={styles.fieldLabel}>Branch rename preferences</div>
+        <div className={styles.fieldLabel}>{t("repo_branch_rename")}</div>
         <div className={`${styles.fieldHint} ${styles.fieldHintSpaced}`}>
-          Custom instructions sent to the agent along with your first message in
-          a workspace where the branch hasn't already been renamed.
+          {t("repo_branch_rename_hint")}
         </div>
         <textarea
           className={styles.textarea}
@@ -478,24 +465,22 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
                 branchRenamePreferences.trim() || null,
             })
           }
-          placeholder="Add your preferences here. The agent will be told to prioritize these instructions over its default instructions."
+          placeholder={t("repo_branch_rename_placeholder")}
           rows={3}
         />
       </div>
 
       <div className={styles.fieldGroup}>
-        <div className={styles.fieldLabel}>MCP servers</div>
+        <div className={styles.fieldLabel}>{t("repo_mcp_servers")}</div>
         <div className={`${styles.fieldHint} ${styles.fieldHintSpacedWide}`}>
-          Servers injected into agent sessions. Toggle to enable or disable for
-          this repository.
+          {t("repo_mcp_servers_hint")}
         </div>
         {mcpServers.length === 0 ? (
           <div className={styles.fieldHint}>
-            No MCP servers detected for this repository.
+            {t("repo_mcp_no_servers")}
           </div>
         ) : (
           <div className={styles.mcpList}>
-            {/* Group servers by source */}
             {(() => {
               const groups = new Map<string, typeof mcpServers>();
               for (const server of mcpServers) {
@@ -567,7 +552,7 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
                                 }
                               }}
                             >
-                              Reconnect
+                              {t("repo_mcp_reconnect")}
                             </button>
                           )}
                           <button
@@ -589,7 +574,7 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
                             }}
                             role="switch"
                             aria-checked={server.enabled}
-                            aria-label={`${server.enabled ? "Disable" : "Enable"} ${server.name}`}
+                            aria-label={server.enabled ? t("repo_mcp_disable_aria", { name: server.name }) : t("repo_mcp_enable_aria", { name: server.name })}
                           >
                             <span className={styles.mcpToggleKnob} />
                           </button>
@@ -607,7 +592,7 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
             className={styles.iconBtn}
             onClick={() => openModal("mcpSelection", { repoId })}
           >
-            Re-detect &amp; add servers
+            {t("repo_mcp_detect")}
           </button>
           {mcpServers.length > 0 && (
             <button
@@ -621,7 +606,7 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
                 }
               }}
             >
-              Refresh status
+              {t("repo_mcp_refresh")}
             </button>
           )}
         </div>
@@ -629,10 +614,9 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>Archive on merge</div>
+          <div className={styles.settingLabel}>{t("repo_archive_on_merge")}</div>
           <div className={styles.settingDescription}>
-            Automatically archive workspaces when their PR is merged. Overrides
-            the global setting for this repository.
+            {t("repo_archive_on_merge_desc")}
           </div>
         </div>
         <div className={styles.settingControl}>
@@ -655,36 +639,35 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
               }
             }}
           >
-            <option value="inherit">Use global default</option>
-            <option value="true">Enabled</option>
-            <option value="false">Disabled</option>
+            <option value="inherit">{t("repo_archive_inherit")}</option>
+            <option value="true">{t("repo_archive_enabled")}</option>
+            <option value="false">{t("repo_archive_disabled")}</option>
           </select>
         </div>
       </div>
 
       <div className={styles.fieldGroup}>
-        <div className={styles.fieldLabel}>Worktree discovery</div>
+        <div className={styles.fieldLabel}>{t("repo_worktree_discovery")}</div>
         <div className={`${styles.fieldHint} ${styles.fieldHintSpaced}`}>
-          Scan for existing git worktrees (e.g. from Conductor) and import them
-          as workspaces.
+          {t("repo_worktree_discovery_hint")}
         </div>
         <button
           className={styles.iconBtn}
           onClick={() => openModal("importWorktrees", { repoId })}
         >
-          Discover worktrees
+          {t("repo_worktree_discover")}
         </button>
       </div>
 
       <div className={styles.dangerZone}>
-        <div className={styles.dangerLabel}>Danger Zone</div>
+        <div className={styles.dangerLabel}>{t("repo_danger_zone")}</div>
         <button
           className={styles.btnDanger}
           onClick={() =>
             openModal("removeRepo", { repoId, repoName: repo.name })
           }
         >
-          Remove Repository
+          {t("repo_remove_repo")}
         </button>
       </div>
 

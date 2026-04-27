@@ -1,34 +1,25 @@
 import { SlidersHorizontal, Cpu, Palette, Bell, GitBranch, FlaskConical, BarChart3, Puzzle } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { RepoIcon } from "../shared/RepoIcon";
 import styles from "./Settings.module.css";
 
-const APP_SECTIONS = [
-  { id: "general", label: "General", icon: SlidersHorizontal },
-  { id: "models", label: "Models", icon: Cpu },
-  { id: "appearance", label: "Appearance", icon: Palette },
-  { id: "notifications", label: "Notifications", icon: Bell },
-  { id: "git", label: "Git", icon: GitBranch },
-  { id: "plugins", label: "Plugins", icon: Puzzle },
-  {
-    id: "claude-code-plugins",
-    label: "Claude Code Plugins",
-    icon: Puzzle,
-  },
-];
-
-const MORE_SECTIONS = [
-  { id: "experimental", label: "Experimental", icon: FlaskConical },
-];
-
 export function getAppSections(pluginManagementEnabled: boolean) {
-  return APP_SECTIONS.filter(
-    (section) =>
-      section.id !== "claude-code-plugins" || pluginManagementEnabled,
-  );
+  return [
+    { id: "general", icon: SlidersHorizontal },
+    { id: "models", icon: Cpu },
+    { id: "appearance", icon: Palette },
+    { id: "notifications", icon: Bell },
+    { id: "git", icon: GitBranch },
+    { id: "plugins", icon: Puzzle },
+    ...(pluginManagementEnabled
+      ? [{ id: "claude-code-plugins", icon: Puzzle }]
+      : []),
+  ] as const;
 }
 
 export function SettingsSidebar() {
+  const { t } = useTranslation(["common", "settings"]);
   const settingsSection = useAppStore((s) => s.settingsSection);
   const setSettingsSection = useAppStore((s) => s.setSettingsSection);
   const closeSettings = useAppStore((s) => s.closeSettings);
@@ -36,10 +27,21 @@ export function SettingsSidebar() {
   const usageInsightsEnabled = useAppStore((s) => s.usageInsightsEnabled);
   const pluginManagementEnabled = useAppStore((s) => s.pluginManagementEnabled);
 
+  const sectionLabel = (id: string) => {
+    if (id === "general") return t("settings:nav_general");
+    if (id === "models") return t("settings:nav_models");
+    if (id === "appearance") return t("settings:nav_appearance");
+    if (id === "notifications") return t("settings:nav_notifications");
+    if (id === "git") return t("settings:nav_git");
+    if (id === "plugins") return t("settings:nav_plugins");
+    if (id === "claude-code-plugins") return t("settings:nav_claude_code_plugins");
+    return id;
+  };
+
   return (
     <div className={styles.sidebar}>
       <button className={styles.backLink} onClick={closeSettings}>
-        &larr; Back to app
+        {t("common:back_to_app")}
       </button>
 
       {getAppSections(pluginManagementEnabled).map((s) => (
@@ -51,7 +53,7 @@ export function SettingsSidebar() {
           onClick={() => setSettingsSection(s.id)}
         >
           <s.icon size={14} />
-          {s.label}
+          {sectionLabel(s.id)}
         </button>
       ))}
 
@@ -63,25 +65,22 @@ export function SettingsSidebar() {
           onClick={() => setSettingsSection("usage")}
         >
           <BarChart3 size={14} />
-          Usage
+          {t("settings:nav_usage")}
         </button>
       )}
 
-      <div className={styles.groupLabel}>More</div>
-      {MORE_SECTIONS.map((s) => (
-        <button
-          key={s.id}
-          className={
-            settingsSection === s.id ? styles.navItemActive : styles.navItem
-          }
-          onClick={() => setSettingsSection(s.id)}
-        >
-          <s.icon size={14} />
-          {s.label}
-        </button>
-      ))}
+      <div className={styles.groupLabel}>{t("settings:group_more")}</div>
+      <button
+        className={
+          settingsSection === "experimental" ? styles.navItemActive : styles.navItem
+        }
+        onClick={() => setSettingsSection("experimental")}
+      >
+        <FlaskConical size={14} />
+        {t("settings:nav_experimental")}
+      </button>
 
-      <div className={styles.groupLabel}>Repositories</div>
+      <div className={styles.groupLabel}>{t("settings:group_repositories")}</div>
       {repositories.map((repo) => {
         const sectionId = `repo:${repo.id}`;
         return (

@@ -2,12 +2,15 @@ import { useEffect, useState } from "react";
 import { FolderOpen } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getVersion } from "@tauri-apps/api/app";
+import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../../stores/useAppStore";
 import { getAppSetting, setAppSetting } from "../../../services/tauri";
 import { applyUpdateChannel, checkForUpdate } from "../../../hooks/useAutoUpdater";
+import i18n from "../../../i18n";
 import styles from "../Settings.module.css";
 
 export function GeneralSettings() {
+  const { t } = useTranslation("settings");
   const worktreeBaseDir = useAppStore((s) => s.worktreeBaseDir);
   const setWorktreeBaseDir = useAppStore((s) => s.setWorktreeBaseDir);
   const updateAvailable = useAppStore((s) => s.updateAvailable);
@@ -28,6 +31,7 @@ export function GeneralSettings() {
     "auto" | "light" | "dark" | "color"
   >("auto");
   const [archiveOnMerge, setArchiveOnMerge] = useState(false);
+  const [language, setLanguageState] = useState("en");
   const [error, setError] = useState<string | null>(null);
   const [appVersion, setAppVersion] = useState("");
   const [checkState, setCheckState] = useState<"idle" | "checking" | "up-to-date">("idle");
@@ -51,6 +55,9 @@ export function GeneralSettings() {
       .catch(() => {});
     getAppSetting("archive_on_merge")
       .then((val) => setArchiveOnMerge(val === "true"))
+      .catch(() => {});
+    getAppSetting("language")
+      .then((val) => { if (val) setLanguageState(val); })
       .catch(() => {});
   }, []);
 
@@ -78,7 +85,7 @@ export function GeneralSettings() {
       setCheckState("up-to-date");
     } else if (result === "error") {
       setCheckState("idle");
-      setError("Update check failed. Please try again later.");
+      setError(t("general_update_check_failed"));
     }
   };
 
@@ -149,17 +156,30 @@ export function GeneralSettings() {
     }
   };
 
+  const handleLanguageChange = async (next: string) => {
+    const prev = language;
+    setLanguageState(next);
+    try {
+      setError(null);
+      await setAppSetting("language", next);
+      await i18n.changeLanguage(next);
+    } catch (e) {
+      setLanguageState(prev);
+      setError(String(e));
+    }
+  };
+
   return (
     <div>
-      <h2 className={styles.sectionTitle}>General</h2>
+      <h2 className={styles.sectionTitle}>{t("general_title")}</h2>
 
       {error && <div className={styles.error}>{error}</div>}
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>App version</div>
+          <div className={styles.settingLabel}>{t("general_app_version")}</div>
           <div className={styles.settingDescription}>
-            {appVersion ? `v${appVersion}` : "\u2026"}
+            {appVersion ? `v${appVersion}` : "…"}
           </div>
         </div>
         <div className={styles.settingControl}>
@@ -169,28 +189,28 @@ export function GeneralSettings() {
             disabled={checkState === "checking"}
           >
             {checkState === "checking"
-              ? "Checking\u2026"
+              ? t("general_checking")
               : checkState === "up-to-date"
-                ? "Up to date"
-                : "Check for Updates"}
+                ? t("general_up_to_date")
+                : t("general_check_updates")}
           </button>
         </div>
       </div>
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>Update channel</div>
+          <div className={styles.settingLabel}>{t("general_update_channel")}</div>
           <div className={styles.settingDescription}>
             {channelLocked
-              ? "Locked while an update is installing. Available again after restart."
-              : "Nightly builds include the latest features and fixes but may be unstable."}
+              ? t("general_channel_locked")
+              : t("general_channel_nightly_hint")}
           </div>
         </div>
         <div className={styles.settingControl}>
           <select
             className={styles.select}
             value={updateChannel}
-            aria-label="Update channel"
+            aria-label={t("general_update_channel")}
             disabled={channelLocked}
             onChange={(e) => {
               const value = e.target.value;
@@ -199,17 +219,17 @@ export function GeneralSettings() {
               }
             }}
           >
-            <option value="stable">Stable (recommended)</option>
-            <option value="nightly">Nightly (latest main)</option>
+            <option value="stable">{t("general_channel_stable")}</option>
+            <option value="nightly">{t("general_channel_nightly")}</option>
           </select>
         </div>
       </div>
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>Worktree base directory</div>
+          <div className={styles.settingLabel}>{t("general_worktree_dir")}</div>
           <div className={styles.settingDescription}>
-            Where new workspaces are created
+            {t("general_worktree_desc")}
           </div>
         </div>
         <div className={styles.settingControl}>
@@ -219,7 +239,7 @@ export function GeneralSettings() {
               value={path}
               onChange={(e) => setPath(e.target.value)}
               onBlur={handlePathBlur}
-              placeholder="~/.claudette/workspaces"
+              placeholder={t("general_worktree_placeholder")}
             />
             <button
               className={styles.iconBtn}
@@ -236,7 +256,7 @@ export function GeneralSettings() {
                   setError(String(e));
                 }
               }}
-              title="Browse"
+              title={t("general_worktree_dir")}
             >
               <FolderOpen size={14} />
             </button>
@@ -246,9 +266,9 @@ export function GeneralSettings() {
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>Archive on merge</div>
+          <div className={styles.settingLabel}>{t("general_archive_on_merge")}</div>
           <div className={styles.settingDescription}>
-            Automatically archive a workspace when its pull request is merged.
+            {t("general_archive_on_merge_desc")}
           </div>
         </div>
         <div className={styles.settingControl}>
@@ -256,7 +276,7 @@ export function GeneralSettings() {
             className={styles.toggle}
             role="switch"
             aria-checked={archiveOnMerge}
-            aria-label="Archive on merge"
+            aria-label={t("general_archive_on_merge")}
             data-checked={archiveOnMerge}
             onClick={handleArchiveOnMergeToggle}
           >
@@ -267,10 +287,9 @@ export function GeneralSettings() {
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>System tray</div>
+          <div className={styles.settingLabel}>{t("general_system_tray")}</div>
           <div className={styles.settingDescription}>
-            Show Claudette in the system tray. Closing the window will minimize
-            to tray when enabled.
+            {t("general_system_tray_desc")}
           </div>
         </div>
         <div className={styles.settingControl}>
@@ -278,7 +297,7 @@ export function GeneralSettings() {
             className={styles.toggle}
             role="switch"
             aria-checked={trayEnabled}
-            aria-label="System tray"
+            aria-label={t("general_system_tray")}
             data-checked={trayEnabled}
             onClick={handleTrayToggle}
           >
@@ -289,19 +308,16 @@ export function GeneralSettings() {
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>Tray icon style</div>
+          <div className={styles.settingLabel}>{t("general_tray_icon_style")}</div>
           <div className={styles.settingDescription}>
-            Auto uses macOS template tinting (black or white depending on the
-            menu bar) and the logo's orange on Linux. Pick Light for a white
-            icon on dark panels, Dark for a black icon on light panels, or
-            Color to use the orange on every platform.
+            {t("general_tray_icon_style_desc")}
           </div>
         </div>
         <div className={styles.settingControl}>
           <select
             className={styles.select}
             value={trayIconStyle}
-            aria-label="Tray icon style"
+            aria-label={t("general_tray_icon_style")}
             disabled={!trayEnabled}
             onChange={(e) => {
               // The <select> options below only emit these four values,
@@ -319,10 +335,29 @@ export function GeneralSettings() {
               }
             }}
           >
-            <option value="auto">Auto</option>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-            <option value="color">Color</option>
+            <option value="auto">{t("general_tray_auto")}</option>
+            <option value="light">{t("general_tray_light")}</option>
+            <option value="dark">{t("general_tray_dark")}</option>
+            <option value="color">{t("general_tray_color")}</option>
+          </select>
+        </div>
+      </div>
+
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>{t("general_language")}</div>
+          <div className={styles.settingDescription}>
+            {t("general_language_desc")}
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          <select
+            className={styles.select}
+            value={language}
+            aria-label={t("general_language")}
+            onChange={(e) => void handleLanguageChange(e.target.value)}
+          >
+            <option value="en">{t("general_language_en")}</option>
           </select>
         </div>
       </div>

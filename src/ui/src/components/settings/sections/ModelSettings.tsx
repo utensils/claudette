@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { getAppSetting, setAppSetting } from "../../../services/tauri";
 import { MODELS } from "../../chat/ModelSelector";
 import { EFFORT_LEVELS } from "../../chat/EffortSelector";
@@ -6,6 +7,7 @@ import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAl
 import styles from "../Settings.module.css";
 
 export function ModelSettings() {
+  const { t } = useTranslation("settings");
   const [defaultModel, setDefaultModel] = useState("opus");
   const [defaultThinking, setDefaultThinking] = useState(false);
   const [defaultPlanMode, setDefaultPlanMode] = useState(false);
@@ -107,15 +109,15 @@ export function ModelSettings() {
 
   return (
     <div>
-      <h2 className={styles.sectionTitle}>Models</h2>
+      <h2 className={styles.sectionTitle}>{t("models_title")}</h2>
 
       {error && <div className={styles.error}>{error}</div>}
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>Default model</div>
+          <div className={styles.settingLabel}>{t("models_default_model")}</div>
           <div className={styles.settingDescription}>
-            Model for new chats
+            {t("models_default_model_desc")}
           </div>
         </div>
         <div className={styles.settingControl}>
@@ -136,8 +138,8 @@ export function ModelSettings() {
               value={defaultThinking ? "true" : "false"}
               onChange={(e) => handleThinkingChange(e.target.value)}
             >
-              <option value="false">Thinking off</option>
-              <option value="true">Thinking on</option>
+              <option value="false">{t("models_thinking_off")}</option>
+              <option value="true">{t("models_thinking_on")}</option>
             </select>
           </div>
         </div>
@@ -145,10 +147,10 @@ export function ModelSettings() {
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>Default effort level</div>
+          <div className={styles.settingLabel}>{t("models_default_effort")}</div>
           <div className={styles.settingDescription}>
-            Reasoning effort for new chats
-            {effortDisabled && " (not supported by selected model)"}
+            {t("models_default_effort_desc")}
+            {effortDisabled && t("models_effort_not_supported")}
           </div>
         </div>
         <div className={styles.settingControl}>
@@ -169,9 +171,9 @@ export function ModelSettings() {
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>Show thinking blocks</div>
+          <div className={styles.settingLabel}>{t("models_show_thinking")}</div>
           <div className={styles.settingDescription}>
-            Display model thinking in chat by default
+            {t("models_show_thinking_desc")}
           </div>
         </div>
         <div className={styles.settingControl}>
@@ -179,7 +181,7 @@ export function ModelSettings() {
             className={styles.toggle}
             role="switch"
             aria-checked={defaultShowThinking}
-            aria-label="Show thinking blocks"
+            aria-label={t("models_show_thinking")}
             data-checked={defaultShowThinking}
             onClick={handleToggle(defaultShowThinking, setDefaultShowThinking, "default_show_thinking")}
           >
@@ -190,9 +192,9 @@ export function ModelSettings() {
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>Default to plan mode</div>
+          <div className={styles.settingLabel}>{t("models_default_plan_mode")}</div>
           <div className={styles.settingDescription}>
-            Start new chats in plan mode
+            {t("models_default_plan_mode_desc")}
           </div>
         </div>
         <div className={styles.settingControl}>
@@ -200,7 +202,7 @@ export function ModelSettings() {
             className={styles.toggle}
             role="switch"
             aria-checked={defaultPlanMode}
-            aria-label="Default to plan mode"
+            aria-label={t("models_default_plan_mode")}
             data-checked={defaultPlanMode}
             onClick={handleToggle(defaultPlanMode, setDefaultPlanMode, "default_plan_mode")}
           >
@@ -211,10 +213,10 @@ export function ModelSettings() {
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>Default to fast mode</div>
+          <div className={styles.settingLabel}>{t("models_default_fast_mode")}</div>
           <div className={styles.settingDescription}>
-            Start new chats in fast mode
-            {fastDisabled && " (not supported by selected model)"}
+            {t("models_default_fast_mode_desc")}
+            {fastDisabled && t("models_fast_not_supported")}
           </div>
         </div>
         <div className={styles.settingControl}>
@@ -222,7 +224,7 @@ export function ModelSettings() {
             className={`${styles.toggle}${fastDisabled ? ` ${styles.selectDim}` : ""}`}
             role="switch"
             aria-checked={defaultFastMode}
-            aria-label="Default to fast mode"
+            aria-label={t("models_default_fast_mode")}
             data-checked={defaultFastMode && !fastDisabled}
             disabled={fastDisabled}
             onClick={handleToggle(defaultFastMode, setDefaultFastMode, "default_fast_mode")}
@@ -234,9 +236,9 @@ export function ModelSettings() {
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>Use Claude Code with Chrome</div>
+          <div className={styles.settingLabel}>{t("models_chrome")}</div>
           <div className={styles.settingDescription}>
-            Allow Claude Code to control your Chrome browser. To use this feature, first install the Claude Code Chrome extension.
+            {t("models_chrome_desc")}
           </div>
         </div>
         <div className={styles.settingControl}>
@@ -244,7 +246,7 @@ export function ModelSettings() {
             className={styles.toggle}
             role="switch"
             aria-checked={defaultChrome}
-            aria-label="Use Claude Code with Chrome"
+            aria-label={t("models_chrome")}
             data-checked={defaultChrome}
             onClick={handleToggle(defaultChrome, setDefaultChrome, "default_chrome")}
           >

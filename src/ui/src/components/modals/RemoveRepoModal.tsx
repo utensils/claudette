@@ -1,10 +1,13 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { removeRepository } from "../../services/tauri";
 import { Modal } from "./Modal";
 import shared from "./shared.module.css";
 
 export function RemoveRepoModal() {
+  const { t } = useTranslation("modals");
+  const { t: tCommon } = useTranslation("common");
   const closeModal = useAppStore((s) => s.closeModal);
   const modalData = useAppStore((s) => s.modalData);
   const removeRepo = useAppStore((s) => s.removeRepository);
@@ -32,30 +35,30 @@ export function RemoveRepoModal() {
   };
 
   return (
-    <Modal title="Remove repository" onClose={closeModal}>
+    <Modal title={t("remove_repo_title")} onClose={closeModal}>
       <div className={shared.warning}>
-        Are you sure you want to remove <strong>{repoName}</strong>? This will
-        not delete the repository from disk, only unregister it.
+        {t("remove_repo_warning_pre")} <strong>{repoName}</strong>{t("remove_repo_warning_post")}
       </div>
       {(active > 0 || archived > 0) && (
         <div className={shared.warning}>
-          Will permanently destroy: {active > 0 && `${active} active`}
+          {t("remove_repo_will_destroy_pre")}{" "}
+          {active > 0 && t("remove_repo_active", { count: active })}
           {active > 0 && archived > 0 && ", "}
-          {archived > 0 && `${archived} archived`} workspace
-          {active + archived > 1 ? "s" : ""}.
+          {archived > 0 && t("remove_repo_archived", { count: archived })}{" "}
+          {t(active + archived > 1 ? "remove_repo_workspaces" : "remove_repo_workspace")}.
         </div>
       )}
       {error && <div className={shared.error}>{error}</div>}
       <div className={shared.actions}>
         <button className={shared.btn} onClick={closeModal}>
-          Cancel
+          {tCommon("cancel")}
         </button>
         <button
           className={shared.btnDanger}
           onClick={handleRemove}
           disabled={loading}
         >
-          {loading ? "Removing..." : "Remove"}
+          {loading ? t("remove_repo_removing") : t("remove_repo_confirm")}
         </button>
       </div>
     </Modal>

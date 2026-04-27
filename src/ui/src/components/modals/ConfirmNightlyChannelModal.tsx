@@ -1,10 +1,13 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { applyUpdateChannel } from "../../hooks/useAutoUpdater";
 import { Modal } from "./Modal";
 import shared from "./shared.module.css";
 
 export function ConfirmNightlyChannelModal() {
+  const { t } = useTranslation("modals");
+  const { t: tCommon } = useTranslation("common");
   const closeModal = useAppStore((s) => s.closeModal);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -20,32 +23,29 @@ export function ConfirmNightlyChannelModal() {
     }
   };
 
-  // Block backdrop dismiss while the channel switch is in flight — matches
-  // the disabled Cancel button below, and avoids the catch handler trying to
-  // setError on an unmounted component if the request later fails.
   const handleClose = () => {
     if (loading) return;
     closeModal();
   };
 
   return (
-    <Modal title="Switch to nightly channel?" onClose={handleClose}>
+    <Modal title={t("nightly_title")} onClose={handleClose}>
       <div className={shared.warning}>
-        Nightly builds are untested pre-releases built from the latest{" "}
-        <strong>main</strong> branch. They may contain bugs or break features.
-        You can switch back to Stable at any time.
+        {t("nightly_warning_pre")}{" "}
+        <strong>main</strong>{" "}
+        {t("nightly_warning_post")}
       </div>
       {error && <div className={shared.error}>{error}</div>}
       <div className={shared.actions}>
         <button className={shared.btn} onClick={closeModal} disabled={loading}>
-          Cancel
+          {tCommon("cancel")}
         </button>
         <button
           className={shared.btnPrimary}
           onClick={handleConfirm}
           disabled={loading}
         >
-          {loading ? "Switching..." : "Switch to Nightly"}
+          {loading ? t("nightly_switching") : t("nightly_confirm")}
         </button>
       </div>
     </Modal>
