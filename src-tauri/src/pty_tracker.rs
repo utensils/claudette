@@ -108,20 +108,9 @@ pub fn spawn(pty_id: u64, shell_pid: i32, master_fd: OwnedFd, cancel: Arc<Notify
     });
 }
 
-/// No-op shim on non-Unix platforms.
-#[cfg(not(unix))]
-pub fn spawn(
-    _pty_id: u64,
-    _shell_pid: i32,
-    _master_fd: (),
-    _cancel: std::sync::Arc<tokio::sync::Notify>,
-    _app: tauri::AppHandle,
-) {
-}
-
 /// Duplicate the master PTY's file descriptor so the polling task can own a
-/// copy with an independent lifetime. Returns `None` on non-Unix or if the
-/// master does not expose a raw FD.
+/// copy with an independent lifetime. Returns `None` if the master does not
+/// expose a raw FD.
 #[cfg(unix)]
 pub fn dup_master_fd(master: &dyn portable_pty::MasterPty) -> Option<OwnedFd> {
     let raw = master.as_raw_fd()?;
@@ -130,11 +119,6 @@ pub fn dup_master_fd(master: &dyn portable_pty::MasterPty) -> Option<OwnedFd> {
         return None;
     }
     Some(unsafe { OwnedFd::from_raw_fd(dup) })
-}
-
-#[cfg(not(unix))]
-pub fn dup_master_fd(_master: &dyn portable_pty::MasterPty) -> Option<()> {
-    None
 }
 
 #[cfg(unix)]

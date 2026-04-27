@@ -89,11 +89,6 @@ pub fn kill_processes_with_descendants(roots: &[i32], grace_ms: u64) {
     }
 }
 
-#[cfg(not(unix))]
-pub fn kill_processes_with_descendants(_roots: &[i32], _grace_ms: u64) {
-    // ConPTY on Windows uses Job Objects for grouping; not implemented here.
-}
-
 #[cfg(test)]
 #[cfg(unix)]
 mod tests {
