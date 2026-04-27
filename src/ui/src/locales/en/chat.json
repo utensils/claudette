@@ -21,6 +21,7 @@
   "voice_stop": "Stop voice input",
   "voice_discard": "Discard transcription",
   "voice_cancel": "Cancel",
+  "voice_error_dismiss_hint": "Click to dismiss",
   "voice_starting": "Starting…",
   "voice_transcribing": "Transcribing",
   "voice_transcribing_with": "Transcribing with {{provider}}",

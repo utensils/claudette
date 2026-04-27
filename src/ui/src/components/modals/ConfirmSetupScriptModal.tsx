@@ -73,7 +73,7 @@ export function ConfirmSetupScriptModal() {
     }
   };
 
-  const label = source === "repo" ? ".claudette.json" : "repo settings";
+  const label = source === "repo" ? ".claudette.json" : t("setup_script_source_repo_settings");
 
   return (
     <Modal title={t("setup_script_title")} onClose={closeModal}>

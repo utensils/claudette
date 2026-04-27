@@ -6,11 +6,12 @@ import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../../stores/useAppStore";
 import { getAppSetting, setAppSetting } from "../../../services/tauri";
 import { applyUpdateChannel, checkForUpdate } from "../../../hooks/useAutoUpdater";
-import i18n from "../../../i18n";
+import i18n, { isSupportedLanguage } from "../../../i18n";
 import styles from "../Settings.module.css";
 
 export function GeneralSettings() {
   const { t } = useTranslation("settings");
+  const { t: tCommon } = useTranslation("common");
   const worktreeBaseDir = useAppStore((s) => s.worktreeBaseDir);
   const setWorktreeBaseDir = useAppStore((s) => s.setWorktreeBaseDir);
   const updateAvailable = useAppStore((s) => s.updateAvailable);
@@ -57,7 +58,7 @@ export function GeneralSettings() {
       .then((val) => setArchiveOnMerge(val === "true"))
       .catch(() => {});
     getAppSetting("language")
-      .then((val) => { if (val) setLanguageState(val); })
+      .then((val) => { if (val && isSupportedLanguage(val)) setLanguageState(val); })
       .catch(() => {});
   }, []);
 
@@ -256,7 +257,7 @@ export function GeneralSettings() {
                   setError(String(e));
                 }
               }}
-              title={t("general_worktree_dir")}
+              title={tCommon("browse")}
             >
               <FolderOpen size={14} />
             </button>

@@ -3258,7 +3258,7 @@ function ChatInputArea({
                 type="button"
                 className={styles.voiceErrorBtn}
                 onClick={() => voice.cancel()}
-                title={`${voice.error ?? ""}\n\nClick to dismiss`}
+                title={`${voice.error ?? ""}\n\n${t("voice_error_dismiss_hint")}`}
               >
                 <AlertCircle size={12} className={styles.voiceErrorIcon} aria-hidden="true" />
                 <span className={styles.voiceErrorText}>{voice.error}</span>

@@ -59,6 +59,7 @@
   "setup_script_title": "Review setup script",
   "setup_script_warning_pre": "This workspace has a setup script from",
   "setup_script_warning_post": "that will be executed. Please review it before proceeding.",
+  "setup_script_source_repo_settings": "repo settings",
   "setup_script_label": "Script",
   "setup_script_always_run": "Always run setup scripts for this repo",
   "setup_script_skip": "Skip",

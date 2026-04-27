@@ -583,14 +583,16 @@ export const Sidebar = memo(function Sidebar() {
           const groupKey = `status:${key}`;
           const collapsed = statusGroupCollapsed[groupKey];
           const runningCount = bucketWorkspaces.filter((ws) => isAgentBusy(ws.agent_status)).length;
-          const label = ({
-            "merged": t("status_merged"),
-            "in-review": t("status_in_review"),
-            "draft": t("status_draft"),
-            "in-progress": t("status_in_progress"),
-            "closed": t("status_closed"),
-            "archived": t("status_archived"),
-          } as const)[key];
+          let label: string;
+          switch (key) {
+            case "merged": label = t("status_merged"); break;
+            case "in-review": label = t("status_in_review"); break;
+            case "draft": label = t("status_draft"); break;
+            case "in-progress": label = t("status_in_progress"); break;
+            case "closed": label = t("status_closed"); break;
+            case "archived": label = t("status_archived"); break;
+            default: label = key;
+          }
           return (
             <div key={groupKey} className={styles.statusGroup}>
               <div

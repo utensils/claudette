@@ -11,7 +11,7 @@ import { useMcpStatus } from "./hooks/useMcpStatus";
 import { AppLayout } from "./components/layout/AppLayout";
 import { findLeafByPtyId } from "./stores/terminalPaneTree";
 import type { CommandEvent } from "./types";
-import i18n from "./i18n";
+import i18n, { isSupportedLanguage } from "./i18n";
 import "./styles/theme.css";
 
 function App() {
@@ -197,7 +197,11 @@ function App() {
       .then((val) => { if (val === "true") setPluginManagementEnabled(true); })
       .catch(() => {});
     getAppSetting("language")
-      .then((lang) => { if (lang && lang !== i18n.language) void i18n.changeLanguage(lang); })
+      .then((lang) => {
+        if (lang && isSupportedLanguage(lang) && lang !== i18n.language) {
+          void i18n.changeLanguage(lang);
+        }
+      })
       .catch(() => {});
     getHostEnvFlags()
       .then(({ disable_1m_context }) => { if (disable_1m_context) setDisable1mContext(true); })
