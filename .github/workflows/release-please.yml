@@ -331,7 +331,9 @@ jobs:
       - name: Delete staging release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release delete "${{ needs.prepare-staging.outputs.staging_tag }}" --yes --cleanup-tag --repo "${{ github.repository }}"
+        run: |
+          gh release delete "${{ needs.prepare-staging.outputs.staging_tag }}" --yes --repo "${{ github.repository }}" 2>/dev/null || true
+          gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/${{ needs.prepare-staging.outputs.staging_tag }}" 2>/dev/null || true
 
   notify-discord:
     name: Discord Release Notification

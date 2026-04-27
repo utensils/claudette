@@ -388,4 +388,5 @@ jobs:
 
           .github/scripts/validate-public-latest.sh "$GITHUB_REPOSITORY" nightly
 
-          gh release delete "$STAGING_TAG" --yes --cleanup-tag --repo "$GITHUB_REPOSITORY"
+          gh release delete "$STAGING_TAG" --yes --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+          gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/${STAGING_TAG}" 2>/dev/null || true
