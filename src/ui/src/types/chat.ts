@@ -57,9 +57,16 @@ export interface ChatAttachment {
 }
 
 /** Payload of the `agent-attachment-created` Tauri event. The Rust bridge
- *  emits this whenever the agent calls `mcp__claudette__send_to_user`. */
+ *  emits this whenever the agent calls `mcp__claudette__send_to_user`.
+ *
+ *  Both ids are needed: `workspace_id` lets the listener decide whether the
+ *  event is for the active workspace at all, and `chat_session_id` is the
+ *  key the chat-attachment store actually uses (a single workspace can host
+ *  multiple chat sessions). Keying off `workspace_id` was a latent bug —
+ *  rows landed in the wrong slice and never rendered. */
 export interface AgentAttachmentEvent {
   workspace_id: string;
+  chat_session_id: string;
   message_id: string;
   attachment: ChatAttachment & { caption?: string | null };
 }

@@ -59,6 +59,10 @@ impl Sink for ChatBridgeSink {
 #[derive(Serialize, Clone)]
 struct AgentAttachmentEvent {
     workspace_id: String,
+    /// The chat session the attachment belongs to. The frontend store keys
+    /// `chatAttachments` by session id (a workspace can have several sessions),
+    /// so the listener needs this to merge the row into the correct slice.
+    chat_session_id: String,
     message_id: String,
     attachment: AttachmentEventBody,
 }
@@ -192,6 +196,7 @@ async fn send_attachment(
     // Emit the event so the chat surface re-renders.
     let evt = AgentAttachmentEvent {
         workspace_id: workspace_id.clone(),
+        chat_session_id: chat_session_id.clone(),
         message_id: message_id.clone(),
         attachment: AttachmentEventBody {
             id: attachment_id.clone(),
