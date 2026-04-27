@@ -49,7 +49,7 @@ import {
   isTextFile,
 } from "../../utils/attachmentValidation";
 import { useTypewriter } from "../../hooks/useTypewriter";
-import { extractToolSummary } from "../../hooks/toolSummary";
+import { extractToolSummary, relativizePath } from "../../hooks/toolSummary";
 import { AgentQuestionCard } from "./AgentQuestionCard";
 import { PlanApprovalCard } from "./PlanApprovalCard";
 import { ComposerToolbar } from "./composer/ComposerToolbar";
@@ -1114,6 +1114,7 @@ export function ChatPanel() {
                   sessionId={activeSessionId}
                   isRunning={isRunning ?? false}
                   searchQuery={searchQuery}
+                  worktreePath={ws?.worktree_path}
                 />
               )}
 
@@ -1400,6 +1401,7 @@ function TurnSummary({
   onFork,
   onRollback,
   searchQuery,
+  worktreePath,
 }: {
   turn: CompletedTurn;
   collapsed: boolean;
@@ -1417,6 +1419,7 @@ function TurnSummary({
   /** Active chat-search query. Force-expands this card when non-empty and
    *  the query matches inside any of the contained activity summaries. */
   searchQuery: string;
+  worktreePath?: string | null;
 }) {
   const hasElapsed = typeof turn.durationMs === "number" && turn.durationMs > 0;
   const hasTokens =
@@ -1474,7 +1477,7 @@ function TurnSummary({
                   {(act.summary || act.inputJson) && (
                     <span className={styles.toolSummary}>
                       <HighlightedPlainText
-                        text={act.summary || extractToolSummary(act.toolName, act.inputJson)}
+                        text={relativizePath(act.summary || extractToolSummary(act.toolName, act.inputJson), worktreePath)}
                         query={searchQuery}
                       />
                     </span>
@@ -1754,6 +1757,9 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
   const chatAttachments = useAppStore(
     (s) => s.chatAttachments[sessionId] ?? EMPTY_ATTACHMENTS
   );
+  const worktreePath = useAppStore(
+    (s) => s.workspaces.find((w) => w.id === workspaceId)?.worktree_path
+  );
 
   // Pre-build a Map keyed by message_id for O(1) lookup in the render loop.
   //
@@ -1981,6 +1987,7 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
         onFork={onForkTurn ? () => onForkTurn(turn.id) : undefined}
         onRollback={buildOnRollback(turn.id)}
         searchQuery={searchQuery}
+        worktreePath={worktreePath}
       />
     ));
   };
@@ -2170,6 +2177,7 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
             onFork={onForkTurn ? () => onForkTurn(turn.id) : undefined}
             onRollback={buildOnRollback(turn.id)}
             searchQuery={searchQuery}
+            worktreePath={worktreePath}
           />
         ))}
     </>
@@ -2184,10 +2192,12 @@ const ToolActivitiesSection = memo(function ToolActivitiesSection({
   sessionId,
   isRunning,
   searchQuery,
+  worktreePath,
 }: {
   sessionId: string;
   isRunning: boolean;
   searchQuery: string;
+  worktreePath?: string | null;
 }) {
   const activities = useAppStore(
     (s) => s.toolActivities[sessionId] ?? EMPTY_ACTIVITIES
@@ -2248,7 +2258,7 @@ const ToolActivitiesSection = memo(function ToolActivitiesSection({
                   <span className={styles.toolName} style={{ color: toolColor(act.toolName) }}>{act.toolName}</span>
                   {act.summary && (
                     <span className={styles.toolSummary}>
-                      <HighlightedPlainText text={act.summary} query={searchQuery} />
+                      <HighlightedPlainText text={relativizePath(act.summary, worktreePath)} query={searchQuery} />
                     </span>
                   )}
                 </div>

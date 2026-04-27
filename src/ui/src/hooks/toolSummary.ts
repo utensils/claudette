@@ -97,3 +97,13 @@ function truncate(s: string, max: number): string {
   if (max <= 3) return s.slice(0, max);
   return s.slice(0, max - 3) + "...";
 }
+
+/** Strip the workspace root prefix from a summary string, leaving a relative path. */
+export function relativizePath(
+  text: string,
+  root: string | null | undefined
+): string {
+  if (!root || !text) return text;
+  const prefix = root.endsWith("/") ? root : root + "/";
+  return text.replaceAll(prefix, "");
+}
