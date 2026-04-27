@@ -4,8 +4,6 @@
   flex-wrap: nowrap;
   overflow-x: auto;
   overflow-y: hidden;
-  gap: 4px;
-  padding: 0 8px;
   background: transparent;
   scrollbar-width: thin;
   scrollbar-color: var(--border-subtle) transparent;
@@ -24,7 +22,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 14px;
+  padding: 8px 10px;
   min-width: 0;
   max-width: 220px;
   font-size: 12px;
@@ -38,11 +36,15 @@
   transition: color 80ms ease;
 }
 
+.tab:first-child {
+  padding-left: 8px;
+}
+
 .tab::after {
   content: "";
   position: absolute;
-  left: 8px;
-  right: 8px;
+  left: 0;
+  right: 0;
   bottom: 0;
   height: 1px;
   background: transparent;
