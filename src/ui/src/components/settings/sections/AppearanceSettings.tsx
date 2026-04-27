@@ -24,6 +24,8 @@ export function AppearanceSettings() {
   const fontFamilyMono = useAppStore((s) => s.fontFamilyMono);
   const setFontFamilyMono = useAppStore((s) => s.setFontFamilyMono);
   const systemFonts = useAppStore((s) => s.systemFonts);
+  const showSidebarRunningCommands = useAppStore((s) => s.showSidebarRunningCommands);
+  const setShowSidebarRunningCommands = useAppStore((s) => s.setShowSidebarRunningCommands);
 
   const [availableThemes, setAvailableThemes] = useState<ThemeDefinition[]>([]);
   const [termFontSize, setTermFontSize] = useState(String(terminalFontSize));
@@ -251,6 +253,38 @@ export function AppearanceSettings() {
             onChange={(e) => setTermFontSize(e.target.value)}
             onBlur={handleTermFontSizeBlur}
           />
+        </div>
+      </div>
+
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>Show running commands in sidebar</div>
+          <div className={styles.settingDescription}>
+            Display a collapsible list of foreground processes running in each
+            workspace's terminals. Off by default.
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          <button
+            className={styles.toggle}
+            role="switch"
+            aria-checked={showSidebarRunningCommands}
+            aria-label="Show running commands in sidebar"
+            data-checked={showSidebarRunningCommands}
+            onClick={async () => {
+              const next = !showSidebarRunningCommands;
+              setShowSidebarRunningCommands(next);
+              try {
+                setError(null);
+                await setAppSetting("show_sidebar_running_commands", next ? "true" : "false");
+              } catch (e) {
+                setShowSidebarRunningCommands(!next);
+                setError(String(e));
+              }
+            }}
+          >
+            <div className={styles.toggleKnob} />
+          </button>
         </div>
       </div>
 

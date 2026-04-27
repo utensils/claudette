@@ -36,7 +36,6 @@ export type {
   TerminalSplitDirection,
   WorkspaceCommandState,
   CommandEvent,
-  SetupResult,
 } from "./terminal";
 export type {
   AgentStreamPayload,

@@ -1545,8 +1545,8 @@ describe("removeWorkspace", () => {
       },
       activeTerminalTabId: { "ws-a": 1, "ws-b": 2 },
       workspaceTerminalCommands: {
-        "ws-a": { command: "ls", isRunning: false, exitCode: 0 },
-        "ws-b": { command: "pwd", isRunning: false, exitCode: 0 },
+        "ws-a": { 1: "ls" },
+        "ws-b": { 2: "pwd" },
       },
     });
   });

@@ -19,13 +19,6 @@ export interface CommandEvent {
   exit_code: number | null;
 }
 
-export interface SetupResult {
-  script_path: string;
-  rc_path: string;
-  loader_code: string;
-  already_integrated: boolean;
-}
-
 // -- Split-pane layout (ephemeral, not persisted) --
 
 export type TerminalPaneNodeId = string;

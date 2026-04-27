@@ -21,7 +21,6 @@ import type {
   TerminalPaneNode,
   TerminalPaneNodeId,
   TerminalSplitDirection,
-  WorkspaceCommandState,
   RemoteConnectionInfo,
   DiscoveredServer,
   ConversationCheckpoint,
@@ -385,16 +384,23 @@ interface AppState {
   // workspace's last-active tab independently.
   activeTerminalTabId: Record<string, number | null>;
   terminalPanelVisible: boolean;
-  workspaceTerminalCommands: Record<string, WorkspaceCommandState>;
+  /// Currently-running foreground commands, keyed by `wsId` then by `ptyId`.
+  /// An entry exists only while that PTY's foreground command is running —
+  /// it's added on `pty-command-detected`, removed on `pty-command-stopped`
+  /// or `pty-exit`. The sidebar renders one row per entry, so a workspace
+  /// with two terminals running `nxv dev` and `sleep 30` shows both.
+  workspaceTerminalCommands: Record<string, Record<number, string | null>>;
   setTerminalTabs: (wsId: string, tabs: TerminalTab[]) => void;
   addTerminalTab: (wsId: string, tab: TerminalTab) => void;
   removeTerminalTab: (wsId: string, tabId: number) => void;
   setActiveTerminalTab: (wsId: string, id: number | null) => void;
   toggleTerminalPanel: () => void;
-  setWorkspaceTerminalCommand: (
+  setWorkspaceRunningCommand: (
     wsId: string,
-    state: WorkspaceCommandState,
+    ptyId: number,
+    command: string | null,
   ) => void;
+  clearWorkspaceRunningCommand: (wsId: string, ptyId: number) => void;
 
   // Per-tab split-pane layout (ephemeral — not persisted). Keyed by tab id.
   terminalPaneTrees: Record<number, TerminalPaneNode>;
@@ -558,6 +564,12 @@ interface AppState {
   // -- Detected Apps --
   detectedApps: DetectedApp[];
   setDetectedApps: (apps: DetectedApp[]) => void;
+
+  // -- Sidebar display preferences --
+  /// Show running terminal commands under each workspace in the sidebar.
+  /// Off by default — opt in via Settings → Appearance.
+  showSidebarRunningCommands: boolean;
+  setShowSidebarRunningCommands: (v: boolean) => void;
 
   // -- Experimental --
   usageInsightsEnabled: boolean;
@@ -1514,13 +1526,31 @@ export const useAppStore = create<AppState>((set, get) => ({
     })),
   toggleTerminalPanel: () =>
     set((s) => ({ terminalPanelVisible: !s.terminalPanelVisible })),
-  setWorkspaceTerminalCommand: (wsId, state) =>
-    set((s) => ({
-      workspaceTerminalCommands: {
-        ...s.workspaceTerminalCommands,
-        [wsId]: state,
-      },
-    })),
+  setWorkspaceRunningCommand: (wsId, ptyId, command) =>
+    set((s) => {
+      const wsMap = { ...(s.workspaceTerminalCommands[wsId] ?? {}) };
+      wsMap[ptyId] = command;
+      return {
+        workspaceTerminalCommands: {
+          ...s.workspaceTerminalCommands,
+          [wsId]: wsMap,
+        },
+      };
+    }),
+  clearWorkspaceRunningCommand: (wsId, ptyId) =>
+    set((s) => {
+      const wsMap = s.workspaceTerminalCommands[wsId];
+      if (!wsMap || !(ptyId in wsMap)) return {};
+      const next = { ...wsMap };
+      delete next[ptyId];
+      const nextOuter = { ...s.workspaceTerminalCommands };
+      if (Object.keys(next).length === 0) {
+        delete nextOuter[wsId];
+      } else {
+        nextOuter[wsId] = next;
+      }
+      return { workspaceTerminalCommands: nextOuter };
+    }),
 
   // Pane-tree slice. State is ephemeral: if the app restarts, every tab
   // comes back as a single-leaf tree. See `terminalPaneTree.ts` for the
@@ -1922,6 +1952,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   // -- Detected Apps --
   detectedApps: [],
   setDetectedApps: (apps) => set({ detectedApps: apps }),
+
+  // -- Sidebar Display Preferences --
+  showSidebarRunningCommands: false,
+  setShowSidebarRunningCommands: (v) => set({ showSidebarRunningCommands: v }),
 
   // -- Experimental --
   usageInsightsEnabled: false,
