@@ -101,15 +101,14 @@ jobs:
 
           > **These builds are unstable pre-releases.**"
 
-          gh release create "$STAGING_TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "Nightly ${VERSION}" \
-            --notes "$NOTES" \
-            --prerelease \
-            --draft
-
-          RELEASE_ID=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${STAGING_TAG}" --jq .id)
+          RELEASE_ID=$(gh api -X POST "repos/${GITHUB_REPOSITORY}/releases" \
+            -f tag_name="$STAGING_TAG" \
+            -f target_commitish="$GITHUB_SHA" \
+            -f name="Nightly ${VERSION}" \
+            -f body="$NOTES" \
+            -F draft=true \
+            -F prerelease=true \
+            --jq .id)
           echo "tag=${STAGING_TAG}" >> "$GITHUB_OUTPUT"
           echo "release_id=${RELEASE_ID}" >> "$GITHUB_OUTPUT"
 

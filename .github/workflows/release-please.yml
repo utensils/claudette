@@ -93,14 +93,14 @@ jobs:
               --draft
           fi
 
-          gh release create "$STAGING_TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$TARGET_SHA" \
-            --title "${TAG} staging" \
-            --notes "Temporary staging release for ${TAG}." \
-            --draft
-
-          RELEASE_ID=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${STAGING_TAG}" --jq .id)
+          RELEASE_ID=$(gh api -X POST "repos/${GITHUB_REPOSITORY}/releases" \
+            -f tag_name="$STAGING_TAG" \
+            -f target_commitish="$TARGET_SHA" \
+            -f name="${TAG} staging" \
+            -f body="Temporary staging release for ${TAG}." \
+            -F draft=true \
+            -F prerelease=false \
+            --jq .id)
           echo "tag=${STAGING_TAG}" >> "$GITHUB_OUTPUT"
           echo "release_id=${RELEASE_ID}" >> "$GITHUB_OUTPUT"
 
