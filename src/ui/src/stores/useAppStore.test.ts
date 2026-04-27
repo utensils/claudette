@@ -527,10 +527,10 @@ describe("finalizeTurn afterMessageIndex", () => {
   });
 });
 
-// Regression coverage for #463: clicking a completed turn's chevron must
-// flip `collapsed`, and the toggle's key must match the key the readers
-// use (sessionId, not workspaceId — these diverged after the multi-session
-// refactor in #306).
+// Regression coverage for issue 463: clicking a completed turn's chevron
+// must flip `collapsed`, and the toggle's key must match the key the
+// readers use (sessionId, not workspaceId — these diverged after the
+// multi-session refactor in PR 306).
 describe("toggleCompletedTurn", () => {
   const SESSION_ID = "session-xyz";
   const WORKSPACE_ID = "workspace-abc";
@@ -573,7 +573,7 @@ describe("toggleCompletedTurn", () => {
     expect(turns[0].collapsed).toBe(true);
   });
 
-  it("is a no-op when turnIndex is out of range", () => {
+  it("leaves turn data unchanged when turnIndex is out of range", () => {
     addToolActivities(SESSION_ID);
     useAppStore.getState().finalizeTurn(SESSION_ID, 1);
 
