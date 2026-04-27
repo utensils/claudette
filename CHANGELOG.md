@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.20.0](https://github.com/utensils/claudette/compare/v0.19.0...v0.20.0) (2026-04-27)
+
+
+### Features
+
+* add SVG logo asset ([cf590fd](https://github.com/utensils/claudette/commit/cf590fd7d4328c10534712a2a009aef4ae62eb20))
+* **chat:** agent-authored inline attachments via in-process MCP bridge ([#431](https://github.com/utensils/claudette/issues/431)) ([ee348ce](https://github.com/utensils/claudette/commit/ee348ceb8781a8002c861f44b35b6e5b0b07558f))
+* **chat:** Cmd/Ctrl+F to search the current workspace chat session ([#447](https://github.com/utensils/claudette/issues/447)) ([bdb89f3](https://github.com/utensils/claudette/commit/bdb89f34cfc3222164f4655ef4a56c92fbb4b07f))
+* **chat:** hide 1M context models when CLAUDE_CODE_DISABLE_1M_CONTEXT is set ([#440](https://github.com/utensils/claudette/issues/440)) ([6588f1e](https://github.com/utensils/claudette/commit/6588f1ebf5d2577e0d826aa22594a670d7286d58))
+* **chat:** multi-session tabs per workspace ([#306](https://github.com/utensils/claudette/issues/306)) ([abd79d7](https://github.com/utensils/claudette/commit/abd79d720e673efa3a05fae0ff995ed8fa32296b))
+* **chat:** pin frequently-used slash commands in the composer ([#401](https://github.com/utensils/claudette/issues/401)) ([0104498](https://github.com/utensils/claudette/commit/0104498ed6c05e22e6e94b4fa67717cd55a29c48))
+* **chat:** voice input providers (apple speech + bundled whisper) ([#438](https://github.com/utensils/claudette/issues/438)) ([a1d5a61](https://github.com/utensils/claudette/commit/a1d5a61d38a697dd89e3f8c67c6b39cd2d955951))
+* **db:** tolerate "already exists" errors in migration runner ([#448](https://github.com/utensils/claudette/issues/448)) ([b53e431](https://github.com/utensils/claudette/commit/b53e431db3f57da84e4749f5d278636d3c25bc9a))
+* **diff:** open file diffs as tabs alongside chat sessions ([#456](https://github.com/utensils/claudette/issues/456)) ([a4ac215](https://github.com/utensils/claudette/commit/a4ac215f3a968e0d02238dcf61e5b55dbb943f17))
+* **release:** add native linux-aarch64 builds ([#445](https://github.com/utensils/claudette/issues/445)) ([77e95f9](https://github.com/utensils/claudette/commit/77e95f9abb69819a4c779ce76ab2192b87d656ce))
+* **server:** thread env-provider ResolvedEnv through remote handler ([#446](https://github.com/utensils/claudette/issues/446)) ([9a1ab96](https://github.com/utensils/claudette/commit/9a1ab968fc7114c1ad11234aeb0d87699a746d61))
+* **sidebar:** discard changes from unstaged + untracked files ([#444](https://github.com/utensils/claudette/issues/444)) ([c333258](https://github.com/utensils/claudette/commit/c3332581e35258f51b8db8b6cfff547c9edf044f))
+* **terminal:** polling-based command indicator + cleaner PTY lifecycle ([#466](https://github.com/utensils/claudette/issues/466)) ([51f8080](https://github.com/utensils/claudette/commit/51f8080fd0f7f74ecad9c0c0801aaed41a121945))
+
+
+### Bug Fixes
+
+* **chat:** attachment context menus + SVG lightbox preview ([#434](https://github.com/utensils/claudette/issues/434)) ([7b2e709](https://github.com/utensils/claudette/commit/7b2e709399fe8e3e689dba5bdcae827b5e95405e))
+* **chat:** clean code-block selection rectangle ([#435](https://github.com/utensils/claudette/issues/435)) ([5b9c1b6](https://github.com/utensils/claudette/commit/5b9c1b66015205252d106e08119229d6fb61eeaa))
+* **chat:** eliminate stair-step code block selection + add copy button ([5b9c1b6](https://github.com/utensils/claudette/commit/5b9c1b66015205252d106e08119229d6fb61eeaa))
+* **chat:** expand trailing tool-call summaries by toggling under sessionId ([#464](https://github.com/utensils/claudette/issues/464)) ([10f2312](https://github.com/utensils/claudette/commit/10f23122378607f388b477dc02eaa5deed0e7982))
+* **chat:** restore drag-and-drop attachments via promise chain fix and HTML5 fallback ([#452](https://github.com/utensils/claudette/issues/452)) ([47af807](https://github.com/utensils/claudette/commit/47af8076bf69075862f57a4c29ddad3b9e8faa19))
+* **ci:** prefix nightly short SHA with 'g' to keep version SemVer-valid ([#451](https://github.com/utensils/claudette/issues/451)) ([20001f8](https://github.com/utensils/claudette/commit/20001f87d2ce421ea4480aad6bf598991b847bb9))
+* input tweak ([8f79887](https://github.com/utensils/claudette/commit/8f79887e2468221557e65477103bcaa8aad09f48))
+* **terminal:** restore workspace sidebar command indicator after split-pane refactor ([#460](https://github.com/utensils/claudette/issues/460)) ([72bc306](https://github.com/utensils/claudette/commit/72bc3067fabd03246925fca548b7efd1c8c5a678)), closes [#459](https://github.com/utensils/claudette/issues/459)
+* **updater:** fall back to previous nightly when manifest is broken ([#454](https://github.com/utensils/claudette/issues/454)) ([b5568a5](https://github.com/utensils/claudette/commit/b5568a5ff94685adfce4bae5149c07d7d4c63d19))
+* **updater:** keep nightly available during in-progress builds ([#443](https://github.com/utensils/claudette/issues/443)) ([344bc8f](https://github.com/utensils/claudette/commit/344bc8f30d921d9feba80481d405ea0b49a5a1f0))
+* **updater:** rewrite latest.json URLs after staging promote ([#449](https://github.com/utensils/claudette/issues/449)) ([ab6171f](https://github.com/utensils/claudette/commit/ab6171fa4631c28958500b303b3ca7753499f943))
+* **updater:** unstick nightly install via CI URL fix and visible error UI ([#453](https://github.com/utensils/claudette/issues/453)) ([27c63f2](https://github.com/utensils/claudette/commit/27c63f278cb16a8286f3c20b2e797b8972793720))
+
+
+### Performance Improvements
+
+* **chat:** workerize Shiki + memoize markdown render path ([#439](https://github.com/utensils/claudette/issues/439)) ([2c0628d](https://github.com/utensils/claudette/commit/2c0628dfb005597932a1af430d1f16c92632893d))
+
 ## [0.19.0](https://github.com/utensils/claudette/compare/v0.18.0...v0.19.0) (2026-04-25)
 
 
