@@ -100,7 +100,7 @@ jobs:
             --notes "Temporary staging release for ${TAG}." \
             --draft
 
-          RELEASE_ID=$(gh release view "$STAGING_TAG" --repo "$GITHUB_REPOSITORY" --json id --jq .id)
+          RELEASE_ID=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${STAGING_TAG}" --jq .id)
           echo "tag=${STAGING_TAG}" >> "$GITHUB_OUTPUT"
           echo "release_id=${RELEASE_ID}" >> "$GITHUB_OUTPUT"
 
@@ -113,11 +113,11 @@ jobs:
         include:
           - platform: macos-latest
             rust-target: aarch64-apple-darwin
-            bundles: app,dmg
+            bundles: app
             label: macos-aarch64
           - platform: macos-15-intel
             rust-target: x86_64-apple-darwin
-            bundles: app,dmg
+            bundles: app
             label: macos-x86_64
           - platform: ubuntu-22.04
             rust-target: x86_64-unknown-linux-gnu
@@ -210,6 +210,37 @@ jobs:
           releaseName: ${{ needs.resolve-tag.outputs.tag }}
           releaseDraft: true
           args: --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundles }}
+
+      # DMGs are useful manual downloads, but they are not part of the
+      # updater contract. Build and upload them after the app tarball/manifest
+      # so a DMG packaging failure cannot strand the update feed again.
+      - name: Build and upload macOS DMG (best effort)
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          STAGING_TAG: ${{ needs.prepare-staging.outputs.staging_tag }}
+        run: |
+          set -euo pipefail
+          npx @tauri-apps/cli@v2 build --target ${{ matrix.rust-target }} --bundles dmg
+
+          shopt -s nullglob
+          dmgs=(target/${{ matrix.rust-target }}/release/bundle/dmg/*.dmg)
+          if [ "${#dmgs[@]}" -eq 0 ]; then
+            echo "::warning::No DMG was produced for ${{ matrix.label }}"
+            exit 0
+          fi
+
+          gh release upload "$STAGING_TAG" "${dmgs[@]}" --repo "$GITHUB_REPOSITORY" --clobber
 
       # ---- Windows: direct cargo build, ship the bare .exe -----------------
       # `custom-protocol` is the feature flag that tells tauri-build to
