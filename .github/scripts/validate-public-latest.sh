@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$#" -ne 2 ]; then
+  echo "usage: $0 <repo> <tag>" >&2
+  exit 2
+fi
+
+REPO="$1"
+TAG="$2"
+WORK_DIR="${RUNNER_TEMP:-/tmp}/claudette-public-latest-${TAG}"
+LATEST_URL="https://github.com/${REPO}/releases/download/${TAG}/latest.json"
+
+rm -rf "$WORK_DIR"
+mkdir -p "$WORK_DIR"
+
+curl -fsSL "$LATEST_URL" -o "$WORK_DIR/latest.json"
+
+python3 - "$WORK_DIR/latest.json" "$WORK_DIR/urls.txt" "$REPO" "$TAG" <<'PY'
+import json
+import sys
+from pathlib import Path
+from urllib.parse import urlparse
+
+manifest_path = Path(sys.argv[1])
+urls_path = Path(sys.argv[2])
+repo = sys.argv[3]
+target_tag = sys.argv[4]
+owner, name = repo.split("/", 1)
+marker = f"/{owner}/{name}/releases/download/"
+
+data = json.loads(manifest_path.read_text())
+urls = []
+bad_urls = []
+
+
+def walk(value):
+    if isinstance(value, dict):
+        for v in value.values():
+            walk(v)
+        return
+    if isinstance(value, list):
+        for v in value:
+            walk(v)
+        return
+    if not isinstance(value, str):
+        return
+
+    parsed = urlparse(value)
+    if parsed.netloc != "github.com" or marker not in parsed.path:
+        return
+    _, rest = parsed.path.split(marker, 1)
+    tag, _, asset = rest.partition("/")
+    if not asset:
+        return
+    urls.append(value)
+    if tag != target_tag or "staging" in tag or tag.startswith("untagged-"):
+        bad_urls.append(value)
+
+
+walk(data)
+if bad_urls:
+    print("::error::public latest.json contains invalid release URLs:", file=sys.stderr)
+    for url in bad_urls:
+        print(f"  {url}", file=sys.stderr)
+    sys.exit(1)
+if not urls:
+    print("::error::public latest.json contains no GitHub release asset URLs", file=sys.stderr)
+    sys.exit(1)
+
+urls_path.write_text("\n".join(sorted(set(urls))) + "\n")
+PY
+
+while IFS= read -r url; do
+  echo "validating $url"
+  curl -fsSL -r 0-0 -o /dev/null "$url"
+done < "$WORK_DIR/urls.txt"

@@ -84,7 +84,7 @@ export function UpdateBanner() {
             Will install when all agents finish
           </span>
           <div className={styles.actions}>
-            <button className={styles.btnPrimary} onClick={installNow}>
+            <button className={styles.btnPrimary} onClick={() => installNow()}>
               Install Now
             </button>
           </div>
@@ -97,7 +97,7 @@ export function UpdateBanner() {
             available
           </span>
           <div className={styles.actions}>
-            <button className={styles.btnPrimary} onClick={installNow}>
+            <button className={styles.btnPrimary} onClick={() => installNow()}>
               Install Now
             </button>
             <button className={styles.btn} onClick={installWhenIdle}>

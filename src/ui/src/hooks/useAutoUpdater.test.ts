@@ -168,6 +168,31 @@ describe("installNow", () => {
     storeState.updateChannel = "stable";
     storeState.updateDownloading = false;
     storeState.updateAvailable = true;
+    mockCheckForUpdatesWithChannel.mockResolvedValue({ version: "2.0.0" });
+  });
+
+  it("refreshes the pending update before installing", async () => {
+    mockInstallPendingUpdate.mockResolvedValue(undefined);
+
+    await installNow();
+
+    expect(mockCheckForUpdatesWithChannel).toHaveBeenCalledWith("stable");
+    expect(mockInstallPendingUpdate).toHaveBeenCalled();
+    expect(
+      mockCheckForUpdatesWithChannel.mock.invocationCallOrder[0]
+    ).toBeLessThan(mockInstallPendingUpdate.mock.invocationCallOrder[0]);
+  });
+
+  it("re-checks and retries once after an install failure", async () => {
+    mockInstallPendingUpdate
+      .mockRejectedValueOnce(new Error("stale URL"))
+      .mockResolvedValueOnce(undefined);
+
+    await installNow();
+
+    expect(mockCheckForUpdatesWithChannel).toHaveBeenCalledTimes(2);
+    expect(mockInstallPendingUpdate).toHaveBeenCalledTimes(2);
+    expect(mockSetUpdateError).not.toHaveBeenCalled();
   });
 
   it("surfaces install errors via setUpdateError so the banner can show them", async () => {
@@ -187,6 +212,16 @@ describe("installNow", () => {
     expect(mockSetUpdateError).toHaveBeenCalledWith(
       expect.stringContaining("404 Not Found")
     );
+  });
+
+  it("stops without installing when the refresh finds no update", async () => {
+    mockCheckForUpdatesWithChannel.mockResolvedValue(null);
+
+    await installNow();
+
+    expect(mockInstallPendingUpdate).not.toHaveBeenCalled();
+    expect(mockSetUpdateDownloading).toHaveBeenLastCalledWith(false);
+    expect(mockSetUpdateProgress).toHaveBeenLastCalledWith(0);
   });
 
   it("is a no-op when no update is available", async () => {

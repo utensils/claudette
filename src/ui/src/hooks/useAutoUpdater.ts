@@ -14,6 +14,15 @@ const CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 
 export type UpdateCheckResult = "available" | "up-to-date" | "error";
 
+interface InstallNowOptions {
+  refreshFirst?: boolean;
+  retryOnFailure?: boolean;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /** Check the updater endpoint for the active channel and update Zustand state. */
 export async function checkForUpdate(): Promise<UpdateCheckResult> {
   const channel = useAppStore.getState().updateChannel;
@@ -32,7 +41,10 @@ export async function checkForUpdate(): Promise<UpdateCheckResult> {
   }
 }
 
-export async function installNow(): Promise<void> {
+export async function installNow({
+  refreshFirst = true,
+  retryOnFailure = true,
+}: InstallNowOptions = {}): Promise<void> {
   const store = useAppStore.getState();
   if (store.updateDownloading) return;
   if (!store.updateAvailable) return;
@@ -41,16 +53,43 @@ export async function installNow(): Promise<void> {
   store.setUpdateProgress(0);
 
   try {
+    if (refreshFirst) {
+      const result = await checkForUpdate();
+      if (result === "error") {
+        throw new Error("Failed to check for updates. Please try again.");
+      }
+      if (result !== "available") {
+        const s = useAppStore.getState();
+        s.setUpdateDownloading(false);
+        s.setUpdateProgress(0);
+        return;
+      }
+    }
+
     await installPendingUpdate();
     // The Rust side calls app.restart() after install completes, so this
     // line typically isn't reached. If it is (e.g. install failed silently),
     // fall through to the catch on the next tick.
   } catch (e) {
     console.error("[updater] Install failed:", e);
+    let finalError = e;
+    if (retryOnFailure) {
+      const result = await checkForUpdate();
+      if (result === "available") {
+        try {
+          await installPendingUpdate();
+          return;
+        } catch (retryError) {
+          console.error("[updater] Retry after recheck failed:", retryError);
+          finalError = retryError;
+        }
+      }
+    }
+
     const s = useAppStore.getState();
     s.setUpdateDownloading(false);
     s.setUpdateProgress(0);
-    s.setUpdateError(String(e));
+    s.setUpdateError(errorMessage(finalError));
   }
 }
 
@@ -75,7 +114,9 @@ export async function retryInstall(): Promise<void> {
       .setUpdateError("Failed to check for updates. Please try again.");
     return;
   }
-  if (result === "available") await installNow();
+  if (result === "available") {
+    await installNow({ refreshFirst: false, retryOnFailure: true });
+  }
 }
 
 export function installWhenIdle(): void {

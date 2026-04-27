@@ -64,22 +64,27 @@ jobs:
     name: Prepare Release
     needs: compute-version
     runs-on: ubuntu-latest
+    outputs:
+      staging_tag: ${{ steps.staging.outputs.tag }}
+      staging_release_id: ${{ steps.staging.outputs.release_id }}
     steps:
       - uses: actions/checkout@v6
 
-      # Build into a separate `nightly-staging` release so the live `nightly`
-      # release (with the previous build's assets) stays accessible to the
-      # in-app updater for the entire duration of the build. The `publish`
-      # job atomically promotes staging → nightly once all matrix jobs
-      # succeed, shrinking the unavailability window from "the entire build"
-      # to a couple of seconds.
+      # Build into a unique staging release so the live `nightly` release
+      # stays accessible to the in-app updater for the entire build. The
+      # publish job copies validated assets into `nightly` instead of
+      # retagging/deleting the live release.
       - name: Reset staging release
+        id: staging
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.compute-version.outputs.version }}
           LAST_TAG: ${{ needs.compute-version.outputs.last_tag }}
         run: |
-          gh release delete nightly-staging --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+          set -euo pipefail
+
+          STAGING_TAG="nightly-staging-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          gh release delete "$STAGING_TAG" --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
 
           NOTES="Automated nightly build of \`${GITHUB_SHA}\`.
 
@@ -96,13 +101,17 @@ jobs:
 
           > **These builds are unstable pre-releases.**"
 
-          gh release create nightly-staging \
+          gh release create "$STAGING_TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "Nightly ${VERSION}" \
             --notes "$NOTES" \
             --prerelease \
             --draft
+
+          RELEASE_ID=$(gh release view "$STAGING_TAG" --repo "$GITHUB_REPOSITORY" --json id --jq .id)
+          echo "tag=${STAGING_TAG}" >> "$GITHUB_OUTPUT"
+          echo "release_id=${RELEASE_ID}" >> "$GITHUB_OUTPUT"
 
   build:
     needs: [compute-version, prepare-release]
@@ -212,7 +221,8 @@ jobs:
           APPLE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_PASSWORD || '' }}
           APPLE_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
         with:
-          tagName: nightly-staging
+          tagName: ${{ needs.prepare-release.outputs.staging_tag }}
+          releaseId: ${{ needs.prepare-release.outputs.staging_release_id }}
           releaseName: "Nightly ${{ needs.compute-version.outputs.version }}"
           releaseDraft: true
           prerelease: true
@@ -251,7 +261,7 @@ jobs:
           ASSET="claudette-${{ matrix.label }}.zip"
           cp "$BIN" claudette.exe
           powershell -NoProfile -Command "Compress-Archive -Path 'claudette.exe' -DestinationPath '$ASSET' -Force"
-          gh release upload nightly-staging "$ASSET" --clobber
+          gh release upload "${{ needs.prepare-release.outputs.staging_tag }}" "$ASSET" --clobber
 
       - name: Build headless server
         shell: bash
@@ -265,7 +275,7 @@ jobs:
           BIN="target/${{ matrix.rust-target }}/release/claudette-server"
           ASSET="claudette-server-${{ matrix.label }}"
           cp "$BIN" "$ASSET"
-          gh release upload nightly-staging "$ASSET" --clobber
+          gh release upload "${{ needs.prepare-release.outputs.staging_tag }}" "$ASSET" --clobber
 
       - name: Upload headless server binary (Windows)
         if: startsWith(matrix.platform, 'windows')
@@ -277,119 +287,75 @@ jobs:
           ASSET="claudette-server-${{ matrix.label }}.zip"
           cp "$BIN" claudette-server.exe
           powershell -NoProfile -Command "Compress-Archive -Path 'claudette-server.exe' -DestinationPath '$ASSET' -Force"
-          gh release upload nightly-staging "$ASSET" --clobber
+          gh release upload "${{ needs.prepare-release.outputs.staging_tag }}" "$ASSET" --clobber
 
   # Nightly builds are not announced to Discord — too noisy. Stable releases only.
   publish:
     name: Publish Nightly
-    needs: build
+    needs: [compute-version, prepare-release, build]
     if: always() && needs.build.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      # Atomic-ish promote: verify the staging release is intact, delete the
-      # live `nightly` release+tag, then retag `nightly-staging` to
-      # `nightly` and un-draft. The blackout window between the delete and
-      # the retag is ~1–2s — orders of magnitude smaller than the prior
-      # delete-then-rebuild flow, and covered on the client side by treating
-      # "release manifest not found" as "no update".
+      - uses: actions/checkout@v6
+
       - name: Promote staging to nightly
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.compute-version.outputs.version }}
+          LAST_TAG: ${{ needs.compute-version.outputs.last_tag }}
+          STAGING_TAG: ${{ needs.prepare-release.outputs.staging_tag }}
         run: |
           set -euo pipefail
 
-          # Pre-flight: ensure `nightly-staging` is reachable before we touch
-          # `nightly`. If staging is somehow missing or the API is down, we
-          # want to abort *with `nightly` still intact* rather than leave the
-          # repository with no nightly release at all.
-          if ! gh release view nightly-staging --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "::error::nightly-staging release is not reachable; aborting promotion"
+          if ! gh release view "$STAGING_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::${STAGING_TAG} release is not reachable; aborting promotion"
             exit 1
           fi
 
-          # `tauri-action` generated `latest.json` while the release was
-          # tagged `nightly-staging`, so its embedded asset URLs are
-          # hardcoded to `releases/download/nightly-staging/...`. After the
-          # retag below those URLs would 404, breaking the in-app updater's
-          # download step. The Tauri signature covers binary contents — not
-          # the URL field — so rewriting URLs here does not invalidate
-          # verification.
-          #
-          # Fetch and rewrite *before* the retag, while staging still
-          # exists. We upload the rewritten file after the retag. This avoids
-          # depending on the freshly-retagged `nightly/...` URL being
-          # reachable via the public CDN, whose propagation delay previously
-          # exceeded our retry window and left a stale manifest live (#449
-          # follow-up). Aborting here is safe — `nightly` is still intact.
-          for attempt in 1 2 3; do
-            rm -f latest.json
-            if curl -fsSL -o latest.json \
-              "https://github.com/${GITHUB_REPOSITORY}/releases/download/nightly-staging/latest.json"; then
-              break
-            fi
-            if [ "$attempt" -eq 3 ]; then
-              echo "::error::Failed to fetch nightly-staging/latest.json after 3 attempts"
-              exit 1
-            fi
-            backoff=$((attempt * 5))
-            echo "latest.json fetch attempt $attempt failed; retrying in ${backoff}s"
-            sleep "$backoff"
-          done
+          NOTES="Automated nightly build of \`${GITHUB_SHA}\`.
 
-          sed -i 's|releases/download/nightly-staging/|releases/download/nightly/|g' latest.json
-          # Hard-fail if the rewrite was a no-op AND staging URLs are still
-          # present — retrying with the same input won't help, and shipping
-          # a manifest with staging URLs would break the updater. (A no-op
-          # because the manifest was already rewritten on a prior crashed
-          # run is fine: grep will find nothing, and we proceed.)
-          if grep -q 'releases/download/nightly-staging/' latest.json; then
-            echo "::error::latest.json still contains nightly-staging URLs after rewrite; aborting"
-            exit 1
+          **Version:** \`${VERSION}\`
+          **Built:** $(date -u +%FT%TZ)"
+
+          if [ -n "$LAST_TAG" ]; then
+            DIFF_URL="https://github.com/${GITHUB_REPOSITORY}/compare/${LAST_TAG}...${GITHUB_SHA}"
+            NOTES="${NOTES}
+          [Changes since ${LAST_TAG}](${DIFF_URL})"
           fi
 
-          # Upload the rewritten manifest back to `nightly-staging` *before*
-          # we touch `nightly`. Assets follow the release when its tag
-          # changes, so when the retag below succeeds the corrected manifest
-          # appears at the `nightly/...` URL atomically — no separate
-          # post-retag upload that could fail and leave a broken manifest
-          # live on the promoted release.
-          for attempt in 1 2 3; do
-            if gh release upload nightly-staging latest.json --clobber --repo "$GITHUB_REPOSITORY"; then
-              break
-            fi
-            if [ "$attempt" -eq 3 ]; then
-              echo "::error::Failed to upload rewritten latest.json to nightly-staging after 3 attempts"
-              exit 1
-            fi
-            backoff=$((attempt * 5))
-            echo "latest.json upload attempt $attempt failed; retrying in ${backoff}s"
-            sleep "$backoff"
-          done
+          NOTES="${NOTES}
 
-          gh release delete nightly --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+          > **These builds are unstable pre-releases.**"
 
-          # Retry the retag a few times to ride out transient API hiccups
-          # (rate limits, brief outages). If all retries fail, the workflow
-          # exits non-zero and a follow-up run can recover by re-promoting
-          # the still-intact `nightly-staging` release (which now carries
-          # the already-rewritten manifest).
-          for attempt in 1 2 3; do
-            if gh release edit nightly-staging \
+          if ! gh release view nightly --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create nightly \
               --repo "$GITHUB_REPOSITORY" \
-              --tag nightly \
-              --draft=false \
-              --prerelease; then
-              break
-            fi
-            if [ "$attempt" -eq 3 ]; then
-              echo "::error::Failed to promote nightly-staging to nightly after 3 attempts"
-              exit 1
-            fi
-            echo "Promotion attempt $attempt failed; retrying in 5s"
-            sleep 5
-          done
+              --target "$GITHUB_SHA" \
+              --title "Nightly ${VERSION}" \
+              --notes "$NOTES" \
+              --prerelease \
+              --draft
+          fi
 
-          # `gh release edit --tag` creates the new tag (`nightly`) at the
-          # release's target commit but leaves the old `nightly-staging`
-          # git tag orphaned. Clean it up so we don't accumulate dead tags.
-          gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/nightly-staging" 2>/dev/null || true
+          .github/scripts/promote-release-assets.sh "$GITHUB_REPOSITORY" "$STAGING_TAG" nightly
+
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/nightly" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/nightly" \
+              -f sha="$GITHUB_SHA" \
+              -F force=true >/dev/null
+          else
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/tags/nightly" \
+              -f sha="$GITHUB_SHA" >/dev/null
+          fi
+
+          gh release edit nightly \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Nightly ${VERSION}" \
+            --notes "$NOTES" \
+            --prerelease \
+            --draft=false
+
+          .github/scripts/validate-public-latest.sh "$GITHUB_REPOSITORY" nightly
+
+          gh release delete "$STAGING_TAG" --yes --cleanup-tag --repo "$GITHUB_REPOSITORY"

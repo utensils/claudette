@@ -159,6 +159,47 @@ async fn endpoints_for(channel: &str) -> Result<Vec<Url>, String> {
     Ok(vec![url])
 }
 
+fn release_download_tag(url: &Url) -> Option<&str> {
+    if url.host_str() != Some("github.com") {
+        return None;
+    }
+
+    let mut segments = url.path_segments()?;
+    while let Some(segment) = segments.next() {
+        if segment == "releases" && segments.next() == Some("download") {
+            return segments.next();
+        }
+    }
+    None
+}
+
+fn is_transient_release_tag(tag: &str) -> bool {
+    tag.starts_with("untagged-") || tag.contains("staging")
+}
+
+fn string_contains_transient_release_url(value: &str) -> bool {
+    Url::parse(value)
+        .ok()
+        .and_then(|url| release_download_tag(&url).map(str::to_owned))
+        .is_some_and(|tag| is_transient_release_tag(&tag))
+}
+
+fn manifest_contains_transient_release_url(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::String(s) => string_contains_transient_release_url(s),
+        serde_json::Value::Array(items) => {
+            items.iter().any(manifest_contains_transient_release_url)
+        }
+        serde_json::Value::Object(map) => map.values().any(manifest_contains_transient_release_url),
+        _ => false,
+    }
+}
+
+fn update_contains_transient_release_url(update: &tauri_plugin_updater::Update) -> bool {
+    release_download_tag(&update.download_url).is_some_and(is_transient_release_tag)
+        || manifest_contains_transient_release_url(&update.raw_json)
+}
+
 /// Classifies an updater error: `Ok(())` means "downgrade to no update
 /// available", `Err(...)` is a real transport/parse failure that should
 /// bubble up to the UI.
@@ -195,29 +236,56 @@ pub async fn check_for_updates_with_channel(
     channel: String,
 ) -> Result<Option<UpdateInfo>, String> {
     let endpoints = endpoints_for(&channel).await?;
+    let mut update = None;
+    let mut last_error = None;
 
-    let result = app
-        .updater_builder()
-        .endpoints(endpoints)
-        .map_err(|e| e.to_string())?
-        .build()
-        .map_err(|e| e.to_string())?
-        .check()
-        .await;
+    for endpoint in endpoints {
+        let result = app
+            .updater_builder()
+            .endpoints(vec![endpoint.clone()])
+            .map_err(|e| e.to_string())?
+            .build()
+            .map_err(|e| e.to_string())?
+            .check()
+            .await;
 
-    let update = match result {
-        Ok(u) => u,
-        Err(e) => match classify_check_error(e) {
-            Ok(()) => {
-                eprintln!(
-                    "[updater] Release manifest unavailable for channel {channel:?}; \
-                     treating as no update available"
-                );
-                None
+        match result {
+            Ok(Some(candidate)) => {
+                if update_contains_transient_release_url(&candidate) {
+                    eprintln!(
+                        "[updater] Ignoring update manifest from {endpoint}: \
+                         asset URL points at staging/temporary release"
+                    );
+                    continue;
+                }
+                update = Some(candidate);
+                last_error = None;
+                break;
             }
-            Err(msg) => return Err(msg),
-        },
-    };
+            Ok(None) => {
+                last_error = None;
+                break;
+            }
+            Err(e) => match classify_check_error(e) {
+                Ok(()) => {
+                    eprintln!(
+                        "[updater] Release manifest unavailable at {endpoint} for channel \
+                         {channel:?}; trying next endpoint"
+                    );
+                }
+                Err(msg) => {
+                    eprintln!("[updater] Update check failed at {endpoint}: {msg}");
+                    last_error = Some(msg);
+                }
+            },
+        }
+    }
+
+    if update.is_none()
+        && let Some(msg) = last_error
+    {
+        return Err(msg);
+    }
 
     let mut slot = state.pending_update.lock().await;
     match update {
@@ -331,6 +399,52 @@ mod tests {
             "https://github.com/utensils/claudette/releases/download/{tag}/latest.json"
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn extracts_release_download_tag_from_github_url() {
+        let url = Url::parse(
+            "https://github.com/utensils/claudette/releases/download/nightly/latest.json",
+        )
+        .unwrap();
+        assert_eq!(release_download_tag(&url), Some("nightly"));
+    }
+
+    #[test]
+    fn detects_transient_release_tags() {
+        assert!(is_transient_release_tag("nightly-staging"));
+        assert!(is_transient_release_tag("v0.20.0-staging-123"));
+        assert!(is_transient_release_tag("untagged-dc659d313a6f82718f77"));
+        assert!(!is_transient_release_tag("nightly"));
+        assert!(!is_transient_release_tag("v0.20.0"));
+    }
+
+    #[test]
+    fn detects_transient_release_urls_anywhere_in_manifest() {
+        let manifest = serde_json::json!({
+            "version": "0.20.0",
+            "platforms": {
+                "darwin-aarch64": {
+                    "signature": "sig",
+                    "url": "https://github.com/utensils/claudette/releases/download/nightly-staging/Claudette.app.tar.gz"
+                }
+            }
+        });
+        assert!(manifest_contains_transient_release_url(&manifest));
+    }
+
+    #[test]
+    fn accepts_public_release_urls_in_manifest() {
+        let manifest = serde_json::json!({
+            "version": "0.20.0",
+            "platforms": {
+                "darwin-aarch64": {
+                    "signature": "sig",
+                    "url": "https://github.com/utensils/claudette/releases/download/nightly/Claudette.app.tar.gz"
+                }
+            }
+        });
+        assert!(!manifest_contains_transient_release_url(&manifest));
     }
 
     #[test]
