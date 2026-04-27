@@ -31,12 +31,14 @@ async fn start_bridge_and_inject_mcp(
     app: &AppHandle,
     db_path: &std::path::Path,
     workspace_id: &str,
+    chat_session_id: &str,
     base_mcp_config: Option<String>,
 ) -> Result<(Arc<McpBridgeSession>, Option<String>), String> {
     let sink = Arc::new(ChatBridgeSink {
         app: app.clone(),
         db_path: db_path.to_path_buf(),
         workspace_id: workspace_id.to_string(),
+        chat_session_id: chat_session_id.to_string(),
     });
     let bridge = Arc::new(McpBridgeSession::start(sink).await?);
     let merged = inject_claudette_mcp_entry(base_mcp_config, bridge.handle())?;
@@ -846,6 +848,7 @@ pub async fn send_chat_message(
                         &app,
                         &state.db_path,
                         &workspace_id,
+                        &chat_session_id,
                         agent_settings.mcp_config.clone(),
                     )
                     .await?;
@@ -930,6 +933,7 @@ pub async fn send_chat_message(
                 &app,
                 &state.db_path,
                 &workspace_id,
+                &chat_session_id,
                 agent_settings.mcp_config.clone(),
             )
             .await?;
