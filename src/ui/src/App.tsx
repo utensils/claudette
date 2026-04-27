@@ -7,6 +7,7 @@ import { applyTheme, applyUserFonts, loadAllThemes, findTheme } from "./utils/th
 import { adjustUiFontSize, resetUiFontSize } from "./utils/fontSettings";
 import { useMcpStatus } from "./hooks/useMcpStatus";
 import { AppLayout } from "./components/layout/AppLayout";
+import { findLeafByPtyId } from "./stores/terminalPaneTree";
 import type { CommandEvent } from "./types";
 import "./styles/theme.css";
 
@@ -146,42 +147,42 @@ function App() {
       .then(({ disable_1m_context }) => { if (disable_1m_context) setDisable1mContext(true); })
       .catch(() => {});
 
-    // Listen for terminal command events
+    // Listen for terminal command events. PTYs live on pane leaves inside
+    // each tab's pane tree (a tab can hold multiple split panes, each with
+    // its own PTY), so we walk the trees to find which tab owns the firing
+    // PTY, then resolve that tab's workspace.
+    const findWorkspaceForPty = (pty_id: number): string | null => {
+      const { terminalTabs, terminalPaneTrees } = useAppStore.getState();
+      for (const [wsId, tabs] of Object.entries(terminalTabs)) {
+        for (const tab of tabs) {
+          const tree = terminalPaneTrees[tab.id];
+          if (tree && findLeafByPtyId(tree, pty_id)) return wsId;
+        }
+      }
+      return null;
+    };
+
     const setupCommandListeners = async () => {
       const unlistenCommandDetected = await listen<CommandEvent>("pty-command-detected", (event) => {
         const { pty_id, command } = event.payload;
-
-        // Find the workspace that owns this PTY - use getState() to avoid stale closure
-        const { terminalTabs, setWorkspaceTerminalCommand } = useAppStore.getState();
-        for (const [wsId, tabs] of Object.entries(terminalTabs)) {
-          const tab = tabs.find((t) => t.pty_id === pty_id);
-          if (tab) {
-            setWorkspaceTerminalCommand(wsId, {
-              command: command || null,
-              isRunning: true,
-              exitCode: null,
-            });
-            break;
-          }
-        }
+        const wsId = findWorkspaceForPty(pty_id);
+        if (!wsId) return;
+        useAppStore.getState().setWorkspaceTerminalCommand(wsId, {
+          command: command || null,
+          isRunning: true,
+          exitCode: null,
+        });
       });
 
       const unlistenCommandStopped = await listen<CommandEvent>("pty-command-stopped", (event) => {
         const { pty_id, command, exit_code } = event.payload;
-
-        // Find the workspace that owns this PTY - use getState() to avoid stale closure
-        const { terminalTabs, setWorkspaceTerminalCommand } = useAppStore.getState();
-        for (const [wsId, tabs] of Object.entries(terminalTabs)) {
-          const tab = tabs.find((t) => t.pty_id === pty_id);
-          if (tab) {
-            setWorkspaceTerminalCommand(wsId, {
-              command: command || null,
-              isRunning: false,
-              exitCode: exit_code !== null && exit_code !== undefined ? exit_code : null,
-            });
-            break;
-          }
-        }
+        const wsId = findWorkspaceForPty(pty_id);
+        if (!wsId) return;
+        useAppStore.getState().setWorkspaceTerminalCommand(wsId, {
+          command: command || null,
+          isRunning: false,
+          exitCode: exit_code !== null && exit_code !== undefined ? exit_code : null,
+        });
       });
 
       return () => {

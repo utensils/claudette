@@ -5,7 +5,6 @@ export interface TerminalTab {
   is_script_output: boolean;
   sort_order: number;
   created_at: string;
-  pty_id?: number;
 }
 
 export interface WorkspaceCommandState {

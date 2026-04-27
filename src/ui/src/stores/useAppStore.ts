@@ -395,7 +395,6 @@ interface AppState {
     wsId: string,
     state: WorkspaceCommandState,
   ) => void;
-  updateTerminalTabPtyId: (tabId: number, ptyId: number) => void;
 
   // Per-tab split-pane layout (ephemeral — not persisted). Keyed by tab id.
   terminalPaneTrees: Record<number, TerminalPaneNode>;
@@ -1522,16 +1521,6 @@ export const useAppStore = create<AppState>((set, get) => ({
         [wsId]: state,
       },
     })),
-  updateTerminalTabPtyId: (tabId, ptyId) =>
-    set((s) => {
-      const newTabs: Record<string, TerminalTab[]> = {};
-      for (const [wsId, tabs] of Object.entries(s.terminalTabs)) {
-        newTabs[wsId] = tabs.map((tab) =>
-          tab.id === tabId ? { ...tab, pty_id: ptyId } : tab,
-        );
-      }
-      return { terminalTabs: newTabs };
-    }),
 
   // Pane-tree slice. State is ephemeral: if the app restarts, every tab
   // comes back as a single-leaf tree. See `terminalPaneTree.ts` for the
