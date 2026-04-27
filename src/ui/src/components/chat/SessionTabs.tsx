@@ -1,6 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-// `FileDiff` is also a TS type re-exported from "../../types" — alias the
-// lucide icon to avoid the name collision in this file.
 import { FileDiff as FileDiffIcon, Plus, X } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import {
@@ -82,7 +80,13 @@ export function SessionTabs({ workspaceId }: Props) {
       });
   }, [workspaceId, setSessionsForWorkspace]);
 
-  const activeSessions = sessions.filter((s) => s.status === "Active");
+  // Memoized so navEntries / navigateTabs stay referentially stable when the
+  // session list hasn't changed — without this, `sessions.filter` returns a
+  // fresh array each render and defeats the downstream useMemo/useCallback.
+  const activeSessions = useMemo(
+    () => sessions.filter((s) => s.status === "Active"),
+    [sessions],
+  );
 
   const handleCreate = async () => {
     try {

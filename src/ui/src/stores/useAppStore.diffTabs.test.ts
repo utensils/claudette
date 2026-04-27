@@ -129,6 +129,60 @@ describe("selectDiffTab", () => {
     expect(state.diffSelectedLayer).toBe("unstaged");
     expect(state.diffTabsByWorkspace[WS_A]).toBe(tabsBefore);
   });
+
+  it("clears stale content/error when switching to a different tab", () => {
+    useAppStore.getState().openDiffTab(WS_A, "a.ts", "unstaged");
+    useAppStore.getState().openDiffTab(WS_A, "b.ts", "unstaged");
+    // Simulate a load completing for b.ts.
+    useAppStore.setState({
+      diffContent: { path: "b.ts", hunks: [], is_binary: false },
+      diffError: "boom",
+    });
+
+    useAppStore.getState().selectDiffTab("a.ts", "unstaged");
+
+    const state = useAppStore.getState();
+    expect(state.diffContent).toBeNull();
+    expect(state.diffError).toBeNull();
+  });
+
+  it("preserves content when re-selecting the already-active tab", () => {
+    useAppStore.getState().openDiffTab(WS_A, "a.ts", "unstaged");
+    const content = { path: "a.ts", hunks: [], is_binary: false };
+    useAppStore.setState({ diffContent: content });
+
+    useAppStore.getState().selectDiffTab("a.ts", "unstaged");
+
+    expect(useAppStore.getState().diffContent).toBe(content);
+  });
+});
+
+describe("openDiffTab clears stale content", () => {
+  beforeEach(reset);
+
+  it("nulls diffContent/diffError when opening a different file", () => {
+    useAppStore.getState().openDiffTab(WS_A, "a.ts", "unstaged");
+    useAppStore.setState({
+      diffContent: { path: "a.ts", hunks: [], is_binary: false },
+      diffError: "boom",
+    });
+
+    useAppStore.getState().openDiffTab(WS_A, "b.ts", "unstaged");
+
+    const state = useAppStore.getState();
+    expect(state.diffContent).toBeNull();
+    expect(state.diffError).toBeNull();
+  });
+
+  it("preserves diffContent when re-opening the already-active tab", () => {
+    useAppStore.getState().openDiffTab(WS_A, "a.ts", "unstaged");
+    const content = { path: "a.ts", hunks: [], is_binary: false };
+    useAppStore.setState({ diffContent: content });
+
+    useAppStore.getState().openDiffTab(WS_A, "a.ts", "unstaged");
+
+    expect(useAppStore.getState().diffContent).toBe(content);
+  });
 });
 
 describe("selectSession clears active diff", () => {

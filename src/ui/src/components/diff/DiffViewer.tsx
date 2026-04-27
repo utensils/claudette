@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import { loadFileDiff } from "../../services/tauri";
 import { PanelToggles } from "../shared/PanelToggles";
@@ -60,15 +60,23 @@ export function DiffViewer() {
 
   const ws = workspaces.find((w) => w.id === selectedWorkspaceId);
 
+  // Monotonic version token: each new fetch bumps it so a stale in-flight
+  // response (e.g. user already switched diff tabs) gets dropped instead of
+  // overwriting the now-active file's content.
+  const loadVersionRef = useRef(0);
+
   useEffect(() => {
     if (!diffSelectedFile || !ws?.worktree_path || !diffMergeBase) return;
+    const version = ++loadVersionRef.current;
     setDiffLoading(true);
     loadFileDiff(ws.worktree_path, diffMergeBase, diffSelectedFile, diffSelectedLayer ?? undefined)
       .then((content) => {
+        if (version !== loadVersionRef.current) return;
         setDiffContent(content);
         setDiffLoading(false);
       })
       .catch((e) => {
+        if (version !== loadVersionRef.current) return;
         setDiffError(String(e));
         setDiffLoading(false);
       });

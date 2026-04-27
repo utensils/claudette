@@ -1397,14 +1397,31 @@ export const useAppStore = create<AppState>((set, get) => ({
             ...s.diffTabsByWorkspace,
             [workspaceId]: [...existing, { path, layer: normalizedLayer }],
           };
+      // Only clear content when the selection actually changes — clicking the
+      // already-active tab must not blank the viewer (the loader effect
+      // wouldn't refire on identical deps, leaving the user staring at empty).
+      const isSameSelection =
+        s.diffSelectedFile === path && s.diffSelectedLayer === normalizedLayer;
       return {
         diffTabsByWorkspace: nextTabs,
         diffSelectedFile: path,
         diffSelectedLayer: normalizedLayer,
+        ...(isSameSelection ? {} : { diffContent: null, diffError: null }),
       };
     }),
   selectDiffTab: (path, layer) =>
-    set({ diffSelectedFile: path, diffSelectedLayer: layer ?? null }),
+    set((s) => {
+      const normalizedLayer = layer ?? null;
+      const isSameSelection =
+        s.diffSelectedFile === path && s.diffSelectedLayer === normalizedLayer;
+      if (isSameSelection) return s;
+      return {
+        diffSelectedFile: path,
+        diffSelectedLayer: normalizedLayer,
+        diffContent: null,
+        diffError: null,
+      };
+    }),
   closeDiffTab: (workspaceId, path, layer) =>
     set((s) => {
       const normalizedLayer = layer ?? null;
