@@ -1,6 +1,9 @@
-use serde::Serialize;
+use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_updater::UpdaterExt;
+use url::Url;
 
 use crate::state::AppState;
 
@@ -8,6 +11,12 @@ const STABLE_URL: &str =
     "https://github.com/utensils/claudette/releases/latest/download/latest.json";
 const NIGHTLY_URL: &str =
     "https://github.com/utensils/claudette/releases/download/nightly/latest.json";
+
+const GITHUB_RELEASES_API: &str =
+    "https://api.github.com/repos/utensils/claudette/releases?per_page=10";
+const NIGHTLY_CANDIDATE_LIMIT: usize = 3;
+const USER_AGENT: &str = concat!("claudette-updater/", env!("CARGO_PKG_VERSION"));
+const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// Subset of [`tauri_plugin_updater::Update`] that we expose across the IPC boundary.
 #[derive(Serialize)]
@@ -27,6 +36,127 @@ fn endpoint_for(channel: &str) -> &'static str {
             STABLE_URL
         }
     }
+}
+
+fn http_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(reqwest::Client::new)
+}
+
+/// Subset of the GitHub Releases API payload we filter on.
+#[derive(Deserialize)]
+struct GhRelease {
+    tag_name: String,
+    draft: bool,
+    prerelease: bool,
+    published_at: Option<String>,
+}
+
+/// Parse a GitHub Releases API response and return the top `limit` candidate
+/// `latest.json` URLs for the nightly channel, newest first. Pure function so
+/// the filtering/sorting logic is unit-testable without HTTP.
+fn nightly_candidate_urls_from_json(body: &str, limit: usize) -> Vec<Url> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    let releases: Vec<GhRelease> = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut filtered: Vec<GhRelease> = releases
+        .into_iter()
+        .filter(|r| {
+            !r.draft
+                && r.prerelease
+                && r.tag_name != "nightly-staging"
+                && (r.tag_name == "nightly" || r.tag_name.starts_with("nightly-"))
+        })
+        .collect();
+
+    // Newest first. ISO-8601 Z-suffixed timestamps sort correctly as strings.
+    // Releases with no published_at sort last (treated as oldest).
+    filtered.sort_by(|a, b| b.published_at.cmp(&a.published_at));
+
+    let mut urls: Vec<Url> = Vec::new();
+    for r in filtered {
+        let raw = format!(
+            "https://github.com/utensils/claudette/releases/download/{}/latest.json",
+            r.tag_name
+        );
+        if let Ok(url) = Url::parse(&raw)
+            && !urls.contains(&url)
+        {
+            urls.push(url);
+            if urls.len() >= limit {
+                break;
+            }
+        }
+    }
+    urls
+}
+
+/// Discover nightly `latest.json` candidate URLs by querying the GitHub
+/// Releases API. Always returns a (possibly empty) vec; transport, HTTP,
+/// or parse failures are logged and downgrade to "no candidates," letting
+/// the caller fall back to the static [`NIGHTLY_URL`].
+async fn discover_nightly_endpoints() -> Vec<Url> {
+    let resp = match http_client()
+        .get(GITHUB_RELEASES_API)
+        .header("User-Agent", USER_AGENT)
+        .header("Accept", "application/vnd.github+json")
+        .timeout(DISCOVERY_TIMEOUT)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!(
+                "[updater] Nightly discovery request failed: {e}; falling back to static URL"
+            );
+            return Vec::new();
+        }
+    };
+
+    let status = resp.status();
+    if !status.is_success() {
+        eprintln!("[updater] Nightly discovery returned HTTP {status}; falling back to static URL");
+        return Vec::new();
+    }
+
+    let body = match resp.text().await {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!(
+                "[updater] Nightly discovery body read failed: {e}; falling back to static URL"
+            );
+            return Vec::new();
+        }
+    };
+
+    nightly_candidate_urls_from_json(&body, NIGHTLY_CANDIDATE_LIMIT)
+}
+
+/// Build the ordered endpoint list to feed to the Tauri updater plugin. The
+/// plugin tries each in order and stops at the first one that fetches +
+/// parses, so a broken `latest.json` from the most recent nightly silently
+/// fails over to the previous one.
+async fn endpoints_for(channel: &str) -> Result<Vec<Url>, String> {
+    if channel == "nightly" {
+        let mut endpoints = discover_nightly_endpoints().await;
+        let static_fallback: Url = NIGHTLY_URL
+            .parse()
+            .map_err(|e: url::ParseError| e.to_string())?;
+        if !endpoints.contains(&static_fallback) {
+            endpoints.push(static_fallback);
+        }
+        return Ok(endpoints);
+    }
+
+    let url: Url = endpoint_for(channel)
+        .parse()
+        .map_err(|e: url::ParseError| e.to_string())?;
+    Ok(vec![url])
 }
 
 /// Classifies an updater error: `Ok(())` means "downgrade to no update
@@ -64,13 +194,11 @@ pub async fn check_for_updates_with_channel(
     state: State<'_, AppState>,
     channel: String,
 ) -> Result<Option<UpdateInfo>, String> {
-    let endpoint = endpoint_for(&channel)
-        .parse()
-        .map_err(|e: url::ParseError| e.to_string())?;
+    let endpoints = endpoints_for(&channel).await?;
 
     let result = app
         .updater_builder()
-        .endpoints(vec![endpoint])
+        .endpoints(endpoints)
         .map_err(|e| e.to_string())?
         .build()
         .map_err(|e| e.to_string())?
@@ -181,5 +309,132 @@ mod tests {
         assert_eq!(endpoint_for("nightly"), NIGHTLY_URL);
         // Unknown channels fall back to stable (and log a warning).
         assert_eq!(endpoint_for("garbage"), STABLE_URL);
+    }
+
+    fn release_json(
+        tag: &str,
+        draft: bool,
+        prerelease: bool,
+        published_at: Option<&str>,
+    ) -> String {
+        let pa = match published_at {
+            Some(s) => format!("\"{s}\""),
+            None => "null".to_string(),
+        };
+        format!(
+            "{{\"tag_name\":\"{tag}\",\"draft\":{draft},\"prerelease\":{prerelease},\"published_at\":{pa}}}"
+        )
+    }
+
+    fn url(tag: &str) -> Url {
+        Url::parse(&format!(
+            "https://github.com/utensils/claudette/releases/download/{tag}/latest.json"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn parses_and_filters_top_three_nightlies() {
+        let body = format!(
+            "[{},{},{},{},{}]",
+            release_json("v0.19.0", false, false, Some("2026-04-25T00:00:00Z")),
+            release_json("nightly-staging", true, true, Some("2026-04-26T18:00:00Z")),
+            release_json("nightly", false, true, Some("2026-04-26T15:00:00Z")),
+            release_json(
+                "nightly-2026-04-25",
+                false,
+                true,
+                Some("2026-04-25T12:00:00Z")
+            ),
+            release_json(
+                "nightly-2026-04-24",
+                false,
+                true,
+                Some("2026-04-24T12:00:00Z")
+            ),
+        );
+        let got = nightly_candidate_urls_from_json(&body, NIGHTLY_CANDIDATE_LIMIT);
+        assert_eq!(
+            got,
+            vec![
+                url("nightly"),
+                url("nightly-2026-04-25"),
+                url("nightly-2026-04-24"),
+            ]
+        );
+    }
+
+    #[test]
+    fn excludes_drafts() {
+        let body = format!(
+            "[{}]",
+            release_json("nightly", true, true, Some("2026-04-26T15:00:00Z"))
+        );
+        assert!(nightly_candidate_urls_from_json(&body, NIGHTLY_CANDIDATE_LIMIT).is_empty());
+    }
+
+    #[test]
+    fn excludes_nightly_staging_even_when_published() {
+        let body = format!(
+            "[{}]",
+            release_json("nightly-staging", false, true, Some("2026-04-26T15:00:00Z"))
+        );
+        assert!(nightly_candidate_urls_from_json(&body, NIGHTLY_CANDIDATE_LIMIT).is_empty());
+    }
+
+    #[test]
+    fn excludes_non_prerelease() {
+        let body = format!(
+            "[{}]",
+            release_json("nightly", false, false, Some("2026-04-26T15:00:00Z"))
+        );
+        assert!(nightly_candidate_urls_from_json(&body, NIGHTLY_CANDIDATE_LIMIT).is_empty());
+    }
+
+    #[test]
+    fn malformed_json_returns_empty() {
+        assert!(nightly_candidate_urls_from_json("not json", NIGHTLY_CANDIDATE_LIMIT).is_empty());
+    }
+
+    #[test]
+    fn limit_zero_returns_empty() {
+        let body = format!(
+            "[{}]",
+            release_json("nightly", false, true, Some("2026-04-26T15:00:00Z"))
+        );
+        assert!(nightly_candidate_urls_from_json(&body, 0).is_empty());
+    }
+
+    #[test]
+    fn respects_limit() {
+        let body = format!(
+            "[{},{},{}]",
+            release_json("nightly", false, true, Some("2026-04-26T15:00:00Z")),
+            release_json(
+                "nightly-2026-04-25",
+                false,
+                true,
+                Some("2026-04-25T12:00:00Z")
+            ),
+            release_json(
+                "nightly-2026-04-24",
+                false,
+                true,
+                Some("2026-04-24T12:00:00Z")
+            ),
+        );
+        let got = nightly_candidate_urls_from_json(&body, 1);
+        assert_eq!(got, vec![url("nightly")]);
+    }
+
+    #[test]
+    fn missing_published_at_sorts_last() {
+        let body = format!(
+            "[{},{}]",
+            release_json("nightly-undated", false, true, None),
+            release_json("nightly", false, true, Some("2026-04-26T15:00:00Z")),
+        );
+        let got = nightly_candidate_urls_from_json(&body, NIGHTLY_CANDIDATE_LIMIT);
+        assert_eq!(got, vec![url("nightly"), url("nightly-undated")]);
     }
 }
