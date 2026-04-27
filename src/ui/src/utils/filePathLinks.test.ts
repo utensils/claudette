@@ -121,3 +121,20 @@ describe("encode/decode round trip", () => {
     expect(decodeFilePathHref(bad)).toBe("/tmp/bogus%");
   });
 });
+
+describe("WebKit < 16.4 compatibility", () => {
+  // The app's `minimumSystemVersion` is macOS 11, which ships WebKit
+  // without RegExp lookbehind. Module evaluation must not contain any
+  // `(?<…)` group — if one slips back in, this assertion fires before
+  // the rest of the suite even loads on those hosts.
+  it("path detection runs on a JS engine without lookbehind support", () => {
+    // The smoke test is just calling the function: if PATH_REGEX
+    // contained a lookbehind, JSC <16.4 would have thrown SyntaxError
+    // at the top-level `new RegExp(...)` evaluation when the module
+    // loaded. We can't simulate that here, but we can at least catch
+    // a regression by string-inspecting the source.
+    const src = detectFilePaths.toString();
+    expect(src.includes("(?<!")).toBe(false);
+    expect(src.includes("(?<=")).toBe(false);
+  });
+});

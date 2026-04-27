@@ -37,13 +37,26 @@ export interface FilePathMatch {
  *    POSIX or NTFS act as natural terminators
  *  - the regex stays compact enough to read
  *
- * Negative lookbehind on `[\w:.\\\/-]` blocks matches that start in the
- * middle of an existing path or URL (e.g. `https://x.com/y` — the `/y`
- * is preceded by `m`, fails). This is the cheapest way to avoid mangling
- * URLs without a separate URL parser.
+ * The "must not be in the middle of an existing path or URL" rule
+ * (e.g. `https://x.com/y` — the `/y` should not match) is enforced via
+ * an explicit JS-side check on the preceding character below, NOT via
+ * a regex lookbehind. WebKit on macOS 11 (our `minimumSystemVersion`)
+ * ships JavaScriptCore without `RegExp` lookbehind support, so a
+ * `(?<!…)` group throws a `SyntaxError` at module-eval time and breaks
+ * markdown rendering across the entire chat surface. Lookbehind lands
+ * in WebKit 16.4 (Safari 16.4, ~ macOS 13.3); until we bump the OS
+ * floor we have to do this in code.
  */
 const PATH_REGEX =
-  /(?<![\w:.\\/\-])(?:[A-Za-z]:[\\/][^\s<>"|*?]+|\\\\[^\s<>"|*?\\/]+\\[^\s<>"|*?\\/]+(?:\\[^\s<>"|*?\\/]+)*|~?\/[^\s<>"|*?]+)/g;
+  /(?:[A-Za-z]:[\\/][^\s<>"|*?]+|\\\\[^\s<>"|*?\\/]+\\[^\s<>"|*?\\/]+(?:\\[^\s<>"|*?\\/]+)*|~?\/[^\s<>"|*?]+)/g;
+
+/**
+ * Characters that, if they sit immediately before a regex match, indicate
+ * the match started in the middle of an existing token (URL scheme tail,
+ * another path, hyphenated word). Mirrors the old lookbehind's character
+ * class: word chars, colon, dot, both slash kinds, hyphen.
+ */
+const FORBIDDEN_PREV_CHAR_REGEX = /[\w:.\\/\-]/;
 
 /**
  * Sentence-final characters that tend to follow a path in prose but are
@@ -64,6 +77,12 @@ export function detectFilePaths(text: string): FilePathMatch[] {
   const matches: FilePathMatch[] = [];
   for (const m of text.matchAll(PATH_REGEX)) {
     if (m.index === undefined) continue;
+    // Lookbehind-equivalent guard: skip matches that started in the
+    // middle of another token. See PATH_REGEX comment for why this is
+    // a JS check rather than a regex lookbehind.
+    if (m.index > 0 && FORBIDDEN_PREV_CHAR_REGEX.test(text[m.index - 1])) {
+      continue;
+    }
     const raw = m[0];
     const stripped = raw.replace(TRAILING_PUNCT_REGEX, "");
     if (stripped.length < MIN_PATH_LENGTH) continue;

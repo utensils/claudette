@@ -41,11 +41,57 @@ pub async fn open_in_editor(path: String) -> Result<(), String> {
     // shell-style tilde expansion — without this, the markdown autolinker
     // emitting `~/Downloads/foo.csv` would silently fail to open.
     let expanded = expand_home_tilde(&path);
+    if !is_acceptable_open_target(&expanded) {
+        return Err(format!(
+            "refusing to open non-file path {expanded:?} via open_in_editor — \
+             this command opens local files only; use open_url for HTTP(S)"
+        ));
+    }
     // Run synchronously so errors propagate back to the frontend instead
     // of getting silently dropped on stderr inside a spawned task. The
     // helper is a thin wrapper around `open` / `xdg-open` / `cmd start`,
     // all of which return as soon as the OS hands off — no blocking.
     opener::open(&expanded).map_err(|e| format!("Failed to open {expanded:?}: {e}"))
+}
+
+/// Whether a string looks like a local file path we should hand to the OS
+/// opener. Reject URLs (`opener::open` happily opens `https://…` or even
+/// `javascript:` on some platforms) so a crafted markdown link with a
+/// `claudettepath:` href can't be smuggled into a generic URL trampoline.
+/// Also reject relative paths — the autolinker only emits absolute matches,
+/// and a relative input would resolve against an unpredictable cwd.
+fn is_acceptable_open_target(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    // Any `<scheme>://…` shape is a URL, not a file. Use the same heuristic
+    // hast-util-sanitize uses: a colon before the first `/`, `?`, or `#`.
+    let colon = s.find(':');
+    let slash = s.find('/');
+    if let Some(c) = colon
+        && (slash.is_none() || c < slash.unwrap_or(usize::MAX))
+        && s[c..].starts_with("://")
+    {
+        return false;
+    }
+    // POSIX absolute (`/foo/bar`).
+    if s.starts_with('/') {
+        return true;
+    }
+    // Windows UNC (`\\server\share\…`) or back-slash absolute (`\foo`).
+    if s.starts_with('\\') {
+        return true;
+    }
+    // Windows drive (`C:\…` or `C:/…`).
+    let mut chars = s.chars();
+    if let (Some(first), Some(second), Some(third)) = (chars.next(), chars.next(), chars.next())
+        && first.is_ascii_alphabetic()
+        && second == ':'
+        && (third == '\\' || third == '/')
+    {
+        return true;
+    }
+    false
 }
 
 /// Expand a leading `~` or `~/` to the user's home directory. Returns the
@@ -199,5 +245,48 @@ mod tests {
         // to handle that. The string passes through unchanged so the
         // OS open command can decide.
         assert_eq!(expand_home_tilde("~root/foo"), "~root/foo");
+    }
+
+    #[test]
+    fn is_acceptable_open_target_accepts_posix_absolute() {
+        assert!(is_acceptable_open_target("/tmp/foo.csv"));
+        assert!(is_acceptable_open_target("/etc"));
+    }
+
+    #[test]
+    fn is_acceptable_open_target_accepts_windows_drive() {
+        assert!(is_acceptable_open_target("C:\\Users\\foo.csv"));
+        assert!(is_acceptable_open_target("c:/Users/foo.csv"));
+    }
+
+    #[test]
+    fn is_acceptable_open_target_accepts_unc() {
+        assert!(is_acceptable_open_target("\\\\server\\share\\file.txt"));
+    }
+
+    #[test]
+    fn is_acceptable_open_target_rejects_urls() {
+        assert!(!is_acceptable_open_target("https://example.com"));
+        assert!(!is_acceptable_open_target("http://example.com/path"));
+        assert!(!is_acceptable_open_target("file:///etc/passwd"));
+        // Even a "claudettepath:" prefix gets stripped by the frontend
+        // before invocation, but if a crafted link slipped through with
+        // a URL payload after the scheme we still reject:
+        assert!(!is_acceptable_open_target("javascript://alert(1)"));
+    }
+
+    #[test]
+    fn is_acceptable_open_target_rejects_relative_and_empty() {
+        assert!(!is_acceptable_open_target(""));
+        assert!(!is_acceptable_open_target("foo/bar.csv"));
+        assert!(!is_acceptable_open_target("./foo.csv"));
+        assert!(!is_acceptable_open_target("../foo.csv"));
+    }
+
+    #[test]
+    fn is_acceptable_open_target_rejects_drive_without_separator() {
+        // `C:foo` is a Windows-relative-to-current-dir-on-drive path —
+        // unpredictable; reject.
+        assert!(!is_acceptable_open_target("C:foo.csv"));
     }
 }
