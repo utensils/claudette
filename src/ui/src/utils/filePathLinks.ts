@@ -1,7 +1,7 @@
 /**
  * Detect absolute file paths inside a plain-text string so a markdown
  * post-processor can wrap them in clickable links. The link target uses
- * a custom `claudette-path:` URI so the markdown `<a>` override knows to
+ * a custom `claudettepath:` URI so the markdown `<a>` override knows to
  * route the click into a Tauri command instead of treating it as a web
  * URL — and so rehype-sanitize doesn't strip it as an unsafe protocol
  * (we extend the allowed-scheme list in `markdown.ts`).
@@ -93,5 +93,16 @@ export function encodeFilePathHref(path: string): string {
 
 export function decodeFilePathHref(href: string): string | null {
   if (!href.startsWith(FILE_PATH_SCHEME)) return null;
-  return decodeURI(href.slice(FILE_PATH_SCHEME.length));
+  const tail = href.slice(FILE_PATH_SCHEME.length);
+  // `decodeURI` throws `URIError` on malformed percent-encoding (e.g. a
+  // dangling `%` or invalid `%x` pair). A bad `claudettepath:` link in
+  // assistant markdown shouldn't be able to crash the click handler or
+  // the markdown render — fall back to the raw, undecoded tail so the
+  // caller still has *something* to pass to `open_in_editor`. The
+  // backend will surface its own error if the path doesn't exist.
+  try {
+    return decodeURI(tail);
+  } catch {
+    return tail;
+  }
 }

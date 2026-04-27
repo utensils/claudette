@@ -2576,7 +2576,17 @@ pub async fn read_file_as_base64(path: String) -> Result<AttachmentResponse, Str
             })
         }
         Some((Kind::Csv | Kind::Markdown | Kind::Json, media_type)) => {
-            // Text-shaped — must be valid UTF-8.
+            // Text-shaped — must be valid UTF-8 *and* contain no NUL bytes.
+            // UTF-8 itself permits U+0000, so a binary file with a misleading
+            // `.csv` / `.json` / `.md` extension can pass `from_utf8` while
+            // clearly being binary. The unknown-extension branch below
+            // already rejects on `\0`; mirror that here so the same content
+            // doesn't get a free pass purely because the suffix is on the
+            // known list.
+            let check_len = data.len().min(8192);
+            if data[..check_len].contains(&0) {
+                return Err(format!("File looks binary (contains NUL bytes): .{ext}"));
+            }
             let text = String::from_utf8(data.clone())
                 .map_err(|_| format!("File is not valid UTF-8: .{ext}"))?;
             let data_base64 = base64_encode(&data);

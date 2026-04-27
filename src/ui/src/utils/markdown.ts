@@ -86,8 +86,8 @@ export function preprocessContent(text: string): string {
 
 // Sanitization schema: allow standard markdown HTML + our callout elements.
 // Also extend `protocols.href` so the file-path autolinker's
-// `claudette-path:` scheme survives sanitization — without this, every
-// rehype-injected `<a href="claudette-path:…">` would be stripped to a bare
+// `claudettepath:` scheme survives sanitization — without this, every
+// rehype-injected `<a href="claudettepath:…">` would be stripped to a bare
 // link with no href and the click handler would have nothing to read.
 export const SANITIZE_SCHEMA = {
   ...defaultSchema,
@@ -103,9 +103,10 @@ export const SANITIZE_SCHEMA = {
     // Default schema only allows `className` on <a> when the value is the
     // hard-coded "data-footnote-backref" sentinel (footnote-specific). The
     // file-path autolinker emits `cc-file-path-link`, which would otherwise
-    // get stripped — strip the value restriction by replacing the existing
-    // ["className", ...] entry with a bare "className" allow-all, then add
-    // back the original entries.
+    // get stripped — drop the existing `["className", "data-footnote-backref"]`
+    // value-restricted entry, then append a bare `"className"` so any value
+    // is allowed. All other a-attributes (`href`, aria-*, data-footnote-*) are
+    // preserved by spreading the rest of the default list.
     a: [
       ...(defaultSchema.attributes?.a ?? []).filter(
         (attr) =>
@@ -285,7 +286,7 @@ export function HighlightedCode({
 }
 
 // Override <a> to open external links in the system browser instead of
-// navigating the webview, and to route `claudette-path:` links — produced
+// navigating the webview, and to route `claudettepath:` links — produced
 // by the file-path autolinker — through the OS default-app handler.
 export const MARKDOWN_COMPONENTS: Components = {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars

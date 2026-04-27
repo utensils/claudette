@@ -1,6 +1,6 @@
 /**
  * Rehype plugin that scans text nodes for absolute file paths and rewrites
- * each match as an `<a href="claudette-path:…">` element. The MARKDOWN_COMPONENTS.a
+ * each match as an `<a href="claudettepath:…">` element. The MARKDOWN_COMPONENTS.a
  * override in `markdown.ts` recognises that scheme and routes clicks into a
  * Tauri command so the user's default app opens the file.
  *

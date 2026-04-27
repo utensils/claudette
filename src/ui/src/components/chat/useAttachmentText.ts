@@ -32,7 +32,15 @@ export function useAttachmentText(opts: {
           const { loadAttachmentData } = await import("../../services/tauri");
           b64 = await loadAttachmentData(attachmentId);
         }
-        if (cancelled || !b64) return;
+        if (cancelled) return;
+        if (!b64) {
+          // Neither inline bytes nor a row id to fetch from — without
+          // setting an explicit error the card would render
+          // "Loading…" forever. Surface the missing source so the
+          // caller renders the standard error state instead.
+          setError("attachment has no inline data and no id to fetch");
+          return;
+        }
         const bytes = base64ToBytes(b64);
         const decoded = new TextDecoder("utf-8").decode(bytes);
         setText(decoded);

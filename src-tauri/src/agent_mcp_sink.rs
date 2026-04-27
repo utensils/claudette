@@ -30,10 +30,12 @@ use crate::state::AppState;
 /// Tauri-side implementation of [`Sink`] — one per persistent agent session.
 ///
 /// `chat_session_id` is the key used to look up the agent's `AgentSessionState`
-/// in `AppState.agents` (and therefore the `last_user_msg_id` anchor).
-/// `workspace_id` is what the frontend listens for on the
-/// `agent-attachment-created` event so it can route the new attachment to the
-/// right chat surface. Both are needed; they are NOT the same id.
+/// in `AppState.agents` (and therefore the `last_user_msg_id` anchor) and the
+/// key the frontend listener uses to merge the new attachment into the right
+/// `chatAttachments[sessionId]` slice. `workspace_id` is still emitted on the
+/// event for any host-side filtering (e.g. notifications) that wants
+/// workspace granularity, but the chat-surface routing path no longer reads
+/// it. Both are kept on the struct because they are NOT the same id.
 pub struct ChatBridgeSink {
     pub app: AppHandle,
     pub db_path: PathBuf,

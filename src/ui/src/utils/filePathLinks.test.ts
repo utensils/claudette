@@ -111,4 +111,13 @@ describe("encode/decode round trip", () => {
   it("returns null for non-matching href", () => {
     expect(decodeFilePathHref("https://example.com")).toBeNull();
   });
+
+  it("does not throw on malformed percent-encoding — falls back to raw tail", () => {
+    // `decodeURI` would throw URIError on a dangling `%`. The decoder
+    // must catch and return *something* so a bad assistant link can't
+    // crash the markdown render or click handler.
+    const bad = `${FILE_PATH_SCHEME}/tmp/bogus%`;
+    expect(() => decodeFilePathHref(bad)).not.toThrow();
+    expect(decodeFilePathHref(bad)).toBe("/tmp/bogus%");
+  });
 });
