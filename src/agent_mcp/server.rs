@@ -114,6 +114,11 @@ async fn handle_request(
 }
 
 fn initialize_result() -> Value {
+    // The `instructions` field is the spec-blessed channel for telling the
+    // host (and through it, the model) when this server is relevant. It
+    // complements the per-tool description rather than duplicating it: the
+    // tool description covers *how* to call `send_to_user`, this paragraph
+    // covers *when* the whole server is the right tool to reach for.
     json!({
         "protocolVersion": MCP_PROTOCOL_VERSION,
         "capabilities": {
@@ -122,7 +127,15 @@ fn initialize_result() -> Value {
         "serverInfo": {
             "name": SERVER_NAME,
             "version": env!("CARGO_PKG_VERSION"),
-        }
+        },
+        "instructions": "The Claudette MCP server lets the agent deliver a \
+            file inline in the user's chat surface. Use `send_to_user` whenever \
+            you produce a deliverable artifact the user should be able to view \
+            or download immediately — generated images, PDFs, or short \
+            text-shaped data files (CSV, Markdown, JSON, plain text). Do NOT \
+            use it for arbitrary binaries, archives, or oversized files; for \
+            those, tell the user the absolute path on disk so they can open \
+            them themselves."
     })
 }
 
@@ -377,6 +390,22 @@ mod tests {
         assert_eq!(r["result"]["protocolVersion"], MCP_PROTOCOL_VERSION);
         assert_eq!(r["result"]["serverInfo"]["name"], SERVER_NAME);
         assert!(r["result"]["capabilities"]["tools"].is_object());
+        // The `instructions` field is what spec-compliant hosts surface to
+        // the model so it knows when the whole server is relevant. Confirm
+        // it ships and mentions both the affirmative use case and the
+        // explicit "do not use for X" guard so future edits don't quietly
+        // drop the latter.
+        let instructions = r["result"]["instructions"]
+            .as_str()
+            .expect("instructions field is required");
+        assert!(
+            instructions.contains("send_to_user"),
+            "instructions should mention send_to_user, got: {instructions}"
+        );
+        assert!(
+            instructions.to_lowercase().contains("do not"),
+            "instructions should describe when NOT to use, got: {instructions}"
+        );
     }
 
     #[tokio::test]
