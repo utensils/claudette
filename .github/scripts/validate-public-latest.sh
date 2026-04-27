@@ -24,11 +24,9 @@ curl_with_retry() {
   local status=0
 
   while true; do
-    if curl -fsSL "$@"; then
-      return 0
-    fi
-
+    curl -fsSL "$@" && return 0
     status=$?
+
     if [ "$attempt" -ge "$max_attempts" ]; then
       echo "::error::failed to validate ${label} after ${attempt} attempts (curl ${status})" >&2
       return "$status"
