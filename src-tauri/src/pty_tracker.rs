@@ -48,13 +48,7 @@ struct CommandEvent {
 ///
 /// On non-Unix platforms this is a no-op.
 #[cfg(unix)]
-pub fn spawn(
-    pty_id: u64,
-    shell_pid: i32,
-    master_fd: OwnedFd,
-    cancel: Arc<Notify>,
-    app: AppHandle,
-) {
+pub fn spawn(pty_id: u64, shell_pid: i32, master_fd: OwnedFd, cancel: Arc<Notify>, app: AppHandle) {
     use std::os::fd::AsRawFd;
 
     tokio::spawn(async move {

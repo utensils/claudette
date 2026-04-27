@@ -294,6 +294,16 @@ pub async fn close_pty(pty_id: u64, state: State<'_, AppState>) -> Result<(), St
             cancel.notify_one();
         }
         if let Ok(mut child) = handle.child.into_inner() {
+            // Walk the shell's subtree and kill every descendant before the
+            // shell itself, so cargo-watch-style grandchildren don't survive
+            // by being orphaned to launchd. 100ms grace for graceful exit.
+            #[cfg(unix)]
+            if let Some(pid) = child.process_id() {
+                crate::subprocess_cleanup::kill_processes_with_descendants(&[pid as i32], 100);
+            }
+            // Belt-and-suspenders: portable-pty's kill (SIGKILL on Unix,
+            // TerminateProcess on Windows) reaps the shell handle so we
+            // don't leak it. No-op on Unix if subtree-kill already worked.
             let _ = child.kill();
         }
     }

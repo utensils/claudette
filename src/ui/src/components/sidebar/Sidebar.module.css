@@ -465,8 +465,41 @@
   font-family: var(--font-mono);
 }
 
-/* Terminal command display */
-.terminalCommand {
+/* Running-commands summary row. Collapsed by default — clicking expands the
+   list of individual commands underneath. Indented to nest visually under
+   the workspace branch line. */
+.terminalCommandSummary {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  padding: 0;
+  margin-top: 2px;
+  margin-left: 14px;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.terminalCommandSummary:hover .commandText {
+  color: var(--text);
+}
+
+.commandChevron {
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+/* Individual command rows shown when the summary is expanded. Indented
+   slightly more than the summary so the hierarchy reads correctly. */
+.terminalCommandItem {
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-dim);
@@ -476,7 +509,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  margin-top: 2px;
+  margin-top: 1px;
+  margin-left: 32px;
 }
 
 .runningIcon {

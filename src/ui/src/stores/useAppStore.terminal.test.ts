@@ -163,7 +163,7 @@ describe("workspace removal cascades to terminal state", () => {
       terminalTabs: { [WS_A]: [makeTab(1, WS_A)] },
       activeTerminalTabId: { [WS_A]: 1 },
       workspaceTerminalCommands: {
-        [WS_A]: { command: "cargo test", isRunning: true, exitCode: null },
+        [WS_A]: { 1: "cargo test" },
       },
     });
 
@@ -209,8 +209,8 @@ describe("workspace removal cascades to terminal state", () => {
       },
       activeTerminalTabId: { [WS_A]: 1, [WS_B]: 2 },
       workspaceTerminalCommands: {
-        [WS_A]: { command: null, isRunning: false, exitCode: null },
-        [WS_B]: { command: null, isRunning: false, exitCode: null },
+        [WS_A]: { 1: "make build" },
+        [WS_B]: { 2: "npm test" },
       },
     });
 
@@ -290,5 +290,89 @@ describe("workspace removal cascades to terminal state", () => {
 
     // repo-2's workspace is still selected — removing repo-1 shouldn't affect it.
     expect(useAppStore.getState().selectedWorkspaceId).toBe(WS_B);
+  });
+});
+
+describe("workspace running-command map", () => {
+  beforeEach(() => {
+    useAppStore.setState({
+      workspaceTerminalCommands: {},
+    });
+  });
+
+  it("setWorkspaceRunningCommand records a command under workspace+pty", () => {
+    useAppStore.getState().setWorkspaceRunningCommand(WS_A, 1, "sleep 30");
+    expect(useAppStore.getState().workspaceTerminalCommands[WS_A]).toEqual({
+      1: "sleep 30",
+    });
+  });
+
+  it("setWorkspaceRunningCommand allows multiple PTYs per workspace", () => {
+    useAppStore.getState().setWorkspaceRunningCommand(WS_A, 1, "cargo test");
+    useAppStore.getState().setWorkspaceRunningCommand(WS_A, 2, "bun run dev");
+    expect(useAppStore.getState().workspaceTerminalCommands[WS_A]).toEqual({
+      1: "cargo test",
+      2: "bun run dev",
+    });
+  });
+
+  it("setWorkspaceRunningCommand isolates workspaces from each other", () => {
+    useAppStore.getState().setWorkspaceRunningCommand(WS_A, 1, "make build");
+    useAppStore.getState().setWorkspaceRunningCommand(WS_B, 1, "npm test");
+    expect(useAppStore.getState().workspaceTerminalCommands[WS_A]).toEqual({
+      1: "make build",
+    });
+    expect(useAppStore.getState().workspaceTerminalCommands[WS_B]).toEqual({
+      1: "npm test",
+    });
+  });
+
+  it("clearWorkspaceRunningCommand removes only the named pty entry", () => {
+    useAppStore.setState({
+      workspaceTerminalCommands: { [WS_A]: { 1: "a", 2: "b" } },
+    });
+    useAppStore.getState().clearWorkspaceRunningCommand(WS_A, 1);
+    expect(useAppStore.getState().workspaceTerminalCommands[WS_A]).toEqual({
+      2: "b",
+    });
+  });
+
+  it("clearWorkspaceRunningCommand drops the workspace key when its map empties", () => {
+    useAppStore.setState({
+      workspaceTerminalCommands: { [WS_A]: { 1: "only" } },
+    });
+    useAppStore.getState().clearWorkspaceRunningCommand(WS_A, 1);
+    expect(useAppStore.getState().workspaceTerminalCommands[WS_A]).toBeUndefined();
+  });
+
+  it("clearWorkspaceRunningCommand on a missing entry is a no-op", () => {
+    const before = useAppStore.getState().workspaceTerminalCommands;
+    useAppStore.getState().clearWorkspaceRunningCommand("missing-ws", 999);
+    expect(useAppStore.getState().workspaceTerminalCommands).toBe(before);
+  });
+
+  it("setWorkspaceRunningCommand replaces an existing entry for the same pty", () => {
+    useAppStore.getState().setWorkspaceRunningCommand(WS_A, 1, "first");
+    useAppStore.getState().setWorkspaceRunningCommand(WS_A, 1, "second");
+    expect(useAppStore.getState().workspaceTerminalCommands[WS_A]).toEqual({
+      1: "second",
+    });
+  });
+});
+
+describe("showSidebarRunningCommands setting", () => {
+  beforeEach(() => {
+    useAppStore.setState({ showSidebarRunningCommands: false });
+  });
+
+  it("defaults to false", () => {
+    expect(useAppStore.getState().showSidebarRunningCommands).toBe(false);
+  });
+
+  it("setShowSidebarRunningCommands toggles the flag", () => {
+    useAppStore.getState().setShowSidebarRunningCommands(true);
+    expect(useAppStore.getState().showSidebarRunningCommands).toBe(true);
+    useAppStore.getState().setShowSidebarRunningCommands(false);
+    expect(useAppStore.getState().showSidebarRunningCommands).toBe(false);
   });
 });

@@ -10,6 +10,7 @@ mod pty;
 mod pty_tracker;
 mod remote;
 mod state;
+mod subprocess_cleanup;
 mod transport;
 mod tray;
 mod usage;
@@ -630,34 +631,24 @@ fn main() {
 }
 
 /// `RunEvent::Exit` is the last hook before the Tauri runtime tears down,
-/// so any process Claudette spawned that we haven't already reaped will
-/// re-parent to PID 1 if we don't kill it here. We have two flavors:
+/// so anything Claudette spawned that we haven't already reaped will
+/// re-parent to PID 1 if we don't kill it here.
 ///
-/// - **PTY shells**: spawned with their own session/process group via
-///   `setsid()` inside `portable-pty`, so we signal `kill(-pid, …)` to
-///   reach the shell *and* its descendants (foreground command + any
-///   backgrounded jobs that didn't ignore SIGHUP).
-/// - **Persistent Claude CLI agents**: spawned with the parent's process
-///   group, so a regular `kill(pid, …)` is enough.
-///
-/// Strategy is parallel SIGTERM → 500 ms grace → SIGKILL, so total
-/// shutdown delay is bounded regardless of how many children there are.
+/// We treat PTY shells and persistent Claude CLI agents the same way: each
+/// is a "root" whose entire descendant tree must die. `cargo-watch` and
+/// similar tools deliberately put their grandchildren into a fresh
+/// session/PG, so signaling the root's process group leaves them behind —
+/// the subtree walk in `subprocess_cleanup` is the reliable path.
 #[cfg(unix)]
 fn cleanup_subprocesses_on_exit(app_state: &state::AppState) {
-    use std::time::{Duration, Instant};
-
-    // Direct PIDs (Claude CLI agents).
-    let mut pids: Vec<i32> = Vec::new();
-    // PIDs to signal as process groups (PTY shell sessions).
-    let mut pgrps: Vec<i32> = Vec::new();
+    let mut roots: Vec<i32> = Vec::new();
 
     if let Ok(ptys) = app_state.ptys.try_read() {
         for handle in ptys.values() {
             if let Ok(child) = handle.child.lock()
                 && let Some(pid) = child.process_id()
-                && pid > 0
             {
-                pgrps.push(pid as i32);
+                roots.push(pid as i32);
             }
         }
     }
@@ -665,50 +656,12 @@ fn cleanup_subprocesses_on_exit(app_state: &state::AppState) {
     if let Ok(agents) = app_state.agents.try_read() {
         for ag in agents.values() {
             if let Some(sess) = &ag.persistent_session {
-                let pid = sess.pid();
-                if pid > 0 {
-                    pids.push(pid as i32);
-                }
+                roots.push(sess.pid() as i32);
             }
         }
     }
 
-    if pids.is_empty() && pgrps.is_empty() {
-        return;
-    }
-
-    // Phase 1: SIGTERM everyone in parallel.
-    for &pgid in &pgrps {
-        // SAFETY: pgid was validated > 0 above; -pgid is the standard
-        // POSIX "signal this process group" form for `kill(2)`.
-        unsafe { libc::kill(-pgid, libc::SIGTERM) };
-    }
-    for &pid in &pids {
-        unsafe { libc::kill(pid, libc::SIGTERM) };
-    }
-
-    // Phase 2: poll for everyone to exit. Bounded at 500 ms total.
-    let deadline = Instant::now() + Duration::from_millis(500);
-    while Instant::now() < deadline {
-        let any_alive = pgrps
-            .iter()
-            .chain(pids.iter())
-            .any(|&p| unsafe { libc::kill(p, 0) == 0 });
-        if !any_alive {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-
-    // Phase 3: SIGKILL stragglers. We don't bother to reap — the kernel
-    // does it for us when our process exits a moment later, and waitpid
-    // can deadlock if a process is in uninterruptible sleep.
-    for &pgid in &pgrps {
-        unsafe { libc::kill(-pgid, libc::SIGKILL) };
-    }
-    for &pid in &pids {
-        unsafe { libc::kill(pid, libc::SIGKILL) };
-    }
+    subprocess_cleanup::kill_processes_with_descendants(&roots, 500);
 }
 
 fn shutdown_runtime_handler(_app: &tauri::AppHandle, _event: tauri::RunEvent) {

@@ -29,6 +29,7 @@ function App() {
   const setSystemFonts = useAppStore((s) => s.setSystemFonts);
   const setDetectedApps = useAppStore((s) => s.setDetectedApps);
   const setUsageInsightsEnabled = useAppStore((s) => s.setUsageInsightsEnabled);
+  const setShowSidebarRunningCommands = useAppStore((s) => s.setShowSidebarRunningCommands);
   const setPluginManagementEnabled = useAppStore((s) => s.setPluginManagementEnabled);
   const setDisable1mContext = useAppStore((s) => s.setDisable1mContext);
   const setAppVersion = useAppStore((s) => s.setAppVersion);
@@ -140,6 +141,9 @@ function App() {
     getAppSetting("usage_insights_enabled")
       .then((val) => { if (val === "true") setUsageInsightsEnabled(true); })
       .catch(() => {});
+    getAppSetting("show_sidebar_running_commands")
+      .then((val) => { if (val === "true") setShowSidebarRunningCommands(true); })
+      .catch(() => {});
     getAppSetting("plugin_management_enabled")
       .then((val) => { if (val === "true") setPluginManagementEnabled(true); })
       .catch(() => {});
@@ -167,31 +171,48 @@ function App() {
         const { pty_id, command } = event.payload;
         const wsId = findWorkspaceForPty(pty_id);
         if (!wsId) return;
-        useAppStore.getState().setWorkspaceTerminalCommand(wsId, {
-          command: command || null,
-          isRunning: true,
-          exitCode: null,
-        });
+        useAppStore.getState().setWorkspaceRunningCommand(wsId, pty_id, command || null);
       });
 
       const unlistenCommandStopped = await listen<CommandEvent>("pty-command-stopped", (event) => {
-        const { pty_id, command, exit_code } = event.payload;
+        const { pty_id } = event.payload;
         const wsId = findWorkspaceForPty(pty_id);
         if (!wsId) return;
-        useAppStore.getState().setWorkspaceTerminalCommand(wsId, {
-          command: command || null,
-          isRunning: false,
-          exitCode: exit_code !== null && exit_code !== undefined ? exit_code : null,
-        });
+        useAppStore.getState().clearWorkspaceRunningCommand(wsId, pty_id);
       });
 
-      // Shell exited (e.g. user typed `exit`): the backend reader saw EOF
-      // and emitted pty-exit. Close the owning pane, and if it was the
-      // only pane in its tab, close the tab too.
+      // Shell exited (e.g. user typed `exit`, or close_pty killed it): the
+      // backend reader saw EOF and emitted pty-exit. Three things to do:
+      //   1. Drop any running-command entry for this pty (so the sidebar
+      //      indicator doesn't go stale). We search workspaceTerminalCommands
+      //      directly because the tab/pane may already have been removed
+      //      from the store if the user closed it via the X button — in
+      //      that path the tab is removed before close_pty fires the EOF.
+      //   2. If the pane is still in the tree, close it.
+      //   3. If that was the only pane in its tab, close the tab too.
       const unlistenPtyExit = await listen<{ pty_id: number }>("pty-exit", (event) => {
         const ptyId = event.payload.pty_id;
-        const { terminalTabs, terminalPaneTrees, closePane, removeTerminalTab, setWorkspaceTerminalCommand } =
-          useAppStore.getState();
+        const {
+          terminalTabs,
+          terminalPaneTrees,
+          workspaceTerminalCommands,
+          closePane,
+          removeTerminalTab,
+          clearWorkspaceRunningCommand,
+        } = useAppStore.getState();
+
+        // 1. Sweep the workspaceTerminalCommands map for this pty across
+        //    every workspace and clear any entry. Cheap (one outer-key
+        //    scan) and works even when tabs/panes have already been
+        //    cleaned up.
+        for (const [wsId, ptyMap] of Object.entries(workspaceTerminalCommands)) {
+          if (ptyId in ptyMap) {
+            clearWorkspaceRunningCommand(wsId, ptyId);
+          }
+        }
+
+        // 2. Try to find the owning pane and close it (handles the
+        //    `exit`-typed-by-user case where the tab is still mounted).
         for (const [wsId, tabs] of Object.entries(terminalTabs)) {
           for (const tab of tabs) {
             const tree = terminalPaneTrees[tab.id];
@@ -205,7 +226,6 @@ function App() {
               );
               removeTerminalTab(wsId, tab.id);
             }
-            setWorkspaceTerminalCommand(wsId, { command: null, isRunning: false, exitCode: null });
             return;
           }
         }
@@ -316,7 +336,7 @@ function App() {
       unlistenAutoArchived.then((fn) => fn());
       unlistenMissingCli.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setPluginManagementEnabled, setDisable1mContext, setAppVersion]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setShowSidebarRunningCommands, setPluginManagementEnabled, setDisable1mContext, setAppVersion]);
 
   return <AppLayout />;
 }
