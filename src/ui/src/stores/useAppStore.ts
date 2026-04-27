@@ -1953,10 +1953,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   detectedApps: [],
   setDetectedApps: (apps) => set({ detectedApps: apps }),
 
-  // -- Experimental --
+  // -- Sidebar Display Preferences --
   showSidebarRunningCommands: false,
   setShowSidebarRunningCommands: (v) => set({ showSidebarRunningCommands: v }),
 
+  // -- Experimental --
   usageInsightsEnabled: false,
   setUsageInsightsEnabled: (enabled) => set({ usageInsightsEnabled: enabled }),
   pluginManagementEnabled: false,

@@ -55,7 +55,14 @@ pub fn spawn(pty_id: u64, shell_pid: i32, master_fd: OwnedFd, cancel: Arc<Notify
 
     tokio::spawn(async move {
         let fd = master_fd.as_raw_fd();
-        let mut last_pgrp = shell_pid;
+        // Seed `last_pgrp` from the actual foreground PGID rather than
+        // assuming it equals the shell's PID. They usually match right
+        // after spawn (the shell becomes session leader), but if the
+        // shell has already forked a child by the time the tracker
+        // starts, using `shell_pid` would treat the existing foreground
+        // group as a brand-new transition and emit a spurious
+        // `pty-command-detected`.
+        let mut last_pgrp = foreground_pgrp(fd).unwrap_or(shell_pid);
         let mut last_command: Option<String> = None;
 
         loop {
@@ -110,13 +117,25 @@ pub fn spawn(pty_id: u64, shell_pid: i32, master_fd: OwnedFd, cancel: Arc<Notify
 }
 
 /// Duplicate the master PTY's file descriptor so the polling task can own a
-/// copy with an independent lifetime. Returns `None` if the master does not
-/// expose a raw FD.
+/// copy with an independent lifetime. The duplicated FD is set close-on-exec
+/// so child processes spawned by the app (Claude CLI agents, PTY shells)
+/// don't inherit it — otherwise they'd hold the PTY open and we'd never see
+/// EOF on the original master. Returns `None` if the master does not expose
+/// a raw FD or if the dup/fcntl syscalls fail.
 #[cfg(unix)]
 pub fn dup_master_fd(master: &dyn portable_pty::MasterPty) -> Option<OwnedFd> {
     let raw = master.as_raw_fd()?;
     let dup = unsafe { libc::dup(raw) };
     if dup < 0 {
+        return None;
+    }
+    let flags = unsafe { libc::fcntl(dup, libc::F_GETFD) };
+    if flags < 0 {
+        unsafe { libc::close(dup) };
+        return None;
+    }
+    if unsafe { libc::fcntl(dup, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0 {
+        unsafe { libc::close(dup) };
         return None;
     }
     Some(unsafe { OwnedFd::from_raw_fd(dup) })

@@ -308,14 +308,26 @@ pub async fn close_pty(pty_id: u64, state: State<'_, AppState>) -> Result<(), St
         // Walk the shell's subtree and kill every descendant before the
         // shell itself, so cargo-watch-style grandchildren don't survive
         // by being orphaned to launchd. 100ms grace for graceful exit.
+        // The walk shells out to `ps` and uses `std::thread::sleep` for
+        // the grace window — wrap in spawn_blocking so we don't block
+        // a tokio worker for the duration.
         #[cfg(unix)]
         if let Some(pid) = child.process_id() {
-            crate::subprocess_cleanup::kill_processes_with_descendants(&[pid as i32], 100);
+            let _ = tokio::task::spawn_blocking(move || {
+                crate::subprocess_cleanup::kill_processes_with_descendants(&[pid as i32], 100);
+            })
+            .await;
         }
         // Belt-and-suspenders: portable-pty's kill (SIGKILL on Unix,
-        // TerminateProcess on Windows) reaps the shell handle so we
-        // don't leak it. No-op on Unix if subtree-kill already worked.
-        let _ = child.kill();
+        // TerminateProcess on Windows) ensures the shell is gone if the
+        // subtree walk didn't catch it. Then `wait()` to reap so we
+        // don't leave a zombie. Both calls are blocking — wrap in
+        // spawn_blocking for the same reason as above.
+        let _ = tokio::task::spawn_blocking(move || {
+            let _ = child.kill();
+            let _ = child.wait();
+        })
+        .await;
     }
     Ok(())
 }
