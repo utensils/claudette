@@ -53,8 +53,11 @@ const PATH_REGEX =
  * prose. */
 const TRAILING_PUNCT_REGEX = /[.,;:!?)\]'"`]+$/;
 
-/** Real paths have at least one separator inside the body, not just the
- *  prefix. `/a` is too short to be a useful match. */
+/** Minimum-length heuristic for detected paths after trailing punctuation
+ *  is stripped. This filters out very short matches like `/a` (which are
+ *  almost always punctuation noise rather than real filenames) without
+ *  enforcing the presence of an additional inner separator — that would
+ *  reject legitimate two-segment paths like `/etc` or `~/foo`. */
 const MIN_PATH_LENGTH = 3;
 
 export function detectFilePaths(text: string): FilePathMatch[] {

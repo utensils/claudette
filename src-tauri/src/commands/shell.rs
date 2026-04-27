@@ -36,13 +36,33 @@ pub fn detect_user_shell() -> (String, ShellType) {
 
 #[tauri::command]
 pub async fn open_in_editor(path: String) -> Result<(), String> {
-    // Open file in default editor using tauri-plugin-dialog
-    tauri::async_runtime::spawn(async move {
-        if let Err(e) = opener::open(&path) {
-            eprintln!("Failed to open file in editor: {e}");
+    // Expand a leading `~/` (or bare `~`) using the host's home dir.
+    // `opener::open` shells out to the OS handler, which doesn't perform
+    // shell-style tilde expansion — without this, the markdown autolinker
+    // emitting `~/Downloads/foo.csv` would silently fail to open.
+    let expanded = expand_home_tilde(&path);
+    // Run synchronously so errors propagate back to the frontend instead
+    // of getting silently dropped on stderr inside a spawned task. The
+    // helper is a thin wrapper around `open` / `xdg-open` / `cmd start`,
+    // all of which return as soon as the OS hands off — no blocking.
+    opener::open(&expanded).map_err(|e| format!("Failed to open {expanded:?}: {e}"))
+}
+
+/// Expand a leading `~` or `~/` to the user's home directory. Returns the
+/// input unchanged if it doesn't start with `~`, or if the home dir can't
+/// be resolved (best-effort: callers still see a sensible error from the
+/// OS open command instead of a silent expansion failure).
+fn expand_home_tilde(path: &str) -> String {
+    if path == "~" {
+        if let Some(home) = dirs::home_dir() {
+            return home.to_string_lossy().into_owned();
         }
-    });
-    Ok(())
+    } else if let Some(rest) = path.strip_prefix("~/")
+        && let Some(home) = dirs::home_dir()
+    {
+        return home.join(rest).to_string_lossy().into_owned();
+    }
+    path.to_string()
 }
 
 /// Returns true if the URL uses a scheme safe for opening in the system browser.
@@ -140,5 +160,44 @@ mod tests {
     #[test]
     fn is_safe_url_scheme_blocks_fragment() {
         assert!(!is_safe_url_scheme("#section"));
+    }
+
+    #[test]
+    fn expand_home_tilde_expands_tilde_slash() {
+        let Some(home) = dirs::home_dir() else {
+            // Test machines without a resolvable home dir return the
+            // input unchanged — verify that path explicitly so the
+            // test still says something meaningful.
+            assert_eq!(expand_home_tilde("~/foo"), "~/foo");
+            return;
+        };
+        let expected = home.join("foo").to_string_lossy().into_owned();
+        assert_eq!(expand_home_tilde("~/foo"), expected);
+    }
+
+    #[test]
+    fn expand_home_tilde_expands_bare_tilde() {
+        let Some(home) = dirs::home_dir() else {
+            assert_eq!(expand_home_tilde("~"), "~");
+            return;
+        };
+        assert_eq!(expand_home_tilde("~"), home.to_string_lossy().to_string());
+    }
+
+    #[test]
+    fn expand_home_tilde_leaves_absolute_paths_alone() {
+        assert_eq!(expand_home_tilde("/tmp/foo.csv"), "/tmp/foo.csv");
+        assert_eq!(
+            expand_home_tilde("C:\\Users\\foo.csv"),
+            "C:\\Users\\foo.csv"
+        );
+    }
+
+    #[test]
+    fn expand_home_tilde_does_not_expand_user_specific_tilde() {
+        // `~root/foo` is shell sugar for "root's home" — we don't try
+        // to handle that. The string passes through unchanged so the
+        // OS open command can decide.
+        assert_eq!(expand_home_tilde("~root/foo"), "~root/foo");
     }
 }
