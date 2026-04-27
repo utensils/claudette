@@ -3,6 +3,7 @@ import {
   FileCode,
   FileSpreadsheet,
   FileText,
+  MoreHorizontal,
   type LucideIcon,
 } from "lucide-react";
 
@@ -29,7 +30,10 @@ const ICONS: Record<string, LucideIcon> = {
  * with a "Expand" / "Collapse" toggle.
  *
  * `onContextMenu` lets the call site wire the same Download / Copy / Open
- * menu image attachments use.
+ * menu image attachments use. The header also renders a kebab button that
+ * fires the same handler with synthesized client coords — this gives the
+ * menu a visible affordance on top of the discoverable-only right-click,
+ * matching how images surface their actions.
  */
 export function AttachmentCardShell({
   filename,
@@ -65,6 +69,31 @@ export function AttachmentCardShell({
           {filename}
         </span>
         <span className={styles.size}>{formatBytes(sizeBytes)}</span>
+        {onContextMenu && (
+          <button
+            type="button"
+            className={styles.menuButton}
+            aria-label="File actions"
+            title="File actions"
+            data-testid="attachment-menu-trigger"
+            onClick={(e) => {
+              // Anchor the popover to the kebab itself rather than the
+              // raw click coords — left-click anywhere on the button
+              // (including dead pixels around the icon) feels like the
+              // same target, so the menu shouldn't drift.
+              const rect = e.currentTarget.getBoundingClientRect();
+              const synthetic = {
+                ...e,
+                preventDefault: () => e.preventDefault(),
+                clientX: rect.right,
+                clientY: rect.bottom,
+              } as unknown as React.MouseEvent;
+              onContextMenu(synthetic);
+            }}
+          >
+            <MoreHorizontal size={14} aria-hidden />
+          </button>
+        )}
       </div>
       <div
         className={

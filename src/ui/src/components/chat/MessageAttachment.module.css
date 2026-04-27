@@ -42,6 +42,33 @@
   flex-shrink: 0;
 }
 
+.menuButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  margin-left: 2px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text-faint);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.menuButton:hover {
+  background: var(--hover-bg-subtle);
+  border-color: var(--divider);
+  color: var(--text-primary);
+}
+
+.menuButton:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .body {
   position: relative;
   max-height: 320px;

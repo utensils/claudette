@@ -1273,7 +1273,23 @@ export function ChatPanel() {
                       },
                     },
                   ]
-                : []),
+                : [
+                    // Non-image types (PDF + the text-shaped cards)
+                    // route through the OS default-app handler — the
+                    // Rust side stages the bytes to a temp file with
+                    // the right extension and asks the system to open
+                    // it. Same UX as left-clicking a PDF thumbnail.
+                    {
+                      label: "Open with default app",
+                      onSelect: () => {
+                        withBytes()
+                          .then(openAttachmentWithDefaultApp)
+                          .catch((err) =>
+                            console.error("Open with default app failed:", err),
+                          );
+                      },
+                    },
+                  ]),
               ...(shareSupported
                 ? [
                     {

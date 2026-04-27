@@ -5,6 +5,7 @@ import {
   MARKDOWN_COMPONENTS,
   REHYPE_PLUGINS,
   REMARK_PLUGINS,
+  safeUrlTransform,
 } from "../../utils/markdown";
 
 /**
@@ -25,6 +26,7 @@ export const MessageMarkdown = memo(function MessageMarkdown({
       remarkPlugins={REMARK_PLUGINS}
       rehypePlugins={REHYPE_PLUGINS}
       components={MARKDOWN_COMPONENTS}
+      urlTransform={safeUrlTransform}
     >
       {preprocessed}
     </Markdown>
