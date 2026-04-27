@@ -55,11 +55,6 @@
   color: var(--text-primary);
 }
 
-.tab:focus-visible {
-  outline: none;
-  box-shadow: none;
-}
-
 .active {
   color: var(--text-primary);
 }
