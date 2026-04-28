@@ -7,6 +7,12 @@ import type { ChatMessage } from "../types/chat";
 import type { ConversationCheckpoint } from "../types/checkpoint";
 import { extractToolSummary } from "./toolSummary";
 import { parseAskUserQuestion } from "./parseAgentQuestion";
+import {
+  type BlockToolMap,
+  setBlockTool,
+  getBlockTool,
+  clearBlockToolsForSession,
+} from "./blockToolMap";
 import { debugChat } from "../utils/chatDebug";
 import { extractLatestCallUsage } from "../utils/extractLatestCallUsage";
 import { buildCompactionSentinel } from "../utils/compactionSentinel";
@@ -34,11 +40,12 @@ export function useAgentStream() {
   const setPlanMode = useAppStore((s) => s.setPlanMode);
   const addCompactionEvent = useAppStore((s) => s.addCompactionEvent);
 
-  // Map content block index → { toolUseId, toolName } for the current turn.
-  // Reset on process exit.
-  const blockToolMapRef = useRef<
-    Record<number, { toolUseId: string; toolName: string }>
-  >({});
+  // Per-session map: sessionId → (content-block index → tool entry). Two
+  // concurrent sessions routinely reuse the same Anthropic content-block
+  // indices, so a flat per-index map would let one session's tool ids
+  // clobber the other's. Cleared on each session's ProcessExited (only
+  // that session's slot — the rest stays intact).
+  const blockToolMapRef = useRef<BlockToolMap>({});
   // Per-session turn-state bookkeeping (keyed by session_id).
   const turnMessageCountRef = useRef<Record<string, number>>({});
   const turnFinalizedRef = useRef<Record<string, boolean>>({});
@@ -101,7 +108,7 @@ export function useAgentStream() {
         useAppStore.getState().clearPromptStartTime(wsId);
         setStreamingContent(sessionId, "");
         clearStreamingThinking(sessionId);
-        blockToolMapRef.current = {};
+        clearBlockToolsForSession(blockToolMapRef.current, sessionId);
         delete thinkingBlocksRef.current[sessionId];
         // NOTE: Do NOT clear agentQuestion here. In --print mode the CLI
         // exits immediately after emitting AskUserQuestion, so ProcessExited
@@ -232,7 +239,11 @@ export function useAgentStream() {
                     delta.type === "input_json_delta" &&
                     delta.partial_json
                   ) {
-                    const entry = blockToolMapRef.current[inner.index];
+                    const entry = getBlockTool(
+                      blockToolMapRef.current,
+                      sessionId,
+                      inner.index,
+                    );
                     if (entry) {
                       appendToolActivityInput(
                         sessionId,
@@ -246,7 +257,11 @@ export function useAgentStream() {
                     delta.type === "tool_use_delta" &&
                     delta.partial_json
                   ) {
-                    const entry = blockToolMapRef.current[inner.index];
+                    const entry = getBlockTool(
+                      blockToolMapRef.current,
+                      sessionId,
+                      inner.index,
+                    );
                     if (entry) {
                       appendToolActivityInput(
                         sessionId,
@@ -280,10 +295,15 @@ export function useAgentStream() {
                     "type" in inner.content_block &&
                     inner.content_block.type === "tool_use"
                   ) {
-                    blockToolMapRef.current[inner.index] = {
-                      toolUseId: inner.content_block.id,
-                      toolName: inner.content_block.name,
-                    };
+                    setBlockTool(
+                      blockToolMapRef.current,
+                      sessionId,
+                      inner.index,
+                      {
+                        toolUseId: inner.content_block.id,
+                        toolName: inner.content_block.name,
+                      },
+                    );
                     addToolActivity(sessionId, {
                       toolUseId: inner.content_block.id,
                       toolName: inner.content_block.name,
@@ -307,7 +327,11 @@ export function useAgentStream() {
                     thinkingBlocksRef.current[sessionId].delete(inner.index);
                     break;
                   }
-                  const entry = blockToolMapRef.current[inner.index];
+                  const entry = getBlockTool(
+                    blockToolMapRef.current,
+                    sessionId,
+                    inner.index,
+                  );
                   if (!entry) break;
 
                   // Read accumulated input JSON from the tool activity.
