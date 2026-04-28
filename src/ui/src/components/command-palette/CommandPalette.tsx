@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { Search, ChevronLeft } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
-import { applyTheme, applyUserFonts, findTheme, loadAllThemes } from "../../utils/theme";
+import { applyTheme, applyUserFonts, findTheme, loadAllThemes, cacheThemePreference, getThemeDataAttr } from "../../utils/theme";
 import { adjustUiFontSize, resetUiFontSize } from "../../utils/fontSettings";
 import {
   setAppSetting,
@@ -56,6 +56,9 @@ export function CommandPalette() {
   const updateWorkspace = useAppStore((s) => s.updateWorkspace);
   const currentThemeId = useAppStore((s) => s.currentThemeId);
   const setCurrentThemeId = useAppStore((s) => s.setCurrentThemeId);
+  const themeMode = useAppStore((s) => s.themeMode);
+  const setThemeDark = useAppStore((s) => s.setThemeDark);
+  const setThemeLight = useAppStore((s) => s.setThemeLight);
 
   // Resolve current repo from selected workspace
   const currentRepoId = useMemo(() => {
@@ -108,10 +111,27 @@ export function CommandPalette() {
   }, [themes]);
 
   const applyThemeById = useCallback((id: string) => {
-    applyThemeWithFonts(id);
-    setCurrentThemeId(id);
-    setAppSetting("theme", id).catch(console.error);
-  }, [applyThemeWithFonts, setCurrentThemeId]);
+    const theme = findTheme(themes, id);
+    applyThemeWithFonts(theme.id);
+    setCurrentThemeId(theme.id);
+    // Write to the mode-appropriate key so the Settings UI stays consistent.
+    // In system mode, apply to the key for the currently active OS preference.
+    const isSystemDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    const effectiveMode = themeMode === "system" ? (isSystemDark ? "dark" : "light") : themeMode;
+    if (effectiveMode === "light") {
+      setThemeLight(theme.id);
+      const state = useAppStore.getState();
+      const darkTheme = findTheme(themes, state.themeDark);
+      cacheThemePreference(themeMode, getThemeDataAttr(darkTheme), getThemeDataAttr(theme));
+      setAppSetting("theme_light", theme.id).catch(console.error);
+    } else {
+      setThemeDark(theme.id);
+      const state = useAppStore.getState();
+      const lightTheme = findTheme(themes, state.themeLight);
+      cacheThemePreference(themeMode, getThemeDataAttr(theme), getThemeDataAttr(lightTheme));
+      setAppSetting("theme_dark", theme.id).catch(console.error);
+    }
+  }, [applyThemeWithFonts, setCurrentThemeId, themeMode, themes, setThemeDark, setThemeLight]);
 
   const handleCreateWorkspace = useCallback(async (repoId: string) => {
     try {

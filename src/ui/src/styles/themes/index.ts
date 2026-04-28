@@ -124,3 +124,4 @@ export const BUILTIN_THEME_IDS: ReadonlySet<string> = new Set(
 );
 
 export const DEFAULT_THEME_ID = "default-dark";
+export const DEFAULT_LIGHT_THEME_ID = "default-light";

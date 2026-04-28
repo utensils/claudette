@@ -1,9 +1,11 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { useAppStore } from "./stores/useAppStore";
 import { loadInitialData, getAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, clearAttention, detectInstalledApps, listSystemFonts, deleteTerminalTab } from "./services/tauri";
-import { applyTheme, applyUserFonts, loadAllThemes, findTheme } from "./utils/theme";
+import { applyTheme, applyUserFonts, loadAllThemes, findTheme, cacheThemePreference, getThemeDataAttr } from "./utils/theme";
+import { DEFAULT_THEME_ID, DEFAULT_LIGHT_THEME_ID } from "./styles/themes";
+import type { ThemeDefinition } from "./types/theme";
 import { adjustUiFontSize, resetUiFontSize } from "./utils/fontSettings";
 import { useMcpStatus } from "./hooks/useMcpStatus";
 import { AppLayout } from "./components/layout/AppLayout";
@@ -23,6 +25,9 @@ function App() {
   const setLocalServerRunning = useAppStore((s) => s.setLocalServerRunning);
   const setLocalServerConnectionString = useAppStore((s) => s.setLocalServerConnectionString);
   const setCurrentThemeId = useAppStore((s) => s.setCurrentThemeId);
+  const setThemeMode = useAppStore((s) => s.setThemeMode);
+  const setThemeDark = useAppStore((s) => s.setThemeDark);
+  const setThemeLight = useAppStore((s) => s.setThemeLight);
   const setUiFontSize = useAppStore((s) => s.setUiFontSize);
   const setFontFamilySans = useAppStore((s) => s.setFontFamilySans);
   const setFontFamilyMono = useAppStore((s) => s.setFontFamilyMono);
@@ -33,6 +38,9 @@ function App() {
   const setPluginManagementEnabled = useAppStore((s) => s.setPluginManagementEnabled);
   const setDisable1mContext = useAppStore((s) => s.setDisable1mContext);
   const setAppVersion = useAppStore((s) => s.setAppVersion);
+
+  // Cached theme list — populated on initial load, reused by the OS handler.
+  const loadedThemesRef = useRef<ThemeDefinition[]>([]);
 
   // Listen for MCP supervisor status events from the Rust backend.
   useMcpStatus();
@@ -87,12 +95,46 @@ function App() {
         }
       })
       .catch((err) => console.error("Failed to load terminal font size:", err));
-    getAppSetting("theme")
-      .then(async (savedThemeId) => {
+    (async () => {
+      try {
         const allThemes = await loadAllThemes();
-        const theme = findTheme(allThemes, savedThemeId ?? "default-dark");
+        loadedThemesRef.current = allThemes;
+        const [themeModeVal, darkIdVal, lightIdVal, legacyThemeVal] = await Promise.all([
+          getAppSetting("theme_mode"),
+          getAppSetting("theme_dark"),
+          getAppSetting("theme_light"),
+          getAppSetting("theme"),
+        ]);
+        const rawMode = themeModeVal ?? "dark";
+        const mode: "light" | "dark" | "system" =
+          rawMode === "light" || rawMode === "dark" || rawMode === "system"
+            ? rawMode
+            : "dark";
+        // Resolve through findTheme so a previously-saved id that no longer
+        // exists (e.g. a user JSON theme that was removed) falls back to a
+        // real theme — and we persist that resolved id, not the dead one,
+        // so the Settings <select> always reflects the applied theme.
+        const darkTheme = findTheme(allThemes, darkIdVal ?? legacyThemeVal ?? DEFAULT_THEME_ID);
+        const lightTheme = findTheme(allThemes, lightIdVal ?? DEFAULT_LIGHT_THEME_ID);
+        const darkId = darkTheme.id;
+        const lightId = lightTheme.id;
+
+        setThemeMode(mode);
+        setThemeDark(darkId);
+        setThemeLight(lightId);
+
+        const systemIsDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+        const effectiveId =
+          mode === "system" ? (systemIsDark ? darkId : lightId) :
+          mode === "light" ? lightId : darkId;
+
+        const theme = findTheme(allThemes, effectiveId);
         setCurrentThemeId(theme.id);
         applyTheme(theme);
+
+        // Cache per-mode attrs for the pre-hydration script.
+        cacheThemePreference(mode, getThemeDataAttr(darkTheme), getThemeDataAttr(lightTheme));
+
         // Apply user font overrides on top of the theme.
         const [sansVal, monoVal, sizeVal] = await Promise.all([
           getAppSetting("font_family_sans"),
@@ -106,8 +148,10 @@ function App() {
         if (mono) setFontFamilyMono(mono);
         if (sizeVal && size >= 10 && size <= 20) setUiFontSize(size);
         applyUserFonts(sans, mono, size >= 10 && size <= 20 ? size : 13);
-      })
-      .catch((err) => console.error("Failed to load theme:", err));
+      } catch (err) {
+        console.error("Failed to load theme:", err);
+      }
+    })();
     getVersion()
       .then((v) => setAppVersion(v))
       .catch((err) => console.error("Failed to load app version:", err));
@@ -336,7 +380,46 @@ function App() {
       unlistenAutoArchived.then((fn) => fn());
       unlistenMissingCli.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setShowSidebarRunningCommands, setPluginManagementEnabled, setDisable1mContext, setAppVersion]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setShowSidebarRunningCommands, setPluginManagementEnabled, setDisable1mContext, setAppVersion]);
+
+  // Listen for OS light/dark changes and switch theme when mode is "system".
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleChange = async (e: MediaQueryListEvent) => {
+      const state = useAppStore.getState();
+      if (state.themeMode !== "system") return;
+      const effectiveId = e.matches ? state.themeDark : state.themeLight;
+      // The cached theme list is populated once on initial load. If the user
+      // dropped a new JSON theme on disk and selected it via Settings, it
+      // won't be in the ref — refresh on miss so we apply the right theme
+      // instead of silently falling back via findTheme.
+      let themes = loadedThemesRef.current;
+      if (!themes.some((t) => t.id === effectiveId)) {
+        try {
+          themes = await loadAllThemes();
+          loadedThemesRef.current = themes;
+        } catch (err) {
+          console.error("Failed to reload themes for system change:", err);
+        }
+      }
+      if (themes.length === 0) return;
+      try {
+        const theme = findTheme(themes, effectiveId);
+        applyTheme(theme);
+        applyUserFonts(state.fontFamilySans, state.fontFamilyMono, state.uiFontSize);
+        state.setCurrentThemeId(theme.id);
+      } catch (err) {
+        console.error("Failed to apply system theme change:", err);
+      }
+    };
+    if (typeof mq.addEventListener === "function") {
+      mq.addEventListener("change", handleChange);
+      return () => mq.removeEventListener("change", handleChange);
+    }
+    // Fallback for older WebKit (e.g. macOS Catalina / Safari <14)
+    mq.addListener(handleChange);
+    return () => mq.removeListener(handleChange);
+  }, []);
 
   return <AppLayout />;
 }

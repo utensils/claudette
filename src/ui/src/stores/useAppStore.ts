@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { DEFAULT_THEME_ID } from "../styles/themes";
+import { DEFAULT_THEME_ID, DEFAULT_LIGHT_THEME_ID } from "../styles/themes";
 import { debugChat } from "../utils/chatDebug";
 import { extractLatestCallUsage } from "../utils/extractLatestCallUsage";
 import {
@@ -533,6 +533,12 @@ interface AppState {
   setSystemFonts: (fonts: string[]) => void;
   currentThemeId: string;
   setCurrentThemeId: (id: string) => void;
+  themeMode: "light" | "dark" | "system";
+  setThemeMode: (mode: "light" | "dark" | "system") => void;
+  themeDark: string;
+  setThemeDark: (id: string) => void;
+  themeLight: string;
+  setThemeLight: (id: string) => void;
   lastMessages: Record<string, ChatMessage>;
   setLastMessages: (msgs: Record<string, ChatMessage>) => void;
 
@@ -1841,6 +1847,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSystemFonts: (fonts) => set({ systemFonts: fonts }),
   currentThemeId: DEFAULT_THEME_ID,
   setCurrentThemeId: (id) => set({ currentThemeId: id }),
+  themeMode: "dark",
+  setThemeMode: (mode) => set({ themeMode: mode }),
+  themeDark: DEFAULT_THEME_ID,
+  setThemeDark: (id) => set({ themeDark: id }),
+  themeLight: DEFAULT_LIGHT_THEME_ID,
+  setThemeLight: (id) => set({ themeLight: id }),
   lastMessages: {},
   setLastMessages: (msgs) => set({ lastMessages: msgs }),
 

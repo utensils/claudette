@@ -30,15 +30,23 @@ vi.stubGlobal("document", {
   createElement: () => ({ rel: "", href: "", id: "" }),
   head: { appendChild: () => {} },
 });
+const lsMap = new Map<string, string>();
 vi.stubGlobal("localStorage", {
-  getItem: () => null,
-  setItem: () => {},
-  removeItem: () => {},
+  getItem: (k: string) => lsMap.get(k) ?? null,
+  setItem: (k: string, v: string) => { lsMap.set(k, v); },
+  removeItem: (k: string) => { lsMap.delete(k); },
+  clear: () => { lsMap.clear(); },
 });
 
 // Import AFTER the global stub so the module sees our fake document.
-const { applyUserFonts, clearUserFont, DEFAULT_SANS_STACK, DEFAULT_MONO_STACK } =
-  await import("./theme");
+const {
+  applyUserFonts,
+  clearUserFont,
+  DEFAULT_SANS_STACK,
+  DEFAULT_MONO_STACK,
+  getThemeDataAttr,
+  cacheThemePreference,
+} = await import("./theme");
 
 describe("applyUserFonts", () => {
   beforeEach(() => {
@@ -148,5 +156,80 @@ describe("applyUserFonts + clearUserFont round-trip", () => {
     expect(styleMap.has("--font-mono")).toBe(false);
     // zoom persists
     expect(styleMap.has("zoom")).toBe(true);
+  });
+});
+
+describe("getThemeDataAttr", () => {
+  it("returns the built-in theme's own id", () => {
+    expect(getThemeDataAttr({ id: "default-dark", name: "", description: "", colors: {} }))
+      .toBe("default-dark");
+    expect(getThemeDataAttr({ id: "default-light", name: "", description: "", colors: {} }))
+      .toBe("default-light");
+  });
+
+  it("returns the dark baseline for user themes with dark color-scheme", () => {
+    const userTheme = {
+      id: "my-user-theme",
+      name: "Mine",
+      description: "",
+      colors: { "color-scheme": "dark" },
+    };
+    expect(getThemeDataAttr(userTheme)).toBe("default-dark");
+  });
+
+  it("returns the light baseline for user themes with light color-scheme", () => {
+    const userTheme = {
+      id: "my-light-user-theme",
+      name: "Light",
+      description: "",
+      colors: { "color-scheme": "light" },
+    };
+    expect(getThemeDataAttr(userTheme)).toBe("default-light");
+  });
+
+  it("falls back to the dark baseline when color-scheme is missing", () => {
+    const userTheme = {
+      id: "ambiguous-theme",
+      name: "Ambiguous",
+      description: "",
+      colors: {},
+    };
+    expect(getThemeDataAttr(userTheme)).toBe("default-dark");
+  });
+});
+
+describe("cacheThemePreference", () => {
+  beforeEach(() => {
+    lsMap.clear();
+  });
+
+  it("writes mode and per-mode data-theme attrs to localStorage", () => {
+    cacheThemePreference("system", "default-dark", "default-light");
+    expect(lsMap.get("claudette.theme_mode")).toBe("system");
+    expect(lsMap.get("claudette.theme_dark_attr")).toBe("default-dark");
+    expect(lsMap.get("claudette.theme_light_attr")).toBe("default-light");
+  });
+
+  it("overwrites previously cached values", () => {
+    cacheThemePreference("dark", "default-dark", "default-light");
+    cacheThemePreference("light", "warm-ember", "default-light");
+    expect(lsMap.get("claudette.theme_mode")).toBe("light");
+    expect(lsMap.get("claudette.theme_dark_attr")).toBe("warm-ember");
+  });
+
+  it("does not throw when localStorage.setItem fails", () => {
+    vi.stubGlobal("localStorage", {
+      getItem: () => null,
+      setItem: () => { throw new Error("blocked"); },
+      removeItem: () => {},
+    });
+    expect(() => cacheThemePreference("dark", "default-dark", "default-light")).not.toThrow();
+    // Restore the Map-backed stub so later tests can observe writes again.
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => lsMap.get(k) ?? null,
+      setItem: (k: string, v: string) => { lsMap.set(k, v); },
+      removeItem: (k: string) => { lsMap.delete(k); },
+      clear: () => { lsMap.clear(); },
+    });
   });
 });
