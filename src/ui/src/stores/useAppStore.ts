@@ -47,7 +47,7 @@ import {
   getDashboardMetrics,
   getWorkspaceMetricsBatch,
 } from "../services/tauri";
-import type { SlashCommand } from "../services/tauri";
+import type { FileContent, SlashCommand } from "../services/tauri";
 import type {
   PluginSettingsIntent,
   PluginSettingsTab,
@@ -356,6 +356,15 @@ interface AppState {
   diffViewMode: DiffViewMode;
   diffLoading: boolean;
   diffError: string | null;
+  // Markdown-preview overlay for the active diff tab. Resets to "diff" on
+  // every tab switch (no per-tab persistence). Only meaningful when the
+  // selected file's extension is .md/.markdown — UI hides the toggle
+  // otherwise. Content is the working-tree version (post-edit), fetched
+  // separately from the diff so the user sees how their changes will render.
+  diffPreviewMode: "diff" | "rendered";
+  diffPreviewContent: FileContent | null;
+  diffPreviewLoading: boolean;
+  diffPreviewError: string | null;
   // Per-workspace open diff-file tabs. Ephemeral — not persisted across
   // restarts. Identity is (path, layer); the same path opened from two
   // different layers produces two distinct tabs because their diff content
@@ -367,6 +376,10 @@ interface AppState {
   setDiffViewMode: (mode: DiffViewMode) => void;
   setDiffLoading: (loading: boolean) => void;
   setDiffError: (error: string | null) => void;
+  setDiffPreviewMode: (mode: "diff" | "rendered") => void;
+  setDiffPreviewContent: (content: FileContent | null) => void;
+  setDiffPreviewLoading: (loading: boolean) => void;
+  setDiffPreviewError: (error: string | null) => void;
   clearDiff: () => void;
   // Open a diff tab for the given file (deduped by path+layer) and make it
   // the active view. The previously-selected chat session stays selected so
@@ -750,6 +763,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         diffSelectedLayer: null,
         diffContent: null,
         diffError: null,
+        diffPreviewMode: "diff",
+        diffPreviewContent: null,
+        diffPreviewLoading: false,
+        diffPreviewError: null,
       };
       if (id && s.unreadCompletions.has(id)) {
         const next = new Set(s.unreadCompletions);
@@ -843,6 +860,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       // active diff view yields. Diff tabs themselves remain in the strip.
       diffSelectedFile: null,
       diffSelectedLayer: null,
+      diffPreviewMode: "diff",
+      diffPreviewContent: null,
+      diffPreviewLoading: false,
+      diffPreviewError: null,
     })),
 
   // -- Chat --
@@ -1384,6 +1405,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   diffViewMode: "Unified",
   diffLoading: false,
   diffError: null,
+  diffPreviewMode: "diff",
+  diffPreviewContent: null,
+  diffPreviewLoading: false,
+  diffPreviewError: null,
   diffTabsByWorkspace: {},
   setDiffFiles: (files, mergeBase, stagedFiles) =>
     set({ diffFiles: files, diffMergeBase: mergeBase, diffStagedFiles: stagedFiles ?? null }),
@@ -1392,6 +1417,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   setDiffViewMode: (mode) => set({ diffViewMode: mode }),
   setDiffLoading: (loading) => set({ diffLoading: loading }),
   setDiffError: (error) => set({ diffError: error }),
+  setDiffPreviewMode: (mode) => set({ diffPreviewMode: mode }),
+  setDiffPreviewContent: (content) => set({ diffPreviewContent: content }),
+  setDiffPreviewLoading: (loading) => set({ diffPreviewLoading: loading }),
+  setDiffPreviewError: (error) => set({ diffPreviewError: error }),
   clearDiff: () =>
     set({
       diffFiles: [],
@@ -1401,6 +1430,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       diffStagedFiles: null,
       diffContent: null,
       diffError: null,
+      diffPreviewMode: "diff",
+      diffPreviewContent: null,
+      diffPreviewLoading: false,
+      diffPreviewError: null,
       diffTabsByWorkspace: {},
     }),
   openDiffTab: (workspaceId, path, layer) =>
@@ -1425,7 +1458,16 @@ export const useAppStore = create<AppState>((set, get) => ({
         diffTabsByWorkspace: nextTabs,
         diffSelectedFile: path,
         diffSelectedLayer: normalizedLayer,
-        ...(isSameSelection ? {} : { diffContent: null, diffError: null }),
+        ...(isSameSelection
+          ? {}
+          : {
+              diffContent: null,
+              diffError: null,
+              diffPreviewMode: "diff",
+              diffPreviewContent: null,
+              diffPreviewLoading: false,
+              diffPreviewError: null,
+            }),
       };
     }),
   selectDiffTab: (path, layer) =>
@@ -1439,6 +1481,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         diffSelectedLayer: normalizedLayer,
         diffContent: null,
         diffError: null,
+        diffPreviewMode: "diff",
+        diffPreviewContent: null,
+        diffPreviewLoading: false,
+        diffPreviewError: null,
       };
     }),
   closeDiffTab: (workspaceId, path, layer) =>
@@ -1465,6 +1511,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         updates.diffSelectedLayer = null;
         updates.diffContent = null;
         updates.diffError = null;
+        updates.diffPreviewMode = "diff";
+        updates.diffPreviewContent = null;
+        updates.diffPreviewLoading = false;
+        updates.diffPreviewError = null;
       }
       return updates;
     }),

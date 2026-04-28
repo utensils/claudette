@@ -1,0 +1,59 @@
+.diagram {
+  /* Mermaid emits an inline-block <svg>; center it in the available width
+     and cap its size so wide flowcharts don't blow out the chat column. */
+  display: flex;
+  justify-content: center;
+  margin: 16px 0;
+  padding: 16px;
+  background: var(--surface-subtle, transparent);
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.loading {
+  margin: 16px 0;
+  padding: 12px 16px;
+  border: 1px dashed var(--divider);
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.error {
+  margin: 16px 0;
+  padding: 12px 16px;
+  border: 1px solid var(--error-border);
+  border-radius: 8px;
+  background: var(--error-bg);
+}
+
+.errorLabel {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--diff-removed-text);
+  margin-bottom: 8px;
+}
+
+.errorSource {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  background: var(--hover-bg-subtle);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-primary);
+}
+
+.errorMessage {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}

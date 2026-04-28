@@ -681,6 +681,21 @@ export function revertFile(
   return invoke("revert_file", { worktreePath, mergeBase, filePath, status });
 }
 
+export interface FileContent {
+  path: string;
+  content: string | null;
+  is_binary: boolean;
+  size_bytes: number;
+  truncated: boolean;
+}
+
+export function readWorkspaceFile(
+  workspaceId: string,
+  relativePath: string,
+): Promise<FileContent> {
+  return invoke("read_workspace_file", { workspaceId, relativePath });
+}
+
 export function discardFile(
   worktreePath: string,
   filePath: string,

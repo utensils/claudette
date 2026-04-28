@@ -22,9 +22,181 @@
   min-width: 0;
 }
 
+.headerRight {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .fileName {
   font-family: var(--font-mono);
   font-size: 13px;
+}
+
+.modeToggle {
+  display: inline-flex;
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--surface-subtle, transparent);
+}
+
+.modeToggleButton {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.modeToggleButton + .modeToggleButton {
+  border-left: 1px solid var(--divider);
+}
+
+.modeToggleButton:hover:not(.modeToggleButtonActive) {
+  background: var(--hover-bg-subtle);
+  color: var(--text-primary);
+}
+
+.modeToggleButtonActive {
+  background: rgba(var(--accent-primary-rgb), 0.15);
+  color: var(--accent-primary);
+}
+
+.previewBody {
+  padding: 24px 32px 40px;
+  max-width: 880px;
+  margin: 0 auto;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--text-primary);
+}
+
+.previewBody > :first-child {
+  margin-top: 0;
+}
+
+.previewBody > :last-child {
+  margin-bottom: 0;
+}
+
+/* Headings — give vertical breathing room. Override the cramped global
+   line-height for headings inside the preview so multi-word titles don't
+   collapse into each other. */
+.previewBody h1,
+.previewBody h2,
+.previewBody h3,
+.previewBody h4,
+.previewBody h5,
+.previewBody h6 {
+  margin-top: 1.6em;
+  margin-bottom: 0.5em;
+  line-height: 1.25;
+}
+
+.previewBody h1 {
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--divider);
+}
+
+.previewBody h2 {
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--divider);
+}
+
+/* Paragraphs / lists / blockquotes — consistent vertical rhythm. */
+.previewBody p,
+.previewBody ul,
+.previewBody ol,
+.previewBody blockquote,
+.previewBody pre {
+  margin: 0 0 1em;
+}
+
+.previewBody ul,
+.previewBody ol {
+  padding-left: 1.6em;
+}
+
+.previewBody li + li {
+  margin-top: 0.25em;
+}
+
+.previewBody blockquote {
+  padding: 4px 14px;
+  border-left: 3px solid var(--accent-primary);
+  background: rgba(var(--accent-primary-rgb), 0.04);
+  color: var(--text-muted);
+}
+
+/* Tables — mirror the chat surface's styling: rounded outer border,
+   accent-tinted header, alternating rows. */
+.previewBody table {
+  border-collapse: collapse;
+  margin: 12px 0 1.2em;
+  width: 100%;
+  font-size: 13px;
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.previewBody th {
+  background: rgba(var(--accent-primary-rgb), 0.08);
+  color: var(--accent-primary);
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid rgba(var(--accent-primary-rgb), 0.18);
+}
+
+.previewBody td {
+  padding: 8px 12px;
+  text-align: left;
+  border-top: 1px solid var(--divider);
+}
+
+.previewBody tr:nth-child(even) td {
+  background: var(--hover-bg-subtle);
+}
+
+/* Inline code inside cells stays compact. */
+.previewBody td code {
+  font-size: 0.88em;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+
+/* Links — subtle accent underline. */
+.previewBody a {
+  color: var(--accent-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Horizontal rule — soft divider, not a thick line. */
+.previewBody hr {
+  margin: 1.5em 0;
+  border: none;
+  border-top: 1px solid var(--divider);
+}
+
+.truncatedBanner {
+  margin-bottom: 16px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: rgba(var(--accent-primary-rgb), 0.08);
+  border: 1px solid rgba(var(--accent-primary-rgb), 0.2);
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 .content {
