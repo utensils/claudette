@@ -390,16 +390,18 @@ function App() {
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const handleChange = async (e: MediaQueryListEvent) => {
-      const state = useAppStore.getState();
-      if (state.themeMode !== "system") return;
+      const initial = useAppStore.getState();
+      if (initial.themeMode !== "system") return;
       const token = ++themeChangeTokenRef.current;
-      const effectiveId = e.matches ? state.themeDark : state.themeLight;
+      // Tentative — only used to decide whether to refresh the theme cache.
+      // The authoritative effectiveId is recomputed from fresh state below.
+      const tentativeId = e.matches ? initial.themeDark : initial.themeLight;
       // The cached theme list is populated once on initial load. If the user
       // dropped a new JSON theme on disk and selected it via Settings, it
       // won't be in the ref — refresh on miss so we apply the right theme
       // instead of silently falling back via findTheme.
       let themes = loadedThemesRef.current;
-      if (!themes.some((t) => t.id === effectiveId)) {
+      if (!themes.some((t) => t.id === tentativeId)) {
         try {
           themes = await loadAllThemes();
           loadedThemesRef.current = themes;
@@ -407,14 +409,19 @@ function App() {
           console.error("Failed to reload themes for system change:", err);
         }
       }
-      // A later handler already ran — discard this stale result.
+      // A later OS event already ran — discard this stale result.
       if (themeChangeTokenRef.current !== token) return;
+      // Re-read store state: the user may have switched away from system mode
+      // (or changed themeDark/themeLight, fonts, etc.) during the await. If
+      // they did, their explicit action already applied a theme synchronously
+      // and we must not stomp it.
+      const fresh = useAppStore.getState();
+      if (fresh.themeMode !== "system") return;
       if (themes.length === 0) return;
+      const effectiveId = e.matches ? fresh.themeDark : fresh.themeLight;
       try {
         const theme = findTheme(themes, effectiveId);
         applyTheme(theme);
-        // Read fresh state: font settings may have changed during the await.
-        const fresh = useAppStore.getState();
         applyUserFonts(fresh.fontFamilySans, fresh.fontFamilyMono, fresh.uiFontSize);
         fresh.setCurrentThemeId(theme.id);
       } catch (err) {
