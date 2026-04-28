@@ -2,35 +2,52 @@ import { memo, useEffect, useRef, useState } from "react";
 import styles from "./MermaidBlock.module.css";
 
 // Mermaid is heavy (~700 KB minified). Defer loading until a diagram is
-// actually rendered, and reuse the same instance across all blocks for the
-// rest of the session.
+// actually rendered, and reuse the imported module across all blocks for
+// the rest of the session. Re-initialize when the app theme changes so
+// subsequent renders pick up the current color scheme — built-in themes
+// switch via CSS without a full reload, and a cached mermaid instance
+// would otherwise keep emitting the old palette.
 type MermaidApi = typeof import("mermaid").default;
-let mermaidPromise: Promise<MermaidApi> | null = null;
+let mermaidModulePromise: Promise<MermaidApi> | null = null;
+let initializedTheme: "dark" | "default" | null = null;
 
-function loadMermaid(): Promise<MermaidApi> {
-  if (!mermaidPromise) {
-    mermaidPromise = import("mermaid").then((mod) => {
-      const m = mod.default;
-      m.initialize({
-        startOnLoad: false,
-        // securityLevel "strict" (default) sanitizes diagram source so
-        // <script> and HTML embedded in node labels can't escape into the
-        // page. We render mermaid output for both file previews (trusted)
-        // and chat messages (less trusted), so the strict default is what
-        // we want.
-        securityLevel: "strict",
-        theme: detectTheme(),
-        fontFamily: "var(--font-sans)",
-      });
-      return m;
-    });
+async function loadMermaid(): Promise<MermaidApi> {
+  if (!mermaidModulePromise) {
+    mermaidModulePromise = import("mermaid").then((mod) => mod.default);
   }
-  return mermaidPromise;
+  const m = await mermaidModulePromise;
+  const theme = detectTheme();
+  if (initializedTheme !== theme) {
+    m.initialize({
+      startOnLoad: false,
+      // securityLevel "strict" (default) sanitizes diagram source so
+      // <script> and HTML embedded in node labels can't escape into the
+      // page. We render mermaid output for both file previews (trusted)
+      // and chat messages (less trusted), so the strict default is what
+      // we want.
+      securityLevel: "strict",
+      theme,
+      fontFamily: "var(--font-sans)",
+    });
+    initializedTheme = theme;
+  }
+  return m;
 }
 
+// Built-in themes set the scheme via CSS (`--color-scheme` custom property
+// + a `color-scheme: var(--color-scheme)` rule on `<html>`); user JSON
+// themes set inline `style.colorScheme` directly (theme.ts:191). Read the
+// computed CSS variable first, then the resolved `colorScheme`, then the
+// inline style, then fall back to the OS preference. This covers both
+// theme paths plus pre-hydration where neither is set yet.
 function detectTheme(): "dark" | "default" {
   if (typeof document === "undefined") return "dark";
-  const declared = document.documentElement.style.colorScheme;
+  const root = document.documentElement;
+  const computed = window.getComputedStyle(root);
+  const declared =
+    computed.getPropertyValue("--color-scheme").trim().toLowerCase() ||
+    computed.colorScheme.trim().toLowerCase() ||
+    root.style.colorScheme.trim().toLowerCase();
   if (declared === "light") return "default";
   if (declared === "dark") return "dark";
   return window.matchMedia?.("(prefers-color-scheme: dark)").matches
@@ -61,6 +78,10 @@ export const MermaidBlock = memo(function MermaidBlock({ source }: Props) {
 
   useEffect(() => {
     let cancelled = false;
+    // Drop the previously rendered SVG so a streaming or edited source
+    // doesn't keep showing the stale diagram while the new render is in
+    // flight — the loading state takes over instead.
+    setSvg(null);
     setError(null);
     loadMermaid()
       .then(async (mermaid) => {

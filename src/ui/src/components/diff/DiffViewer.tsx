@@ -113,13 +113,16 @@ export function DiffViewer() {
   // Lazily fetch the working-tree file content when the user toggles into
   // rendered preview. Cached on the store so toggling Diff/Preview repeatedly
   // doesn't refetch; the store resets it on tab switch.
+  //
+  // Bail when an error is already recorded so a failed fetch isn't retried in
+  // an infinite loop — the store clears `diffPreviewError` on tab switch, so
+  // moving away and back is the explicit retry signal.
   useEffect(() => {
     if (!showRendered) return;
     if (!selectedWorkspaceId || !diffSelectedFile) return;
-    if (diffPreviewContent || diffPreviewLoading) return;
+    if (diffPreviewContent || diffPreviewLoading || diffPreviewError) return;
     const version = ++previewVersionRef.current;
     setDiffPreviewLoading(true);
-    setDiffPreviewError(null);
     readWorkspaceFile(selectedWorkspaceId, diffSelectedFile)
       .then((content) => {
         if (version !== previewVersionRef.current) return;
@@ -137,6 +140,7 @@ export function DiffViewer() {
     diffSelectedFile,
     diffPreviewContent,
     diffPreviewLoading,
+    diffPreviewError,
     setDiffPreviewContent,
     setDiffPreviewLoading,
     setDiffPreviewError,
@@ -160,13 +164,12 @@ export function DiffViewer() {
           {isMarkdown && (
             <div
               className={styles.modeToggle}
-              role="tablist"
+              role="group"
               aria-label="Markdown view mode"
             >
               <button
                 type="button"
-                role="tab"
-                aria-selected={diffPreviewMode === "diff"}
+                aria-pressed={diffPreviewMode === "diff"}
                 className={`${styles.modeToggleButton} ${
                   diffPreviewMode === "diff" ? styles.modeToggleButtonActive : ""
                 }`}
@@ -176,8 +179,7 @@ export function DiffViewer() {
               </button>
               <button
                 type="button"
-                role="tab"
-                aria-selected={diffPreviewMode === "rendered"}
+                aria-pressed={diffPreviewMode === "rendered"}
                 className={`${styles.modeToggleButton} ${
                   diffPreviewMode === "rendered" ? styles.modeToggleButtonActive : ""
                 }`}
