@@ -2299,9 +2299,13 @@ pub async fn submit_plan_approval(
             "updatedInput": pending.original_input,
         })
     } else {
+        let feedback = reason.unwrap_or_else(|| "Plan denied. Please revise the approach.".into());
+        let message = format!(
+            "{feedback}\n\nRevise the plan to address this feedback, then call ExitPlanMode again to present the updated plan for approval. Do not begin implementation until the user approves the revised plan."
+        );
         serde_json::json!({
             "behavior": "deny",
-            "message": reason.unwrap_or_else(|| "Plan denied. Please revise the approach.".into()),
+            "message": message,
         })
     };
     ps.send_control_response(&pending.request_id, response)

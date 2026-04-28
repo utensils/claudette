@@ -23,6 +23,7 @@ export function PlanApprovalCard({
   const [planContent, setPlanContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [feedback, setFeedback] = useState("");
 
   const handleViewPlan = async () => {
     if (planContent !== null) {
@@ -92,18 +93,39 @@ export function PlanApprovalCard({
         </div>
       )}
 
-      <div className={styles.actions}>
+      <button
+        className={styles.approveBtn}
+        onClick={() => onRespond(true)}
+      >
+        Approve plan
+      </button>
+
+      <div className={styles.divider}>Or provide feedback below</div>
+
+      <div className={styles.freeformRow}>
+        <textarea
+          className={styles.freeformInput}
+          value={feedback}
+          onChange={(e) => setFeedback(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              const text = feedback.trim();
+              if (text) onRespond(false, text);
+            }
+          }}
+          placeholder="Request changes or ask for a revision…"
+          rows={1}
+        />
         <button
-          className={styles.approveBtn}
-          onClick={() => onRespond(true)}
+          className={styles.feedbackBtn}
+          onClick={() => {
+            const text = feedback.trim();
+            if (text) onRespond(false, text);
+          }}
+          disabled={!feedback.trim()}
         >
-          Approve plan
-        </button>
-        <button
-          className={styles.denyBtn}
-          onClick={() => onRespond(false, "Plan denied. Please revise the approach.")}
-        >
-          Deny
+          Send
         </button>
       </div>
     </div>
