@@ -115,6 +115,12 @@ pub struct AgentSessionState {
     /// turn. Updated each time a new user message is inserted; cleared on
     /// session teardown. See `agent_mcp_sink::ChatBridgeSink`.
     pub last_user_msg_id: Option<String>,
+    /// Set after we've posted a trust-error system message into the
+    /// chat for the current resolved env. Cleared whenever the resolved
+    /// env vars change (the user ran `direnv allow` / `mise trust`,
+    /// edited the config, toggled a provider) so a fresh failure
+    /// re-emits exactly once.
+    pub posted_env_trust_warning: bool,
 }
 
 /// Handle to an active PTY process.

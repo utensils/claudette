@@ -509,6 +509,7 @@ pub async fn send_chat_message(
                 session_resolved_env: Default::default(),
                 mcp_bridge: None,
                 last_user_msg_id: None,
+                posted_env_trust_warning: false,
             };
         }
 
@@ -531,6 +532,7 @@ pub async fn send_chat_message(
             session_resolved_env: Default::default(),
             mcp_bridge: None,
             last_user_msg_id: None,
+            posted_env_trust_warning: false,
         }
     });
 
@@ -773,6 +775,10 @@ pub async fn send_chat_message(
         session.mcp_bridge = None;
         session.active_pid = None;
         session.session_exited_plan = false;
+        // Env vars changed → re-arm the trust-warning dedupe so a fresh
+        // failure (e.g. user ran `mise trust` but `.envrc` is still
+        // blocked) reposts exactly once for the new error set.
+        session.posted_env_trust_warning = false;
         if stale_pid.is_some() || to_deny_env.is_some() {
             drop(agents);
             if let Some((ref ps, drained)) = to_deny_env {
@@ -790,6 +796,42 @@ pub async fn send_chat_message(
         }
     }
     let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
+
+    // If any env-provider reported a trust/priming error (`mise trust`,
+    // `direnv allow`, …) surface it inline as a System message. Without
+    // this the agent spawns with a degraded env and the user sees no
+    // explanation for the resulting silent failure (#478). Dedupe via
+    // `posted_env_trust_warning` so we don't spam every turn while the
+    // user fixes it; the flag clears when the resolved env changes.
+    if !session.posted_env_trust_warning
+        && let Some(body) = resolved_env.format_trust_message()
+    {
+        let warning = ChatMessage {
+            id: uuid::Uuid::new_v4().to_string(),
+            workspace_id: workspace_id.clone(),
+            chat_session_id: chat_session_id.clone(),
+            role: ChatRole::System,
+            content: body,
+            cost_usd: None,
+            duration_ms: None,
+            created_at: now_iso(),
+            thinking: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+        };
+        if let Err(err) = db.insert_chat_message(&warning) {
+            // Logging-only: a missing warning shouldn't block the turn.
+            eprintln!("[chat] failed to post env-trust warning: {err}");
+        } else {
+            session.posted_env_trust_warning = true;
+            // Emit so the open chat panel can render the warning
+            // immediately without waiting for the failing turn to
+            // finalize and trigger a history reload.
+            let _ = app.emit("chat-system-message", &warning);
+        }
+    }
 
     // Use persistent session to keep MCP servers alive across turns.
     // First turn or after restart: start a PersistentSession.
@@ -3140,6 +3182,7 @@ mod tests {
             session_resolved_env: Default::default(),
             mcp_bridge: None,
             last_user_msg_id: None,
+            posted_env_trust_warning: false,
         }
     }
 

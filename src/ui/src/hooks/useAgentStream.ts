@@ -677,6 +677,24 @@ export function useAgentStream() {
     };
   }, [updateWorkspace]);
 
+  // Listen for backend-authored system messages that the chat command
+  // inserts into the DB out-of-band (currently: env-provider trust
+  // warnings emitted before agent spawn). The DB insert keeps the
+  // message in history; this event mirrors it into the live store so
+  // the user sees it immediately, not only after the failing turn
+  // finalizes and triggers a history reload.
+  useEffect(() => {
+    let active = true;
+    const unlisten = listen<ChatMessage>("chat-system-message", (event) => {
+      if (!active) return;
+      addChatMessage(event.payload.chat_session_id, event.payload);
+    });
+    return () => {
+      active = false;
+      unlisten.then((fn) => fn());
+    };
+  }, [addChatMessage]);
+
   // Listen for agent-authored attachments delivered via the
   // `mcp__claudette__send_to_user` tool. The Rust bridge has already
   // persisted them; we just need to mirror into the in-memory store so the
