@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { DEFAULT_THEME_ID } from "../styles/themes";
+import { DEFAULT_THEME_ID, DEFAULT_LIGHT_THEME_ID } from "../styles/themes";
 import { debugChat } from "../utils/chatDebug";
 import { extractLatestCallUsage } from "../utils/extractLatestCallUsage";
 import {
@@ -1851,7 +1851,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setThemeMode: (mode) => set({ themeMode: mode }),
   themeDark: DEFAULT_THEME_ID,
   setThemeDark: (id) => set({ themeDark: id }),
-  themeLight: "default-light",
+  themeLight: DEFAULT_LIGHT_THEME_ID,
   setThemeLight: (id) => set({ themeLight: id }),
   lastMessages: {},
   setLastMessages: (msgs) => set({ lastMessages: msgs }),

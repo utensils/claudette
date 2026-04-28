@@ -4,6 +4,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { useAppStore } from "./stores/useAppStore";
 import { loadInitialData, getAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, clearAttention, detectInstalledApps, listSystemFonts, deleteTerminalTab } from "./services/tauri";
 import { applyTheme, applyUserFonts, loadAllThemes, findTheme, cacheThemePreference, getThemeDataAttr } from "./utils/theme";
+import { DEFAULT_THEME_ID, DEFAULT_LIGHT_THEME_ID } from "./styles/themes";
 import type { ThemeDefinition } from "./types/theme";
 import { adjustUiFontSize, resetUiFontSize } from "./utils/fontSettings";
 import { useMcpStatus } from "./hooks/useMcpStatus";
@@ -113,8 +114,8 @@ function App() {
         // exists (e.g. a user JSON theme that was removed) falls back to a
         // real theme — and we persist that resolved id, not the dead one,
         // so the Settings <select> always reflects the applied theme.
-        const darkTheme = findTheme(allThemes, darkIdVal ?? legacyThemeVal ?? "default-dark");
-        const lightTheme = findTheme(allThemes, lightIdVal ?? "default-light");
+        const darkTheme = findTheme(allThemes, darkIdVal ?? legacyThemeVal ?? DEFAULT_THEME_ID);
+        const lightTheme = findTheme(allThemes, lightIdVal ?? DEFAULT_LIGHT_THEME_ID);
         const darkId = darkTheme.id;
         const lightId = lightTheme.id;
 
@@ -384,11 +385,23 @@ function App() {
   // Listen for OS light/dark changes and switch theme when mode is "system".
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const handleChange = (e: MediaQueryListEvent) => {
+    const handleChange = async (e: MediaQueryListEvent) => {
       const state = useAppStore.getState();
       if (state.themeMode !== "system") return;
       const effectiveId = e.matches ? state.themeDark : state.themeLight;
-      const themes = loadedThemesRef.current;
+      // The cached theme list is populated once on initial load. If the user
+      // dropped a new JSON theme on disk and selected it via Settings, it
+      // won't be in the ref — refresh on miss so we apply the right theme
+      // instead of silently falling back via findTheme.
+      let themes = loadedThemesRef.current;
+      if (!themes.some((t) => t.id === effectiveId)) {
+        try {
+          themes = await loadAllThemes();
+          loadedThemesRef.current = themes;
+        } catch (err) {
+          console.error("Failed to reload themes for system change:", err);
+        }
+      }
       if (themes.length === 0) return;
       try {
         const theme = findTheme(themes, effectiveId);
