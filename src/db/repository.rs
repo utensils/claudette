@@ -207,26 +207,7 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::Repository;
-
-    fn make_repo(id: &str, path: &str, name: &str) -> Repository {
-        Repository {
-            id: id.into(),
-            path: path.into(),
-            name: name.into(),
-            path_slug: name.into(),
-            icon: None,
-            created_at: String::new(),
-            setup_script: None,
-            custom_instructions: None,
-            sort_order: 0,
-            branch_rename_preferences: None,
-            setup_script_auto_run: false,
-            base_branch: None,
-            default_remote: None,
-            path_valid: true,
-        }
-    }
+    use crate::db::test_support::*;
 
     #[test]
     fn test_insert_and_list_repositories() {

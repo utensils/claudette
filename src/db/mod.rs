@@ -3,17 +3,28 @@ use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use serde::{Deserialize, Serialize};
-
 use crate::migrations::{MIGRATIONS, Migration};
 use crate::model::{
     AgentStatus, Attachment, AttachmentOrigin, ChatMessage, ChatSession, CheckpointFile,
-    CompletedTurnData, ConversationCheckpoint, PinnedCommand, RemoteConnection, TerminalTab,
-    TurnToolActivity, Workspace, WorkspaceStatus,
+    CompletedTurnData, ConversationCheckpoint, PinnedCommand, TurnToolActivity, Workspace,
+    WorkspaceStatus,
 };
 
 mod repository;
 pub use repository::is_duplicate_repository_path_error;
+
+mod settings;
+pub use settings::RepositoryMcpServer;
+
+mod scm;
+pub use scm::ScmStatusCacheRow;
+
+mod terminal;
+
+mod remote;
+
+#[cfg(test)]
+mod test_support;
 
 fn row_to_attachment(row: &rusqlite::Row) -> rusqlite::Result<Attachment> {
     let data: Vec<u8> = row.get(4)?;
@@ -34,31 +45,6 @@ fn row_to_attachment(row: &rusqlite::Row) -> rusqlite::Result<Attachment> {
 }
 
 const ATTACHMENT_COLUMNS: &str = "id, message_id, filename, media_type, data, width, height, size_bytes, created_at, origin, tool_use_id";
-
-/// Persisted SCM status for a workspace, loaded on app startup for instant display.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ScmStatusCacheRow {
-    pub workspace_id: String,
-    pub repo_id: String,
-    pub branch_name: String,
-    pub provider: Option<String>,
-    pub pr_json: Option<String>,
-    pub ci_json: Option<String>,
-    pub error: Option<String>,
-    pub fetched_at: String,
-}
-
-/// A saved MCP server configuration for a repository.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RepositoryMcpServer {
-    pub id: String,
-    pub repository_id: String,
-    pub name: String,
-    pub config_json: String,
-    pub source: String,
-    pub created_at: String,
-    pub enabled: bool,
-}
 
 pub struct Database {
     conn: Connection,
@@ -326,64 +312,6 @@ fn is_already_exists_error(err: &rusqlite::Error) -> bool {
 }
 
 impl Database {
-    // --- App Settings ---
-
-    #[allow(dead_code)]
-    pub fn get_app_setting(&self, key: &str) -> Result<Option<String>, rusqlite::Error> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT value FROM app_settings WHERE key = ?1")?;
-        let mut rows = stmt.query(params![key])?;
-        match rows.next()? {
-            Some(row) => Ok(Some(row.get(0)?)),
-            None => Ok(None),
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn set_app_setting(&self, key: &str, value: &str) -> Result<(), rusqlite::Error> {
-        self.conn.execute(
-            "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?1, ?2)",
-            params![key, value],
-        )?;
-        Ok(())
-    }
-
-    /// Delete a single app setting. Returns Ok(()) whether the key
-    /// existed or not — callers using "absent means default" semantics
-    /// (e.g. env-provider enable/disable) don't care.
-    pub fn delete_app_setting(&self, key: &str) -> Result<(), rusqlite::Error> {
-        self.conn
-            .execute("DELETE FROM app_settings WHERE key = ?1", params![key])?;
-        Ok(())
-    }
-
-    /// Return every `(key, value)` whose key starts with `prefix`.
-    /// Used by features that namespace many related settings under one
-    /// prefix (e.g. per-provider env-provider enable flags) and need to
-    /// enumerate them efficiently.
-    pub fn list_app_settings_with_prefix(
-        &self,
-        prefix: &str,
-    ) -> Result<Vec<(String, String)>, rusqlite::Error> {
-        // Escape LIKE metacharacters so a prefix containing % or _ doesn't
-        // accidentally match unrelated keys. ESCAPE '\' designates the
-        // backslash as the literal-escape marker.
-        let escaped: String = prefix
-            .chars()
-            .flat_map(|c| match c {
-                '%' | '_' | '\\' => vec!['\\', c],
-                _ => vec![c],
-            })
-            .collect();
-        let pattern = format!("{escaped}%");
-        let mut stmt = self.conn.prepare(
-            "SELECT key, value FROM app_settings WHERE key LIKE ?1 ESCAPE '\\' ORDER BY key",
-        )?;
-        let rows = stmt.query_map(params![pattern], |row| Ok((row.get(0)?, row.get(1)?)))?;
-        rows.collect()
-    }
-
     // --- Workspaces ---
 
     pub fn insert_workspace(&self, ws: &Workspace) -> Result<(), rusqlite::Error> {
@@ -1893,173 +1821,6 @@ impl Database {
             .collect())
     }
 
-    // --- Terminal Tabs ---
-
-    pub fn insert_terminal_tab(&self, tab: &TerminalTab) -> Result<(), rusqlite::Error> {
-        self.conn.execute(
-            "INSERT INTO terminal_tabs (id, workspace_id, title, is_script_output, sort_order)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                tab.id,
-                tab.workspace_id,
-                tab.title,
-                tab.is_script_output as i32,
-                tab.sort_order,
-            ],
-        )?;
-        Ok(())
-    }
-
-    pub fn max_terminal_tab_id(&self) -> Result<i64, rusqlite::Error> {
-        self.conn.query_row(
-            "SELECT COALESCE(MAX(id), 0) FROM terminal_tabs",
-            [],
-            |row| row.get(0),
-        )
-    }
-
-    pub fn list_terminal_tabs_by_workspace(
-        &self,
-        workspace_id: &str,
-    ) -> Result<Vec<TerminalTab>, rusqlite::Error> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, workspace_id, title, is_script_output, sort_order, created_at
-             FROM terminal_tabs WHERE workspace_id = ?1 ORDER BY sort_order, id",
-        )?;
-        let rows = stmt.query_map(params![workspace_id], |row| {
-            let is_script: i32 = row.get(3)?;
-            Ok(TerminalTab {
-                id: row.get(0)?,
-                workspace_id: row.get(1)?,
-                title: row.get(2)?,
-                is_script_output: is_script != 0,
-                sort_order: row.get(4)?,
-                created_at: row.get(5)?,
-            })
-        })?;
-        rows.collect()
-    }
-
-    pub fn delete_terminal_tab(&self, id: i64) -> Result<(), rusqlite::Error> {
-        self.conn
-            .execute("DELETE FROM terminal_tabs WHERE id = ?1", params![id])?;
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub fn delete_terminal_tabs_for_workspace(
-        &self,
-        workspace_id: &str,
-    ) -> Result<(), rusqlite::Error> {
-        self.conn.execute(
-            "DELETE FROM terminal_tabs WHERE workspace_id = ?1",
-            params![workspace_id],
-        )?;
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub fn update_terminal_tab_title(&self, id: i64, title: &str) -> Result<(), rusqlite::Error> {
-        self.conn.execute(
-            "UPDATE terminal_tabs SET title = ?1 WHERE id = ?2",
-            params![title, id],
-        )?;
-        Ok(())
-    }
-
-    // --- Remote Connections ---
-
-    fn parse_port(row: &rusqlite::Row, idx: usize) -> rusqlite::Result<u16> {
-        let p: i32 = row.get(idx)?;
-        if !(0..=65535).contains(&p) {
-            return Err(rusqlite::Error::IntegralValueOutOfRange(idx, p as i64));
-        }
-        Ok(p as u16)
-    }
-
-    pub fn insert_remote_connection(&self, conn: &RemoteConnection) -> Result<(), rusqlite::Error> {
-        self.conn.execute(
-            "INSERT INTO remote_connections (id, name, host, port, session_token, cert_fingerprint, auto_connect)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![
-                conn.id,
-                conn.name,
-                conn.host,
-                conn.port as i32,
-                conn.session_token,
-                conn.cert_fingerprint,
-                conn.auto_connect as i32,
-            ],
-        )?;
-        Ok(())
-    }
-
-    pub fn list_remote_connections(&self) -> Result<Vec<RemoteConnection>, rusqlite::Error> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, host, port, session_token, cert_fingerprint, auto_connect, created_at
-             FROM remote_connections ORDER BY created_at",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            let auto_connect_int: i32 = row.get(6)?;
-            Ok(RemoteConnection {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                host: row.get(2)?,
-                port: Self::parse_port(row, 3)?,
-                session_token: row.get(4)?,
-                cert_fingerprint: row.get(5)?,
-                auto_connect: auto_connect_int != 0,
-                created_at: row.get(7)?,
-            })
-        })?;
-        rows.collect()
-    }
-
-    pub fn get_remote_connection(
-        &self,
-        id: &str,
-    ) -> Result<Option<RemoteConnection>, rusqlite::Error> {
-        self.conn
-            .query_row(
-                "SELECT id, name, host, port, session_token, cert_fingerprint, auto_connect, created_at
-                 FROM remote_connections WHERE id = ?1",
-                params![id],
-                |row| {
-                    let auto_connect_int: i32 = row.get(6)?;
-                    Ok(RemoteConnection {
-                        id: row.get(0)?,
-                        name: row.get(1)?,
-                        host: row.get(2)?,
-                        port: Self::parse_port(row, 3)?,
-                        session_token: row.get(4)?,
-                        cert_fingerprint: row.get(5)?,
-                        auto_connect: auto_connect_int != 0,
-                        created_at: row.get(7)?,
-                    })
-                },
-            )
-            .optional()
-    }
-
-    pub fn update_remote_connection_session(
-        &self,
-        id: &str,
-        session_token: &str,
-        cert_fingerprint: &str,
-    ) -> Result<(), rusqlite::Error> {
-        self.conn.execute(
-            "UPDATE remote_connections SET session_token = ?1, cert_fingerprint = ?2 WHERE id = ?3",
-            params![session_token, cert_fingerprint, id],
-        )?;
-        Ok(())
-    }
-
-    pub fn delete_remote_connection(&self, id: &str) -> Result<(), rusqlite::Error> {
-        self.conn
-            .execute("DELETE FROM remote_connections WHERE id = ?1", params![id])?;
-        Ok(())
-    }
-
     // --- Slash Command Usage ---
 
     pub fn record_slash_command_usage(
@@ -2093,129 +1854,6 @@ impl Database {
             map.insert(name, count);
         }
         Ok(map)
-    }
-
-    // --- Repository MCP Servers ---
-
-    /// List all saved MCP servers for a repository.
-    pub fn list_repository_mcp_servers(
-        &self,
-        repository_id: &str,
-    ) -> Result<Vec<RepositoryMcpServer>, rusqlite::Error> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, repository_id, name, config_json, source, created_at, enabled
-             FROM repository_mcp_servers
-             WHERE repository_id = ?1
-             ORDER BY name",
-        )?;
-        let rows = stmt.query_map(params![repository_id], |row| {
-            let enabled_int: i32 = row.get(6)?;
-            Ok(RepositoryMcpServer {
-                id: row.get(0)?,
-                repository_id: row.get(1)?,
-                name: row.get(2)?,
-                config_json: row.get(3)?,
-                source: row.get(4)?,
-                created_at: row.get(5)?,
-                enabled: enabled_int != 0,
-            })
-        })?;
-        rows.collect()
-    }
-
-    /// Replace all MCP servers for a repository atomically (delete + re-insert).
-    pub fn replace_repository_mcp_servers(
-        &self,
-        repository_id: &str,
-        servers: &[RepositoryMcpServer],
-    ) -> Result<(), rusqlite::Error> {
-        let tx = self.conn.unchecked_transaction()?;
-        tx.execute(
-            "DELETE FROM repository_mcp_servers WHERE repository_id = ?1",
-            params![repository_id],
-        )?;
-        for server in servers {
-            tx.execute(
-                "INSERT INTO repository_mcp_servers (id, repository_id, name, config_json, source, enabled)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    server.id,
-                    server.repository_id,
-                    server.name,
-                    server.config_json,
-                    server.source,
-                    server.enabled as i32,
-                ],
-            )?;
-        }
-        tx.commit()
-    }
-
-    /// Delete a single MCP server by ID.
-    pub fn delete_repository_mcp_server(&self, id: &str) -> Result<(), rusqlite::Error> {
-        self.conn.execute(
-            "DELETE FROM repository_mcp_servers WHERE id = ?1",
-            params![id],
-        )?;
-        Ok(())
-    }
-
-    /// Update the enabled state of a single MCP server.
-    pub fn set_mcp_server_enabled(&self, id: &str, enabled: bool) -> Result<(), rusqlite::Error> {
-        self.conn.execute(
-            "UPDATE repository_mcp_servers SET enabled = ?1 WHERE id = ?2",
-            params![enabled as i32, id],
-        )?;
-        Ok(())
-    }
-
-    // --- SCM Status Cache ---
-
-    /// `row.fetched_at` is ignored; the database sets it to `datetime('now')` on every upsert.
-    pub fn upsert_scm_status_cache(&self, row: &ScmStatusCacheRow) -> Result<(), rusqlite::Error> {
-        self.conn.execute(
-            "INSERT OR REPLACE INTO scm_status_cache
-                (workspace_id, repo_id, branch_name, provider, pr_json, ci_json, error, fetched_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))",
-            params![
-                row.workspace_id,
-                row.repo_id,
-                row.branch_name,
-                row.provider,
-                row.pr_json,
-                row.ci_json,
-                row.error
-            ],
-        )?;
-        Ok(())
-    }
-
-    pub fn load_all_scm_status_cache(&self) -> Result<Vec<ScmStatusCacheRow>, rusqlite::Error> {
-        let mut stmt = self.conn.prepare(
-            "SELECT workspace_id, repo_id, branch_name, provider, pr_json, ci_json, error, fetched_at
-             FROM scm_status_cache",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(ScmStatusCacheRow {
-                workspace_id: row.get(0)?,
-                repo_id: row.get(1)?,
-                branch_name: row.get(2)?,
-                provider: row.get(3)?,
-                pr_json: row.get(4)?,
-                ci_json: row.get(5)?,
-                error: row.get(6)?,
-                fetched_at: row.get(7)?,
-            })
-        })?;
-        rows.collect()
-    }
-
-    pub fn delete_scm_status_cache(&self, workspace_id: &str) -> Result<(), rusqlite::Error> {
-        self.conn.execute(
-            "DELETE FROM scm_status_cache WHERE workspace_id = ?1",
-            params![workspace_id],
-        )?;
-        Ok(())
     }
 
     // --- Pinned Commands ---
@@ -2306,40 +1944,8 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{AgentStatus, Attachment, ChatRole, Repository, WorkspaceStatus};
-
-    fn make_repo(id: &str, path: &str, name: &str) -> Repository {
-        Repository {
-            id: id.into(),
-            path: path.into(),
-            name: name.into(),
-            path_slug: name.into(),
-            icon: None,
-            created_at: String::new(),
-            setup_script: None,
-            custom_instructions: None,
-            sort_order: 0,
-            branch_rename_preferences: None,
-            setup_script_auto_run: false,
-            base_branch: None,
-            default_remote: None,
-            path_valid: true,
-        }
-    }
-
-    fn make_workspace(id: &str, repo_id: &str, name: &str) -> Workspace {
-        Workspace {
-            id: id.into(),
-            repository_id: repo_id.into(),
-            name: name.into(),
-            branch_name: format!("claudette/{name}"),
-            worktree_path: None,
-            status: WorkspaceStatus::Active,
-            agent_status: AgentStatus::Idle,
-            status_line: String::new(),
-            created_at: String::new(),
-        }
-    }
+    use crate::db::test_support::*;
+    use crate::model::{Attachment, ChatRole, Repository, WorkspaceStatus};
 
     #[test]
     fn test_insert_and_list_workspaces() {
@@ -2639,15 +2245,6 @@ mod tests {
             cache_read_tokens: None,
             cache_creation_tokens: None,
         }
-    }
-
-    fn setup_db_with_workspace() -> Database {
-        let db = Database::open_in_memory().unwrap();
-        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
-            .unwrap();
-        db.insert_workspace(&make_workspace("w1", "r1", "fix-bug"))
-            .unwrap();
-        db
     }
 
     #[test]
@@ -3147,116 +2744,6 @@ mod tests {
         assert_eq!(repos[0].path_slug, "my-project");
     }
 
-    // --- App settings tests ---
-
-    #[test]
-    fn test_get_set_app_setting() {
-        let db = Database::open_in_memory().unwrap();
-        db.set_app_setting("worktree_base_dir", "/custom/path")
-            .unwrap();
-        let val = db.get_app_setting("worktree_base_dir").unwrap();
-        assert_eq!(val.as_deref(), Some("/custom/path"));
-    }
-
-    #[test]
-    fn test_get_app_setting_missing() {
-        let db = Database::open_in_memory().unwrap();
-        let val = db.get_app_setting("nonexistent_key").unwrap();
-        assert!(val.is_none());
-    }
-
-    #[test]
-    fn test_set_app_setting_upsert() {
-        let db = Database::open_in_memory().unwrap();
-        db.set_app_setting("key1", "value1").unwrap();
-        db.set_app_setting("key1", "value2").unwrap();
-        let val = db.get_app_setting("key1").unwrap();
-        assert_eq!(val.as_deref(), Some("value2"));
-    }
-
-    // --- Terminal tab tests ---
-
-    fn make_terminal_tab(id: i64, ws_id: &str, title: &str) -> TerminalTab {
-        TerminalTab {
-            id,
-            workspace_id: ws_id.into(),
-            title: title.into(),
-            is_script_output: false,
-            sort_order: 0,
-            created_at: String::new(),
-        }
-    }
-
-    #[test]
-    fn test_insert_and_list_terminal_tabs() {
-        let db = setup_db_with_workspace();
-        db.insert_terminal_tab(&make_terminal_tab(1, "w1", "Terminal 1"))
-            .unwrap();
-        db.insert_terminal_tab(&make_terminal_tab(2, "w1", "Terminal 2"))
-            .unwrap();
-        let tabs = db.list_terminal_tabs_by_workspace("w1").unwrap();
-        assert_eq!(tabs.len(), 2);
-        assert_eq!(tabs[0].title, "Terminal 1");
-        assert_eq!(tabs[1].title, "Terminal 2");
-    }
-
-    #[test]
-    fn test_terminal_tabs_filtered_by_workspace() {
-        let db = setup_db_with_workspace();
-        db.insert_workspace(&make_workspace("w2", "r1", "feature"))
-            .unwrap();
-        db.insert_terminal_tab(&make_terminal_tab(1, "w1", "T1"))
-            .unwrap();
-        db.insert_terminal_tab(&make_terminal_tab(2, "w2", "T2"))
-            .unwrap();
-        let tabs = db.list_terminal_tabs_by_workspace("w1").unwrap();
-        assert_eq!(tabs.len(), 1);
-        assert_eq!(tabs[0].title, "T1");
-    }
-
-    #[test]
-    fn test_delete_terminal_tab() {
-        let db = setup_db_with_workspace();
-        db.insert_terminal_tab(&make_terminal_tab(1, "w1", "Terminal 1"))
-            .unwrap();
-        db.delete_terminal_tab(1).unwrap();
-        let tabs = db.list_terminal_tabs_by_workspace("w1").unwrap();
-        assert!(tabs.is_empty());
-    }
-
-    #[test]
-    fn test_terminal_tabs_cascade_on_workspace_delete() {
-        let db = setup_db_with_workspace();
-        db.insert_terminal_tab(&make_terminal_tab(1, "w1", "Terminal 1"))
-            .unwrap();
-        db.insert_terminal_tab(&make_terminal_tab(2, "w1", "Terminal 2"))
-            .unwrap();
-        db.delete_workspace("w1").unwrap();
-        let tabs = db.list_terminal_tabs_by_workspace("w1").unwrap();
-        assert!(tabs.is_empty());
-    }
-
-    #[test]
-    fn test_terminal_tab_script_output_flag() {
-        let db = setup_db_with_workspace();
-        let mut tab = make_terminal_tab(1, "w1", "npm run dev");
-        tab.is_script_output = true;
-        db.insert_terminal_tab(&tab).unwrap();
-        let tabs = db.list_terminal_tabs_by_workspace("w1").unwrap();
-        assert!(tabs[0].is_script_output);
-    }
-
-    #[test]
-    fn test_update_terminal_tab_title() {
-        let db = setup_db_with_workspace();
-        db.insert_terminal_tab(&make_terminal_tab(1, "w1", "Terminal 1"))
-            .unwrap();
-        db.update_terminal_tab_title(1, "My Custom Terminal")
-            .unwrap();
-        let tabs = db.list_terminal_tabs_by_workspace("w1").unwrap();
-        assert_eq!(tabs[0].title, "My Custom Terminal");
-    }
-
     #[test]
     fn test_last_message_per_workspace() {
         let db = setup_db_with_workspace();
@@ -3312,85 +2799,6 @@ mod tests {
         let db = setup_db_with_workspace();
         let last = db.last_message_per_workspace().unwrap();
         assert!(last.is_empty());
-    }
-
-    // --- Remote connection tests ---
-
-    use crate::model::RemoteConnection as RemoteConn;
-
-    fn make_remote_conn(id: &str, name: &str, host: &str, port: u16) -> RemoteConn {
-        RemoteConn {
-            id: id.into(),
-            name: name.into(),
-            host: host.into(),
-            port,
-            session_token: None,
-            cert_fingerprint: None,
-            auto_connect: false,
-            created_at: String::new(),
-        }
-    }
-
-    #[test]
-    fn test_insert_and_list_remote_connections() {
-        let db = Database::open_in_memory().unwrap();
-        db.insert_remote_connection(&make_remote_conn("rc1", "Server A", "host-a.local", 7683))
-            .unwrap();
-        db.insert_remote_connection(&make_remote_conn("rc2", "Server B", "host-b.local", 9000))
-            .unwrap();
-        let conns = db.list_remote_connections().unwrap();
-        assert_eq!(conns.len(), 2);
-        assert_eq!(conns[0].name, "Server A");
-        assert_eq!(conns[1].port, 9000);
-    }
-
-    #[test]
-    fn test_get_remote_connection() {
-        let db = Database::open_in_memory().unwrap();
-        db.insert_remote_connection(&make_remote_conn("rc1", "Server A", "host-a.local", 7683))
-            .unwrap();
-        let conn = db.get_remote_connection("rc1").unwrap().unwrap();
-        assert_eq!(conn.host, "host-a.local");
-        assert!(!conn.created_at.is_empty()); // DB default fills this
-    }
-
-    #[test]
-    fn test_get_remote_connection_missing() {
-        let db = Database::open_in_memory().unwrap();
-        let conn = db.get_remote_connection("nonexistent").unwrap();
-        assert!(conn.is_none());
-    }
-
-    #[test]
-    fn test_update_remote_connection_session() {
-        let db = Database::open_in_memory().unwrap();
-        db.insert_remote_connection(&make_remote_conn("rc1", "Server A", "host-a.local", 7683))
-            .unwrap();
-        db.update_remote_connection_session("rc1", "tok-123", "fp-abc")
-            .unwrap();
-        let conn = db.get_remote_connection("rc1").unwrap().unwrap();
-        assert_eq!(conn.session_token.as_deref(), Some("tok-123"));
-        assert_eq!(conn.cert_fingerprint.as_deref(), Some("fp-abc"));
-    }
-
-    #[test]
-    fn test_delete_remote_connection() {
-        let db = Database::open_in_memory().unwrap();
-        db.insert_remote_connection(&make_remote_conn("rc1", "Server A", "host-a.local", 7683))
-            .unwrap();
-        db.delete_remote_connection("rc1").unwrap();
-        let conns = db.list_remote_connections().unwrap();
-        assert!(conns.is_empty());
-    }
-
-    #[test]
-    fn test_remote_connection_auto_connect_flag() {
-        let db = Database::open_in_memory().unwrap();
-        let mut conn = make_remote_conn("rc1", "Server A", "host-a.local", 7683);
-        conn.auto_connect = true;
-        db.insert_remote_connection(&conn).unwrap();
-        let fetched = db.get_remote_connection("rc1").unwrap().unwrap();
-        assert!(fetched.auto_connect);
     }
 
     #[test]
@@ -3744,163 +3152,6 @@ mod tests {
 
         let cp = db.get_checkpoint("cp1").unwrap().unwrap();
         assert_eq!(cp.message_count, 3);
-    }
-
-    // --- MCP server enabled field ---
-
-    fn make_mcp_server(id: &str, repo_id: &str, name: &str) -> RepositoryMcpServer {
-        RepositoryMcpServer {
-            id: id.into(),
-            repository_id: repo_id.into(),
-            name: name.into(),
-            config_json: r#"{"type":"stdio","command":"echo"}"#.into(),
-            source: "user_project_config".into(),
-            created_at: String::new(),
-            enabled: true,
-        }
-    }
-
-    #[test]
-    fn test_mcp_server_enabled_default_true() {
-        let db = setup_db_with_workspace();
-        let server = make_mcp_server("mcp1", "r1", "test-server");
-        db.replace_repository_mcp_servers("r1", &[server]).unwrap();
-
-        let servers = db.list_repository_mcp_servers("r1").unwrap();
-        assert_eq!(servers.len(), 1);
-        assert!(servers[0].enabled);
-    }
-
-    #[test]
-    fn test_set_mcp_server_enabled() {
-        let db = setup_db_with_workspace();
-        let server = make_mcp_server("mcp1", "r1", "test-server");
-        db.replace_repository_mcp_servers("r1", &[server]).unwrap();
-
-        // Disable
-        db.set_mcp_server_enabled("mcp1", false).unwrap();
-        let servers = db.list_repository_mcp_servers("r1").unwrap();
-        assert!(!servers[0].enabled);
-
-        // Re-enable
-        db.set_mcp_server_enabled("mcp1", true).unwrap();
-        let servers = db.list_repository_mcp_servers("r1").unwrap();
-        assert!(servers[0].enabled);
-    }
-
-    #[test]
-    fn test_mcp_server_replace_preserves_enabled() {
-        let db = setup_db_with_workspace();
-        let mut server = make_mcp_server("mcp1", "r1", "test-server");
-        server.enabled = false;
-        db.replace_repository_mcp_servers("r1", &[server]).unwrap();
-
-        let servers = db.list_repository_mcp_servers("r1").unwrap();
-        assert!(!servers[0].enabled);
-    }
-
-    #[test]
-    fn test_set_mcp_server_enabled_nonexistent_id() {
-        // Setting enabled on a nonexistent server ID should succeed silently
-        // (UPDATE on 0 rows is not an error in SQLite).
-        let db = setup_db_with_workspace();
-        let result = db.set_mcp_server_enabled("nonexistent-id", false);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_list_mcp_servers_empty_repo() {
-        let db = setup_db_with_workspace();
-        let servers = db.list_repository_mcp_servers("r1").unwrap();
-        assert!(servers.is_empty());
-    }
-
-    #[test]
-    fn test_mcp_server_replace_clears_old_servers() {
-        let db = setup_db_with_workspace();
-
-        // Insert two servers.
-        let servers = vec![
-            make_mcp_server("mcp1", "r1", "server-a"),
-            make_mcp_server("mcp2", "r1", "server-b"),
-        ];
-        db.replace_repository_mcp_servers("r1", &servers).unwrap();
-        assert_eq!(db.list_repository_mcp_servers("r1").unwrap().len(), 2);
-
-        // Replace with just one — the old ones should be gone.
-        let new_servers = vec![make_mcp_server("mcp3", "r1", "server-c")];
-        db.replace_repository_mcp_servers("r1", &new_servers)
-            .unwrap();
-        let result = db.list_repository_mcp_servers("r1").unwrap();
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].name, "server-c");
-    }
-
-    #[test]
-    fn test_delete_mcp_server() {
-        let db = setup_db_with_workspace();
-        let servers = vec![
-            make_mcp_server("mcp1", "r1", "server-a"),
-            make_mcp_server("mcp2", "r1", "server-b"),
-        ];
-        db.replace_repository_mcp_servers("r1", &servers).unwrap();
-
-        db.delete_repository_mcp_server("mcp1").unwrap();
-        let result = db.list_repository_mcp_servers("r1").unwrap();
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].name, "server-b");
-    }
-
-    #[test]
-    fn test_mcp_server_enabled_survives_roundtrip() {
-        // Insert with enabled=true, disable, verify after fresh list.
-        let db = setup_db_with_workspace();
-        let server = make_mcp_server("mcp1", "r1", "test-server");
-        db.replace_repository_mcp_servers("r1", &[server]).unwrap();
-
-        db.set_mcp_server_enabled("mcp1", false).unwrap();
-        let servers = db.list_repository_mcp_servers("r1").unwrap();
-        assert!(!servers[0].enabled);
-
-        db.set_mcp_server_enabled("mcp1", true).unwrap();
-        let servers = db.list_repository_mcp_servers("r1").unwrap();
-        assert!(servers[0].enabled);
-    }
-
-    #[test]
-    fn test_mcp_servers_isolated_per_repo() {
-        let db = Database::open_in_memory().unwrap();
-        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
-            .unwrap();
-        db.insert_repository(&make_repo("r2", "/tmp/repo2", "repo2"))
-            .unwrap();
-
-        let s1 = make_mcp_server("m1", "r1", "server-for-r1");
-        let s2 = make_mcp_server("m2", "r2", "server-for-r2");
-        db.replace_repository_mcp_servers("r1", &[s1]).unwrap();
-        db.replace_repository_mcp_servers("r2", &[s2]).unwrap();
-
-        let r1_servers = db.list_repository_mcp_servers("r1").unwrap();
-        let r2_servers = db.list_repository_mcp_servers("r2").unwrap();
-        assert_eq!(r1_servers.len(), 1);
-        assert_eq!(r1_servers[0].name, "server-for-r1");
-        assert_eq!(r2_servers.len(), 1);
-        assert_eq!(r2_servers[0].name, "server-for-r2");
-    }
-
-    #[test]
-    fn test_mcp_server_replace_with_empty_clears_all() {
-        let db = setup_db_with_workspace();
-        let servers = vec![
-            make_mcp_server("mcp1", "r1", "server-a"),
-            make_mcp_server("mcp2", "r1", "server-b"),
-        ];
-        db.replace_repository_mcp_servers("r1", &servers).unwrap();
-        assert_eq!(db.list_repository_mcp_servers("r1").unwrap().len(), 2);
-
-        // Replace with empty vec — should clear all.
-        db.replace_repository_mcp_servers("r1", &[]).unwrap();
-        assert!(db.list_repository_mcp_servers("r1").unwrap().is_empty());
     }
 
     // --- Metrics capture tests ---
@@ -4320,24 +3571,6 @@ mod tests {
         }
     }
 
-    fn make_scm_cache(
-        workspace_id: &str,
-        repo_id: &str,
-        branch: &str,
-        pr_json: Option<&str>,
-    ) -> ScmStatusCacheRow {
-        ScmStatusCacheRow {
-            workspace_id: workspace_id.into(),
-            repo_id: repo_id.into(),
-            branch_name: branch.into(),
-            provider: Some("github".into()),
-            pr_json: pr_json.map(Into::into),
-            ci_json: Some("[]".into()),
-            error: None,
-            fetched_at: String::new(),
-        }
-    }
-
     #[test]
     fn test_migrations_timestamp_prefix_format() {
         for m in MIGRATIONS {
@@ -4601,86 +3834,6 @@ mod tests {
             !super::is_already_exists_error(&err),
             "constraint violations are not already-exists, got {err:?}",
         );
-    }
-
-    #[test]
-    fn test_upsert_scm_status_cache() {
-        let db = Database::open_in_memory().unwrap();
-        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
-            .unwrap();
-        db.insert_workspace(&make_workspace("w1", "r1", "fix-bug"))
-            .unwrap();
-
-        let pr = r#"{"number":1,"title":"Fix","state":"open","url":"","author":"me","branch":"fix-bug","base":"main","draft":false,"ci_status":null}"#;
-        db.upsert_scm_status_cache(&make_scm_cache("w1", "r1", "fix-bug", Some(pr)))
-            .unwrap();
-
-        let rows = db.load_all_scm_status_cache().unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].workspace_id, "w1");
-        assert_eq!(rows[0].provider, Some("github".into()));
-        assert!(rows[0].pr_json.is_some());
-        assert!(rows[0].error.is_none());
-
-        // Upsert same workspace — should replace, not duplicate.
-        db.upsert_scm_status_cache(&make_scm_cache("w1", "r1", "fix-bug", Some("null")))
-            .unwrap();
-        let rows = db.load_all_scm_status_cache().unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].pr_json, Some("null".into()));
-    }
-
-    #[test]
-    fn test_scm_status_cache_cascade_delete() {
-        let db = Database::open_in_memory().unwrap();
-        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
-            .unwrap();
-        db.insert_workspace(&make_workspace("w1", "r1", "fix-bug"))
-            .unwrap();
-        db.upsert_scm_status_cache(&make_scm_cache("w1", "r1", "fix-bug", Some("null")))
-            .unwrap();
-
-        db.delete_workspace("w1").unwrap();
-        let rows = db.load_all_scm_status_cache().unwrap();
-        assert!(rows.is_empty());
-    }
-
-    #[test]
-    fn test_delete_scm_status_cache() {
-        let db = Database::open_in_memory().unwrap();
-        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
-            .unwrap();
-        db.insert_workspace(&make_workspace("w1", "r1", "fix-bug"))
-            .unwrap();
-        db.upsert_scm_status_cache(&make_scm_cache("w1", "r1", "fix-bug", Some("null")))
-            .unwrap();
-
-        db.delete_scm_status_cache("w1").unwrap();
-        let rows = db.load_all_scm_status_cache().unwrap();
-        assert!(rows.is_empty());
-    }
-
-    #[test]
-    fn test_scm_status_cache_nullable_pr() {
-        let db = Database::open_in_memory().unwrap();
-        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
-            .unwrap();
-        db.insert_workspace(&make_workspace("w1", "r1", "fix-bug"))
-            .unwrap();
-
-        // NULL pr_json = never fetched
-        db.upsert_scm_status_cache(&make_scm_cache("w1", "r1", "fix-bug", None))
-            .unwrap();
-        let rows = db.load_all_scm_status_cache().unwrap();
-        assert_eq!(rows.len(), 1);
-        assert!(rows[0].pr_json.is_none());
-
-        // "null" string pr_json = fetched, no PR found
-        db.upsert_scm_status_cache(&make_scm_cache("w1", "r1", "fix-bug", Some("null")))
-            .unwrap();
-        let rows = db.load_all_scm_status_cache().unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].pr_json, Some("null".into()));
     }
 
     #[test]
