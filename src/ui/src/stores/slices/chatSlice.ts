@@ -1,0 +1,428 @@
+import type { StateCreator } from "zustand";
+import type { ChatMessage, ChatAttachment } from "../../types";
+import { debugChat } from "../../utils/chatDebug";
+import type { CompactionEvent } from "../../utils/compactionSentinel";
+import type { AppState } from "../useAppStore";
+
+export interface ToolActivity {
+  toolUseId: string;
+  toolName: string;
+  inputJson: string;
+  resultText: string;
+  collapsed: boolean;
+  summary: string;
+}
+
+export interface CompletedTurn {
+  id: string;
+  activities: ToolActivity[];
+  messageCount: number;
+  collapsed: boolean;
+  /** Index into chatMessages at the time of finalization — used to render
+   *  the turn summary at the correct chronological position. */
+  afterMessageIndex: number;
+  /** Commit hash from the corresponding conversation checkpoint, if any.
+   *  Used to gate the "fork workspace at this turn" action. */
+  commitHash?: string | null;
+  /** Total time this turn took, in milliseconds. Summed from the
+   *  duration_ms of assistant messages produced during the turn. */
+  durationMs?: number;
+  /** Turn-total input tokens. Live turns receive this from the CLI's
+   *  `result.usage`; persisted turns are reconstructed by summing the
+   *  `input_tokens` of each assistant `ChatMessage` in the turn (see
+   *  `reconstructCompletedTurns`). Undefined for legacy turns with no
+   *  token metadata on any message. */
+  inputTokens?: number;
+  /** Turn-total output tokens. Live turns receive this from the CLI's
+   *  `result.usage`; persisted turns are reconstructed by summing the
+   *  `output_tokens` of each assistant `ChatMessage` in the turn. */
+  outputTokens?: number;
+  /** Turn-total cache-read tokens. Live turns receive this from the CLI's
+   *  `result.usage.cache_read_input_tokens`. Persisted turns use the MAX
+   *  (not sum) of per-message `cache_read_tokens` — cache counts are
+   *  cumulative-per-API-call, so summing across a multi-message tool-use
+   *  turn would double-count the shared prompt prefix each call re-reads. */
+  cacheReadTokens?: number;
+  /** Turn-total cache-creation tokens. Same max-based reconstruction semantics
+   *  as `cacheReadTokens`. */
+  cacheCreationTokens?: number;
+}
+
+/**
+ * Token usage from the most recent completed turn for a workspace.
+ * Lives as its own slice (`latestTurnUsage`) rather than being derived from
+ * `completedTurns` because `finalizeTurn` early-returns for tool-free turns
+ * — so a Q&A turn without tool calls doesn't add a CompletedTurn but should
+ * still refresh the ContextMeter. The shape matches the `result.usage` block
+ * the CLI emits on every turn end.
+ */
+export interface TurnUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
+}
+
+export interface ChatSlice {
+  chatMessages: Record<string, ChatMessage[]>;
+  chatAttachments: Record<string, ChatAttachment[]>;
+  setChatAttachments: (wsId: string, attachments: ChatAttachment[]) => void;
+  addChatAttachments: (wsId: string, attachments: ChatAttachment[]) => void;
+  streamingContent: Record<string, string>;
+  streamingThinking: Record<string, string>;
+  pendingTypewriter: Record<string, { messageId: string; text: string } | null>;
+  showThinkingBlocks: Record<string, boolean>;
+  toolActivities: Record<string, ToolActivity[]>;
+  completedTurns: Record<string, CompletedTurn[]>;
+  /** Latest `result.usage` values per workspace — kept in sync with every
+   *  turn end, including tool-free turns that don't produce a CompletedTurn.
+   *  The ContextMeter reads from here so it reflects the latest turn even
+   *  when the timeline doesn't record one. */
+  latestTurnUsage: Record<string, TurnUsage>;
+  setLatestTurnUsage: (wsId: string, usage: TurnUsage) => void;
+  /** Delete the meter's usage entry for a workspace. Used when a
+   *  rollback or empty load leaves no assistant message with token data —
+   *  clearing hides the meter rather than leaving a stale value. */
+  clearLatestTurnUsage: (wsId: string) => void;
+  promptStartTime: Record<string, number>;
+  setPromptStartTime: (wsId: string, time: number) => void;
+  clearPromptStartTime: (wsId: string) => void;
+  /** Per-workspace compaction history, re-derived from the persisted
+   *  COMPACTION:* sentinel messages on workspace load and updated live
+   *  on compact_boundary events. This slice stores derived metadata
+   *  for future consumers (e.g. a compaction counter); ChatPanel's
+   *  divider rendering dispatches on persisted sentinel System messages
+   *  in `chatMessages[wsId]` rather than reading this slice directly. */
+  compactionEvents: Record<string, CompactionEvent[]>;
+  setCompactionEvents: (wsId: string, events: CompactionEvent[]) => void;
+  addCompactionEvent: (wsId: string, event: CompactionEvent) => void;
+  setChatMessages: (wsId: string, messages: ChatMessage[]) => void;
+  addChatMessage: (wsId: string, message: ChatMessage) => void;
+  setStreamingContent: (wsId: string, content: string) => void;
+  appendStreamingContent: (wsId: string, text: string) => void;
+  setPendingTypewriter: (wsId: string, messageId: string, text: string) => void;
+  /** Atomic drain-end handoff: clears both `pendingTypewriter` and
+   *  `streamingThinking` in a single store update so the streaming thinking
+   *  block and the draining assistant text hand off to the completed message
+   *  in the same render, without a gap or a 1-frame duplicate. */
+  finishTypewriterDrain: (wsId: string) => void;
+  appendStreamingThinking: (wsId: string, text: string) => void;
+  clearStreamingThinking: (wsId: string) => void;
+  setShowThinkingBlocks: (wsId: string, show: boolean) => void;
+  setToolActivities: (wsId: string, activities: ToolActivity[]) => void;
+  addToolActivity: (wsId: string, activity: ToolActivity) => void;
+  updateToolActivity: (
+    wsId: string,
+    toolUseId: string,
+    updates: Partial<ToolActivity>,
+  ) => void;
+  toggleToolActivityCollapsed: (wsId: string, index: number) => void;
+  finalizeTurn: (
+    wsId: string,
+    messageCount: number,
+    turnId?: string,
+    durationMs?: number,
+    inputTokens?: number,
+    outputTokens?: number,
+    cacheReadTokens?: number,
+    cacheCreationTokens?: number,
+  ) => void;
+  hydrateCompletedTurns: (wsId: string, turns: CompletedTurn[]) => void;
+  setCompletedTurns: (wsId: string, turns: CompletedTurn[]) => void;
+  toggleCompletedTurn: (wsId: string, turnIndex: number) => void;
+  appendToolActivityInput: (
+    wsId: string,
+    toolUseId: string,
+    partialJson: string,
+  ) => void;
+  lastMessages: Record<string, ChatMessage>;
+  setLastMessages: (msgs: Record<string, ChatMessage>) => void;
+}
+
+export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
+  set,
+) => ({
+  chatMessages: {},
+  chatAttachments: {},
+  setChatAttachments: (wsId, attachments) =>
+    set((s) => ({
+      chatAttachments: { ...s.chatAttachments, [wsId]: attachments },
+    })),
+  addChatAttachments: (wsId, attachments) =>
+    set((s) => ({
+      chatAttachments: {
+        ...s.chatAttachments,
+        [wsId]: [...(s.chatAttachments[wsId] ?? []), ...attachments],
+      },
+    })),
+  streamingContent: {},
+  streamingThinking: {},
+  pendingTypewriter: {},
+  showThinkingBlocks: {},
+  toolActivities: {},
+  completedTurns: {},
+  latestTurnUsage: {},
+  setLatestTurnUsage: (wsId, usage) =>
+    set((s) => ({
+      latestTurnUsage: { ...s.latestTurnUsage, [wsId]: usage },
+    })),
+  clearLatestTurnUsage: (wsId) =>
+    set((s) => {
+      if (!(wsId in s.latestTurnUsage)) return {};
+      const next = { ...s.latestTurnUsage };
+      delete next[wsId];
+      return { latestTurnUsage: next };
+    }),
+  promptStartTime: {},
+  setPromptStartTime: (wsId, time) =>
+    set((s) => ({
+      promptStartTime: { ...s.promptStartTime, [wsId]: time },
+    })),
+  clearPromptStartTime: (wsId) =>
+    set((s) => {
+      if (!(wsId in s.promptStartTime)) return {};
+      const next = { ...s.promptStartTime };
+      delete next[wsId];
+      return { promptStartTime: next };
+    }),
+  compactionEvents: {},
+  setCompactionEvents: (wsId, events) =>
+    set((s) => ({
+      compactionEvents: { ...s.compactionEvents, [wsId]: events },
+    })),
+  addCompactionEvent: (wsId, event) =>
+    set((s) => ({
+      compactionEvents: {
+        ...s.compactionEvents,
+        [wsId]: [...(s.compactionEvents[wsId] ?? []), event],
+      },
+    })),
+  setChatMessages: (wsId, messages) =>
+    set((s) => ({
+      chatMessages: { ...s.chatMessages, [wsId]: messages },
+    })),
+  addChatMessage: (wsId, message) =>
+    set((s) => ({
+      chatMessages: {
+        ...s.chatMessages,
+        [wsId]: [...(s.chatMessages[wsId] || []), message],
+      },
+      lastMessages: { ...s.lastMessages, [wsId]: message },
+    })),
+  setStreamingContent: (wsId, content) =>
+    set((s) => ({
+      streamingContent: { ...s.streamingContent, [wsId]: content },
+    })),
+  appendStreamingContent: (wsId, text) =>
+    set((s) => ({
+      streamingContent: {
+        ...s.streamingContent,
+        [wsId]: (s.streamingContent[wsId] || "") + text,
+      },
+    })),
+  setPendingTypewriter: (wsId, messageId, text) =>
+    set((s) => ({
+      pendingTypewriter: {
+        ...s.pendingTypewriter,
+        [wsId]: { messageId, text },
+      },
+    })),
+  finishTypewriterDrain: (wsId) =>
+    set((s) => ({
+      pendingTypewriter: { ...s.pendingTypewriter, [wsId]: null },
+      streamingThinking: { ...s.streamingThinking, [wsId]: "" },
+    })),
+  appendStreamingThinking: (wsId, text) =>
+    set((s) => ({
+      streamingThinking: {
+        ...s.streamingThinking,
+        [wsId]: (s.streamingThinking[wsId] || "") + text,
+      },
+    })),
+  clearStreamingThinking: (wsId) =>
+    set((s) => ({
+      streamingThinking: { ...s.streamingThinking, [wsId]: "" },
+    })),
+  setShowThinkingBlocks: (wsId, show) =>
+    set((s) => ({
+      showThinkingBlocks: { ...s.showThinkingBlocks, [wsId]: show },
+    })),
+  setToolActivities: (wsId, activities) =>
+    set((s) => ({
+      toolActivities: { ...s.toolActivities, [wsId]: activities },
+    })),
+  addToolActivity: (wsId, activity) =>
+    set((s) => ({
+      toolActivities: {
+        ...s.toolActivities,
+        [wsId]: [...(s.toolActivities[wsId] || []), activity],
+      },
+    })),
+  updateToolActivity: (wsId, toolUseId, updates) =>
+    set((s) => ({
+      toolActivities: {
+        ...s.toolActivities,
+        [wsId]: (s.toolActivities[wsId] || []).map((a) =>
+          a.toolUseId === toolUseId ? { ...a, ...updates } : a,
+        ),
+      },
+    })),
+  toggleToolActivityCollapsed: (wsId, index) =>
+    set((s) => ({
+      toolActivities: {
+        ...s.toolActivities,
+        [wsId]: (s.toolActivities[wsId] || []).map((a, i) =>
+          i === index ? { ...a, collapsed: !a.collapsed } : a,
+        ),
+      },
+    })),
+  appendToolActivityInput: (wsId, toolUseId, partialJson) =>
+    set((s) => ({
+      toolActivities: {
+        ...s.toolActivities,
+        [wsId]: (s.toolActivities[wsId] || []).map((a) =>
+          a.toolUseId === toolUseId
+            ? { ...a, inputJson: a.inputJson + partialJson }
+            : a,
+        ),
+      },
+    })),
+  finalizeTurn: (
+    wsId,
+    messageCount,
+    turnId,
+    durationMs,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheCreationTokens,
+  ) =>
+    set((s) => {
+      // Phase 2.5: finalizeTurn no longer writes latestTurnUsage. The
+      // meter needs per-call values, not the turn-aggregate we receive
+      // here — useAgentStream's result handler calls setLatestTurnUsage
+      // separately with the correct per-call data. The tokens we DO
+      // receive here stay as CompletedTurn aggregate fields for the
+      // TurnFooter's "turn-total work" view.
+      const activities = s.toolActivities[wsId] || [];
+      if (activities.length === 0) {
+        debugChat("store", "finalizeTurn skipped", {
+          wsId,
+          messageCount,
+          turnId: turnId ?? null,
+          existingCompletedTurnIds: (s.completedTurns[wsId] || []).map(
+            (turn) => turn.id,
+          ),
+        });
+        return {};
+      }
+      const turn: CompletedTurn = {
+        id: turnId ?? crypto.randomUUID(),
+        activities: activities.map((a) => ({
+          toolUseId: a.toolUseId,
+          toolName: a.toolName,
+          inputJson: a.inputJson,
+          resultText: a.resultText,
+          collapsed: true,
+          summary: a.summary,
+        })),
+        messageCount,
+        collapsed: true,
+        afterMessageIndex: (s.chatMessages[wsId] || []).length,
+        durationMs,
+        inputTokens,
+        outputTokens,
+        cacheReadTokens,
+        cacheCreationTokens,
+      };
+      debugChat("store", "finalizeTurn", {
+        wsId,
+        turnId: turn.id,
+        messageCount,
+        afterMessageIndex: turn.afterMessageIndex,
+        toolCount: turn.activities.length,
+        toolUseIds: turn.activities.map((activity) => activity.toolUseId),
+        existingCompletedTurnIds: (s.completedTurns[wsId] || []).map(
+          (existingTurn) => existingTurn.id,
+        ),
+      });
+      return {
+        completedTurns: {
+          ...s.completedTurns,
+          [wsId]: [...(s.completedTurns[wsId] || []), turn],
+        },
+        toolActivities: { ...s.toolActivities, [wsId]: [] },
+      };
+    }),
+  hydrateCompletedTurns: (wsId, turns) =>
+    set((s) => {
+      const existing = s.completedTurns[wsId] || [];
+      const existingById = new Map(existing.map((turn) => [turn.id, turn]));
+      const incomingIds = new Set(turns.map((turn) => turn.id));
+
+      const merged = turns.map((turn) => {
+        const existingTurn = existingById.get(turn.id);
+        if (!existingTurn) return turn;
+
+        const existingActivitiesById = new Map(
+          existingTurn.activities.map((activity) => [
+            activity.toolUseId,
+            activity,
+          ]),
+        );
+
+        return {
+          ...turn,
+          collapsed: existingTurn.collapsed,
+          activities: turn.activities.map((activity) => ({
+            ...activity,
+            collapsed:
+              existingActivitiesById.get(activity.toolUseId)?.collapsed ??
+              activity.collapsed,
+          })),
+        };
+      });
+
+      const pendingTurns = existing.filter((turn) => !incomingIds.has(turn.id));
+      const nextTurns = [...merged, ...pendingTurns].sort(
+        (a, b) => a.afterMessageIndex - b.afterMessageIndex,
+      );
+
+      debugChat("store", "hydrateCompletedTurns", {
+        wsId,
+        existingIds: existing.map((turn) => turn.id),
+        incomingIds: turns.map((turn) => turn.id),
+        pendingIds: pendingTurns.map((turn) => turn.id),
+        nextIds: nextTurns.map((turn) => turn.id),
+      });
+
+      return {
+        completedTurns: {
+          ...s.completedTurns,
+          [wsId]: nextTurns,
+        },
+      };
+    }),
+  setCompletedTurns: (wsId, turns) =>
+    set((s) => {
+      debugChat("store", "setCompletedTurns", {
+        wsId,
+        turnIds: turns.map((turn) => turn.id),
+        previousIds: (s.completedTurns[wsId] || []).map((turn) => turn.id),
+      });
+      return {
+        completedTurns: { ...s.completedTurns, [wsId]: turns },
+      };
+    }),
+  toggleCompletedTurn: (wsId, turnIndex) =>
+    set((s) => ({
+      completedTurns: {
+        ...s.completedTurns,
+        [wsId]: (s.completedTurns[wsId] || []).map((t, i) =>
+          i === turnIndex ? { ...t, collapsed: !t.collapsed } : t,
+        ),
+      },
+    })),
+  lastMessages: {},
+  setLastMessages: (msgs) => set({ lastMessages: msgs }),
+});
