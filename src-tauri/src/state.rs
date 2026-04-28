@@ -116,10 +116,12 @@ pub struct AgentSessionState {
     /// session teardown. See `agent_mcp_sink::ChatBridgeSink`.
     pub last_user_msg_id: Option<String>,
     /// Set after we've posted a trust-error system message into the
-    /// chat for the current resolved env. Cleared whenever the resolved
-    /// env vars change (the user ran `direnv allow` / `mise trust`,
-    /// edited the config, toggled a provider) so a fresh failure
-    /// re-emits exactly once.
+    /// chat for the current resolved env. Cleared when an existing
+    /// persistent session is torn down because the resolved env drifted
+    /// (e.g. after `direnv allow` / `mise trust`, config edits, or
+    /// provider toggles), so a fresh failure re-emits once after that
+    /// restart. Stays sticky until then so we don't spam every turn
+    /// while the user is fixing the underlying issue.
     pub posted_env_trust_warning: bool,
 }
 
