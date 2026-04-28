@@ -7,6 +7,9 @@ import {
   MAX_IMAGE_SIZE,
   MAX_PDF_SIZE,
   MAX_TEXT_SIZE,
+  MAX_CSV_SIZE,
+  MAX_MARKDOWN_SIZE,
+  MAX_JSON_SIZE,
   MAX_ATTACHMENTS,
   maxSizeFor,
   isTextFile,
@@ -46,16 +49,24 @@ describe("attachment type validation", () => {
     expect(isSupported("application/pdf")).toBe(true);
   });
 
-  it("accepts text/plain files", () => {
+  it("accepts text/data files", () => {
     expect(isSupported("text/plain")).toBe(true);
+    expect(isSupported("text/csv")).toBe(true);
+    expect(isSupported("text/markdown")).toBe(true);
+    expect(isSupported("application/json")).toBe(true);
+  });
+
+  it("accepts SVG images", () => {
+    expect(isSupported("image/svg+xml")).toBe(true);
   });
 
   it("rejects unsupported file types", () => {
-    expect(isSupported("image/svg+xml")).toBe(false);
     expect(isSupported("image/bmp")).toBe(false);
     expect(isSupported("video/mp4")).toBe(false);
-    expect(isSupported("application/json")).toBe(false);
     expect(isSupported("application/zip")).toBe(false);
+    expect(isSupported("application/x-tar")).toBe(false);
+    expect(isSupported("text/yaml")).toBe(false);
+    expect(isSupported("text/html")).toBe(false);
   });
 
   it("classifies images vs documents vs text", () => {
@@ -68,6 +79,9 @@ describe("attachment type validation", () => {
     expect(isImage("text/plain")).toBe(false);
     expect(isDocument("text/plain")).toBe(false);
     expect(isTextFile("text/plain")).toBe(true);
+    expect(isTextFile("text/csv")).toBe(true);
+    expect(isTextFile("text/markdown")).toBe(true);
+    expect(isTextFile("application/json")).toBe(true);
   });
 });
 
@@ -87,17 +101,36 @@ describe("attachment size validation", () => {
     expect(validateSize("application/pdf", MAX_PDF_SIZE + 1)).toBe(false);
   });
 
-  it("enforces text file size limit at 500 KB", () => {
+  it("enforces text file size limit at 1 MB", () => {
     expect(validateSize("text/plain", 100 * 1024)).toBe(true);
     expect(validateSize("text/plain", MAX_TEXT_SIZE)).toBe(true);
     expect(validateSize("text/plain", MAX_TEXT_SIZE + 1)).toBe(false);
   });
 
+  it("enforces CSV size limit at 2 MB", () => {
+    expect(validateSize("text/csv", 1 * 1024 * 1024)).toBe(true);
+    expect(validateSize("text/csv", MAX_CSV_SIZE)).toBe(true);
+    expect(validateSize("text/csv", MAX_CSV_SIZE + 1)).toBe(false);
+  });
+
+  it("enforces Markdown size limit at 1 MB", () => {
+    expect(validateSize("text/markdown", MAX_MARKDOWN_SIZE)).toBe(true);
+    expect(validateSize("text/markdown", MAX_MARKDOWN_SIZE + 1)).toBe(false);
+  });
+
+  it("enforces JSON size limit at 1 MB", () => {
+    expect(validateSize("application/json", MAX_JSON_SIZE)).toBe(true);
+    expect(validateSize("application/json", MAX_JSON_SIZE + 1)).toBe(false);
+  });
+
   it("applies correct limit per type", () => {
-    const size = 10 * 1024 * 1024; // 10 MB — valid for PDF, invalid for image
+    const size = 10 * 1024 * 1024; // 10 MB — valid for PDF, invalid for image/text/csv/json/md
     expect(validateSize("application/pdf", size)).toBe(true);
     expect(validateSize("image/png", size)).toBe(false);
     expect(validateSize("text/plain", size)).toBe(false);
+    expect(validateSize("text/csv", size)).toBe(false);
+    expect(validateSize("text/markdown", size)).toBe(false);
+    expect(validateSize("application/json", size)).toBe(false);
   });
 });
 
@@ -121,26 +154,37 @@ describe("content block type mapping", () => {
     expect(contentBlockType("application/pdf")).toBe("document");
   });
 
-  it("uses text blocks for text files", () => {
+  it("uses text blocks for text/data files", () => {
     expect(contentBlockType("text/plain")).toBe("text");
+    expect(contentBlockType("text/csv")).toBe("text");
+    expect(contentBlockType("text/markdown")).toBe("text");
+    expect(contentBlockType("application/json")).toBe("text");
   });
 });
 
 describe("text file helpers", () => {
   it("isTextFile identifies text MIME types", () => {
     expect(isTextFile("text/plain")).toBe(true);
+    expect(isTextFile("text/csv")).toBe(true);
+    expect(isTextFile("text/markdown")).toBe(true);
+    expect(isTextFile("application/json")).toBe(true);
     expect(isTextFile("image/png")).toBe(false);
     expect(isTextFile("application/pdf")).toBe(false);
-    expect(isTextFile("application/json")).toBe(false);
   });
 
-  it("maxSizeFor returns 500 KB for text files", () => {
-    expect(maxSizeFor("text/plain")).toBe(500 * 1024);
+  it("maxSizeFor returns the right cap per text type", () => {
+    expect(maxSizeFor("text/plain")).toBe(1024 * 1024);
+    expect(maxSizeFor("text/csv")).toBe(2 * 1024 * 1024);
+    expect(maxSizeFor("text/markdown")).toBe(1024 * 1024);
+    expect(maxSizeFor("application/json")).toBe(1024 * 1024);
   });
 
-  it("SUPPORTED_TEXT_TYPES contains text/plain", () => {
+  it("SUPPORTED_TEXT_TYPES contains all four text/data types", () => {
     expect(SUPPORTED_TEXT_TYPES.has("text/plain")).toBe(true);
-    expect(SUPPORTED_TEXT_TYPES.size).toBe(1);
+    expect(SUPPORTED_TEXT_TYPES.has("text/csv")).toBe(true);
+    expect(SUPPORTED_TEXT_TYPES.has("text/markdown")).toBe(true);
+    expect(SUPPORTED_TEXT_TYPES.has("application/json")).toBe(true);
+    expect(SUPPORTED_TEXT_TYPES.size).toBe(4);
   });
 });
 

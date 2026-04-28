@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" shape-rendering="crispEdges">
+  <defs>
+    <style>
+      .orange { fill: #e36f4c; }
+      .black { fill: #000000; }
+      .bow-dark { fill: #d14a79; }
+      .bow-mid { fill: #dc7295; }
+      .bow-light { fill: #e68fa8; }
+      .blush { fill: #e58ba6; }
+    </style>
+  </defs>
+
+  <g id="body" class="orange">
+    <rect x="203" y="216" width="688" height="137"/>
+    <rect x="129" y="353" width="762" height="104"/>
+    <rect x="10" y="457" width="1004" height="128"/>
+    <rect x="129" y="585" width="762" height="120"/>
+    <rect x="192" y="705" width="71" height="120"/>
+    <rect x="324" y="705" width="70" height="120"/>
+    <rect x="631" y="705" width="70" height="120"/>
+    <rect x="764" y="705" width="72" height="120"/>
+  </g>
+
+  <g id="bow">
+    <rect class="bow-dark" x="279" y="145" width="68" height="134"/>
+    <rect class="bow-dark" x="257" y="176" width="22" height="82"/>
+    <rect class="bow-dark" x="347" y="176" width="22" height="82"/>
+    <rect class="bow-light" x="279" y="166" width="68" height="91"/>
+    <rect class="bow-dark" x="279" y="203" width="24" height="19"/>
+
+    <rect class="bow-dark" x="203" y="212" width="76" height="85"/>
+    <rect class="bow-mid" x="205" y="233" width="52" height="44"/>
+
+    <rect class="bow-dark" x="96" y="220" width="68" height="133"/>
+    <rect class="bow-dark" x="74" y="255" width="22" height="56"/>
+    <rect class="bow-dark" x="164" y="240" width="43" height="91"/>
+    <rect class="bow-light" x="96" y="240" width="68" height="91"/>
+    <rect class="bow-dark" x="140" y="272" width="45" height="18"/>
+    <rect class="bow-mid" x="96" y="220" width="68" height="20"/>
+    <rect class="bow-mid" x="96" y="311" width="68" height="42"/>
+  </g>
+
+  <g id="eyes">
+    <rect class="black" x="255" y="339" width="22" height="22"/>
+    <rect class="black" x="232" y="361" width="22" height="23"/>
+    <rect class="black" x="255" y="385" width="21" height="21"/>
+    <rect class="black" x="279" y="361" width="58" height="95"/>
+    <rect class="bow-light" x="255" y="361" width="23" height="24"/>
+
+    <rect class="black" x="750" y="339" width="22" height="22"/>
+    <rect class="black" x="773" y="361" width="22" height="23"/>
+    <rect class="black" x="750" y="385" width="23" height="21"/>
+    <rect class="black" x="690" y="361" width="59" height="95"/>
+    <rect class="bow-light" x="749" y="361" width="24" height="23"/>
+  </g>
+
+  <g id="blush" class="blush">
+    <rect x="232" y="479" width="25" height="31"/>
+    <rect x="273" y="479" width="25" height="31"/>
+    <rect x="724" y="479" width="25" height="31"/>
+    <rect x="765" y="479" width="25" height="31"/>
+  </g>
+</svg>

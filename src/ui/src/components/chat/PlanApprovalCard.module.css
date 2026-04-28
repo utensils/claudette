@@ -235,13 +235,9 @@
   font-family: var(--font-mono, monospace);
 }
 
-.actions {
-  display: flex;
-  gap: 8px;
-}
-
 .approveBtn {
-  flex: 1;
+  display: block;
+  width: 100%;
   padding: 10px 14px;
   background: rgba(var(--accent-primary-rgb), 0.1);
   border: 1px solid rgba(var(--accent-primary-rgb), 0.25);
@@ -257,19 +253,74 @@
   background: rgba(var(--accent-primary-rgb), 0.18);
 }
 
-.denyBtn {
-  padding: 10px 14px;
-  background: transparent;
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0 12px;
+  font-size: 11px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.divider::before,
+.divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--hover-bg);
+}
+
+.freeformRow {
+  display: flex;
+  gap: 8px;
+}
+
+.freeformInput {
+  flex: 1;
+  background: var(--hover-bg-subtle);
   border: 1px solid var(--divider);
   border-radius: 8px;
-  color: var(--text-dim);
+  padding: 10px 14px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1.5;
+  outline: none;
+  resize: none;
+  min-height: 38px;
+  transition: border-color var(--transition-normal), box-shadow var(--transition-normal);
+}
+
+.freeformInput:focus {
+  border-color: rgba(var(--accent-primary-rgb), 0.3);
+  box-shadow: 0 0 0 3px rgba(var(--accent-primary-rgb), 0.06);
+}
+
+.freeformInput::placeholder {
+  color: var(--text-faint);
+}
+
+.feedbackBtn {
+  background: transparent;
+  border: 1px solid rgba(var(--accent-primary-rgb), 0.25);
+  color: var(--accent-dim);
+  padding: 10px 16px;
+  border-radius: 8px;
+  cursor: pointer;
   font-size: 13px;
   font-weight: 500;
-  cursor: pointer;
+  align-self: flex-end;
   transition: background var(--transition-fast), color var(--transition-fast);
 }
 
-.denyBtn:hover {
-  background: var(--error-bg);
-  color: var(--text-primary);
+.feedbackBtn:hover:not(:disabled) {
+  background: rgba(var(--accent-primary-rgb), 0.08);
+  color: var(--accent-primary);
+}
+
+.feedbackBtn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
 }

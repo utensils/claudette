@@ -9,6 +9,7 @@ import {
   closeLeaf,
   countLeaves,
   findLeaf,
+  findLeafByPtyId,
   findParentSplit,
   makeLeaf,
   neighborLeaf,
@@ -19,6 +20,10 @@ import {
 
 function leaf(id: string): TerminalLeafPane {
   return { kind: "leaf", id };
+}
+
+function leafWithPty(id: string, ptyId: number): TerminalLeafPane {
+  return { kind: "leaf", id, ptyId };
 }
 
 function split(
@@ -68,6 +73,49 @@ describe("findLeaf", () => {
       split("s2", "vertical", leaf("b"), split("s3", "horizontal", leaf("c"), leaf("d"))),
     );
     expect(findLeaf(tree, "d")?.id).toBe("d");
+  });
+});
+
+describe("findLeafByPtyId", () => {
+  it("returns the leaf when a lone leaf's ptyId matches", () => {
+    const tree = leafWithPty("a", 7);
+    expect(findLeafByPtyId(tree, 7)?.id).toBe("a");
+  });
+
+  it("returns null for a leaf without a ptyId", () => {
+    const tree = leaf("a");
+    expect(findLeafByPtyId(tree, 1)).toBeNull();
+  });
+
+  it("descends into both children of a split", () => {
+    const tree = split(
+      "s",
+      "horizontal",
+      leafWithPty("left", 11),
+      leafWithPty("right", 22),
+    );
+    expect(findLeafByPtyId(tree, 11)?.id).toBe("left");
+    expect(findLeafByPtyId(tree, 22)?.id).toBe("right");
+  });
+
+  it("finds a leaf nested several levels deep", () => {
+    const tree = split(
+      "s1",
+      "horizontal",
+      leafWithPty("a", 1),
+      split(
+        "s2",
+        "vertical",
+        leafWithPty("b", 2),
+        split("s3", "horizontal", leafWithPty("c", 3), leafWithPty("d", 4)),
+      ),
+    );
+    expect(findLeafByPtyId(tree, 4)?.id).toBe("d");
+  });
+
+  it("returns null when no leaf carries the ptyId", () => {
+    const tree = split("s", "horizontal", leafWithPty("a", 1), leaf("b"));
+    expect(findLeafByPtyId(tree, 99)).toBeNull();
   });
 });
 

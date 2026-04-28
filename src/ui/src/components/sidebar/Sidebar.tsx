@@ -17,7 +17,7 @@ import {
   pairWithServer,
   startLocalServer,
 } from "../../services/tauri";
-import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, CircleStop, LoaderCircle, GitPullRequestArrow, GitPullRequestDraft, GitMerge, GitPullRequestClosed } from "lucide-react";
+import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, CircleStop, LoaderCircle, GitPullRequestArrow, GitPullRequestDraft, GitMerge, GitPullRequestClosed, ChevronRight, ChevronDown } from "lucide-react";
 import { RepoIcon } from "../shared/RepoIcon";
 import { UpdateBanner } from "../layout/UpdateBanner";
 import { getScmSortPriority } from "../../utils/scmSortPriority";
@@ -89,6 +89,22 @@ export const Sidebar = memo(function Sidebar() {
   const didDragRef = useRef(false);
   const DRAG_THRESHOLD = 5; // px before drag activates
   const workspaceTerminalCommands = useAppStore((s) => s.workspaceTerminalCommands);
+  const showSidebarRunningCommands = useAppStore((s) => s.showSidebarRunningCommands);
+  // Per-workspace expansion state for the running-commands list. Collapsed
+  // by default — the row shows a "N running" summary; clicking expands the
+  // list. State lives in the component (not the store) since this is pure
+  // ephemeral UI state that doesn't need to survive a reload.
+  const [expandedCommandWorkspaces, setExpandedCommandWorkspaces] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const toggleCommandsExpanded = useCallback((wsId: string) => {
+    setExpandedCommandWorkspaces((prev) => {
+      const next = new Set(prev);
+      if (next.has(wsId)) next.delete(wsId);
+      else next.add(wsId);
+      return next;
+    });
+  }, []);
 
   const [renamingWsId, setRenamingWsId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -395,31 +411,58 @@ export const Sidebar = memo(function Sidebar() {
           )}
           <span className={styles.wsBranch}>{ws.branch_name}</span>
           {(() => {
-            const commandState = workspaceTerminalCommands[ws.id];
-            if (!commandState?.command) return null;
+            if (!showSidebarRunningCommands) return null;
+            const wsCommands = workspaceTerminalCommands[ws.id];
+            if (!wsCommands) return null;
+            const entries = Object.entries(wsCommands);
+            if (entries.length === 0) return null;
 
             const truncateCommand = (cmd: string, maxLen: number) => {
               if (cmd.length <= maxLen) return cmd;
               return cmd.slice(0, maxLen - 3) + "...";
             };
 
+            const expanded = expandedCommandWorkspaces.has(ws.id);
+            const count = entries.length;
+            const listId = `running-commands-${ws.id}`;
+
             return (
-              <div className={styles.terminalCommand}>
-                {commandState.isRunning ? (
-                  <span title="Running" aria-label="Running">
+              <>
+                <button
+                  type="button"
+                  className={styles.terminalCommandSummary}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleCommandsExpanded(ws.id);
+                  }}
+                  title={expanded ? "Collapse running commands" : "Expand running commands"}
+                  aria-expanded={expanded}
+                  aria-controls={listId}
+                >
+                  <span className={styles.iconWrap} aria-label="Running">
                     <Cog size={12} className={styles.runningIcon} />
                   </span>
-                ) : commandState.exitCode === 0 ? (
-                  <span className={styles.successIcon} title="Exited successfully">✓</span>
-                ) : commandState.exitCode !== null ? (
-                  <span className={styles.errorIcon} title={`Exit code: ${commandState.exitCode}`}>✗</span>
-                ) : (
-                  <span className={styles.commandIcon}>▸</span>
+                  <span className={styles.commandText}>
+                    {count} running
+                  </span>
+                  {expanded ? (
+                    <ChevronDown size={10} className={styles.commandChevron} />
+                  ) : (
+                    <ChevronRight size={10} className={styles.commandChevron} />
+                  )}
+                </button>
+                {expanded && (
+                  <div id={listId} role="group" aria-label="Running commands">
+                    {entries.map(([ptyId, command]) => (
+                      <div key={ptyId} className={styles.terminalCommandItem}>
+                        <span className={styles.commandText} title={command ?? ""}>
+                          {truncateCommand(command ?? "(running)", 40)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
                 )}
-                <span className={styles.commandText} title={commandState.command}>
-                  {truncateCommand(commandState.command, 40)}
-                </span>
-              </div>
+              </>
             );
           })()}
         </div>

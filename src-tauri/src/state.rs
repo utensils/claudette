@@ -5,7 +5,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use claudette::agent::PersistentSession;
-use parking_lot::Mutex as ParkingMutex;
 use tokio::sync::{RwLock, Semaphore};
 
 use claudette::env_provider::{EnvCache, EnvWatcher};
@@ -128,13 +127,10 @@ pub struct PtyHandle {
     pub master: Mutex<Box<dyn portable_pty::MasterPty + Send>>,
     pub child: Mutex<Box<dyn portable_pty::Child + Send>>,
 
-    /// OSC 133 state tracking (kept for potential future use, e.g., PTY status queries)
-    #[allow(dead_code)]
-    pub current_command: Arc<ParkingMutex<Option<String>>>,
-    #[allow(dead_code)]
-    pub command_running: Arc<ParkingMutex<bool>>,
-    #[allow(dead_code)]
-    pub last_exit_code: Arc<ParkingMutex<Option<i32>>>,
+    /// Wakes the foreground-process-group polling task in `pty_tracker` so it
+    /// drops its duplicated master FD and exits before this handle is freed.
+    /// `None` on platforms where the tracker is not spawned (Windows).
+    pub tracker_cancel: Option<Arc<tokio::sync::Notify>>,
 }
 
 /// State of the embedded claudette-server subprocess.

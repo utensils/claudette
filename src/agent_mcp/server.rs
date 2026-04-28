@@ -26,7 +26,7 @@ use crate::agent_mcp::protocol::{
     MCP_PROTOCOL_VERSION, error_codes,
 };
 use crate::agent_mcp::tools::send_to_user::{
-    ALLOWED_DOCUMENT_TYPES, ALLOWED_IMAGE_TYPES, ALLOWED_TEXT_TYPES,
+    ALLOWED_DOCUMENT_TYPES, ALLOWED_IMAGE_TYPES, allowed_text_types,
 };
 
 pub const ENV_SOCKET_ADDR: &str = "CLAUDETTE_MCP_SOCKET";
@@ -114,6 +114,11 @@ async fn handle_request(
 }
 
 fn initialize_result() -> Value {
+    // The `instructions` field is the spec-blessed channel for telling the
+    // host (and through it, the model) when this server is relevant. It
+    // complements the per-tool description rather than duplicating it: the
+    // tool description covers *how* to call `send_to_user`, this paragraph
+    // covers *when* the whole server is the right tool to reach for.
     json!({
         "protocolVersion": MCP_PROTOCOL_VERSION,
         "capabilities": {
@@ -122,7 +127,15 @@ fn initialize_result() -> Value {
         "serverInfo": {
             "name": SERVER_NAME,
             "version": env!("CARGO_PKG_VERSION"),
-        }
+        },
+        "instructions": "The Claudette MCP server lets the agent deliver a \
+            file inline in the user's chat surface. Use `send_to_user` whenever \
+            you produce a deliverable artifact the user should be able to view \
+            or download immediately — generated images, PDFs, or short \
+            text-shaped data files (CSV, Markdown, JSON, plain text). Do NOT \
+            use it for arbitrary binaries, archives, or oversized files; for \
+            those, tell the user the absolute path on disk so they can open \
+            them themselves."
     })
 }
 
@@ -130,18 +143,23 @@ fn tools_list_result() -> Value {
     let allowed_types: Vec<&str> = ALLOWED_IMAGE_TYPES
         .iter()
         .chain(ALLOWED_DOCUMENT_TYPES.iter())
-        .chain(ALLOWED_TEXT_TYPES.iter())
         .copied()
+        .chain(allowed_text_types())
         .collect();
 
     json!({
         "tools": [{
             "name": TOOL_NAME,
             "description": "Deliver a file to the user inline in the Claudette chat surface. \
-                           Use this when the user asks to be sent an artifact (screenshot, \
-                           generated image, PDF, small text file). The file must already exist \
-                           on disk; pass its absolute path. Renders inline; the user can \
-                           click to enlarge or download.",
+                           Supported types: images (PNG/JPEG/GIF/WebP/SVG), PDF, plain text, \
+                           CSV, JSON, and Markdown. Each type has its own size cap; the call \
+                           is rejected for oversized or unsupported types. The file must \
+                           already exist on disk — pass its absolute path. Renders inline \
+                           with a type-aware preview; the user can click to enlarge or \
+                           download. For anything outside the supported set (binaries, \
+                           archives, oversized files), do NOT call this tool — instead, \
+                           tell the user the absolute path on disk so they can open it \
+                           manually.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -372,6 +390,22 @@ mod tests {
         assert_eq!(r["result"]["protocolVersion"], MCP_PROTOCOL_VERSION);
         assert_eq!(r["result"]["serverInfo"]["name"], SERVER_NAME);
         assert!(r["result"]["capabilities"]["tools"].is_object());
+        // The `instructions` field is what spec-compliant hosts surface to
+        // the model so it knows when the whole server is relevant. Confirm
+        // it ships and mentions both the affirmative use case and the
+        // explicit "do not use for X" guard so future edits don't quietly
+        // drop the latter.
+        let instructions = r["result"]["instructions"]
+            .as_str()
+            .expect("instructions field is required");
+        assert!(
+            instructions.contains("send_to_user"),
+            "instructions should mention send_to_user, got: {instructions}"
+        );
+        assert!(
+            instructions.to_lowercase().contains("do not"),
+            "instructions should describe when NOT to use, got: {instructions}"
+        );
     }
 
     #[tokio::test]

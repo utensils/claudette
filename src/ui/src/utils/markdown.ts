@@ -5,10 +5,13 @@ import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { AnsiUp } from "ansi_up";
+import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "../services/tauri";
 import { CodeBlock } from "../components/chat/CodeBlock";
 import { StreamingContext } from "../components/chat/StreamingContext";
+import { decodeFilePathHref, FILE_PATH_SCHEME } from "./filePathLinks";
 import { getCachedHighlight, highlightCode } from "./highlight";
+import { rehypeFilePathLinks } from "./rehypeFilePathLinks";
 
 // Shared AnsiUp instance for converting ANSI escape sequences to HTML.
 const ansiUp = new AnsiUp();
@@ -82,6 +85,10 @@ export function preprocessContent(text: string): string {
 }
 
 // Sanitization schema: allow standard markdown HTML + our callout elements.
+// Also extend `protocols.href` so the file-path autolinker's
+// `claudettepath:` scheme survives sanitization — without this, every
+// rehype-injected `<a href="claudettepath:…">` would be stripped to a bare
+// link with no href and the click handler would have nothing to read.
 export const SANITIZE_SCHEMA = {
   ...defaultSchema,
   tagNames: [
@@ -93,7 +100,30 @@ export const SANITIZE_SCHEMA = {
     div: [...(defaultSchema.attributes?.div ?? []), "className"],
     span: [...(defaultSchema.attributes?.span ?? []), "className"],
     hr: [...(defaultSchema.attributes?.hr ?? []), "className"],
+    // Default schema only allows `className` on <a> when the value is the
+    // hard-coded "data-footnote-backref" sentinel (footnote-specific). The
+    // file-path autolinker emits `cc-file-path-link`, which would otherwise
+    // get stripped — drop the existing `["className", "data-footnote-backref"]`
+    // value-restricted entry, then append a bare `"className"` so any value
+    // is allowed. All other a-attributes (`href`, aria-*, data-footnote-*) are
+    // preserved by spreading the rest of the default list.
+    a: [
+      ...(defaultSchema.attributes?.a ?? []).filter(
+        (attr) =>
+          !(Array.isArray(attr) && attr[0] === "className"),
+      ),
+      "className",
+    ],
     "*": [...(defaultSchema.attributes?.["*"] ?? []), "class"],
+  },
+  protocols: {
+    ...defaultSchema.protocols,
+    href: [
+      ...(defaultSchema.protocols?.href ?? []),
+      // The trailing colon is *not* part of the scheme name in the
+      // hast-util-sanitize allow-list — strip it.
+      FILE_PATH_SCHEME.replace(/:$/, ""),
+    ],
   },
 };
 
@@ -101,14 +131,48 @@ export const SANITIZE_SCHEMA = {
 // Highlighting is no longer part of the plugin pipeline — it runs in a Web
 // Worker off the main thread, dispatched from the `code` component override
 // below once the surrounding subtree is no longer streaming.
+// Order matters: `rehypeRaw` first so any `<a>` already authored as raw HTML
+// is parsed; then the file-path autolinker injects new `<a>` nodes around
+// detected paths in plain text; only then do we sanitize, so the sanitize
+// schema's protocol allow-list is what gates the synthesized links.
 export const REHYPE_PLUGINS: PluggableList = [
   rehypeRaw,
+  rehypeFilePathLinks,
   [rehypeSanitize, SANITIZE_SCHEMA],
 ];
 export const REMARK_PLUGINS: PluggableList = [remarkGfm];
 
 // Schemes that should open in the system browser rather than navigate the webview.
 export const EXTERNAL_SCHEMES = /^https?:|^mailto:/i;
+
+/**
+ * URL transform that runs *inside* react-markdown after rehype but before
+ * each `<a>`/`<img>` is rendered. react-markdown's `defaultUrlTransform`
+ * hard-codes its safe-protocol regex (`^(https?|ircs?|mailto|xmpp)$`) and
+ * blanks any URL whose scheme isn't on that list — including our custom
+ * `claudettepath:` autolinker scheme. This wrapper preserves the default
+ * safe-list and lets our scheme through; everything else still goes
+ * through the same protocol gate as upstream. */
+export function safeUrlTransform(value: string): string {
+  if (value.startsWith(FILE_PATH_SCHEME)) return value;
+  // Inline copy of react-markdown's defaultUrlTransform logic so we don't
+  // have to import an internal export. Behavior mirrors upstream so the
+  // upgrade story stays simple.
+  const colon = value.indexOf(":");
+  const questionMark = value.indexOf("?");
+  const numberSign = value.indexOf("#");
+  const slash = value.indexOf("/");
+  if (
+    colon === -1 ||
+    (slash !== -1 && colon > slash) ||
+    (questionMark !== -1 && colon > questionMark) ||
+    (numberSign !== -1 && colon > numberSign) ||
+    /^(https?|ircs?|mailto|xmpp)$/i.test(value.slice(0, colon))
+  ) {
+    return value;
+  }
+  return "";
+}
 
 function extractText(children: React.ReactNode): string {
   if (typeof children === "string") return children;
@@ -221,16 +285,32 @@ export function HighlightedCode({
   return createElement("code", { ...props, className }, children);
 }
 
-// Override <a> to open external links in the system browser instead of navigating the webview.
+// Override <a> to open external links in the system browser instead of
+// navigating the webview, and to route `claudettepath:` links — produced
+// by the file-path autolinker — through the OS default-app handler.
 export const MARKDOWN_COMPONENTS: Components = {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  a: ({ node, href, children, ...props }) =>
-    createElement(
+  a: ({ node, href, children, ...props }) => {
+    const filePath = href ? decodeFilePathHref(href) : null;
+    return createElement(
       "a",
       {
         ...props,
         href,
+        // Tooltip the actual path so a user hovering can see exactly
+        // what the click will open — the visible text is the path
+        // already, but title= adds redundancy on long paths that get
+        // visually truncated by surrounding wrap/ellipsis rules.
+        title: filePath ?? (props as { title?: string }).title,
         onClick: (e: React.MouseEvent<HTMLAnchorElement>) => {
+          if (filePath) {
+            e.preventDefault();
+            void invoke("open_in_editor", { path: filePath }).catch(
+              (err) =>
+                console.error("Failed to open path:", filePath, err),
+            );
+            return;
+          }
           if (href && EXTERNAL_SCHEMES.test(href)) {
             e.preventDefault();
             void openUrl(href).catch((err) =>
@@ -240,7 +320,8 @@ export const MARKDOWN_COMPONENTS: Components = {
         },
       },
       children,
-    ),
+    );
+  },
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   pre: ({ node, children, ...props }) =>
     createElement(CodeBlock, props, children),

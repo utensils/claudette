@@ -197,7 +197,7 @@
   top: calc(100% + 4px);
   right: 0;
   min-width: 100%;
-  max-height: 280px;
+  max-height: 320px;
   overflow-y: auto;
   background: var(--sidebar-bg);
   border: 1px solid var(--divider);
@@ -233,6 +233,50 @@
 
 .fontPickerOptionSelected:hover {
   background: var(--accent-bg-strong);
+}
+
+.fontPickerSearch {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-bottom: 1px solid var(--divider);
+  border-radius: 0;
+  background: var(--sidebar-bg);
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.fontPickerSearch::placeholder {
+  color: var(--text-dim);
+}
+
+.fontPickerGroupLabel {
+  padding: 8px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.fontPickerGroupLabel:not(:first-child) {
+  margin-top: 4px;
+  border-top: 1px solid var(--divider);
+  padding-top: 8px;
+}
+
+.fontPickerNoResults {
+  padding: 12px 10px;
+  color: var(--text-dim);
+  font-size: 13px;
+  text-align: center;
 }
 
 .numberInput {

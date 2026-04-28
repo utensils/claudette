@@ -2,12 +2,13 @@ import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { useAppStore } from "./stores/useAppStore";
-import { loadInitialData, getAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, clearAttention, detectInstalledApps, listSystemFonts } from "./services/tauri";
+import { loadInitialData, getAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, clearAttention, detectInstalledApps, listSystemFonts, deleteTerminalTab } from "./services/tauri";
 import { applyTheme, applyUserFonts, loadAllThemes, findTheme, cacheThemePreference, getThemeDataAttr } from "./utils/theme";
 import type { ThemeDefinition } from "./types/theme";
 import { adjustUiFontSize, resetUiFontSize } from "./utils/fontSettings";
 import { useMcpStatus } from "./hooks/useMcpStatus";
 import { AppLayout } from "./components/layout/AppLayout";
+import { findLeafByPtyId } from "./stores/terminalPaneTree";
 import type { CommandEvent } from "./types";
 import "./styles/theme.css";
 
@@ -32,6 +33,7 @@ function App() {
   const setSystemFonts = useAppStore((s) => s.setSystemFonts);
   const setDetectedApps = useAppStore((s) => s.setDetectedApps);
   const setUsageInsightsEnabled = useAppStore((s) => s.setUsageInsightsEnabled);
+  const setShowSidebarRunningCommands = useAppStore((s) => s.setShowSidebarRunningCommands);
   const setPluginManagementEnabled = useAppStore((s) => s.setPluginManagementEnabled);
   const setDisable1mContext = useAppStore((s) => s.setDisable1mContext);
   const setAppVersion = useAppStore((s) => s.setAppVersion);
@@ -178,6 +180,9 @@ function App() {
     getAppSetting("usage_insights_enabled")
       .then((val) => { if (val === "true") setUsageInsightsEnabled(true); })
       .catch(() => {});
+    getAppSetting("show_sidebar_running_commands")
+      .then((val) => { if (val === "true") setShowSidebarRunningCommands(true); })
+      .catch(() => {});
     getAppSetting("plugin_management_enabled")
       .then((val) => { if (val === "true") setPluginManagementEnabled(true); })
       .catch(() => {});
@@ -185,40 +190,82 @@ function App() {
       .then(({ disable_1m_context }) => { if (disable_1m_context) setDisable1mContext(true); })
       .catch(() => {});
 
-    // Listen for terminal command events
+    // Listen for terminal command events. PTYs live on pane leaves inside
+    // each tab's pane tree (a tab can hold multiple split panes, each with
+    // its own PTY), so we walk the trees to find which tab owns the firing
+    // PTY, then resolve that tab's workspace.
+    const findWorkspaceForPty = (pty_id: number): string | null => {
+      const { terminalTabs, terminalPaneTrees } = useAppStore.getState();
+      for (const [wsId, tabs] of Object.entries(terminalTabs)) {
+        for (const tab of tabs) {
+          const tree = terminalPaneTrees[tab.id];
+          if (tree && findLeafByPtyId(tree, pty_id)) return wsId;
+        }
+      }
+      return null;
+    };
+
     const setupCommandListeners = async () => {
       const unlistenCommandDetected = await listen<CommandEvent>("pty-command-detected", (event) => {
         const { pty_id, command } = event.payload;
-
-        // Find the workspace that owns this PTY - use getState() to avoid stale closure
-        const { terminalTabs, setWorkspaceTerminalCommand } = useAppStore.getState();
-        for (const [wsId, tabs] of Object.entries(terminalTabs)) {
-          const tab = tabs.find((t) => t.pty_id === pty_id);
-          if (tab) {
-            setWorkspaceTerminalCommand(wsId, {
-              command: command || null,
-              isRunning: true,
-              exitCode: null,
-            });
-            break;
-          }
-        }
+        const wsId = findWorkspaceForPty(pty_id);
+        if (!wsId) return;
+        useAppStore.getState().setWorkspaceRunningCommand(wsId, pty_id, command || null);
       });
 
       const unlistenCommandStopped = await listen<CommandEvent>("pty-command-stopped", (event) => {
-        const { pty_id, command, exit_code } = event.payload;
+        const { pty_id } = event.payload;
+        const wsId = findWorkspaceForPty(pty_id);
+        if (!wsId) return;
+        useAppStore.getState().clearWorkspaceRunningCommand(wsId, pty_id);
+      });
 
-        // Find the workspace that owns this PTY - use getState() to avoid stale closure
-        const { terminalTabs, setWorkspaceTerminalCommand } = useAppStore.getState();
+      // Shell exited (e.g. user typed `exit`, or close_pty killed it): the
+      // backend reader saw EOF and emitted pty-exit. Three things to do:
+      //   1. Drop any running-command entry for this pty (so the sidebar
+      //      indicator doesn't go stale). We search workspaceTerminalCommands
+      //      directly because the tab/pane may already have been removed
+      //      from the store if the user closed it via the X button — in
+      //      that path the tab is removed before close_pty fires the EOF.
+      //   2. If the pane is still in the tree, close it.
+      //   3. If that was the only pane in its tab, close the tab too.
+      const unlistenPtyExit = await listen<{ pty_id: number }>("pty-exit", (event) => {
+        const ptyId = event.payload.pty_id;
+        const {
+          terminalTabs,
+          terminalPaneTrees,
+          workspaceTerminalCommands,
+          closePane,
+          removeTerminalTab,
+          clearWorkspaceRunningCommand,
+        } = useAppStore.getState();
+
+        // 1. Sweep the workspaceTerminalCommands map for this pty across
+        //    every workspace and clear any entry. Cheap (one outer-key
+        //    scan) and works even when tabs/panes have already been
+        //    cleaned up.
+        for (const [wsId, ptyMap] of Object.entries(workspaceTerminalCommands)) {
+          if (ptyId in ptyMap) {
+            clearWorkspaceRunningCommand(wsId, ptyId);
+          }
+        }
+
+        // 2. Try to find the owning pane and close it (handles the
+        //    `exit`-typed-by-user case where the tab is still mounted).
         for (const [wsId, tabs] of Object.entries(terminalTabs)) {
-          const tab = tabs.find((t) => t.pty_id === pty_id);
-          if (tab) {
-            setWorkspaceTerminalCommand(wsId, {
-              command: command || null,
-              isRunning: false,
-              exitCode: exit_code !== null && exit_code !== undefined ? exit_code : null,
-            });
-            break;
+          for (const tab of tabs) {
+            const tree = terminalPaneTrees[tab.id];
+            if (!tree) continue;
+            const leaf = findLeafByPtyId(tree, ptyId);
+            if (!leaf) continue;
+            const remaining = closePane(tab.id, leaf.id);
+            if (remaining === null) {
+              deleteTerminalTab(tab.id).catch((err) =>
+                console.error("Failed to delete terminal tab on exit:", err),
+              );
+              removeTerminalTab(wsId, tab.id);
+            }
+            return;
           }
         }
       });
@@ -226,6 +273,7 @@ function App() {
       return () => {
         unlistenCommandDetected();
         unlistenCommandStopped();
+        unlistenPtyExit();
       };
     };
 
@@ -327,7 +375,7 @@ function App() {
       unlistenAutoArchived.then((fn) => fn());
       unlistenMissingCli.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setPluginManagementEnabled, setDisable1mContext, setAppVersion]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setShowSidebarRunningCommands, setPluginManagementEnabled, setDisable1mContext, setAppVersion]);
 
   // Listen for OS light/dark changes and switch theme when mode is "system".
   useEffect(() => {

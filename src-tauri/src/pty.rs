@@ -1,13 +1,11 @@
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
-use parking_lot::Mutex as ParkingMutex;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::commands::shell::detect_user_shell;
-use crate::osc133::{Osc133Event, Osc133Parser};
 use crate::state::{AppState, PtyHandle};
 
 #[derive(Clone, Serialize)]
@@ -17,10 +15,8 @@ struct PtyOutputPayload {
 }
 
 #[derive(Clone, Serialize)]
-struct CommandEvent {
+struct PtyExitPayload {
     pty_id: u64,
-    command: Option<String>,
-    exit_code: Option<i32>,
 }
 
 #[tauri::command]
@@ -176,106 +172,65 @@ pub async fn spawn_pty(
         .take_writer()
         .map_err(|e| format!("Failed to take PTY writer: {e}"))?;
 
-    // OSC 133 tracking state
-    let current_command = Arc::new(ParkingMutex::new(None));
-    let command_running = Arc::new(ParkingMutex::new(false));
-    let last_exit_code = Arc::new(ParkingMutex::new(None));
-
-    // Background reader: reads PTY output and emits Tauri events.
+    // Background reader: forwards PTY output to xterm.js as Tauri events.
     let emitter_app = app.clone();
     let reader_pty_id = pty_id;
-    let cmd_clone = current_command.clone();
-    let running_clone = command_running.clone();
-    let exit_clone = last_exit_code.clone();
 
     std::thread::spawn(move || {
         let mut buf = [0u8; 4096];
-        let mut parser = Osc133Parser::new();
-
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    let data = &buf[..n];
-
-                    // Emit raw output for xterm.js
                     let payload = PtyOutputPayload {
                         pty_id: reader_pty_id,
-                        data: data.to_vec(),
+                        data: buf[..n].to_vec(),
                     };
                     let _ = emitter_app.emit("pty-output", &payload);
-
-                    // Parse OSC 133 sequences
-                    for event in parser.feed(data) {
-                        match event {
-                            Osc133Event::CommandStart => {
-                                // Will extract command from CommandText event or text between B and C
-                            }
-                            Osc133Event::CommandText { command } => {
-                                // Explicit command text (used by bash/fish via OSC 133;E)
-                                *cmd_clone.lock() = Some(command.clone());
-                                *running_clone.lock() = true;
-
-                                let _ = emitter_app.emit(
-                                    "pty-command-detected",
-                                    &CommandEvent {
-                                        pty_id: reader_pty_id,
-                                        command: Some(command),
-                                        exit_code: None,
-                                    },
-                                );
-                            }
-                            Osc133Event::CommandExecuted => {
-                                // Extract command text captured between B and C markers (zsh)
-                                if let Some(cmd) = parser.extract_command() {
-                                    *cmd_clone.lock() = Some(cmd.clone());
-                                    *running_clone.lock() = true;
-
-                                    let _ = emitter_app.emit(
-                                        "pty-command-detected",
-                                        &CommandEvent {
-                                            pty_id: reader_pty_id,
-                                            command: Some(cmd),
-                                            exit_code: None,
-                                        },
-                                    );
-                                }
-                            }
-                            Osc133Event::CommandFinished { exit_code } => {
-                                *running_clone.lock() = false;
-                                *exit_clone.lock() = Some(exit_code);
-
-                                let _ = emitter_app.emit(
-                                    "pty-command-stopped",
-                                    &CommandEvent {
-                                        pty_id: reader_pty_id,
-                                        command: cmd_clone.lock().clone(),
-                                        exit_code: Some(exit_code),
-                                    },
-                                );
-                            }
-                            Osc133Event::PromptStart => {
-                                // Prompt appeared — reset running state and clear stale
-                                // command.  Lock each mutex independently (assigning
-                                // false is idempotent, no conditional needed).
-                                *running_clone.lock() = false;
-                                *cmd_clone.lock() = None;
-                            }
-                        }
-                    }
                 }
                 Err(_) => break,
             }
         }
+        // Reader saw EOF (or read error) — the shell process closed its end
+        // of the PTY. Notify the frontend so it can tear down the pane and
+        // tab. Closing via the user typing `exit` is the common case.
+        let _ = emitter_app.emit(
+            "pty-exit",
+            &PtyExitPayload {
+                pty_id: reader_pty_id,
+            },
+        );
     });
+
+    // Spawn the foreground-process-group polling task. This drives the
+    // sidebar command indicator without requiring shell-side cooperation.
+    // Skipped on Windows (no POSIX process groups) and if we can't read
+    // either the master FD or the shell's pid.
+    let tracker_cancel = {
+        #[cfg(unix)]
+        {
+            let shell_pid = child.process_id().map(|p| p as i32);
+            let dup_fd = crate::pty_tracker::dup_master_fd(&*pair.master);
+            match (shell_pid, dup_fd) {
+                (Some(pid), Some(fd)) => {
+                    let cancel = std::sync::Arc::new(tokio::sync::Notify::new());
+                    crate::pty_tracker::spawn(pty_id, pid, fd, cancel.clone(), app.clone());
+                    Some(cancel)
+                }
+                _ => None,
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    };
 
     let handle = PtyHandle {
         writer: Mutex::new(writer),
         master: Mutex::new(pair.master),
         child: Mutex::new(child),
-        current_command,
-        command_running,
-        last_exit_code,
+        tracker_cancel,
     };
 
     state.ptys.write().await.insert(pty_id, handle);
@@ -331,11 +286,48 @@ pub async fn resize_pty(
 
 #[tauri::command]
 pub async fn close_pty(pty_id: u64, state: State<'_, AppState>) -> Result<(), String> {
-    let mut ptys = state.ptys.write().await;
-    if let Some(handle) = ptys.remove(&pty_id)
-        && let Ok(mut child) = handle.child.into_inner()
-    {
-        let _ = child.kill();
+    // Pull the handle out under the write lock, then release it before doing
+    // any blocking work (subtree walk, signals, the 100ms grace sleep).
+    // Otherwise other PTY operations (spawn / write / resize / close) on
+    // unrelated PTYs serialize behind this one for ~100ms.
+    let handle = {
+        let mut ptys = state.ptys.write().await;
+        ptys.remove(&pty_id)
+    };
+
+    let Some(handle) = handle else {
+        return Ok(());
+    };
+
+    // Wake the tracker first so it drops its duplicated master FD before
+    // the handle (and the original master) goes out of scope.
+    if let Some(cancel) = &handle.tracker_cancel {
+        cancel.notify_one();
+    }
+    if let Ok(mut child) = handle.child.into_inner() {
+        // Walk the shell's subtree and kill every descendant before the
+        // shell itself, so cargo-watch-style grandchildren don't survive
+        // by being orphaned to launchd. 100ms grace for graceful exit.
+        // The walk shells out to `ps` and uses `std::thread::sleep` for
+        // the grace window — wrap in spawn_blocking so we don't block
+        // a tokio worker for the duration.
+        #[cfg(unix)]
+        if let Some(pid) = child.process_id() {
+            let _ = tokio::task::spawn_blocking(move || {
+                crate::subprocess_cleanup::kill_processes_with_descendants(&[pid as i32], 100);
+            })
+            .await;
+        }
+        // Belt-and-suspenders: portable-pty's kill (SIGKILL on Unix,
+        // TerminateProcess on Windows) ensures the shell is gone if the
+        // subtree walk didn't catch it. Then `wait()` to reap so we
+        // don't leave a zombie. Both calls are blocking — wrap in
+        // spawn_blocking for the same reason as above.
+        let _ = tokio::task::spawn_blocking(move || {
+            let _ = child.kill();
+            let _ = child.wait();
+        })
+        .await;
     }
     Ok(())
 }

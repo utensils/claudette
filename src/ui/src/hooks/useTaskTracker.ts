@@ -202,16 +202,16 @@ export function hasTaskActivity(activities: ToolActivity[]): boolean {
  * Scans both completed turns and current-turn activities for
  * TaskCreate, TaskUpdate, TaskStop, and TodoWrite tool calls.
  */
-export function useTaskTracker(wsId: string | null): TaskTrackerResult {
+export function useTaskTracker(sessionId: string | null): TaskTrackerResult {
   const completedTurns = useAppStore(
-    (s) => (wsId ? s.completedTurns[wsId] : null) ?? EMPTY_TURNS
+    (s) => (sessionId ? s.completedTurns[sessionId] : null) ?? EMPTY_TURNS
   );
   const toolActivities = useAppStore(
-    (s) => (wsId ? s.toolActivities[wsId] : null) ?? EMPTY_ACTIVITIES
+    (s) => (sessionId ? s.toolActivities[sessionId] : null) ?? EMPTY_ACTIVITIES
   );
 
   return useMemo(
-    () => (wsId ? deriveTasks(completedTurns, toolActivities) : EMPTY_RESULT),
-    [wsId, completedTurns, toolActivities]
+    () => (sessionId ? deriveTasks(completedTurns, toolActivities) : EMPTY_RESULT),
+    [sessionId, completedTurns, toolActivities]
   );
 }

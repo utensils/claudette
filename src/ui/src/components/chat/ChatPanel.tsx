@@ -49,7 +49,7 @@ import {
   isTextFile,
 } from "../../utils/attachmentValidation";
 import { useTypewriter } from "../../hooks/useTypewriter";
-import { extractToolSummary } from "../../hooks/toolSummary";
+import { extractToolSummary, relativizePath } from "../../hooks/toolSummary";
 import { AgentQuestionCard } from "./AgentQuestionCard";
 import { PlanApprovalCard } from "./PlanApprovalCard";
 import { ComposerToolbar } from "./composer/ComposerToolbar";
@@ -64,6 +64,7 @@ import {
   buildAttachmentMenuLabels,
 } from "./AttachmentContextMenu";
 import { AttachmentLightbox } from "./AttachmentLightbox";
+import { MessageAttachment, isTextDataMediaType } from "./MessageAttachment";
 import {
   downloadAttachment,
   openAttachmentInBrowser,
@@ -1114,6 +1115,7 @@ export function ChatPanel() {
                   sessionId={activeSessionId}
                   isRunning={isRunning ?? false}
                   searchQuery={searchQuery}
+                  worktreePath={ws?.worktree_path}
                 />
               )}
 
@@ -1272,7 +1274,23 @@ export function ChatPanel() {
                       },
                     },
                   ]
-                : []),
+                : [
+                    // Non-image types (PDF + the text-shaped cards)
+                    // route through the OS default-app handler — the
+                    // Rust side stages the bytes to a temp file with
+                    // the right extension and asks the system to open
+                    // it. Same UX as left-clicking a PDF thumbnail.
+                    {
+                      label: "Open with default app",
+                      onSelect: () => {
+                        withBytes()
+                          .then(openAttachmentWithDefaultApp)
+                          .catch((err) =>
+                            console.error("Open with default app failed:", err),
+                          );
+                      },
+                    },
+                  ]),
               ...(shareSupported
                 ? [
                     {
@@ -1400,6 +1418,7 @@ function TurnSummary({
   onFork,
   onRollback,
   searchQuery,
+  worktreePath,
 }: {
   turn: CompletedTurn;
   collapsed: boolean;
@@ -1417,6 +1436,7 @@ function TurnSummary({
   /** Active chat-search query. Force-expands this card when non-empty and
    *  the query matches inside any of the contained activity summaries. */
   searchQuery: string;
+  worktreePath?: string | null;
 }) {
   const hasElapsed = typeof turn.durationMs === "number" && turn.durationMs > 0;
   const hasTokens =
@@ -1430,10 +1450,16 @@ function TurnSummary({
   // resolved tool-summary fallback. Without this, marks would land in
   // detached DOM (the collapsed branch never renders), so the bar's
   // counter would tick up but nothing visible would change.
+  // Match against the same relativized text we render — otherwise a query
+  // hitting only the stripped workspace prefix would force-expand with no
+  // visible highlight inside.
   const queryHasMatch =
     !!searchQuery &&
     turn.activities.some((a) => {
-      const text = a.summary || extractToolSummary(a.toolName, a.inputJson);
+      const text = relativizePath(
+        a.summary || extractToolSummary(a.toolName, a.inputJson),
+        worktreePath,
+      );
       return text.toLowerCase().includes(searchQuery.toLowerCase());
     });
   const isExpanded = !collapsed || queryHasMatch;
@@ -1474,7 +1500,7 @@ function TurnSummary({
                   {(act.summary || act.inputJson) && (
                     <span className={styles.toolSummary}>
                       <HighlightedPlainText
-                        text={act.summary || extractToolSummary(act.toolName, act.inputJson)}
+                        text={relativizePath(act.summary || extractToolSummary(act.toolName, act.inputJson), worktreePath)}
                         query={searchQuery}
                       />
                     </span>
@@ -1754,6 +1780,9 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
   const chatAttachments = useAppStore(
     (s) => s.chatAttachments[sessionId] ?? EMPTY_ATTACHMENTS
   );
+  const worktreePath = useAppStore(
+    (s) => s.workspaces.find((w) => w.id === workspaceId)?.worktree_path
+  );
 
   // Pre-build a Map keyed by message_id for O(1) lookup in the render loop.
   //
@@ -1981,6 +2010,7 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
         onFork={onForkTurn ? () => onForkTurn(turn.id) : undefined}
         onRollback={buildOnRollback(turn.id)}
         searchQuery={searchQuery}
+        worktreePath={worktreePath}
       />
     ));
   };
@@ -2034,71 +2064,59 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
             <div className={styles.content}>
               {attachmentsByMessage.has(msg.id) && (
                 <div className={styles.messageImages}>
-                  {attachmentsByMessage.get(msg.id)!.map((att) =>
-                    att.media_type === "application/pdf" ? (
-                      <PdfThumbnail
-                        key={att.id}
-                        dataBase64={att.data_base64 || undefined}
-                        attachmentId={att.id}
-                        filename={att.filename}
-                        className={styles.messageImage}
-                        onClick={() => {
-                          (async () => {
-                            // Persisted attachments strip data_base64 on first
-                            // load to avoid IPC bloat — fetch on demand.
-                            let b64 = att.data_base64;
-                            if (!b64) {
-                              const { loadAttachmentData } = await import(
-                                "../../services/tauri"
-                              );
-                              b64 = await loadAttachmentData(att.id);
-                            }
-                            await openAttachmentWithDefaultApp({
-                              filename: att.filename,
-                              media_type: att.media_type,
-                              data_base64: b64,
-                            });
-                          })().catch((err) =>
-                            console.error("Failed to open PDF:", err),
-                          );
-                        }}
-                        onContextMenu={(e) =>
-                          onAttachmentContextMenu?.(
-                            e,
-                            {
-                              filename: att.filename,
-                              media_type: att.media_type,
-                              data_base64: att.data_base64,
-                            },
-                            att.id,
-                          )
-                        }
-                      />
-                    ) : att.media_type === "text/plain" ? (
-                      <div
-                        key={att.id}
-                        className={styles.messagePdf}
-                        onContextMenu={(e) =>
-                          onAttachmentContextMenu?.(
-                            e,
-                            {
-                              filename: att.filename,
-                              media_type: att.media_type,
-                              data_base64: att.data_base64,
-                            },
-                            att.id,
-                          )
-                        }
-                      >
-                        <FileText size={14} />
-                        <span>{att.filename}</span>
-                        <span className={styles.textFileSize}>
-                          {att.size_bytes < 1024
-                            ? `${att.size_bytes} B`
-                            : `${(att.size_bytes / 1024).toFixed(0)} KB`}
-                        </span>
-                      </div>
-                    ) : (
+                  {attachmentsByMessage.get(msg.id)!.map((att) => {
+                    if (att.media_type === "application/pdf") {
+                      return (
+                        <PdfThumbnail
+                          key={att.id}
+                          dataBase64={att.data_base64 || undefined}
+                          attachmentId={att.id}
+                          filename={att.filename}
+                          className={styles.messageImage}
+                          onClick={() => {
+                            (async () => {
+                              // Persisted attachments strip data_base64 on first
+                              // load to avoid IPC bloat — fetch on demand.
+                              let b64 = att.data_base64;
+                              if (!b64) {
+                                const { loadAttachmentData } = await import(
+                                  "../../services/tauri"
+                                );
+                                b64 = await loadAttachmentData(att.id);
+                              }
+                              await openAttachmentWithDefaultApp({
+                                filename: att.filename,
+                                media_type: att.media_type,
+                                data_base64: b64,
+                              });
+                            })().catch((err) =>
+                              console.error("Failed to open PDF:", err),
+                            );
+                          }}
+                          onContextMenu={(e) =>
+                            onAttachmentContextMenu?.(
+                              e,
+                              {
+                                filename: att.filename,
+                                media_type: att.media_type,
+                                data_base64: att.data_base64,
+                              },
+                              att.id,
+                            )
+                          }
+                        />
+                      );
+                    }
+                    if (isTextDataMediaType(att.media_type)) {
+                      return (
+                        <MessageAttachment
+                          key={att.id}
+                          attachment={att}
+                          handlers={{ onContextMenu: onAttachmentContextMenu }}
+                        />
+                      );
+                    }
+                    return (
                       <img
                         key={att.id}
                         src={`data:${att.media_type};base64,${att.data_base64}`}
@@ -2123,8 +2141,8 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
                           )
                         }
                       />
-                    ),
-                  )}
+                    );
+                  })}
                 </div>
               )}
               {shouldRenderAsMarkdown(msg.role) ? (
@@ -2164,12 +2182,13 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
             key={turn.id}
             turn={turn}
             collapsed={turn.collapsed}
-            onToggle={() => toggleCompletedTurn(workspaceId, globalIdx)}
+            onToggle={() => toggleCompletedTurn(sessionId, globalIdx)}
             taskProgress={taskProgressByTurn.get(globalIdx)}
             assistantText={assistantTextByTurnId.get(turn.id) ?? ""}
             onFork={onForkTurn ? () => onForkTurn(turn.id) : undefined}
             onRollback={buildOnRollback(turn.id)}
             searchQuery={searchQuery}
+            worktreePath={worktreePath}
           />
         ))}
     </>
@@ -2184,10 +2203,12 @@ const ToolActivitiesSection = memo(function ToolActivitiesSection({
   sessionId,
   isRunning,
   searchQuery,
+  worktreePath,
 }: {
   sessionId: string;
   isRunning: boolean;
   searchQuery: string;
+  worktreePath?: string | null;
 }) {
   const activities = useAppStore(
     (s) => s.toolActivities[sessionId] ?? EMPTY_ACTIVITIES
@@ -2208,13 +2229,15 @@ const ToolActivitiesSection = memo(function ToolActivitiesSection({
   // Force-expand when the active search query matches inside any of this
   // section's activity summaries — otherwise marks would be silently
   // hidden behind the collapsed header and the user would see a non-zero
-  // counter with no visible highlight.
+  // counter with no visible highlight. Match against the same relativized
+  // text we render, not the raw summary.
   const queryHasMatch =
     !!searchQuery &&
-    activities.some(
-      (a) =>
-        a.summary && a.summary.toLowerCase().includes(searchQuery.toLowerCase()),
-    );
+    activities.some((a) => {
+      if (!a.summary) return false;
+      const text = relativizePath(a.summary, worktreePath);
+      return text.toLowerCase().includes(searchQuery.toLowerCase());
+    });
   const isExpanded = !collapsed || queryHasMatch;
 
   return (
@@ -2248,7 +2271,7 @@ const ToolActivitiesSection = memo(function ToolActivitiesSection({
                   <span className={styles.toolName} style={{ color: toolColor(act.toolName) }}>{act.toolName}</span>
                   {act.summary && (
                     <span className={styles.toolSummary}>
-                      <HighlightedPlainText text={act.summary} query={searchQuery} />
+                      <HighlightedPlainText text={relativizePath(act.summary, worktreePath)} query={searchQuery} />
                     </span>
                   )}
                 </div>

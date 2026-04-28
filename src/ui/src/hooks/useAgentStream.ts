@@ -687,6 +687,7 @@ export function useAgentStream() {
     let active = true;
     const unlisten = listen<{
       workspace_id: string;
+      chat_session_id: string;
       message_id: string;
       attachment: {
         id: string;
@@ -702,8 +703,11 @@ export function useAgentStream() {
       };
     }>("agent-attachment-created", (event) => {
       if (!active) return;
-      const { workspace_id: wsId, attachment } = event.payload;
-      addChatAttachments(wsId, [
+      // Store keys `chatAttachments` by chat_session_id (a single workspace
+      // can have several sessions), so we route by that. workspace_id is
+      // present too but unused here.
+      const { chat_session_id: sessionId, attachment } = event.payload;
+      addChatAttachments(sessionId, [
         {
           id: attachment.id,
           message_id: attachment.message_id,

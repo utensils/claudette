@@ -60,6 +60,17 @@ export function allLeafIds(tree: TerminalPaneNode): TerminalPaneNodeId[] {
   return [...allLeafIds(tree.children[0]), ...allLeafIds(tree.children[1])];
 }
 
+export function findLeafByPtyId(
+  tree: TerminalPaneNode,
+  ptyId: number,
+): TerminalLeafPane | null {
+  if (tree.kind === "leaf") return tree.ptyId === ptyId ? tree : null;
+  return (
+    findLeafByPtyId(tree.children[0], ptyId) ??
+    findLeafByPtyId(tree.children[1], ptyId)
+  );
+}
+
 export interface SplitLeafResult {
   tree: TerminalPaneNode;
   // The id of the new leaf created by the split. null when the operation

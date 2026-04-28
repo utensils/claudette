@@ -527,6 +527,63 @@ describe("finalizeTurn afterMessageIndex", () => {
   });
 });
 
+// Regression coverage for issue 463: clicking a completed turn's chevron
+// must flip `collapsed`, and the toggle's key must match the key the
+// readers use (sessionId, not workspaceId — these diverged after the
+// multi-session refactor in PR 306).
+describe("toggleCompletedTurn", () => {
+  const SESSION_ID = "session-xyz";
+  const WORKSPACE_ID = "workspace-abc";
+
+  beforeEach(() => {
+    useAppStore.setState({
+      toolActivities: {},
+      completedTurns: {},
+      chatMessages: {},
+    });
+  });
+
+  it("flips collapsed for the turn at turnIndex under the given key", () => {
+    addToolActivities(SESSION_ID);
+    useAppStore.getState().finalizeTurn(SESSION_ID, 1);
+
+    const before = useAppStore.getState().completedTurns[SESSION_ID];
+    expect(before).toHaveLength(1);
+    expect(before[0].collapsed).toBe(true);
+
+    useAppStore.getState().toggleCompletedTurn(SESSION_ID, 0);
+
+    const after = useAppStore.getState().completedTurns[SESSION_ID];
+    expect(after[0].collapsed).toBe(false);
+
+    useAppStore.getState().toggleCompletedTurn(SESSION_ID, 0);
+
+    const final = useAppStore.getState().completedTurns[SESSION_ID];
+    expect(final[0].collapsed).toBe(true);
+  });
+
+  it("toggling under the wrong key does not mutate turns at the correct key", () => {
+    addToolActivities(SESSION_ID);
+    useAppStore.getState().finalizeTurn(SESSION_ID, 1);
+
+    useAppStore.getState().toggleCompletedTurn(WORKSPACE_ID, 0);
+
+    const turns = useAppStore.getState().completedTurns[SESSION_ID];
+    expect(turns).toHaveLength(1);
+    expect(turns[0].collapsed).toBe(true);
+  });
+
+  it("leaves turn data unchanged when turnIndex is out of range", () => {
+    addToolActivities(SESSION_ID);
+    useAppStore.getState().finalizeTurn(SESSION_ID, 1);
+
+    useAppStore.getState().toggleCompletedTurn(SESSION_ID, 99);
+
+    const turns = useAppStore.getState().completedTurns[SESSION_ID];
+    expect(turns[0].collapsed).toBe(true);
+  });
+});
+
 describe("hydrateCompletedTurns", () => {
   beforeEach(() => {
     useAppStore.setState({
@@ -1488,8 +1545,8 @@ describe("removeWorkspace", () => {
       },
       activeTerminalTabId: { "ws-a": 1, "ws-b": 2 },
       workspaceTerminalCommands: {
-        "ws-a": { command: "ls", isRunning: false, exitCode: 0 },
-        "ws-b": { command: "pwd", isRunning: false, exitCode: 0 },
+        "ws-a": { 1: "ls" },
+        "ws-b": { 2: "pwd" },
       },
     });
   });

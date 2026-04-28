@@ -1,0 +1,201 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 720px;
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  background: var(--hover-bg-subtle);
+  overflow: hidden;
+  font-size: 13px;
+}
+
+/* CSV cards size to fit their table when possible — a 15-column wide CSV
+   would otherwise spend a horizontal scrollbar inside a 720px box even
+   though the chat surface has plenty of room to the right. `fit-content`
+   plus `max-width: 100%` lets the card grow up to the available chat
+   width and still scroll if the table truly exceeds that. The min-width
+   keeps a four-column-table card from collapsing to its filename. */
+.card[data-media-type="text/csv"] {
+  width: fit-content;
+  max-width: 100%;
+  min-width: 320px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--divider);
+  background: var(--surface-bg);
+  color: var(--text-muted);
+  font-size: 12px;
+  user-select: none;
+}
+
+.headerIcon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.filename {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.size {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.menuButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  margin-left: 2px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text-faint);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.menuButton:hover {
+  background: var(--hover-bg-subtle);
+  border-color: var(--divider);
+  color: var(--text-primary);
+}
+
+.menuButton:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.body {
+  position: relative;
+  max-height: 320px;
+  overflow: hidden;
+}
+
+.bodyExpanded {
+  max-height: none;
+}
+
+.fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 32px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--hover-bg-subtle));
+}
+
+.expandToggle {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--divider);
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.expandToggle:hover {
+  background: var(--hover-bg-subtle);
+  color: var(--text-primary);
+}
+
+.preBody {
+  margin: 0;
+  padding: 8px 10px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-primary);
+  background: transparent;
+  white-space: pre;
+  overflow: auto;
+}
+
+.markdownBody {
+  padding: 8px 12px;
+  color: var(--text-primary);
+  overflow: auto;
+}
+
+.markdownBody > :first-child {
+  margin-top: 0;
+}
+
+.markdownBody > :last-child {
+  margin-bottom: 0;
+}
+
+.csvTable {
+  /* `max-content` lets columns size to their actual data instead of
+     stretching to fill a 100%-width card. Combined with the parent
+     card's `fit-content` width above, a small table renders compact
+     and a wide table grows up to the chat-surface bound — both
+     without unnecessary horizontal scroll. */
+  width: max-content;
+  max-width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.csvTable th,
+.csvTable td {
+  padding: 4px 8px;
+  border-right: 1px solid var(--divider);
+  border-bottom: 1px solid var(--divider);
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Cap individual column width so a runaway value (long URL, base64
+     blob) doesn't push the whole table horizontally. Column natural
+     widths still drive the layout — this is just an outlier guard. */
+  max-width: 320px;
+}
+
+.csvTable th {
+  background: var(--surface-bg);
+  color: var(--text-muted);
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+}
+
+.csvTable tbody tr:nth-child(even) {
+  background: var(--surface-bg);
+}
+
+.csvTruncated {
+  padding: 4px 10px;
+  color: var(--text-faint);
+  font-size: 11px;
+  border-top: 1px solid var(--divider);
+  background: var(--surface-bg);
+}
+
+.error {
+  padding: 8px 10px;
+  color: var(--text-faint);
+  font-size: 12px;
+  font-style: italic;
+}

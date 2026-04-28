@@ -323,8 +323,11 @@ jobs:
           # follow-up). Aborting here is safe — `nightly` is still intact.
           for attempt in 1 2 3; do
             rm -f latest.json
-            if curl -fsSL -o latest.json \
-              "https://github.com/${GITHUB_REPOSITORY}/releases/download/nightly-staging/latest.json"; then
+            if gh release download nightly-staging \
+              --repo "$GITHUB_REPOSITORY" \
+              --pattern "latest.json" \
+              --dir . \
+              --clobber; then
               break
             fi
             if [ "$attempt" -eq 3 ]; then

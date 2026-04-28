@@ -28,10 +28,19 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::state::AppState;
 
 /// Tauri-side implementation of [`Sink`] — one per persistent agent session.
+///
+/// `chat_session_id` is the key used to look up the agent's `AgentSessionState`
+/// in `AppState.agents` (and therefore the `last_user_msg_id` anchor) and the
+/// key the frontend listener uses to merge the new attachment into the right
+/// `chatAttachments[sessionId]` slice. `workspace_id` is still emitted on the
+/// event for any host-side filtering (e.g. notifications) that wants
+/// workspace granularity, but the chat-surface routing path no longer reads
+/// it. Both are kept on the struct because they are NOT the same id.
 pub struct ChatBridgeSink {
     pub app: AppHandle,
     pub db_path: PathBuf,
     pub workspace_id: String,
+    pub chat_session_id: String,
 }
 
 impl Sink for ChatBridgeSink {
@@ -42,13 +51,20 @@ impl Sink for ChatBridgeSink {
         let app = self.app.clone();
         let db_path = self.db_path.clone();
         let workspace_id = self.workspace_id.clone();
-        Box::pin(async move { handle_payload(app, db_path, workspace_id, payload).await })
+        let chat_session_id = self.chat_session_id.clone();
+        Box::pin(async move {
+            handle_payload(app, db_path, workspace_id, chat_session_id, payload).await
+        })
     }
 }
 
 #[derive(Serialize, Clone)]
 struct AgentAttachmentEvent {
     workspace_id: String,
+    /// The chat session the attachment belongs to. The frontend store keys
+    /// `chatAttachments` by session id (a workspace can have several sessions),
+    /// so the listener needs this to merge the row into the correct slice.
+    chat_session_id: String,
     message_id: String,
     attachment: AttachmentEventBody,
 }
@@ -74,6 +90,7 @@ async fn handle_payload(
     app: AppHandle,
     db_path: PathBuf,
     workspace_id: String,
+    chat_session_id: String,
     payload: BridgePayload,
 ) -> BridgeResponse {
     match payload {
@@ -81,7 +98,18 @@ async fn handle_payload(
             file_path,
             media_type,
             caption,
-        } => send_attachment(app, db_path, workspace_id, file_path, media_type, caption).await,
+        } => {
+            send_attachment(
+                app,
+                db_path,
+                workspace_id,
+                chat_session_id,
+                file_path,
+                media_type,
+                caption,
+            )
+            .await
+        }
     }
 }
 
@@ -89,6 +117,7 @@ async fn send_attachment(
     app: AppHandle,
     db_path: PathBuf,
     workspace_id: String,
+    chat_session_id: String,
     file_path: String,
     media_type: String,
     caption: Option<String>,
@@ -128,12 +157,16 @@ async fn send_attachment(
     // don't carry two full copies in memory at once for big PDFs.
     let data_base64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
 
-    // Resolve the anchor message_id from AppState.
+    // Resolve the anchor message_id from AppState. The `agents` map is keyed
+    // by `chat_session_id` (a single workspace can have multiple sessions),
+    // so we must look up by that — using `workspace_id` here was a latent bug
+    // that meant `last_user_msg_id` was always `None` and `send_to_user`
+    // always rejected with "no in-flight turn".
     let anchor_msg_id = {
         let state = app.state::<AppState>();
         let agents = state.agents.read().await;
         agents
-            .get(&workspace_id)
+            .get(&chat_session_id)
             .and_then(|s| s.last_user_msg_id.clone())
     };
     let Some(message_id) = anchor_msg_id else {
@@ -165,6 +198,7 @@ async fn send_attachment(
     // Emit the event so the chat surface re-renders.
     let evt = AgentAttachmentEvent {
         workspace_id: workspace_id.clone(),
+        chat_session_id: chat_session_id.clone(),
         message_id: message_id.clone(),
         attachment: AttachmentEventBody {
             id: attachment_id.clone(),

@@ -31,12 +31,14 @@ async fn start_bridge_and_inject_mcp(
     app: &AppHandle,
     db_path: &std::path::Path,
     workspace_id: &str,
+    chat_session_id: &str,
     base_mcp_config: Option<String>,
 ) -> Result<(Arc<McpBridgeSession>, Option<String>), String> {
     let sink = Arc::new(ChatBridgeSink {
         app: app.clone(),
         db_path: db_path.to_path_buf(),
         workspace_id: workspace_id.to_string(),
+        chat_session_id: chat_session_id.to_string(),
     });
     let bridge = Arc::new(McpBridgeSession::start(sink).await?);
     let merged = inject_claudette_mcp_entry(base_mcp_config, bridge.handle())?;
@@ -322,17 +324,35 @@ pub async fn send_chat_message(
     // Decode, validate, and persist attachments alongside the user message.
     // Both inserts share a transaction so the message and its attachments are
     // atomic — a failed attachment decode won't leave an orphaned message.
+    // Mirrors the agent-side allow-list in
+    // `src/agent_mcp/tools/send_to_user.rs::policy`. Keep the two in sync —
+    // outbound (agent → user) symmetry with inbound (user → agent) is the
+    // documented invariant.
     const ALLOWED_MIME: &[&str] = &[
         "image/png",
         "image/jpeg",
         "image/gif",
         "image/webp",
+        "image/svg+xml",
         "application/pdf",
         "text/plain",
+        "text/csv",
+        "text/markdown",
+        "application/json",
     ];
     const MAX_IMAGE_BYTES: usize = 3_932_160; // 3.75 MB
-    const MAX_PDF_BYTES: usize = 20_971_520; // 20 MB
-    const MAX_TEXT_BYTES: usize = 512_000; // 500 KB
+    const MAX_PDF_BYTES: usize = 20 * 1024 * 1024; // 20 MB
+    const MAX_TEXT_BYTES: usize = 1024 * 1024; // 1 MB
+    const MAX_CSV_BYTES: usize = 2 * 1024 * 1024; // 2 MB
+    const MAX_MARKDOWN_BYTES: usize = 1024 * 1024; // 1 MB
+    const MAX_JSON_BYTES: usize = 1024 * 1024; // 1 MB
+
+    fn is_text_kind(media_type: &str) -> bool {
+        matches!(
+            media_type,
+            "text/plain" | "text/csv" | "text/markdown" | "application/json"
+        )
+    }
 
     let mut att_models: Vec<Attachment> = Vec::new();
     let mut cli_atts: Vec<FileAttachment> = Vec::new();
@@ -343,12 +363,13 @@ pub async fn send_chat_message(
                 return Err(format!("Unsupported attachment type: {}", input.media_type));
             }
             let data = base64_decode(&input.data_base64).map_err(|e| format!("Bad base64: {e}"))?;
-            let max = if input.media_type == "application/pdf" {
-                MAX_PDF_BYTES
-            } else if input.media_type == "text/plain" {
-                MAX_TEXT_BYTES
-            } else {
-                MAX_IMAGE_BYTES
+            let max = match input.media_type.as_str() {
+                "application/pdf" => MAX_PDF_BYTES,
+                "text/plain" => MAX_TEXT_BYTES,
+                "text/csv" => MAX_CSV_BYTES,
+                "text/markdown" => MAX_MARKDOWN_BYTES,
+                "application/json" => MAX_JSON_BYTES,
+                _ => MAX_IMAGE_BYTES,
             };
             if data.len() > max {
                 return Err(format!(
@@ -360,15 +381,19 @@ pub async fn send_chat_message(
             if input.media_type == "application/pdf" && !data.starts_with(b"%PDF-") {
                 return Err("Invalid PDF: missing %PDF- header".to_string());
             }
-            let text_content = if input.media_type == "text/plain" {
+            let text_content = if is_text_kind(&input.media_type) {
                 let check_len = data.len().min(8192);
                 if data[..check_len].contains(&0) {
-                    return Err(
-                        "Invalid text/plain attachment: binary content detected".to_string()
-                    );
+                    return Err(format!(
+                        "Invalid {} attachment: binary content detected",
+                        input.media_type
+                    ));
                 }
                 let decoded = std::str::from_utf8(&data).map_err(|_| {
-                    "Invalid text/plain attachment: payload is not valid UTF-8".to_string()
+                    format!(
+                        "Invalid {} attachment: payload is not valid UTF-8",
+                        input.media_type
+                    )
                 })?;
                 Some(
                     input
@@ -823,6 +848,7 @@ pub async fn send_chat_message(
                         &app,
                         &state.db_path,
                         &workspace_id,
+                        &chat_session_id,
                         agent_settings.mcp_config.clone(),
                     )
                     .await?;
@@ -907,6 +933,7 @@ pub async fn send_chat_message(
                 &app,
                 &state.db_path,
                 &workspace_id,
+                &chat_session_id,
                 agent_settings.mcp_config.clone(),
             )
             .await?;
@@ -2299,9 +2326,13 @@ pub async fn submit_plan_approval(
             "updatedInput": pending.original_input,
         })
     } else {
+        let feedback = reason.unwrap_or_else(|| "Plan denied. Please revise the approach.".into());
+        let message = format!(
+            "{feedback}\n\nRevise the plan to address this feedback, then call ExitPlanMode again to present the updated plan for approval. Do not begin implementation until the user approves the revised plan."
+        );
         serde_json::json!({
             "behavior": "deny",
-            "message": reason.unwrap_or_else(|| "Plan denied. Please revise the approach.".into()),
+            "message": message,
         })
     };
     ps.send_control_response(&pending.request_id, response)
@@ -2377,9 +2408,13 @@ pub async fn load_attachments_for_session(
     let mut result = Vec::new();
     for (_, atts) in att_map {
         for a in atts {
-            // Inline base64 data for images and text files — PDFs are too
-            // large to push through IPC eagerly and would stall the renderer.
-            let is_text = a.media_type == "text/plain";
+            // Inline base64 data for images and text-shaped attachments —
+            // PDFs are too large to push through IPC eagerly and would stall
+            // the renderer.
+            let is_text = matches!(
+                a.media_type.as_str(),
+                "text/plain" | "text/csv" | "text/markdown" | "application/json"
+            );
             let data_base64 = if a.media_type.starts_with("image/") || is_text {
                 base64_encode(&a.data)
             } else {
@@ -2434,8 +2469,11 @@ pub async fn read_file_as_base64(path: String) -> Result<AttachmentResponse, Str
     use std::path::Path;
 
     const MAX_IMAGE_SIZE: usize = 3_932_160; // 3.75 MB
-    const MAX_PDF_SIZE: usize = 20_971_520; // 20 MB
-    const MAX_TEXT_SIZE: usize = 512_000; // 500 KB
+    const MAX_PDF_SIZE: usize = 20 * 1024 * 1024; // 20 MB
+    const MAX_TEXT_SIZE: usize = 1024 * 1024; // 1 MB
+    const MAX_CSV_SIZE: usize = 2 * 1024 * 1024; // 2 MB
+    const MAX_MARKDOWN_SIZE: usize = 1024 * 1024; // 1 MB
+    const MAX_JSON_SIZE: usize = 1024 * 1024; // 1 MB
 
     let file_path = Path::new(&path);
     let filename = file_path
@@ -2450,12 +2488,27 @@ pub async fn read_file_as_base64(path: String) -> Result<AttachmentResponse, Str
         .unwrap_or("")
         .to_lowercase();
 
-    let known_media_type = match ext.as_str() {
-        "png" => Some("image/png"),
-        "jpg" | "jpeg" => Some("image/jpeg"),
-        "gif" => Some("image/gif"),
-        "webp" => Some("image/webp"),
-        "pdf" => Some("application/pdf"),
+    enum Kind {
+        Image,
+        Pdf,
+        Csv,
+        Markdown,
+        Json,
+    }
+
+    // Map extensions to a Kind. Anything else falls through to UTF-8
+    // sniffing below, which classifies the file as plain text or rejects
+    // it as binary.
+    let known_kind = match ext.as_str() {
+        "png" => Some((Kind::Image, "image/png")),
+        "jpg" | "jpeg" => Some((Kind::Image, "image/jpeg")),
+        "gif" => Some((Kind::Image, "image/gif")),
+        "webp" => Some((Kind::Image, "image/webp")),
+        "svg" => Some((Kind::Image, "image/svg+xml")),
+        "pdf" => Some((Kind::Pdf, "application/pdf")),
+        "csv" => Some((Kind::Csv, "text/csv")),
+        "md" | "markdown" => Some((Kind::Markdown, "text/markdown")),
+        "json" => Some((Kind::Json, "application/json")),
         _ => None,
     };
 
@@ -2468,12 +2521,13 @@ pub async fn read_file_as_base64(path: String) -> Result<AttachmentResponse, Str
     if file_len == 0 {
         return Err("File is empty".to_string());
     }
-    let max_for_read = if known_media_type == Some("application/pdf") {
-        MAX_PDF_SIZE
-    } else if known_media_type.is_some() {
-        MAX_IMAGE_SIZE
-    } else {
-        MAX_TEXT_SIZE
+    let max_for_read = match &known_kind {
+        Some((Kind::Pdf, _)) => MAX_PDF_SIZE,
+        Some((Kind::Image, _)) => MAX_IMAGE_SIZE,
+        Some((Kind::Csv, _)) => MAX_CSV_SIZE,
+        Some((Kind::Markdown, _)) => MAX_MARKDOWN_SIZE,
+        Some((Kind::Json, _)) => MAX_JSON_SIZE,
+        None => MAX_TEXT_SIZE,
     };
     if file_len > max_for_read {
         return Err(format!(
@@ -2489,49 +2543,96 @@ pub async fn read_file_as_base64(path: String) -> Result<AttachmentResponse, Str
 
     let size_bytes = data.len() as i64;
 
-    if let Some(media_type) = known_media_type {
-        if media_type == "application/pdf" && !data.starts_with(b"%PDF-") {
-            return Err("Invalid PDF file: missing %PDF- header".to_string());
+    match known_kind {
+        Some((Kind::Image, media_type)) => {
+            let data_base64 = base64_encode(&data);
+            Ok(AttachmentResponse {
+                id: String::new(),
+                message_id: String::new(),
+                filename,
+                media_type: media_type.to_string(),
+                data_base64,
+                text_content: None,
+                width: None,
+                height: None,
+                size_bytes,
+                origin: claudette::model::AttachmentOrigin::User,
+                tool_use_id: None,
+            })
         }
-
-        let data_base64 = base64_encode(&data);
-        Ok(AttachmentResponse {
-            id: String::new(),
-            message_id: String::new(),
-            filename,
-            media_type: media_type.to_string(),
-            data_base64,
-            text_content: None,
-            width: None,
-            height: None,
-            size_bytes,
-            origin: claudette::model::AttachmentOrigin::User,
-            tool_use_id: None,
-        })
-    } else {
-        // Unknown extension — attempt to read as text.
-        let check_len = data.len().min(8192);
-        if data[..check_len].contains(&0) {
-            return Err(format!("Unsupported binary file type: .{ext}"));
-        }
-        match String::from_utf8(data.clone()) {
-            Ok(text) => {
-                let data_base64 = base64_encode(&data);
-                Ok(AttachmentResponse {
-                    id: String::new(),
-                    message_id: String::new(),
-                    filename,
-                    media_type: "text/plain".to_string(),
-                    data_base64,
-                    text_content: Some(text),
-                    width: None,
-                    height: None,
-                    size_bytes,
-                    origin: claudette::model::AttachmentOrigin::User,
-                    tool_use_id: None,
-                })
+        Some((Kind::Pdf, media_type)) => {
+            if !data.starts_with(b"%PDF-") {
+                return Err("Invalid PDF file: missing %PDF- header".to_string());
             }
-            Err(_) => Err(format!("Unsupported binary file type: .{ext}")),
+            let data_base64 = base64_encode(&data);
+            Ok(AttachmentResponse {
+                id: String::new(),
+                message_id: String::new(),
+                filename,
+                media_type: media_type.to_string(),
+                data_base64,
+                text_content: None,
+                width: None,
+                height: None,
+                size_bytes,
+                origin: claudette::model::AttachmentOrigin::User,
+                tool_use_id: None,
+            })
+        }
+        Some((Kind::Csv | Kind::Markdown | Kind::Json, media_type)) => {
+            // Text-shaped — must be valid UTF-8 *and* contain no NUL bytes.
+            // UTF-8 itself permits U+0000, so a binary file with a misleading
+            // `.csv` / `.json` / `.md` extension can pass `from_utf8` while
+            // clearly being binary. The unknown-extension branch below
+            // already rejects on `\0`; mirror that here so the same content
+            // doesn't get a free pass purely because the suffix is on the
+            // known list.
+            let check_len = data.len().min(8192);
+            if data[..check_len].contains(&0) {
+                return Err(format!("File looks binary (contains NUL bytes): .{ext}"));
+            }
+            let text = String::from_utf8(data.clone())
+                .map_err(|_| format!("File is not valid UTF-8: .{ext}"))?;
+            let data_base64 = base64_encode(&data);
+            Ok(AttachmentResponse {
+                id: String::new(),
+                message_id: String::new(),
+                filename,
+                media_type: media_type.to_string(),
+                data_base64,
+                text_content: Some(text),
+                width: None,
+                height: None,
+                size_bytes,
+                origin: claudette::model::AttachmentOrigin::User,
+                tool_use_id: None,
+            })
+        }
+        None => {
+            // Unknown extension — attempt to read as text.
+            let check_len = data.len().min(8192);
+            if data[..check_len].contains(&0) {
+                return Err(format!("Unsupported binary file type: .{ext}"));
+            }
+            match String::from_utf8(data.clone()) {
+                Ok(text) => {
+                    let data_base64 = base64_encode(&data);
+                    Ok(AttachmentResponse {
+                        id: String::new(),
+                        message_id: String::new(),
+                        filename,
+                        media_type: "text/plain".to_string(),
+                        data_base64,
+                        text_content: Some(text),
+                        width: None,
+                        height: None,
+                        size_bytes,
+                        origin: claudette::model::AttachmentOrigin::User,
+                        tool_use_id: None,
+                    })
+                }
+                Err(_) => Err(format!("Unsupported binary file type: .{ext}")),
+            }
         }
     }
 }

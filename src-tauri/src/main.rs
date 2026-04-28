@@ -5,11 +5,12 @@ mod agent_mcp_sink;
 mod commands;
 mod mdns;
 mod missing_cli;
-mod osc133;
 mod platform_speech;
 mod pty;
+mod pty_tracker;
 mod remote;
 mod state;
+mod subprocess_cleanup;
 mod transport;
 mod tray;
 mod usage;
@@ -550,8 +551,6 @@ fn main() {
             commands::cesp::cesp_preview_sound,
             commands::cesp::cesp_play_for_event,
             // Shell Integration
-            commands::shell::setup_shell_integration,
-            commands::shell::apply_shell_integration,
             commands::shell::open_in_editor,
             commands::shell::open_url,
             // MCP
@@ -628,39 +627,87 @@ fn main() {
     builder
         .build(tauri::generate_context!())
         .expect("error while building Claudette")
-        .run(|_app, _event| {
-            match _event {
-                // Show the window when the dock icon is clicked (macOS reopen).
-                #[cfg(target_os = "macos")]
-                tauri::RunEvent::Reopen { .. } => {
-                    if let Some(window) = _app.get_webview_window("main") {
-                        let _ = window.unminimize();
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
-                    // Navigate to session needing attention, if any.
-                    tray::navigate_to_attention(_app);
-                }
-                // Kill the embedded server process (if we spawned one) before
-                // the tokio runtime tears down. Using synchronous POSIX kill
-                // ensures the child is dead before our process exits, preventing
-                // the "Address already in use" error on next launch.
-                tauri::RunEvent::Exit => {
-                    let app_state = _app.state::<state::AppState>();
-                    // try_write avoids blocking if another thread holds the lock
-                    // during shutdown — in that case Drop will still fire.
-                    // Dropping `srv` triggers LocalServerState::drop which
-                    // calls kill_process_sync(pid). Taking it out of the
-                    // Option ensures cleanup runs exactly once.
-                    if let Ok(mut guard) = app_state.local_server.try_write()
-                        && let Some(srv) = guard.take()
-                    {
-                        drop(srv);
-                    }
-                }
-                _ => {}
+        .run(shutdown_runtime_handler);
+}
+
+/// `RunEvent::Exit` is the last hook before the Tauri runtime tears down,
+/// so anything Claudette spawned that we haven't already reaped will
+/// re-parent to PID 1 if we don't kill it here.
+///
+/// We treat PTY shells and persistent Claude CLI agents the same way: each
+/// is a "root" whose entire descendant tree must die. `cargo-watch` and
+/// similar tools deliberately put their grandchildren into a fresh
+/// session/PG, so signaling the root's process group leaves them behind —
+/// the subtree walk in `subprocess_cleanup` is the reliable path.
+#[cfg(unix)]
+fn cleanup_subprocesses_on_exit(app_state: &state::AppState) {
+    let mut roots: Vec<i32> = Vec::new();
+
+    if let Ok(ptys) = app_state.ptys.try_read() {
+        for handle in ptys.values() {
+            if let Ok(child) = handle.child.lock()
+                && let Some(pid) = child.process_id()
+            {
+                roots.push(pid as i32);
             }
-        });
+        }
+    }
+
+    if let Ok(agents) = app_state.agents.try_read() {
+        for ag in agents.values() {
+            if let Some(sess) = &ag.persistent_session {
+                roots.push(sess.pid() as i32);
+            }
+        }
+    }
+
+    subprocess_cleanup::kill_processes_with_descendants(&roots, 500);
+}
+
+fn shutdown_runtime_handler(_app: &tauri::AppHandle, _event: tauri::RunEvent) {
+    match _event {
+        // Show the window when the dock icon is clicked (macOS reopen).
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen { .. } => {
+            if let Some(window) = _app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+            // Navigate to session needing attention, if any.
+            tray::navigate_to_attention(_app);
+        }
+        // Kill the embedded server process (if we spawned one) before
+        // the tokio runtime tears down. Using synchronous POSIX kill
+        // ensures the child is dead before our process exits, preventing
+        // the "Address already in use" error on next launch.
+        tauri::RunEvent::Exit => {
+            let app_state = _app.state::<state::AppState>();
+
+            // Kill all spawned children (PTY shells + Claude CLI agent
+            // subprocesses) before our process dies, otherwise they
+            // re-parent to launchd and survive — the user has to hunt
+            // them down with `ps`. Each root's full descendant tree is
+            // walked via `subprocess_cleanup` and signaled in parallel,
+            // which catches grandchildren detached into a fresh
+            // session/PG (e.g. cargo-watch's nxv serve) that a plain
+            // PG signal would miss.
+            #[cfg(unix)]
+            cleanup_subprocesses_on_exit(&app_state);
+
+            // try_write avoids blocking if another thread holds the lock
+            // during shutdown — in that case Drop will still fire.
+            // Dropping `srv` triggers LocalServerState::drop which
+            // calls kill_process_sync(pid). Taking it out of the
+            // Option ensures cleanup runs exactly once.
+            if let Ok(mut guard) = app_state.local_server.try_write()
+                && let Some(srv) = guard.take()
+            {
+                drop(srv);
+            }
+        }
+        _ => {}
+    }
 }
 
 #[cfg(test)]

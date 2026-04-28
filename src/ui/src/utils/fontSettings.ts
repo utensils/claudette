@@ -35,6 +35,7 @@ export function resetUiFontSize(): void {
 export interface FontOption {
   value: string;
   label: string;
+  group?: "sans" | "mono";
 }
 
 /** Heuristic: does a font family name look monospaced? */
@@ -42,28 +43,38 @@ const MONO_KEYWORDS = /\b(mono|code|consol|courier|menlo|monaco|terminal|fixed|h
 
 /**
  * Build font option lists from system-installed fonts.
- * Splits into sans-serif and monospace based on name heuristics.
+ * Both lists contain ALL fonts, with the relevant category sorted first.
+ * Each font carries a `group` tag ("sans" | "mono") for rendering group headers.
  */
 export function buildFontOptions(systemFonts: string[]): {
   sans: FontOption[];
   mono: FontOption[];
 } {
-  const sans: FontOption[] = [{ value: "", label: "Default (Inter)" }];
-  const mono: FontOption[] = [{ value: "", label: "Default (JetBrains Mono)" }];
+  const sansGroup: FontOption[] = [];
+  const monoGroup: FontOption[] = [];
 
   for (const name of systemFonts) {
-    // Skip hidden/internal fonts
     if (name.startsWith(".") || name.startsWith("#")) continue;
-    const opt: FontOption = { value: name, label: name };
     if (MONO_KEYWORDS.test(name)) {
-      mono.push(opt);
+      monoGroup.push({ value: name, label: name, group: "mono" });
     } else {
-      sans.push(opt);
+      sansGroup.push({ value: name, label: name, group: "sans" });
     }
   }
 
-  sans.push({ value: "__custom__", label: "Custom..." });
-  mono.push({ value: "__custom__", label: "Custom..." });
+  const sans: FontOption[] = [
+    { value: "", label: "Default (Inter)" },
+    ...sansGroup,
+    ...monoGroup,
+    { value: "__custom__", label: "Custom..." },
+  ];
+
+  const mono: FontOption[] = [
+    { value: "", label: "Default (JetBrains Mono)" },
+    ...monoGroup,
+    ...sansGroup,
+    { value: "__custom__", label: "Custom..." },
+  ];
 
   return { sans, mono };
 }

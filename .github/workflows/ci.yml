@@ -69,70 +69,10 @@ jobs:
       - run: bun run build
       - run: bun run test
 
-  # Native Windows build check on both supported targets. We compile the
-  # full workspace (including the Tauri bin, which pulls in WebView2 +
-  # Win32 APIs) and run the library tests so Windows-specific code paths
-  # — process/PTY spawning, verbatim-path handling, registry PATH reads —
-  # are exercised on a real Windows host. The matrix runs on first-party
-  # GitHub runners; `windows-11-arm` is GA and ships a native ARM64
-  # MSVC toolchain so this is a native build, not cross-compilation.
-  windows-check:
-    name: Windows Check (${{ matrix.label }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: windows-latest
-            rust-target: x86_64-pc-windows-msvc
-            label: x86_64
-          - platform: windows-11-arm
-            rust-target: aarch64-pc-windows-msvc
-            label: aarch64
-    runs-on: ${{ matrix.platform }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.94"
-          targets: ${{ matrix.rust-target }}
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: windows-${{ matrix.label }}
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "latest"
-
-      - name: Install frontend dependencies
-        shell: bash
-        run: cd src/ui && bun install --frozen-lockfile
-
-      # `tauri::generate_context!()` checks that `frontendDist` exists at
-      # compile time, and the release build actually embeds the files,
-      # so we need a built frontend before any `cargo` command that
-      # touches claudette-tauri.
-      - name: Build frontend
-        shell: bash
-        run: cd src/ui && bun run build
-
-      - name: Generate icons
-        shell: bash
-        run: npx @tauri-apps/cli icon assets/logo.png
-
-      - name: cargo check (full workspace)
-        shell: bash
-        run: cargo check --workspace --target ${{ matrix.rust-target }}
-
-      # Release-mode build of just the Tauri bin, so the asset-embedding
-      # path (tauri_build + custom-protocol) is exercised on Windows.
-      # Without this the check job can miss regressions that only fire
-      # under the release profile or the embedded-frontend codegen.
-      - name: cargo build --release (claudette-tauri)
-        shell: bash
-        run: cargo build --release -p claudette-tauri --features tauri/custom-protocol --target ${{ matrix.rust-target }}
-
-      - name: cargo test (library crates)
-        shell: bash
-        run: cargo test -p claudette -p claudette-server --target ${{ matrix.rust-target }}
+  # Note: Windows is not built in this CI pipeline. Windows artifacts
+  # are produced by the nightly (`.github/workflows/nightly.yml`) and
+  # release (`.github/workflows/release-please.yml`) workflows, which
+  # cover both `x86_64-pc-windows-msvc` and `aarch64-pc-windows-msvc`.
+  # Skipping Windows here keeps PR turnaround fast — Windows runners
+  # take ~10 min — without losing build-verification coverage where
+  # it matters (artifact production).

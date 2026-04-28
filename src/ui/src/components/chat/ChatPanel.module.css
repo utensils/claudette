@@ -498,6 +498,26 @@
   margin: 8px 0 16px;
 }
 
+/* File-path autolinks injected by `rehypeFilePathLinks`. Subtle, non-loud
+   styling — the link should be discoverable on hover but not draw attention
+   away from the prose around it. The path text itself is monospace (matching
+   how Claude usually writes paths) so the click target reads as
+   path-shaped rather than as a generic link. */
+.content :global(a.cc-file-path-link) {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--text-primary);
+  text-decoration: underline;
+  text-decoration-color: rgba(var(--accent-primary-rgb), 0.35);
+  text-underline-offset: 2px;
+  cursor: pointer;
+  word-break: break-all;
+}
+
+.content :global(a.cc-file-path-link:hover) {
+  color: var(--accent-primary);
+  text-decoration-color: currentColor;
+}
+
 /* Cmd/Ctrl+F search highlights. Lives inside ChatPanel.module.css with
    :global() so the wrapper components in this folder (and the post-render
    DOM walker in HighlightedMessageMarkdown) can style raw <mark> tags
