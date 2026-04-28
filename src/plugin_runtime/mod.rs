@@ -17,7 +17,17 @@ use mlua::{LuaSerdeExt, VmState};
 /// inner cap. This bounds the total time a single call_operation can
 /// hang the polling loop or a Tauri command.
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(60);
-const LUA_OPERATION_TIMEOUT: &str = "__claudette_lua_operation_timeout__";
+
+#[derive(Debug)]
+struct LuaOperationTimeout;
+
+impl fmt::Display for LuaOperationTimeout {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "plugin operation timed out")
+    }
+}
+
+impl std::error::Error for LuaOperationTimeout {}
 
 #[derive(Debug)]
 pub struct LoadedPlugin {
@@ -379,7 +389,7 @@ fn install_operation_timeout_interrupt(lua: &mlua::Lua, operation_timeout: Durat
     let deadline = Instant::now() + operation_timeout;
     lua.set_interrupt(move |_| {
         if Instant::now() >= deadline {
-            Err(mlua::Error::external(LUA_OPERATION_TIMEOUT))
+            Err(mlua::Error::external(LuaOperationTimeout))
         } else {
             Ok(VmState::Continue)
         }
@@ -387,7 +397,13 @@ fn install_operation_timeout_interrupt(lua: &mlua::Lua, operation_timeout: Durat
 }
 
 fn is_lua_operation_timeout(error: &mlua::Error) -> bool {
-    error.to_string().contains(LUA_OPERATION_TIMEOUT)
+    match error {
+        mlua::Error::ExternalError(err) => err.downcast_ref::<LuaOperationTimeout>().is_some(),
+        mlua::Error::CallbackError { cause, .. } | mlua::Error::WithContext { cause, .. } => {
+            is_lua_operation_timeout(cause)
+        }
+        _ => false,
+    }
 }
 
 /// Check if all required CLI tools are available on PATH.
@@ -634,6 +650,36 @@ mod tests {
             started.elapsed() < Duration::from_secs(2),
             "CPU-bound Lua operation should abort promptly"
         );
+    }
+
+    #[tokio::test]
+    async fn script_error_message_containing_timeout_text_is_not_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin(
+            dir.path(),
+            "sentinel-error",
+            r#"
+            local M = {}
+            function M.run(args)
+                error("plugin operation timed out")
+            end
+            return M
+            "#,
+            &["run"],
+        );
+        let registry = PluginRegistry::discover(dir.path());
+
+        let result = registry
+            .call_operation_with_timeout(
+                "sentinel-error",
+                "run",
+                serde_json::json!({}),
+                test_workspace(),
+                Duration::from_millis(100),
+            )
+            .await;
+
+        assert!(matches!(result, Err(PluginError::ScriptError(_))));
     }
 
     #[tokio::test]
