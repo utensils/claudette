@@ -46,7 +46,9 @@ const {
   DEFAULT_MONO_STACK,
   getThemeDataAttr,
   cacheThemePreference,
+  findTheme,
 } = await import("./theme");
+const { DEFAULT_THEME_ID } = await import("../styles/themes");
 
 describe("applyUserFonts", () => {
   beforeEach(() => {
@@ -231,5 +233,27 @@ describe("cacheThemePreference", () => {
       removeItem: (k: string) => { lsMap.delete(k); },
       clear: () => { lsMap.clear(); },
     });
+  });
+});
+
+describe("findTheme", () => {
+  const dark = { id: DEFAULT_THEME_ID, name: "Default Dark", description: "", colors: {} };
+  const light = { id: "default-light", name: "Default Light", description: "", colors: {} };
+  const custom = { id: "my-custom", name: "Custom", description: "", colors: {} };
+
+  it("returns the matching theme when the requested id exists", () => {
+    expect(findTheme([dark, light, custom], "my-custom")).toBe(custom);
+  });
+
+  it("falls back to DEFAULT_THEME_ID when the requested id is not found", () => {
+    expect(findTheme([dark, light], "nonexistent")).toBe(dark);
+  });
+
+  it("falls back to themes[0] when even DEFAULT_THEME_ID is absent", () => {
+    expect(findTheme([light, custom], "nonexistent")).toBe(light);
+  });
+
+  it("throws when the themes array is empty", () => {
+    expect(() => findTheme([], "anything")).toThrow("No themes are available.");
   });
 });
