@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, type CSSProperties } from "react";
+import { useState, useRef, useEffect, useMemo, type CSSProperties, type ReactNode } from "react";
 import type { FontOption } from "../../utils/fontSettings";
 import styles from "./Settings.module.css";
 
@@ -22,6 +22,7 @@ const MONO_FALLBACK = '"JetBrains Mono", ui-monospace, "SF Mono", monospace';
  */
 export function FontSelect({ options, value, onChange, isCustom, kind = "sans" }: FontSelectProps) {
   const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
   const ref = useRef<HTMLDivElement>(null);
   const listId = useRef(`font-list-${Math.random().toString(36).slice(2, 8)}`).current;
   const fallback = kind === "mono" ? MONO_FALLBACK : SANS_FALLBACK;
@@ -51,6 +52,15 @@ export function FontSelect({ options, value, onChange, isCustom, kind = "sans" }
     return () => document.removeEventListener("keydown", handler);
   }, [open]);
 
+  const filteredOptions = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return options;
+    return options.filter((opt) => {
+      if (opt.value === "" || opt.value === "__custom__") return false;
+      return opt.label.toLowerCase().includes(q);
+    });
+  }, [options, search]);
+
   const selectedLabel = isCustom
     ? value || "Custom..."
     : (options.find((o) => o.value === value)?.label ?? "Default");
@@ -62,13 +72,62 @@ export function FontSelect({ options, value, onChange, isCustom, kind = "sans" }
     return { fontFamily: fallback };
   };
 
+  const renderOptions = (): ReactNode[] => {
+    const elements: ReactNode[] = [];
+    let lastGroup: string | undefined;
+
+    for (const opt of filteredOptions) {
+      if (opt.group && opt.group !== lastGroup) {
+        elements.push(
+          <div
+            key={`group-${opt.group}`}
+            className={styles.fontPickerGroupLabel}
+            role="presentation"
+          >
+            {opt.group === "sans" ? "Sans-serif" : "Monospace"}
+          </div>,
+        );
+        lastGroup = opt.group;
+      }
+
+      const isSelected = !isCustom && opt.value === value;
+      const cls = isSelected
+        ? styles.fontPickerOptionSelected
+        : styles.fontPickerOption;
+
+      elements.push(
+        <button
+          key={opt.value || "__default__"}
+          type="button"
+          role="option"
+          aria-selected={isSelected}
+          className={cls}
+          style={fontStyle(opt.value)}
+          onClick={() => {
+            onChange(opt.value);
+            if (opt.value !== "__custom__") setOpen(false);
+          }}
+        >
+          {opt.label}
+        </button>,
+      );
+    }
+
+    return elements;
+  };
+
   return (
     <div className={styles.fontPicker} ref={ref}>
       <button
         type="button"
         className={styles.fontPickerButton}
         style={fontStyle(isCustom ? "" : value)}
-        onClick={() => setOpen(!open)}
+        onClick={() => {
+          setOpen((prev) => {
+            if (!prev) setSearch("");
+            return !prev;
+          });
+        }}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listId : undefined}
@@ -82,28 +141,18 @@ export function FontSelect({ options, value, onChange, isCustom, kind = "sans" }
           id={listId}
           aria-label="Font selection"
         >
-          {options.map((opt) => {
-            const isSelected = !isCustom && opt.value === value;
-            const cls = isSelected
-              ? styles.fontPickerOptionSelected
-              : styles.fontPickerOption;
-            return (
-              <button
-                key={opt.value || "__default__"}
-                type="button"
-                role="option"
-                aria-selected={isSelected}
-                className={cls}
-                style={fontStyle(opt.value)}
-                onClick={() => {
-                  onChange(opt.value);
-                  if (opt.value !== "__custom__") setOpen(false);
-                }}
-              >
-                {opt.label}
-              </button>
-            );
-          })}
+          <input
+            className={styles.fontPickerSearch}
+            type="text"
+            placeholder="Search fonts…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            autoFocus
+          />
+          {renderOptions()}
+          {filteredOptions.length === 0 && search.trim() && (
+            <div className={styles.fontPickerNoResults}>No matching fonts</div>
+          )}
         </div>
       )}
     </div>

@@ -46,18 +46,51 @@ describe("buildFontOptions", () => {
     "SF Mono",
   ];
 
-  it("splits fonts into sans and mono lists", () => {
+  it("both lists contain all non-hidden fonts", () => {
     const { sans, mono } = buildFontOptions(systemFonts);
     const sansValues = sans.map((o) => o.value);
     const monoValues = mono.map((o) => o.value);
-    expect(sansValues).toContain("Arial");
-    expect(sansValues).toContain("SF Pro");
-    expect(sansValues).toContain("Roboto");
-    expect(monoValues).toContain("Fira Code");
-    expect(monoValues).toContain("JetBrains Mono");
-    expect(monoValues).toContain("Source Code Pro");
-    expect(monoValues).toContain("SF Mono");
-    expect(monoValues).toContain("Menlo");
+    const visibleFonts = systemFonts.filter((n) => !n.startsWith(".") && !n.startsWith("#"));
+    for (const name of visibleFonts) {
+      expect(sansValues).toContain(name);
+      expect(monoValues).toContain(name);
+    }
+  });
+
+  it("sans list orders sans-group fonts before mono-group fonts", () => {
+    const { sans } = buildFontOptions(systemFonts);
+    const fontEntries = sans.filter((o) => o.group);
+    const firstMonoIdx = fontEntries.findIndex((o) => o.group === "mono");
+    const lastSansIdx = fontEntries.map((o) => o.group).lastIndexOf("sans");
+    if (firstMonoIdx !== -1 && lastSansIdx !== -1) {
+      expect(lastSansIdx).toBeLessThan(firstMonoIdx);
+    }
+  });
+
+  it("mono list orders mono-group fonts before sans-group fonts", () => {
+    const { mono } = buildFontOptions(systemFonts);
+    const fontEntries = mono.filter((o) => o.group);
+    const firstSansIdx = fontEntries.findIndex((o) => o.group === "sans");
+    const lastMonoIdx = fontEntries.map((o) => o.group).lastIndexOf("mono");
+    if (firstSansIdx !== -1 && lastMonoIdx !== -1) {
+      expect(lastMonoIdx).toBeLessThan(firstSansIdx);
+    }
+  });
+
+  it("tags fonts with correct group field", () => {
+    const { sans } = buildFontOptions(systemFonts);
+    const arial = sans.find((o) => o.value === "Arial");
+    const firaCode = sans.find((o) => o.value === "Fira Code");
+    expect(arial?.group).toBe("sans");
+    expect(firaCode?.group).toBe("mono");
+  });
+
+  it("Default and Custom entries have no group field", () => {
+    const { sans, mono } = buildFontOptions(systemFonts);
+    expect(sans[0].group).toBeUndefined();
+    expect(sans[sans.length - 1].group).toBeUndefined();
+    expect(mono[0].group).toBeUndefined();
+    expect(mono[mono.length - 1].group).toBeUndefined();
   });
 
   it("has default entries with empty value", () => {
@@ -85,21 +118,15 @@ describe("buildFontOptions", () => {
   });
 
   it("classifies Courier New as mono", () => {
-    const { mono } = buildFontOptions(systemFonts);
-    expect(mono.map((o) => o.value)).toContain("Courier New");
+    const { sans } = buildFontOptions(systemFonts);
+    const courierNew = sans.find((o) => o.value === "Courier New");
+    expect(courierNew?.group).toBe("mono");
   });
 
   it("classifies Inconsolata as mono", () => {
-    const { mono } = buildFontOptions(systemFonts);
-    expect(mono.map((o) => o.value)).toContain("Inconsolata");
-  });
-
-  it("does not put sans fonts in mono list", () => {
-    const { mono } = buildFontOptions(systemFonts);
-    const monoValues = mono.map((o) => o.value);
-    expect(monoValues).not.toContain("Arial");
-    expect(monoValues).not.toContain("SF Pro");
-    expect(monoValues).not.toContain("Noto Sans");
+    const { sans } = buildFontOptions(systemFonts);
+    const inconsolata = sans.find((o) => o.value === "Inconsolata");
+    expect(inconsolata?.group).toBe("mono");
   });
 
   it("filters out fonts starting with #", () => {
@@ -115,54 +142,54 @@ describe("buildFontOptions", () => {
       "Anonymous Pro", "Ubuntu Mono", "Roboto Mono",
       "Liberation Mono", "Droid Sans Mono", "Geist Mono",
     ];
-    const { mono } = buildFontOptions(monoNames);
-    const monoValues = mono.map((o) => o.value);
+    const { sans } = buildFontOptions(monoNames);
     for (const name of monoNames) {
-      expect(monoValues).toContain(name);
+      const opt = sans.find((o) => o.value === name);
+      expect(opt?.group).toBe("mono");
     }
   });
 
   it("uses font name as both value and label", () => {
     const { sans } = buildFontOptions(["Helvetica Neue"]);
     const opt = sans.find((o) => o.value === "Helvetica Neue");
-    expect(opt).toEqual({ value: "Helvetica Neue", label: "Helvetica Neue" });
+    expect(opt).toEqual({ value: "Helvetica Neue", label: "Helvetica Neue", group: "sans" });
   });
 
-  it("preserves input order within each list", () => {
+  it("preserves input order within each group", () => {
     const { sans } = buildFontOptions(["Zapfino", "Arial", "Baskerville"]);
-    const values = sans.map((o) => o.value).filter((v) => v && v !== "__custom__");
-    expect(values).toEqual(["Zapfino", "Arial", "Baskerville"]);
+    const sansGroupValues = sans.filter((o) => o.group === "sans").map((o) => o.value);
+    expect(sansGroupValues).toEqual(["Zapfino", "Arial", "Baskerville"]);
   });
 
   it("classifies macOS-specific mono fonts", () => {
-    const { mono } = buildFontOptions(["Monaco", "Andale Mono", "PT Mono"]);
-    const values = mono.map((o) => o.value);
-    expect(values).toContain("Monaco");
-    expect(values).toContain("Andale Mono");
-    expect(values).toContain("PT Mono");
+    const { sans } = buildFontOptions(["Monaco", "Andale Mono", "PT Mono"]);
+    for (const name of ["Monaco", "Andale Mono", "PT Mono"]) {
+      expect(sans.find((o) => o.value === name)?.group).toBe("mono");
+    }
   });
 
   it("classifies modern mono fonts", () => {
-    const { mono } = buildFontOptions([
+    const { sans } = buildFontOptions([
       "Monaspace Neon", "Maple Mono", "Intel One Mono", "0xProto", "Commit Mono",
     ]);
-    const values = mono.map((o) => o.value);
     for (const name of ["Monaspace Neon", "Maple Mono", "Intel One Mono", "0xProto", "Commit Mono"]) {
-      expect(values).toContain(name);
+      expect(sans.find((o) => o.value === name)?.group).toBe("mono");
     }
   });
 
   it("does not misclassify 'Monotype Corsiva' as mono", () => {
-    // "Monotype" contains "mono" but \bmono\b won't match because
-    // the trailing "t" is a word character (no boundary after "mono").
     const { sans } = buildFontOptions(["Monotype Corsiva"]);
-    expect(sans.map((o) => o.value)).toContain("Monotype Corsiva");
+    expect(sans.find((o) => o.value === "Monotype Corsiva")?.group).toBe("sans");
+  });
+
+  it("both lists have same length", () => {
+    const { sans, mono } = buildFontOptions(systemFonts);
+    expect(sans.length).toBe(mono.length);
   });
 
   it("handles duplicate font names in input", () => {
     const { sans } = buildFontOptions(["Arial", "Arial", "Helvetica"]);
     const arialCount = sans.filter((o) => o.value === "Arial").length;
-    // buildFontOptions does not deduplicate — that's the backend's job
     expect(arialCount).toBe(2);
   });
 });
