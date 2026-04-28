@@ -32,6 +32,8 @@ export function AppearanceSettings() {
   const showSidebarRunningCommands = useAppStore((s) => s.showSidebarRunningCommands);
   const setShowSidebarRunningCommands = useAppStore((s) => s.setShowSidebarRunningCommands);
 
+  const isFollowSystem = themeMode === "system";
+
   const [availableThemes, setAvailableThemes] = useState<ThemeDefinition[]>([]);
   const [termFontSize, setTermFontSize] = useState(String(terminalFontSize));
   const [uiFontSizeStr, setUiFontSizeStr] = useState(String(uiFontSize));
@@ -142,6 +144,15 @@ export function AppearanceSettings() {
       await setAppSetting("theme_light", theme.id);
     } catch (e) {
       setError(String(e));
+    }
+  };
+
+  const handleFollowSystemToggle = async () => {
+    if (isFollowSystem) {
+      const systemIsDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+      await handleModeChange(systemIsDark ? "dark" : "light");
+    } else {
+      await handleModeChange("system");
     }
   };
 
@@ -260,18 +271,22 @@ export function AppearanceSettings() {
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>Theme mode</div>
+          <div className={styles.settingLabel}>Follow system</div>
+          <div className={styles.settingDescription}>
+            Automatically switch themes based on your OS setting
+          </div>
         </div>
         <div className={styles.settingControl}>
-          <select
-            className={styles.select}
-            value={themeMode}
-            onChange={(e) => handleModeChange(e.target.value as "light" | "dark" | "system")}
+          <button
+            className={styles.toggle}
+            role="switch"
+            aria-checked={isFollowSystem}
+            aria-label="Follow system appearance"
+            data-checked={isFollowSystem}
+            onClick={handleFollowSystemToggle}
           >
-            <option value="dark">Dark</option>
-            <option value="light">Light</option>
-            <option value="system">Follow system</option>
-          </select>
+            <div className={styles.toggleKnob} />
+          </button>
         </div>
       </div>
 
