@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.20.1](https://github.com/utensils/claudette/compare/v0.20.0...v0.20.1) (2026-04-28)
+
+
+### Bug Fixes
+
+* **chat:** show paths relative to workspace root in tool usage rows ([#471](https://github.com/utensils/claudette/issues/471)) ([523c71b](https://github.com/utensils/claudette/commit/523c71b16456a70e9947866bca136125de4133c2))
+* **settings:** show all fonts in both pickers and add search ([#474](https://github.com/utensils/claudette/issues/474)) ([c9af8ed](https://github.com/utensils/claudette/commit/c9af8ed09d929b9b4491b336fcdcb3a85ae9412c))
+* **sidebar:** key Tasks panel by active sessionId, not workspaceId ([#472](https://github.com/utensils/claudette/issues/472)) ([e53870d](https://github.com/utensils/claudette/commit/e53870d557c3e7fe65ccad7390c94328963bf215))
+
 ## [0.20.0](https://github.com/utensils/claudette/compare/v0.19.0...v0.20.0) (2026-04-27)
 
 
