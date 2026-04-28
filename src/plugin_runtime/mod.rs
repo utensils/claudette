@@ -6,17 +6,28 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use host_api::{HostContext, WorkspaceInfo};
 use manifest::PluginManifest;
-use mlua::LuaSerdeExt;
+use mlua::{LuaSerdeExt, VmState};
 
 /// Overall operation timeout. A plugin can make multiple serial
 /// `host.exec` calls (each capped at 30s), but pure-Lua loops have no
 /// inner cap. This bounds the total time a single call_operation can
 /// hang the polling loop or a Tauri command.
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(60);
+
+#[derive(Debug)]
+struct LuaOperationTimeout;
+
+impl fmt::Display for LuaOperationTimeout {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "plugin operation timed out")
+    }
+}
+
+impl std::error::Error for LuaOperationTimeout {}
 
 #[derive(Debug)]
 pub struct LoadedPlugin {
@@ -255,6 +266,24 @@ impl PluginRegistry {
         args: serde_json::Value,
         workspace_info: WorkspaceInfo,
     ) -> Result<serde_json::Value, PluginError> {
+        self.call_operation_with_timeout(
+            plugin_name,
+            operation,
+            args,
+            workspace_info,
+            OPERATION_TIMEOUT,
+        )
+        .await
+    }
+
+    async fn call_operation_with_timeout(
+        &self,
+        plugin_name: &str,
+        operation: &str,
+        args: serde_json::Value,
+        workspace_info: WorkspaceInfo,
+        operation_timeout: Duration,
+    ) -> Result<serde_json::Value, PluginError> {
         let plugin = self
             .plugins
             .get(plugin_name)
@@ -290,11 +319,12 @@ impl PluginRegistry {
 
         let lua =
             host_api::create_lua_vm(ctx).map_err(|e| PluginError::ScriptError(e.to_string()))?;
+        install_operation_timeout_interrupt(&lua, operation_timeout);
 
         // Run script load + function call + result conversion under a
-        // single timeout so a misbehaving plugin can't stall the polling
-        // loop indefinitely via pure-Lua loops (host.exec already has its
-        // own per-call timeout; this covers the Lua VM itself).
+        // single timeout. Luau's interrupt deadline covers non-yielding
+        // pure-Lua loops, while the Tokio timeout still covers async host
+        // calls that are waiting outside the VM.
         let required_clis = plugin.manifest.required_clis.clone();
         let plugin_name_owned = plugin_name.to_string();
         let operation_owned = operation.to_string();
@@ -305,7 +335,13 @@ impl PluginRegistry {
                 .set_name(format!("plugins/{plugin_name_owned}/init.lua"))
                 .eval_async()
                 .await
-                .map_err(|e| PluginError::ScriptError(format!("Failed to load plugin: {e}")))?;
+                .map_err(|e| {
+                    if is_lua_operation_timeout(&e) {
+                        PluginError::Timeout
+                    } else {
+                        PluginError::ScriptError(format!("Failed to load plugin: {e}"))
+                    }
+                })?;
 
             // Get the operation function
             let func: mlua::Function = module.get(operation_owned.as_str()).map_err(|e| {
@@ -313,13 +349,20 @@ impl PluginRegistry {
             })?;
 
             // Convert args to Lua value
-            let lua_args = lua
-                .to_value(&args)
-                .map_err(|e| PluginError::ParseError(format!("Failed to convert args: {e}")))?;
+            let lua_args = lua.to_value(&args).map_err(|e| {
+                if is_lua_operation_timeout(&e) {
+                    PluginError::Timeout
+                } else {
+                    PluginError::ParseError(format!("Failed to convert args: {e}"))
+                }
+            })?;
 
             // Call the operation
             let result: mlua::Value =
                 func.call_async(lua_args).await.map_err(|e: mlua::Error| {
+                    if is_lua_operation_timeout(&e) {
+                        return PluginError::Timeout;
+                    }
                     let msg = e.to_string();
                     // Detect auth errors from CLI tools
                     if msg.contains("auth") || msg.contains("login") || msg.contains("401") {
@@ -330,11 +373,16 @@ impl PluginRegistry {
                 })?;
 
             // Convert result to JSON
-            lua.from_value(result)
-                .map_err(|e| PluginError::ParseError(format!("Failed to convert result: {e}")))
+            lua.from_value(result).map_err(|e| {
+                if is_lua_operation_timeout(&e) {
+                    PluginError::Timeout
+                } else {
+                    PluginError::ParseError(format!("Failed to convert result: {e}"))
+                }
+            })
         };
 
-        match tokio::time::timeout(OPERATION_TIMEOUT, fut).await {
+        match tokio::time::timeout(operation_timeout, fut).await {
             Ok(result) => result,
             Err(_) => Err(PluginError::Timeout),
         }
@@ -343,6 +391,27 @@ impl PluginRegistry {
     /// Get the plugin directory path.
     pub fn plugin_dir(&self) -> &Path {
         &self.plugin_dir
+    }
+}
+
+fn install_operation_timeout_interrupt(lua: &mlua::Lua, operation_timeout: Duration) {
+    let deadline = Instant::now() + operation_timeout;
+    lua.set_interrupt(move |_| {
+        if Instant::now() >= deadline {
+            Err(mlua::Error::external(LuaOperationTimeout))
+        } else {
+            Ok(VmState::Continue)
+        }
+    });
+}
+
+fn is_lua_operation_timeout(error: &mlua::Error) -> bool {
+    match error {
+        mlua::Error::ExternalError(err) => err.downcast_ref::<LuaOperationTimeout>().is_some(),
+        mlua::Error::CallbackError { cause, .. } | mlua::Error::WithContext { cause, .. } => {
+            is_lua_operation_timeout(cause)
+        }
+        _ => false,
     }
 }
 
@@ -358,6 +427,7 @@ fn check_clis_available(clis: &[String]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
 
     #[test]
     fn test_discover_empty_dir() {
@@ -489,6 +559,142 @@ mod tests {
             .unwrap();
 
         assert_eq!(result["message"], "hello");
+    }
+
+    fn write_plugin(dir: &Path, name: &str, init_lua: &str, operations: &[&str]) {
+        let plugin_dir = dir.join(name);
+        std::fs::create_dir(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("plugin.json"),
+            serde_json::json!({
+                "name": name,
+                "display_name": name,
+                "version": "1.0.0",
+                "description": "test plugin",
+                "operations": operations,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(plugin_dir.join("init.lua"), init_lua).unwrap();
+    }
+
+    fn test_workspace() -> WorkspaceInfo {
+        WorkspaceInfo {
+            id: "ws-1".to_string(),
+            name: "test".to_string(),
+            branch: "main".to_string(),
+            worktree_path: "/tmp".to_string(),
+            repo_path: "/tmp".to_string(),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn top_level_cpu_loop_is_interrupted_within_operation_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin(
+            dir.path(),
+            "top-level-loop",
+            r#"
+            while true do end
+            local M = {}
+            function M.run(args)
+                return { ok = true }
+            end
+            return M
+            "#,
+            &["run"],
+        );
+        let registry = PluginRegistry::discover(dir.path());
+
+        let started = Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            registry.call_operation_with_timeout(
+                "top-level-loop",
+                "run",
+                serde_json::json!({}),
+                test_workspace(),
+                Duration::from_millis(100),
+            ),
+        )
+        .await
+        .expect("CPU-bound Lua load should not stall the test runtime");
+
+        assert!(matches!(result, Err(PluginError::Timeout)));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "CPU-bound Lua load should abort promptly"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn operation_cpu_loop_is_interrupted_within_operation_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin(
+            dir.path(),
+            "operation-loop",
+            r#"
+            local M = {}
+            function M.run(args)
+                while true do end
+                return { ok = true }
+            end
+            return M
+            "#,
+            &["run"],
+        );
+        let registry = PluginRegistry::discover(dir.path());
+
+        let started = Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            registry.call_operation_with_timeout(
+                "operation-loop",
+                "run",
+                serde_json::json!({}),
+                test_workspace(),
+                Duration::from_millis(100),
+            ),
+        )
+        .await
+        .expect("CPU-bound Lua operation should not stall the test runtime");
+
+        assert!(matches!(result, Err(PluginError::Timeout)));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "CPU-bound Lua operation should abort promptly"
+        );
+    }
+
+    #[tokio::test]
+    async fn script_error_message_containing_timeout_text_is_not_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin(
+            dir.path(),
+            "sentinel-error",
+            r#"
+            local M = {}
+            function M.run(args)
+                error("plugin operation timed out")
+            end
+            return M
+            "#,
+            &["run"],
+        );
+        let registry = PluginRegistry::discover(dir.path());
+
+        let result = registry
+            .call_operation_with_timeout(
+                "sentinel-error",
+                "run",
+                serde_json::json!({}),
+                test_workspace(),
+                Duration::from_millis(100),
+            )
+            .await;
+
+        assert!(matches!(result, Err(PluginError::ScriptError(_))));
     }
 
     #[tokio::test]

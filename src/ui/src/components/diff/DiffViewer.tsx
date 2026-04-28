@@ -1,10 +1,19 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useAppStore } from "../../stores/useAppStore";
-import { loadFileDiff } from "../../services/tauri";
+import { loadFileDiff, readWorkspaceFile } from "../../services/tauri";
 import { PanelToggles } from "../shared/PanelToggles";
 import { SessionTabs } from "../chat/SessionTabs";
+import { MessageMarkdown } from "../chat/MessageMarkdown";
 import type { DiffLine } from "../../types/diff";
 import styles from "./DiffViewer.module.css";
+
+const MARKDOWN_EXT = /\.(md|markdown)$/i;
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 interface SideBySideRow {
   left: DiffLine | null;
@@ -55,15 +64,26 @@ export function DiffViewer() {
   const setDiffContent = useAppStore((s) => s.setDiffContent);
   const setDiffLoading = useAppStore((s) => s.setDiffLoading);
   const setDiffError = useAppStore((s) => s.setDiffError);
+  const diffPreviewMode = useAppStore((s) => s.diffPreviewMode);
+  const diffPreviewContent = useAppStore((s) => s.diffPreviewContent);
+  const diffPreviewLoading = useAppStore((s) => s.diffPreviewLoading);
+  const diffPreviewError = useAppStore((s) => s.diffPreviewError);
+  const setDiffPreviewMode = useAppStore((s) => s.setDiffPreviewMode);
+  const setDiffPreviewContent = useAppStore((s) => s.setDiffPreviewContent);
+  const setDiffPreviewLoading = useAppStore((s) => s.setDiffPreviewLoading);
+  const setDiffPreviewError = useAppStore((s) => s.setDiffPreviewError);
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
 
   const ws = workspaces.find((w) => w.id === selectedWorkspaceId);
+  const isMarkdown = !!diffSelectedFile && MARKDOWN_EXT.test(diffSelectedFile);
+  const showRendered = isMarkdown && diffPreviewMode === "rendered";
 
   // Monotonic version token: each new fetch bumps it so a stale in-flight
   // response (e.g. user already switched diff tabs) gets dropped instead of
   // overwriting the now-active file's content.
   const loadVersionRef = useRef(0);
+  const previewVersionRef = useRef(0);
 
   useEffect(() => {
     if (!diffSelectedFile || !ws?.worktree_path || !diffMergeBase) return;
@@ -90,6 +110,42 @@ export function DiffViewer() {
     setDiffError,
   ]);
 
+  // Lazily fetch the working-tree file content when the user toggles into
+  // rendered preview. Cached on the store so toggling Diff/Preview repeatedly
+  // doesn't refetch; the store resets it on tab switch.
+  //
+  // Bail when an error is already recorded so a failed fetch isn't retried in
+  // an infinite loop — the store clears `diffPreviewError` on tab switch, so
+  // moving away and back is the explicit retry signal.
+  useEffect(() => {
+    if (!showRendered) return;
+    if (!selectedWorkspaceId || !diffSelectedFile) return;
+    if (diffPreviewContent || diffPreviewLoading || diffPreviewError) return;
+    const version = ++previewVersionRef.current;
+    setDiffPreviewLoading(true);
+    readWorkspaceFile(selectedWorkspaceId, diffSelectedFile)
+      .then((content) => {
+        if (version !== previewVersionRef.current) return;
+        setDiffPreviewContent(content);
+        setDiffPreviewLoading(false);
+      })
+      .catch((e) => {
+        if (version !== previewVersionRef.current) return;
+        setDiffPreviewError(String(e));
+        setDiffPreviewLoading(false);
+      });
+  }, [
+    showRendered,
+    selectedWorkspaceId,
+    diffSelectedFile,
+    diffPreviewContent,
+    diffPreviewLoading,
+    diffPreviewError,
+    setDiffPreviewContent,
+    setDiffPreviewLoading,
+    setDiffPreviewError,
+  ]);
+
   const sideBySideHunks = useMemo(() => {
     if (!diffContent) return [];
     return diffContent.hunks.map((hunk) => ({
@@ -104,11 +160,60 @@ export function DiffViewer() {
         <div className={styles.headerLeft}>
           <span className={styles.fileName}>{diffSelectedFile}</span>
         </div>
-        <PanelToggles />
+        <div className={styles.headerRight}>
+          {isMarkdown && (
+            <div
+              className={styles.modeToggle}
+              role="group"
+              aria-label="Markdown view mode"
+            >
+              <button
+                type="button"
+                aria-pressed={diffPreviewMode === "diff"}
+                className={`${styles.modeToggleButton} ${
+                  diffPreviewMode === "diff" ? styles.modeToggleButtonActive : ""
+                }`}
+                onClick={() => setDiffPreviewMode("diff")}
+              >
+                Diff
+              </button>
+              <button
+                type="button"
+                aria-pressed={diffPreviewMode === "rendered"}
+                className={`${styles.modeToggleButton} ${
+                  diffPreviewMode === "rendered" ? styles.modeToggleButtonActive : ""
+                }`}
+                onClick={() => setDiffPreviewMode("rendered")}
+              >
+                Preview
+              </button>
+            </div>
+          )}
+          <PanelToggles />
+        </div>
       </div>
       {selectedWorkspaceId && <SessionTabs workspaceId={selectedWorkspaceId} />}
       <div className={styles.content}>
-        {diffLoading ? (
+        {showRendered ? (
+          diffPreviewLoading ? (
+            <div className={styles.center}>Loading preview...</div>
+          ) : diffPreviewError ? (
+            <div className={styles.center}>Failed to load: {diffPreviewError}</div>
+          ) : !diffPreviewContent ? (
+            <div className={styles.center}>No content</div>
+          ) : diffPreviewContent.is_binary || diffPreviewContent.content === null ? (
+            <div className={styles.center}>Cannot render: file is not text</div>
+          ) : (
+            <div className={styles.previewBody}>
+              {diffPreviewContent.truncated && (
+                <div className={styles.truncatedBanner}>
+                  Preview truncated &mdash; full file is {formatBytes(diffPreviewContent.size_bytes)}
+                </div>
+              )}
+              <MessageMarkdown content={diffPreviewContent.content} />
+            </div>
+          )
+        ) : diffLoading ? (
           <div className={styles.center}>Loading diff...</div>
         ) : !diffContent ? (
           <div className={styles.center}>No diff content</div>
