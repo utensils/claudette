@@ -62,9 +62,13 @@ export async function refreshSelectedWorkspaceBranch(
   }
 }
 
-function isWindowVisible(): boolean {
+function isAppActive(): boolean {
   if (typeof document === "undefined") return true;
-  return !document.hidden;
+  // Treat both hidden tabs (`document.hidden`) and unfocused-but-visible
+  // windows (`!document.hasFocus()`) as inactive. On macOS the user
+  // commonly Cmd-Tabs to another app — that blurs the window without
+  // hiding the document, so a hidden-only check would still poll there.
+  return !document.hidden && document.hasFocus();
 }
 
 export function useBranchRefresh() {
@@ -93,14 +97,12 @@ export function useBranchRefresh() {
     const tick = async () => {
       timer = null;
       if (cancelled) return;
-      // Skip the network round-trip when the window is hidden — no UI is
-      // visible to update, and waking up again on visibilitychange will
-      // refresh immediately. Reschedule a check at the back-off cap so we
-      // catch up shortly after the window comes back without spamming.
-      if (!isWindowVisible()) {
-        schedule(BRANCH_POLL_MAX_MS);
-        return;
-      }
+      // Skip the network round-trip when the app is inactive — no UI is
+      // visible to update, and waking up on focus/visibility will refresh
+      // immediately. Holding the timer empty (instead of rescheduling)
+      // means a backgrounded window won't keep firing pointless probes;
+      // the focus/visibility handler is the single source of resumption.
+      if (!isAppActive()) return;
       if (inFlight) {
         schedule(BRANCH_POLL_BASE_MS);
         return;
@@ -116,32 +118,35 @@ export function useBranchRefresh() {
     // Run immediately on mount, then enter the back-off loop.
     void tick();
 
-    const onVisible = () => {
-      // Returning to visible: reset back-off and refresh now so the user
-      // sees current state without waiting on the (possibly long) timer.
-      if (!isWindowVisible()) return;
+    const onResume = () => {
+      // App became active again: cancel any pending timer (otherwise we'd
+      // double-poll once the focus-driven `tick` schedules its own next
+      // delay), reset the back-off, and refresh now.
+      if (!isAppActive()) return;
+      clearTimer();
       consecutiveEmpty = 0;
       void tick();
     };
-    const onFocus = () => onVisible();
-    const onBlur = () => {
-      // No need to immediately cancel — the next tick will see the hidden
-      // state and bail. But cancel anyway so a near-due timer doesn't
-      // perform a pointless probe right after blur.
+    const onPause = () => {
+      // App went inactive — stop the timer outright. Resumption goes
+      // through `onResume`, which re-arms the loop.
       clearTimer();
-      schedule(BRANCH_POLL_MAX_MS);
     };
 
-    document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("focus", onFocus);
-    window.addEventListener("blur", onBlur);
+    const onVisibilityChange = () => {
+      if (isAppActive()) onResume();
+      else onPause();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("focus", onResume);
+    window.addEventListener("blur", onPause);
 
     return () => {
       cancelled = true;
       clearTimer();
-      document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("focus", onFocus);
-      window.removeEventListener("blur", onBlur);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("focus", onResume);
+      window.removeEventListener("blur", onPause);
     };
   }, [updateWorkspace]);
 
