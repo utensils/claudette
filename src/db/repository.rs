@@ -203,3 +203,68 @@ impl Database {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Repository;
+
+    fn make_repo(id: &str, path: &str, name: &str) -> Repository {
+        Repository {
+            id: id.into(),
+            path: path.into(),
+            name: name.into(),
+            path_slug: name.into(),
+            icon: None,
+            created_at: String::new(),
+            setup_script: None,
+            custom_instructions: None,
+            sort_order: 0,
+            branch_rename_preferences: None,
+            setup_script_auto_run: false,
+            base_branch: None,
+            default_remote: None,
+            path_valid: true,
+        }
+    }
+
+    #[test]
+    fn test_insert_and_list_repositories() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        db.insert_repository(&make_repo("r2", "/tmp/repo2", "repo2"))
+            .unwrap();
+        let repos = db.list_repositories().unwrap();
+        assert_eq!(repos.len(), 2);
+        assert_eq!(repos[0].name, "repo1");
+        assert_eq!(repos[1].name, "repo2");
+    }
+
+    #[test]
+    fn test_duplicate_repo_path_rejected() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        let result = db.insert_repository(&make_repo("r2", "/tmp/repo1", "repo1-dup"));
+        let err = result.expect_err("expected UNIQUE constraint failure");
+        assert!(
+            is_duplicate_repository_path_error(&err),
+            "expected duplicate-path error, got: {err:?}",
+        );
+    }
+
+    #[test]
+    fn test_duplicate_repo_id_not_flagged_as_duplicate_path() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        let err = db
+            .insert_repository(&make_repo("r1", "/tmp/repo2", "repo2"))
+            .expect_err("expected PRIMARY KEY constraint failure on id");
+        assert!(
+            !is_duplicate_repository_path_error(&err),
+            "id collision should not be mapped to the duplicate-path branch: {err:?}",
+        );
+    }
+}
