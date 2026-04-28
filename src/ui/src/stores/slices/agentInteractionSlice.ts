@@ -60,12 +60,12 @@ export interface AgentInteractionSlice {
     }
   >;
   setQueuedMessage: (
-    wsId: string,
+    sessionId: string,
     content: string,
     mentionedFiles?: string[],
     attachments?: AttachmentInput[],
   ) => void;
-  clearQueuedMessage: (wsId: string) => void;
+  clearQueuedMessage: (sessionId: string) => void;
 }
 
 export const createAgentInteractionSlice: StateCreator<
@@ -161,16 +161,16 @@ export const createAgentInteractionSlice: StateCreator<
     }),
 
   queuedMessages: {},
-  setQueuedMessage: (wsId, content, mentionedFiles, attachments) =>
+  setQueuedMessage: (sessionId, content, mentionedFiles, attachments) =>
     set((s) => ({
       queuedMessages: {
         ...s.queuedMessages,
-        [wsId]: { content, mentionedFiles, attachments },
+        [sessionId]: { content, mentionedFiles, attachments },
       },
     })),
-  clearQueuedMessage: (wsId) =>
+  clearQueuedMessage: (sessionId) =>
     set((s) => {
-      const { [wsId]: _, ...rest } = s.queuedMessages;
+      const { [sessionId]: _, ...rest } = s.queuedMessages;
       return { queuedMessages: rest };
     }),
 });

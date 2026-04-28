@@ -49,12 +49,12 @@ export interface CompletedTurn {
 }
 
 /**
- * Token usage from the most recent completed turn for a workspace.
+ * Token usage from the most recent completed turn for a chat session.
  * Lives as its own slice (`latestTurnUsage`) rather than being derived from
  * `completedTurns` because `finalizeTurn` early-returns for tool-free turns
  * — so a Q&A turn without tool calls doesn't add a CompletedTurn but should
- * still refresh the ContextMeter. The shape matches the `result.usage` block
- * the CLI emits on every turn end.
+ * still refresh the ContextMeter for that session. The shape matches the
+ * `result.usage` block the CLI emits on every turn end.
  */
 export interface TurnUsage {
   inputTokens?: number;
@@ -74,7 +74,7 @@ export interface ChatSlice {
   showThinkingBlocks: Record<string, boolean>;
   toolActivities: Record<string, ToolActivity[]>;
   completedTurns: Record<string, CompletedTurn[]>;
-  /** Latest `result.usage` values per workspace — kept in sync with every
+  /** Latest `result.usage` values per chat session — kept in sync with every
    *  turn end, including tool-free turns that don't produce a CompletedTurn.
    *  The ContextMeter reads from here so it reflects the latest turn even
    *  when the timeline doesn't record one. */
@@ -87,12 +87,12 @@ export interface ChatSlice {
   promptStartTime: Record<string, number>;
   setPromptStartTime: (wsId: string, time: number) => void;
   clearPromptStartTime: (wsId: string) => void;
-  /** Per-workspace compaction history, re-derived from the persisted
+  /** Per-session compaction history, re-derived from the persisted
    *  COMPACTION:* sentinel messages on workspace load and updated live
    *  on compact_boundary events. This slice stores derived metadata
    *  for future consumers (e.g. a compaction counter); ChatPanel's
    *  divider rendering dispatches on persisted sentinel System messages
-   *  in `chatMessages[wsId]` rather than reading this slice directly. */
+   *  in `chatMessages[sessionId]` rather than reading this slice directly. */
   compactionEvents: Record<string, CompactionEvent[]>;
   setCompactionEvents: (wsId: string, events: CompactionEvent[]) => void;
   addCompactionEvent: (wsId: string, event: CompactionEvent) => void;

@@ -5,9 +5,10 @@ import { extractCompactionEvents } from "../../utils/compactionSentinel";
 import type { AppState } from "../useAppStore";
 
 export interface CheckpointsSlice {
+  // Keyed by chat session id (matches `listCheckpoints(sessionId)` callers).
   checkpoints: Record<string, ConversationCheckpoint[]>;
-  setCheckpoints: (wsId: string, cps: ConversationCheckpoint[]) => void;
-  addCheckpoint: (wsId: string, cp: ConversationCheckpoint) => void;
+  setCheckpoints: (sessionId: string, cps: ConversationCheckpoint[]) => void;
+  addCheckpoint: (sessionId: string, cp: ConversationCheckpoint) => void;
   rollbackConversation: (
     sessionId: string,
     workspaceId: string,
@@ -23,15 +24,15 @@ export const createCheckpointsSlice: StateCreator<
   CheckpointsSlice
 > = (set) => ({
   checkpoints: {},
-  setCheckpoints: (wsId, cps) =>
+  setCheckpoints: (sessionId, cps) =>
     set((s) => ({
-      checkpoints: { ...s.checkpoints, [wsId]: cps },
+      checkpoints: { ...s.checkpoints, [sessionId]: cps },
     })),
-  addCheckpoint: (wsId, cp) =>
+  addCheckpoint: (sessionId, cp) =>
     set((s) => ({
       checkpoints: {
         ...s.checkpoints,
-        [wsId]: [...(s.checkpoints[wsId] || []), cp],
+        [sessionId]: [...(s.checkpoints[sessionId] || []), cp],
       },
     })),
   rollbackConversation: (sessionId, workspaceId, checkpointId, messages) =>
