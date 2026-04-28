@@ -172,7 +172,7 @@ describe("getThemeDataAttr", () => {
       id: "my-user-theme",
       name: "Mine",
       description: "",
-      colors: { "color-scheme": "dark", "accent-primary": "#abc" },
+      colors: { "color-scheme": "dark" },
     };
     expect(getThemeDataAttr(userTheme)).toBe("default-dark");
   });
@@ -182,7 +182,7 @@ describe("getThemeDataAttr", () => {
       id: "my-light-user-theme",
       name: "Light",
       description: "",
-      colors: { "color-scheme": "light", "accent-primary": "#abc" },
+      colors: { "color-scheme": "light" },
     };
     expect(getThemeDataAttr(userTheme)).toBe("default-light");
   });
@@ -192,7 +192,7 @@ describe("getThemeDataAttr", () => {
       id: "ambiguous-theme",
       name: "Ambiguous",
       description: "",
-      colors: { "accent-primary": "#abc" },
+      colors: {},
     };
     expect(getThemeDataAttr(userTheme)).toBe("default-dark");
   });
