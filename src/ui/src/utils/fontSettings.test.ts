@@ -62,9 +62,9 @@ describe("buildFontOptions", () => {
     const fontEntries = sans.filter((o) => o.group);
     const firstMonoIdx = fontEntries.findIndex((o) => o.group === "mono");
     const lastSansIdx = fontEntries.map((o) => o.group).lastIndexOf("sans");
-    if (firstMonoIdx !== -1 && lastSansIdx !== -1) {
-      expect(lastSansIdx).toBeLessThan(firstMonoIdx);
-    }
+    expect(firstMonoIdx).not.toBe(-1);
+    expect(lastSansIdx).not.toBe(-1);
+    expect(lastSansIdx).toBeLessThan(firstMonoIdx);
   });
 
   it("mono list orders mono-group fonts before sans-group fonts", () => {
@@ -72,9 +72,9 @@ describe("buildFontOptions", () => {
     const fontEntries = mono.filter((o) => o.group);
     const firstSansIdx = fontEntries.findIndex((o) => o.group === "sans");
     const lastMonoIdx = fontEntries.map((o) => o.group).lastIndexOf("mono");
-    if (firstSansIdx !== -1 && lastMonoIdx !== -1) {
-      expect(lastMonoIdx).toBeLessThan(firstSansIdx);
-    }
+    expect(firstSansIdx).not.toBe(-1);
+    expect(lastMonoIdx).not.toBe(-1);
+    expect(lastMonoIdx).toBeLessThan(firstSansIdx);
   });
 
   it("tags fonts with correct group field", () => {

@@ -76,7 +76,7 @@ export function FontSelect({ options, value, onChange, isCustom, kind = "sans" }
     const elements: ReactNode[] = [];
     let lastGroup: string | undefined;
 
-    for (const opt of filteredOptions) {
+    filteredOptions.forEach((opt, i) => {
       if (opt.group && opt.group !== lastGroup) {
         elements.push(
           <div
@@ -97,7 +97,7 @@ export function FontSelect({ options, value, onChange, isCustom, kind = "sans" }
 
       elements.push(
         <button
-          key={opt.value || "__default__"}
+          key={`opt-${i}-${opt.value}`}
           type="button"
           role="option"
           aria-selected={isSelected}
@@ -111,7 +111,7 @@ export function FontSelect({ options, value, onChange, isCustom, kind = "sans" }
           {opt.label}
         </button>,
       );
-    }
+    });
 
     return elements;
   };
@@ -135,12 +135,7 @@ export function FontSelect({ options, value, onChange, isCustom, kind = "sans" }
         {selectedLabel}
       </button>
       {open && (
-        <div
-          className={styles.fontPickerDropdown}
-          role="listbox"
-          id={listId}
-          aria-label="Font selection"
-        >
+        <div className={styles.fontPickerDropdown}>
           <input
             className={styles.fontPickerSearch}
             type="text"
@@ -149,9 +144,12 @@ export function FontSelect({ options, value, onChange, isCustom, kind = "sans" }
             onChange={(e) => setSearch(e.target.value)}
             autoFocus
           />
-          {renderOptions()}
-          {filteredOptions.length === 0 && search.trim() && (
+          {filteredOptions.length === 0 && search.trim() ? (
             <div className={styles.fontPickerNoResults}>No matching fonts</div>
+          ) : (
+            <div role="listbox" id={listId} aria-label="Font selection">
+              {renderOptions()}
+            </div>
           )}
         </div>
       )}
