@@ -11,10 +11,18 @@
 //! selection.
 
 use std::path::Path;
+use std::sync::Arc;
+
+use tokio::sync::Semaphore;
 
 use crate::db::Database;
 use crate::git;
 use crate::model::WorkspaceStatus;
+
+/// Caps concurrent `git rev-parse` invocations driven by the periodic
+/// branch reconcile. Bounded so a user with dozens of active workspaces
+/// doesn't fan-out a fresh `git` process per workspace every poll tick.
+const RECONCILE_GIT_PROBE_CONCURRENCY: usize = 6;
 
 /// Re-read the current branch for every active workspace. For each workspace
 /// whose stored `branch_name` no longer matches the worktree's HEAD, persist
@@ -31,18 +39,35 @@ pub async fn reconcile_all_workspace_branches(
         db.list_workspaces().map_err(|e| e.to_string())?
     };
 
-    let mut updates = Vec::new();
-    for ws in &workspaces {
-        if ws.status != WorkspaceStatus::Active {
-            continue;
-        }
-        if let Some(ref wt_path) = ws.worktree_path
-            && let Ok(branch) = git::current_branch(wt_path).await
-            && branch != ws.branch_name
-        {
-            updates.push((ws.id.clone(), branch));
-        }
-    }
+    // Bounded-concurrent fan-out — capped by `RECONCILE_GIT_PROBE_CONCURRENCY`
+    // so a user with many active workspaces doesn't trigger an unbounded
+    // wave of `git rev-parse` processes on every poll tick.
+    let sem = Arc::new(Semaphore::new(RECONCILE_GIT_PROBE_CONCURRENCY));
+    let probe_futures: Vec<_> = workspaces
+        .iter()
+        .filter(|ws| ws.status == WorkspaceStatus::Active)
+        .filter_map(|ws| {
+            ws.worktree_path.as_ref().map(|wt_path| {
+                let id = ws.id.clone();
+                let wt_path = wt_path.clone();
+                let stored_branch = ws.branch_name.clone();
+                let sem = Arc::clone(&sem);
+                async move {
+                    let _permit = sem.acquire_owned().await.ok();
+                    match git::current_branch(&wt_path).await {
+                        Ok(branch) if branch != stored_branch => Some((id, branch)),
+                        _ => None,
+                    }
+                }
+            })
+        })
+        .collect();
+
+    let updates: Vec<(String, String)> = futures::future::join_all(probe_futures)
+        .await
+        .into_iter()
+        .flatten()
+        .collect();
 
     if !updates.is_empty() {
         let db = Database::open(db_path).map_err(|e| e.to_string())?;
@@ -353,6 +378,50 @@ mod tests {
         let w2 = all.iter().find(|w| w.id == "w2").unwrap();
         assert_eq!(w1.branch_name, "claudette/stable");
         assert_eq!(w2.branch_name, "user/renamed");
+    }
+
+    #[tokio::test]
+    async fn reconcile_all_handles_more_workspaces_than_concurrency_cap() {
+        // Spin up more workspaces than RECONCILE_GIT_PROBE_CONCURRENCY so the
+        // semaphore is genuinely exercised. Every odd-indexed workspace is
+        // renamed externally; the result must contain exactly those, in any
+        // order, with the DB updated to match.
+        let total = RECONCILE_GIT_PROBE_CONCURRENCY * 2 + 1;
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = db_dir.path().join("test.db");
+        let db = Database::open(&db_path).unwrap();
+
+        let mut repo_dirs = Vec::with_capacity(total);
+        let mut expected = Vec::new();
+        for i in 0..total {
+            let dir = tempfile::tempdir().unwrap();
+            init_git_repo(dir.path(), "claudette/orig");
+            let repo_id = format!("r{i}");
+            let ws_id = format!("w{i}");
+            db.insert_repository(&make_repo(&repo_id, dir.path()))
+                .unwrap();
+            db.insert_workspace(&make_ws(&ws_id, &repo_id, "claudette/orig", dir.path()))
+                .unwrap();
+            if i % 2 == 1 {
+                let new_branch = format!("user/r{i}");
+                rename_branch(dir.path(), &new_branch);
+                expected.push((ws_id, new_branch));
+            }
+            repo_dirs.push(dir);
+        }
+        drop(db);
+
+        let mut updates = reconcile_all_workspace_branches(&db_path).await.unwrap();
+        updates.sort();
+        expected.sort();
+        assert_eq!(updates, expected);
+
+        let db = Database::open(&db_path).unwrap();
+        let all = db.list_workspaces().unwrap();
+        for (id, branch) in &expected {
+            let ws = all.iter().find(|w| &w.id == id).unwrap();
+            assert_eq!(&ws.branch_name, branch);
+        }
     }
 
     #[tokio::test]

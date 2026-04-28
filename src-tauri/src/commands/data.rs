@@ -1,13 +1,21 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use serde::Serialize;
 use tauri::State;
+use tokio::sync::Semaphore;
 
 use claudette::db::Database;
 use claudette::git;
 use claudette::model::{ChatMessage, Repository, Workspace};
 
 use crate::state::AppState;
+
+/// Caps concurrent `git` invocations during initial data load so a user
+/// with many repos/workspaces doesn't fork-bomb their machine on startup.
+/// Tuned at 6 — each git probe is short, but on a cold filesystem the
+/// system call cost dominates and unbounded fan-out can wedge slow disks.
+const STARTUP_GIT_PROBE_CONCURRENCY: usize = 6;
 
 #[derive(Serialize)]
 pub struct InitialData {
@@ -56,29 +64,35 @@ pub async fn load_initial_data(state: State<'_, AppState>) -> Result<InitialData
         })
         .collect();
 
+    let probe_sem = Arc::new(Semaphore::new(STARTUP_GIT_PROBE_CONCURRENCY));
+
     if !needs_backfill.is_empty() {
         use super::repository::{resolve_default_branch, resolve_default_remote};
 
         let backfill_futures: Vec<_> = needs_backfill
             .into_iter()
-            .map(|(id, path, existing_remote, existing_branch)| async move {
-                let remote = match existing_remote {
-                    Some(r) => Some(r),
-                    None => {
-                        let remotes = git::list_remotes(&path).await.unwrap_or_default();
-                        resolve_default_remote(&remotes)
-                    }
-                };
-                let branch = match existing_branch {
-                    Some(b) => Some(b),
-                    None => {
-                        let branches = git::list_remote_tracking_branches(&path)
-                            .await
-                            .unwrap_or_default();
-                        resolve_default_branch(&branches, remote.as_deref())
-                    }
-                };
-                (id, remote, branch)
+            .map(|(id, path, existing_remote, existing_branch)| {
+                let sem = Arc::clone(&probe_sem);
+                async move {
+                    let _permit = sem.acquire_owned().await.ok();
+                    let remote = match existing_remote {
+                        Some(r) => Some(r),
+                        None => {
+                            let remotes = git::list_remotes(&path).await.unwrap_or_default();
+                            resolve_default_remote(&remotes)
+                        }
+                    };
+                    let branch = match existing_branch {
+                        Some(b) => Some(b),
+                        None => {
+                            let branches = git::list_remote_tracking_branches(&path)
+                                .await
+                                .unwrap_or_default();
+                            resolve_default_branch(&branches, remote.as_deref())
+                        }
+                    };
+                    (id, remote, branch)
+                }
             })
             .collect();
 
@@ -102,7 +116,8 @@ pub async fn load_initial_data(state: State<'_, AppState>) -> Result<InitialData
         }
     }
 
-    // Resolve default branch for each valid repo concurrently (best-effort).
+    // Resolve default branch for each valid repo concurrently (best-effort,
+    // bounded by `probe_sem`).
     let branch_futures: Vec<_> = repositories
         .iter()
         .filter(|r| r.path_valid)
@@ -111,7 +126,9 @@ pub async fn load_initial_data(state: State<'_, AppState>) -> Result<InitialData
             let path = r.path.clone();
             let base = r.base_branch.clone();
             let remote = r.default_remote.clone();
+            let sem = Arc::clone(&probe_sem);
             async move {
+                let _permit = sem.acquire_owned().await.ok();
                 let branch = match base {
                     Some(b) => Some(b),
                     None => git::default_branch(&path, remote.as_deref()).await.ok(),
@@ -123,7 +140,9 @@ pub async fn load_initial_data(state: State<'_, AppState>) -> Result<InitialData
     let branch_results = futures::future::join_all(branch_futures).await;
     let default_branches: HashMap<String, String> = branch_results.into_iter().flatten().collect();
 
-    // Resolve current branch for each active workspace with a valid worktree path.
+    // Resolve current branch for each active workspace with a valid worktree path,
+    // bounded by `probe_sem` so a user with many workspaces doesn't fan-out
+    // unbounded git probes at startup.
     let workspace_branch_futures: Vec<_> = workspaces
         .iter()
         .filter(|ws| ws.status == claudette::model::WorkspaceStatus::Active)
@@ -134,7 +153,9 @@ pub async fn load_initial_data(state: State<'_, AppState>) -> Result<InitialData
                 .map(|path| {
                     let id = ws.id.clone();
                     let path = path.clone();
+                    let sem = Arc::clone(&probe_sem);
                     async move {
+                        let _permit = sem.acquire_owned().await.ok();
                         match git::current_branch(&path).await {
                             Ok(branch) => (id, branch),
                             Err(_) => (id, "(detached)".to_string()),

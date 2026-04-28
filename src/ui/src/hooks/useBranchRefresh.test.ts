@@ -11,6 +11,9 @@ vi.mock("../services/tauri", () => ({
 }));
 
 import {
+  BRANCH_POLL_BASE_MS,
+  BRANCH_POLL_MAX_MS,
+  nextBranchPollDelay,
   pollAndApplyBranchUpdates,
   refreshSelectedWorkspaceBranch,
 } from "./useBranchRefresh";
@@ -20,15 +23,16 @@ describe("pollAndApplyBranchUpdates", () => {
     vi.clearAllMocks();
   });
 
-  it("applies every drift returned by the backend", async () => {
+  it("applies every drift returned by the backend and reports the count", async () => {
     mockRefreshBranches.mockResolvedValue([
       ["w1", "user/renamed"],
       ["w2", "feature/new"],
     ]);
     const updateWorkspace = vi.fn();
 
-    await pollAndApplyBranchUpdates(updateWorkspace);
+    const applied = await pollAndApplyBranchUpdates(updateWorkspace);
 
+    expect(applied).toBe(2);
     expect(updateWorkspace).toHaveBeenCalledTimes(2);
     expect(updateWorkspace).toHaveBeenNthCalledWith(1, "w1", {
       branch_name: "user/renamed",
@@ -38,23 +42,40 @@ describe("pollAndApplyBranchUpdates", () => {
     });
   });
 
-  it("makes no store writes when the backend returns no drift", async () => {
+  it("returns zero and writes nothing when the backend returns no drift", async () => {
     mockRefreshBranches.mockResolvedValue([]);
     const updateWorkspace = vi.fn();
 
-    await pollAndApplyBranchUpdates(updateWorkspace);
+    const applied = await pollAndApplyBranchUpdates(updateWorkspace);
 
+    expect(applied).toBe(0);
     expect(updateWorkspace).not.toHaveBeenCalled();
   });
 
-  it("swallows errors so the polling loop keeps running", async () => {
+  it("returns zero on backend error so the polling loop keeps running", async () => {
     mockRefreshBranches.mockRejectedValue(new Error("IPC down"));
     const updateWorkspace = vi.fn();
 
-    await expect(
-      pollAndApplyBranchUpdates(updateWorkspace),
-    ).resolves.toBeUndefined();
+    const applied = await pollAndApplyBranchUpdates(updateWorkspace);
+
+    expect(applied).toBe(0);
     expect(updateWorkspace).not.toHaveBeenCalled();
+  });
+});
+
+describe("nextBranchPollDelay", () => {
+  it("returns the base interval after a poll that observed drift", () => {
+    expect(nextBranchPollDelay(0)).toBe(BRANCH_POLL_BASE_MS);
+  });
+
+  it("doubles the interval on each consecutive empty poll", () => {
+    expect(nextBranchPollDelay(1)).toBe(BRANCH_POLL_BASE_MS * 2);
+    expect(nextBranchPollDelay(2)).toBe(BRANCH_POLL_BASE_MS * 4);
+  });
+
+  it("never grows beyond the cap", () => {
+    expect(nextBranchPollDelay(10)).toBe(BRANCH_POLL_MAX_MS);
+    expect(nextBranchPollDelay(100)).toBe(BRANCH_POLL_MAX_MS);
   });
 });
 
