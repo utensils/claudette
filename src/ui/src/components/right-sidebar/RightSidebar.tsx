@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { isAgentBusy } from "../../utils/agentStatus";
 import { ChevronRight, Undo2, Trash2 } from "lucide-react";
-import { useAppStore } from "../../stores/useAppStore";
+import { useAppStore, selectActiveSessionId } from "../../stores/useAppStore";
 import { useTaskTracker } from "../../hooks/useTaskTracker";
 import { discardFile, loadDiffFiles, sendRemoteCommand } from "../../services/tauri";
 import type { DiffFilesResult } from "../../services/tauri";
@@ -45,7 +45,8 @@ export const RightSidebar = memo(function RightSidebar() {
   const worktreePath = ws?.worktree_path ?? null;
   const prevIsRunning = useRef<boolean | undefined>(undefined);
 
-  const { totalCount: taskCount } = useTaskTracker(selectedWorkspaceId);
+  const activeSessionId = useAppStore(selectActiveSessionId);
+  const { totalCount: taskCount } = useTaskTracker(activeSessionId);
 
   // Discard-changes UI state. Local-only — discard isn't bridged through the
   // remote server (matches revert_file), so the action is hidden when the
@@ -363,7 +364,7 @@ export const RightSidebar = memo(function RightSidebar() {
 
       {activeTab === "tasks" && (
         selectedWorkspaceId
-          ? <TaskList workspaceId={selectedWorkspaceId} />
+          ? <TaskList sessionId={activeSessionId} />
           : <div className={styles.list}><div className={styles.empty}>No workspace selected</div></div>
       )}
 

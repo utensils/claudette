@@ -67,11 +67,11 @@ function TaskItem({ task }: { task: TrackedTask }) {
 }
 
 export const TaskList = memo(function TaskList({
-  workspaceId,
+  sessionId,
 }: {
-  workspaceId: string;
+  sessionId: string | null;
 }) {
-  const { tasks } = useTaskTracker(workspaceId);
+  const { tasks } = useTaskTracker(sessionId);
 
   if (tasks.length === 0) {
     return (
