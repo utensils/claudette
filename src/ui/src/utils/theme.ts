@@ -1,4 +1,6 @@
 import type { ITheme } from "@xterm/xterm";
+import hljsDarkUrl from "highlight.js/styles/github-dark.min.css?url";
+import hljsLightUrl from "highlight.js/styles/github.min.css?url";
 import type { ThemeDefinition } from "../types/theme";
 import {
   BUILTIN_THEME_IDS,
@@ -7,6 +9,21 @@ import {
   DEFAULT_LIGHT_THEME_ID,
 } from "../styles/themes";
 import { listUserThemes } from "../services/tauri";
+
+// highlight.js renders tokens as <span class="hljs-keyword"> etc. The class
+// names have no built-in colors — a theme stylesheet provides them. We swap
+// the active stylesheet on light/dark transitions instead of loading both,
+// so unused tokens never paint.
+function applyHljsTheme(isLight: boolean): void {
+  let link = document.getElementById("hljs-theme") as HTMLLinkElement | null;
+  if (!link) {
+    link = document.createElement("link");
+    link.id = "hljs-theme";
+    link.rel = "stylesheet";
+    document.head.appendChild(link);
+  }
+  link.href = isLight ? hljsLightUrl : hljsDarkUrl;
+}
 
 // localStorage key used by index.html's pre-hydration script to set
 // data-theme before React mounts. Keep in sync with that script.
@@ -169,10 +186,14 @@ export function applyTheme(theme: ThemeDefinition): void {
   const isBuiltin = BUILTIN_THEME_IDS.has(theme.id);
 
   let dataThemeAttr: string;
+  let isLight: boolean;
   if (isBuiltin) {
     clearThemeableInlineVars();
     dataThemeAttr = theme.id;
     root.setAttribute("data-theme", dataThemeAttr);
+    isLight =
+      BUILTIN_THEME_META.find((m) => m.id === theme.id)?.colorScheme ===
+      "light";
   } else {
     // User-provided JSON theme. Pick the baseline matching the theme's
     // declared color-scheme so a light user theme starts from light defaults
@@ -189,8 +210,10 @@ export function applyTheme(theme: ThemeDefinition): void {
     }
     const scheme = theme.colors["color-scheme"] ?? "dark";
     root.style.setProperty("color-scheme", scheme);
+    isLight = scheme === "light";
   }
 
+  applyHljsTheme(isLight);
   cacheDataTheme(dataThemeAttr);
 }
 
