@@ -66,8 +66,8 @@ export interface TurnUsage {
 export interface ChatSlice {
   chatMessages: Record<string, ChatMessage[]>;
   chatAttachments: Record<string, ChatAttachment[]>;
-  setChatAttachments: (wsId: string, attachments: ChatAttachment[]) => void;
-  addChatAttachments: (wsId: string, attachments: ChatAttachment[]) => void;
+  setChatAttachments: (sessionId: string, attachments: ChatAttachment[]) => void;
+  addChatAttachments: (sessionId: string, attachments: ChatAttachment[]) => void;
   streamingContent: Record<string, string>;
   streamingThinking: Record<string, string>;
   pendingTypewriter: Record<string, { messageId: string; text: string } | null>;
@@ -79,11 +79,14 @@ export interface ChatSlice {
    *  The ContextMeter reads from here so it reflects the latest turn even
    *  when the timeline doesn't record one. */
   latestTurnUsage: Record<string, TurnUsage>;
-  setLatestTurnUsage: (wsId: string, usage: TurnUsage) => void;
-  /** Delete the meter's usage entry for a workspace. Used when a
+  setLatestTurnUsage: (sessionId: string, usage: TurnUsage) => void;
+  /** Delete the meter's usage entry for a chat session. Used when a
    *  rollback or empty load leaves no assistant message with token data —
    *  clearing hides the meter rather than leaving a stale value. */
-  clearLatestTurnUsage: (wsId: string) => void;
+  clearLatestTurnUsage: (sessionId: string) => void;
+  // promptStartTime is keyed by workspace id (driven by ChatPanel's
+  // `selectedWorkspaceId` and useAgentStream's `wsId`), not session id —
+  // the meter spans the whole workspace's active turn.
   promptStartTime: Record<string, number>;
   setPromptStartTime: (wsId: string, time: number) => void;
   clearPromptStartTime: (wsId: string) => void;
@@ -94,31 +97,31 @@ export interface ChatSlice {
    *  divider rendering dispatches on persisted sentinel System messages
    *  in `chatMessages[sessionId]` rather than reading this slice directly. */
   compactionEvents: Record<string, CompactionEvent[]>;
-  setCompactionEvents: (wsId: string, events: CompactionEvent[]) => void;
-  addCompactionEvent: (wsId: string, event: CompactionEvent) => void;
-  setChatMessages: (wsId: string, messages: ChatMessage[]) => void;
-  addChatMessage: (wsId: string, message: ChatMessage) => void;
-  setStreamingContent: (wsId: string, content: string) => void;
-  appendStreamingContent: (wsId: string, text: string) => void;
-  setPendingTypewriter: (wsId: string, messageId: string, text: string) => void;
+  setCompactionEvents: (sessionId: string, events: CompactionEvent[]) => void;
+  addCompactionEvent: (sessionId: string, event: CompactionEvent) => void;
+  setChatMessages: (sessionId: string, messages: ChatMessage[]) => void;
+  addChatMessage: (sessionId: string, message: ChatMessage) => void;
+  setStreamingContent: (sessionId: string, content: string) => void;
+  appendStreamingContent: (sessionId: string, text: string) => void;
+  setPendingTypewriter: (sessionId: string, messageId: string, text: string) => void;
   /** Atomic drain-end handoff: clears both `pendingTypewriter` and
    *  `streamingThinking` in a single store update so the streaming thinking
    *  block and the draining assistant text hand off to the completed message
    *  in the same render, without a gap or a 1-frame duplicate. */
-  finishTypewriterDrain: (wsId: string) => void;
-  appendStreamingThinking: (wsId: string, text: string) => void;
-  clearStreamingThinking: (wsId: string) => void;
-  setShowThinkingBlocks: (wsId: string, show: boolean) => void;
-  setToolActivities: (wsId: string, activities: ToolActivity[]) => void;
-  addToolActivity: (wsId: string, activity: ToolActivity) => void;
+  finishTypewriterDrain: (sessionId: string) => void;
+  appendStreamingThinking: (sessionId: string, text: string) => void;
+  clearStreamingThinking: (sessionId: string) => void;
+  setShowThinkingBlocks: (sessionId: string, show: boolean) => void;
+  setToolActivities: (sessionId: string, activities: ToolActivity[]) => void;
+  addToolActivity: (sessionId: string, activity: ToolActivity) => void;
   updateToolActivity: (
-    wsId: string,
+    sessionId: string,
     toolUseId: string,
     updates: Partial<ToolActivity>,
   ) => void;
-  toggleToolActivityCollapsed: (wsId: string, index: number) => void;
+  toggleToolActivityCollapsed: (sessionId: string, index: number) => void;
   finalizeTurn: (
-    wsId: string,
+    sessionId: string,
     messageCount: number,
     turnId?: string,
     durationMs?: number,
@@ -127,11 +130,11 @@ export interface ChatSlice {
     cacheReadTokens?: number,
     cacheCreationTokens?: number,
   ) => void;
-  hydrateCompletedTurns: (wsId: string, turns: CompletedTurn[]) => void;
-  setCompletedTurns: (wsId: string, turns: CompletedTurn[]) => void;
-  toggleCompletedTurn: (wsId: string, turnIndex: number) => void;
+  hydrateCompletedTurns: (sessionId: string, turns: CompletedTurn[]) => void;
+  setCompletedTurns: (sessionId: string, turns: CompletedTurn[]) => void;
+  toggleCompletedTurn: (sessionId: string, turnIndex: number) => void;
   appendToolActivityInput: (
-    wsId: string,
+    sessionId: string,
     toolUseId: string,
     partialJson: string,
   ) => void;
@@ -144,15 +147,15 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
 ) => ({
   chatMessages: {},
   chatAttachments: {},
-  setChatAttachments: (wsId, attachments) =>
+  setChatAttachments: (sessionId, attachments) =>
     set((s) => ({
-      chatAttachments: { ...s.chatAttachments, [wsId]: attachments },
+      chatAttachments: { ...s.chatAttachments, [sessionId]: attachments },
     })),
-  addChatAttachments: (wsId, attachments) =>
+  addChatAttachments: (sessionId, attachments) =>
     set((s) => ({
       chatAttachments: {
         ...s.chatAttachments,
-        [wsId]: [...(s.chatAttachments[wsId] ?? []), ...attachments],
+        [sessionId]: [...(s.chatAttachments[sessionId] ?? []), ...attachments],
       },
     })),
   streamingContent: {},
@@ -162,15 +165,15 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
   toolActivities: {},
   completedTurns: {},
   latestTurnUsage: {},
-  setLatestTurnUsage: (wsId, usage) =>
+  setLatestTurnUsage: (sessionId, usage) =>
     set((s) => ({
-      latestTurnUsage: { ...s.latestTurnUsage, [wsId]: usage },
+      latestTurnUsage: { ...s.latestTurnUsage, [sessionId]: usage },
     })),
-  clearLatestTurnUsage: (wsId) =>
+  clearLatestTurnUsage: (sessionId) =>
     set((s) => {
-      if (!(wsId in s.latestTurnUsage)) return {};
+      if (!(sessionId in s.latestTurnUsage)) return {};
       const next = { ...s.latestTurnUsage };
-      delete next[wsId];
+      delete next[sessionId];
       return { latestTurnUsage: next };
     }),
   promptStartTime: {},
@@ -186,101 +189,101 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
       return { promptStartTime: next };
     }),
   compactionEvents: {},
-  setCompactionEvents: (wsId, events) =>
+  setCompactionEvents: (sessionId, events) =>
     set((s) => ({
-      compactionEvents: { ...s.compactionEvents, [wsId]: events },
+      compactionEvents: { ...s.compactionEvents, [sessionId]: events },
     })),
-  addCompactionEvent: (wsId, event) =>
+  addCompactionEvent: (sessionId, event) =>
     set((s) => ({
       compactionEvents: {
         ...s.compactionEvents,
-        [wsId]: [...(s.compactionEvents[wsId] ?? []), event],
+        [sessionId]: [...(s.compactionEvents[sessionId] ?? []), event],
       },
     })),
-  setChatMessages: (wsId, messages) =>
+  setChatMessages: (sessionId, messages) =>
     set((s) => ({
-      chatMessages: { ...s.chatMessages, [wsId]: messages },
+      chatMessages: { ...s.chatMessages, [sessionId]: messages },
     })),
-  addChatMessage: (wsId, message) =>
+  addChatMessage: (sessionId, message) =>
     set((s) => ({
       chatMessages: {
         ...s.chatMessages,
-        [wsId]: [...(s.chatMessages[wsId] || []), message],
+        [sessionId]: [...(s.chatMessages[sessionId] || []), message],
       },
-      lastMessages: { ...s.lastMessages, [wsId]: message },
+      lastMessages: { ...s.lastMessages, [sessionId]: message },
     })),
-  setStreamingContent: (wsId, content) =>
+  setStreamingContent: (sessionId, content) =>
     set((s) => ({
-      streamingContent: { ...s.streamingContent, [wsId]: content },
+      streamingContent: { ...s.streamingContent, [sessionId]: content },
     })),
-  appendStreamingContent: (wsId, text) =>
+  appendStreamingContent: (sessionId, text) =>
     set((s) => ({
       streamingContent: {
         ...s.streamingContent,
-        [wsId]: (s.streamingContent[wsId] || "") + text,
+        [sessionId]: (s.streamingContent[sessionId] || "") + text,
       },
     })),
-  setPendingTypewriter: (wsId, messageId, text) =>
+  setPendingTypewriter: (sessionId, messageId, text) =>
     set((s) => ({
       pendingTypewriter: {
         ...s.pendingTypewriter,
-        [wsId]: { messageId, text },
+        [sessionId]: { messageId, text },
       },
     })),
-  finishTypewriterDrain: (wsId) =>
+  finishTypewriterDrain: (sessionId) =>
     set((s) => ({
-      pendingTypewriter: { ...s.pendingTypewriter, [wsId]: null },
-      streamingThinking: { ...s.streamingThinking, [wsId]: "" },
+      pendingTypewriter: { ...s.pendingTypewriter, [sessionId]: null },
+      streamingThinking: { ...s.streamingThinking, [sessionId]: "" },
     })),
-  appendStreamingThinking: (wsId, text) =>
+  appendStreamingThinking: (sessionId, text) =>
     set((s) => ({
       streamingThinking: {
         ...s.streamingThinking,
-        [wsId]: (s.streamingThinking[wsId] || "") + text,
+        [sessionId]: (s.streamingThinking[sessionId] || "") + text,
       },
     })),
-  clearStreamingThinking: (wsId) =>
+  clearStreamingThinking: (sessionId) =>
     set((s) => ({
-      streamingThinking: { ...s.streamingThinking, [wsId]: "" },
+      streamingThinking: { ...s.streamingThinking, [sessionId]: "" },
     })),
-  setShowThinkingBlocks: (wsId, show) =>
+  setShowThinkingBlocks: (sessionId, show) =>
     set((s) => ({
-      showThinkingBlocks: { ...s.showThinkingBlocks, [wsId]: show },
+      showThinkingBlocks: { ...s.showThinkingBlocks, [sessionId]: show },
     })),
-  setToolActivities: (wsId, activities) =>
+  setToolActivities: (sessionId, activities) =>
     set((s) => ({
-      toolActivities: { ...s.toolActivities, [wsId]: activities },
+      toolActivities: { ...s.toolActivities, [sessionId]: activities },
     })),
-  addToolActivity: (wsId, activity) =>
+  addToolActivity: (sessionId, activity) =>
     set((s) => ({
       toolActivities: {
         ...s.toolActivities,
-        [wsId]: [...(s.toolActivities[wsId] || []), activity],
+        [sessionId]: [...(s.toolActivities[sessionId] || []), activity],
       },
     })),
-  updateToolActivity: (wsId, toolUseId, updates) =>
+  updateToolActivity: (sessionId, toolUseId, updates) =>
     set((s) => ({
       toolActivities: {
         ...s.toolActivities,
-        [wsId]: (s.toolActivities[wsId] || []).map((a) =>
+        [sessionId]: (s.toolActivities[sessionId] || []).map((a) =>
           a.toolUseId === toolUseId ? { ...a, ...updates } : a,
         ),
       },
     })),
-  toggleToolActivityCollapsed: (wsId, index) =>
+  toggleToolActivityCollapsed: (sessionId, index) =>
     set((s) => ({
       toolActivities: {
         ...s.toolActivities,
-        [wsId]: (s.toolActivities[wsId] || []).map((a, i) =>
+        [sessionId]: (s.toolActivities[sessionId] || []).map((a, i) =>
           i === index ? { ...a, collapsed: !a.collapsed } : a,
         ),
       },
     })),
-  appendToolActivityInput: (wsId, toolUseId, partialJson) =>
+  appendToolActivityInput: (sessionId, toolUseId, partialJson) =>
     set((s) => ({
       toolActivities: {
         ...s.toolActivities,
-        [wsId]: (s.toolActivities[wsId] || []).map((a) =>
+        [sessionId]: (s.toolActivities[sessionId] || []).map((a) =>
           a.toolUseId === toolUseId
             ? { ...a, inputJson: a.inputJson + partialJson }
             : a,
@@ -288,7 +291,7 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
       },
     })),
   finalizeTurn: (
-    wsId,
+    sessionId,
     messageCount,
     turnId,
     durationMs,
@@ -304,13 +307,13 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
       // separately with the correct per-call data. The tokens we DO
       // receive here stay as CompletedTurn aggregate fields for the
       // TurnFooter's "turn-total work" view.
-      const activities = s.toolActivities[wsId] || [];
+      const activities = s.toolActivities[sessionId] || [];
       if (activities.length === 0) {
         debugChat("store", "finalizeTurn skipped", {
-          wsId,
+          sessionId,
           messageCount,
           turnId: turnId ?? null,
-          existingCompletedTurnIds: (s.completedTurns[wsId] || []).map(
+          existingCompletedTurnIds: (s.completedTurns[sessionId] || []).map(
             (turn) => turn.id,
           ),
         });
@@ -328,7 +331,7 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
         })),
         messageCount,
         collapsed: true,
-        afterMessageIndex: (s.chatMessages[wsId] || []).length,
+        afterMessageIndex: (s.chatMessages[sessionId] || []).length,
         durationMs,
         inputTokens,
         outputTokens,
@@ -336,27 +339,27 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
         cacheCreationTokens,
       };
       debugChat("store", "finalizeTurn", {
-        wsId,
+        sessionId,
         turnId: turn.id,
         messageCount,
         afterMessageIndex: turn.afterMessageIndex,
         toolCount: turn.activities.length,
         toolUseIds: turn.activities.map((activity) => activity.toolUseId),
-        existingCompletedTurnIds: (s.completedTurns[wsId] || []).map(
+        existingCompletedTurnIds: (s.completedTurns[sessionId] || []).map(
           (existingTurn) => existingTurn.id,
         ),
       });
       return {
         completedTurns: {
           ...s.completedTurns,
-          [wsId]: [...(s.completedTurns[wsId] || []), turn],
+          [sessionId]: [...(s.completedTurns[sessionId] || []), turn],
         },
-        toolActivities: { ...s.toolActivities, [wsId]: [] },
+        toolActivities: { ...s.toolActivities, [sessionId]: [] },
       };
     }),
-  hydrateCompletedTurns: (wsId, turns) =>
+  hydrateCompletedTurns: (sessionId, turns) =>
     set((s) => {
-      const existing = s.completedTurns[wsId] || [];
+      const existing = s.completedTurns[sessionId] || [];
       const existingById = new Map(existing.map((turn) => [turn.id, turn]));
       const incomingIds = new Set(turns.map((turn) => turn.id));
 
@@ -389,7 +392,7 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
       );
 
       debugChat("store", "hydrateCompletedTurns", {
-        wsId,
+        sessionId,
         existingIds: existing.map((turn) => turn.id),
         incomingIds: turns.map((turn) => turn.id),
         pendingIds: pendingTurns.map((turn) => turn.id),
@@ -399,26 +402,26 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
       return {
         completedTurns: {
           ...s.completedTurns,
-          [wsId]: nextTurns,
+          [sessionId]: nextTurns,
         },
       };
     }),
-  setCompletedTurns: (wsId, turns) =>
+  setCompletedTurns: (sessionId, turns) =>
     set((s) => {
       debugChat("store", "setCompletedTurns", {
-        wsId,
+        sessionId,
         turnIds: turns.map((turn) => turn.id),
-        previousIds: (s.completedTurns[wsId] || []).map((turn) => turn.id),
+        previousIds: (s.completedTurns[sessionId] || []).map((turn) => turn.id),
       });
       return {
-        completedTurns: { ...s.completedTurns, [wsId]: turns },
+        completedTurns: { ...s.completedTurns, [sessionId]: turns },
       };
     }),
-  toggleCompletedTurn: (wsId, turnIndex) =>
+  toggleCompletedTurn: (sessionId, turnIndex) =>
     set((s) => ({
       completedTurns: {
         ...s.completedTurns,
-        [wsId]: (s.completedTurns[wsId] || []).map((t, i) =>
+        [sessionId]: (s.completedTurns[sessionId] || []).map((t, i) =>
           i === turnIndex ? { ...t, collapsed: !t.collapsed } : t,
         ),
       },
