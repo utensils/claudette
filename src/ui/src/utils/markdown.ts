@@ -8,6 +8,7 @@ import { AnsiUp } from "ansi_up";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "../services/tauri";
 import { CodeBlock } from "../components/chat/CodeBlock";
+import { MermaidBlock } from "../components/chat/MermaidBlock";
 import { StreamingContext } from "../components/chat/StreamingContext";
 import { decodeFilePathHref, FILE_PATH_SCHEME } from "./filePathLinks";
 import { getCachedHighlight, highlightCode } from "./highlight";
@@ -323,8 +324,26 @@ export const MARKDOWN_COMPONENTS: Components = {
     );
   },
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  pre: ({ node, children, ...props }) =>
-    createElement(CodeBlock, props, children),
+  pre: ({ node, children, ...props }) => {
+    // Detect ```mermaid fences and route them to MermaidBlock instead of
+    // the syntax-highlighted code path. We introspect the `<code>` child's
+    // className because by the time we reach `pre`, react-markdown has
+    // already produced React elements — the original AST node is opaque.
+    const codeChild = React.Children.toArray(children).find(
+      (c): c is React.ReactElement<{ className?: string; children?: React.ReactNode }> =>
+        React.isValidElement(c) &&
+        typeof (c.props as { className?: string }).className === "string" &&
+        /(?:^|\s)language-mermaid(?:\s|$)/.test(
+          (c.props as { className: string }).className,
+        ),
+    );
+    if (codeChild) {
+      return createElement(MermaidBlock, {
+        source: extractText(codeChild.props.children).replace(/\n+$/, ""),
+      });
+    }
+    return createElement(CodeBlock, props, children);
+  },
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   code: ({ node, ...props }) => createElement(HighlightedCode, props),
 };
