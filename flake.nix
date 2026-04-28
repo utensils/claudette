@@ -104,7 +104,7 @@
             #   nix build .#frontend 2>&1 | grep 'got:' | awk '{print $2}'
             outputHash =
               if pkgs.stdenv.isDarwin then
-                "sha256-4DTkNSdBEuOH4cwx9arUglGaDUp87gnbOflAjDBYVEM="
+                "sha256-jAvDzhkVASfcc36K4ngTKAWTAus2H7oqaqp1pUXZRFo="
               else
                 "sha256-TP3Ck8BOXAZRMo7YPVGvxe9ULewNhdVsUU9x/bpjJL4=";
 
@@ -142,7 +142,11 @@
               (craneLib.filterCargoSources path type)
               || (builtins.match ".*src-tauri/.*" path != null)
               || (builtins.match ".*assets/.*" path != null)
-              || (builtins.match ".*plugins/.*" path != null);
+              || (builtins.match ".*plugins/.*" path != null)
+              # Migration .sql files are loaded via include_str! in
+              # src/migrations/mod.rs, so they must survive the source
+              # filter even though they aren't *.rs.
+              || (builtins.match ".*/migrations/.*\\.sql" path != null);
           };
 
           # Platform-specific build dependencies
@@ -311,9 +315,20 @@
           };
 
           # -- Checks ------------------------------------------------------------
+          # `claudette` (the Tauri binary) is only included on Linux:
+          # the macOS build requires Apple's Swift toolchain (`swiftc`)
+          # for the Apple Speech FFI bridge in src-tauri/build.rs, which
+          # is not available in the pure Nix sandbox. Use `cargo tauri
+          # build` outside the sandbox to produce the macOS bundle.
+          # `claudette-server` has no Swift dependency and builds clean
+          # on all platforms.
           checks = {
-            inherit claudette claudette-server;
-
+            inherit claudette-server;
+          }
+          // lib.optionalAttrs pkgs.stdenv.isLinux {
+            inherit claudette;
+          }
+          // {
             clippy = craneLib.cargoClippy (
               commonCraneArgs
               // {
@@ -539,6 +554,16 @@
                 command = "exec ./scripts/dev.sh";
                 help = "Start Tauri dev mode with hot-reload (auto-selects free Vite + debug ports)";
                 category = "development";
+              }
+              {
+                name = "docs-dev";
+                command = ''
+                  cd "$PRJ_ROOT/site"
+                  [ -d node_modules ] || bun install --frozen-lockfile
+                  exec bun run dev "$@"
+                '';
+                help = "Start the docs site (Astro/Starlight) in dev mode with hot-reload (default http://localhost:4321)";
+                category = "documentation";
               }
               {
                 name = "build-app";

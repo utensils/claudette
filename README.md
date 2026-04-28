@@ -269,6 +269,28 @@ Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md)
 - The backend (`src/`) is a library crate consumed by the Tauri binary (`src-tauri/`).
 - See `CLAUDE.md` for detailed architecture and contribution guidelines.
 
+## Relationship to Anthropic
+
+Claudette is an independent, community-built tool. **It is not affiliated with, endorsed by, or sponsored by Anthropic, PBC.** "Claude" and "Claude Code" are trademarks of Anthropic, PBC; their use here is descriptive — Claudette orchestrates the official Claude Code CLI — and does not imply any partnership.
+
+### How Claudette uses your Claude account
+
+Claudette does **not** authenticate to Anthropic on your behalf. It spawns the official `claude` CLI you have installed locally as a subprocess; the CLI authenticates itself using the credentials you have configured for it. Claudette never reads, copies, or forwards your Claude OAuth tokens, and explicitly strips any inherited subscription tokens from spawned subprocesses so they are never passed through.
+
+### Pro/Max plan usage and parallel agents
+
+Per the [Claude Code legal and compliance page](https://code.claude.com/docs/en/legal-and-compliance):
+
+> Advertised usage limits for Pro and Max plans assume ordinary, individual usage of Claude Code and the Agent SDK.
+
+Claudette can run multiple agents in parallel git worktrees. **We recommend keeping default parallelism low (1–3 simultaneous agents)** and treating heavier use as something you explicitly opt into. Whether running N parallel agents counts as "ordinary, individual usage" under your plan is a judgment Anthropic reserves for itself; Claudette is the affordance, but the responsibility for staying within your plan's terms is yours.
+
+If you need higher throughput, the supported path is API-key authentication via [Claude Console](https://platform.claude.com/), which is governed by Anthropic's [Commercial Terms](https://www.anthropic.com/legal/commercial-terms).
+
+### Plugin secrets storage
+
+Claude Code plugins may require their own secrets (API keys, tokens). Claudette stores these in the same secure-storage object Claude Code itself uses — the macOS Keychain entry `Claude Code-credentials`, or `~/.claude/.credentials.json` on Linux — but only under its own `pluginSecrets` namespace. Your Claude OAuth tokens (`claudeAiOauth.*`) are never read or written by Claudette's plugin code.
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE).

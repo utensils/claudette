@@ -9,6 +9,14 @@ Claudette is designed with a simple privacy principle: **your data stays on your
 
 Claudette has no user registration, no login, and no accounts. You download the app and start using it — there's nothing to sign up for.
 
+## Relationship to Anthropic
+
+Claudette is an independent, community-built tool. It is **not affiliated with, endorsed by, or sponsored by Anthropic, PBC.** "Claude" and "Claude Code" are trademarks of Anthropic, PBC; their use here is descriptive — Claudette orchestrates the official Claude Code CLI — and does not imply any partnership.
+
+Claudette does not authenticate to Anthropic on your behalf. It spawns the official `claude` CLI you have installed locally as a subprocess; the CLI authenticates itself with whatever credentials you have configured. Claudette never reads, copies, or forwards your Claude OAuth tokens.
+
+Per the [Claude Code legal and compliance page](https://code.claude.com/docs/en/legal-and-compliance), "advertised usage limits for Pro and Max plans assume ordinary, individual usage of Claude Code and the Agent SDK." We recommend keeping default parallelism low (1–3 simultaneous agents) and treating heavier use as something you explicitly opt into. Responsibility for staying within your plan's terms is yours.
+
 ## No Remote Servers
 
 Claudette does not operate any remote servers. Nothing you do in Claudette is transmitted to any servers managed by Claudette or [utensils](https://utensils.io). There is:
@@ -31,6 +39,21 @@ Your Machine ←→ Anthropic API
 
 Claudette never proxies, intercepts, or stores your API traffic on any third-party server.
 
+## Network Activity
+
+Beyond the Claude API traffic that flows through your locally-installed `claude` CLI, Claudette itself reaches a small number of external endpoints. None of these handle your prompts, code, or Claude credentials.
+
+| Destination | What it's for | When |
+|---|---|---|
+| `github.com/utensils/Claudette/releases` | App update checks (Tauri updater) | On app start |
+| `api.github.com/repos/utensils/claudette/releases` | Nightly build discovery | If nightly channel selected |
+| `peonping.github.io/registry/` | Soundpack registry index | If you open the soundpack picker |
+| `github.com/<repo>/archive/refs/tags/<tag>.tar.gz` | Soundpack downloads | Only when you install a pack |
+| `huggingface.co/distil-whisper/distil-large-v3/...` | Local speech-to-text model | Only the first time you use voice input |
+| `fonts.googleapis.com` | UI font (rendered in webview) | While the app window is open |
+
+There is no telemetry endpoint, no analytics endpoint, and no crash-reporting endpoint. The destinations above exist to make features work, not to track you.
+
 ## Local Storage
 
 Claudette stores workspace metadata and chat history in a local **SQLite database** on your machine:
@@ -39,6 +62,10 @@ Claudette stores workspace metadata and chat history in a local **SQLite databas
 - **Linux**: `~/.local/share/com.claudette.app/`
 
 This database contains workspace names, chat messages, and settings — all stored locally. You can back it up, delete it, or move it at any time.
+
+## Plugin Secrets
+
+Claude Code plugins may require their own secrets — API keys, tokens, etc. Claudette stores these in the same secure-storage object Claude Code itself uses (the macOS Keychain entry `Claude Code-credentials`, or `~/.claude/.credentials.json` on Linux), but only under its own `pluginSecrets` namespace. Your Claude OAuth tokens (`claudeAiOauth.*`) are never read or written by Claudette's plugin code.
 
 ## Remote Workspaces
 

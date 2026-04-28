@@ -5,6 +5,12 @@ description: Connect to workspaces on remote machines via encrypted WebSocket.
 
 Claudette can connect to workspaces on another machine over an encrypted WebSocket connection. The local app discovers or connects to a remote server and displays remote repos, agents, and terminals alongside local ones.
 
+:::caution[Use with your own account only]
+Agents started on a remote Claudette server run under whatever Claude credentials are configured on the *server* machine. If you pair multiple devices to a server signed into your Claude Pro/Max account, all of those devices share that single subscription identity.
+
+[Anthropic's Consumer Terms](https://www.anthropic.com/legal/consumer-terms) prohibit making your account "available to anyone else." Pair only your own devices to a server tied to a Pro/Max subscription. If you need to share access with a teammate, use API-key authentication on the server and have your teammate sign in with their own credentials.
+:::
+
 ## Sharing from the Desktop App
 
 Click **Share this machine** in the sidebar. The server starts automatically as a subprocess — no separate installation required. The server is embedded in the Claudette binary (gated behind the default-enabled `server` feature).

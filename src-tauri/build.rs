@@ -16,6 +16,24 @@ fn main() {
 
 #[cfg(target_os = "macos")]
 fn compile_platform_speech_swift() {
+    // Detect missing swiftc gracefully — a pure Nix sandbox build has
+    // xcrun (from apple-sdk) but no Swift toolchain. Skipping here lets
+    // `cargo check` and `cargo clippy` run inside the sandbox; the
+    // resulting object files won't satisfy the Speech-framework linker
+    // step, so full binary builds must still run outside the sandbox
+    // with a working Xcode toolchain.
+    let swiftc_available = Command::new("xcrun")
+        .args(["--find", "swiftc"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !swiftc_available {
+        println!(
+            "cargo:warning=swiftc not found; skipping Apple Speech Swift bridge. Full Tauri builds require Xcode."
+        );
+        return;
+    }
+
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest dir"));
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("out dir"));
     let source = manifest_dir.join("macos").join("PlatformSpeech.swift");
