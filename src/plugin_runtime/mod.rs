@@ -349,9 +349,13 @@ impl PluginRegistry {
             })?;
 
             // Convert args to Lua value
-            let lua_args = lua
-                .to_value(&args)
-                .map_err(|e| PluginError::ParseError(format!("Failed to convert args: {e}")))?;
+            let lua_args = lua.to_value(&args).map_err(|e| {
+                if is_lua_operation_timeout(&e) {
+                    PluginError::Timeout
+                } else {
+                    PluginError::ParseError(format!("Failed to convert args: {e}"))
+                }
+            })?;
 
             // Call the operation
             let result: mlua::Value =
@@ -369,8 +373,13 @@ impl PluginRegistry {
                 })?;
 
             // Convert result to JSON
-            lua.from_value(result)
-                .map_err(|e| PluginError::ParseError(format!("Failed to convert result: {e}")))
+            lua.from_value(result).map_err(|e| {
+                if is_lua_operation_timeout(&e) {
+                    PluginError::Timeout
+                } else {
+                    PluginError::ParseError(format!("Failed to convert result: {e}"))
+                }
+            })
         };
 
         match tokio::time::timeout(operation_timeout, fut).await {
@@ -580,7 +589,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn top_level_cpu_loop_is_interrupted_within_operation_timeout() {
         let dir = tempfile::tempdir().unwrap();
         write_plugin(
@@ -599,15 +608,18 @@ mod tests {
         let registry = PluginRegistry::discover(dir.path());
 
         let started = Instant::now();
-        let result = registry
-            .call_operation_with_timeout(
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            registry.call_operation_with_timeout(
                 "top-level-loop",
                 "run",
                 serde_json::json!({}),
                 test_workspace(),
                 Duration::from_millis(100),
-            )
-            .await;
+            ),
+        )
+        .await
+        .expect("CPU-bound Lua load should not stall the test runtime");
 
         assert!(matches!(result, Err(PluginError::Timeout)));
         assert!(
@@ -616,7 +628,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn operation_cpu_loop_is_interrupted_within_operation_timeout() {
         let dir = tempfile::tempdir().unwrap();
         write_plugin(
@@ -635,15 +647,18 @@ mod tests {
         let registry = PluginRegistry::discover(dir.path());
 
         let started = Instant::now();
-        let result = registry
-            .call_operation_with_timeout(
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            registry.call_operation_with_timeout(
                 "operation-loop",
                 "run",
                 serde_json::json!({}),
                 test_workspace(),
                 Duration::from_millis(100),
-            )
-            .await;
+            ),
+        )
+        .await
+        .expect("CPU-bound Lua operation should not stall the test runtime");
 
         assert!(matches!(result, Err(PluginError::Timeout)));
         assert!(
