@@ -6,7 +6,7 @@ import {
   type BlockToolMap,
 } from "./blockToolMap";
 
-// Regression tests for issue #484. The map drives content_block_delta →
+// Regression tests for issue 484. The map drives content_block_delta →
 // tool input routing in useAgentStream. Before the fix it was a flat
 // Record<number, …> keyed only by content-block index, so two concurrent
 // sessions whose Anthropic API streams reused the same block index
