@@ -41,6 +41,10 @@ function App() {
 
   // Cached theme list — populated on initial load, reused by the OS handler.
   const loadedThemesRef = useRef<ThemeDefinition[]>([]);
+  // Generation token: incremented on each OS theme change event so that a
+  // stale async loadAllThemes() result doesn't overwrite a later handler's
+  // applied theme when the OS toggles light↔dark in rapid succession.
+  const themeChangeTokenRef = useRef(0);
 
   // Listen for MCP supervisor status events from the Rust backend.
   useMcpStatus();
@@ -388,6 +392,7 @@ function App() {
     const handleChange = async (e: MediaQueryListEvent) => {
       const state = useAppStore.getState();
       if (state.themeMode !== "system") return;
+      const token = ++themeChangeTokenRef.current;
       const effectiveId = e.matches ? state.themeDark : state.themeLight;
       // The cached theme list is populated once on initial load. If the user
       // dropped a new JSON theme on disk and selected it via Settings, it
@@ -402,12 +407,16 @@ function App() {
           console.error("Failed to reload themes for system change:", err);
         }
       }
+      // A later handler already ran — discard this stale result.
+      if (themeChangeTokenRef.current !== token) return;
       if (themes.length === 0) return;
       try {
         const theme = findTheme(themes, effectiveId);
         applyTheme(theme);
-        applyUserFonts(state.fontFamilySans, state.fontFamilyMono, state.uiFontSize);
-        state.setCurrentThemeId(theme.id);
+        // Read fresh state: font settings may have changed during the await.
+        const fresh = useAppStore.getState();
+        applyUserFonts(fresh.fontFamilySans, fresh.fontFamilyMono, fresh.uiFontSize);
+        fresh.setCurrentThemeId(theme.id);
       } catch (err) {
         console.error("Failed to apply system theme change:", err);
       }
