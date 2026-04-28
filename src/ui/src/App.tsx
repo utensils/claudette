@@ -109,8 +109,14 @@ function App() {
           rawMode === "light" || rawMode === "dark" || rawMode === "system"
             ? rawMode
             : "dark";
-        const darkId = darkIdVal ?? legacyThemeVal ?? "default-dark";
-        const lightId = lightIdVal ?? "default-light";
+        // Resolve through findTheme so a previously-saved id that no longer
+        // exists (e.g. a user JSON theme that was removed) falls back to a
+        // real theme — and we persist that resolved id, not the dead one,
+        // so the Settings <select> always reflects the applied theme.
+        const darkTheme = findTheme(allThemes, darkIdVal ?? legacyThemeVal ?? "default-dark");
+        const lightTheme = findTheme(allThemes, lightIdVal ?? "default-light");
+        const darkId = darkTheme.id;
+        const lightId = lightTheme.id;
 
         setThemeMode(mode);
         setThemeDark(darkId);
@@ -126,8 +132,6 @@ function App() {
         applyTheme(theme);
 
         // Cache per-mode attrs for the pre-hydration script.
-        const darkTheme = findTheme(allThemes, darkId);
-        const lightTheme = findTheme(allThemes, lightId);
         cacheThemePreference(mode, getThemeDataAttr(darkTheme), getThemeDataAttr(lightTheme));
 
         // Apply user font overrides on top of the theme.

@@ -4,6 +4,7 @@ import {
   BUILTIN_THEME_IDS,
   BUILTIN_THEME_META,
   DEFAULT_THEME_ID,
+  DEFAULT_LIGHT_THEME_ID,
 } from "../styles/themes";
 import { listUserThemes } from "../services/tauri";
 
@@ -173,9 +174,10 @@ export function applyTheme(theme: ThemeDefinition): void {
     dataThemeAttr = theme.id;
     root.setAttribute("data-theme", dataThemeAttr);
   } else {
-    // User-provided JSON theme. Mark data-theme so any default-dark rules
-    // still apply as a baseline; inline vars override.
-    dataThemeAttr = DEFAULT_THEME_ID;
+    // User-provided JSON theme. Pick the baseline matching the theme's
+    // declared color-scheme so a light user theme starts from light defaults
+    // (avoids a dark first-paint flash); inline vars override either way.
+    dataThemeAttr = baselineAttrForTheme(theme);
     root.setAttribute("data-theme", dataThemeAttr);
     for (const varName of THEMEABLE_VARS) {
       const value = theme.colors[varName];
@@ -192,12 +194,23 @@ export function applyTheme(theme: ThemeDefinition): void {
   cacheDataTheme(dataThemeAttr);
 }
 
+// User JSON themes layer on top of a built-in baseline. Pick the baseline
+// matching the theme's color-scheme so the pre-hydration script lands on
+// a stylesheet block that's already light or dark — keeps applyTheme() and
+// getThemeDataAttr() consistent.
+function baselineAttrForTheme(theme: ThemeDefinition): string {
+  return theme.colors["color-scheme"] === "light"
+    ? DEFAULT_LIGHT_THEME_ID
+    : DEFAULT_THEME_ID;
+}
+
 /**
  * Returns the data-theme attribute value that applyTheme() would set for a given theme.
- * Built-in themes use their own ID; user JSON themes layer on top of DEFAULT_THEME_ID.
+ * Built-in themes use their own ID; user JSON themes use the built-in baseline that
+ * matches their declared color-scheme.
  */
 export function getThemeDataAttr(theme: ThemeDefinition): string {
-  return BUILTIN_THEME_IDS.has(theme.id) ? theme.id : DEFAULT_THEME_ID;
+  return BUILTIN_THEME_IDS.has(theme.id) ? theme.id : baselineAttrForTheme(theme);
 }
 
 /**
