@@ -5,6 +5,12 @@
 //! are idiomatic Rust; the public method paths resolve identically to a
 //! single-block layout.
 
+use rusqlite::{OptionalExtension, params};
+
+use crate::model::Repository;
+
+use super::Database;
+
 /// Returns true when `err` is the SQLite `UNIQUE` constraint failure on
 /// `repositories.path` — i.e. the caller tried to insert a repo whose path
 /// is already registered. Other constraint failures (including UNIQUE on
@@ -17,12 +23,6 @@ pub fn is_duplicate_repository_path_error(err: &rusqlite::Error) -> bool {
         false
     }
 }
-
-use rusqlite::{OptionalExtension, params};
-
-use crate::model::Repository;
-
-use super::Database;
 
 impl Database {
     pub fn insert_repository(&self, repo: &Repository) -> Result<(), rusqlite::Error> {
