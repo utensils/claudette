@@ -12,6 +12,8 @@ use crate::model::{
     TerminalTab, TurnToolActivity, Workspace, WorkspaceStatus,
 };
 
+mod repository;
+
 fn row_to_attachment(row: &rusqlite::Row) -> rusqlite::Result<Attachment> {
     let data: Vec<u8> = row.get(4)?;
     let origin_str: String = row.get(9)?;
