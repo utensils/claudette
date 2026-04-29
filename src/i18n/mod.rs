@@ -51,7 +51,7 @@ fn es_store() -> &'static HashMap<String, String> {
 
 fn parse_locale(raw: &str, tag: &str) -> HashMap<String, String> {
     serde_json::from_str(raw)
-        .unwrap_or_else(|e| panic!("locales/{tag}/tray.json failed to parse as flat JSON: {e}"))
+        .unwrap_or_else(|e| panic!("src/locales/{tag}/tray.json failed to parse as flat JSON: {e}"))
 }
 
 /// Look up a translation key. Returns the English value if the locale is

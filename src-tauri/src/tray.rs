@@ -299,13 +299,16 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), String> {
     // suffix sidesteps the collision entirely.
     let tray_id = mint_tray_id(&state);
 
-    // Initial idle tooltip in the user's language. `rebuild_tray` will
-    // overwrite this on the first agent state change.
+    // Initial idle tooltip in the user's language. The tray spawns in
+    // the Idle state (matching the icon chosen above), so use the same
+    // "All idle" string `rebuild_tray` will produce on the first agent
+    // state change — otherwise the very first hover after launch shows
+    // a less informative tooltip than every subsequent hover.
     let initial_locale = match &db {
         Some(db) => locale_from_db(db),
         None => Locale::En,
     };
-    let initial_tooltip = t(initial_locale, "tooltip_idle");
+    let initial_tooltip = t(initial_locale, "tooltip_all_idle");
 
     let tray = TrayIconBuilder::with_id(&tray_id)
         .icon(icon)

@@ -1,5 +1,4 @@
 {
-  "tooltip_idle": "Claudette",
   "tooltip_all_idle": "Claudette — All idle",
   "tooltip_running_one": "Claudette — {{count}} agent running",
   "tooltip_running_other": "Claudette — {{count}} agents running",

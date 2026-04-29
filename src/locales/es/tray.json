@@ -1,5 +1,4 @@
 {
-  "tooltip_idle": "Claudette",
   "tooltip_all_idle": "Claudette — Todo inactivo",
   "tooltip_running_one": "Claudette — {{count}} agente en ejecución",
   "tooltip_running_other": "Claudette — {{count}} agentes en ejecución",
