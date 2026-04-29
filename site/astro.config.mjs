@@ -16,14 +16,19 @@ export default defineConfig({
       favicon: '/favicon.png',
       social: [
         {
-          icon: 'github',
-          label: 'GitHub',
-          href: 'https://github.com/utensils/Claudette',
-        },
-        {
           icon: 'discord',
           label: 'Discord',
           href: 'https://discord.gg/aumGBKccmD',
+        },
+        {
+          icon: 'reddit',
+          label: 'r/ClaudetteApp',
+          href: 'https://www.reddit.com/r/ClaudetteApp/',
+        },
+        {
+          icon: 'github',
+          label: 'GitHub',
+          href: 'https://github.com/utensils/Claudette',
         },
       ],
       customCss: [

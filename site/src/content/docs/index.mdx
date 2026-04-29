@@ -1,37 +1,25 @@
 ---
-title: Claudette — Claude's Missing Better Half
+title: Claudette — The open-source desktop companion for Claude Code
 description: A beautiful desktop orchestrator for parallel Claude Code agents. Runs natively on macOS, Linux, and Windows. Git worktrees, remote workspaces, integrated terminal, and more.
 template: splash
-hero:
-  title: Claudette
-  tagline: Claude's missing better half — a beautiful desktop orchestrator for running parallel Claude Code agents. Runs natively on macOS, Linux, and Windows. Manage workspaces, review diffs, and ship faster.
-  image:
-    alt: Claudette — a cute pixel art pig with a pink bow
-    file: ../../assets/hero-mascot.png
-  actions:
-    - text: Download
-      link: https://github.com/utensils/Claudette/releases
-      icon: down-caret
-      variant: primary
-    - text: View on GitHub
-      link: https://github.com/utensils/Claudette
-      variant: minimal
-      icon: github
-    - text: Read the Docs
-      link: /claudette/getting-started/installation/
-      variant: secondary
+tableOfContents: false
+pagefind: false
 ---
 
+import Hero from '../../components/Hero.astro';
+import Pillars from '../../components/Pillars.astro';
 import FeatureCards from '../../components/FeatureCards.astro';
-import StatsBar from '../../components/StatsBar.astro';
+import ValuesStrip from '../../components/ValuesStrip.astro';
+import AndMore from '../../components/AndMore.astro';
+import Anatomy from '../../components/Anatomy.astro';
 import HowItWorks from '../../components/HowItWorks.astro';
-import Screenshots from '../../components/Screenshots.astro';
-import TechStack from '../../components/TechStack.astro';
 import CTASection from '../../components/CTASection.astro';
 
+<Hero />
+<Pillars />
 <FeatureCards />
-<StatsBar />
+<ValuesStrip />
+<AndMore />
+<Anatomy />
 <HowItWorks />
-<Screenshots />
-<TechStack />
 <CTASection />
