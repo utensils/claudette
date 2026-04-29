@@ -248,4 +248,44 @@ mod tests {
             "id collision should not be mapped to the duplicate-path branch: {err:?}",
         );
     }
+
+    #[test]
+    fn test_update_repository_name() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        db.update_repository_name("r1", "My Custom Name").unwrap();
+        let repos = db.list_repositories().unwrap();
+        assert_eq!(repos[0].name, "My Custom Name");
+        // path_slug should remain unchanged
+        assert_eq!(repos[0].path_slug, "repo1");
+    }
+
+    #[test]
+    fn test_update_repository_icon() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+
+        // Set icon
+        db.update_repository_icon("r1", Some("rocket")).unwrap();
+        let repos = db.list_repositories().unwrap();
+        assert_eq!(repos[0].icon.as_deref(), Some("rocket"));
+
+        // Clear icon
+        db.update_repository_icon("r1", None).unwrap();
+        let repos = db.list_repositories().unwrap();
+        assert!(repos[0].icon.is_none());
+    }
+
+    #[test]
+    fn test_repository_path_slug_persisted() {
+        let db = Database::open_in_memory().unwrap();
+        let mut repo = make_repo("r1", "/tmp/my-project", "My Project");
+        repo.path_slug = "my-project".into();
+        db.insert_repository(&repo).unwrap();
+        let repos = db.list_repositories().unwrap();
+        assert_eq!(repos[0].name, "My Project");
+        assert_eq!(repos[0].path_slug, "my-project");
+    }
 }
