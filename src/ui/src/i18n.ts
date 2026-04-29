@@ -10,8 +10,13 @@ import settingsEs from "./locales/es/settings.json";
 import chatEs from "./locales/es/chat.json";
 import modalsEs from "./locales/es/modals.json";
 import sidebarEs from "./locales/es/sidebar.json";
+import commonPtBr from "./locales/pt-BR/common.json";
+import settingsPtBr from "./locales/pt-BR/settings.json";
+import chatPtBr from "./locales/pt-BR/chat.json";
+import modalsPtBr from "./locales/pt-BR/modals.json";
+import sidebarPtBr from "./locales/pt-BR/sidebar.json";
 
-export const SUPPORTED_LANGUAGES = ["en", "es"] as const;
+export const SUPPORTED_LANGUAGES = ["en", "es", "pt-BR"] as const;
 export type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];
 
 export function isSupportedLanguage(lang: string): lang is SupportedLanguage {
@@ -38,6 +43,13 @@ void i18n.use(initReactI18next).init({
       chat: chatEs,
       modals: modalsEs,
       sidebar: sidebarEs,
+    },
+    "pt-BR": {
+      common: commonPtBr,
+      settings: settingsPtBr,
+      chat: chatPtBr,
+      modals: modalsPtBr,
+      sidebar: sidebarPtBr,
     },
   },
   interpolation: {

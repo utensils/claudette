@@ -1,0 +1,21 @@
+{
+  "cancel": "Cancelar",
+  "save": "Salvar",
+  "delete": "Excluir",
+  "close": "Fechar",
+  "browse": "Procurar",
+  "copy": "Copiar",
+  "copied": "Copiado",
+  "add": "Adicionar",
+  "edit": "Editar",
+  "loading": "Carregando…",
+  "error": "Erro",
+  "open": "Abrir",
+  "none": "Nenhum",
+  "custom": "Personalizado",
+  "more": "Mais",
+  "retry": "Tentar novamente",
+  "skip": "Pular",
+  "done": "Concluído",
+  "back_to_app": "← Voltar ao app"
+}

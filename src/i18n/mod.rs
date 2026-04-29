@@ -11,6 +11,7 @@ use std::sync::OnceLock;
 
 const TRAY_EN: &str = include_str!("../locales/en/tray.json");
 const TRAY_ES: &str = include_str!("../locales/es/tray.json");
+const TRAY_PT_BR: &str = include_str!("../locales/pt-BR/tray.json");
 
 /// Supported locales. Mirrors `SUPPORTED_LANGUAGES` in `src/ui/src/i18n.ts`;
 /// keep both lists in sync. Unknown values from the DB fall back to `En`.
@@ -18,6 +19,7 @@ const TRAY_ES: &str = include_str!("../locales/es/tray.json");
 pub enum Locale {
     En,
     Es,
+    PtBr,
 }
 
 impl Locale {
@@ -27,6 +29,7 @@ impl Locale {
     pub fn from_db_value(value: Option<&str>) -> Self {
         match value.map(str::trim).unwrap_or("") {
             "es" => Locale::Es,
+            "pt-BR" => Locale::PtBr,
             _ => Locale::En,
         }
     }
@@ -35,6 +38,7 @@ impl Locale {
         match self {
             Locale::En => en_store(),
             Locale::Es => es_store(),
+            Locale::PtBr => pt_br_store(),
         }
     }
 }
@@ -47,6 +51,11 @@ fn en_store() -> &'static HashMap<String, String> {
 fn es_store() -> &'static HashMap<String, String> {
     static ES: OnceLock<HashMap<String, String>> = OnceLock::new();
     ES.get_or_init(|| parse_locale(TRAY_ES, "es"))
+}
+
+fn pt_br_store() -> &'static HashMap<String, String> {
+    static PT_BR: OnceLock<HashMap<String, String>> = OnceLock::new();
+    PT_BR.get_or_init(|| parse_locale(TRAY_PT_BR, "pt-BR"))
 }
 
 fn parse_locale(raw: &str, tag: &str) -> HashMap<String, String> {
@@ -96,6 +105,8 @@ mod tests {
         assert_eq!(Locale::from_db_value(Some("en")), Locale::En);
         assert_eq!(Locale::from_db_value(Some("es")), Locale::Es);
         assert_eq!(Locale::from_db_value(Some(" es ")), Locale::Es);
+        assert_eq!(Locale::from_db_value(Some("pt-BR")), Locale::PtBr);
+        assert_eq!(Locale::from_db_value(Some(" pt-BR ")), Locale::PtBr);
     }
 
     #[test]
@@ -110,6 +121,7 @@ mod tests {
     fn t_returns_localized_string() {
         assert_eq!(t(Locale::En, "menu_settings"), "Settings");
         assert_eq!(t(Locale::Es, "menu_settings"), "Configuración");
+        assert_eq!(t(Locale::PtBr, "menu_settings"), "Configurações");
     }
 
     #[test]
@@ -136,11 +148,19 @@ mod tests {
     fn locales_have_identical_key_sets() {
         let en: std::collections::BTreeSet<_> = en_store().keys().collect();
         let es: std::collections::BTreeSet<_> = es_store().keys().collect();
-        let only_en: Vec<_> = en.difference(&es).collect();
-        let only_es: Vec<_> = es.difference(&en).collect();
+        let pt_br: std::collections::BTreeSet<_> = pt_br_store().keys().collect();
+        let only_en_vs_es: Vec<_> = en.difference(&es).collect();
+        let only_es_vs_en: Vec<_> = es.difference(&en).collect();
+        let only_en_vs_pt_br: Vec<_> = en.difference(&pt_br).collect();
+        let only_pt_br_vs_en: Vec<_> = pt_br.difference(&en).collect();
         assert!(
-            only_en.is_empty() && only_es.is_empty(),
-            "tray locale key drift — only_en={only_en:?} only_es={only_es:?}"
+            only_en_vs_es.is_empty()
+                && only_es_vs_en.is_empty()
+                && only_en_vs_pt_br.is_empty()
+                && only_pt_br_vs_en.is_empty(),
+            "tray locale key drift — \
+             only_en_vs_es={only_en_vs_es:?} only_es_vs_en={only_es_vs_en:?} \
+             only_en_vs_pt_br={only_en_vs_pt_br:?} only_pt_br_vs_en={only_pt_br_vs_en:?}"
         );
     }
 }
