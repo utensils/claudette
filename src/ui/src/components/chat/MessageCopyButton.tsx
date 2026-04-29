@@ -33,15 +33,13 @@ export function MessageCopyButton({
     };
   }, []);
 
-  const label = copied ? t("message_copied") : t("message_copy");
-
   return (
     <button
       type="button"
       className={className}
       onClick={handleCopy}
-      title={label}
-      aria-label={label}
+      title={copied ? t("message_copied") : t("message_copy")}
+      aria-label={t("message_copy")}
     >
       {copied ? (
         <svg

@@ -194,6 +194,9 @@
   padding: 4px;
   border-radius: 6px;
   opacity: 0;
+  /* Don't intercept clicks/text-selection while hidden — only bubble hover or
+     keyboard focus re-enables hit testing below. */
+  pointer-events: none;
   transition: opacity 0.15s, background 0.15s, color 0.15s, border-color 0.15s;
   display: flex;
   align-items: center;
@@ -203,6 +206,7 @@
 
 .role_User:hover .userMessageCopyButton {
   opacity: 0.7;
+  pointer-events: auto;
 }
 
 .role_User:hover .userMessageCopyButton:hover {
@@ -214,6 +218,7 @@
 
 .userMessageCopyButton:focus-visible {
   opacity: 1;
+  pointer-events: auto;
   outline: 2px solid var(--accent-primary);
   outline-offset: 1px;
 }
