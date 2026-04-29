@@ -24,3 +24,16 @@ bun = "latest"
 # renders as an empty string, which mise treats as unset for these vars.
 SDKROOT = "{% if os() == 'macos' %}{{ exec(command='xcrun --show-sdk-path') | trim }}{% endif %}"
 LIBRARY_PATH = "{% if os() == 'macos' %}{{ exec(command='xcrun --show-sdk-path') | trim }}/usr/lib{% endif %}"
+
+# Force Apple's clang as the C compiler and linker on macOS, regardless of
+# PATH order. Setting `LIBRARY_PATH` alone isn't enough on nix-darwin: nix's
+# bundled `ld` doesn't resolve Apple's `.tbd` text-based stubs the same way
+# `ld64` does, so links fail with "Undefined symbols for arch arm64" on
+# `-lSystem` even when libSystem.tbd is on the search path. /usr/bin/cc and
+# /usr/bin/c++ are present on every Mac with Xcode or the Command Line Tools.
+CC = "{% if os() == 'macos' %}/usr/bin/cc{% endif %}"
+CXX = "{% if os() == 'macos' %}/usr/bin/c++{% endif %}"
+# Cargo's per-target linker overrides — both arches set so universal-binary
+# builds and either-host machines pick up Apple's clang as the linker driver.
+CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER = "{% if os() == 'macos' %}/usr/bin/cc{% endif %}"
+CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER = "{% if os() == 'macos' %}/usr/bin/cc{% endif %}"
