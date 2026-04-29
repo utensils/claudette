@@ -62,11 +62,14 @@ impl Database {
     pub(super) fn parse_chat_message_row(row: &rusqlite::Row) -> rusqlite::Result<ChatMessage> {
         let role_str: String = row.get(3)?;
         let chat_session_id: String = row.get::<_, Option<String>>(2)?.unwrap_or_default();
+        let role = role_str.parse().map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e))
+        })?;
         Ok(ChatMessage {
             id: row.get(0)?,
             workspace_id: row.get(1)?,
             chat_session_id,
-            role: role_str.parse().unwrap(),
+            role,
             content: row.get(4)?,
             cost_usd: row.get(5)?,
             duration_ms: row.get(6)?,
@@ -193,6 +196,9 @@ impl Database {
 
     fn parse_chat_session_row(row: &rusqlite::Row) -> rusqlite::Result<ChatSession> {
         let status_str: String = row.get(7)?;
+        let status = status_str.parse().map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(7, rusqlite::types::Type::Text, Box::new(e))
+        })?;
         Ok(ChatSession {
             id: row.get(0)?,
             workspace_id: row.get(1)?,
@@ -201,7 +207,7 @@ impl Database {
             name_edited: row.get::<_, i32>(4)? != 0,
             turn_count: row.get(5)?,
             sort_order: row.get(6)?,
-            status: status_str.parse().unwrap(),
+            status,
             created_at: row.get(8)?,
             archived_at: row.get(9)?,
             agent_status: AgentStatus::Idle,
@@ -1060,5 +1066,61 @@ mod tests {
         let db = setup_db_with_workspace();
         let last = db.last_message_per_workspace().unwrap();
         assert!(last.is_empty());
+    }
+
+    /// Regression: an unknown `role` string in the `chat_messages` table must
+    /// surface as a `FromSqlConversionFailure`, not silently become
+    /// `ChatRole::User`. See issue #485.
+    ///
+    /// We bypass the table's `CHECK(role IN (...))` constraint via
+    /// `PRAGMA ignore_check_constraints` so this test can simulate corrupted
+    /// data or a future-version row whose role string post-dates the CHECK.
+    #[test]
+    fn test_list_chat_messages_unknown_role_returns_error() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "hi"))
+            .unwrap();
+        db.conn
+            .execute_batch("PRAGMA ignore_check_constraints = ON;")
+            .unwrap();
+        db.conn
+            .execute(
+                "UPDATE chat_messages SET role = 'unknown_role' WHERE id = 'm1'",
+                [],
+            )
+            .unwrap();
+        let result = db.list_chat_messages("w1");
+        assert!(
+            matches!(
+                result,
+                Err(rusqlite::Error::FromSqlConversionFailure(_, _, _))
+            ),
+            "expected FromSqlConversionFailure for unknown role, got: {result:?}",
+        );
+    }
+
+    /// Regression: an unknown `status` string in the `chat_sessions` table
+    /// must surface as a `FromSqlConversionFailure`, not silently coerce to
+    /// `SessionStatus::Active`. See issue #485.
+    #[test]
+    fn test_list_chat_sessions_unknown_status_returns_error() {
+        let db = setup_db_with_workspace();
+        // The workspace was seeded with a default chat session — corrupt its status.
+        db.conn
+            .execute(
+                "UPDATE chat_sessions SET status = 'pending' WHERE workspace_id = 'w1'",
+                [],
+            )
+            .unwrap();
+        // include_archived = true so the WHERE filter doesn't pre-exclude the
+        // corrupt row before parse_chat_session_row gets a chance to see it.
+        let result = db.list_chat_sessions_for_workspace("w1", true);
+        assert!(
+            matches!(
+                result,
+                Err(rusqlite::Error::FromSqlConversionFailure(_, _, _))
+            ),
+            "expected FromSqlConversionFailure for unknown session status, got: {result:?}",
+        );
     }
 }
