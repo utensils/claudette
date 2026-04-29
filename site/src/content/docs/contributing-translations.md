@@ -7,10 +7,11 @@ Claudette is built by a small team and a growing community. One of the most impa
 
 ## What's localized today
 
-The app ships with English and Spanish:
+The app ships with English, Spanish, and Brazilian Portuguese:
 
 - **English** is the complete baseline: the full UI (buttons, tooltips, settings, modals, chat, sidebar) plus the system tray menu, native notifications, and the quit-confirm dialog.
-- **Spanish** is a partial translation. The tray menu, notifications, quit dialog, and parts of the frontend UI (general settings, sidebar, common controls) are translated; the chat and modal namespaces are still empty and currently fall back to English.
+- **Spanish** is a complete translation: the full UI (buttons, tooltips, settings, modals, chat, sidebar) plus the system tray menu, native notifications, and the quit-confirm dialog.
+- **Brazilian Portuguese (pt-BR)** is a complete translation: the full UI plus the system tray menu, native notifications, and the quit-confirm dialog.
 
 Missing translation keys fall back to English at runtime, so a partially translated language is safe to ship — anything not yet translated simply shows in English until someone fills it in.
 
