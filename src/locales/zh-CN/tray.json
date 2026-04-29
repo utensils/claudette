@@ -1,0 +1,21 @@
+{
+  "tooltip_all_idle": "Claudette — 全部空闲",
+  "tooltip_running_one": "Claudette — {{count}} 个智能体运行中",
+  "tooltip_running_other": "Claudette — {{count}} 个智能体运行中",
+  "tooltip_needs_input_one": "Claudette — {{count}} 个智能体需要输入",
+  "tooltip_needs_input_other": "Claudette — {{count}} 个智能体需要输入",
+  "status_needs_input_plan": "ℹ️ 需要输入",
+  "status_needs_input": "❓ 需要输入",
+  "status_running": "● 运行中",
+  "status_idle": "○ 空闲",
+  "menu_settings": "设置",
+  "menu_show": "显示 Claudette",
+  "menu_quit": "退出",
+  "quit_title": "退出 Claudette",
+  "quit_message": "仍有智能体在运行。仍要退出吗？",
+  "quit_confirm": "退出",
+  "quit_cancel": "取消",
+  "notification_title": "Claudette — 需要输入",
+  "notification_body": "{{ws_name}} 正在等待你的回应",
+  "notification_unknown_workspace": "一个智能体"
+}
