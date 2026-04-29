@@ -97,12 +97,22 @@ const WorkspaceCard = memo(function WorkspaceCard({
       ? ws.agent_status
       : "Error";
 
+  const isStopped =
+    ws.agent_status === "Stopped" || typeof ws.agent_status !== "string";
+
   const statusKind: SessionStatusKind =
     badge === "ask"  ? { kind: "ask" } :
     badge === "plan" ? { kind: "plan" } :
     badge === "done" ? { kind: "unread" } :
     isRunning        ? { kind: "running" } :
+    isStopped        ? { kind: "stopped" } :
                        { kind: "idle" };
+
+  const statusIconTitle =
+    badge === "ask"  ? "Question requires attention" :
+    badge === "plan" ? "Plan approval needed" :
+    badge === "done" ? "Completed" :
+                       statusTitle;
 
   return (
     <button
@@ -130,7 +140,7 @@ const WorkspaceCard = memo(function WorkspaceCard({
               {formatElapsed(elapsed)}
             </span>
           )}
-          <span title={statusTitle} aria-label={statusTitle} role="img">
+          <span title={statusIconTitle} aria-label={statusIconTitle} role="img">
             <SessionStatusIcon status={statusKind} size={14} />
           </span>
         </span>

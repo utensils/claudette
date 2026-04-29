@@ -1,4 +1,4 @@
-import { CircleCheck, CircleDashed, CircleQuestionMark, CircleAlert, LoaderCircle } from "lucide-react";
+import { CircleCheck, CircleDashed, CircleQuestionMark, CircleAlert, CircleStop, LoaderCircle } from "lucide-react";
 import styles from "./SessionStatusIcon.module.css";
 
 export type SessionStatusKind =
@@ -6,6 +6,7 @@ export type SessionStatusKind =
   | { kind: "ask" }
   | { kind: "plan" }
   | { kind: "unread" }
+  | { kind: "stopped" }
   | { kind: "idle" };
 
 interface Props {
@@ -37,6 +38,10 @@ export function SessionStatusIcon({ status, size = 14 }: Props) {
     case "unread":
       return (
         <CircleCheck size={size} style={{ color: "var(--badge-done)" }} />
+      );
+    case "stopped":
+      return (
+        <CircleStop size={size} style={{ color: "var(--status-stopped)" }} />
       );
     case "idle":
       return <CircleDashed size={size} style={{ color: "var(--text-dim)" }} />;
