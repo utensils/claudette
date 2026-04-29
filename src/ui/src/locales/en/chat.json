@@ -101,6 +101,8 @@
 
   "code_block_copy": "Copy code",
   "code_block_copied": "Copied",
+  "message_copy": "Copy message",
+  "message_copied": "Copied",
   "attachment_close_lightbox": "Close image preview",
 
   "mcp_unknown_error": "unknown",
