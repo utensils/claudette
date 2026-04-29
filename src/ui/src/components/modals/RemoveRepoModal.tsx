@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useTranslation } from "react-i18next";
+import { Trans, useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { removeRepository } from "../../services/tauri";
 import { Modal } from "./Modal";
@@ -37,7 +37,12 @@ export function RemoveRepoModal() {
   return (
     <Modal title={t("remove_repo_title")} onClose={closeModal}>
       <div className={shared.warning}>
-        {t("remove_repo_warning_pre")} <strong>{repoName}</strong>{t("remove_repo_warning_post")}
+        <Trans
+          i18nKey="remove_repo_warning"
+          ns="modals"
+          values={{ name: repoName }}
+          components={{ strong: <strong /> }}
+        />
       </div>
       {(active > 0 || archived > 0) && (
         <div className={shared.warning}>

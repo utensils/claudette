@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useTranslation } from "react-i18next";
+import { Trans, useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { relinkRepository } from "../../services/tauri";
 import { Modal } from "./Modal";
@@ -37,7 +37,12 @@ export function RelinkRepoModal() {
   return (
     <Modal title={t("relink_title")} onClose={closeModal}>
       <div className={shared.warning}>
-        {t("relink_warning_pre")} <strong>{repoName}</strong> {t("relink_warning_post")}
+        <Trans
+          i18nKey="relink_warning"
+          ns="modals"
+          values={{ name: repoName }}
+          components={{ strong: <strong /> }}
+        />
       </div>
       <div className={shared.field}>
         <label className={shared.label}>{t("relink_new_path_label")}</label>

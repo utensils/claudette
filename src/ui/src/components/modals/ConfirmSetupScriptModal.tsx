@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useTranslation } from "react-i18next";
+import { Trans, useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { runWorkspaceSetup, setSetupScriptAutoRun } from "../../services/tauri";
 import { Modal } from "./Modal";
@@ -78,7 +78,12 @@ export function ConfirmSetupScriptModal() {
   return (
     <Modal title={t("setup_script_title")} onClose={closeModal}>
       <div className={shared.warning}>
-        {t("setup_script_warning_pre")} <strong>{label}</strong> {t("setup_script_warning_post")}
+        <Trans
+          i18nKey="setup_script_warning"
+          ns="modals"
+          values={{ source: label }}
+          components={{ strong: <strong /> }}
+        />
       </div>
       <div className={shared.field}>
         <label className={shared.label}>{t("setup_script_label")}</label>

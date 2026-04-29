@@ -1,7 +1,6 @@
 {
   "delete_workspace_title": "ワークスペースを削除",
-  "delete_workspace_warning_pre": "「",
-  "delete_workspace_warning_post": "」を削除してもよろしいですか？ブランチと未マージのコミットは完全に削除されます。",
+  "delete_workspace_warning": "ワークスペース「<strong>{{name}}</strong>」を削除してもよろしいですか？ブランチと未マージのコミットは完全に削除されます。",
   "delete_workspace_deleting": "削除中...",
   "delete_workspace_confirm": "削除",
 
@@ -26,22 +25,19 @@
   "rollback_confirm": "ロールバック",
 
   "nightly_title": "ナイトリーチャネルに切り替えますか？",
-  "nightly_warning_pre": "ナイトリービルドは最新の ",
-  "nightly_warning_post": " ブランチからビルドされた、テストされていないプレリリースです。バグや機能の不具合が含まれる可能性があります。「安定版」へはいつでも戻せます。",
+  "nightly_warning": "ナイトリービルドは最新の <strong>main</strong> ブランチからビルドされた、テストされていないプレリリースです。バグや機能の不具合が含まれる可能性があります。「安定版」へはいつでも戻せます。",
   "nightly_switching": "切り替え中...",
   "nightly_confirm": "ナイトリーに切り替え",
 
   "relink_title": "リポジトリを再リンク",
-  "relink_warning_pre": "「",
-  "relink_warning_post": "」のパスは無効になりました。新しい場所を指定してください。",
+  "relink_warning": "リポジトリ「<strong>{{name}}</strong>」のパスは無効になりました。新しい場所を指定してください。",
   "relink_new_path_label": "新しいパス",
   "relink_new_path_placeholder": "/new/path/to/repository",
   "relink_relinking": "再リンク中...",
   "relink_confirm": "再リンク",
 
   "remove_repo_title": "リポジトリを削除",
-  "remove_repo_warning_pre": "「",
-  "remove_repo_warning_post": "」を削除してもよろしいですか？ディスク上のリポジトリは削除されず、登録解除のみが行われます。",
+  "remove_repo_warning": "リポジトリ「<strong>{{name}}</strong>」を削除してもよろしいですか？ディスク上のリポジトリは削除されず、登録解除のみが行われます。",
   "remove_repo_will_destroy_pre": "次が完全に破棄されます:",
   "remove_repo_active": "{{count}} 件のアクティブ",
   "remove_repo_archived": "{{count}} 件のアーカイブ済み",
@@ -57,8 +53,7 @@
   "share_done": "完了",
 
   "setup_script_title": "セットアップスクリプトを確認",
-  "setup_script_warning_pre": "このワークスペースには、",
-  "setup_script_warning_post": " から実行されるセットアップスクリプトがあります。続行する前に内容を確認してください。",
+  "setup_script_warning": "このワークスペースには、<strong>{{source}}</strong> から実行されるセットアップスクリプトがあります。続行する前に内容を確認してください。",
   "setup_script_source_repo_settings": "リポジトリ設定",
   "setup_script_label": "スクリプト",
   "setup_script_always_run": "このリポジトリでは常にセットアップスクリプトを実行する",

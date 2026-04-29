@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useTranslation } from "react-i18next";
+import { Trans, useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { applyUpdateChannel } from "../../hooks/useAutoUpdater";
 import { Modal } from "./Modal";
@@ -31,9 +31,11 @@ export function ConfirmNightlyChannelModal() {
   return (
     <Modal title={t("nightly_title")} onClose={handleClose}>
       <div className={shared.warning}>
-        {t("nightly_warning_pre")}{" "}
-        <strong>main</strong>{" "}
-        {t("nightly_warning_post")}
+        <Trans
+          i18nKey="nightly_warning"
+          ns="modals"
+          components={{ strong: <strong /> }}
+        />
       </div>
       {error && <div className={shared.error}>{error}</div>}
       <div className={shared.actions}>
