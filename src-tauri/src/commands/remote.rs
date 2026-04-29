@@ -8,6 +8,7 @@ use crate::state::AppState;
 #[cfg(feature = "server")]
 use crate::state::LocalServerState;
 use crate::transport::ws::WebSocketTransport;
+#[cfg(feature = "server")]
 use claudette::process::CommandWindowExt as _;
 #[cfg(feature = "server")]
 use tokio::io::{AsyncBufReadExt, BufReader};
