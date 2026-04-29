@@ -111,7 +111,7 @@ Key principles:
 
 ## Translating Claudette
 
-Claudette is internationalized using [i18next](https://www.i18next.com/) on the frontend and a small bespoke loader on the Rust side. Today the app ships with English (`en`) and Spanish (`es`); UI strings, the system tray menu, native notifications, and the quit-confirm dialog are all localized. Missing keys fall back to English at runtime, so partial translations are safe to ship — they just leave a few English strings showing through.
+Claudette is internationalized using [i18next](https://www.i18next.com/) on the frontend and a small bespoke loader on the Rust side. Today the app ships with English (`en`) and Spanish (`es`). English is the complete baseline; Spanish is a partial translation that covers the tray menu, notifications, quit dialog, and the `common` / `settings` / `sidebar` frontend namespaces — the `chat` and `modals` namespaces are still empty and fall back to English. Missing keys fall back to English at runtime, so partial translations are safe to ship — they just leave a few English strings showing through.
 
 Adding a language is mostly a JSON-translation task. You don't need Rust or TypeScript experience to translate the strings; the small registration step at the end is just a handful of lines.
 
@@ -128,7 +128,7 @@ Both sides use the same `{{var}}` placeholder syntax for interpolation, so a tra
 2. **Copy the English files.** Duplicate `src/ui/src/locales/en/` and `src/locales/en/` to your new locale directory. Translate the **values**; leave the **keys** byte-for-byte identical to English.
 3. **Register the language on the frontend.** In `src/ui/src/i18n.ts`, add imports for each of the five namespace files, append your locale code to `SUPPORTED_LANGUAGES`, and add a matching entry to the `resources` map.
 4. **Update the TypeScript declaration** in `src/ui/src/types/i18next.d.ts` only if you've introduced a new namespace (most translation contributions don't need this).
-5. **Register the language on the backend.** In `src/i18n/mod.rs`, add a variant to the `Locale` enum, add an `include_str!` line for your `tray.json`, add a matching `*_store()` constant, and update `Locale::from_db_value` and `Locale::store` to recognize the new code.
+5. **Register the language on the backend.** In `src/i18n/mod.rs`, add a variant to the `Locale` enum, add an `include_str!` line for your `tray.json`, add a matching `*_store()` function alongside the existing `en_store()` / `es_store()` (each wraps a `OnceLock` over the parsed JSON), and update `Locale::from_db_value` and `Locale::store` to recognize the new code. Also extend the `locales_have_identical_key_sets` test in the same file to include your new store, so the parity check covers your locale.
 6. **Add the language to the selector** in Settings → General, following the existing pattern for English and Spanish.
 
 ### Updating an existing translation
@@ -143,7 +143,7 @@ If you'd like to fix a mistranslation or polish wording in an existing language,
 
 ### What CI checks
 
-- `cargo test --all-features` runs `locales_have_identical_key_sets` in `src/i18n/mod.rs`, which fails if any backend locale has missing or extra keys relative to English. Run it locally before opening a PR.
+- `cargo test --all-features` runs `locales_have_identical_key_sets` in `src/i18n/mod.rs`, which fails if the backend locales it includes (currently `en` and `es`) disagree on which keys exist. The check only covers the locales explicitly compared in the test, so when adding a new backend locale make sure to extend the test to include it (see the registration step above). Run the suite locally before opening a PR.
 - `cd src/ui && bunx tsc -b` enforces frontend type safety, which transitively catches mistyped translation keys consumed via `useTranslation()`.
 - `cargo clippy --workspace --all-targets` and `cargo fmt --all --check` round out the standard checks.
 

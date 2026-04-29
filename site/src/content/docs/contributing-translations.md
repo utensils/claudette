@@ -7,12 +7,10 @@ Claudette is built by a small team and a growing community. One of the most impa
 
 ## What's localized today
 
-The app ships with English and Spanish. Both cover:
+The app ships with English and Spanish:
 
-- The full UI (buttons, tooltips, settings, modals, chat, sidebar)
-- The system tray menu
-- Native notifications
-- The quit-confirm dialog when agents are still running
+- **English** is the complete baseline: the full UI (buttons, tooltips, settings, modals, chat, sidebar) plus the system tray menu, native notifications, and the quit-confirm dialog.
+- **Spanish** is a partial translation. The tray menu, notifications, quit dialog, and parts of the frontend UI (general settings, sidebar, common controls) are translated; the chat and modal namespaces are still empty and currently fall back to English.
 
 Missing translation keys fall back to English at runtime, so a partially translated language is safe to ship — anything not yet translated simply shows in English until someone fills it in.
 
@@ -31,7 +29,7 @@ Both sides use the same `{{name}}` placeholder syntax for inserting dynamic valu
 2. **Fork the repository** and create a feature branch.
 3. **Copy the English locale folders** to a new folder named with your language code (`fr`, `de`, `pt`, `pt-BR`, etc.) and translate the values. Keep the keys exactly as they are.
 4. **Register your language** so the app knows it exists — this is a small change to two files (one TypeScript, one Rust). The exact steps are in the [Contributing Guide on GitHub](https://github.com/utensils/Claudette/blob/main/CONTRIBUTING.md#translating-claudette).
-5. **Open a pull request.** CI runs a key-parity check that flags any keys you've missed or accidentally renamed, so you'll get fast feedback.
+5. **Open a pull request.** CI runs a key-parity check on the backend (`src/locales/<lang>/tray.json`) that fails if any of the locales it knows about disagree on which keys exist — note that adding a brand-new backend locale also means extending that test to include your locale. The frontend doesn't enforce parity; partial translations are fine and rely on English fallback for any keys you haven't filled in yet.
 
 If you only want to fix a typo or polish wording in an existing language, the process is even simpler — edit the relevant JSON file and open a PR. No registration step is required.
 
