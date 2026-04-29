@@ -1,7 +1,6 @@
 {
   "delete_workspace_title": "Delete workspace",
-  "delete_workspace_warning_pre": "Are you sure you want to delete",
-  "delete_workspace_warning_post": "? The branch and any unmerged commits will be permanently deleted.",
+  "delete_workspace_warning": "Are you sure you want to delete <strong>{{name}}</strong>? The branch and any unmerged commits will be permanently deleted.",
   "delete_workspace_deleting": "Deleting...",
   "delete_workspace_confirm": "Delete",
 
@@ -26,22 +25,19 @@
   "rollback_confirm": "Roll Back",
 
   "nightly_title": "Switch to nightly channel?",
-  "nightly_warning_pre": "Nightly builds are untested pre-releases built from the latest",
-  "nightly_warning_post": "branch. They may contain bugs or break features. You can switch back to Stable at any time.",
+  "nightly_warning": "Nightly builds are untested pre-releases built from the latest <strong>main</strong> branch. They may contain bugs or break features. You can switch back to Stable at any time.",
   "nightly_switching": "Switching...",
   "nightly_confirm": "Switch to Nightly",
 
   "relink_title": "Re-link repository",
-  "relink_warning_pre": "Path for",
-  "relink_warning_post": "is no longer valid. Provide the new location.",
+  "relink_warning": "Path for <strong>{{name}}</strong> is no longer valid. Provide the new location.",
   "relink_new_path_label": "New path",
   "relink_new_path_placeholder": "/new/path/to/repository",
   "relink_relinking": "Re-linking...",
   "relink_confirm": "Re-link",
 
   "remove_repo_title": "Remove repository",
-  "remove_repo_warning_pre": "Are you sure you want to remove",
-  "remove_repo_warning_post": "? This will not delete the repository from disk, only unregister it.",
+  "remove_repo_warning": "Are you sure you want to remove <strong>{{name}}</strong>? This will not delete the repository from disk, only unregister it.",
   "remove_repo_will_destroy_pre": "Will permanently destroy:",
   "remove_repo_active": "{{count}} active",
   "remove_repo_archived": "{{count}} archived",
@@ -57,8 +53,7 @@
   "share_done": "Done",
 
   "setup_script_title": "Review setup script",
-  "setup_script_warning_pre": "This workspace has a setup script from",
-  "setup_script_warning_post": "that will be executed. Please review it before proceeding.",
+  "setup_script_warning": "This workspace has a setup script from <strong>{{source}}</strong> that will be executed. Please review it before proceeding.",
   "setup_script_source_repo_settings": "repo settings",
   "setup_script_label": "Script",
   "setup_script_always_run": "Always run setup scripts for this repo",

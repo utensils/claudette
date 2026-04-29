@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useTranslation } from "react-i18next";
+import { Trans, useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { deleteWorkspace } from "../../services/tauri";
 import { Modal } from "./Modal";
@@ -30,7 +30,12 @@ export function DeleteWorkspaceModal() {
   return (
     <Modal title={t("delete_workspace_title")} onClose={closeModal}>
       <div className={shared.warning}>
-        {t("delete_workspace_warning_pre")} <strong>{wsName}</strong>{t("delete_workspace_warning_post")}
+        <Trans
+          i18nKey="delete_workspace_warning"
+          ns="modals"
+          values={{ name: wsName }}
+          components={{ strong: <strong /> }}
+        />
       </div>
       <div className={shared.actions}>
         <button className={shared.btn} onClick={closeModal}>
