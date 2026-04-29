@@ -13,6 +13,10 @@ import agent from '../assets/screenshots/agent.png';
  *     GitPullRequestDraft, GitMerge, GitPullRequestClosed).
  */
 
+// Animation flags mirror the running app's Sidebar.module.css:
+//   - Running: LoaderCircle spins (`.spinner` in SessionStatusIcon.module.css)
+//   - Done / Plan / Ask: pulse via opacity 1 → 0.4 → 1 every 2s
+//     (`.badgeDone / .badgePlan / .badgeAsk` use `pulse-badge` keyframes)
 const sessionStates = [
   {
     label: 'Running — agent is producing tokens',
@@ -23,16 +27,19 @@ const sessionStates = [
   {
     label: 'Done — agent finished, work ready to review',
     color: 'var(--badge-done)',
+    pulse: true,
     paths: '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
   },
   {
     label: 'Ask — agent is waiting on you to answer',
     color: 'var(--badge-ask)',
+    pulse: true,
     paths: '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>',
   },
   {
     label: 'Plan — running in plan mode (read-only)',
     color: 'var(--badge-plan)',
+    pulse: true,
     paths: '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>',
   },
   {
@@ -88,14 +95,17 @@ const prStates = [
       <div class="legend-group">
         <p class="legend-label">Session state</p>
         <ul class="legend">
-          {sessionStates.map((s) => (
-            <li>
-              <span class={s.spin ? 'status-icon spin' : 'status-icon'} style={`color: ${s.color}`}>
-                <svg viewBox="0 0 24 24" aria-hidden="true" set:html={s.paths} />
-              </span>
-              {s.label}
-            </li>
-          ))}
+          {sessionStates.map((s) => {
+            const cls = ['status-icon', s.spin && 'spin', s.pulse && 'pulse'].filter(Boolean).join(' ');
+            return (
+              <li>
+                <span class={cls} style={`color: ${s.color}`}>
+                  <svg viewBox="0 0 24 24" aria-hidden="true" set:html={s.paths} />
+                </span>
+                {s.label}
+              </li>
+            );
+          })}
         </ul>
       </div>
 
