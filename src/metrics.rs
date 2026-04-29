@@ -1044,6 +1044,29 @@ mod tests {
         let _env_lock = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let _tz_guard = TzEnvGuard::override_with("America/Los_Angeles");
 
+        // Confirm the TZ override actually produced a non-UTC offset for
+        // SQLite. On a host without zoneinfo/tzdata, `tzset()` silently
+        // falls back to UTC and `'localtime'` becomes a no-op — under that
+        // fallback the assertions below would still pass, hiding a real
+        // regression. SQLite has no `%z` strftime token, so compare the
+        // julianday of `'now'` against `'now','localtime'`: a non-zero
+        // delta (in days) indicates a real local offset. Fail loudly if
+        // the override didn't take effect.
+        let tz_probe = Connection::open_in_memory().unwrap();
+        let offset_hours: f64 = tz_probe
+            .query_row(
+                "SELECT (julianday('now', 'localtime') - julianday('now')) * 24.0",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            offset_hours.abs() > 0.5,
+            "TZ=America/Los_Angeles did not produce a non-UTC local offset for SQLite \
+             (got {offset_hours:.2}h); this system may be missing tzdata/zoneinfo, \
+             so the regression test would be a no-op"
+        );
+
         let (_dir, path) = setup_db();
         let conn = Connection::open(&path).unwrap();
         insert_repo(&conn, "r");
