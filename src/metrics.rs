@@ -993,6 +993,43 @@ mod tests {
         fn tzset();
     }
 
+    // Serializes tests that mutate process-global TZ. Matches the pattern
+    // used in src/mcp.rs and src/plugin.rs for other env-mutating tests so
+    // a single shared lock would be straightforward to introduce later if
+    // multiple modules need it.
+    #[cfg(unix)]
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[cfg(unix)]
+    struct TzEnvGuard {
+        prev: Option<std::ffi::OsString>,
+    }
+
+    #[cfg(unix)]
+    impl TzEnvGuard {
+        fn override_with(tz: &str) -> Self {
+            let prev = std::env::var_os("TZ");
+            unsafe {
+                std::env::set_var("TZ", tz);
+                tzset();
+            }
+            Self { prev }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for TzEnvGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.prev {
+                    Some(v) => std::env::set_var("TZ", v),
+                    None => std::env::remove_var("TZ"),
+                }
+                tzset();
+            }
+        }
+    }
+
     // Regression guard for the local-timezone fix. CI runs in UTC, where
     // `'localtime'` is a no-op, so without this test the rest of the suite
     // can't tell whether the modifier is present at all. Forces TZ to a
@@ -1003,50 +1040,30 @@ mod tests {
     // exactly one commit.
     #[test]
     #[cfg(unix)]
-    #[serial_test::serial]
     fn dashboard_buckets_commits_by_local_date_under_non_utc_tz() {
-        // SAFETY: #[serial] serializes against any other test that mutates
-        // process-global env. We restore the prior TZ after asserting.
-        let prev_tz = std::env::var_os("TZ");
-        unsafe {
-            std::env::set_var("TZ", "America/Los_Angeles");
-            tzset();
-        }
+        let _env_lock = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let _tz_guard = TzEnvGuard::override_with("America/Los_Angeles");
 
-        let result = std::panic::catch_unwind(|| {
-            let (_dir, path) = setup_db();
-            let conn = Connection::open(&path).unwrap();
-            insert_repo(&conn, "r");
-            insert_workspace(&conn, "ws", "r");
+        let (_dir, path) = setup_db();
+        let conn = Connection::open(&path).unwrap();
+        insert_repo(&conn, "r");
+        insert_workspace(&conn, "ws", "r");
 
-            for i in 0..14 {
-                let sql = format!(
-                    "INSERT INTO agent_commits (commit_hash, workspace_id, repository_id, additions, deletions, files_changed, committed_at)
-                     VALUES ('c{i}', 'ws', 'r', 0, 0, 0,
-                             strftime('%Y-%m-%dT%H:%M:%fZ', 'now', 'localtime', 'start of day', '-{i} days', '+23 hours', '+30 minutes', 'utc'))"
-                );
-                conn.execute(&sql, []).unwrap();
-            }
-
-            let m = dashboard_metrics(&path).unwrap();
-            assert_eq!(
-                m.commits_daily_14d,
-                vec![1; 14],
-                "expected one commit per local-day slot under TZ=America/Los_Angeles, got {:?}",
-                m.commits_daily_14d
+        for i in 0..14 {
+            let sql = format!(
+                "INSERT INTO agent_commits (commit_hash, workspace_id, repository_id, additions, deletions, files_changed, committed_at)
+                 VALUES ('c{i}', 'ws', 'r', 0, 0, 0,
+                         strftime('%Y-%m-%dT%H:%M:%fZ', 'now', 'localtime', 'start of day', '-{i} days', '+23 hours', '+30 minutes', 'utc'))"
             );
-        });
-
-        unsafe {
-            match prev_tz {
-                Some(v) => std::env::set_var("TZ", v),
-                None => std::env::remove_var("TZ"),
-            }
-            tzset();
+            conn.execute(&sql, []).unwrap();
         }
 
-        if let Err(e) = result {
-            std::panic::resume_unwind(e);
-        }
+        let m = dashboard_metrics(&path).unwrap();
+        assert_eq!(
+            m.commits_daily_14d,
+            vec![1; 14],
+            "expected one commit per local-day slot under TZ=America/Los_Angeles, got {:?}",
+            m.commits_daily_14d
+        );
     }
 }
