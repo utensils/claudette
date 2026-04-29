@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { loadAttachmentData } from "../../services/tauri";
 import { base64ToBytes } from "../../utils/base64";
 
 /**
@@ -29,7 +30,6 @@ export function useAttachmentText(opts: {
       try {
         let b64 = data_base64 ?? null;
         if (!b64 && attachmentId) {
-          const { loadAttachmentData } = await import("../../services/tauri");
           b64 = await loadAttachmentData(attachmentId);
         }
         if (cancelled) return;

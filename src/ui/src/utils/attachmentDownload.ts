@@ -1,4 +1,5 @@
 import { save } from "@tauri-apps/plugin-dialog";
+import { writeText as clipboardWriteText } from "@tauri-apps/plugin-clipboard-manager";
 import { invoke } from "@tauri-apps/api/core";
 
 import { base64ToBytes } from "./base64";
@@ -152,8 +153,7 @@ export async function copyAttachmentToClipboard(
       return;
     }
     if (typeof window !== "undefined") {
-      const mod = await import("@tauri-apps/plugin-clipboard-manager");
-      await mod.writeText(text);
+      await clipboardWriteText(text);
       return;
     }
     if (!clipboard) {

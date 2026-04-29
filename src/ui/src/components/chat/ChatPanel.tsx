@@ -8,6 +8,7 @@ import { useAppStore } from "../../stores/useAppStore";
 import type { ToolActivity, CompletedTurn } from "../../stores/useAppStore";
 import {
   loadChatHistory,
+  loadAttachmentData,
   loadAttachmentsForSession,
   readFileAsBase64,
   listCheckpoints,
@@ -165,7 +166,6 @@ function PdfThumbnail({ dataBase64, attachmentId, filename, className, onClick, 
       let b64 = dataBase64;
       // If no inline data, fetch on demand from the backend.
       if (!b64 && attachmentId) {
-        const { loadAttachmentData } = await import("../../services/tauri");
         b64 = await loadAttachmentData(attachmentId);
       }
       if (!b64 || cancelled) return;
@@ -321,7 +321,6 @@ export function ChatPanel() {
       attachmentId?: string,
     ): Promise<DownloadableAttachment> => {
       if (attachment.data_base64 || !attachmentId) return attachment;
-      const { loadAttachmentData } = await import("../../services/tauri");
       const data_base64 = await loadAttachmentData(attachmentId);
       return { ...attachment, data_base64 };
     },
@@ -2083,9 +2082,6 @@ const MessagesWithTurns = memo(function MessagesWithTurns({
                               // load to avoid IPC bloat — fetch on demand.
                               let b64 = att.data_base64;
                               if (!b64) {
-                                const { loadAttachmentData } = await import(
-                                  "../../services/tauri"
-                                );
                                 b64 = await loadAttachmentData(att.id);
                               }
                               await openAttachmentWithDefaultApp({
