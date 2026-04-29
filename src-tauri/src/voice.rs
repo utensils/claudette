@@ -627,12 +627,6 @@ impl VoiceProviderRegistry {
         self.backend_checker.ready_backend()
     }
 
-    fn candle_accelerator_label(&self) -> String {
-        self.ensure_candle_backend_ready()
-            .map(|backend| backend.accelerator_label().to_string())
-            .unwrap_or_else(|err| format!("Unavailable: {err}"))
-    }
-
     pub(crate) fn resolve_provider_id(
         &self,
         db: &Database,
@@ -857,7 +851,10 @@ impl VoiceProvider for DistilWhisperCandleProvider {
         let backend_status = registry.ensure_candle_backend_ready();
 
         let mut metadata = self.metadata(registry);
-        metadata.accelerator_label = Some(registry.candle_accelerator_label());
+        metadata.accelerator_label = Some(match &backend_status {
+            Ok(backend) => backend.accelerator_label().to_string(),
+            Err(err) => format!("Unavailable: {err}"),
+        });
 
         let (status, status_label, setup_required, error) =
             if model_status.as_deref() == Some("downloading") {

@@ -66,6 +66,7 @@ export function PluginsSettings() {
   }, []);
 
   const refreshPlugins = useCallback(async () => {
+    setError(null);
     try {
       setPlugins(await listClaudettePlugins());
     } catch (e) {
@@ -74,6 +75,7 @@ export function PluginsSettings() {
   }, []);
 
   const refreshBuiltins = useCallback(async () => {
+    setError(null);
     try {
       setBuiltins(await listBuiltinClaudettePlugins());
     } catch (e) {
@@ -82,6 +84,7 @@ export function PluginsSettings() {
   }, []);
 
   const refreshVoice = useCallback(async () => {
+    setError(null);
     try {
       setVoiceProviders(await listVoiceProviders());
     } catch (e) {
