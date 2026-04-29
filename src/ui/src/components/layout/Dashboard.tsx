@@ -85,8 +85,10 @@ const WorkspaceCard = memo(function WorkspaceCard({
       ? styles.cardRunning
       : ws.agent_status === "Stopped" || typeof ws.agent_status !== "string"
         ? styles.cardStopped
-        : styles.cardIdle,
-  ].join(" ");
+        : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   const statusTitle = isRunning
     ? "Running"
