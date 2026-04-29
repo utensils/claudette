@@ -183,6 +183,46 @@
   color: var(--text-muted);
 }
 
+.userMessageCopyButton {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+  opacity: 0;
+  /* Don't intercept clicks/text-selection while hidden — only bubble hover or
+     keyboard focus re-enables hit testing below. */
+  pointer-events: none;
+  transition: opacity 0.15s, background 0.15s, color 0.15s, border-color 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+
+.role_User:hover .userMessageCopyButton {
+  opacity: 0.7;
+  pointer-events: auto;
+}
+
+.role_User:hover .userMessageCopyButton:hover {
+  opacity: 1;
+  background: var(--hover-bg);
+  border-color: var(--divider);
+  color: var(--text-primary);
+}
+
+.userMessageCopyButton:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 1px;
+}
+
 /* Assistant messages — clean prose, no chrome */
 .role_Assistant {
   background: transparent;

@@ -40,6 +40,7 @@ import styles from "./ChatPanel.module.css";
 import { TurnSummary } from "./TurnSummary";
 import { TurnFooter } from "./TurnFooter";
 import { PdfThumbnail } from "./PdfThumbnail";
+import { MessageCopyButton } from "./MessageCopyButton";
 import {
   EMPTY_ATTACHMENTS,
   EMPTY_CHECKPOINTS,
@@ -388,6 +389,12 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
               <div className={`${styles.message} ${styles[roleClassKey(msg.role, msg.content)]}`}>
                 {msg.role === "User" && (
                   <div className={styles.roleLabel}>{t("you_label")}</div>
+                )}
+                {msg.role === "User" && msg.content.length > 0 && (
+                  <MessageCopyButton
+                    text={msg.content}
+                    className={styles.userMessageCopyButton}
+                  />
                 )}
                 {msg.role === "Assistant" && msg.thinking && showThinkingBlocks && (
                   <ThinkingBlock content={msg.thinking} isStreaming={false} searchQuery={searchQuery} />
