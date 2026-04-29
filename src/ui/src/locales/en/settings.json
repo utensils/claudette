@@ -38,6 +38,7 @@
   "general_language_desc": "Interface language. Changes take effect immediately.",
   "general_language_en": "English",
   "general_language_es": "Español",
+  "general_language_pt_br": "Portuguese (Brazil)",
   "general_update_check_failed": "Update check failed. Please try again later.",
 
   "appearance_title": "Appearance",
