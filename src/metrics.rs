@@ -110,8 +110,13 @@ fn dashboard_metrics_with(conn: &Connection) -> Result<DashboardMetrics, rusqlit
         |row| row.get::<_, i64>(0).map(|n| n as u32),
     )?;
 
+    // Range form on raw `started_at` keeps `idx_agent_sessions_started` usable.
+    // `started_at` is stored as naive UTC (`datetime('now')` form), so comparing
+    // it against UTC boundary timestamps is well-defined lexicographically.
     let sessions_today: u32 = conn.query_row(
-        "SELECT COUNT(*) FROM agent_sessions WHERE date(started_at, 'localtime') = date('now', 'localtime')",
+        "SELECT COUNT(*) FROM agent_sessions
+         WHERE started_at >= datetime('now', 'localtime', 'start of day', 'utc')
+           AND started_at <  datetime('now', 'localtime', 'start of day', '+1 day', 'utc')",
         [],
         |row| row.get::<_, i64>(0).map(|n| n as u32),
     )?;
@@ -132,14 +137,14 @@ fn dashboard_metrics_with(conn: &Connection) -> Result<DashboardMetrics, rusqlit
 
     let live_cost_30d: f64 = conn.query_row(
         "SELECT COALESCE(SUM(cost_usd), 0) FROM chat_messages
-         WHERE date(created_at, 'localtime') >= date('now', 'localtime', '-29 days')",
+         WHERE created_at >= datetime('now', 'localtime', 'start of day', '-29 days', 'utc')",
         [],
         |row| row.get(0),
     )?;
     let deleted_cost_30d: f64 = conn.query_row(
         "SELECT COALESCE(SUM(total_cost_usd), 0) FROM deleted_workspace_summaries
          WHERE last_message_at IS NOT NULL
-           AND date(last_message_at, 'localtime') >= date('now', 'localtime', '-29 days')",
+           AND last_message_at >= datetime('now', 'localtime', 'start of day', '-29 days', 'utc')",
         [],
         |row| row.get(0),
     )?;
@@ -150,7 +155,7 @@ fn dashboard_metrics_with(conn: &Connection) -> Result<DashboardMetrics, rusqlit
             "SELECT AVG(CASE WHEN completed_ok THEN 1.0 ELSE 0.0 END)
              FROM agent_sessions
              WHERE ended_at IS NOT NULL
-               AND date(started_at, 'localtime') >= date('now', 'localtime', '-29 days')",
+               AND started_at >= datetime('now', 'localtime', 'start of day', '-29 days', 'utc')",
             [],
             |row| row.get::<_, Option<f64>>(0),
         )?
@@ -160,7 +165,7 @@ fn dashboard_metrics_with(conn: &Connection) -> Result<DashboardMetrics, rusqlit
         "SELECT COALESCE(SUM(COALESCE(input_tokens, 0)), 0),
                 COALESCE(SUM(COALESCE(output_tokens, 0)), 0)
          FROM chat_messages
-         WHERE date(created_at, 'localtime') >= date('now', 'localtime', '-29 days')",
+         WHERE created_at >= datetime('now', 'localtime', 'start of day', '-29 days', 'utc')",
         [],
         |row| Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64)),
     )?;
@@ -169,7 +174,7 @@ fn dashboard_metrics_with(conn: &Connection) -> Result<DashboardMetrics, rusqlit
                 COALESCE(SUM(total_output_tokens), 0)
          FROM deleted_workspace_summaries
          WHERE last_message_at IS NOT NULL
-           AND date(last_message_at, 'localtime') >= date('now', 'localtime', '-29 days')",
+           AND last_message_at >= datetime('now', 'localtime', 'start of day', '-29 days', 'utc')",
         [],
         |row| Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64)),
     )?;
@@ -185,7 +190,7 @@ fn dashboard_metrics_with(conn: &Connection) -> Result<DashboardMetrics, rusqlit
                 ), 0)
          FROM chat_messages
          WHERE role = 'assistant'
-           AND date(created_at, 'localtime') >= date('now', 'localtime', '-29 days')",
+           AND created_at >= datetime('now', 'localtime', 'start of day', '-29 days', 'utc')",
         [],
         |row| Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64)),
     )?;
@@ -233,7 +238,7 @@ fn daily_counts_14d(conn: &Connection) -> Result<Vec<u32>, rusqlite::Error> {
 fn daily_cost_30d(conn: &Connection) -> Result<Vec<f64>, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT date(created_at, 'localtime') AS d, COALESCE(SUM(cost_usd), 0) FROM chat_messages
-         WHERE date(created_at, 'localtime') >= date('now', 'localtime', '-29 days')
+         WHERE created_at >= datetime('now', 'localtime', 'start of day', '-29 days', 'utc')
          GROUP BY d",
     )?;
     let costs: HashMap<String, f64> = stmt
@@ -249,7 +254,7 @@ fn daily_tokens_30d(conn: &Connection) -> Result<Vec<u64>, rusqlite::Error> {
         "SELECT date(created_at, 'localtime') AS d,
                 COALESCE(SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)), 0)
          FROM chat_messages
-         WHERE date(created_at, 'localtime') >= date('now', 'localtime', '-29 days')
+         WHERE created_at >= datetime('now', 'localtime', 'start of day', '-29 days', 'utc')
          GROUP BY d",
     )?;
     let tokens: HashMap<String, u64> = stmt
@@ -464,7 +469,7 @@ fn heatmap(conn: &Connection) -> Result<Vec<HeatmapCell>, rusqlite::Error> {
                 CAST((julianday(date('now', 'localtime')) - julianday(date(started_at, 'localtime'))) / 7 AS INTEGER) AS week,
                 COUNT(*) AS c
          FROM agent_sessions
-         WHERE date(started_at, 'localtime') >= date('now', 'localtime', '-90 days')
+         WHERE started_at >= datetime('now', 'localtime', 'start of day', '-90 days', 'utc')
          GROUP BY dow, week",
     )?;
     let mut grid = [[0u32; 13]; 7];
@@ -981,5 +986,67 @@ mod tests {
         assert_eq!(m.tokens_daily_30d.len(), 30);
         assert_eq!(*m.tokens_daily_30d.last().unwrap(), 6000);
         assert_eq!(m.tokens_daily_30d[..29].iter().sum::<u64>(), 0);
+    }
+
+    #[cfg(unix)]
+    unsafe extern "C" {
+        fn tzset();
+    }
+
+    // Regression guard for the local-timezone fix. CI runs in UTC, where
+    // `'localtime'` is a no-op, so without this test the rest of the suite
+    // can't tell whether the modifier is present at all. Forces TZ to a
+    // non-zero offset zone, inserts a commit at 23:30 local on each of the
+    // last 14 days (a time-of-day past midnight UTC under Pacific time, so
+    // UTC-only bucketing would shift each row into the next UTC day and
+    // miss its slot), and asserts every slot of the 14-day sparkline gets
+    // exactly one commit.
+    #[test]
+    #[cfg(unix)]
+    #[serial_test::serial]
+    fn dashboard_buckets_commits_by_local_date_under_non_utc_tz() {
+        // SAFETY: #[serial] serializes against any other test that mutates
+        // process-global env. We restore the prior TZ after asserting.
+        let prev_tz = std::env::var_os("TZ");
+        unsafe {
+            std::env::set_var("TZ", "America/Los_Angeles");
+            tzset();
+        }
+
+        let result = std::panic::catch_unwind(|| {
+            let (_dir, path) = setup_db();
+            let conn = Connection::open(&path).unwrap();
+            insert_repo(&conn, "r");
+            insert_workspace(&conn, "ws", "r");
+
+            for i in 0..14 {
+                let sql = format!(
+                    "INSERT INTO agent_commits (commit_hash, workspace_id, repository_id, additions, deletions, files_changed, committed_at)
+                     VALUES ('c{i}', 'ws', 'r', 0, 0, 0,
+                             strftime('%Y-%m-%dT%H:%M:%fZ', 'now', 'localtime', 'start of day', '-{i} days', '+23 hours', '+30 minutes', 'utc'))"
+                );
+                conn.execute(&sql, []).unwrap();
+            }
+
+            let m = dashboard_metrics(&path).unwrap();
+            assert_eq!(
+                m.commits_daily_14d,
+                vec![1; 14],
+                "expected one commit per local-day slot under TZ=America/Los_Angeles, got {:?}",
+                m.commits_daily_14d
+            );
+        });
+
+        unsafe {
+            match prev_tz {
+                Some(v) => std::env::set_var("TZ", v),
+                None => std::env::remove_var("TZ"),
+            }
+            tzset();
+        }
+
+        if let Err(e) = result {
+            std::panic::resume_unwind(e);
+        }
     }
 }
