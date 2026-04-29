@@ -111,16 +111,13 @@ fn dashboard_metrics_with(conn: &Connection) -> Result<DashboardMetrics, rusqlit
     )?;
 
     let sessions_today: u32 = conn.query_row(
-        "SELECT COUNT(*) FROM agent_sessions WHERE started_at >= date('now')",
+        "SELECT COUNT(*) FROM agent_sessions WHERE date(started_at, 'localtime') = date('now', 'localtime')",
         [],
         |row| row.get::<_, i64>(0).map(|n| n as u32),
     )?;
 
-    // Wrap `committed_at` in `date()` so comparisons interpret the RFC3339
-    // committer timestamp (with tz offset) as a UTC date, matching how the
-    // `GROUP BY date(committed_at)` windows are computed downstream.
     let commits_today: u32 = conn.query_row(
-        "SELECT COUNT(*) FROM agent_commits WHERE date(committed_at) = date('now')",
+        "SELECT COUNT(*) FROM agent_commits WHERE date(committed_at, 'localtime') = date('now', 'localtime')",
         [],
         |row| row.get::<_, i64>(0).map(|n| n as u32),
     )?;
@@ -128,21 +125,21 @@ fn dashboard_metrics_with(conn: &Connection) -> Result<DashboardMetrics, rusqlit
     let (additions_7d, deletions_7d): (u64, u64) = conn.query_row(
         "SELECT COALESCE(SUM(additions), 0), COALESCE(SUM(deletions), 0)
          FROM agent_commits
-         WHERE date(committed_at) >= date('now','-6 days')",
+         WHERE date(committed_at, 'localtime') >= date('now', 'localtime', '-6 days')",
         [],
         |row| Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64)),
     )?;
 
     let live_cost_30d: f64 = conn.query_row(
         "SELECT COALESCE(SUM(cost_usd), 0) FROM chat_messages
-         WHERE created_at >= date('now','-29 days')",
+         WHERE date(created_at, 'localtime') >= date('now', 'localtime', '-29 days')",
         [],
         |row| row.get(0),
     )?;
     let deleted_cost_30d: f64 = conn.query_row(
         "SELECT COALESCE(SUM(total_cost_usd), 0) FROM deleted_workspace_summaries
          WHERE last_message_at IS NOT NULL
-           AND last_message_at >= date('now','-29 days')",
+           AND date(last_message_at, 'localtime') >= date('now', 'localtime', '-29 days')",
         [],
         |row| row.get(0),
     )?;
@@ -153,7 +150,7 @@ fn dashboard_metrics_with(conn: &Connection) -> Result<DashboardMetrics, rusqlit
             "SELECT AVG(CASE WHEN completed_ok THEN 1.0 ELSE 0.0 END)
              FROM agent_sessions
              WHERE ended_at IS NOT NULL
-               AND started_at >= date('now','-29 days')",
+               AND date(started_at, 'localtime') >= date('now', 'localtime', '-29 days')",
             [],
             |row| row.get::<_, Option<f64>>(0),
         )?
@@ -163,7 +160,7 @@ fn dashboard_metrics_with(conn: &Connection) -> Result<DashboardMetrics, rusqlit
         "SELECT COALESCE(SUM(COALESCE(input_tokens, 0)), 0),
                 COALESCE(SUM(COALESCE(output_tokens, 0)), 0)
          FROM chat_messages
-         WHERE created_at >= date('now','-29 days')",
+         WHERE date(created_at, 'localtime') >= date('now', 'localtime', '-29 days')",
         [],
         |row| Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64)),
     )?;
@@ -172,7 +169,7 @@ fn dashboard_metrics_with(conn: &Connection) -> Result<DashboardMetrics, rusqlit
                 COALESCE(SUM(total_output_tokens), 0)
          FROM deleted_workspace_summaries
          WHERE last_message_at IS NOT NULL
-           AND last_message_at >= date('now','-29 days')",
+           AND date(last_message_at, 'localtime') >= date('now', 'localtime', '-29 days')",
         [],
         |row| Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64)),
     )?;
@@ -188,7 +185,7 @@ fn dashboard_metrics_with(conn: &Connection) -> Result<DashboardMetrics, rusqlit
                 ), 0)
          FROM chat_messages
          WHERE role = 'assistant'
-           AND created_at >= date('now','-29 days')",
+           AND date(created_at, 'localtime') >= date('now', 'localtime', '-29 days')",
         [],
         |row| Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64)),
     )?;
@@ -221,8 +218,8 @@ fn dashboard_metrics_with(conn: &Connection) -> Result<DashboardMetrics, rusqlit
 
 fn daily_counts_14d(conn: &Connection) -> Result<Vec<u32>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT date(committed_at) AS d, COUNT(*) FROM agent_commits
-         WHERE date(committed_at) >= date('now','-13 days')
+        "SELECT date(committed_at, 'localtime') AS d, COUNT(*) FROM agent_commits
+         WHERE date(committed_at, 'localtime') >= date('now', 'localtime', '-13 days')
          GROUP BY d",
     )?;
     let counts: HashMap<String, u32> = stmt
@@ -235,8 +232,8 @@ fn daily_counts_14d(conn: &Connection) -> Result<Vec<u32>, rusqlite::Error> {
 
 fn daily_cost_30d(conn: &Connection) -> Result<Vec<f64>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT date(created_at) AS d, COALESCE(SUM(cost_usd), 0) FROM chat_messages
-         WHERE created_at >= date('now','-29 days')
+        "SELECT date(created_at, 'localtime') AS d, COALESCE(SUM(cost_usd), 0) FROM chat_messages
+         WHERE date(created_at, 'localtime') >= date('now', 'localtime', '-29 days')
          GROUP BY d",
     )?;
     let costs: HashMap<String, f64> = stmt
@@ -249,10 +246,10 @@ fn daily_cost_30d(conn: &Connection) -> Result<Vec<f64>, rusqlite::Error> {
 
 fn daily_tokens_30d(conn: &Connection) -> Result<Vec<u64>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT date(created_at) AS d,
+        "SELECT date(created_at, 'localtime') AS d,
                 COALESCE(SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)), 0)
          FROM chat_messages
-         WHERE created_at >= date('now','-29 days')
+         WHERE date(created_at, 'localtime') >= date('now', 'localtime', '-29 days')
          GROUP BY d",
     )?;
     let tokens: HashMap<String, u64> = stmt
@@ -267,8 +264,8 @@ fn fill_last_n_days<T, F>(conn: &Connection, n: i64, mut f: F) -> Result<Vec<T>,
 where
     F: FnMut(&str) -> T,
 {
-    // Use SQLite's own date() so we match its handling of timezone / date math exactly.
-    let mut stmt = conn.prepare("SELECT date('now', ?1 || ' days')")?;
+    // Use SQLite's own date() with 'localtime' so day boundaries match the user's system timezone.
+    let mut stmt = conn.prepare("SELECT date('now', 'localtime', ?1 || ' days')")?;
     let mut out = Vec::with_capacity(n as usize);
     for offset in (0..n).rev() {
         let day: String = stmt.query_row([format!("-{offset}")], |row| row.get(0))?;
@@ -463,11 +460,11 @@ fn repo_leaderboard(conn: &Connection) -> Result<Vec<RepoLeaderRow>, rusqlite::E
 fn heatmap(conn: &Connection) -> Result<Vec<HeatmapCell>, rusqlite::Error> {
     // 13 weeks × 7 days = 91 cells. Week index = days-ago / 7 (0 = most recent).
     let mut stmt = conn.prepare(
-        "SELECT CAST(strftime('%w', started_at) AS INTEGER) AS dow,
-                CAST((julianday(date('now')) - julianday(date(started_at))) / 7 AS INTEGER) AS week,
+        "SELECT CAST(strftime('%w', started_at, 'localtime') AS INTEGER) AS dow,
+                CAST((julianday(date('now', 'localtime')) - julianday(date(started_at, 'localtime'))) / 7 AS INTEGER) AS week,
                 COUNT(*) AS c
          FROM agent_sessions
-         WHERE started_at >= date('now','-90 days')
+         WHERE date(started_at, 'localtime') >= date('now', 'localtime', '-90 days')
          GROUP BY dow, week",
     )?;
     let mut grid = [[0u32; 13]; 7];
