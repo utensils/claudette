@@ -12,6 +12,7 @@ use std::sync::OnceLock;
 const TRAY_EN: &str = include_str!("../locales/en/tray.json");
 const TRAY_ES: &str = include_str!("../locales/es/tray.json");
 const TRAY_PT_BR: &str = include_str!("../locales/pt-BR/tray.json");
+const TRAY_JA: &str = include_str!("../locales/ja/tray.json");
 
 /// Supported locales. Mirrors `SUPPORTED_LANGUAGES` in `src/ui/src/i18n.ts`;
 /// keep both lists in sync. Unknown values from the DB fall back to `En`.
@@ -20,6 +21,7 @@ pub enum Locale {
     En,
     Es,
     PtBr,
+    Ja,
 }
 
 impl Locale {
@@ -30,6 +32,7 @@ impl Locale {
         match value.map(str::trim).unwrap_or("") {
             "es" => Locale::Es,
             "pt-BR" => Locale::PtBr,
+            "ja" => Locale::Ja,
             _ => Locale::En,
         }
     }
@@ -39,6 +42,7 @@ impl Locale {
             Locale::En => en_store(),
             Locale::Es => es_store(),
             Locale::PtBr => pt_br_store(),
+            Locale::Ja => ja_store(),
         }
     }
 }
@@ -56,6 +60,11 @@ fn es_store() -> &'static HashMap<String, String> {
 fn pt_br_store() -> &'static HashMap<String, String> {
     static PT_BR: OnceLock<HashMap<String, String>> = OnceLock::new();
     PT_BR.get_or_init(|| parse_locale(TRAY_PT_BR, "pt-BR"))
+}
+
+fn ja_store() -> &'static HashMap<String, String> {
+    static JA: OnceLock<HashMap<String, String>> = OnceLock::new();
+    JA.get_or_init(|| parse_locale(TRAY_JA, "ja"))
 }
 
 fn parse_locale(raw: &str, tag: &str) -> HashMap<String, String> {
@@ -107,6 +116,8 @@ mod tests {
         assert_eq!(Locale::from_db_value(Some(" es ")), Locale::Es);
         assert_eq!(Locale::from_db_value(Some("pt-BR")), Locale::PtBr);
         assert_eq!(Locale::from_db_value(Some(" pt-BR ")), Locale::PtBr);
+        assert_eq!(Locale::from_db_value(Some("ja")), Locale::Ja);
+        assert_eq!(Locale::from_db_value(Some(" ja ")), Locale::Ja);
     }
 
     #[test]
@@ -122,6 +133,7 @@ mod tests {
         assert_eq!(t(Locale::En, "menu_settings"), "Settings");
         assert_eq!(t(Locale::Es, "menu_settings"), "Configuración");
         assert_eq!(t(Locale::PtBr, "menu_settings"), "Configurações");
+        assert_eq!(t(Locale::Ja, "menu_settings"), "設定");
     }
 
     #[test]
@@ -133,34 +145,39 @@ mod tests {
         );
         assert_eq!(body, "vast-daffodil is waiting for your response");
 
-        let body_es = t_args(
-            Locale::Es,
-            "notification_body",
-            &[("ws_name", "vast-daffodil")],
-        );
-        assert!(
-            body_es.contains("vast-daffodil"),
-            "Spanish body should still interpolate ws_name: {body_es}"
-        );
+        for locale in [Locale::Es, Locale::PtBr, Locale::Ja] {
+            let body = t_args(locale, "notification_body", &[("ws_name", "vast-daffodil")]);
+            assert!(
+                body.contains("vast-daffodil"),
+                "{locale:?} body should still interpolate ws_name: {body}"
+            );
+        }
     }
 
+    /// Every non-English tray locale must declare exactly the same key set as
+    /// English. Translators aren't expected to add new keys (that's a code
+    /// change), and missing keys would silently fall back to English at
+    /// runtime — fine in principle, but easy to ship by accident. This test
+    /// makes parity drift a hard CI failure.
+    ///
+    /// Iterates over all non-English locales so adding a new locale only
+    /// requires extending the array, not duplicating the comparison.
     #[test]
     fn locales_have_identical_key_sets() {
         let en: std::collections::BTreeSet<_> = en_store().keys().collect();
-        let es: std::collections::BTreeSet<_> = es_store().keys().collect();
-        let pt_br: std::collections::BTreeSet<_> = pt_br_store().keys().collect();
-        let only_en_vs_es: Vec<_> = en.difference(&es).collect();
-        let only_es_vs_en: Vec<_> = es.difference(&en).collect();
-        let only_en_vs_pt_br: Vec<_> = en.difference(&pt_br).collect();
-        let only_pt_br_vs_en: Vec<_> = pt_br.difference(&en).collect();
-        assert!(
-            only_en_vs_es.is_empty()
-                && only_es_vs_en.is_empty()
-                && only_en_vs_pt_br.is_empty()
-                && only_pt_br_vs_en.is_empty(),
-            "tray locale key drift — \
-             only_en_vs_es={only_en_vs_es:?} only_es_vs_en={only_es_vs_en:?} \
-             only_en_vs_pt_br={only_en_vs_pt_br:?} only_pt_br_vs_en={only_pt_br_vs_en:?}"
-        );
+
+        for (tag, store) in [
+            ("es", es_store()),
+            ("pt-BR", pt_br_store()),
+            ("ja", ja_store()),
+        ] {
+            let other: std::collections::BTreeSet<_> = store.keys().collect();
+            let only_en: Vec<_> = en.difference(&other).collect();
+            let only_other: Vec<_> = other.difference(&en).collect();
+            assert!(
+                only_en.is_empty() && only_other.is_empty(),
+                "tray locale key drift between en and {tag} — only_en={only_en:?} only_{tag}={only_other:?}"
+            );
+        }
     }
 }
