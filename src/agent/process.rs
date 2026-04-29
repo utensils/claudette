@@ -114,15 +114,16 @@ pub async fn run_turn(
         .id()
         .ok_or_else(|| "Process exited immediately".to_string())?;
 
-    // When images are present, pipe the prompt + image content blocks to stdin
-    // as a stream-json SDKUserMessage, then close stdin to signal EOF.
+    // When attachments are present (images, PDFs, or text files), pipe the
+    // prompt + content blocks to stdin as a stream-json SDKUserMessage, then
+    // close stdin to signal EOF.
     if has_attachments && let Some(mut stdin) = child.stdin.take() {
         use tokio::io::AsyncWriteExt;
         let payload = build_stdin_message(prompt, attachments);
         stdin
             .write_all(payload.as_bytes())
             .await
-            .map_err(|e| format!("Failed to write image data to stdin: {e}"))?;
+            .map_err(|e| format!("Failed to write attachments payload to stdin: {e}"))?;
         stdin
             .write_all(b"\n")
             .await

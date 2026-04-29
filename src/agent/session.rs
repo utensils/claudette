@@ -307,7 +307,9 @@ fn build_persistent_args(
         args.push(model.clone());
     }
 
-    if settings.chrome_enabled {
+    // Chrome is session-level — only applied on the first turn (matches
+    // `build_claude_args` and the `AgentSettings::chrome_enabled` doc).
+    if !is_resume && settings.chrome_enabled {
         args.push("--chrome".to_string());
     }
 
@@ -529,6 +531,28 @@ mod tests {
             serde_json::from_str(&args[settings_idx + 1]).unwrap();
         assert_eq!(settings_json["fastMode"], true);
         assert_eq!(settings_json["alwaysThinkingEnabled"], true);
+    }
+
+    #[test]
+    fn test_build_persistent_args_chrome_skipped_on_resume() {
+        // Chrome is session-level (per `AgentSettings::chrome_enabled` docs)
+        // and must not be re-applied on resume — same as `build_claude_args`.
+        let settings = AgentSettings {
+            chrome_enabled: true,
+            ..Default::default()
+        };
+        let args = build_persistent_args("sess-1", true, &[], None, &settings);
+        assert!(!args.contains(&"--chrome".to_string()));
+    }
+
+    #[test]
+    fn test_build_persistent_args_chrome_set_on_first_turn() {
+        let settings = AgentSettings {
+            chrome_enabled: true,
+            ..Default::default()
+        };
+        let args = build_persistent_args("sess-1", false, &[], None, &settings);
+        assert!(args.contains(&"--chrome".to_string()));
     }
 
     #[test]
