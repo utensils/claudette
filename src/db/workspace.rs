@@ -1208,12 +1208,18 @@ mod tests {
             )
             .unwrap();
         let result = db.list_workspaces();
-        assert!(
-            matches!(
-                result,
-                Err(rusqlite::Error::FromSqlConversionFailure(_, _, _))
-            ),
-            "expected FromSqlConversionFailure for unknown status, got: {result:?}",
-        );
+        match result {
+            Err(rusqlite::Error::FromSqlConversionFailure(idx, ty, _)) => {
+                assert_eq!(idx, 5, "expected workspaces.status column index 5");
+                assert_eq!(
+                    ty,
+                    rusqlite::types::Type::Text,
+                    "expected workspaces.status to be reported as TEXT"
+                );
+            }
+            other => {
+                panic!("expected FromSqlConversionFailure for unknown status, got: {other:?}",)
+            }
+        }
     }
 }

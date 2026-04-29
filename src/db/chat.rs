@@ -1090,13 +1090,17 @@ mod tests {
             )
             .unwrap();
         let result = db.list_chat_messages("w1");
-        assert!(
-            matches!(
-                result,
-                Err(rusqlite::Error::FromSqlConversionFailure(_, _, _))
-            ),
-            "expected FromSqlConversionFailure for unknown role, got: {result:?}",
-        );
+        match result {
+            Err(rusqlite::Error::FromSqlConversionFailure(idx, ty, _)) => {
+                assert_eq!(idx, 3, "expected chat_messages.role column index 3");
+                assert_eq!(
+                    ty,
+                    rusqlite::types::Type::Text,
+                    "expected chat_messages.role to be reported as TEXT"
+                );
+            }
+            other => panic!("expected FromSqlConversionFailure for unknown role, got: {other:?}",),
+        }
     }
 
     /// Regression: an unknown `status` string in the `chat_sessions` table
@@ -1115,12 +1119,18 @@ mod tests {
         // include_archived = true so the WHERE filter doesn't pre-exclude the
         // corrupt row before parse_chat_session_row gets a chance to see it.
         let result = db.list_chat_sessions_for_workspace("w1", true);
-        assert!(
-            matches!(
-                result,
-                Err(rusqlite::Error::FromSqlConversionFailure(_, _, _))
+        match result {
+            Err(rusqlite::Error::FromSqlConversionFailure(idx, ty, _)) => {
+                assert_eq!(idx, 7, "expected chat_sessions.status column index 7");
+                assert_eq!(
+                    ty,
+                    rusqlite::types::Type::Text,
+                    "expected chat_sessions.status to be reported as TEXT"
+                );
+            }
+            other => panic!(
+                "expected FromSqlConversionFailure for unknown session status, got: {other:?}",
             ),
-            "expected FromSqlConversionFailure for unknown session status, got: {result:?}",
-        );
+        }
     }
 }
