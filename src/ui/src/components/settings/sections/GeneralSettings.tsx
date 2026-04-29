@@ -5,7 +5,12 @@ import { getVersion } from "@tauri-apps/api/app";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../../stores/useAppStore";
 import { getAppSetting, setAppSetting } from "../../../services/tauri";
-import { applyUpdateChannel, checkForUpdate } from "../../../hooks/useAutoUpdater";
+import {
+  applyUpdateChannel,
+  checkForUpdate,
+  installNow,
+  installWhenIdle,
+} from "../../../hooks/useAutoUpdater";
 import i18n, { isSupportedLanguage } from "../../../i18n";
 import styles from "../Settings.module.css";
 
@@ -15,8 +20,10 @@ export function GeneralSettings() {
   const worktreeBaseDir = useAppStore((s) => s.worktreeBaseDir);
   const setWorktreeBaseDir = useAppStore((s) => s.setWorktreeBaseDir);
   const updateAvailable = useAppStore((s) => s.updateAvailable);
+  const updateVersion = useAppStore((s) => s.updateVersion);
   const updateChannel = useAppStore((s) => s.updateChannel);
   const updateDownloading = useAppStore((s) => s.updateDownloading);
+  const updateProgress = useAppStore((s) => s.updateProgress);
   const updateInstallWhenIdle = useAppStore((s) => s.updateInstallWhenIdle);
   const openModal = useAppStore((s) => s.openModal);
 
@@ -88,10 +95,11 @@ export function GeneralSettings() {
       setCheckState("idle");
       setError(t("general_update_check_failed"));
     } else {
-      // "available" — the UpdateBanner picks it up. Reset the button so it
-      // doesn't stick on "Checking…". The fallback useEffect on
-      // `updateAvailable` only fires on transitions, so it can't recover
-      // when the auto-check has already cached the same update.
+      // "available" — the inline install controls below pick it up. Reset
+      // the button so it doesn't stick on "Checking…". The fallback
+      // useEffect on `updateAvailable` only fires on transitions, so it
+      // can't recover when the auto-check has already cached the same
+      // update.
       setCheckState("idle");
     }
   };
@@ -187,20 +195,40 @@ export function GeneralSettings() {
           <div className={styles.settingLabel}>{t("general_app_version")}</div>
           <div className={styles.settingDescription}>
             {appVersion ? `v${appVersion}` : "…"}
+            {updateAvailable && updateVersion
+              ? ` ${t("general_update_available_suffix", { version: updateVersion })}`
+              : ""}
           </div>
         </div>
         <div className={styles.settingControl}>
-          <button
-            className={styles.iconBtn}
-            onClick={handleCheckForUpdates}
-            disabled={checkState === "checking"}
-          >
-            {checkState === "checking"
-              ? t("general_checking")
-              : checkState === "up-to-date"
-                ? t("general_up_to_date")
-                : t("general_check_updates")}
-          </button>
+          {updateDownloading ? (
+            <button className={styles.iconBtn} disabled>
+              {t("general_downloading", { progress: updateProgress })}
+            </button>
+          ) : updateAvailable && updateVersion ? (
+            <div className={styles.inlineControl}>
+              <button className={styles.iconBtn} onClick={installNow}>
+                {t("general_install_now")}
+              </button>
+              {!updateInstallWhenIdle && (
+                <button className={styles.iconBtn} onClick={installWhenIdle}>
+                  {t("general_when_idle")}
+                </button>
+              )}
+            </div>
+          ) : (
+            <button
+              className={styles.iconBtn}
+              onClick={handleCheckForUpdates}
+              disabled={checkState === "checking"}
+            >
+              {checkState === "checking"
+                ? t("general_checking")
+                : checkState === "up-to-date"
+                  ? t("general_up_to_date")
+                  : t("general_check_updates")}
+            </button>
+          )}
         </div>
       </div>
 
