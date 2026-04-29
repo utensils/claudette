@@ -87,6 +87,12 @@ export function GeneralSettings() {
     } else if (result === "error") {
       setCheckState("idle");
       setError(t("general_update_check_failed"));
+    } else {
+      // "available" — the UpdateBanner picks it up. Reset the button so it
+      // doesn't stick on "Checking…". The fallback useEffect on
+      // `updateAvailable` only fires on transitions, so it can't recover
+      // when the auto-check has already cached the same update.
+      setCheckState("idle");
     }
   };
 
