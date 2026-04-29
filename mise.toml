@@ -1,3 +1,26 @@
+# Contributor environment for non-Nix builds.
+#
+# The Nix devshell (flake.nix) is still the recommended path; this file is
+# for contributors who use `mise` instead. It pins the toolchain assumed by
+# the README's fresh-clone steps and, on macOS, points the linker at the
+# active SDK so transitive crate build scripts that link `-liconv`/`-lSystem`
+# actually find them. Without that, `nix-darwin`-style setups (where `cc`
+# resolves to a wrapper that doesn't auto-inject the SDK lib path) trip
+# `ld: library not found for -liconv` inside e.g. `objc2-exception-helper`'s
+# build script. No `cargo:rustc-link-search` from any one crate's build.rs
+# can reach a transitive build script — the fix has to be at the env layer.
+
 [tools]
 rust = "1.94"
 bun = "latest"
+# tauri-cli 2.6+ is required for the `bundle.macOS.infoPlist` schema field
+# we use. The npm package ships a prebuilt binary, sidestepping
+# `cargo install tauri-cli` (which itself needs the SDK linker fix below).
+"npm:@tauri-apps/cli" = "^2.9"
+
+[env]
+# macOS only. `xcrun --show-sdk-path` resolves whichever SDK is active —
+# Xcode or just the Command Line Tools. On non-macOS the conditional
+# renders as an empty string, which mise treats as unset for these vars.
+SDKROOT = "{% if os() == 'macos' %}{{ exec(command='xcrun --show-sdk-path') | trim }}{% endif %}"
+LIBRARY_PATH = "{% if os() == 'macos' %}{{ exec(command='xcrun --show-sdk-path') | trim }}/usr/lib{% endif %}"
