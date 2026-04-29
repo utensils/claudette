@@ -3,15 +3,148 @@
 #[cfg(target_os = "macos")]
 use std::env;
 #[cfg(target_os = "macos")]
-use std::path::PathBuf;
-#[cfg(target_os = "macos")]
 use std::process::Command;
 
+use std::path::{Path, PathBuf};
+
 fn main() {
+    generate_bundle_icons();
+
     #[cfg(target_os = "macos")]
     compile_platform_speech_swift();
 
     tauri_build::build();
+}
+
+// Regenerates the platform-specific bundle icons (`32x32.png`, `128x128.png`,
+// `128x128@2x.png`, `icon.icns`, `icon.ico`) from `icons/icon.png`. Only
+// `icon.png` is checked into git; the rest are gitignored so contributors don't
+// accumulate churn from `cargo tauri icon` re-runs. See issue #516.
+fn generate_bundle_icons() {
+    let manifest_dir = PathBuf::from(
+        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set during build"),
+    );
+    let icons_dir = manifest_dir.join("icons");
+    let source = icons_dir.join("icon.png");
+
+    println!("cargo:rerun-if-changed={}", source.display());
+
+    let outputs: [(&str, IconKind); 5] = [
+        ("32x32.png", IconKind::Png { side: 32 }),
+        ("128x128.png", IconKind::Png { side: 128 }),
+        ("128x128@2x.png", IconKind::Png { side: 256 }),
+        ("icon.icns", IconKind::Icns),
+        ("icon.ico", IconKind::Ico),
+    ];
+
+    if outputs_are_fresh(&source, &icons_dir, &outputs) {
+        return;
+    }
+
+    if !source.exists() {
+        panic!(
+            "icons/icon.png is missing — cannot generate bundle icons. \
+             Restore icons/icon.png (the only icon source tracked in git)."
+        );
+    }
+
+    let img = image::open(&source).unwrap_or_else(|err| {
+        panic!("failed to open {}: {err}", source.display());
+    });
+
+    for (name, kind) in &outputs {
+        let path = icons_dir.join(name);
+        match kind {
+            IconKind::Png { side } => write_png(&img, *side, &path),
+            IconKind::Icns => write_icns(&img, &path),
+            IconKind::Ico => write_ico(&img, &path),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum IconKind {
+    Png { side: u32 },
+    Icns,
+    Ico,
+}
+
+fn outputs_are_fresh(source: &Path, icons_dir: &Path, outputs: &[(&str, IconKind)]) -> bool {
+    let Ok(source_mtime) = std::fs::metadata(source).and_then(|m| m.modified()) else {
+        return false;
+    };
+    outputs.iter().all(|(name, _)| {
+        std::fs::metadata(icons_dir.join(name))
+            .and_then(|m| m.modified())
+            .map(|t| t >= source_mtime)
+            .unwrap_or(false)
+    })
+}
+
+fn write_png(src: &image::DynamicImage, side: u32, out: &Path) {
+    let resized = src.resize_exact(side, side, image::imageops::FilterType::Lanczos3);
+    resized
+        .save(out)
+        .unwrap_or_else(|err| panic!("failed to write {}: {err}", out.display()));
+}
+
+fn write_icns(src: &image::DynamicImage, out: &Path) {
+    use icns::{IconFamily, IconType, Image, PixelFormat};
+
+    // The .icns container holds multiple resolutions; macOS picks the closest match
+    // for each render context. RGBA32_*_2x variants encode retina pairs at 2× the
+    // logical size (e.g. 256×256 pixel data labeled "128@2x").
+    let levels: &[(u32, IconType)] = &[
+        (16, IconType::RGBA32_16x16),
+        (32, IconType::RGBA32_16x16_2x),
+        (32, IconType::RGBA32_32x32),
+        (64, IconType::RGBA32_32x32_2x),
+        (128, IconType::RGBA32_128x128),
+        (256, IconType::RGBA32_128x128_2x),
+        (256, IconType::RGBA32_256x256),
+        (512, IconType::RGBA32_256x256_2x),
+        (512, IconType::RGBA32_512x512),
+        (1024, IconType::RGBA32_512x512_2x),
+    ];
+
+    let mut family = IconFamily::new();
+    for (side, icon_type) in levels {
+        let resized = src
+            .resize_exact(*side, *side, image::imageops::FilterType::Lanczos3)
+            .to_rgba8();
+        let image = Image::from_data(PixelFormat::RGBA, *side, *side, resized.into_raw())
+            .expect("icns Image::from_data");
+        family
+            .add_icon_with_type(&image, *icon_type)
+            .expect("icns add_icon_with_type");
+    }
+
+    let file = std::fs::File::create(out)
+        .unwrap_or_else(|err| panic!("failed to create {}: {err}", out.display()));
+    family
+        .write(file)
+        .unwrap_or_else(|err| panic!("failed to write {}: {err}", out.display()));
+}
+
+fn write_ico(src: &image::DynamicImage, out: &Path) {
+    use ico::{IconDir, IconDirEntry, IconImage, ResourceType};
+
+    let sides: &[u32] = &[16, 24, 32, 48, 64, 128, 256];
+
+    let mut icon_dir = IconDir::new(ResourceType::Icon);
+    for side in sides {
+        let resized = src
+            .resize_exact(*side, *side, image::imageops::FilterType::Lanczos3)
+            .to_rgba8();
+        let image = IconImage::from_rgba_data(*side, *side, resized.into_raw());
+        icon_dir.add_entry(IconDirEntry::encode(&image).expect("ico encode"));
+    }
+
+    let file = std::fs::File::create(out)
+        .unwrap_or_else(|err| panic!("failed to create {}: {err}", out.display()));
+    icon_dir
+        .write(file)
+        .unwrap_or_else(|err| panic!("failed to write {}: {err}", out.display()));
 }
 
 #[cfg(target_os = "macos")]

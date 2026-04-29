@@ -76,3 +76,8 @@ tempfile = "3"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# Icon generation: only icons/icon.png is tracked in git; the platform-specific
+# bundle icons (PNGs, .icns, .ico) are regenerated at build time.
+image = { version = "0.25", default-features = false, features = ["png"] }
+ico = "0.4"
+icns = "0.3"
