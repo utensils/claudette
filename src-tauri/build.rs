@@ -27,8 +27,6 @@ fn generate_bundle_icons() {
     let icons_dir = manifest_dir.join("icons");
     let source = icons_dir.join("icon.png");
 
-    println!("cargo:rerun-if-changed={}", source.display());
-
     let outputs: [(&str, IconKind); 5] = [
         ("32x32.png", IconKind::Png { side: 32 }),
         ("128x128.png", IconKind::Png { side: 128 }),
@@ -36,6 +34,16 @@ fn generate_bundle_icons() {
         ("icon.icns", IconKind::Icns),
         ("icon.ico", IconKind::Ico),
     ];
+
+    // Track both the source and every generated output. Cargo treats a missing
+    // `rerun-if-changed` path as "changed", so listing the outputs here forces
+    // build.rs to re-run if any of them is deleted while `icon.png` is unchanged
+    // — otherwise the script would be skipped, leaving the bundler to fail on
+    // the missing icon.
+    println!("cargo:rerun-if-changed={}", source.display());
+    for (name, _) in &outputs {
+        println!("cargo:rerun-if-changed={}", icons_dir.join(name).display());
+    }
 
     if outputs_are_fresh(&source, &icons_dir, &outputs) {
         return;
