@@ -1,11 +1,12 @@
 import { memo, useMemo, useEffect, useState } from "react";
-import { GitBranch, Layers, Globe, CircleCheck, CircleAlert, CircleQuestionMark, LoaderCircle, ChevronDown, ChevronRight } from "lucide-react";
+import { GitBranch, Layers, Globe, ChevronDown, ChevronRight } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import type { AgentStatus } from "../../types/workspace";
 import { isAgentBusy } from "../../utils/agentStatus";
 import { RepoIcon } from "../shared/RepoIcon";
 import { PanelToggles } from "../shared/PanelToggles";
 import { StatsStrip, AnalyticsSection, MicroStats } from "../metrics";
+import { SessionStatusIcon, type SessionStatusKind } from "../shared/SessionStatusIcon";
 import styles from "./Dashboard.module.css";
 
 /** Strip markdown syntax for a clean one-line preview. */
@@ -96,6 +97,23 @@ const WorkspaceCard = memo(function WorkspaceCard({
       ? ws.agent_status
       : "Error";
 
+  const isStopped =
+    ws.agent_status === "Stopped" || typeof ws.agent_status !== "string";
+
+  const statusKind: SessionStatusKind =
+    badge === "ask"  ? { kind: "ask" } :
+    badge === "plan" ? { kind: "plan" } :
+    badge === "done" ? { kind: "unread" } :
+    isRunning        ? { kind: "running" } :
+    isStopped        ? { kind: "stopped" } :
+                       { kind: "idle" };
+
+  const statusIconTitle =
+    badge === "ask"  ? "Question requires attention" :
+    badge === "plan" ? "Plan approval needed" :
+    badge === "done" ? "Completed" :
+                       statusTitle;
+
   return (
     <button
       type="button"
@@ -122,31 +140,9 @@ const WorkspaceCard = memo(function WorkspaceCard({
               {formatElapsed(elapsed)}
             </span>
           )}
-          {badge === "done" ? (
-            <span className={styles.badgeDone} title="Completed" aria-label="Completed" role="img">
-              <CircleCheck size={12} />
-            </span>
-          ) : badge === "plan" ? (
-            <span className={styles.badgePlan} title="Plan approval needed" aria-label="Plan approval needed" role="img">
-              <CircleAlert size={12} />
-            </span>
-          ) : badge === "ask" ? (
-            <span className={styles.badgeAsk} title="Question requires attention" aria-label="Question requires attention" role="img">
-              <CircleQuestionMark size={12} />
-            </span>
-          ) : isRunning ? (
-            <span className={styles.statusSpinner} title={statusTitle} aria-label={statusTitle} role="img">
-              <LoaderCircle size={12} />
-            </span>
-          ) : (
-            <span
-              className={styles.statusDot}
-              style={{ background: statusColor }}
-              title={statusTitle}
-              aria-label={statusTitle}
-              role="img"
-            />
-          )}
+          <span title={statusIconTitle} aria-label={statusIconTitle} role="img">
+            <SessionStatusIcon status={statusKind} size={14} />
+          </span>
         </span>
       </div>
       <div className={styles.branchLine}>
