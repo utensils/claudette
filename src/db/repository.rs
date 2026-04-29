@@ -281,22 +281,8 @@ mod tests {
     #[test]
     fn test_repository_path_slug_persisted() {
         let db = Database::open_in_memory().unwrap();
-        let repo = Repository {
-            id: "r1".into(),
-            path: "/tmp/my-project".into(),
-            name: "My Project".into(),
-            path_slug: "my-project".into(),
-            icon: None,
-            created_at: String::new(),
-            setup_script: None,
-            custom_instructions: None,
-            sort_order: 0,
-            branch_rename_preferences: None,
-            setup_script_auto_run: false,
-            base_branch: None,
-            default_remote: None,
-            path_valid: true,
-        };
+        let mut repo = make_repo("r1", "/tmp/my-project", "My Project");
+        repo.path_slug = "my-project".into();
         db.insert_repository(&repo).unwrap();
         let repos = db.list_repositories().unwrap();
         assert_eq!(repos[0].name, "My Project");
