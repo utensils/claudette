@@ -20,12 +20,22 @@
   align-items: center;
   gap: 4px;
   padding: 2px 8px;
-  border-radius: 4px;
   cursor: pointer;
   font-size: 12px;
   color: var(--text-dim);
-  border-bottom: 2px solid transparent;
+  position: relative;
   transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.tab::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: transparent;
+  transition: background var(--transition-fast);
 }
 
 .tab:hover {
@@ -35,8 +45,11 @@
 
 .tabActive {
   color: var(--text-primary);
-  border-bottom-color: var(--accent-primary);
   background: transparent;
+}
+
+.tabActive::after {
+  background: var(--accent-primary);
 }
 
 .tabTitle {
