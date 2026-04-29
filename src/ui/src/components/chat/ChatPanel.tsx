@@ -3123,7 +3123,7 @@ function ChatInputArea({
                   e.stopPropagation();
                   removeAttachment(att.id);
                 }}
-                title="Remove"
+                title={t("remove_attachment")}
               >
                 <X size={12} />
               </button>

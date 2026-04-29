@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { MessageMarkdown } from "./MessageMarkdown";
 import type { PlanApproval } from "../../stores/useAppStore";
 import { readPlanFile, sendRemoteCommand } from "../../services/tauri";
@@ -20,6 +21,7 @@ export function PlanApprovalCard({
   onRespond,
   remoteConnectionId,
 }: PlanApprovalCardProps) {
+  const { t } = useTranslation("chat");
   const [planContent, setPlanContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -45,7 +47,7 @@ export function PlanApprovalCard({
       setExpanded(true);
     } catch (e) {
       console.error("Failed to read plan file:", e);
-      setPlanContent("(Failed to read plan file)");
+      setPlanContent(t("plan_approval_failed_read"));
       setExpanded(true);
     } finally {
       setLoading(false);
@@ -54,11 +56,10 @@ export function PlanApprovalCard({
 
   return (
     <div className={styles.card}>
-      <div className={styles.label}>Plan Ready for Approval</div>
+      <div className={styles.label}>{t("plan_approval_label")}</div>
 
       <div className={styles.description}>
-        The agent has written a plan and is requesting approval to proceed with
-        implementation.
+        {t("plan_approval_description")}
       </div>
 
       {approval.planFilePath && (
@@ -67,7 +68,11 @@ export function PlanApprovalCard({
           onClick={handleViewPlan}
           disabled={loading}
         >
-          {loading ? "Loading..." : expanded ? "Hide plan" : "View plan"}
+          {loading
+            ? t("plan_approval_loading")
+            : expanded
+              ? t("plan_approval_hide_plan")
+              : t("plan_approval_view_plan")}
           {" \u2014 "}
           {approval.planFilePath.split("/").slice(-2).join("/")}
         </button>
@@ -81,7 +86,7 @@ export function PlanApprovalCard({
 
       {approval.allowedPrompts.length > 0 && (
         <div className={styles.permissions}>
-          <div className={styles.permLabel}>Requested permissions</div>
+          <div className={styles.permLabel}>{t("plan_approval_requested_permissions")}</div>
           <div className={styles.permList}>
             {approval.allowedPrompts.map((p, i) => (
               <div key={i} className={styles.permItem}>
@@ -97,10 +102,10 @@ export function PlanApprovalCard({
         className={styles.approveBtn}
         onClick={() => onRespond(true)}
       >
-        Approve plan
+        {t("plan_approval_approve")}
       </button>
 
-      <div className={styles.divider}>Or provide feedback below</div>
+      <div className={styles.divider}>{t("plan_approval_or_feedback")}</div>
 
       <div className={styles.freeformRow}>
         <textarea
@@ -114,7 +119,7 @@ export function PlanApprovalCard({
               if (text) onRespond(false, text);
             }
           }}
-          placeholder="Request changes or ask for a revision…"
+          placeholder={t("plan_approval_feedback_placeholder")}
           rows={1}
         />
         <button
@@ -125,7 +130,7 @@ export function PlanApprovalCard({
           }}
           disabled={!feedback.trim()}
         >
-          Send
+          {t("plan_approval_send")}
         </button>
       </div>
     </div>

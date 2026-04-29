@@ -62,5 +62,61 @@
   "agent_question_or_type": "Or type your response below",
   "agent_question_send": "Send",
   "agent_question_back": "Back",
-  "agent_question_progress": "{{current}} of {{total}}"
+  "agent_question_progress": "{{current}} of {{total}}",
+
+  "plan_approval_label": "Plan Ready for Approval",
+  "plan_approval_description": "The agent has written a plan and is requesting approval to proceed with implementation.",
+  "plan_approval_view_plan": "View plan",
+  "plan_approval_hide_plan": "Hide plan",
+  "plan_approval_loading": "Loading...",
+  "plan_approval_failed_read": "(Failed to read plan file)",
+  "plan_approval_requested_permissions": "Requested permissions",
+  "plan_approval_approve": "Approve plan",
+  "plan_approval_or_feedback": "Or provide feedback below",
+  "plan_approval_feedback_placeholder": "Request changes or ask for a revision…",
+  "plan_approval_send": "Send",
+
+  "session_new": "New session",
+  "session_close": "Close session",
+  "session_close_diff": "Close diff",
+  "session_running_confirm_close": "This session is still running. Stop and close \"{{name}}\"?",
+
+  "chat_search_aria": "Search chat",
+  "chat_search_placeholder": "Search chat…",
+  "chat_search_query_aria": "Search query",
+  "chat_search_prev": "Previous match",
+  "chat_search_prev_title": "Previous (Shift+Enter)",
+  "chat_search_next": "Next match",
+  "chat_search_next_title": "Next (Enter)",
+  "chat_search_close": "Close search",
+  "chat_search_close_title": "Close (Esc)",
+  "chat_search_no_matches": "No matches",
+
+  "pinned_commands_label": "pinned",
+  "pinned_commands_hint": "pin a command…",
+  "pinned_commands_search": "search commands…",
+  "pinned_commands_add": "Pin a command",
+  "pinned_command_not_available": "/{{name}} (not available)",
+  "pinned_command_unpin": "Unpin /{{name}}",
+
+  "code_block_copy": "Copy code",
+  "code_block_copied": "Copied",
+  "attachment_close_lightbox": "Close image preview",
+
+  "mcp_unknown_error": "unknown",
+
+  "diff_loading": "Loading diff...",
+  "diff_no_content": "No diff content",
+  "diff_binary_changed": "Binary file changed",
+  "diff_no_changes": "No changes",
+  "diff_preview_loading": "Loading preview...",
+  "diff_preview_failed": "Failed to load: {{error}}",
+  "diff_preview_no_content": "No content",
+  "diff_preview_not_text": "Cannot render: file is not text",
+  "diff_preview_truncated": "Preview truncated — full file is {{size}}",
+  "diff_markdown_view_mode_aria": "Markdown view mode",
+  "diff_mode_diff": "Diff",
+  "diff_mode_preview": "Preview",
+
+  "terminal_failed_to_start": "Failed to start shell"
 }

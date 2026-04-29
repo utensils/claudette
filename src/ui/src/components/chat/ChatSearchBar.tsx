@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronUp, X } from "lucide-react";
 import { useAppStore, type ToolActivity } from "../../stores/useAppStore";
 import { focusChatPrompt } from "../../utils/focusTargets";
@@ -50,6 +51,7 @@ interface Props {
 }
 
 export function ChatSearchBar({ workspaceId, scopeRef }: Props) {
+  const { t } = useTranslation("chat");
   const open = useAppStore(
     (s) => s.chatSearch[workspaceId]?.open ?? false,
   );
@@ -191,14 +193,14 @@ export function ChatSearchBar({ workspaceId, scopeRef }: Props) {
   const counter = !query
     ? ""
     : matchCount === 0
-      ? "No matches"
+      ? t("chat_search_no_matches")
       : `${displayMatchIndex + 1} / ${matchCount}`;
 
   return (
     <div
       className={styles.bar}
       role="search"
-      aria-label="Search chat"
+      aria-label={t("chat_search_aria")}
       data-search-total={matchCount}
       data-search-active={matchIndex}
     >
@@ -206,7 +208,7 @@ export function ChatSearchBar({ workspaceId, scopeRef }: Props) {
         ref={inputRef}
         type="text"
         className={styles.input}
-        placeholder="Search chat…"
+        placeholder={t("chat_search_placeholder")}
         value={query}
         onChange={(e) => setQuery(workspaceId, e.target.value)}
         onKeyDown={(e) => {
@@ -228,7 +230,7 @@ export function ChatSearchBar({ workspaceId, scopeRef }: Props) {
             inputRef.current?.select();
           }
         }}
-        aria-label="Search query"
+        aria-label={t("chat_search_query_aria")}
       />
       <span className={styles.counter} aria-live="polite">
         {counter}
@@ -238,8 +240,8 @@ export function ChatSearchBar({ workspaceId, scopeRef }: Props) {
         className={styles.iconButton}
         onClick={handlePrev}
         disabled={matchCount === 0}
-        aria-label="Previous match"
-        title="Previous (Shift+Enter)"
+        aria-label={t("chat_search_prev")}
+        title={t("chat_search_prev_title")}
       >
         <ChevronUp size={14} />
       </button>
@@ -248,8 +250,8 @@ export function ChatSearchBar({ workspaceId, scopeRef }: Props) {
         className={styles.iconButton}
         onClick={handleNext}
         disabled={matchCount === 0}
-        aria-label="Next match"
-        title="Next (Enter)"
+        aria-label={t("chat_search_next")}
+        title={t("chat_search_next_title")}
       >
         <ChevronDown size={14} />
       </button>
@@ -257,8 +259,8 @@ export function ChatSearchBar({ workspaceId, scopeRef }: Props) {
         type="button"
         className={styles.iconButton}
         onClick={handleClose}
-        aria-label="Close search"
-        title="Close (Esc)"
+        aria-label={t("chat_search_close")}
+        title={t("chat_search_close_title")}
       >
         <X size={14} />
       </button>

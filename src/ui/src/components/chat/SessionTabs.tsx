@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { FileDiff as FileDiffIcon, Plus, X } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import {
@@ -41,6 +42,7 @@ const EMPTY_SESSIONS: ChatSession[] = [];
 const EMPTY_DIFF_TABS: DiffFileTab[] = [];
 
 export function SessionTabs({ workspaceId }: Props) {
+  const { t } = useTranslation("chat");
   const sessions = useAppStore(
     (s) => s.sessionsByWorkspace[workspaceId] ?? EMPTY_SESSIONS,
   );
@@ -103,7 +105,7 @@ export function SessionTabs({ workspaceId }: Props) {
   const handleArchive = async (session: ChatSession) => {
     if (session.agent_status === "Running") {
       const ok = window.confirm(
-        `This session is still running. Stop and close "${session.name}"?`,
+        t("session_running_confirm_close", { name: session.name }),
       );
       if (!ok) return;
     }
@@ -221,8 +223,8 @@ export function SessionTabs({ workspaceId }: Props) {
         type="button"
         className={styles.addBtn}
         onClick={handleCreate}
-        title="New session"
-        aria-label="New session"
+        title={t("session_new")}
+        aria-label={t("session_new")}
       >
         <Plus size={14} />
       </button>
@@ -249,6 +251,7 @@ function SessionTab({
   onNavigate,
   tabRef,
 }: TabProps) {
+  const { t } = useTranslation("chat");
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(session.name);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -353,8 +356,8 @@ function SessionTab({
           e.stopPropagation();
           onClose();
         }}
-        title="Close session"
-        aria-label="Close session"
+        title={t("session_close")}
+        aria-label={t("session_close")}
       >
         <X size={12} />
       </button>
@@ -372,6 +375,7 @@ interface DiffTabProps {
 }
 
 function DiffTab({ tab, isActive, onSelect, onClose, onNavigate, tabRef }: DiffTabProps) {
+  const { t } = useTranslation("chat");
   // Show just the basename in the tab; the full path goes in the tooltip
   // (mirrors how editors label file tabs). `path.split("/").pop()` is fine
   // because diff paths come from git and use forward slashes on every
@@ -417,8 +421,8 @@ function DiffTab({ tab, isActive, onSelect, onClose, onNavigate, tabRef }: DiffT
           e.stopPropagation();
           onClose();
         }}
-        title="Close diff"
-        aria-label="Close diff"
+        title={t("session_close_diff")}
+        aria-label={t("session_close_diff")}
       >
         <X size={12} />
       </button>

@@ -170,7 +170,7 @@ export function AttachMenu({
                             type="button"
                             className={styles.serverInfo}
                             onClick={() => handleReconnect(server.name)}
-                            title={`Failed: ${status?.last_error ?? "unknown"} — click to reconnect`}
+                            title={t("mcp_reconnect_aria", { error: status?.last_error ?? t("mcp_unknown_error") })}
                           >
                             <span
                               className={styles.serverDot}

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 
@@ -76,6 +77,7 @@ export function AttachmentLightbox({
   onClose,
   onContextMenu,
 }: AttachmentLightboxProps) {
+  const { t } = useTranslation("chat");
   const backdropRef = useRef<HTMLDivElement>(null);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
   const imageWrapRef = useRef<HTMLDivElement>(null);
@@ -148,7 +150,7 @@ export function AttachmentLightbox({
         ref={closeBtnRef}
         type="button"
         className={styles.closeBtn}
-        aria-label="Close image preview"
+        aria-label={t("attachment_close_lightbox")}
         onClick={onClose}
       >
         <X size={18} />

@@ -64,6 +64,13 @@
   "appearance_custom_monospace_font": "Custom monospace font",
   "appearance_custom_monospace_font_desc": "Enter a font name installed on your system",
   "appearance_monospace_font_placeholder": "e.g. Fira Code",
+  "font_select_custom": "Custom...",
+  "font_select_default": "Default",
+  "font_select_group_sans": "Sans-serif",
+  "font_select_group_mono": "Monospace",
+  "font_select_search_placeholder": "Search fonts…",
+  "font_select_no_matches": "No matching fonts",
+  "font_select_listbox_aria": "Font selection",
 
   "models_title": "Models",
   "models_default_model": "Default model",

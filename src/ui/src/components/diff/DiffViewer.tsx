@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { loadFileDiff, readWorkspaceFile } from "../../services/tauri";
 import { PanelToggles } from "../shared/PanelToggles";
@@ -75,6 +76,7 @@ function pairLines(lines: DiffLine[]): SideBySideRow[] {
 }
 
 export function DiffViewer() {
+  const { t } = useTranslation("chat");
   const diffSelectedFile = useAppStore((s) => s.diffSelectedFile);
   const diffSelectedLayer = useAppStore((s) => s.diffSelectedLayer);
   const diffContent = useAppStore((s) => s.diffContent);
@@ -190,7 +192,7 @@ export function DiffViewer() {
             <div
               className={styles.modeToggle}
               role="group"
-              aria-label="Markdown view mode"
+              aria-label={t("diff_markdown_view_mode_aria")}
             >
               <button
                 type="button"
@@ -200,7 +202,7 @@ export function DiffViewer() {
                 }`}
                 onClick={() => setDiffPreviewMode("diff")}
               >
-                Diff
+                {t("diff_mode_diff")}
               </button>
               <button
                 type="button"
@@ -210,7 +212,7 @@ export function DiffViewer() {
                 }`}
                 onClick={() => setDiffPreviewMode("rendered")}
               >
-                Preview
+                {t("diff_mode_preview")}
               </button>
             </div>
           )}
@@ -221,31 +223,31 @@ export function DiffViewer() {
       <div className={styles.content}>
         {showRendered ? (
           diffPreviewLoading ? (
-            <div className={styles.center}>Loading preview...</div>
+            <div className={styles.center}>{t("diff_preview_loading")}</div>
           ) : diffPreviewError ? (
-            <div className={styles.center}>Failed to load: {diffPreviewError}</div>
+            <div className={styles.center}>{t("diff_preview_failed", { error: diffPreviewError })}</div>
           ) : !diffPreviewContent ? (
-            <div className={styles.center}>No content</div>
+            <div className={styles.center}>{t("diff_preview_no_content")}</div>
           ) : diffPreviewContent.is_binary || diffPreviewContent.content === null ? (
-            <div className={styles.center}>Cannot render: file is not text</div>
+            <div className={styles.center}>{t("diff_preview_not_text")}</div>
           ) : (
             <div className={styles.previewBody}>
               {diffPreviewContent.truncated && (
                 <div className={styles.truncatedBanner}>
-                  Preview truncated &mdash; full file is {formatBytes(diffPreviewContent.size_bytes)}
+                  {t("diff_preview_truncated", { size: formatBytes(diffPreviewContent.size_bytes) })}
                 </div>
               )}
               <MessageMarkdown content={diffPreviewContent.content} />
             </div>
           )
         ) : diffLoading ? (
-          <div className={styles.center}>Loading diff...</div>
+          <div className={styles.center}>{t("diff_loading")}</div>
         ) : !diffContent ? (
-          <div className={styles.center}>No diff content</div>
+          <div className={styles.center}>{t("diff_no_content")}</div>
         ) : diffContent.is_binary ? (
-          <div className={styles.center}>Binary file changed</div>
+          <div className={styles.center}>{t("diff_binary_changed")}</div>
         ) : diffContent.hunks.length === 0 ? (
-          <div className={styles.center}>No changes</div>
+          <div className={styles.center}>{t("diff_no_changes")}</div>
         ) : diffViewMode === "Unified" ? (
           <div className={styles.diffTable}>
             {diffContent.hunks.map((hunk, hi) => (

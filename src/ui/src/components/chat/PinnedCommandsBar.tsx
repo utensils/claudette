@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { SlashCommand, PinnedCommand } from "../../services/tauri";
 import { getPinnedCommands, pinCommand, unpinCommand } from "../../services/tauri";
 import styles from "./PinnedCommandsBar.module.css";
@@ -14,6 +15,7 @@ export function PinnedCommandsBar({
   slashCommands,
   onInsertCommand,
 }: PinnedCommandsBarProps) {
+  const { t } = useTranslation("chat");
   const [pins, setPins] = useState<PinnedCommand[]>([]);
   const [showPicker, setShowPicker] = useState(false);
   const [pickerQuery, setPickerQuery] = useState("");
@@ -110,9 +112,9 @@ export function PinnedCommandsBar({
 
   return (
     <div className={styles.bar}>
-      {pins.length > 0 && <span className={styles.label}>pinned</span>}
+      {pins.length > 0 && <span className={styles.label}>{t("pinned_commands_label")}</span>}
       {pins.length === 0 && !showPicker && (
-        <span className={styles.hint}>pin a command…</span>
+        <span className={styles.hint}>{t("pinned_commands_hint")}</span>
       )}
 
       {pins.map((pin) => {
@@ -128,7 +130,7 @@ export function PinnedCommandsBar({
               type="button"
               className={styles.pillAction}
               onClick={() => onInsertCommand(`/${pin.command_name} `)}
-              title={isStale ? `/${pin.command_name} (not available)` : `/${pin.command_name}`}
+              title={isStale ? t("pinned_command_not_available", { name: pin.command_name }) : `/${pin.command_name}`}
             >
               <span className={styles.slash}>/</span>
               {pin.command_name}
@@ -136,7 +138,7 @@ export function PinnedCommandsBar({
             <button
               type="button"
               className={styles.unpin}
-              aria-label={`Unpin /${pin.command_name}`}
+              aria-label={t("pinned_command_unpin", { name: pin.command_name })}
               onClick={() => handleUnpin(pin.id)}
             >
               ✕
@@ -157,7 +159,7 @@ export function PinnedCommandsBar({
               setShowPicker(false);
               setPickerQuery("");
             }}
-            placeholder="search commands…"
+            placeholder={t("pinned_commands_search")}
           />
           {availableCommands.slice(0, 12).map((cmd) => (
             <button
@@ -176,7 +178,7 @@ export function PinnedCommandsBar({
         <button
           className={styles.addBtn}
           onClick={() => setShowPicker(true)}
-          title="Pin a command"
+          title={t("pinned_commands_add")}
         >
           +
         </button>

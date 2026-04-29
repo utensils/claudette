@@ -1,4 +1,5 @@
 import { memo } from "react";
+import { useTranslation } from "react-i18next";
 import { Group, Panel, Separator, type Layout } from "react-resizable-panels";
 import type { TerminalPaneNode } from "../../types/terminal";
 import styles from "./TerminalPanel.module.css";
@@ -30,6 +31,7 @@ export interface TerminalPaneTreeProps {
 export const TerminalPaneTree = memo(function TerminalPaneTree(
   props: TerminalPaneTreeProps,
 ) {
+  const { t } = useTranslation(["chat", "common"]);
   const { tabId, node, activePaneId, onActivatePane, onLayout, onRetryLeaf } = props;
 
   if (node.kind === "leaf") {
@@ -43,13 +45,13 @@ export const TerminalPaneTree = memo(function TerminalPaneTree(
       >
         {node.spawnError && (
           <div className={styles.paneLeafError} role="alert">
-            <div className={styles.spawnErrorTitle}>Failed to start shell</div>
+            <div className={styles.spawnErrorTitle}>{t("chat:terminal_failed_to_start")}</div>
             <div className={styles.spawnErrorMessage}>{node.spawnError}</div>
             <button
               className={styles.spawnErrorRetry}
               onClick={() => onRetryLeaf(node.id)}
             >
-              Retry
+              {t("common:retry")}
             </button>
           </div>
         )}

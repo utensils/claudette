@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo, type CSSProperties, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import type { FontOption } from "../../utils/fontSettings";
 import styles from "./Settings.module.css";
 
@@ -21,6 +22,7 @@ const MONO_FALLBACK = '"JetBrains Mono", ui-monospace, "SF Mono", monospace';
  * Replaces the native <select> for font pickers so users can preview fonts.
  */
 export function FontSelect({ options, value, onChange, isCustom, kind = "sans" }: FontSelectProps) {
+  const { t } = useTranslation("settings");
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const ref = useRef<HTMLDivElement>(null);
@@ -62,8 +64,8 @@ export function FontSelect({ options, value, onChange, isCustom, kind = "sans" }
   }, [options, search]);
 
   const selectedLabel = isCustom
-    ? value || "Custom..."
-    : (options.find((o) => o.value === value)?.label ?? "Default");
+    ? value || t("font_select_custom")
+    : (options.find((o) => o.value === value)?.label ?? t("font_select_default"));
 
   // Every option gets an explicit fontFamily so it doesn't inherit the
   // current --font-sans (which may be a decorative font like Zapfino).
@@ -84,7 +86,7 @@ export function FontSelect({ options, value, onChange, isCustom, kind = "sans" }
             className={styles.fontPickerGroupLabel}
             role="presentation"
           >
-            {opt.group === "sans" ? "Sans-serif" : "Monospace"}
+            {opt.group === "sans" ? t("font_select_group_sans") : t("font_select_group_mono")}
           </div>,
         );
         lastGroup = opt.group;
@@ -139,15 +141,15 @@ export function FontSelect({ options, value, onChange, isCustom, kind = "sans" }
           <input
             className={styles.fontPickerSearch}
             type="text"
-            placeholder="Search fonts…"
+            placeholder={t("font_select_search_placeholder")}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             autoFocus
           />
           {filteredOptions.length === 0 && search.trim() ? (
-            <div className={styles.fontPickerNoResults}>No matching fonts</div>
+            <div className={styles.fontPickerNoResults}>{t("font_select_no_matches")}</div>
           ) : (
-            <div role="listbox" id={listId} aria-label="Font selection">
+            <div role="listbox" id={listId} aria-label={t("font_select_listbox_aria")}>
               {renderOptions()}
             </div>
           )}

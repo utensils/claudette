@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import styles from "./CodeBlock.module.css";
 
 export function CodeBlock({
@@ -8,6 +9,7 @@ export function CodeBlock({
   children?: React.ReactNode;
   [key: string]: unknown;
 }) {
+  const { t } = useTranslation("chat");
   const preRef = useRef<HTMLPreElement>(null);
   const [copied, setCopied] = useState(false);
   const timeoutRef = useRef<number | null>(null);
@@ -41,8 +43,8 @@ export function CodeBlock({
         type="button"
         className={`${styles.copyButton} ${copied ? styles.copied : ""}`}
         onClick={handleCopy}
-        title={copied ? "Copied" : "Copy code"}
-        aria-label="Copy code"
+        title={copied ? t("code_block_copied") : t("code_block_copy")}
+        aria-label={t("code_block_copy")}
       >
         {copied ? (
           <svg
