@@ -139,10 +139,14 @@
     var(--app-bg);
 }
 
-/* Reset Starlight prose margins for our custom sections so headings
-   don't pick up `margin-top` from the docs prose stylesheet. */
+/* Reset Starlight prose margins for our custom sections so headings,
+   prose, AND wrapping containers don't pick up sibling `margin-top`
+   from the docs prose stylesheet (`.sl-markdown-content > * + *`).
+   Including div/article/figure prevents that rule from shrinking our
+   grid items — their `gap` handles inter-card spacing. */
 .sl-markdown-content :where(.hero-v2, .pillars-section, .features-section,
-                           .values, .andmore, .anatomy, .howto-slim, .cta-section) :where(h1, h2, h3, h4, p, ul, ol) {
+                           .values, .andmore, .anatomy, .howto-slim, .cta-section, .site-footer)
+                    :where(h1, h2, h3, h4, p, ul, ol, div, article, figure, section) {
   margin-top: 0;
 }
 
