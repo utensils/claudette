@@ -263,6 +263,10 @@ Join us on [Discord](https://discord.gg/aumGBKccmD) to ask questions, share feed
 
 Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md) to get started. All participants are expected to follow our [Code of Conduct](CODE_OF_CONDUCT.md).
 
+### Translations
+
+Claudette currently ships in English and Spanish, and we'd love help adding more languages. Translations live as JSON files under `src/ui/src/locales/<lang>/` (frontend) and `src/locales/<lang>/` (tray menu, notifications, and quit dialog) — most of the work is editing key/value pairs and requires no Rust or TypeScript experience. See [Translating Claudette](CONTRIBUTING.md#translating-claudette) in the Contributing Guide for the step-by-step recipe.
+
 ## Development notes
 
 - The project uses Rust edition 2024 and Bun as the frontend package manager.
