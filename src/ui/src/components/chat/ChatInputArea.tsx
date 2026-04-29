@@ -39,7 +39,7 @@ import { formatElapsedSeconds } from "./chatHelpers";
 import styles from "./ChatPanel.module.css";
 
 /** Extract the @-query based on cursor position in the textarea. */
-export function extractMentionQuery(text: string, cursorPos: number): string | null {
+function extractMentionQuery(text: string, cursorPos: number): string | null {
   const before = text.slice(0, cursorPos);
   const atIndex = before.lastIndexOf("@");
   if (atIndex === -1) return null;
@@ -52,7 +52,7 @@ export function extractMentionQuery(text: string, cursorPos: number): string | n
 }
 
 /** Convert a File/Blob to a base64 string (without the data: prefix). */
-export function fileToBase64(file: Blob): Promise<string> {
+function fileToBase64(file: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
