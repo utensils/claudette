@@ -4,6 +4,7 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager};
 
 use claudette::db::Database;
+use claudette::i18n::{Locale, t, t_args};
 use claudette::model::WorkspaceStatus;
 
 use crate::state::{AppState, AttentionKind};
@@ -236,6 +237,10 @@ fn icon_style_from_db(db: &Database) -> TrayIconStyle {
     )
 }
 
+fn locale_from_db(db: &Database) -> Locale {
+    Locale::from_db_value(db.get_app_setting("language").ok().flatten().as_deref())
+}
+
 /// Mint a fresh tray id. Each invocation yields a distinct string so
 /// re-registration after a disable/enable cycle doesn't collide with the
 /// previous tray's DBus path on Linux (see the setup_tray comment).
@@ -294,10 +299,18 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), String> {
     // suffix sidesteps the collision entirely.
     let tray_id = mint_tray_id(&state);
 
+    // Initial idle tooltip in the user's language. `rebuild_tray` will
+    // overwrite this on the first agent state change.
+    let initial_locale = match &db {
+        Some(db) => locale_from_db(db),
+        None => Locale::En,
+    };
+    let initial_tooltip = t(initial_locale, "tooltip_idle");
+
     let tray = TrayIconBuilder::with_id(&tray_id)
         .icon(icon)
         .icon_as_template(is_template)
-        .tooltip("Claudette")
+        .tooltip(&initial_tooltip)
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| {
@@ -320,16 +333,25 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), String> {
                     .map_or(true, |a| has_running_agents(&a));
                 if running {
                     let handle = app.clone();
+                    // Read locale lazily inside the spawned task — the
+                    // user could have changed languages since the tray
+                    // was built, and the dialog should match the
+                    // current setting.
+                    let locale = Database::open(&handle.state::<AppState>().db_path)
+                        .ok()
+                        .map(|db| locale_from_db(&db))
+                        .unwrap_or(Locale::En);
+                    let title = t(locale, "quit_title");
+                    let message = t(locale, "quit_message");
+                    let confirm = t(locale, "quit_confirm");
+                    let cancel = t(locale, "quit_cancel");
                     tauri::async_runtime::spawn(async move {
                         use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
                         let confirmed = handle
                             .dialog()
-                            .message("Agents are still running. Quit anyway?")
-                            .title("Quit Claudette")
-                            .buttons(MessageDialogButtons::OkCancelCustom(
-                                "Quit".into(),
-                                "Cancel".into(),
-                            ))
+                            .message(message)
+                            .title(title)
+                            .buttons(MessageDialogButtons::OkCancelCustom(confirm, cancel))
                             .blocking_show();
                         if confirmed {
                             handle.exit(0);
@@ -393,17 +415,28 @@ pub fn rebuild_tray(app: &AppHandle) {
         let _ = tray.set_icon_as_template(is_template);
     }
 
+    let locale = match &db {
+        Some(db) => locale_from_db(db),
+        None => Locale::En,
+    };
     let tooltip = match &tray_state {
-        TrayState::Idle => "Claudette — All idle".to_string(),
-        TrayState::Running(n) => format!(
-            "Claudette — {n} agent{} running",
-            if *n == 1 { "" } else { "s" }
-        ),
-        TrayState::NeedsAttention(n) => format!(
-            "Claudette — {n} agent{} need{} input",
-            if *n == 1 { "" } else { "s" },
-            if *n == 1 { "s" } else { "" },
-        ),
+        TrayState::Idle => t(locale, "tooltip_all_idle"),
+        TrayState::Running(n) => {
+            let key = if *n == 1 {
+                "tooltip_running_one"
+            } else {
+                "tooltip_running_other"
+            };
+            t_args(locale, key, &[("count", &n.to_string())])
+        }
+        TrayState::NeedsAttention(n) => {
+            let key = if *n == 1 {
+                "tooltip_needs_input_one"
+            } else {
+                "tooltip_needs_input_other"
+            };
+            t_args(locale, key, &[("count", &n.to_string())])
+        }
     };
     let _ = tray.set_tooltip(Some(&tooltip));
 }
@@ -424,22 +457,23 @@ pub fn notify_attention(app: &AppHandle, workspace_id: &str, kind: AttentionKind
         .list_workspaces()
         .ok()
         .and_then(|wss| wss.into_iter().find(|w| w.id == workspace_id));
+    let locale = locale_from_db(&db);
     let ws_name = ws
         .as_ref()
         .map(|w| w.name.clone())
-        .unwrap_or_else(|| "An agent".to_string());
+        .unwrap_or_else(|| t(locale, "notification_unknown_workspace"));
 
     let app_state = app.state::<AppState>();
     let resolved =
         resolve_notification(&db, &app_state.cesp_playback, NotificationEvent::from(kind));
 
-    let title = "Claudette — Input Required";
-    let body = format!("{ws_name} is waiting for your response");
+    let title = t(locale, "notification_title");
+    let body = t_args(locale, "notification_body", &[("ws_name", &ws_name)]);
 
     send_notification(
         app,
         workspace_id,
-        title,
+        &title,
         &body,
         &resolved.sound,
         resolved.volume,
@@ -556,6 +590,7 @@ fn build_tray_menu_with_db(app: &AppHandle, db: &Database) -> Result<Menu<tauri:
     let state = app.state::<AppState>();
     let repos = db.list_repositories().map_err(|e| e.to_string())?;
     let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
+    let locale = locale_from_db(db);
 
     // Use try_read() to avoid panicking inside the tokio runtime.
     // If the lock is contended, all agents show as idle (harmless — next rebuild corrects it).
@@ -609,13 +644,13 @@ fn build_tray_menu_with_db(app: &AppHandle, db: &Database) -> Result<Menu<tauri:
                 .and_then(|s| s.attention_kind);
             let status = if needs_input {
                 match attention_kind {
-                    Some(crate::state::AttentionKind::Plan) => "ℹ️ Needs Input",
-                    _ => "❓ Needs Input",
+                    Some(crate::state::AttentionKind::Plan) => t(locale, "status_needs_input_plan"),
+                    _ => t(locale, "status_needs_input"),
                 }
             } else if is_running {
-                "● Running"
+                t(locale, "status_running")
             } else {
-                "○ Idle"
+                t(locale, "status_idle")
             };
             let label = format!("  {}  {}", ws.name, status);
             let item = MenuItem::with_id(app, format!("ws:{}", ws.id), &label, true, None::<&str>)
@@ -628,19 +663,25 @@ fn build_tray_menu_with_db(app: &AppHandle, db: &Database) -> Result<Menu<tauri:
     let sep = PredefinedMenuItem::separator(app).map_err(|e| e.to_string())?;
     items.push(Box::new(sep));
 
-    let settings = MenuItem::with_id(app, "open-settings", "Settings", true, None::<&str>)
-        .map_err(|e| e.to_string())?;
+    let settings = MenuItem::with_id(
+        app,
+        "open-settings",
+        t(locale, "menu_settings"),
+        true,
+        None::<&str>,
+    )
+    .map_err(|e| e.to_string())?;
     items.push(Box::new(settings));
 
-    let show = MenuItem::with_id(app, "show", "Show Claudette", true, None::<&str>)
+    let show = MenuItem::with_id(app, "show", t(locale, "menu_show"), true, None::<&str>)
         .map_err(|e| e.to_string())?;
     items.push(Box::new(show));
 
     let sep2 = PredefinedMenuItem::separator(app).map_err(|e| e.to_string())?;
     items.push(Box::new(sep2));
 
-    let quit =
-        MenuItem::with_id(app, "quit", "Quit", true, None::<&str>).map_err(|e| e.to_string())?;
+    let quit = MenuItem::with_id(app, "quit", t(locale, "menu_quit"), true, None::<&str>)
+        .map_err(|e| e.to_string())?;
     items.push(Box::new(quit));
 
     // Convert to references for Menu::with_items.

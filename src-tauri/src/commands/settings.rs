@@ -72,6 +72,13 @@ pub async fn set_app_setting(
         crate::tray::rebuild_tray(&app);
     }
 
+    // Language changes: rebuild the tray so menu labels, status icons,
+    // and tooltip retranslate without a restart. Same pattern as
+    // tray_icon_style — `rebuild_tray` re-reads the locale from the DB.
+    if key == "language" {
+        crate::tray::rebuild_tray(&app);
+    }
+
     Ok(())
 }
 

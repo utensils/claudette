@@ -1,0 +1,22 @@
+{
+  "tooltip_idle": "Claudette",
+  "tooltip_all_idle": "Claudette — Todo inactivo",
+  "tooltip_running_one": "Claudette — {{count}} agente en ejecución",
+  "tooltip_running_other": "Claudette — {{count}} agentes en ejecución",
+  "tooltip_needs_input_one": "Claudette — {{count}} agente necesita atención",
+  "tooltip_needs_input_other": "Claudette — {{count}} agentes necesitan atención",
+  "status_needs_input_plan": "ℹ️ Necesita atención",
+  "status_needs_input": "❓ Necesita atención",
+  "status_running": "● En ejecución",
+  "status_idle": "○ Inactivo",
+  "menu_settings": "Configuración",
+  "menu_show": "Mostrar Claudette",
+  "menu_quit": "Salir",
+  "quit_title": "Salir de Claudette",
+  "quit_message": "Los agentes siguen activos. ¿Salir de todos modos?",
+  "quit_confirm": "Salir",
+  "quit_cancel": "Cancelar",
+  "notification_title": "Claudette — Se requiere atención",
+  "notification_body": "{{ws_name}} está esperando tu respuesta",
+  "notification_unknown_workspace": "Un agente"
+}

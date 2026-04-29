@@ -9,6 +9,7 @@ pub mod env_provider;
 pub mod file_expand;
 pub mod fork;
 pub mod git;
+pub mod i18n;
 pub mod mcp;
 pub mod mcp_supervisor;
 pub mod metrics;

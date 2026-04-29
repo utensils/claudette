@@ -359,6 +359,7 @@ export function GeneralSettings() {
             onChange={(e) => void handleLanguageChange(e.target.value)}
           >
             <option value="en">{t("general_language_en")}</option>
+            <option value="es">{t("general_language_es")}</option>
           </select>
         </div>
       </div>

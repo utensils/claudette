@@ -1,0 +1,22 @@
+{
+  "tooltip_idle": "Claudette",
+  "tooltip_all_idle": "Claudette — All idle",
+  "tooltip_running_one": "Claudette — {{count}} agent running",
+  "tooltip_running_other": "Claudette — {{count}} agents running",
+  "tooltip_needs_input_one": "Claudette — {{count}} agent needs input",
+  "tooltip_needs_input_other": "Claudette — {{count}} agents need input",
+  "status_needs_input_plan": "ℹ️ Needs Input",
+  "status_needs_input": "❓ Needs Input",
+  "status_running": "● Running",
+  "status_idle": "○ Idle",
+  "menu_settings": "Settings",
+  "menu_show": "Show Claudette",
+  "menu_quit": "Quit",
+  "quit_title": "Quit Claudette",
+  "quit_message": "Agents are still running. Quit anyway?",
+  "quit_confirm": "Quit",
+  "quit_cancel": "Cancel",
+  "notification_title": "Claudette — Input Required",
+  "notification_body": "{{ws_name}} is waiting for your response",
+  "notification_unknown_workspace": "An agent"
+}
