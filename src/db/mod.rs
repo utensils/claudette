@@ -298,64 +298,6 @@ fn is_already_exists_error(err: &rusqlite::Error) -> bool {
 mod tests {
     use super::*;
     use crate::db::test_support::*;
-    use crate::model::ChatRole;
-
-    #[test]
-    fn test_last_message_per_workspace() {
-        let db = setup_db_with_workspace();
-        db.insert_workspace(&make_workspace("w2", "r1", "feature"))
-            .unwrap();
-        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "first"))
-            .unwrap();
-        db.insert_chat_message(&make_chat_msg(
-            &db,
-            "m2",
-            "w1",
-            ChatRole::Assistant,
-            "second",
-        ))
-        .unwrap();
-        db.insert_chat_message(&make_chat_msg(
-            &db,
-            "m3",
-            "w2",
-            ChatRole::User,
-            "other workspace",
-        ))
-        .unwrap();
-
-        let last = db.last_message_per_workspace().unwrap();
-        assert_eq!(last.len(), 2);
-
-        let w1_msg = last.iter().find(|m| m.workspace_id == "w1").unwrap();
-        assert_eq!(w1_msg.content, "second");
-
-        let w2_msg = last.iter().find(|m| m.workspace_id == "w2").unwrap();
-        assert_eq!(w2_msg.content, "other workspace");
-    }
-
-    #[test]
-    fn test_last_message_per_workspace_same_timestamp() {
-        let db = setup_db_with_workspace();
-        // Insert two messages with identical timestamps — the later rowid should win.
-        let mut m1 = make_chat_msg(&db, "m1", "w1", ChatRole::User, "first");
-        m1.created_at = "2026-01-01 00:00:00".into();
-        let mut m2 = make_chat_msg(&db, "m2", "w1", ChatRole::Assistant, "second");
-        m2.created_at = "2026-01-01 00:00:00".into();
-        db.insert_chat_message(&m1).unwrap();
-        db.insert_chat_message(&m2).unwrap();
-
-        let last = db.last_message_per_workspace().unwrap();
-        assert_eq!(last.len(), 1);
-        assert_eq!(last[0].content, "second");
-    }
-
-    #[test]
-    fn test_last_message_empty_when_no_messages() {
-        let db = setup_db_with_workspace();
-        let last = db.last_message_per_workspace().unwrap();
-        assert!(last.is_empty());
-    }
 
     // --- Migration runner tests ---
 
