@@ -157,65 +157,6 @@
   gap: 6px;
 }
 
-.statusDot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.statusSpinner {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 12px;
-  color: var(--accent-primary);
-  flex-shrink: 0;
-  filter: drop-shadow(0 0 3px rgba(var(--accent-primary-rgb), 0.4));
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .statusSpinner {
-    animation: none;
-  }
-}
-
-.badgeDone,
-.badgePlan,
-.badgeAsk {
-  width: 12px;
-  flex-shrink: 0;
-  display: inline-flex;
-  justify-content: center;
-  animation: pulse-badge 2s ease-in-out infinite;
-}
-
-.badgeDone {
-  color: var(--badge-done);
-}
-
-.badgePlan {
-  color: var(--badge-plan);
-}
-
-.badgeAsk {
-  color: var(--badge-ask);
-}
-
-@keyframes pulse-badge {
-  0%, 100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.4;
-  }
-}
 
 .statusLabel {
   font-size: 11px;
