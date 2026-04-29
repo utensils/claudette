@@ -38,6 +38,11 @@ export default defineConfig({
         './src/styles/custom.css',
         './src/styles/homepage.css',
       ],
+      components: {
+        // Renders the default site title plus our primary nav (Features /
+        // Docs / Releases) next to the logo. See `src/components/SiteTitle.astro`.
+        SiteTitle: './src/components/SiteTitle.astro',
+      },
       sidebar: [
         {
           label: 'Getting Started',

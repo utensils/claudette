@@ -43,3 +43,44 @@
   --sl-sidebar-width: 14rem;
   --sl-content-width: 55rem;
 }
+
+/* ============================================================
+   Header — primary nav + centered search.
+   The override in `components/SiteTitle.astro` injects a nav
+   element alongside the brand lockup; this CSS styles that nav
+   and rebalances the header so search sits visually centered. */
+.site-nav-links {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  margin-left: 1.5rem;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+.site-nav-links a {
+  color: var(--sl-color-gray-2);
+  text-decoration: none;
+  transition: color 0.12s ease;
+  white-space: nowrap;
+}
+.site-nav-links a:hover {
+  color: var(--sl-color-text-accent);
+}
+
+/* Center the Starlight search input. Starlight uses CSS Grid for the
+   header (not flex), with `grid-template-columns` auto-sized per child.
+   Replacing it with `1fr auto 1fr` collapses the search column to its
+   button width and gives the side columns equal slack, so the search
+   button lands at the viewport midline regardless of side-content size. */
+header.header > .header {
+  grid-template-columns: 1fr auto 1fr;
+}
+header.header > .header > .right-group {
+  justify-content: flex-end;
+}
+
+@media (max-width: 800px) {
+  /* On narrow viewports drop the inline nav — Starlight's mobile menu
+     surfaces the same destinations through the docs sidebar. */
+  .site-nav-links { display: none; }
+}
