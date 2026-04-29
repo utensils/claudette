@@ -56,7 +56,10 @@ fn parse_locale(raw: &str, tag: &str) -> HashMap<String, String> {
 
 /// Look up a translation key. Returns the English value if the locale is
 /// missing the key, and the key itself if English is missing it (a bug —
-/// caught by the consistency test in CI). Never panics in release builds.
+/// caught by the consistency test in CI). Missing keys do not panic in
+/// release builds, but invalid bundled locale JSON will still panic when
+/// the locale store is first initialized — that condition is an authoring
+/// error, not a runtime one.
 pub fn t(locale: Locale, key: &str) -> String {
     if let Some(v) = locale.store().get(key) {
         return v.clone();

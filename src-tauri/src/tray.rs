@@ -333,10 +333,10 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), String> {
                     .map_or(true, |a| has_running_agents(&a));
                 if running {
                     let handle = app.clone();
-                    // Read locale lazily inside the spawned task — the
-                    // user could have changed languages since the tray
-                    // was built, and the dialog should match the
-                    // current setting.
+                    // Resolve locale and translated strings synchronously
+                    // on the menu-event thread — capturing them before
+                    // the spawn pins the language to the moment the user
+                    // clicked Quit, even if the setting changes mid-flight.
                     let locale = Database::open(&handle.state::<AppState>().db_path)
                         .ok()
                         .map(|db| locale_from_db(&db))
