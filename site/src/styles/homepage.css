@@ -1,7 +1,7 @@
 /* Silkscreen — the pixel display face used for the footer brand mark.
-   Imported here so the font request only fires on pages that consume
-   homepage.css (i.e. the splash). */
-@import url('https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&display=swap');
+   Loaded as a bundled font via `@fontsource/silkscreen` in
+   `astro.config.mjs`'s `customCss` array, so no third-party request
+   leaks onto docs pages and the offline build is self-contained. */
 
 /* ============================================================
    Homepage v2 — content + structure overhaul.
@@ -80,7 +80,8 @@
 }
 
 /* The Starlight light theme — invert surfaces but keep coral accent
-   tuned down for legibility. Mirrors theme.css [data-theme=default-light]. */
+   tuned down for legibility. Mirrors the app's light-theme token values
+   from theme.css using Starlight's `data-theme='light'` attribute. */
 :root[data-theme='light'] {
   --accent-primary: #c45a35;
   --accent-primary-rgb: 196, 90, 53;
@@ -596,12 +597,24 @@
   height: 18px;
   stroke-width: 2;
 }
-.value strong {
-  display: block;
+/* Each value's title (strong, block) sits above its description (span,
+   inline) inside a `.vt` wrapper — keeping the title and desc as
+   separate nodes avoids the "block-level <strong> inside inline <span>"
+   HTML validity issue that nested rendering would cause. */
+.value .vt {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.value .vt strong {
   color: var(--text-primary);
   font-weight: var(--fw-semibold);
   font-size: 14px;
-  margin-bottom: 1px;
+}
+.value .vt span {
+  font-size: 13.5px;
+  color: var(--text-muted);
+  line-height: 1.4;
 }
 
 /* ---------- And more ---------- */
@@ -802,7 +815,10 @@
   letter-spacing: -0.02em;
   color: var(--text-primary);
 }
-.howto-slim > p {
+/* The intro `<p>` lives inside `.howto-slim-inner`, not directly under
+   `.howto-slim`, so use a descendant selector. Scoped to direct children
+   of the inner wrapper to avoid styling the per-card paragraphs. */
+.howto-slim-inner > p {
   color: var(--text-muted);
   margin: 0 auto var(--space-6);
   font-size: 15px;

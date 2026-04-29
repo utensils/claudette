@@ -35,6 +35,11 @@ export default defineConfig({
         '@fontsource/inter/400.css',
         '@fontsource/inter/500.css',
         '@fontsource/inter/600.css',
+        // Silkscreen powers the pixel-art brand lockup in the footer.
+        // Bundled (not Google Fonts CDN) so no third-party request fires
+        // and we honor the site's "no telemetry" promise.
+        '@fontsource/silkscreen/400.css',
+        '@fontsource/silkscreen/700.css',
         './src/styles/custom.css',
         './src/styles/homepage.css',
       ],
