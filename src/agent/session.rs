@@ -339,7 +339,12 @@ fn build_persistent_args(
         args.push(serde_json::Value::Object(obj).to_string());
     }
 
-    if let Some(ref effort) = settings.effort {
+    // Effort level — "auto" and unknown values are skipped (let the CLI use
+    // its default). Mirrors the filter in `build_claude_args` so persistent
+    // sessions and one-shot turns behave identically.
+    if let Some(ref effort) = settings.effort
+        && matches!(effort.as_str(), "low" | "medium" | "high" | "xhigh" | "max")
+    {
         args.push("--effort".to_string());
         args.push(effort.clone());
     }
@@ -524,6 +529,41 @@ mod tests {
             serde_json::from_str(&args[settings_idx + 1]).unwrap();
         assert_eq!(settings_json["fastMode"], true);
         assert_eq!(settings_json["alwaysThinkingEnabled"], true);
+    }
+
+    #[test]
+    fn test_build_persistent_args_effort_auto_omitted() {
+        // "auto" means let the CLI use its default — don't pass --effort.
+        // Mirrors the behavior of `build_claude_args` so persistent sessions
+        // and one-shot turns stay in sync.
+        let settings = AgentSettings {
+            effort: Some("auto".to_string()),
+            ..Default::default()
+        };
+        let args = build_persistent_args("sess-1", false, &[], None, &settings);
+        assert!(!args.contains(&"--effort".to_string()));
+    }
+
+    #[test]
+    fn test_build_persistent_args_effort_unknown_omitted() {
+        // Unknown values are skipped — same as `build_claude_args`.
+        let settings = AgentSettings {
+            effort: Some("bogus".to_string()),
+            ..Default::default()
+        };
+        let args = build_persistent_args("sess-1", false, &[], None, &settings);
+        assert!(!args.contains(&"--effort".to_string()));
+    }
+
+    #[test]
+    fn test_build_persistent_args_effort_xhigh_passed() {
+        let settings = AgentSettings {
+            effort: Some("xhigh".to_string()),
+            ..Default::default()
+        };
+        let args = build_persistent_args("sess-1", false, &[], None, &settings);
+        let idx = args.iter().position(|a| a == "--effort").unwrap();
+        assert_eq!(args[idx + 1], "xhigh");
     }
 
     #[test]

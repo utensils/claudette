@@ -107,7 +107,7 @@ pub enum StreamEvent {
     /// A permission-prompt control request sent by the CLI when
     /// `--permission-prompt-tool stdio` is active. Each `can_use_tool` request
     /// must be answered with a `control_response` keyed by `request_id` —
-    /// see [`super::session::PersistentSession::send_control_response`].
+    /// see [`super::PersistentSession::send_control_response`].
     #[serde(rename = "control_request")]
     ControlRequest {
         request_id: String,
@@ -273,7 +273,7 @@ pub enum ContentBlock {
 ///
 /// Images use `"type": "image"` content blocks; PDFs use `"type": "document"`;
 /// text files (when [`text_content`] is `Some`) use `"type": "text"`.
-/// The block type is determined in [`super::args::build_stdin_message`].
+/// The block type is determined in [`super::build_stdin_message`].
 #[derive(Debug, Clone)]
 pub struct FileAttachment {
     pub media_type: String,

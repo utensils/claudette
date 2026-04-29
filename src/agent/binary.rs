@@ -460,7 +460,10 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn test_search_path_dirs_skips_relative() {
+    fn test_search_path_dirs_skips_relative_then_returns_first_absolute_match() {
+        // PATH has a leading relative entry (`.`) followed by two absolute
+        // entries that both contain a `claude` binary. The relative entry
+        // must be skipped, and the first absolute match wins (PATH order).
         let path = OsString::from(".:/tmp/evil:/good/bin");
         let result = search_path_dirs(path.as_os_str(), &|p| {
             p == Path::new("/tmp/evil/claude") || p == Path::new("/good/bin/claude")

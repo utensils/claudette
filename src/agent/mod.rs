@@ -31,8 +31,8 @@ pub struct AgentSettings {
     /// Start session in plan permission mode. Applied on every turn (each
     /// `claude` invocation is an independent process).
     pub plan_mode: bool,
-    /// Effort level for adaptive reasoning (`low`, `medium`, `high`, `max`).
-    /// `max` is Opus 4.6 only. Applied on every turn via `--effort`.
+    /// Effort level for adaptive reasoning (`low`, `medium`, `high`, `xhigh`,
+    /// `max`). `max` is Opus 4.6 only. Applied on every turn via `--effort`.
     pub effort: Option<String>,
     /// Enable Chrome browser mode via `--chrome`. Session-level: only applied
     /// on the first turn.
