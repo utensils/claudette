@@ -18,15 +18,30 @@ impl ChatRole {
     }
 }
 
+/// Returned when a string doesn't correspond to any known [`ChatRole`].
+/// Surfacing the unknown value (instead of silently coercing) lets callers
+/// detect corrupted DB rows or values written by a forward-version of the app.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseChatRoleError(pub String);
+
+impl std::fmt::Display for ParseChatRoleError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "unknown ChatRole value: {:?}", self.0)
+    }
+}
+
+impl std::error::Error for ParseChatRoleError {}
+
 impl std::str::FromStr for ChatRole {
-    type Err = std::convert::Infallible;
+    type Err = ParseChatRoleError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s {
-            "assistant" => Self::Assistant,
-            "system" => Self::System,
-            _ => Self::User,
-        })
+        match s {
+            "user" => Ok(Self::User),
+            "assistant" => Ok(Self::Assistant),
+            "system" => Ok(Self::System),
+            other => Err(ParseChatRoleError(other.to_string())),
+        }
     }
 }
 

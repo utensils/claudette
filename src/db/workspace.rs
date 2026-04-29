@@ -84,7 +84,13 @@ impl Database {
         )?;
         let rows = stmt.query_map([], |row| {
             let status_str: String = row.get(5)?;
-            let status: WorkspaceStatus = status_str.parse().unwrap();
+            let status: WorkspaceStatus = status_str.parse().map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    5,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })?;
             let agent_status = if status == WorkspaceStatus::Archived {
                 crate::model::AgentStatus::Stopped
             } else {
@@ -1187,5 +1193,33 @@ mod tests {
             .unwrap();
         assert_eq!((turns_w1, adds_w1), (4, 12));
         assert_eq!((turns_w2, adds_w2), (9, 30));
+    }
+
+    /// Regression: an unknown `status` string in the `workspaces` table must
+    /// surface as a `FromSqlConversionFailure`, not silently coerce to a
+    /// default. See issue #485.
+    #[test]
+    fn test_list_workspaces_unknown_status_returns_error() {
+        let db = setup_db_with_workspace();
+        db.conn
+            .execute(
+                "UPDATE workspaces SET status = 'frozen' WHERE id = 'w1'",
+                [],
+            )
+            .unwrap();
+        let result = db.list_workspaces();
+        match result {
+            Err(rusqlite::Error::FromSqlConversionFailure(idx, ty, _)) => {
+                assert_eq!(idx, 5, "expected workspaces.status column index 5");
+                assert_eq!(
+                    ty,
+                    rusqlite::types::Type::Text,
+                    "expected workspaces.status to be reported as TEXT"
+                );
+            }
+            other => {
+                panic!("expected FromSqlConversionFailure for unknown status, got: {other:?}",)
+            }
+        }
     }
 }

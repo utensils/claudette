@@ -39,14 +39,29 @@ impl WorkspaceStatus {
     }
 }
 
+/// Returned when a string doesn't correspond to any known [`WorkspaceStatus`].
+/// Surfacing the unknown value (instead of silently coercing) lets callers
+/// detect corrupted DB rows or values written by a forward-version of the app.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseWorkspaceStatusError(pub String);
+
+impl std::fmt::Display for ParseWorkspaceStatusError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "unknown WorkspaceStatus value: {:?}", self.0)
+    }
+}
+
+impl std::error::Error for ParseWorkspaceStatusError {}
+
 impl std::str::FromStr for WorkspaceStatus {
-    type Err = std::convert::Infallible;
+    type Err = ParseWorkspaceStatusError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s {
-            "archived" => Self::Archived,
-            _ => Self::Active,
-        })
+        match s {
+            "active" => Ok(Self::Active),
+            "archived" => Ok(Self::Archived),
+            other => Err(ParseWorkspaceStatusError(other.to_string())),
+        }
     }
 }
 

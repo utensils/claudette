@@ -17,14 +17,29 @@ impl SessionStatus {
     }
 }
 
+/// Returned when a string doesn't correspond to any known [`SessionStatus`].
+/// Surfacing the unknown value (instead of silently coercing) lets callers
+/// detect corrupted DB rows or values written by a forward-version of the app.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseSessionStatusError(pub String);
+
+impl std::fmt::Display for ParseSessionStatusError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "unknown SessionStatus value: {:?}", self.0)
+    }
+}
+
+impl std::error::Error for ParseSessionStatusError {}
+
 impl std::str::FromStr for SessionStatus {
-    type Err = std::convert::Infallible;
+    type Err = ParseSessionStatusError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s {
-            "archived" => Self::Archived,
-            _ => Self::Active,
-        })
+        match s {
+            "active" => Ok(Self::Active),
+            "archived" => Ok(Self::Archived),
+            other => Err(ParseSessionStatusError(other.to_string())),
+        }
     }
 }
 
