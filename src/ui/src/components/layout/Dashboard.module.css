@@ -85,7 +85,6 @@
 .card {
   background: var(--hover-bg-subtle);
   border: 1px solid var(--divider);
-  border-left: 3px solid var(--status-idle);
   border-radius: 8px;
   padding: 14px 16px;
   cursor: pointer;
@@ -113,15 +112,11 @@
 }
 
 .cardRunning {
-  border-left-color: var(--status-running);
+  border-color: var(--status-running);
 }
 
 .cardStopped {
-  border-left-color: var(--status-stopped);
-}
-
-.cardIdle {
-  border-left-color: var(--status-idle);
+  border-color: var(--status-stopped);
 }
 
 .cardHeader {
