@@ -5,7 +5,11 @@ import type {
   FileDiff,
   DiffViewMode,
 } from "../../types";
-import type { DiffLayer, StagedDiffFiles } from "../../types/diff";
+import type {
+  DiffLayer,
+  DiffSelection,
+  StagedDiffFiles,
+} from "../../types/diff";
 import type { FileContent } from "../../services/tauri";
 import type { AppState } from "../useAppStore";
 
@@ -33,6 +37,9 @@ export interface DiffSlice {
   // different layers produces two distinct tabs because their diff content
   // differs.
   diffTabsByWorkspace: Record<string, DiffFileTab[]>;
+  // Which diff tab was active per workspace. Saved on workspace switch,
+  // restored (with tab-existence validation) when switching back.
+  diffSelectionByWorkspace: Record<string, DiffSelection>;
   setDiffFiles: (
     files: DiffFile[],
     mergeBase: string,
@@ -84,6 +91,7 @@ export const createDiffSlice: StateCreator<AppState, [], [], DiffSlice> = (
   diffPreviewLoading: false,
   diffPreviewError: null,
   diffTabsByWorkspace: {},
+  diffSelectionByWorkspace: {},
   setDiffFiles: (files, mergeBase, stagedFiles) =>
     set({
       diffFiles: files,
@@ -114,6 +122,7 @@ export const createDiffSlice: StateCreator<AppState, [], [], DiffSlice> = (
       diffPreviewLoading: false,
       diffPreviewError: null,
       diffTabsByWorkspace: {},
+      diffSelectionByWorkspace: {},
     }),
   openDiffTab: (workspaceId, path, layer) =>
     set((s) => {

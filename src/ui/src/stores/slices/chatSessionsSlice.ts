@@ -89,9 +89,12 @@ export const createChatSessionsSlice: StateCreator<
           break;
         }
       }
+      const nextDrafts = { ...s.chatDrafts };
+      delete nextDrafts[sessionId];
       return {
         sessionsByWorkspace: next,
         selectedSessionIdByWorkspaceId: nextSelected,
+        chatDrafts: nextDrafts,
       };
     }),
   selectSession: (workspaceId, sessionId) =>

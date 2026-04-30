@@ -195,23 +195,21 @@ export function ChatInputArea({
     textareaRef.current?.focus();
   }, []);
 
-  // Per-session draft storage: save input when switching away,
-  // restore when switching back.
-  const draftsRef = useRef<Record<string, string>>({});
+  const chatDrafts = useAppStore((s) => s.chatDrafts);
+  const setChatDraft = useAppStore((s) => s.setChatDraft);
+  const chatInputRef = useRef(chatInput);
+  chatInputRef.current = chatInput;
+
   const prevSessionRef = useRef(sessionId);
   useEffect(() => {
     const prev = prevSessionRef.current;
     if (prev !== sessionId) {
-      // Save draft for the session we're leaving.
-      draftsRef.current[prev] = chatInput;
-      // Restore draft for the session we're entering.
-      setChatInput(draftsRef.current[sessionId] ?? "");
+      setChatDraft(prev, chatInput);
+      setChatInput(chatDrafts[sessionId] ?? "");
       prevSessionRef.current = sessionId;
-      // Reset file picker and attachment state for new session.
       setFilesLoaded(false);
       setWorkspaceFiles([]);
       mentionedFilesRef.current = new Set();
-      // Clear staged attachments so they don't leak across sessions.
       setPendingAttachments((prev) => {
         for (const a of prev) {
           if (a.preview_url.startsWith("blob:")) URL.revokeObjectURL(a.preview_url);
@@ -221,6 +219,12 @@ export function ChatInputArea({
       voice.cancel();
     }
   }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    return () => {
+      setChatDraft(sessionId, chatInputRef.current);
+    };
+  }, [sessionId, setChatDraft]);
 
   // Auto-focus the textarea when switching or creating sessions.
   useEffect(() => {

@@ -51,6 +51,12 @@ export const createWorkspacesSlice: StateCreator<
       }
       const newDiffTabs = { ...s.diffTabsByWorkspace };
       delete newDiffTabs[id];
+      const newDiffSelection = { ...s.diffSelectionByWorkspace };
+      delete newDiffSelection[id];
+      const newChatDrafts = { ...s.chatDrafts };
+      for (const session of s.sessionsByWorkspace[id] ?? []) {
+        delete newChatDrafts[session.id];
+      }
       return {
         workspaces: s.workspaces.filter((w) => w.id !== id),
         selectedWorkspaceId:
@@ -62,19 +68,39 @@ export const createWorkspacesSlice: StateCreator<
         terminalPaneTrees: newPaneTrees,
         activeTerminalPaneId: newActivePane,
         diffTabsByWorkspace: newDiffTabs,
+        diffSelectionByWorkspace: newDiffSelection,
+        chatDrafts: newChatDrafts,
       };
     }),
   selectWorkspace: (id) =>
     set((s) => {
+      if (id === s.selectedWorkspaceId) return s;
+
+      // Save outgoing workspace's active diff selection.
+      const prev = s.selectedWorkspaceId;
+      let selectionMap = s.diffSelectionByWorkspace;
+      if (prev && s.diffSelectedFile) {
+        selectionMap = {
+          ...selectionMap,
+          [prev]: { path: s.diffSelectedFile, layer: s.diffSelectedLayer },
+        };
+      }
+
+      // Restore incoming workspace's selection, validated against open tabs.
+      const restored = id ? selectionMap[id] : undefined;
+      const incomingTabs = id ? (s.diffTabsByWorkspace[id] ?? []) : [];
+      const tabExists =
+        restored?.path != null &&
+        incomingTabs.some(
+          (t) => t.path === restored.path && t.layer === restored.layer,
+        );
+
       const updates: Partial<AppState> = {
         selectedWorkspaceId: id,
         rightSidebarTab: "changes",
-        // diffSelectedFile/Layer are workspace-global pointers; switching
-        // workspaces must drop them so the new workspace's tab strip and
-        // content render cleanly. Per-workspace diff *tabs* live in
-        // diffTabsByWorkspace and are preserved.
-        diffSelectedFile: null,
-        diffSelectedLayer: null,
+        diffSelectionByWorkspace: selectionMap,
+        diffSelectedFile: tabExists ? restored!.path : null,
+        diffSelectedLayer: tabExists ? restored!.layer : null,
         diffContent: null,
         diffError: null,
         diffPreviewMode: "diff",
