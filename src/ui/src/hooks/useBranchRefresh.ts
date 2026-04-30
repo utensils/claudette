@@ -91,10 +91,22 @@ function isAppActive(): boolean {
 }
 
 // Reads the live workspace branch name straight from the store at call
-// time so the polling/selection helpers don't depend on a snapshot
-// captured when an effect was set up.
+// time. Cheap (single .find on a small array) and used for one-shot
+// lookups like the selection-change refresh; the polling tick takes a
+// snapshot Map up-front instead so its lookups stay O(1).
 const getCurrentBranchFromStore: GetCurrentBranch = (id) =>
   useAppStore.getState().workspaces.find((w) => w.id === id)?.branch_name;
+
+// Snapshot the {id → branch} mapping from the store as a Map so the
+// polling helper can look up each backend entry in O(1). Without this,
+// `getCurrentBranchFromStore` would do a linear scan per backend entry
+// and the whole tick would become O(n²) in the workspace count.
+function snapshotBranchMap(): GetCurrentBranch {
+  const snapshot = new Map<string, string>(
+    useAppStore.getState().workspaces.map((w) => [w.id, w.branch_name]),
+  );
+  return (id) => snapshot.get(id);
+}
 
 export function useBranchRefresh() {
   const updateWorkspace = useAppStore((s) => s.updateWorkspace);
@@ -135,7 +147,7 @@ export function useBranchRefresh() {
       inFlight = true;
       const applied = await pollAndApplyBranchUpdates(
         updateWorkspace,
-        getCurrentBranchFromStore,
+        snapshotBranchMap(),
       );
       inFlight = false;
       if (cancelled) return;

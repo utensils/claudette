@@ -104,8 +104,9 @@ pub async fn reconcile_all_workspace_branches(
 /// reports — `Some(branch)` is **always the current branch**, not just on
 /// drift, so the frontend can overwrite its store value unconditionally.
 /// `None` means we have nothing authoritative to publish: the workspace is
-/// archived, has no worktree path, doesn't exist, or git refused to name a
-/// branch (e.g. detached HEAD). See issue #538.
+/// archived, has no worktree path, or git refused to name a branch (e.g.
+/// detached HEAD). A missing workspace id surfaces as `Err("Workspace not
+/// found")` rather than `None`. See issue #538.
 ///
 /// The DB write is still gated on diff so a no-op refresh costs only a
 /// `git rev-parse`.
