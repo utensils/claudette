@@ -138,6 +138,9 @@ export interface ChatSlice {
     toolUseId: string,
     partialJson: string,
   ) => void;
+  chatDrafts: Record<string, string>;
+  setChatDraft: (sessionId: string, draft: string) => void;
+  clearChatDraft: (sessionId: string) => void;
   lastMessages: Record<string, ChatMessage>;
   setLastMessages: (msgs: Record<string, ChatMessage>) => void;
 }
@@ -426,6 +429,18 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
         ),
       },
     })),
+  chatDrafts: {},
+  setChatDraft: (sessionId, draft) =>
+    set((s) => ({
+      chatDrafts: { ...s.chatDrafts, [sessionId]: draft },
+    })),
+  clearChatDraft: (sessionId) =>
+    set((s) => {
+      if (!(sessionId in s.chatDrafts)) return s;
+      const next = { ...s.chatDrafts };
+      delete next[sessionId];
+      return { chatDrafts: next };
+    }),
   lastMessages: {},
   setLastMessages: (msgs) => set({ lastMessages: msgs }),
 });

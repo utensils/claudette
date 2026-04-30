@@ -122,7 +122,11 @@ export function ChatInputArea({
     attachment: DownloadableAttachment,
   ) => void;
 }) {
-  const [chatInput, setChatInput] = useState("");
+  // Lazy-init from the store so a saved draft is restored on mount (e.g. when
+  // returning to a session after the component unmounted via workspace switch).
+  const [chatInput, setChatInput] = useState(
+    () => useAppStore.getState().chatDrafts[sessionId] ?? "",
+  );
   const [cursorPos, setCursorPos] = useState(0);
   const [inputScrollTop, setInputScrollTop] = useState(0);
   const [slashPickerIndex, setSlashPickerIndex] = useState(0);
@@ -251,23 +255,24 @@ export function ChatInputArea({
     [onSend, pendingAttachments, voice],
   );
 
-  // Per-session draft storage: save input when switching away,
-  // restore when switching back.
-  const draftsRef = useRef<Record<string, string>>({});
+  // Don't subscribe to chatDrafts — drafts are read inside the session-switch
+  // effect (one-shot) and via getState() in the lazy initializer above. A
+  // selector subscription would re-render this component on every keystroke
+  // in *any* session.
+  const setChatDraft = useAppStore((s) => s.setChatDraft);
+  const chatInputRef = useRef(chatInput);
+  chatInputRef.current = chatInput;
+
   const prevSessionRef = useRef(sessionId);
   useEffect(() => {
     const prev = prevSessionRef.current;
     if (prev !== sessionId) {
-      // Save draft for the session we're leaving.
-      draftsRef.current[prev] = chatInput;
-      // Restore draft for the session we're entering.
-      setChatInput(draftsRef.current[sessionId] ?? "");
+      setChatDraft(prev, chatInput);
+      setChatInput(useAppStore.getState().chatDrafts[sessionId] ?? "");
       prevSessionRef.current = sessionId;
-      // Reset file picker and attachment state for new session.
       setFilesLoaded(false);
       setWorkspaceFiles([]);
       mentionedFilesRef.current = new Set();
-      // Clear staged attachments so they don't leak across sessions.
       setPendingAttachments((prev) => {
         for (const a of prev) {
           if (a.preview_url.startsWith("blob:")) URL.revokeObjectURL(a.preview_url);
@@ -277,6 +282,12 @@ export function ChatInputArea({
       voice.cancel();
     }
   }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    return () => {
+      setChatDraft(sessionId, chatInputRef.current);
+    };
+  }, [sessionId, setChatDraft]);
 
   // Auto-focus the textarea when switching or creating sessions.
   useEffect(() => {

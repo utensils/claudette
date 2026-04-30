@@ -53,8 +53,14 @@ export const createRepositoriesSlice: StateCreator<
         delete newActivePane[tabId];
       }
       const newDiffTabs = { ...s.diffTabsByWorkspace };
+      const newDiffSelection = { ...s.diffSelectionByWorkspace };
+      const newChatDrafts = { ...s.chatDrafts };
       for (const wsId of removedWsIds) {
         delete newDiffTabs[wsId];
+        delete newDiffSelection[wsId];
+        for (const session of s.sessionsByWorkspace[wsId] ?? []) {
+          delete newChatDrafts[session.id];
+        }
       }
       return {
         repositories: s.repositories.filter((r) => r.id !== id),
@@ -72,6 +78,8 @@ export const createRepositoriesSlice: StateCreator<
         terminalPaneTrees: newPaneTrees,
         activeTerminalPaneId: newActivePane,
         diffTabsByWorkspace: newDiffTabs,
+        diffSelectionByWorkspace: newDiffSelection,
+        chatDrafts: newChatDrafts,
       };
     }),
 });

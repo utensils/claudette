@@ -18,6 +18,11 @@ export interface DiffFileTab {
   layer: DiffLayer | null;
 }
 
+export interface DiffSelection {
+  path: string;
+  layer: DiffLayer | null;
+}
+
 export interface StagedDiffFiles {
   committed: DiffFile[];
   staged: DiffFile[];
