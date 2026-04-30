@@ -770,21 +770,24 @@ pub fn generate_workspace_name() -> GeneratedWorkspaceName {
     }
 }
 
-/// Re-read the current branch for every active workspace and return the set
-/// of workspaces whose stored `branch_name` is now stale. Any drift is also
-/// persisted back to the DB so external branch renames (`git branch -m`,
-/// `git checkout -b`, etc.) made from the integrated terminal or elsewhere
-/// stop the DB from diverging from git reality.
+/// Re-read the current branch for every active workspace. Returns one
+/// `(workspace_id, current_branch)` entry per workspace we could probe
+/// (level-triggered: every active workspace, not just ones that drifted),
+/// so the frontend store can self-heal if it has somehow diverged from the
+/// DB. See issue #538. Drift is still persisted to the DB on diff, so
+/// external renames (`git branch -m`, `git checkout -b`, …) made from the
+/// integrated terminal flow back into SQLite as well.
 #[tauri::command]
 pub async fn refresh_branches(state: State<'_, AppState>) -> Result<Vec<(String, String)>, String> {
     claudette::workspace_sync::reconcile_all_workspace_branches(&state.db_path).await
 }
 
-/// Re-read the current branch for a single workspace, persist any change, and
-/// return the new branch name (or `None` if nothing changed or the workspace
-/// isn't active). Used for event-driven refreshes — e.g. when the user selects
-/// a workspace or focuses its terminal panel — so sidebar state tracks
-/// external `git` operations without waiting on the 5s poll.
+/// Re-read the current branch for a single workspace, persist any change,
+/// and return the current branch (`Some`) — always the live git value, not
+/// just on drift, so the caller can overwrite its store unconditionally
+/// (#538). `None` means we have nothing authoritative to publish: the
+/// workspace is archived, has no worktree path, or git couldn't name a
+/// branch (e.g. detached HEAD).
 #[tauri::command]
 pub async fn refresh_workspace_branch(
     workspace_id: String,

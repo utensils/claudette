@@ -4,6 +4,7 @@ import { refreshBranches, refreshWorkspaceBranch } from "../services/tauri";
 import type { Workspace } from "../types/workspace";
 
 type UpdateWorkspace = (id: string, updates: Partial<Workspace>) => void;
+type GetCurrentBranch = (workspaceId: string) => string | undefined;
 
 /** Base poll interval when the window is focused and we have just observed drift. */
 export const BRANCH_POLL_BASE_MS = 5_000;
@@ -22,42 +23,60 @@ export function nextBranchPollDelay(consecutiveEmpty: number): number {
 }
 
 /**
- * Poll all active workspaces for external branch-name drift and mirror any
- * detected changes into the Zustand store. Errors are swallowed so a
- * transient git/IPC failure doesn't break the polling loop. Returns the
- * number of drift entries applied so the caller can adapt its cadence.
+ * Poll all active workspaces and mirror the backend-reported branch into the
+ * Zustand store. The backend returns one entry per active workspace
+ * (level-triggered, see issue 538), so this also self-heals a store that
+ * has somehow drifted from the DB. To avoid pointless re-renders and to
+ * keep the back-off loop meaningful, `updateWorkspace` is only called when
+ * the backend value differs from the current store value, and the returned
+ * count reflects only those actual writes. Errors are caught so a
+ * transient git/IPC failure doesn't break the polling loop, but they're
+ * surfaced to the console so the failure mode isn't invisible.
  */
 export async function pollAndApplyBranchUpdates(
   updateWorkspace: UpdateWorkspace,
+  getCurrentBranch: GetCurrentBranch,
 ): Promise<number> {
   try {
     const updates = await refreshBranches();
+    let applied = 0;
     for (const [wsId, branchName] of updates) {
-      updateWorkspace(wsId, { branch_name: branchName });
+      if (getCurrentBranch(wsId) !== branchName) {
+        updateWorkspace(wsId, { branch_name: branchName });
+        applied++;
+      }
     }
-    return updates.length;
-  } catch {
-    // Silently ignore refresh errors
+    return applied;
+  } catch (err) {
+    console.warn("[branch-refresh] poll failed:", err);
     return 0;
   }
 }
 
 /**
  * Immediate refresh for a single workspace — called when the user selects
- * one so external renames appear without waiting on the poll. Returns
- * the new branch name if one was applied (useful for tests).
+ * one so external renames appear without waiting on the poll. The backend
+ * returns the current branch (not just on drift) per issue 538; the store
+ * is only written when that value actually differs, so a no-op refresh
+ * does not trigger re-renders. Returns the resolved branch (or `null` if
+ * the backend couldn't determine one).
  */
 export async function refreshSelectedWorkspaceBranch(
   workspaceId: string,
   updateWorkspace: UpdateWorkspace,
+  getCurrentBranch: GetCurrentBranch,
 ): Promise<string | null> {
   try {
     const branch = await refreshWorkspaceBranch(workspaceId);
-    if (branch !== null) {
+    if (branch !== null && getCurrentBranch(workspaceId) !== branch) {
       updateWorkspace(workspaceId, { branch_name: branch });
     }
     return branch;
-  } catch {
+  } catch (err) {
+    console.warn(
+      `[branch-refresh] single refresh failed for ${workspaceId}:`,
+      err,
+    );
     return null;
   }
 }
@@ -69,6 +88,24 @@ function isAppActive(): boolean {
   // commonly Cmd-Tabs to another app — that blurs the window without
   // hiding the document, so a hidden-only check would still poll there.
   return !document.hidden && document.hasFocus();
+}
+
+// Reads the live workspace branch name straight from the store at call
+// time. Cheap (single .find on a small array) and used for one-shot
+// lookups like the selection-change refresh; the polling tick takes a
+// snapshot Map up-front instead so its lookups stay O(1).
+const getCurrentBranchFromStore: GetCurrentBranch = (id) =>
+  useAppStore.getState().workspaces.find((w) => w.id === id)?.branch_name;
+
+// Snapshot the {id → branch} mapping from the store as a Map so the
+// polling helper can look up each backend entry in O(1). Without this,
+// `getCurrentBranchFromStore` would do a linear scan per backend entry
+// and the whole tick would become O(n²) in the workspace count.
+function snapshotBranchMap(): GetCurrentBranch {
+  const snapshot = new Map<string, string>(
+    useAppStore.getState().workspaces.map((w) => [w.id, w.branch_name]),
+  );
+  return (id) => snapshot.get(id);
 }
 
 export function useBranchRefresh() {
@@ -108,7 +145,10 @@ export function useBranchRefresh() {
         return;
       }
       inFlight = true;
-      const applied = await pollAndApplyBranchUpdates(updateWorkspace);
+      const applied = await pollAndApplyBranchUpdates(
+        updateWorkspace,
+        snapshotBranchMap(),
+      );
       inFlight = false;
       if (cancelled) return;
       consecutiveEmpty = applied > 0 ? 0 : consecutiveEmpty + 1;
@@ -155,6 +195,10 @@ export function useBranchRefresh() {
   // poll tick.
   useEffect(() => {
     if (!selectedWorkspaceId) return;
-    refreshSelectedWorkspaceBranch(selectedWorkspaceId, updateWorkspace);
+    refreshSelectedWorkspaceBranch(
+      selectedWorkspaceId,
+      updateWorkspace,
+      getCurrentBranchFromStore,
+    );
   }, [selectedWorkspaceId, updateWorkspace]);
 }

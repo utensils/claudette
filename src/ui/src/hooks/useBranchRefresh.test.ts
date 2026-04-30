@@ -23,30 +23,61 @@ describe("pollAndApplyBranchUpdates", () => {
     vi.clearAllMocks();
   });
 
-  it("applies every drift returned by the backend and reports the count", async () => {
+  it("writes only the workspaces whose backend branch differs from the store", async () => {
+    // Backend reports two workspaces (level-triggered). Only one differs
+    // from the store value — that's the only one we should write.
     mockRefreshBranches.mockResolvedValue([
       ["w1", "user/renamed"],
       ["w2", "feature/new"],
     ]);
     const updateWorkspace = vi.fn();
+    const getCurrentBranch = vi.fn((id: string) =>
+      id === "w1" ? "user/renamed" : "feature/old",
+    );
 
-    const applied = await pollAndApplyBranchUpdates(updateWorkspace);
+    const applied = await pollAndApplyBranchUpdates(
+      updateWorkspace,
+      getCurrentBranch,
+    );
 
-    expect(applied).toBe(2);
-    expect(updateWorkspace).toHaveBeenCalledTimes(2);
-    expect(updateWorkspace).toHaveBeenNthCalledWith(1, "w1", {
-      branch_name: "user/renamed",
-    });
-    expect(updateWorkspace).toHaveBeenNthCalledWith(2, "w2", {
+    expect(applied).toBe(1);
+    expect(updateWorkspace).toHaveBeenCalledTimes(1);
+    expect(updateWorkspace).toHaveBeenCalledWith("w2", {
       branch_name: "feature/new",
     });
   });
 
-  it("returns zero and writes nothing when the backend returns no drift", async () => {
+  it("returns zero and writes nothing when every backend value matches the store", async () => {
+    // Steady state under level-triggered semantics: backend reports every
+    // active workspace, but nothing has actually drifted. The hook must
+    // not call updateWorkspace at all so the back-off can grow.
+    mockRefreshBranches.mockResolvedValue([
+      ["w1", "main"],
+      ["w2", "feature"],
+    ]);
+    const updateWorkspace = vi.fn();
+    const getCurrentBranch = vi.fn((id: string) =>
+      id === "w1" ? "main" : "feature",
+    );
+
+    const applied = await pollAndApplyBranchUpdates(
+      updateWorkspace,
+      getCurrentBranch,
+    );
+
+    expect(applied).toBe(0);
+    expect(updateWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("returns zero and writes nothing when the backend returns an empty list", async () => {
     mockRefreshBranches.mockResolvedValue([]);
     const updateWorkspace = vi.fn();
+    const getCurrentBranch = vi.fn(() => "main");
 
-    const applied = await pollAndApplyBranchUpdates(updateWorkspace);
+    const applied = await pollAndApplyBranchUpdates(
+      updateWorkspace,
+      getCurrentBranch,
+    );
 
     expect(applied).toBe(0);
     expect(updateWorkspace).not.toHaveBeenCalled();
@@ -55,8 +86,12 @@ describe("pollAndApplyBranchUpdates", () => {
   it("returns zero on backend error so the polling loop keeps running", async () => {
     mockRefreshBranches.mockRejectedValue(new Error("IPC down"));
     const updateWorkspace = vi.fn();
+    const getCurrentBranch = vi.fn(() => "main");
 
-    const applied = await pollAndApplyBranchUpdates(updateWorkspace);
+    const applied = await pollAndApplyBranchUpdates(
+      updateWorkspace,
+      getCurrentBranch,
+    );
 
     expect(applied).toBe(0);
     expect(updateWorkspace).not.toHaveBeenCalled();
@@ -84,11 +119,16 @@ describe("refreshSelectedWorkspaceBranch", () => {
     vi.clearAllMocks();
   });
 
-  it("writes the fresh branch to the store when the backend reports drift", async () => {
+  it("writes the fresh branch to the store when the backend value differs from the store", async () => {
     mockRefreshWorkspaceBranch.mockResolvedValue("user/renamed");
     const updateWorkspace = vi.fn();
+    const getCurrentBranch = vi.fn(() => "main");
 
-    const result = await refreshSelectedWorkspaceBranch("w1", updateWorkspace);
+    const result = await refreshSelectedWorkspaceBranch(
+      "w1",
+      updateWorkspace,
+      getCurrentBranch,
+    );
 
     expect(result).toBe("user/renamed");
     expect(mockRefreshWorkspaceBranch).toHaveBeenCalledWith("w1");
@@ -97,11 +137,33 @@ describe("refreshSelectedWorkspaceBranch", () => {
     });
   });
 
-  it("leaves the store untouched when there is no drift", async () => {
+  it("returns the resolved branch but skips the store write when it matches", async () => {
+    // Level-triggered: backend always returns the current branch. When the
+    // store already agrees, we should not trigger a re-render.
+    mockRefreshWorkspaceBranch.mockResolvedValue("main");
+    const updateWorkspace = vi.fn();
+    const getCurrentBranch = vi.fn(() => "main");
+
+    const result = await refreshSelectedWorkspaceBranch(
+      "w1",
+      updateWorkspace,
+      getCurrentBranch,
+    );
+
+    expect(result).toBe("main");
+    expect(updateWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("leaves the store untouched when the backend returns null", async () => {
     mockRefreshWorkspaceBranch.mockResolvedValue(null);
     const updateWorkspace = vi.fn();
+    const getCurrentBranch = vi.fn(() => "main");
 
-    const result = await refreshSelectedWorkspaceBranch("w1", updateWorkspace);
+    const result = await refreshSelectedWorkspaceBranch(
+      "w1",
+      updateWorkspace,
+      getCurrentBranch,
+    );
 
     expect(result).toBeNull();
     expect(updateWorkspace).not.toHaveBeenCalled();
@@ -112,8 +174,13 @@ describe("refreshSelectedWorkspaceBranch", () => {
       new Error("workspace gone"),
     );
     const updateWorkspace = vi.fn();
+    const getCurrentBranch = vi.fn(() => "main");
 
-    const result = await refreshSelectedWorkspaceBranch("w1", updateWorkspace);
+    const result = await refreshSelectedWorkspaceBranch(
+      "w1",
+      updateWorkspace,
+      getCurrentBranch,
+    );
 
     expect(result).toBeNull();
     expect(updateWorkspace).not.toHaveBeenCalled();
