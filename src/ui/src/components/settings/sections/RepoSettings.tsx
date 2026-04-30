@@ -16,6 +16,11 @@ import { MCP_SOURCE_LABELS } from "../../../types/mcp";
 import { RepoIcon } from "../../shared/RepoIcon";
 import { IconPicker } from "../../modals/IconPicker";
 import { EnvPanel } from "./EnvPanel";
+import {
+  InheritedGlobalsList,
+  PinnedPromptsManager,
+} from "./PinnedPromptsManager";
+import { EMPTY_PINNED_PROMPTS } from "../../../stores/slices/pinnedPromptsSlice";
 import styles from "../Settings.module.css";
 
 interface RepoSettingsProps {
@@ -450,6 +455,8 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
         </div>
       </div>
 
+      <RepoPinnedPromptsField repoId={repoId} />
+
       <div className={styles.fieldGroup}>
         <div className={styles.fieldLabel}>{t("repo_branch_rename")}</div>
         <div className={`${styles.fieldHint} ${styles.fieldHintSpaced}`}>
@@ -672,6 +679,43 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
       </div>
 
       {error && <div className={styles.error}>{error}</div>}
+    </div>
+  );
+}
+
+interface RepoPinnedPromptsFieldProps {
+  repoId: string;
+}
+
+function RepoPinnedPromptsField({ repoId }: RepoPinnedPromptsFieldProps) {
+  const { t } = useTranslation("settings");
+  // Stable empty fallback — see EMPTY_PINNED_PROMPTS docs for why this matters.
+  const repoPrompts = useAppStore(
+    (s) => s.repoPinnedPrompts[repoId] ?? EMPTY_PINNED_PROMPTS,
+  );
+  const globalPrompts = useAppStore((s) => s.globalPinnedPrompts);
+  const loadGlobals = useAppStore((s) => s.loadGlobalPinnedPrompts);
+
+  // Hydrate globals so the inherited list reflects current global state.
+  useEffect(() => {
+    loadGlobals().catch((e) =>
+      console.error("Failed to load global pinned prompts:", e),
+    );
+  }, [loadGlobals]);
+
+  const repoNames = useMemo(
+    () => new Set(repoPrompts.map((p) => p.display_name)),
+    [repoPrompts],
+  );
+
+  return (
+    <div className={styles.fieldGroup}>
+      <div className={styles.fieldLabel}>{t("pinned_prompts_repo_label")}</div>
+      <div className={`${styles.fieldHint} ${styles.fieldHintSpaced}`}>
+        {t("pinned_prompts_repo_description")}
+      </div>
+      <PinnedPromptsManager scope={{ kind: "repo", repoId }} />
+      <InheritedGlobalsList globals={globalPrompts} repoNames={repoNames} />
     </div>
   );
 }

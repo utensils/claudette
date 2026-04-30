@@ -1,0 +1,211 @@
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.row {
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--sidebar-bg) 78%, transparent);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rowHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nameInput {
+  flex: 1;
+  background-color: var(--chat-input-bg);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+  padding: 6px 10px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  outline: none;
+  min-width: 0;
+}
+
+.nameInput:focus {
+  border-color: var(--text-dim);
+}
+
+.nameInputError {
+  composes: nameInput;
+  border-color: var(--status-stopped);
+}
+
+.promptInput {
+  width: 100%;
+  background-color: var(--chat-input-bg);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+  padding: 6px 10px;
+  color: var(--text-primary);
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  outline: none;
+  resize: vertical;
+  min-height: 56px;
+  box-sizing: border-box;
+}
+
+.promptInput:focus {
+  border-color: var(--text-dim);
+}
+
+.controlsRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.autoSendLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.autoSendLabel input[type="checkbox"] {
+  accent-color: var(--accent-primary);
+}
+
+.actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.iconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.iconButton:hover:not(:disabled) {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.iconButton:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.deleteButton {
+  composes: iconButton;
+}
+
+.deleteButton:hover {
+  background: var(--error-hover);
+  color: var(--status-stopped);
+}
+
+.errorText {
+  color: var(--status-stopped);
+  font-size: 11px;
+}
+
+.empty {
+  padding: 16px;
+  border: 1px dashed var(--divider);
+  border-radius: 8px;
+  color: var(--text-dim);
+  font-size: 13px;
+  text-align: center;
+  margin-bottom: 16px;
+}
+
+.addButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px dashed var(--divider);
+  border-radius: 6px;
+  background: none;
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.addButton:hover {
+  border-color: var(--text-dim);
+  color: var(--text-primary);
+}
+
+.inheritedHeading {
+  margin: 24px 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.inheritedRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--sidebar-bg) 60%, transparent);
+}
+
+.inheritedRow + .inheritedRow {
+  margin-top: 6px;
+}
+
+.inheritedName {
+  font-size: 13px;
+  color: var(--text-primary);
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.inheritedPrompt {
+  flex: 1;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.overriddenBadge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: var(--accent-bg);
+  color: var(--accent-primary);
+  flex-shrink: 0;
+}

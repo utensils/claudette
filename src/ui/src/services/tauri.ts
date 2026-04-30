@@ -243,39 +243,69 @@ export function recordSlashCommandUsage(
   });
 }
 
-// -- Pinned Commands --
+// -- Pinned Prompts --
 
-export interface PinnedCommand {
+export interface PinnedPrompt {
   id: number;
-  repo_id: string;
-  command_name: string;
+  repo_id: string | null;
+  display_name: string;
+  prompt: string;
+  auto_send: boolean;
   sort_order: number;
   created_at: string;
-  use_count: number;
 }
 
-export function getPinnedCommands(
-  repoId: string,
-): Promise<PinnedCommand[]> {
-  return invoke("get_pinned_commands", { repoId });
+/** Returns the merged composer list: repo entries first, then non-shadowed globals. */
+export function getPinnedPrompts(
+  repoId: string | null,
+): Promise<PinnedPrompt[]> {
+  return invoke("get_pinned_prompts", { repoId });
 }
 
-export function pinCommand(
-  repoId: string,
-  commandName: string,
-): Promise<PinnedCommand> {
-  return invoke("pin_command", { repoId, commandName });
+/** Returns the prompts in a single scope (null = globals). */
+export function listPinnedPromptsInScope(
+  repoId: string | null,
+): Promise<PinnedPrompt[]> {
+  return invoke("list_pinned_prompts_in_scope", { repoId });
 }
 
-export function unpinCommand(id: number): Promise<void> {
-  return invoke("unpin_command", { id });
+export function createPinnedPrompt(
+  repoId: string | null,
+  displayName: string,
+  prompt: string,
+  autoSend: boolean,
+): Promise<PinnedPrompt> {
+  return invoke("create_pinned_prompt", {
+    repoId,
+    displayName,
+    prompt,
+    autoSend,
+  });
 }
 
-export function reorderPinnedCommands(
-  repoId: string,
+export function updatePinnedPrompt(
+  id: number,
+  displayName: string,
+  prompt: string,
+  autoSend: boolean,
+): Promise<PinnedPrompt> {
+  return invoke("update_pinned_prompt", {
+    id,
+    displayName,
+    prompt,
+    autoSend,
+  });
+}
+
+export function deletePinnedPrompt(id: number): Promise<void> {
+  return invoke("delete_pinned_prompt", { id });
+}
+
+export function reorderPinnedPrompts(
+  repoId: string | null,
   ids: number[],
 ): Promise<void> {
-  return invoke("reorder_pinned_commands", { repoId, ids });
+  return invoke("reorder_pinned_prompts", { repoId, ids });
 }
 
 // -- Plugins --

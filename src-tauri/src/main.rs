@@ -461,11 +461,13 @@ fn main() {
             // Slash commands
             commands::slash_commands::list_slash_commands,
             commands::slash_commands::record_slash_command_usage,
-            // Pinned commands
-            commands::pinned_commands::get_pinned_commands,
-            commands::pinned_commands::pin_command,
-            commands::pinned_commands::unpin_command,
-            commands::pinned_commands::reorder_pinned_commands,
+            // Pinned prompts
+            commands::pinned_prompts::get_pinned_prompts,
+            commands::pinned_prompts::list_pinned_prompts_in_scope,
+            commands::pinned_prompts::create_pinned_prompt,
+            commands::pinned_prompts::update_pinned_prompt,
+            commands::pinned_prompts::delete_pinned_prompt,
+            commands::pinned_prompts::reorder_pinned_prompts,
             // Files
             commands::files::list_workspace_files,
             commands::files::read_workspace_file,

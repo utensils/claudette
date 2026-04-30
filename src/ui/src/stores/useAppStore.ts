@@ -39,6 +39,10 @@ import {
 import { createRemoteSlice, type RemoteSlice } from "./slices/remoteSlice";
 import { createScmSlice, type ScmSlice } from "./slices/scmSlice";
 import {
+  createPinnedPromptsSlice,
+  type PinnedPromptsSlice,
+} from "./slices/pinnedPromptsSlice";
+import {
   createSettingsSlice,
   type SettingsSlice,
 } from "./slices/settingsSlice";
@@ -78,6 +82,7 @@ export type AppState = RepositoriesSlice &
   TerminalSlice &
   ScmSlice &
   UiSlice &
+  PinnedPromptsSlice &
   SettingsSlice &
   RemoteSlice &
   SystemSlice;
@@ -96,6 +101,7 @@ export const useAppStore = create<AppState>()((...a) => ({
   ...createTerminalSlice(...a),
   ...createScmSlice(...a),
   ...createUiSlice(...a),
+  ...createPinnedPromptsSlice(...a),
   ...createSettingsSlice(...a),
   ...createRemoteSlice(...a),
   ...createSystemSlice(...a),

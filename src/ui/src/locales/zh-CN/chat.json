@@ -92,12 +92,9 @@
   "chat_search_close_title": "关闭 (Esc)",
   "chat_search_no_matches": "无匹配",
 
-  "pinned_commands_label": "已固定",
-  "pinned_commands_hint": "固定命令…",
-  "pinned_commands_search": "搜索命令…",
-  "pinned_commands_add": "固定命令",
-  "pinned_command_not_available": "/{{name}}（不可用）",
-  "pinned_command_unpin": "取消固定 /{{name}}",
+  "pinned_prompts_label": "已固定",
+  "pinned_prompt_tooltip_auto": "发送 {{name}}",
+  "pinned_prompt_tooltip_insert": "插入 {{name}}",
 
   "code_block_copy": "复制代码",
   "code_block_copied": "已复制",

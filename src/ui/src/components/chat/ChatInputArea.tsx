@@ -9,7 +9,7 @@ import {
   readFileAsBase64,
   recordSlashCommandUsage,
 } from "../../services/tauri";
-import type { FileEntry, SlashCommand } from "../../services/tauri";
+import type { FileEntry, PinnedPrompt, SlashCommand } from "../../services/tauri";
 import type { AttachmentInput, PendingAttachment } from "../../types/chat";
 import { base64ToBytes } from "../../utils/base64";
 import {
@@ -31,7 +31,7 @@ import { ContextPopover } from "./composer/ContextPopover";
 import { SegmentedMeter } from "./composer/SegmentedMeter";
 import { AttachMenu } from "./AttachMenu";
 import { FileMentionPicker, matchFiles } from "./FileMentionPicker";
-import { PinnedCommandsBar } from "./PinnedCommandsBar";
+import { PinnedPromptsBar } from "./PinnedPromptsBar";
 import { SlashCommandPicker, filterSlashCommands } from "./SlashCommandPicker";
 import { describeSlashQuery } from "./nativeSlashCommands";
 import { hasUltrathink, renderUltrathinkText } from "./ultrathink";
@@ -49,6 +49,23 @@ function extractMentionQuery(text: string, cursorPos: number): string | null {
   // If query contains whitespace, the mention is "closed".
   if (/\s/.test(query)) return null;
   return query;
+}
+
+/**
+ * Extract every closed `@path` token from `text` — i.e. an `@` at start of
+ * string or preceded by whitespace, followed by a non-whitespace path. Used to
+ * forward mentions baked into a pinned prompt to the backend on auto-send,
+ * since those paths were never inserted via the file-mention picker and so
+ * aren't tracked in `mentionedFilesRef`.
+ */
+function extractMentionPaths(text: string): Set<string> {
+  const out = new Set<string>();
+  const re = /(^|\s)@(\S+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    out.add(m[2]);
+  }
+  return out;
 }
 
 /** Convert a File/Blob to a base64 string (without the data: prefix). */
@@ -190,10 +207,49 @@ export function ChatInputArea({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [voice.state, voice.cancel]);
 
-  const handleInsertPinnedCommand = useCallback((commandText: string) => {
-    setChatInput((prev) => commandText + (prev ? " " + prev : ""));
-    textareaRef.current?.focus();
-  }, []);
+  const handleUsePinnedPrompt = useCallback(
+    (pin: PinnedPrompt) => {
+      if (pin.auto_send) {
+        // Cancel any in-flight voice recording before submitting, mirroring
+        // handleSend — otherwise an auto-send click leaves the recorder
+        // running in the background.
+        voice.cancel();
+        // Send immediately. mentionedFilesRef only tracks paths inserted via
+        // the file picker into the textarea, but a pinned prompt's text was
+        // never picker-typed — so we extract any baked-in @path mentions from
+        // pin.prompt itself, then union them with picker-tracked paths that
+        // also appear in the prompt body.
+        const activeFiles = extractMentionPaths(pin.prompt);
+        for (const path of mentionedFilesRef.current) {
+          if (pin.prompt.includes(`@${path}`)) {
+            activeFiles.add(path);
+          }
+        }
+        const files = activeFiles.size > 0 ? activeFiles : undefined;
+        const attachmentPayload =
+          pendingAttachments.length > 0
+            ? pendingAttachments.map((a) => ({
+                filename: a.filename,
+                media_type: a.media_type,
+                data_base64: a.data_base64,
+                text_content: a.text_content ?? undefined,
+              }))
+            : undefined;
+        onSend(pin.prompt, files, attachmentPayload);
+        setChatInput("");
+        for (const a of pendingAttachments) {
+          if (a.preview_url.startsWith("blob:"))
+            URL.revokeObjectURL(a.preview_url);
+        }
+        setPendingAttachments([]);
+        mentionedFilesRef.current = new Set();
+        return;
+      }
+      setChatInput((prev) => pin.prompt + (prev ? " " + prev : ""));
+      textareaRef.current?.focus();
+    },
+    [onSend, pendingAttachments, voice],
+  );
 
   // Per-session draft storage: save input when switching away,
   // restore when switching back.
@@ -851,10 +907,9 @@ export function ChatInputArea({
           ))}
         </div>
       )}
-      <PinnedCommandsBar
+      <PinnedPromptsBar
         repoId={repoId}
-        slashCommands={slashCommands}
-        onInsertCommand={handleInsertPinnedCommand}
+        onUsePinnedPrompt={handleUsePinnedPrompt}
       />
       <div className={styles.inputTextWrap}>
         {showUltrathinkOverlay && (
