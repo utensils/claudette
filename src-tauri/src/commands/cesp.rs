@@ -36,6 +36,19 @@ pub async fn cesp_list_installed() -> Result<Vec<InstalledPack>, String> {
     cesp::list_installed()
 }
 
+fn build_pack_archive_url(source_repo: &str, source_ref: &str) -> Result<url::Url, String> {
+    let mut url = url::Url::parse("https://github.com")
+        .map_err(|e| format!("Failed to construct download URL: {e}"))?;
+    let archive_name = format!("{source_ref}.tar.gz");
+    url.path_segments_mut()
+        .map_err(|_| "Failed to construct download URL".to_string())?
+        .pop_if_empty()
+        .extend(source_repo.split('/'))
+        .push("archive")
+        .push(&archive_name);
+    Ok(url)
+}
+
 #[tauri::command]
 pub async fn cesp_install_pack(
     name: String,
@@ -43,10 +56,9 @@ pub async fn cesp_install_pack(
     source_ref: String,
     source_path: String,
 ) -> Result<InstalledPack, String> {
-    let tarball_url =
-        format!("https://github.com/{source_repo}/archive/refs/tags/{source_ref}.tar.gz");
+    let tarball_url = build_pack_archive_url(&source_repo, &source_ref)?;
     let resp = http_client()
-        .get(&tarball_url)
+        .get(tarball_url)
         .send()
         .await
         .map_err(|e| format!("Failed to download pack: {e}"))?;
@@ -180,4 +192,45 @@ pub async fn cesp_play_for_event(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_pack_archive_url;
+
+    #[test]
+    fn pack_archive_url_simple_tag() {
+        let url = build_pack_archive_url("PeonPing/og-packs", "v1.1.0").unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://github.com/PeonPing/og-packs/archive/v1.1.0.tar.gz"
+        );
+    }
+
+    #[test]
+    fn pack_archive_url_commit_sha() {
+        let url = build_pack_archive_url("owner/repo", "abc1234").unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://github.com/owner/repo/archive/abc1234.tar.gz"
+        );
+    }
+
+    #[test]
+    fn pack_archive_url_percent_encodes_ref_special_chars() {
+        let url = build_pack_archive_url("owner/repo", "feature#branch").unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://github.com/owner/repo/archive/feature%23branch.tar.gz"
+        );
+    }
+
+    #[test]
+    fn pack_archive_url_percent_encodes_repo_special_chars() {
+        let url = build_pack_archive_url("owner/repo with space", "v1").unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://github.com/owner/repo%20with%20space/archive/v1.tar.gz"
+        );
+    }
 }
