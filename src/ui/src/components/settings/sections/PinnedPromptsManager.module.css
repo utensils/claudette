@@ -261,8 +261,7 @@
 }
 
 .btnPrimary:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent-primary) 88%, #000);
-  border-color: color-mix(in srgb, var(--accent-primary) 88%, #000);
+  filter: brightness(0.92);
 }
 
 .btnGhost {
@@ -294,8 +293,7 @@
 }
 
 .btnDestructiveFill:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--status-stopped) 88%, #000);
-  border-color: color-mix(in srgb, var(--status-stopped) 88%, #000);
+  filter: brightness(0.92);
 }
 
 /* ----- Confirm-delete panel (inset, bleeds to card edges) ----- */

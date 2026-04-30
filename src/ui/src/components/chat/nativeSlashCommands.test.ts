@@ -280,6 +280,27 @@ describe("describeSlashQueryAtCursor", () => {
   it("returns null for plain text with no slash", () => {
     expect(describeSlashQueryAtCursor("just some text", 14)).toBeNull();
   });
+
+  it("extends end past cursor to cover the full token when caret is mid-token", () => {
+    // Caret sits between `e` and `v` of `/rev|iew`. The replacement range
+    // must cover all of `/review` so selection doesn't leave `iew` behind.
+    expect(describeSlashQueryAtCursor("/review", 4)).toEqual({
+      token: "rev",
+      start: 0,
+      end: 7,
+    });
+  });
+
+  it("extends end through token but stops at whitespace when caret is mid-token after a newline", () => {
+    // Input: `text\n/rev|iew rest`. Caret is at index 9 (mid-token);
+    // tokenEnd should walk forward to 12 (end of `/review`) but stop at
+    // the space before `rest`.
+    expect(describeSlashQueryAtCursor("text\n/review rest", 9)).toEqual({
+      token: "rev",
+      start: 5,
+      end: 12,
+    });
+  });
 });
 
 describe("native handler table", () => {

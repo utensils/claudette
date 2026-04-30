@@ -144,10 +144,18 @@ export function describeSlashQueryAtCursor(
   // between the `/` and the cursor, the command token is closed.
   const tokenMatch = linePrefix.match(/^\/(\S*)$/);
   if (!tokenMatch) return null;
+  // Extend end past the cursor so replacement covers the full token even when
+  // the caret sits inside an existing `/command` (e.g. clicking into `/review`
+  // halfway through). The token used for filtering stays the prefix up to the
+  // cursor — that's what the user has committed to so far.
+  let tokenEnd = cursor;
+  while (tokenEnd < text.length && /\S/.test(text[tokenEnd] ?? "")) {
+    tokenEnd += 1;
+  }
   return {
     token: tokenMatch[1],
     start: lineStart,
-    end: cursor,
+    end: tokenEnd,
   };
 }
 
