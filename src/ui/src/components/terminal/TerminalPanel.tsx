@@ -769,7 +769,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
     // Gate on focus-target identity changing: this effect re-runs on
     // every workspace update too (deps include `workspaces`), and an
     // unconditional focus call would steal focus from the chat
-    // composer whenever an agent finishes — see issue #546.
+    // composer whenever an agent finishes.
     const nextFocusedLeafId =
       terminalPanelVisible && activeTerminalTabId != null
         ? activeTerminalPaneId[activeTerminalTabId] ?? null
