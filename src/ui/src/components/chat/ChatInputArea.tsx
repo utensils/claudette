@@ -9,7 +9,7 @@ import {
   readFileAsBase64,
   recordSlashCommandUsage,
 } from "../../services/tauri";
-import type { FileEntry, SlashCommand } from "../../services/tauri";
+import type { FileEntry, PinnedPrompt, SlashCommand } from "../../services/tauri";
 import type { AttachmentInput, PendingAttachment } from "../../types/chat";
 import { base64ToBytes } from "../../utils/base64";
 import {
@@ -31,7 +31,7 @@ import { ContextPopover } from "./composer/ContextPopover";
 import { SegmentedMeter } from "./composer/SegmentedMeter";
 import { AttachMenu } from "./AttachMenu";
 import { FileMentionPicker, matchFiles } from "./FileMentionPicker";
-import { PinnedCommandsBar } from "./PinnedCommandsBar";
+import { PinnedPromptsBar } from "./PinnedPromptsBar";
 import { SlashCommandPicker, filterSlashCommands } from "./SlashCommandPicker";
 import { describeSlashQuery } from "./nativeSlashCommands";
 import { hasUltrathink, renderUltrathinkText } from "./ultrathink";
@@ -190,10 +190,43 @@ export function ChatInputArea({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [voice.state, voice.cancel]);
 
-  const handleInsertPinnedCommand = useCallback((commandText: string) => {
-    setChatInput((prev) => commandText + (prev ? " " + prev : ""));
-    textareaRef.current?.focus();
-  }, []);
+  const handleUsePinnedPrompt = useCallback(
+    (pin: PinnedPrompt) => {
+      if (pin.auto_send) {
+        // Send immediately, with whatever attachments / file mentions are
+        // currently staged. Mirrors the post-send cleanup in handleSend so
+        // attachments aren't double-submitted on the next manual send.
+        const activeFiles = new Set<string>();
+        for (const path of mentionedFilesRef.current) {
+          if (pin.prompt.includes(`@${path}`)) {
+            activeFiles.add(path);
+          }
+        }
+        const files = activeFiles.size > 0 ? activeFiles : undefined;
+        const attachmentPayload =
+          pendingAttachments.length > 0
+            ? pendingAttachments.map((a) => ({
+                filename: a.filename,
+                media_type: a.media_type,
+                data_base64: a.data_base64,
+                text_content: a.text_content ?? undefined,
+              }))
+            : undefined;
+        onSend(pin.prompt, files, attachmentPayload);
+        setChatInput("");
+        for (const a of pendingAttachments) {
+          if (a.preview_url.startsWith("blob:"))
+            URL.revokeObjectURL(a.preview_url);
+        }
+        setPendingAttachments([]);
+        mentionedFilesRef.current = new Set();
+        return;
+      }
+      setChatInput((prev) => pin.prompt + (prev ? " " + prev : ""));
+      textareaRef.current?.focus();
+    },
+    [onSend, pendingAttachments],
+  );
 
   // Per-session draft storage: save input when switching away,
   // restore when switching back.
@@ -851,10 +884,9 @@ export function ChatInputArea({
           ))}
         </div>
       )}
-      <PinnedCommandsBar
+      <PinnedPromptsBar
         repoId={repoId}
-        slashCommands={slashCommands}
-        onInsertCommand={handleInsertPinnedCommand}
+        onUsePinnedPrompt={handleUsePinnedPrompt}
       />
       <div className={styles.inputTextWrap}>
         {showUltrathinkOverlay && (

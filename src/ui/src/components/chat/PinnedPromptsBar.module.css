@@ -1,0 +1,46 @@
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px 2px;
+  min-height: 28px;
+}
+
+.label {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  text-transform: lowercase;
+  letter-spacing: 0.03em;
+  user-select: none;
+  margin-right: 2px;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(var(--accent-primary-rgb), 0.18);
+  border-radius: var(--radius-pill);
+  background: var(--toolbar-active);
+  color: var(--toolbar-active-text);
+  font-size: var(--fs-sm);
+  line-height: 1;
+  white-space: nowrap;
+  transition: filter var(--transition-fast);
+}
+
+.pill:hover {
+  filter: brightness(1.12);
+}
+
+.pillAction {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  cursor: pointer;
+}
