@@ -301,6 +301,13 @@ export const TerminalPanel = memo(function TerminalPanel() {
   const currentThemeId = useAppStore((s) => s.currentThemeId);
 
   const autoCreatedRef = useRef<string | null>(null);
+  // Tracks the last (tabId, leafId, visible) tuple we applied keyboard
+  // focus for. The layout effect below re-runs whenever any of its deps
+  // change — including unrelated state like a workspace's agent_status —
+  // so we gate the focus side-effect on this identity changing. Without
+  // this gate, an agent finishing (which updates workspaces) would yank
+  // focus out of the chat composer into the terminal.
+  const lastFocusKeyRef = useRef<string | null>(null);
   const terminalTabsRef = useRef(terminalTabs);
   useEffect(() => {
     terminalTabsRef.current = terminalTabs;
@@ -758,35 +765,46 @@ export const TerminalPanel = memo(function TerminalPanel() {
     // run. Doing the focus synchronously here — after reparent, in the
     // same render cycle — guarantees exactly one focus attempt per
     // applied layout change.
-    if (terminalPanelVisible && activeTerminalTabId != null) {
-      const focusedLeafId = activeTerminalPaneId[activeTerminalTabId];
-      if (focusedLeafId) {
-        const inst = instancesRef.current.get(focusedLeafId);
-        if (
-          inst &&
-          shouldFocusLeaf(
-            focusedLeafId,
-            inst.tabId,
-            activeTerminalPaneId,
-            activeTerminalTabId,
-            terminalPanelVisible,
-          )
-        ) {
-          // The helper textarea is what xterm's own click-focus
-          // path uses; calling term.focus() directly can no-op on
-          // the very first mount. We deliberately don't scrollToBottom
-          // here — if the user was reading scrollback, clicking a pane
-          // to focus it (or any other action that triggers a
-          // re-focus, like a pane split that promotes a sibling)
-          // should leave their scroll position alone.
-          const helper = inst.container.querySelector(
-            ".xterm-helper-textarea",
-          ) as HTMLTextAreaElement | null;
-          if (helper) helper.focus({ preventScroll: true });
-          else inst.term.focus();
-        }
+    //
+    // Gate on focus-target identity changing: this effect re-runs on
+    // every workspace update too (deps include `workspaces`), and an
+    // unconditional focus call would steal focus from the chat
+    // composer whenever an agent finishes.
+    const nextFocusedLeafId =
+      terminalPanelVisible && activeTerminalTabId != null
+        ? activeTerminalPaneId[activeTerminalTabId] ?? null
+        : null;
+    const nextFocusKey =
+      terminalPanelVisible && activeTerminalTabId != null && nextFocusedLeafId
+        ? `${activeTerminalTabId}:${nextFocusedLeafId}`
+        : null;
+    if (nextFocusKey !== null && nextFocusKey !== lastFocusKeyRef.current) {
+      const inst = instancesRef.current.get(nextFocusedLeafId!);
+      if (
+        inst &&
+        shouldFocusLeaf(
+          nextFocusedLeafId!,
+          inst.tabId,
+          activeTerminalPaneId,
+          activeTerminalTabId!,
+          terminalPanelVisible,
+        )
+      ) {
+        // The helper textarea is what xterm's own click-focus
+        // path uses; calling term.focus() directly can no-op on
+        // the very first mount. We deliberately don't scrollToBottom
+        // here — if the user was reading scrollback, clicking a pane
+        // to focus it (or any other action that triggers a
+        // re-focus, like a pane split that promotes a sibling)
+        // should leave their scroll position alone.
+        const helper = inst.container.querySelector(
+          ".xterm-helper-textarea",
+        ) as HTMLTextAreaElement | null;
+        if (helper) helper.focus({ preventScroll: true });
+        else inst.term.focus();
       }
     }
+    lastFocusKeyRef.current = nextFocusKey;
   }, [
     terminalTabs,
     workspaces,
