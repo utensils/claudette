@@ -429,22 +429,39 @@ function PromptRow({
 
   const canSave = name.trim().length > 0 && body.trim().length > 0;
 
-  // Cmd/Ctrl+Enter saves; Esc cancels. Slash autocomplete consumes its own keys first.
+  // Save/cancel shortcuts that work from any field in the editor.
+  const handleSaveCancelKey = useCallback(
+    (e: React.KeyboardEvent): boolean => {
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        if (canSave) void save();
+        return true;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        cancelEdit();
+        return true;
+      }
+      return false;
+    },
+    [canSave, save, cancelEdit],
+  );
+
+  // Name input: only Cmd/Ctrl+Enter and Esc — never the slash picker, which
+  // is anchored to the textarea. Otherwise arrow/Enter keys in the name field
+  // would navigate/select picker items while the user is typing a name.
+  const handleNameKeyDown = handleSaveCancelKey;
+
+  // Textarea: slash autocomplete consumes its own keys first, then save/cancel.
   const handleEditorKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (slash.handleKeyDown(e)) {
         e.preventDefault();
         return;
       }
-      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault();
-        if (canSave) void save();
-      } else if (e.key === "Escape") {
-        e.preventDefault();
-        cancelEdit();
-      }
+      handleSaveCancelKey(e);
     },
-    [slash, canSave, save, cancelEdit],
+    [slash, handleSaveCancelKey],
   );
 
   // ---------- Display mode ----------
@@ -506,7 +523,7 @@ function PromptRow({
           className={error ? styles.nameInputError : styles.nameInput}
           value={name}
           onChange={(e) => setName(e.target.value)}
-          onKeyDown={handleEditorKeyDown}
+          onKeyDown={handleNameKeyDown}
           placeholder={t("pinned_prompts_display_name_placeholder")}
           aria-label={t("pinned_prompts_display_name_label")}
           disabled={mode === "confirm-delete"}
@@ -655,21 +672,35 @@ function DraftRowView({
   const canSave =
     draft.display_name.trim().length > 0 && draft.prompt.trim().length > 0;
 
+  const handleSaveCancelKey = useCallback(
+    (e: React.KeyboardEvent): boolean => {
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        if (canSave) onCommit();
+        return true;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onCancel();
+        return true;
+      }
+      return false;
+    },
+    [canSave, onCommit, onCancel],
+  );
+
+  // Name input: save/cancel only — the picker is anchored to the textarea.
+  const handleNameKeyDown = handleSaveCancelKey;
+
   const handleEditorKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (slash.handleKeyDown(e)) {
         e.preventDefault();
         return;
       }
-      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault();
-        if (canSave) onCommit();
-      } else if (e.key === "Escape") {
-        e.preventDefault();
-        onCancel();
-      }
+      handleSaveCancelKey(e);
     },
-    [slash, canSave, onCommit, onCancel],
+    [slash, handleSaveCancelKey],
   );
 
   return (
@@ -679,7 +710,7 @@ function DraftRowView({
           className={error ? styles.nameInputError : styles.nameInput}
           value={draft.display_name}
           onChange={(e) => onChange({ display_name: e.target.value })}
-          onKeyDown={handleEditorKeyDown}
+          onKeyDown={handleNameKeyDown}
           placeholder={t("pinned_prompts_display_name_placeholder")}
           aria-label={t("pinned_prompts_display_name_label")}
           autoFocus

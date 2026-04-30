@@ -15,7 +15,6 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  overflow: hidden;
   transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
 
@@ -303,6 +302,11 @@
   padding: 12px 14px;
   background: color-mix(in srgb, var(--status-stopped) 6%, transparent);
   border-top: 1px solid color-mix(in srgb, var(--status-stopped) 25%, var(--divider));
+  /* Match the card's inner corner radius (8px outer - 1px border) so the
+     destructive bleed looks flush with the card without `overflow: hidden`
+     on `.row`, which would clip the slash autocomplete picker. */
+  border-bottom-left-radius: 7px;
+  border-bottom-right-radius: 7px;
   display: flex;
   align-items: center;
   gap: 12px;

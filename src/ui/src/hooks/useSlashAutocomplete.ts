@@ -44,6 +44,15 @@ export function useSlashAutocomplete({
     setDismissed(false);
   }, [token]);
 
+  // The token can stay stable while filteredCommands changes — e.g. the slash
+  // command list reloads asynchronously and a previously matching command
+  // disappears. Clamp selectedIndex so Enter/Tab never lands on an undefined
+  // entry and the highlight stays in range.
+  useEffect(() => {
+    if (!showPicker) return;
+    setSelectedIndex((i) => Math.min(i, filteredCommands.length - 1));
+  }, [showPicker, filteredCommands.length]);
+
   const selectCommand = useCallback(
     (cmd: SlashCommand) => {
       if (!query) return;
