@@ -88,6 +88,27 @@ function safeFit(inst: LeafInstance) {
   }
 }
 
+// Claudette scales the whole UI by setting `zoom` on <html> (theme.ts ::
+// applyUserFonts). xterm.js measures cell height with `offsetHeight`
+// (layout pixels, unzoomed) but mouse events and getBoundingClientRect
+// return zoomed pixels — every click is then off by the zoom factor and
+// selection / WebLinksAddon hits land on the wrong row (issue 547).
+//
+// Fix: undo the page zoom on the terminal container so xterm's subtree
+// runs at 1:1 between layout and viewport coords, then bump the xterm
+// font-size by the same factor so the terminal still renders at the
+// user's chosen visual size. Returns 1 when no zoom is set, in which
+// case the helpers below are no-ops.
+function getRootZoom(): number {
+  const z = parseFloat(document.documentElement.style.zoom);
+  return Number.isFinite(z) && z > 0 ? z : 1;
+}
+
+function applyZoomCompensation(inst: LeafInstance, rootZoom: number, baseFontSize: number) {
+  inst.container.style.zoom = rootZoom === 1 ? "" : String(1 / rootZoom);
+  inst.term.options.fontSize = baseFontSize * rootZoom;
+}
+
 // A split triggers SIGWINCH on the underlying PTY; many shells (zsh + zle's
 // `reset-prompt`, p10k, starship's zle-line-init, etc.) respond by moving the
 // cursor to (0,0) and emitting `\e[J`, which clears the visible viewport and
@@ -299,6 +320,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
   const terminalFontSize = useAppStore((s) => s.terminalFontSize);
   const fontFamilyMono = useAppStore((s) => s.fontFamilyMono);
   const currentThemeId = useAppStore((s) => s.currentThemeId);
+  const uiFontSize = useAppStore((s) => s.uiFontSize);
 
   const autoCreatedRef = useRef<string | null>(null);
   // Tracks the last (tabId, leafId, visible) tuple we applied keyboard
@@ -530,13 +552,15 @@ export const TerminalPanel = memo(function TerminalPanel() {
       const container = document.createElement("div");
       container.style.width = "100%";
       container.style.height = "100%";
+      const rootZoom = getRootZoom();
+      if (rootZoom !== 1) container.style.zoom = String(1 / rootZoom);
 
       const monoFont =
         getComputedStyle(document.documentElement)
           .getPropertyValue("--font-mono")
           .trim() || "monospace";
       const term = new Terminal({
-        fontSize: terminalFontSize,
+        fontSize: terminalFontSize * rootZoom,
         fontFamily: monoFont,
         theme: getTerminalTheme(),
       });
@@ -816,13 +840,17 @@ export const TerminalPanel = memo(function TerminalPanel() {
     destroyInstance,
   ]);
 
-  // Font / theme propagation across all live instances.
+  // Font / theme propagation across all live instances. uiFontSize is
+  // bundled in here because it drives the page-zoom compensation: when
+  // the user changes UI size, every terminal needs its container zoom
+  // and effective font-size updated together (see applyZoomCompensation).
   useEffect(() => {
+    const rootZoom = getRootZoom();
     for (const inst of instancesRef.current.values()) {
-      inst.term.options.fontSize = terminalFontSize;
+      applyZoomCompensation(inst, rootZoom, terminalFontSize);
       safeFit(inst);
     }
-  }, [terminalFontSize]);
+  }, [terminalFontSize, uiFontSize]);
 
   useEffect(() => {
     const theme = getTerminalTheme();
