@@ -20,6 +20,7 @@ import {
   InheritedGlobalsList,
   PinnedPromptsManager,
 } from "./PinnedPromptsManager";
+import { EMPTY_PINNED_PROMPTS } from "../../../stores/slices/pinnedPromptsSlice";
 import styles from "../Settings.module.css";
 
 interface RepoSettingsProps {
@@ -688,7 +689,10 @@ interface RepoPinnedPromptsFieldProps {
 
 function RepoPinnedPromptsField({ repoId }: RepoPinnedPromptsFieldProps) {
   const { t } = useTranslation("settings");
-  const repoPrompts = useAppStore((s) => s.repoPinnedPrompts[repoId] ?? []);
+  // Stable empty fallback — see EMPTY_PINNED_PROMPTS docs for why this matters.
+  const repoPrompts = useAppStore(
+    (s) => s.repoPinnedPrompts[repoId] ?? EMPTY_PINNED_PROMPTS,
+  );
   const globalPrompts = useAppStore((s) => s.globalPinnedPrompts);
   const loadGlobals = useAppStore((s) => s.loadGlobalPinnedPrompts);
 

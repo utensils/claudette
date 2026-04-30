@@ -1,7 +1,10 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
-import { selectMergedPinnedPrompts } from "../../stores/slices/pinnedPromptsSlice";
+import {
+  EMPTY_PINNED_PROMPTS,
+  mergePinnedPrompts,
+} from "../../stores/slices/pinnedPromptsSlice";
 import type { PinnedPrompt } from "../../services/tauri";
 import styles from "./PinnedPromptsBar.module.css";
 
@@ -25,11 +28,22 @@ export function PinnedPromptsBar({
 }: PinnedPromptsBarProps) {
   const { t } = useTranslation("chat");
 
-  const prompts = useAppStore((s) =>
-    selectMergedPinnedPrompts(s, repoId ?? null),
+  // Subscribe to the raw slice arrays. Zustand keeps these references stable
+  // until the underlying lists actually change, so the merge below only
+  // reruns on real updates — not on every store tick.
+  const globalPrompts = useAppStore((s) => s.globalPinnedPrompts);
+  const repoPrompts = useAppStore((s) =>
+    repoId
+      ? (s.repoPinnedPrompts[repoId] ?? EMPTY_PINNED_PROMPTS)
+      : EMPTY_PINNED_PROMPTS,
   );
   const loadGlobals = useAppStore((s) => s.loadGlobalPinnedPrompts);
   const loadRepo = useAppStore((s) => s.loadRepoPinnedPrompts);
+
+  const prompts = useMemo(
+    () => mergePinnedPrompts(repoPrompts, globalPrompts, repoId ?? null),
+    [repoPrompts, globalPrompts, repoId],
+  );
 
   useEffect(() => {
     loadGlobals().catch((e) =>
@@ -69,4 +83,3 @@ export function PinnedPromptsBar({
     </div>
   );
 }
-

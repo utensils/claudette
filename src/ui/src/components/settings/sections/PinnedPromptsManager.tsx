@@ -9,6 +9,7 @@ import {
   updatePinnedPrompt,
 } from "../../../services/tauri";
 import { useAppStore } from "../../../stores/useAppStore";
+import { EMPTY_PINNED_PROMPTS } from "../../../stores/slices/pinnedPromptsSlice";
 import styles from "./PinnedPromptsManager.module.css";
 
 export type PinnedPromptScope =
@@ -44,9 +45,13 @@ export function PinnedPromptsManager({ scope }: PinnedPromptsManagerProps) {
   const repoIdForApi: string | null =
     scope.kind === "repo" ? scope.repoId : null;
 
-  const prompts = useAppStore((s) =>
+  // Subscribe to the raw slice values. We deliberately reuse a single empty
+  // array reference (EMPTY_PINNED_PROMPTS) for the missing-key case so the
+  // selector returns a stable reference until the load completes — otherwise
+  // useSyncExternalStore loops on the fresh `[]`.
+  const prompts: readonly PinnedPrompt[] = useAppStore((s) =>
     repoIdForState
-      ? (s.repoPinnedPrompts[repoIdForState] ?? [])
+      ? (s.repoPinnedPrompts[repoIdForState] ?? EMPTY_PINNED_PROMPTS)
       : s.globalPinnedPrompts,
   );
   const setGlobal = useAppStore((s) => s.setGlobalPinnedPrompts);
@@ -57,9 +62,10 @@ export function PinnedPromptsManager({ scope }: PinnedPromptsManagerProps) {
   const loadRepo = useAppStore((s) => s.loadRepoPinnedPrompts);
 
   const writeBack = useCallback(
-    (next: PinnedPrompt[]) => {
-      if (repoIdForState) setForRepo(repoIdForState, next);
-      else setGlobal(next);
+    (next: readonly PinnedPrompt[]) => {
+      const copy = [...next];
+      if (repoIdForState) setForRepo(repoIdForState, copy);
+      else setGlobal(copy);
     },
     [repoIdForState, setForRepo, setGlobal],
   );

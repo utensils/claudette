@@ -91,22 +91,49 @@ export const createPinnedPromptsSlice: StateCreator<
 });
 
 /**
- * Pure selector: merge repo prompts and globals into the composer-visible list.
+ * Stable empty-array reference. Subscribers that fall back to "no prompts for
+ * this repo yet" must hand the same reference back every render — otherwise
+ * useSyncExternalStore (which backs Zustand v5) treats every call as a fresh
+ * snapshot and re-renders forever.
+ */
+export const EMPTY_PINNED_PROMPTS: readonly PinnedPrompt[] = Object.freeze([]);
+
+/**
+ * Pure helper: merge repo prompts and globals into the composer-visible list.
  *
  * Repo entries come first (in their `sort_order`), followed by globals whose
  * `display_name` is not already used by a repo prompt — repo entries silently
  * shadow globals with the same display name.
+ *
+ * NOTE: this allocates a new array, so it MUST NOT be called inside a Zustand
+ * selector. Components subscribe to the raw slice arrays and memoize the
+ * merge with `useMemo`.
+ */
+export function mergePinnedPrompts(
+  repoPrompts: readonly PinnedPrompt[],
+  globalPrompts: readonly PinnedPrompt[],
+  repoId: string | null | undefined,
+): PinnedPrompt[] {
+  if (!repoId) return [...globalPrompts];
+  const repoNames = new Set(repoPrompts.map((p) => p.display_name));
+  const merged: PinnedPrompt[] = [...repoPrompts];
+  for (const g of globalPrompts) {
+    if (!repoNames.has(g.display_name)) merged.push(g);
+  }
+  return merged;
+}
+
+/**
+ * Convenience wrapper for tests; reads the slice values out of `state` and
+ * runs the pure merge. Don't call this from a Zustand selector — see
+ * `mergePinnedPrompts`.
  */
 export function selectMergedPinnedPrompts(
   state: Pick<AppState, "globalPinnedPrompts" | "repoPinnedPrompts">,
   repoId: string | null | undefined,
 ): PinnedPrompt[] {
-  if (!repoId) return state.globalPinnedPrompts;
-  const repoPrompts = state.repoPinnedPrompts[repoId] ?? [];
-  const repoNames = new Set(repoPrompts.map((p) => p.display_name));
-  const merged: PinnedPrompt[] = [...repoPrompts];
-  for (const g of state.globalPinnedPrompts) {
-    if (!repoNames.has(g.display_name)) merged.push(g);
-  }
-  return merged;
+  const repoPrompts = repoId
+    ? (state.repoPinnedPrompts[repoId] ?? EMPTY_PINNED_PROMPTS)
+    : EMPTY_PINNED_PROMPTS;
+  return mergePinnedPrompts(repoPrompts, state.globalPinnedPrompts, repoId);
 }
