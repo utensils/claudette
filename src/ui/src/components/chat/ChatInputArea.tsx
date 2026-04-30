@@ -193,6 +193,10 @@ export function ChatInputArea({
   const handleUsePinnedPrompt = useCallback(
     (pin: PinnedPrompt) => {
       if (pin.auto_send) {
+        // Cancel any in-flight voice recording before submitting, mirroring
+        // handleSend — otherwise an auto-send click leaves the recorder
+        // running in the background.
+        voice.cancel();
         // Send immediately, with whatever attachments / file mentions are
         // currently staged. Mirrors the post-send cleanup in handleSend so
         // attachments aren't double-submitted on the next manual send.
@@ -225,7 +229,7 @@ export function ChatInputArea({
       setChatInput((prev) => pin.prompt + (prev ? " " + prev : ""));
       textareaRef.current?.focus();
     },
-    [onSend, pendingAttachments],
+    [onSend, pendingAttachments, voice],
   );
 
   // Per-session draft storage: save input when switching away,
