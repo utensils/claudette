@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.21.0](https://github.com/utensils/claudette/compare/v0.20.1...v0.21.0) (2026-04-30)
+
+
+### Features
+
+* **agent-mcp:** broaden send_to_user to CSV/JSON/Markdown with type-aware previews ([#465](https://github.com/utensils/claudette/issues/465)) ([923600b](https://github.com/utensils/claudette/commit/923600bf48d920d4f3e63ae04d1fe27708e657f6))
+* **chat:** add hover copy button to user messages ([#530](https://github.com/utensils/claudette/issues/530)) ([534aaaf](https://github.com/utensils/claudette/commit/534aaafe09662c33cace5aaa8d37abd7aca39158))
+* **chat:** inline plan refinement via feedback textarea ([#475](https://github.com/utensils/claudette/issues/475)) ([2b12e4e](https://github.com/utensils/claudette/commit/2b12e4e94662428c4925e6f992f38b248c9983e9))
+* **diff:** add markdown preview with mermaid for changed .md files ([#493](https://github.com/utensils/claudette/issues/493)) ([8226c3a](https://github.com/utensils/claudette/commit/8226c3a3677b5475a031b457991c266e951789cc))
+* **diff:** syntax highlighting in diff view ([#352](https://github.com/utensils/claudette/issues/352)) ([57c8bec](https://github.com/utensils/claudette/commit/57c8bec720c8d6af5a5bdafffda8fbcb77653622))
+* **i18n:** add Brazilian Portuguese (pt-BR) translation ([#527](https://github.com/utensils/claudette/issues/527)) ([5bcc998](https://github.com/utensils/claudette/commit/5bcc99804479f2fb204803b108eaee14c6c7e8ff))
+* **i18n:** add Chinese (Simplified) translation ([#531](https://github.com/utensils/claudette/issues/531)) ([4bde94f](https://github.com/utensils/claudette/commit/4bde94f39f4d99c00de6996227421fefc9b66f3b))
+* **i18n:** add Japanese (ja) translation ([#529](https://github.com/utensils/claudette/issues/529)) ([2a1da58](https://github.com/utensils/claudette/commit/2a1da58aefe399fcb1b67df084fddfb0b5c8a8cf))
+* **i18n:** complete Spanish translation for chat, modals, and settings ([#526](https://github.com/utensils/claudette/issues/526)) ([badbba6](https://github.com/utensils/claudette/commit/badbba68680e116f3aa993666da9358e2bce2bd0))
+* **i18n:** introduce i18next internationalization infrastructure (phase 1) ([#457](https://github.com/utensils/claudette/issues/457)) ([12e1092](https://github.com/utensils/claudette/commit/12e109212b0d3b59ac5dd2e3ef75bbdf6f7c074a))
+* **i18n:** localize tray, notifications, and quit dialog (phase 2) ([#523](https://github.com/utensils/claudette/issues/523)) ([4a2162e](https://github.com/utensils/claudette/commit/4a2162e1db705791481408a7ba38663168e91953))
+* **settings:** add theme mode selector with light/dark/system sync ([#369](https://github.com/utensils/claudette/issues/369)) ([a5cf5a5](https://github.com/utensils/claudette/commit/a5cf5a50fc88e7620ae52f4ecd88ea6fa9c4b5d1))
+
+
+### Bug Fixes
+
+* **build:** generate bundle icons at build time + non-nix mise toolchain ([#535](https://github.com/utensils/claudette/issues/535)) ([55c01e5](https://github.com/utensils/claudette/commit/55c01e540cebdb0dce541a88ae7f5d0b5b3eca89))
+* **chat:** scope blockToolMapRef by session id ([#484](https://github.com/utensils/claudette/issues/484)) ([#501](https://github.com/utensils/claudette/issues/501)) ([7ca6178](https://github.com/utensils/claudette/commit/7ca6178c2c4cf4375d056147bb9a67ce9aa740b9))
+* **chat:** surface env-provider trust errors as system message before agent spawn ([#479](https://github.com/utensils/claudette/issues/479)) ([690cae2](https://github.com/utensils/claudette/commit/690cae2f6e940bf7d951102b4f83e62525cfd9e9))
+* **db:** surface unknown enum values instead of silent fallback ([#515](https://github.com/utensils/claudette/issues/515)) ([764c8f4](https://github.com/utensils/claudette/commit/764c8f44a845ea5791cfb6ba7b35a77d1f1aaccc))
+* **i18n:** refactor modal warnings to use Trans ([#529](https://github.com/utensils/claudette/issues/529) follow-up) ([#532](https://github.com/utensils/claudette/issues/532)) ([98fc4af](https://github.com/utensils/claudette/commit/98fc4af51706188ec0f1ec0299343e1c1048cc3e))
+* interrupt CPU-bound Lua plugins ([#494](https://github.com/utensils/claudette/issues/494)) ([3c5c4bc](https://github.com/utensils/claudette/commit/3c5c4bcccd746eec59d4dfd97bfcc2ec7a37c410))
+* **metrics:** use system local timezone for dashboard date windows ([#512](https://github.com/utensils/claudette/issues/512)) ([bc3365d](https://github.com/utensils/claudette/commit/bc3365df2dba856f2ef67befd5c3c2d2115b9dc6))
+* **theme:** guard OS theme change handler against async race, add findTheme tests ([#481](https://github.com/utensils/claudette/issues/481)) ([3efbcd5](https://github.com/utensils/claudette/commit/3efbcd510d92adc21a57576a76c28a6ad1e318ed))
+* **updater:** reset manual-check button when an update is available ([#514](https://github.com/utensils/claudette/issues/514)) ([1eec360](https://github.com/utensils/claudette/commit/1eec360f28ab608da8f5d408252dc80524792471))
+
+
+### Performance Improvements
+
+* **branch-refresh:** focus-aware polling and bounded startup git probes ([#502](https://github.com/utensils/claudette/issues/502)) ([4041f92](https://github.com/utensils/claudette/commit/4041f9280c4af09a92d3d458cda4fa907641468c))
+* **plugins:** eliminate cold-start delay on plugin settings page ([#534](https://github.com/utensils/claudette/issues/534)) ([e1b8f4c](https://github.com/utensils/claudette/commit/e1b8f4c72dd1e11d6057657d7c64e0042d3d89de))
+
 ## [0.20.1](https://github.com/utensils/claudette/compare/v0.20.0...v0.20.1) (2026-04-28)
 
 
