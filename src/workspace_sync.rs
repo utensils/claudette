@@ -24,10 +24,20 @@ use crate::model::WorkspaceStatus;
 /// doesn't fan-out a fresh `git` process per workspace every poll tick.
 const RECONCILE_GIT_PROBE_CONCURRENCY: usize = 6;
 
-/// Re-read the current branch for every active workspace. For each workspace
-/// whose stored `branch_name` no longer matches the worktree's HEAD, persist
-/// the fresh value to the DB and return the `(workspace_id, new_branch)` pair
-/// so the caller can mirror the change into in-memory UI state.
+/// Re-read the current branch for every active workspace and return the
+/// `(workspace_id, current_branch)` pair for each one we could probe. The
+/// caller (the frontend store) is expected to overwrite its in-memory branch
+/// label with whatever we return, regardless of whether the DB row needed
+/// updating — this is **level-triggered** by design so a store that has
+/// somehow drifted from the DB can self-heal on the next poll. See issue
+/// #538 for the divergence trap this avoids.
+///
+/// Workspaces whose worktree is missing, that aren't active, or that are in
+/// detached HEAD (where `git::current_branch` errors) are silently omitted —
+/// we have nothing authoritative to publish for them.
+///
+/// DB writes are still gated on actual diff so the polling path doesn't
+/// rewrite identical values every tick.
 ///
 /// DB access is split into short synchronous blocks around the async git
 /// calls, because `rusqlite::Connection` is not `Send`.
@@ -55,34 +65,50 @@ pub async fn reconcile_all_workspace_branches(
                 async move {
                     let _permit = sem.acquire_owned().await.ok();
                     match git::current_branch(&wt_path).await {
-                        Ok(branch) if branch != stored_branch => Some((id, branch)),
-                        _ => None,
+                        Ok(branch) => {
+                            let drifted = branch != stored_branch;
+                            Some((id, branch, drifted))
+                        }
+                        Err(_) => None,
                     }
                 }
             })
         })
         .collect();
 
-    let updates: Vec<(String, String)> = futures::future::join_all(probe_futures)
+    let probes: Vec<(String, String, bool)> = futures::future::join_all(probe_futures)
         .await
         .into_iter()
         .flatten()
         .collect();
 
-    if !updates.is_empty() {
+    let drifted: Vec<(&String, &String)> = probes
+        .iter()
+        .filter_map(|(id, branch, drifted)| if *drifted { Some((id, branch)) } else { None })
+        .collect();
+    if !drifted.is_empty() {
         let db = Database::open(db_path).map_err(|e| e.to_string())?;
-        for (id, branch) in &updates {
+        for (id, branch) in &drifted {
             db.update_workspace_branch_name(id, branch)
                 .map_err(|e| e.to_string())?;
         }
     }
 
-    Ok(updates)
+    Ok(probes
+        .into_iter()
+        .map(|(id, branch, _)| (id, branch))
+        .collect())
 }
 
-/// Re-read the current branch for a single workspace. Returns the new branch
-/// name if the DB was stale (and was just updated), or `None` when nothing
-/// needed to change, the workspace isn't active, or the worktree is missing.
+/// Re-read the current branch for a single workspace and return whatever git
+/// reports — `Some(branch)` is **always the current branch**, not just on
+/// drift, so the frontend can overwrite its store value unconditionally.
+/// `None` means we have nothing authoritative to publish: the workspace is
+/// archived, has no worktree path, doesn't exist, or git refused to name a
+/// branch (e.g. detached HEAD). See issue #538.
+///
+/// The DB write is still gated on diff so a no-op refresh costs only a
+/// `git rev-parse`.
 pub async fn reconcile_single_workspace_branch(
     db_path: &Path,
     workspace_id: &str,
@@ -105,13 +131,12 @@ pub async fn reconcile_single_workspace_branch(
     let Ok(branch) = git::current_branch(wt_path).await else {
         return Ok(None);
     };
-    if branch == ws.branch_name {
-        return Ok(None);
-    }
 
-    let db = Database::open(db_path).map_err(|e| e.to_string())?;
-    db.update_workspace_branch_name(&ws.id, &branch)
-        .map_err(|e| e.to_string())?;
+    if branch != ws.branch_name {
+        let db = Database::open(db_path).map_err(|e| e.to_string())?;
+        db.update_workspace_branch_name(&ws.id, &branch)
+            .map_err(|e| e.to_string())?;
+    }
     Ok(Some(branch))
 }
 
@@ -204,9 +229,13 @@ mod tests {
             .unwrap();
         drop(db);
 
-        // First pass: DB already matches git, no updates expected.
+        // First pass: DB already matches git. Level-triggered reconcile still
+        // reports the current branch so a stale store can self-heal.
         let updates = reconcile_all_workspace_branches(&db_path).await.unwrap();
-        assert!(updates.is_empty());
+        assert_eq!(
+            updates,
+            vec![("w1".to_string(), "claudette/original".to_string())]
+        );
 
         // Simulate the user renaming the branch externally.
         rename_branch(repo_dir.path(), "user/renamed-branch");
@@ -229,7 +258,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reconcile_single_returns_none_when_unchanged() {
+    async fn reconcile_single_reports_branch_when_unchanged() {
+        // Level-triggered semantics (#538): when DB and git agree, still
+        // return the current branch so a stale store can be overwritten.
         let repo_dir = tempfile::tempdir().unwrap();
         init_git_repo(repo_dir.path(), "main");
 
@@ -245,7 +276,7 @@ mod tests {
         let result = reconcile_single_workspace_branch(&db_path, "w1")
             .await
             .unwrap();
-        assert!(result.is_none());
+        assert_eq!(result, Some("main".to_string()));
     }
 
     #[tokio::test]
@@ -307,7 +338,8 @@ mod tests {
             .unwrap();
         drop(db);
 
-        // Rename the branch on disk; an archived workspace must not drive an update.
+        // Rename the branch on disk; an archived workspace must not drive an
+        // update or appear in the level-triggered result set.
         rename_branch(repo_dir.path(), "something/else");
 
         let updates = reconcile_all_workspace_branches(&db_path).await.unwrap();
@@ -342,10 +374,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reconcile_all_updates_only_drifted_workspaces() {
-        // Two workspaces pointed at two separate repos; only one has been
-        // renamed externally. The return value and the DB should only
-        // reflect the drifted one.
+    async fn reconcile_all_reports_every_active_workspace_writes_only_drifted() {
+        // Level-triggered semantics (#538): both workspaces appear in the
+        // result, but only the drifted one is written back to the DB.
         let stable = tempfile::tempdir().unwrap();
         init_git_repo(stable.path(), "claudette/stable");
         let drifted = tempfile::tempdir().unwrap();
@@ -366,10 +397,14 @@ mod tests {
 
         rename_branch(drifted.path(), "user/renamed");
 
-        let updates = reconcile_all_workspace_branches(&db_path).await.unwrap();
+        let mut updates = reconcile_all_workspace_branches(&db_path).await.unwrap();
+        updates.sort();
         assert_eq!(
             updates,
-            vec![("w2".to_string(), "user/renamed".to_string())]
+            vec![
+                ("w1".to_string(), "claudette/stable".to_string()),
+                ("w2".to_string(), "user/renamed".to_string()),
+            ]
         );
 
         let db = Database::open(&db_path).unwrap();
@@ -384,15 +419,17 @@ mod tests {
     async fn reconcile_all_handles_more_workspaces_than_concurrency_cap() {
         // Spin up more workspaces than RECONCILE_GIT_PROBE_CONCURRENCY so the
         // semaphore is genuinely exercised. Every odd-indexed workspace is
-        // renamed externally; the result must contain exactly those, in any
-        // order, with the DB updated to match.
+        // renamed externally; under level-triggered semantics every active
+        // workspace appears in the result (even ones that haven't drifted),
+        // while DB writes still happen only for those that actually changed.
         let total = RECONCILE_GIT_PROBE_CONCURRENCY * 2 + 1;
         let db_dir = tempfile::tempdir().unwrap();
         let db_path = db_dir.path().join("test.db");
         let db = Database::open(&db_path).unwrap();
 
         let mut repo_dirs = Vec::with_capacity(total);
-        let mut expected = Vec::new();
+        let mut expected_results: Vec<(String, String)> = Vec::new();
+        let mut expected_db: Vec<(String, String)> = Vec::new();
         for i in 0..total {
             let dir = tempfile::tempdir().unwrap();
             init_git_repo(dir.path(), "claudette/orig");
@@ -402,26 +439,54 @@ mod tests {
                 .unwrap();
             db.insert_workspace(&make_ws(&ws_id, &repo_id, "claudette/orig", dir.path()))
                 .unwrap();
-            if i % 2 == 1 {
+            let final_branch = if i % 2 == 1 {
                 let new_branch = format!("user/r{i}");
                 rename_branch(dir.path(), &new_branch);
-                expected.push((ws_id, new_branch));
-            }
+                new_branch
+            } else {
+                "claudette/orig".to_string()
+            };
+            expected_results.push((ws_id.clone(), final_branch.clone()));
+            expected_db.push((ws_id, final_branch));
             repo_dirs.push(dir);
         }
         drop(db);
 
         let mut updates = reconcile_all_workspace_branches(&db_path).await.unwrap();
         updates.sort();
-        expected.sort();
-        assert_eq!(updates, expected);
+        expected_results.sort();
+        assert_eq!(updates, expected_results);
 
         let db = Database::open(&db_path).unwrap();
         let all = db.list_workspaces().unwrap();
-        for (id, branch) in &expected {
+        for (id, branch) in &expected_db {
             let ws = all.iter().find(|w| &w.id == id).unwrap();
             assert_eq!(&ws.branch_name, branch);
         }
+    }
+
+    #[tokio::test]
+    async fn reconcile_all_self_heals_stale_caller_when_db_matches_git() {
+        // Regression for #538: even when DB and git agree, the result must
+        // contain a non-empty entry per active workspace so a frontend store
+        // that has somehow drifted can be overwritten on the next poll.
+        let repo_dir = tempfile::tempdir().unwrap();
+        init_git_repo(repo_dir.path(), "claudette/agreed");
+
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = db_dir.path().join("test.db");
+        let db = Database::open(&db_path).unwrap();
+        db.insert_repository(&make_repo("r1", repo_dir.path()))
+            .unwrap();
+        db.insert_workspace(&make_ws("w1", "r1", "claudette/agreed", repo_dir.path()))
+            .unwrap();
+        drop(db);
+
+        let updates = reconcile_all_workspace_branches(&db_path).await.unwrap();
+        assert_eq!(
+            updates,
+            vec![("w1".to_string(), "claudette/agreed".to_string())]
+        );
     }
 
     #[tokio::test]
