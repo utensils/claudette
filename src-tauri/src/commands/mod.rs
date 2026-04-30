@@ -10,7 +10,7 @@ pub mod env;
 pub mod files;
 pub mod mcp;
 pub mod metrics;
-pub mod pinned_commands;
+pub mod pinned_prompts;
 pub mod plan;
 pub mod plugin;
 pub mod plugins_runtime;

@@ -1,7 +1,4 @@
-//! Slash command usage tracking and pinned command CRUD methods on `Database`.
-//!
-//! Pinned commands JOIN against slash_command_usage to compute use_count,
-//! which is why these two domains share a module.
+//! Slash command usage tracking and pinned prompt CRUD methods on `Database`.
 //!
 //! This file contributes a `impl Database { ... }` block to the type defined
 //! in `super::Database`. Multiple `impl` blocks on the same type across files
@@ -10,7 +7,7 @@
 
 use rusqlite::params;
 
-use crate::model::PinnedCommand;
+use crate::model::PinnedPrompt;
 
 use super::Database;
 
@@ -50,84 +47,173 @@ impl Database {
         Ok(map)
     }
 
-    // --- Pinned Commands ---
+    // --- Pinned Prompts ---
 
-    pub fn list_pinned_commands(
+    /// Returns prompts in a single scope (`Some(repo_id)` for repo-scoped,
+    /// `None` for globals). Used by the settings UIs that manage each scope
+    /// independently.
+    pub fn list_pinned_prompts_in_scope(
         &self,
-        repo_id: &str,
-    ) -> Result<Vec<PinnedCommand>, rusqlite::Error> {
-        let mut stmt = self.conn.prepare(
-            "SELECT p.id, p.repo_id, p.command_name, p.sort_order, p.created_at,
-                    COALESCE((
-                        SELECT SUM(u.use_count)
-                        FROM slash_command_usage u
-                        JOIN workspaces w ON w.id = u.workspace_id
-                        WHERE w.repository_id = p.repo_id
-                          AND u.command_name = p.command_name
-                    ), 0) AS use_count
-             FROM pinned_commands p
-             WHERE p.repo_id = ?1
-             ORDER BY use_count DESC, p.sort_order, p.id",
-        )?;
-        let rows = stmt.query_map(params![repo_id], |row| {
-            Ok(PinnedCommand {
+        repo_id: Option<&str>,
+    ) -> Result<Vec<PinnedPrompt>, rusqlite::Error> {
+        let mut stmt = match repo_id {
+            Some(_) => self.conn.prepare(
+                "SELECT id, repo_id, display_name, prompt, auto_send, sort_order, created_at
+                 FROM pinned_prompts
+                 WHERE repo_id = ?1
+                 ORDER BY sort_order, id",
+            )?,
+            None => self.conn.prepare(
+                "SELECT id, repo_id, display_name, prompt, auto_send, sort_order, created_at
+                 FROM pinned_prompts
+                 WHERE repo_id IS NULL
+                 ORDER BY sort_order, id",
+            )?,
+        };
+        let map_row = |row: &rusqlite::Row<'_>| {
+            Ok(PinnedPrompt {
                 id: row.get(0)?,
                 repo_id: row.get(1)?,
-                command_name: row.get(2)?,
-                sort_order: row.get(3)?,
-                created_at: row.get(4)?,
-                use_count: row.get(5)?,
+                display_name: row.get(2)?,
+                prompt: row.get(3)?,
+                auto_send: row.get::<_, i64>(4)? != 0,
+                sort_order: row.get(5)?,
+                created_at: row.get(6)?,
             })
-        })?;
-        rows.collect()
+        };
+        match repo_id {
+            Some(rid) => stmt.query_map(params![rid], map_row)?.collect(),
+            None => stmt.query_map([], map_row)?.collect(),
+        }
     }
 
-    pub fn insert_pinned_command(
+    /// Returns the merged list of pinned prompts shown on the composer.
+    ///
+    /// Repo-scoped prompts come first (in sort order), then any globals whose
+    /// `display_name` is not already used by a repo prompt — repo entries
+    /// silently shadow globals with the same display name.
+    pub fn list_pinned_prompts_for_composer(
         &self,
-        repo_id: &str,
-        command_name: &str,
-    ) -> Result<PinnedCommand, rusqlite::Error> {
-        let max_order: i32 = self.conn.query_row(
-            "SELECT COALESCE(MAX(sort_order), -1) FROM pinned_commands WHERE repo_id = ?1",
-            params![repo_id],
-            |row| row.get(0),
-        )?;
+        repo_id: Option<&str>,
+    ) -> Result<Vec<PinnedPrompt>, rusqlite::Error> {
+        let globals = self.list_pinned_prompts_in_scope(None)?;
+        let Some(rid) = repo_id else {
+            return Ok(globals);
+        };
+        let repo_prompts = self.list_pinned_prompts_in_scope(Some(rid))?;
+        let used: std::collections::HashSet<String> = repo_prompts
+            .iter()
+            .map(|p| p.display_name.clone())
+            .collect();
+        let mut merged = repo_prompts;
+        for g in globals {
+            if !used.contains(&g.display_name) {
+                merged.push(g);
+            }
+        }
+        Ok(merged)
+    }
+
+    pub fn insert_pinned_prompt(
+        &self,
+        repo_id: Option<&str>,
+        display_name: &str,
+        prompt: &str,
+        auto_send: bool,
+    ) -> Result<PinnedPrompt, rusqlite::Error> {
+        let max_order: i32 = match repo_id {
+            Some(rid) => self.conn.query_row(
+                "SELECT COALESCE(MAX(sort_order), -1) FROM pinned_prompts WHERE repo_id = ?1",
+                params![rid],
+                |row| row.get(0),
+            )?,
+            None => self.conn.query_row(
+                "SELECT COALESCE(MAX(sort_order), -1) FROM pinned_prompts WHERE repo_id IS NULL",
+                [],
+                |row| row.get(0),
+            )?,
+        };
+        let next_order = max_order + 1;
         let created_at: String = self
             .conn
             .query_row("SELECT datetime('now')", [], |row| row.get(0))?;
+        let auto_send_int: i64 = if auto_send { 1 } else { 0 };
         self.conn.execute(
-            "INSERT INTO pinned_commands (repo_id, command_name, sort_order, created_at)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![repo_id, command_name, max_order + 1, created_at],
+            "INSERT INTO pinned_prompts (repo_id, display_name, prompt, auto_send, sort_order, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![repo_id, display_name, prompt, auto_send_int, next_order, created_at],
         )?;
-        Ok(PinnedCommand {
+        Ok(PinnedPrompt {
             id: self.conn.last_insert_rowid(),
-            repo_id: repo_id.to_string(),
-            command_name: command_name.to_string(),
-            sort_order: max_order + 1,
+            repo_id: repo_id.map(|s| s.to_string()),
+            display_name: display_name.to_string(),
+            prompt: prompt.to_string(),
+            auto_send,
+            sort_order: next_order,
             created_at,
-            use_count: 0,
         })
     }
 
-    pub fn delete_pinned_command(&self, id: i64) -> Result<(), rusqlite::Error> {
+    pub fn update_pinned_prompt(
+        &self,
+        id: i64,
+        display_name: &str,
+        prompt: &str,
+        auto_send: bool,
+    ) -> Result<PinnedPrompt, rusqlite::Error> {
+        let auto_send_int: i64 = if auto_send { 1 } else { 0 };
+        self.conn.execute(
+            "UPDATE pinned_prompts
+             SET display_name = ?1, prompt = ?2, auto_send = ?3
+             WHERE id = ?4",
+            params![display_name, prompt, auto_send_int, id],
+        )?;
+        self.conn.query_row(
+            "SELECT id, repo_id, display_name, prompt, auto_send, sort_order, created_at
+             FROM pinned_prompts WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok(PinnedPrompt {
+                    id: row.get(0)?,
+                    repo_id: row.get(1)?,
+                    display_name: row.get(2)?,
+                    prompt: row.get(3)?,
+                    auto_send: row.get::<_, i64>(4)? != 0,
+                    sort_order: row.get(5)?,
+                    created_at: row.get(6)?,
+                })
+            },
+        )
+    }
+
+    pub fn delete_pinned_prompt(&self, id: i64) -> Result<(), rusqlite::Error> {
         self.conn
-            .execute("DELETE FROM pinned_commands WHERE id = ?1", params![id])?;
+            .execute("DELETE FROM pinned_prompts WHERE id = ?1", params![id])?;
         Ok(())
     }
 
-    pub fn reorder_pinned_commands(
+    pub fn reorder_pinned_prompts(
         &self,
-        repo_id: &str,
+        repo_id: Option<&str>,
         ids: &[i64],
     ) -> Result<(), rusqlite::Error> {
         let tx = self.conn.unchecked_transaction()?;
         {
-            let mut stmt = tx.prepare(
-                "UPDATE pinned_commands SET sort_order = ?1 WHERE id = ?2 AND repo_id = ?3",
+            let mut stmt_repo = tx.prepare(
+                "UPDATE pinned_prompts SET sort_order = ?1 WHERE id = ?2 AND repo_id = ?3",
+            )?;
+            let mut stmt_global = tx.prepare(
+                "UPDATE pinned_prompts SET sort_order = ?1 WHERE id = ?2 AND repo_id IS NULL",
             )?;
             for (i, id) in ids.iter().enumerate() {
-                stmt.execute(params![i as i32, id, repo_id])?;
+                match repo_id {
+                    Some(rid) => {
+                        stmt_repo.execute(params![i as i32, id, rid])?;
+                    }
+                    None => {
+                        stmt_global.execute(params![i as i32, id])?;
+                    }
+                }
             }
         }
         tx.commit()?;
@@ -207,90 +293,199 @@ mod tests {
         assert!(usage.is_empty());
     }
 
-    // --- Pinned command tests ---
+    // --- Pinned prompt tests ---
 
     #[test]
-    fn test_pinned_commands_crud() {
+    fn test_pinned_prompts_repo_crud() {
         let db = Database::open_in_memory().unwrap();
         db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
             .unwrap();
 
-        let p1 = db.insert_pinned_command("r1", "review").unwrap();
-        let p2 = db.insert_pinned_command("r1", "run-tests").unwrap();
+        let p1 = db
+            .insert_pinned_prompt(Some("r1"), "Review", "/review", false)
+            .unwrap();
+        let p2 = db
+            .insert_pinned_prompt(Some("r1"), "Run tests", "Run all unit tests", true)
+            .unwrap();
 
-        assert_eq!(p1.command_name, "review");
-        assert_eq!(p2.command_name, "run-tests");
+        assert_eq!(p1.display_name, "Review");
+        assert_eq!(p1.prompt, "/review");
+        assert!(!p1.auto_send);
+        assert_eq!(p2.display_name, "Run tests");
+        assert!(p2.auto_send);
         assert!(p1.sort_order < p2.sort_order);
 
-        let pins = db.list_pinned_commands("r1").unwrap();
+        let pins = db.list_pinned_prompts_in_scope(Some("r1")).unwrap();
         assert_eq!(pins.len(), 2);
-        assert_eq!(pins[0].command_name, "review");
-        assert_eq!(pins[1].command_name, "run-tests");
+        assert_eq!(pins[0].display_name, "Review");
+        assert_eq!(pins[1].display_name, "Run tests");
 
-        db.delete_pinned_command(p1.id).unwrap();
-        let pins = db.list_pinned_commands("r1").unwrap();
+        let updated = db
+            .update_pinned_prompt(p1.id, "Code review", "/review --thorough", true)
+            .unwrap();
+        assert_eq!(updated.display_name, "Code review");
+        assert_eq!(updated.prompt, "/review --thorough");
+        assert!(updated.auto_send);
+
+        db.delete_pinned_prompt(p1.id).unwrap();
+        let pins = db.list_pinned_prompts_in_scope(Some("r1")).unwrap();
         assert_eq!(pins.len(), 1);
-        assert_eq!(pins[0].command_name, "run-tests");
+        assert_eq!(pins[0].display_name, "Run tests");
     }
 
     #[test]
-    fn test_pinned_commands_unique_constraint() {
+    fn test_pinned_prompts_global_crud() {
+        let db = Database::open_in_memory().unwrap();
+
+        let g1 = db
+            .insert_pinned_prompt(None, "Daily standup", "Summarize my recent commits", true)
+            .unwrap();
+        assert!(g1.repo_id.is_none());
+
+        let globals = db.list_pinned_prompts_in_scope(None).unwrap();
+        assert_eq!(globals.len(), 1);
+        assert_eq!(globals[0].display_name, "Daily standup");
+    }
+
+    #[test]
+    fn test_pinned_prompts_unique_constraint_per_scope() {
         let db = Database::open_in_memory().unwrap();
         db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
             .unwrap();
-        db.insert_pinned_command("r1", "review").unwrap();
-        let dup = db.insert_pinned_command("r1", "review");
+
+        db.insert_pinned_prompt(Some("r1"), "Review", "/review", false)
+            .unwrap();
+        let dup = db.insert_pinned_prompt(Some("r1"), "Review", "/review-2", false);
         assert!(dup.is_err());
+
+        // Same name allowed at the global scope and in a different repo.
+        db.insert_pinned_prompt(None, "Review", "/review", false)
+            .unwrap();
+        let dup_global = db.insert_pinned_prompt(None, "Review", "/review", false);
+        assert!(dup_global.is_err());
     }
 
     #[test]
-    fn test_pinned_commands_per_repo() {
+    fn test_pinned_prompts_per_repo_isolation() {
         let db = Database::open_in_memory().unwrap();
         db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
             .unwrap();
         db.insert_repository(&make_repo("r2", "/tmp/repo2", "repo2"))
             .unwrap();
 
-        db.insert_pinned_command("r1", "review").unwrap();
-        db.insert_pinned_command("r2", "deploy").unwrap();
+        db.insert_pinned_prompt(Some("r1"), "Review", "/review", false)
+            .unwrap();
+        db.insert_pinned_prompt(Some("r2"), "Deploy", "/deploy", false)
+            .unwrap();
 
-        let r1_pins = db.list_pinned_commands("r1").unwrap();
-        let r2_pins = db.list_pinned_commands("r2").unwrap();
-        assert_eq!(r1_pins.len(), 1);
-        assert_eq!(r1_pins[0].command_name, "review");
-        assert_eq!(r2_pins.len(), 1);
-        assert_eq!(r2_pins[0].command_name, "deploy");
+        let r1 = db.list_pinned_prompts_in_scope(Some("r1")).unwrap();
+        let r2 = db.list_pinned_prompts_in_scope(Some("r2")).unwrap();
+        assert_eq!(r1.len(), 1);
+        assert_eq!(r1[0].display_name, "Review");
+        assert_eq!(r2.len(), 1);
+        assert_eq!(r2[0].display_name, "Deploy");
     }
 
     #[test]
-    fn test_pinned_commands_cascade_on_repo_delete() {
+    fn test_pinned_prompts_cascade_on_repo_delete() {
         let db = Database::open_in_memory().unwrap();
         db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
             .unwrap();
-        db.insert_pinned_command("r1", "review").unwrap();
-        db.insert_pinned_command("r1", "run-tests").unwrap();
+        db.insert_pinned_prompt(Some("r1"), "Review", "/review", false)
+            .unwrap();
+        db.insert_pinned_prompt(Some("r1"), "Run tests", "Run tests", true)
+            .unwrap();
+        // A global should survive the repo deletion.
+        db.insert_pinned_prompt(None, "Daily standup", "Standup", true)
+            .unwrap();
 
         db.delete_repository("r1").unwrap();
-        let pins = db.list_pinned_commands("r1").unwrap();
-        assert!(pins.is_empty());
+
+        let repo_pins = db.list_pinned_prompts_in_scope(Some("r1")).unwrap();
+        assert!(repo_pins.is_empty());
+        let globals = db.list_pinned_prompts_in_scope(None).unwrap();
+        assert_eq!(globals.len(), 1);
     }
 
     #[test]
-    fn test_pinned_commands_reorder() {
+    fn test_pinned_prompts_reorder_repo() {
         let db = Database::open_in_memory().unwrap();
         db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
             .unwrap();
 
-        let p1 = db.insert_pinned_command("r1", "alpha").unwrap();
-        let p2 = db.insert_pinned_command("r1", "beta").unwrap();
-        let p3 = db.insert_pinned_command("r1", "gamma").unwrap();
-
-        db.reorder_pinned_commands("r1", &[p3.id, p1.id, p2.id])
+        let p1 = db
+            .insert_pinned_prompt(Some("r1"), "alpha", "a", false)
+            .unwrap();
+        let p2 = db
+            .insert_pinned_prompt(Some("r1"), "beta", "b", false)
+            .unwrap();
+        let p3 = db
+            .insert_pinned_prompt(Some("r1"), "gamma", "c", false)
             .unwrap();
 
-        let pins = db.list_pinned_commands("r1").unwrap();
-        assert_eq!(pins[0].command_name, "gamma");
-        assert_eq!(pins[1].command_name, "alpha");
-        assert_eq!(pins[2].command_name, "beta");
+        db.reorder_pinned_prompts(Some("r1"), &[p3.id, p1.id, p2.id])
+            .unwrap();
+
+        let pins = db.list_pinned_prompts_in_scope(Some("r1")).unwrap();
+        assert_eq!(pins[0].display_name, "gamma");
+        assert_eq!(pins[1].display_name, "alpha");
+        assert_eq!(pins[2].display_name, "beta");
+    }
+
+    #[test]
+    fn test_pinned_prompts_reorder_global() {
+        let db = Database::open_in_memory().unwrap();
+        let p1 = db.insert_pinned_prompt(None, "alpha", "a", false).unwrap();
+        let p2 = db.insert_pinned_prompt(None, "beta", "b", false).unwrap();
+
+        db.reorder_pinned_prompts(None, &[p2.id, p1.id]).unwrap();
+
+        let pins = db.list_pinned_prompts_in_scope(None).unwrap();
+        assert_eq!(pins[0].display_name, "beta");
+        assert_eq!(pins[1].display_name, "alpha");
+    }
+
+    #[test]
+    fn test_pinned_prompts_composer_merge_repo_overrides_global() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+
+        // Globals: "Review" and "Deploy".
+        let g_review = db
+            .insert_pinned_prompt(None, "Review", "/review --global", false)
+            .unwrap();
+        let _g_deploy = db
+            .insert_pinned_prompt(None, "Deploy", "/deploy --global", false)
+            .unwrap();
+        // Repo: overrides "Review", adds "Test".
+        let r_review = db
+            .insert_pinned_prompt(Some("r1"), "Review", "/review --repo", false)
+            .unwrap();
+        let _r_test = db
+            .insert_pinned_prompt(Some("r1"), "Test", "/test", true)
+            .unwrap();
+
+        let merged = db.list_pinned_prompts_for_composer(Some("r1")).unwrap();
+
+        // Repo entries come first.
+        assert_eq!(merged.len(), 3);
+        assert_eq!(merged[0].id, r_review.id);
+        assert_eq!(merged[0].prompt, "/review --repo");
+        assert_eq!(merged[1].display_name, "Test");
+        // Then non-shadowed globals.
+        assert_eq!(merged[2].display_name, "Deploy");
+        // The shadowed global is NOT present.
+        assert!(merged.iter().all(|p| p.id != g_review.id));
+    }
+
+    #[test]
+    fn test_pinned_prompts_composer_globals_only_when_no_repo() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_pinned_prompt(None, "Daily standup", "Standup", true)
+            .unwrap();
+        let merged = db.list_pinned_prompts_for_composer(None).unwrap();
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].display_name, "Daily standup");
     }
 }
