@@ -92,12 +92,9 @@
   "chat_search_close_title": "Close (Esc)",
   "chat_search_no_matches": "No matches",
 
-  "pinned_commands_label": "pinned",
-  "pinned_commands_hint": "pin a command…",
-  "pinned_commands_search": "search commands…",
-  "pinned_commands_add": "Pin a command",
-  "pinned_command_not_available": "/{{name}} (not available)",
-  "pinned_command_unpin": "Unpin /{{name}}",
+  "pinned_prompts_label": "pinned",
+  "pinned_prompt_tooltip_auto": "Send {{name}}",
+  "pinned_prompt_tooltip_insert": "Insert {{name}}",
 
   "code_block_copy": "Copy code",
   "code_block_copied": "Copied",

@@ -38,6 +38,11 @@ const ClaudeCodePluginsSettings = lazy(() =>
     default: m.ClaudeCodePluginsSettings,
   })),
 );
+const PinnedPromptsSettings = lazy(() =>
+  import("./sections/PinnedPromptsSettings").then((m) => ({
+    default: m.PinnedPromptsSettings,
+  })),
+);
 
 function SectionContent({ section }: { section: string | null }) {
   const pluginManagementEnabled = useAppStore((s) => s.pluginManagementEnabled);
@@ -47,6 +52,7 @@ function SectionContent({ section }: { section: string | null }) {
   if (section === "appearance") return <AppearanceSettings />;
   if (section === "notifications") return <NotificationsSettings />;
   if (section === "git") return <GitSettings />;
+  if (section === "pinned-prompts") return <PinnedPromptsSettings />;
   if (section === "plugins") return <PluginsSettings />;
   if (section === "claude-code-plugins") {
     return pluginManagementEnabled ? (

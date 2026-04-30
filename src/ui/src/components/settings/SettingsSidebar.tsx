@@ -1,4 +1,4 @@
-import { SlidersHorizontal, Cpu, Palette, Bell, GitBranch, FlaskConical, BarChart3, Puzzle } from "lucide-react";
+import { SlidersHorizontal, Cpu, Palette, Bell, GitBranch, FlaskConical, BarChart3, Puzzle, Bookmark } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { RepoIcon } from "../shared/RepoIcon";
@@ -11,6 +11,7 @@ export function getAppSections(pluginManagementEnabled: boolean) {
     { id: "appearance", icon: Palette },
     { id: "notifications", icon: Bell },
     { id: "git", icon: GitBranch },
+    { id: "pinned-prompts", icon: Bookmark },
     { id: "plugins", icon: Puzzle },
     ...(pluginManagementEnabled
       ? [{ id: "claude-code-plugins", icon: Puzzle }]
@@ -35,6 +36,7 @@ export function SettingsSidebar() {
     if (id === "git") return t("settings:nav_git");
     if (id === "plugins") return t("settings:nav_plugins");
     if (id === "claude-code-plugins") return t("settings:nav_claude_code_plugins");
+    if (id === "pinned-prompts") return t("settings:nav_pinned_prompts");
     return id;
   };
 
