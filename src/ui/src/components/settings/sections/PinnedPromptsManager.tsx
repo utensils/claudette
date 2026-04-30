@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronDown, ChevronUp, Plus, Save, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Pencil, Plus } from "lucide-react";
 import {
   type PinnedPrompt,
   type SlashCommand,
@@ -36,13 +36,6 @@ function makeDraftId(): string {
   return `draft-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-/**
- * Settings UI for managing pinned prompts in a single scope.
- *
- * Renders the existing prompts, lets the user edit/reorder/delete them, and
- * exposes an "Add prompt" affordance. Persistence is optimistic; failures
- * roll back and surface an inline error.
- */
 export function PinnedPromptsManager({ scope, projectPath }: PinnedPromptsManagerProps) {
   const { t } = useTranslation("settings");
 
@@ -55,14 +48,8 @@ export function PinnedPromptsManager({ scope, projectPath }: PinnedPromptsManage
     return () => { cancelled = true; };
   }, [projectPath]);
 
-  // `null` for global scope, repo id string for repo scope. Used both as the
-  // store key and as the API parameter — they're the same primitive.
   const repoId: string | null = scope.kind === "repo" ? scope.repoId : null;
 
-  // Subscribe to the raw slice values. We deliberately reuse a single empty
-  // array reference (EMPTY_PINNED_PROMPTS) for the missing-key case so the
-  // selector returns a stable reference until the load completes — otherwise
-  // useSyncExternalStore loops on the fresh `[]`.
   const prompts: readonly PinnedPrompt[] = useAppStore((s) =>
     repoId
       ? (s.repoPinnedPrompts[repoId] ?? EMPTY_PINNED_PROMPTS)
@@ -84,7 +71,6 @@ export function PinnedPromptsManager({ scope, projectPath }: PinnedPromptsManage
     [repoId, setForRepo, setGlobal],
   );
 
-  // Hydrate this scope when the manager mounts.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -160,9 +146,6 @@ export function PinnedPromptsManager({ scope, projectPath }: PinnedPromptsManage
   const commitDraft = useCallback(
     async (draft: DraftRow) => {
       const trimmedName = draft.display_name.trim();
-      // Other names must include both persisted prompts and any sibling
-      // drafts in this scope — otherwise two drafts can race past the
-      // client-side check and surface a raw SQLite UNIQUE error on save.
       const otherNames = new Set(persistedNames);
       for (const other of drafts) {
         if (other.draftId === draft.draftId) continue;
@@ -209,10 +192,8 @@ export function PinnedPromptsManager({ scope, projectPath }: PinnedPromptsManage
     async (
       original: PinnedPrompt,
       next: { display_name: string; prompt: string; auto_send: boolean },
-    ) => {
+    ): Promise<boolean> => {
       const trimmedName = next.display_name.trim();
-      // Other-name check must exclude the prompt being edited but include
-      // sibling drafts so an edit can't collide with a not-yet-saved draft.
       const others = new Set(
         prompts.filter((p) => p.id !== original.id).map((p) => p.display_name),
       );
@@ -223,20 +204,19 @@ export function PinnedPromptsManager({ scope, projectPath }: PinnedPromptsManage
       const nameErr = validateName(trimmedName, others);
       if (nameErr) {
         setError(String(original.id), nameErr);
-        return;
+        return false;
       }
       if (!next.prompt.trim()) {
         setError(String(original.id), t("pinned_prompts_error_prompt_required"));
-        return;
+        return false;
       }
-      // Skip the round-trip when nothing changed.
       if (
         trimmedName === original.display_name &&
         next.prompt === original.prompt &&
         next.auto_send === original.auto_send
       ) {
         setError(String(original.id), null);
-        return;
+        return true;
       }
       setError(String(original.id), null);
       try {
@@ -247,9 +227,11 @@ export function PinnedPromptsManager({ scope, projectPath }: PinnedPromptsManage
           next.auto_send,
         );
         upsertPrompt(saved);
+        return true;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         setError(String(original.id), msg);
+        return false;
       }
     },
     [prompts, drafts, setError, t, upsertPrompt, validateName],
@@ -309,6 +291,7 @@ export function PinnedPromptsManager({ scope, projectPath }: PinnedPromptsManage
               onMoveDown={() => handleMove(i, +1)}
               onDelete={() => handleDelete(p)}
               onCommit={(next) => commitEdit(p, next)}
+              clearError={() => setError(String(p.id), null)}
               slashCommands={slashCommands}
             />
           ))}
@@ -341,6 +324,8 @@ export function PinnedPromptsManager({ scope, projectPath }: PinnedPromptsManage
   );
 }
 
+type PromptRowMode = "display" | "editing" | "confirm-delete";
+
 interface PromptRowProps {
   prompt: PinnedPrompt;
   error: string | undefined;
@@ -353,7 +338,8 @@ interface PromptRowProps {
     display_name: string;
     prompt: string;
     auto_send: boolean;
-  }) => void;
+  }) => Promise<boolean>;
+  clearError: () => void;
   slashCommands: SlashCommand[];
 }
 
@@ -366,25 +352,51 @@ function PromptRow({
   onMoveDown,
   onDelete,
   onCommit,
+  clearError,
   slashCommands,
 }: PromptRowProps) {
   const { t } = useTranslation("settings");
+  const [mode, setMode] = useState<PromptRowMode>("display");
   const [name, setName] = useState(prompt.display_name);
   const [body, setBody] = useState(prompt.prompt);
   const [autoSend, setAutoSend] = useState(prompt.auto_send);
   const [cursorPos, setCursorPos] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const keepButtonRef = useRef<HTMLButtonElement>(null);
 
-  // Sync local state when the prompt is replaced from the store (e.g. after a
-  // successful save returns the canonical row, or another tab reloads).
+  // Sync local state when the prompt is replaced from the store.
   useEffect(() => {
     setName(prompt.display_name);
     setBody(prompt.prompt);
     setAutoSend(prompt.auto_send);
   }, [prompt.display_name, prompt.prompt, prompt.auto_send]);
 
-  const flush = useCallback(() => {
-    onCommit({ display_name: name, prompt: body, auto_send: autoSend });
+  // Auto-focus when entering editing or confirm-delete modes.
+  useEffect(() => {
+    if (mode === "editing") nameInputRef.current?.focus();
+    else if (mode === "confirm-delete") keepButtonRef.current?.focus();
+  }, [mode]);
+
+  const enterEdit = useCallback(() => {
+    setName(prompt.display_name);
+    setBody(prompt.prompt);
+    setAutoSend(prompt.auto_send);
+    clearError();
+    setMode("editing");
+  }, [prompt.display_name, prompt.prompt, prompt.auto_send, clearError]);
+
+  const cancelEdit = useCallback(() => {
+    setName(prompt.display_name);
+    setBody(prompt.prompt);
+    setAutoSend(prompt.auto_send);
+    clearError();
+    setMode("display");
+  }, [prompt.display_name, prompt.prompt, prompt.auto_send, clearError]);
+
+  const save = useCallback(async () => {
+    const ok = await onCommit({ display_name: name, prompt: body, auto_send: autoSend });
+    if (ok) setMode("display");
   }, [onCommit, name, body, autoSend]);
 
   const onSlashInsert = useCallback(
@@ -415,48 +427,90 @@ function PromptRow({
     setCursorPos(el.selectionStart);
   }, []);
 
+  const canSave = name.trim().length > 0 && body.trim().length > 0;
+
+  // Cmd/Ctrl+Enter saves; Esc cancels. Slash autocomplete consumes its own keys first.
+  const handleEditorKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (slash.handleKeyDown(e)) {
+        e.preventDefault();
+        return;
+      }
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        if (canSave) void save();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        cancelEdit();
+      }
+    },
+    [slash, canSave, save, cancelEdit],
+  );
+
+  // ---------- Display mode ----------
+  if (mode === "display") {
+    return (
+      <div className={styles.row}>
+        <div className={styles.displayHeader}>
+          <span className={styles.displayName}>{prompt.display_name}</span>
+          <div className={styles.actions}>
+            <button
+              type="button"
+              className={styles.iconButton}
+              disabled={!canMoveUp}
+              onClick={onMoveUp}
+              aria-label={t("pinned_prompts_move_up")}
+              title={t("pinned_prompts_move_up")}
+            >
+              <ChevronUp size={14} />
+            </button>
+            <button
+              type="button"
+              className={styles.iconButton}
+              disabled={!canMoveDown}
+              onClick={onMoveDown}
+              aria-label={t("pinned_prompts_move_down")}
+              title={t("pinned_prompts_move_down")}
+            >
+              <ChevronDown size={14} />
+            </button>
+            <button
+              type="button"
+              className={styles.iconButton}
+              onClick={enterEdit}
+              aria-label={t("pinned_prompts_edit_action", { name: prompt.display_name })}
+              title={t("pinned_prompts_edit_action", { name: prompt.display_name })}
+            >
+              <Pencil size={14} />
+            </button>
+          </div>
+        </div>
+        <div className={styles.displayPreview}>{prompt.prompt}</div>
+        {prompt.auto_send && (
+          <div className={styles.displayMeta}>{t("pinned_prompts_auto_send")}</div>
+        )}
+      </div>
+    );
+  }
+
+  // ---------- Editing / Confirm-delete modes (shared editor body) ----------
+  const cardClass = mode === "confirm-delete"
+    ? `${styles.row} ${styles.rowDangerous}`
+    : `${styles.row} ${styles.rowEditing}`;
+
   return (
-    <div className={styles.row}>
+    <div className={cardClass}>
       <div className={styles.rowHeader}>
         <input
+          ref={nameInputRef}
           className={error ? styles.nameInputError : styles.nameInput}
           value={name}
           onChange={(e) => setName(e.target.value)}
-          onBlur={flush}
+          onKeyDown={handleEditorKeyDown}
           placeholder={t("pinned_prompts_display_name_placeholder")}
           aria-label={t("pinned_prompts_display_name_label")}
+          disabled={mode === "confirm-delete"}
         />
-        <div className={styles.actions}>
-          <button
-            type="button"
-            className={styles.iconButton}
-            disabled={!canMoveUp}
-            onClick={onMoveUp}
-            aria-label={t("pinned_prompts_move_up")}
-            title={t("pinned_prompts_move_up")}
-          >
-            <ChevronUp size={14} />
-          </button>
-          <button
-            type="button"
-            className={styles.iconButton}
-            disabled={!canMoveDown}
-            onClick={onMoveDown}
-            aria-label={t("pinned_prompts_move_down")}
-            title={t("pinned_prompts_move_down")}
-          >
-            <ChevronDown size={14} />
-          </button>
-          <button
-            type="button"
-            className={styles.deleteButton}
-            onClick={onDelete}
-            aria-label={t("pinned_prompts_delete", { name: prompt.display_name })}
-            title={t("pinned_prompts_delete", { name: prompt.display_name })}
-          >
-            <Trash2 size={14} />
-          </button>
-        </div>
       </div>
       <div className={styles.textareaWrapper}>
         <textarea
@@ -465,13 +519,13 @@ function PromptRow({
           value={body}
           onChange={(e) => { setBody(e.target.value); updateCursor(e.target); }}
           onSelect={(e) => updateCursor(e.currentTarget)}
-          onBlur={flush}
-          onKeyDown={(e) => { if (slash.handleKeyDown(e)) e.preventDefault(); }}
+          onKeyDown={handleEditorKeyDown}
           rows={3}
           placeholder={t("pinned_prompts_prompt_placeholder")}
           aria-label={t("pinned_prompts_prompt_label")}
+          disabled={mode === "confirm-delete"}
         />
-        {slash.showPicker && (
+        {mode === "editing" && slash.showPicker && (
           <SlashCommandPicker
             commands={slash.filteredCommands}
             selectedIndex={slash.selectedIndex}
@@ -486,19 +540,65 @@ function PromptRow({
           <input
             type="checkbox"
             checked={autoSend}
-            onChange={(e) => {
-              setAutoSend(e.target.checked);
-              onCommit({
-                display_name: name,
-                prompt: body,
-                auto_send: e.target.checked,
-              });
-            }}
+            onChange={(e) => setAutoSend(e.target.checked)}
+            disabled={mode === "confirm-delete"}
           />
           {t("pinned_prompts_auto_send")}
         </label>
         {error && <span className={styles.errorText}>{error}</span>}
       </div>
+
+      {mode === "editing" ? (
+        <div className={styles.footer}>
+          <button
+            type="button"
+            className={styles.btnDestructiveText}
+            onClick={() => setMode("confirm-delete")}
+          >
+            {t("pinned_prompts_delete_prompt")}
+          </button>
+          <div className={styles.footerSpacer} />
+          <button type="button" className={styles.btnGhost} onClick={cancelEdit}>
+            {t("pinned_prompts_cancel")}
+          </button>
+          <button
+            type="button"
+            className={styles.btnPrimary}
+            onClick={() => void save()}
+            disabled={!canSave}
+          >
+            {t("pinned_prompts_save_changes")}
+          </button>
+        </div>
+      ) : (
+        <div className={styles.confirmPanel}>
+          <div className={styles.confirmCopy}>
+            <div className={styles.confirmTitle}>
+              {t("pinned_prompts_confirm_delete_title")}
+            </div>
+            <div className={styles.confirmSubtitle}>
+              {t("pinned_prompts_confirm_delete_subtitle")}
+            </div>
+          </div>
+          <div className={styles.confirmActions}>
+            <button
+              ref={keepButtonRef}
+              type="button"
+              className={styles.btnGhost}
+              onClick={() => setMode("editing")}
+            >
+              {t("pinned_prompts_keep")}
+            </button>
+            <button
+              type="button"
+              className={styles.btnDestructiveFill}
+              onClick={onDelete}
+            >
+              {t("pinned_prompts_delete_prompt")}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -552,28 +652,38 @@ function DraftRowView({
     setCursorPos(el.selectionStart);
   }, []);
 
+  const canSave =
+    draft.display_name.trim().length > 0 && draft.prompt.trim().length > 0;
+
+  const handleEditorKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (slash.handleKeyDown(e)) {
+        e.preventDefault();
+        return;
+      }
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        if (canSave) onCommit();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        onCancel();
+      }
+    },
+    [slash, canSave, onCommit, onCancel],
+  );
+
   return (
-    <div className={styles.row}>
+    <div className={`${styles.row} ${styles.rowEditing}`}>
       <div className={styles.rowHeader}>
         <input
           className={error ? styles.nameInputError : styles.nameInput}
           value={draft.display_name}
           onChange={(e) => onChange({ display_name: e.target.value })}
+          onKeyDown={handleEditorKeyDown}
           placeholder={t("pinned_prompts_display_name_placeholder")}
           aria-label={t("pinned_prompts_display_name_label")}
           autoFocus
         />
-        <div className={styles.actions}>
-          <button
-            type="button"
-            className={styles.deleteButton}
-            onClick={onCancel}
-            aria-label={t("pinned_prompts_cancel_draft")}
-            title={t("pinned_prompts_cancel_draft")}
-          >
-            <Trash2 size={14} />
-          </button>
-        </div>
       </div>
       <div className={styles.textareaWrapper}>
         <textarea
@@ -582,7 +692,7 @@ function DraftRowView({
           value={draft.prompt}
           onChange={(e) => { onChange({ prompt: e.target.value }); updateCursor(e.target); }}
           onSelect={(e) => updateCursor(e.currentTarget)}
-          onKeyDown={(e) => { if (slash.handleKeyDown(e)) e.preventDefault(); }}
+          onKeyDown={handleEditorKeyDown}
           rows={3}
           placeholder={t("pinned_prompts_prompt_placeholder")}
           aria-label={t("pinned_prompts_prompt_label")}
@@ -606,18 +716,21 @@ function DraftRowView({
           />
           {t("pinned_prompts_auto_send")}
         </label>
-        <div className={styles.actions}>
-          {error && <span className={styles.errorText}>{error}</span>}
-          <button
-            type="button"
-            className={styles.iconButton}
-            onClick={onCommit}
-            title={t("pinned_prompts_save_draft")}
-            aria-label={t("pinned_prompts_save_draft")}
-          >
-            <Save size={14} />
-          </button>
-        </div>
+        {error && <span className={styles.errorText}>{error}</span>}
+      </div>
+      <div className={styles.footer}>
+        <div className={styles.footerSpacer} />
+        <button type="button" className={styles.btnGhost} onClick={onCancel}>
+          {t("pinned_prompts_cancel")}
+        </button>
+        <button
+          type="button"
+          className={styles.btnPrimary}
+          onClick={onCommit}
+          disabled={!canSave}
+        >
+          {t("pinned_prompts_save_draft")}
+        </button>
       </div>
     </div>
   );
@@ -628,10 +741,6 @@ interface InheritedGlobalsListProps {
   repoNames: Set<string>;
 }
 
-/**
- * Read-only summary of the globals a repo will inherit. Anything whose name
- * is also defined as a repo prompt is flagged as overridden.
- */
 export function InheritedGlobalsList({
   globals,
   repoNames,
