@@ -377,6 +377,7 @@ impl VoiceProviderRegistry {
     pub fn prewarm(&self) {
         self.recorder.warmup();
         let _ = self.platform_speech.availability();
+        let _ = self.backend_checker.ready_backend();
     }
 
     pub fn set_selected_provider(
@@ -626,12 +627,6 @@ impl VoiceProviderRegistry {
         self.backend_checker.ready_backend()
     }
 
-    fn candle_accelerator_label(&self) -> String {
-        self.ensure_candle_backend_ready()
-            .map(|backend| backend.accelerator_label().to_string())
-            .unwrap_or_else(|err| format!("Unavailable: {err}"))
-    }
-
     pub(crate) fn resolve_provider_id(
         &self,
         db: &Database,
@@ -828,12 +823,25 @@ impl VoiceProvider for DistilWhisperCandleProvider {
             download_required: true,
             model_size_label: Some("About 1.5 GB plus tokenizer/config files".to_string()),
             cache_path: Some(cache_path.display().to_string()),
-            accelerator_label: Some(registry.candle_accelerator_label()),
+            accelerator_label: None,
         }
     }
 
     fn status(&self, registry: &VoiceProviderRegistry, db: &Database) -> VoiceProviderInfo {
         let enabled = registry.enabled(db, self.id());
+        if !enabled {
+            return VoiceProviderInfo {
+                metadata: self.metadata(registry),
+                status: VoiceProviderStatus::Unavailable,
+                status_label: "Disabled".to_string(),
+                enabled: false,
+                selected: false,
+                setup_required: false,
+                can_remove_model: false,
+                error: None,
+            };
+        }
+
         let cache_path = registry.distil_cache_path();
         let model_status = db
             .get_app_setting(&model_status_key(self.id()))
@@ -841,56 +849,57 @@ impl VoiceProvider for DistilWhisperCandleProvider {
             .flatten();
         let installed = distil_model_ready(&cache_path);
         let backend_status = registry.ensure_candle_backend_ready();
-        let (status, status_label, setup_required, error) = if !enabled {
-            (
-                VoiceProviderStatus::Unavailable,
-                "Disabled".to_string(),
-                false,
-                None,
-            )
-        } else if model_status.as_deref() == Some("downloading") {
-            (
-                VoiceProviderStatus::Downloading,
-                "Downloading model".to_string(),
-                true,
-                None,
-            )
-        } else if let Err(err) = &backend_status {
-            (
-                VoiceProviderStatus::EngineUnavailable,
-                "Voice engine unavailable".to_string(),
-                false,
-                Some(err.clone()),
-            )
-        } else if installed {
-            let backend = backend_status.expect("backend availability checked");
-            (
-                VoiceProviderStatus::Ready,
-                format!("{DISTIL_READY_MESSAGE} ({})", backend.label()),
-                false,
-                None,
-            )
-        } else if model_status
-            .as_deref()
-            .is_some_and(|status| status.starts_with("error:"))
-        {
-            (
-                VoiceProviderStatus::Error,
-                "Download failed".to_string(),
-                true,
-                model_status.map(|s| s.trim_start_matches("error:").to_string()),
-            )
-        } else {
-            (
-                VoiceProviderStatus::NeedsSetup,
-                "Download required".to_string(),
-                true,
-                None,
-            )
-        };
+
+        let mut metadata = self.metadata(registry);
+        metadata.accelerator_label = Some(match &backend_status {
+            Ok(backend) => backend.accelerator_label().to_string(),
+            Err(err) => format!("Unavailable: {err}"),
+        });
+
+        let (status, status_label, setup_required, error) =
+            if model_status.as_deref() == Some("downloading") {
+                (
+                    VoiceProviderStatus::Downloading,
+                    "Downloading model".to_string(),
+                    true,
+                    None,
+                )
+            } else if let Err(err) = &backend_status {
+                (
+                    VoiceProviderStatus::EngineUnavailable,
+                    "Voice engine unavailable".to_string(),
+                    false,
+                    Some(err.clone()),
+                )
+            } else if installed {
+                let backend = backend_status.expect("backend availability checked");
+                (
+                    VoiceProviderStatus::Ready,
+                    format!("{DISTIL_READY_MESSAGE} ({})", backend.label()),
+                    false,
+                    None,
+                )
+            } else if model_status
+                .as_deref()
+                .is_some_and(|status| status.starts_with("error:"))
+            {
+                (
+                    VoiceProviderStatus::Error,
+                    "Download failed".to_string(),
+                    true,
+                    model_status.map(|s| s.trim_start_matches("error:").to_string()),
+                )
+            } else {
+                (
+                    VoiceProviderStatus::NeedsSetup,
+                    "Download required".to_string(),
+                    true,
+                    None,
+                )
+            };
 
         VoiceProviderInfo {
-            metadata: self.metadata(registry),
+            metadata,
             status,
             status_label,
             enabled,
@@ -1894,6 +1903,36 @@ mod tests {
     }
 
     #[test]
+    fn distil_provider_skips_backend_probe_when_disabled() {
+        let (_db_dir, db_path) = test_db_path();
+        let model_dir = tempdir().expect("model dir");
+        let db = open_test_db(&db_path);
+        db.set_app_setting(&enabled_key(DISTIL_ID), "false")
+            .expect("disable");
+        let checker = Arc::new(CountingBackendChecker::new());
+        let registry = VoiceProviderRegistry::with_runtime_and_backend(
+            model_dir.path().to_path_buf(),
+            Arc::new(FakeRecorder::new(vec![0.1])),
+            Arc::new(FakeTranscriber::ok("ignored")),
+            checker.clone(),
+        );
+
+        let provider = registry
+            .list_providers(&db)
+            .into_iter()
+            .find(|p| p.metadata.id == DISTIL_ID)
+            .expect("distil provider");
+
+        assert_eq!(provider.status, VoiceProviderStatus::Unavailable);
+        assert_eq!(
+            checker.call_count(),
+            0,
+            "backend probe should not be called for disabled provider"
+        );
+        assert!(provider.metadata.accelerator_label.is_none());
+    }
+
+    #[test]
     #[ignore = "requires local Distil-Whisper cache and CLAUDETTE_VOICE_SAMPLE_WAV"]
     fn ignored_real_model_probe_transcribes_fixture_wav() {
         let cache_path = std::env::var_os("CLAUDETTE_VOICE_MODEL_CACHE")
@@ -2010,6 +2049,32 @@ mod tests {
     impl CandleBackendChecker for FakeBackendChecker {
         fn ready_backend(&self) -> Result<CandleBackend, String> {
             self.result.clone()
+        }
+    }
+
+    struct CountingBackendChecker {
+        calls: AtomicUsize,
+    }
+
+    impl CountingBackendChecker {
+        fn new() -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+            }
+        }
+
+        fn call_count(&self) -> usize {
+            self.calls.load(Ordering::Relaxed)
+        }
+    }
+
+    impl CandleBackendChecker for CountingBackendChecker {
+        fn ready_backend(&self) -> Result<CandleBackend, String> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            #[cfg(target_os = "macos")]
+            return Ok(CandleBackend::Metal);
+            #[cfg(not(target_os = "macos"))]
+            return Ok(CandleBackend::Cpu);
         }
     }
 

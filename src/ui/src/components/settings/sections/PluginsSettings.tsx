@@ -46,7 +46,7 @@ export function PluginsSettings() {
   const [reseedMessage, setReseedMessage] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
-  const refresh = useCallback(async () => {
+  const refreshAll = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -65,40 +65,67 @@ export function PluginsSettings() {
     }
   }, []);
 
+  const refreshPlugins = useCallback(async () => {
+    setError(null);
+    try {
+      setPlugins(await listClaudettePlugins());
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
+  const refreshBuiltins = useCallback(async () => {
+    setError(null);
+    try {
+      setBuiltins(await listBuiltinClaudettePlugins());
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
+  const refreshVoice = useCallback(async () => {
+    setError(null);
+    try {
+      setVoiceProviders(await listVoiceProviders());
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
   const handleToggleBuiltin = useCallback(
     async (pluginName: string, nextEnabled: boolean) => {
       try {
         await setBuiltinClaudettePluginEnabled(pluginName, nextEnabled);
-        await refresh();
+        await refreshBuiltins();
       } catch (e) {
         setError(String(e));
       }
     },
-    [refresh],
+    [refreshBuiltins],
   );
 
   const handleSelectVoiceProvider = useCallback(
     async (providerId: string) => {
       try {
         await setSelectedVoiceProvider(providerId);
-        await refresh();
+        await refreshVoice();
       } catch (e) {
         setError(String(e));
       }
     },
-    [refresh],
+    [refreshVoice],
   );
 
   const handleToggleVoiceProvider = useCallback(
     async (providerId: string, nextEnabled: boolean) => {
       try {
         await setVoiceProviderEnabled(providerId, nextEnabled);
-        await refresh();
+        await refreshVoice();
       } catch (e) {
         setError(String(e));
       }
     },
-    [refresh],
+    [refreshVoice],
   );
 
   const handlePrepareVoiceProvider = useCallback(
@@ -106,32 +133,32 @@ export function PluginsSettings() {
       setPreparingVoiceProvider(providerId);
       try {
         await prepareVoiceProvider(providerId);
-        await refresh();
+        await refreshVoice();
       } catch (e) {
         setError(String(e));
-        await refresh();
+        await refreshVoice();
       } finally {
         setPreparingVoiceProvider(null);
       }
     },
-    [refresh],
+    [refreshVoice],
   );
 
   const handleRemoveVoiceProviderModel = useCallback(
     async (providerId: string) => {
       try {
         await removeVoiceProviderModel(providerId);
-        await refresh();
+        await refreshVoice();
       } catch (e) {
         setError(String(e));
       }
     },
-    [refresh],
+    [refreshVoice],
   );
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    void refreshAll();
+  }, [refreshAll]);
 
   const voiceProviderFocus = useAppStore((s) => s.voiceProviderFocus);
   const focusVoiceProvider = useAppStore((s) => s.focusVoiceProvider);
@@ -177,24 +204,24 @@ export function PluginsSettings() {
     async (pluginName: string, nextEnabled: boolean) => {
       try {
         await setClaudettePluginEnabled(pluginName, nextEnabled);
-        await refresh();
+        await refreshPlugins();
       } catch (e) {
         setError(String(e));
       }
     },
-    [refresh],
+    [refreshPlugins],
   );
 
   const handleSettingChange = useCallback(
     async (pluginName: string, key: string, value: unknown) => {
       try {
         await setClaudettePluginSetting(pluginName, key, value);
-        await refresh();
+        await refreshPlugins();
       } catch (e) {
         setError(String(e));
       }
     },
-    [refresh],
+    [refreshPlugins],
   );
 
   const handleReseed = useCallback(async () => {
@@ -206,11 +233,11 @@ export function PluginsSettings() {
           ? t("plugins_reseeded")
           : t("plugins_reseeded_warnings", { count: warnings.length, warnings: warnings.join("; ") }),
       );
-      await refresh();
+      await refreshPlugins();
     } catch (e) {
       setError(String(e));
     }
-  }, [refresh, t]);
+  }, [refreshPlugins, t]);
 
   if (error) {
     return (
