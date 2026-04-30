@@ -92,12 +92,9 @@
   "chat_search_close_title": "Fechar (Esc)",
   "chat_search_no_matches": "Sem resultados",
 
-  "pinned_commands_label": "fixados",
-  "pinned_commands_hint": "fixar um comando…",
-  "pinned_commands_search": "buscar comandos…",
-  "pinned_commands_add": "Fixar um comando",
-  "pinned_command_not_available": "/{{name}} (indisponível)",
-  "pinned_command_unpin": "Desafixar /{{name}}",
+  "pinned_prompts_label": "fixados",
+  "pinned_prompt_tooltip_auto": "Enviar {{name}}",
+  "pinned_prompt_tooltip_insert": "Inserir {{name}}",
 
   "code_block_copy": "Copiar código",
   "code_block_copied": "Copiado",
