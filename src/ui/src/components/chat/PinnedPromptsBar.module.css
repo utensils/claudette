@@ -9,9 +9,7 @@
 
 .label {
   color: var(--text-faint);
-  font-size: var(--fs-xs);
-  text-transform: lowercase;
-  letter-spacing: 0.03em;
+  flex-shrink: 0;
   user-select: none;
   margin-right: 2px;
 }

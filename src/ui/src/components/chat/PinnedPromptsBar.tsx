@@ -1,4 +1,5 @@
 import { useEffect, useMemo } from "react";
+import { Pin } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import {
@@ -62,7 +63,7 @@ export function PinnedPromptsBar({
 
   return (
     <div className={styles.bar}>
-      <span className={styles.label}>{t("pinned_prompts_label")}</span>
+      <Pin className={styles.label} size={12} />
       {prompts.map((p) => {
         const tooltipKey = p.auto_send
           ? "pinned_prompt_tooltip_auto"
