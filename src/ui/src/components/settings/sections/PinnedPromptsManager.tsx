@@ -41,17 +41,17 @@ function makeDraftId(): string {
 export function PinnedPromptsManager({ scope }: PinnedPromptsManagerProps) {
   const { t } = useTranslation("settings");
 
-  const repoIdForState = scope.kind === "repo" ? scope.repoId : null;
-  const repoIdForApi: string | null =
-    scope.kind === "repo" ? scope.repoId : null;
+  // `null` for global scope, repo id string for repo scope. Used both as the
+  // store key and as the API parameter — they're the same primitive.
+  const repoId: string | null = scope.kind === "repo" ? scope.repoId : null;
 
   // Subscribe to the raw slice values. We deliberately reuse a single empty
   // array reference (EMPTY_PINNED_PROMPTS) for the missing-key case so the
   // selector returns a stable reference until the load completes — otherwise
   // useSyncExternalStore loops on the fresh `[]`.
   const prompts: readonly PinnedPrompt[] = useAppStore((s) =>
-    repoIdForState
-      ? (s.repoPinnedPrompts[repoIdForState] ?? EMPTY_PINNED_PROMPTS)
+    repoId
+      ? (s.repoPinnedPrompts[repoId] ?? EMPTY_PINNED_PROMPTS)
       : s.globalPinnedPrompts,
   );
   const setGlobal = useAppStore((s) => s.setGlobalPinnedPrompts);
@@ -64,10 +64,10 @@ export function PinnedPromptsManager({ scope }: PinnedPromptsManagerProps) {
   const writeBack = useCallback(
     (next: readonly PinnedPrompt[]) => {
       const copy = [...next];
-      if (repoIdForState) setForRepo(repoIdForState, copy);
+      if (repoId) setForRepo(repoId, copy);
       else setGlobal(copy);
     },
-    [repoIdForState, setForRepo, setGlobal],
+    [repoId, setForRepo, setGlobal],
   );
 
   // Hydrate this scope when the manager mounts.
@@ -75,8 +75,8 @@ export function PinnedPromptsManager({ scope }: PinnedPromptsManagerProps) {
     let cancelled = false;
     (async () => {
       try {
-        if (scope.kind === "global") await loadGlobals();
-        else await loadRepo(scope.repoId);
+        if (repoId === null) await loadGlobals();
+        else await loadRepo(repoId);
       } catch (e) {
         if (!cancelled) {
           console.error("Failed to load pinned prompts:", e);
@@ -86,7 +86,7 @@ export function PinnedPromptsManager({ scope }: PinnedPromptsManagerProps) {
     return () => {
       cancelled = true;
     };
-  }, [scope.kind, scope.kind === "repo" ? scope.repoId : "", loadGlobals, loadRepo]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [repoId, loadGlobals, loadRepo]);
 
   const [drafts, setDrafts] = useState<DraftRow[]>([]);
   const [errorByKey, setErrorByKey] = useState<Record<string, string>>({});
@@ -103,7 +103,7 @@ export function PinnedPromptsManager({ scope }: PinnedPromptsManagerProps) {
     });
   }, []);
 
-  const existingNames = useMemo(
+  const persistedNames = useMemo(
     () => new Set(prompts.map((p) => p.display_name)),
     [prompts],
   );
@@ -146,7 +146,16 @@ export function PinnedPromptsManager({ scope }: PinnedPromptsManagerProps) {
   const commitDraft = useCallback(
     async (draft: DraftRow) => {
       const trimmedName = draft.display_name.trim();
-      const nameErr = validateName(trimmedName, existingNames);
+      // Other names must include both persisted prompts and any sibling
+      // drafts in this scope — otherwise two drafts can race past the
+      // client-side check and surface a raw SQLite UNIQUE error on save.
+      const otherNames = new Set(persistedNames);
+      for (const other of drafts) {
+        if (other.draftId === draft.draftId) continue;
+        const otherTrimmed = other.display_name.trim();
+        if (otherTrimmed) otherNames.add(otherTrimmed);
+      }
+      const nameErr = validateName(trimmedName, otherNames);
       if (nameErr) {
         setError(draft.draftId, nameErr);
         return;
@@ -158,7 +167,7 @@ export function PinnedPromptsManager({ scope }: PinnedPromptsManagerProps) {
       setError(draft.draftId, null);
       try {
         const saved = await createPinnedPrompt(
-          repoIdForApi,
+          repoId,
           trimmedName,
           draft.prompt,
           draft.auto_send,
@@ -172,10 +181,11 @@ export function PinnedPromptsManager({ scope }: PinnedPromptsManagerProps) {
     },
     [
       validateName,
-      existingNames,
+      persistedNames,
+      drafts,
       setError,
       t,
-      repoIdForApi,
+      repoId,
       upsertPrompt,
       removeDraft,
     ],
@@ -187,10 +197,15 @@ export function PinnedPromptsManager({ scope }: PinnedPromptsManagerProps) {
       next: { display_name: string; prompt: string; auto_send: boolean },
     ) => {
       const trimmedName = next.display_name.trim();
-      // Other-name check must exclude the prompt being edited.
+      // Other-name check must exclude the prompt being edited but include
+      // sibling drafts so an edit can't collide with a not-yet-saved draft.
       const others = new Set(
         prompts.filter((p) => p.id !== original.id).map((p) => p.display_name),
       );
+      for (const draft of drafts) {
+        const otherTrimmed = draft.display_name.trim();
+        if (otherTrimmed) others.add(otherTrimmed);
+      }
       const nameErr = validateName(trimmedName, others);
       if (nameErr) {
         setError(String(original.id), nameErr);
@@ -223,7 +238,7 @@ export function PinnedPromptsManager({ scope }: PinnedPromptsManagerProps) {
         setError(String(original.id), msg);
       }
     },
-    [prompts, setError, t, upsertPrompt, validateName],
+    [prompts, drafts, setError, t, upsertPrompt, validateName],
   );
 
   const handleDelete = useCallback(
@@ -252,7 +267,7 @@ export function PinnedPromptsManager({ scope }: PinnedPromptsManagerProps) {
       writeBack(reordered);
       try {
         await reorderPinnedPrompts(
-          repoIdForApi,
+          repoId,
           reordered.map((p) => p.id),
         );
       } catch (e) {
@@ -260,7 +275,7 @@ export function PinnedPromptsManager({ scope }: PinnedPromptsManagerProps) {
         writeBack(previous);
       }
     },
-    [prompts, writeBack, repoIdForApi],
+    [prompts, writeBack, repoId],
   );
 
   return (

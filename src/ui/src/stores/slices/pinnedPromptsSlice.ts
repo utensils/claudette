@@ -60,25 +60,34 @@ export const createPinnedPromptsSlice: StateCreator<
       };
     }),
 
-  removePinnedPromptById: (id) =>
-    set((s) => {
-      const globals = s.globalPinnedPrompts.filter((p) => p.id !== id);
-      const nextRepo: Record<string, PinnedPrompt[]> = {};
-      let repoChanged = false;
-      for (const [k, v] of Object.entries(s.repoPinnedPrompts)) {
-        const filtered = v.filter((p) => p.id !== id);
-        nextRepo[k] = filtered;
-        if (filtered.length !== v.length) repoChanged = true;
-      }
+  removePinnedPromptById: (id) => {
+    // Inspect state up front and bail out early when nothing actually
+    // contains this id — otherwise we'd still call set() with `{}`, which
+    // rebuilds the top-level state object and notifies subscribers.
+    const s = get();
+    const inGlobals = s.globalPinnedPrompts.some((p) => p.id === id);
+    const affectedRepoKeys: string[] = [];
+    for (const [k, v] of Object.entries(s.repoPinnedPrompts)) {
+      if (v.some((p) => p.id === id)) affectedRepoKeys.push(k);
+    }
+    if (!inGlobals && affectedRepoKeys.length === 0) return;
+    set((curr) => {
       const out: Partial<AppState> = {};
-      if (globals.length !== s.globalPinnedPrompts.length) {
-        out.globalPinnedPrompts = globals;
+      if (inGlobals) {
+        out.globalPinnedPrompts = curr.globalPinnedPrompts.filter(
+          (p) => p.id !== id,
+        );
       }
-      if (repoChanged) {
+      if (affectedRepoKeys.length > 0) {
+        const nextRepo = { ...curr.repoPinnedPrompts };
+        for (const k of affectedRepoKeys) {
+          nextRepo[k] = nextRepo[k].filter((p) => p.id !== id);
+        }
         out.repoPinnedPrompts = nextRepo;
       }
       return out;
-    }),
+    });
+  },
 
   loadGlobalPinnedPrompts: async () => {
     const prompts = await listPinnedPromptsInScope(null);

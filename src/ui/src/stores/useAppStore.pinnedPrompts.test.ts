@@ -117,4 +117,17 @@ describe("pinnedPromptsSlice mutators", () => {
     expect(useAppStore.getState().repoPinnedPrompts.r1).toHaveLength(0);
     expect(useAppStore.getState().globalPinnedPrompts).toHaveLength(1);
   });
+
+  it("removePinnedPromptById is a no-op when the id isn't anywhere", () => {
+    const initialGlobals = [makePrompt(1, "Global", "g", null)];
+    const initialRepos = { r1: [makePrompt(2, "Repo", "r", "r1")] };
+    useAppStore.setState({
+      globalPinnedPrompts: initialGlobals,
+      repoPinnedPrompts: initialRepos,
+    });
+    useAppStore.getState().removePinnedPromptById(999);
+    // Same references — no spurious set() that would notify subscribers.
+    expect(useAppStore.getState().globalPinnedPrompts).toBe(initialGlobals);
+    expect(useAppStore.getState().repoPinnedPrompts).toBe(initialRepos);
+  });
 });

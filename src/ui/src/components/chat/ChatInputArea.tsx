@@ -51,6 +51,23 @@ function extractMentionQuery(text: string, cursorPos: number): string | null {
   return query;
 }
 
+/**
+ * Extract every closed `@path` token from `text` — i.e. an `@` at start of
+ * string or preceded by whitespace, followed by a non-whitespace path. Used to
+ * forward mentions baked into a pinned prompt to the backend on auto-send,
+ * since those paths were never inserted via the file-mention picker and so
+ * aren't tracked in `mentionedFilesRef`.
+ */
+function extractMentionPaths(text: string): Set<string> {
+  const out = new Set<string>();
+  const re = /(^|\s)@(\S+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    out.add(m[2]);
+  }
+  return out;
+}
+
 /** Convert a File/Blob to a base64 string (without the data: prefix). */
 function fileToBase64(file: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -197,10 +214,12 @@ export function ChatInputArea({
         // handleSend — otherwise an auto-send click leaves the recorder
         // running in the background.
         voice.cancel();
-        // Send immediately, with whatever attachments / file mentions are
-        // currently staged. Mirrors the post-send cleanup in handleSend so
-        // attachments aren't double-submitted on the next manual send.
-        const activeFiles = new Set<string>();
+        // Send immediately. mentionedFilesRef only tracks paths inserted via
+        // the file picker into the textarea, but a pinned prompt's text was
+        // never picker-typed — so we extract any baked-in @path mentions from
+        // pin.prompt itself, then union them with picker-tracked paths that
+        // also appear in the prompt body.
+        const activeFiles = extractMentionPaths(pin.prompt);
         for (const path of mentionedFilesRef.current) {
           if (pin.prompt.includes(`@${path}`)) {
             activeFiles.add(path);
