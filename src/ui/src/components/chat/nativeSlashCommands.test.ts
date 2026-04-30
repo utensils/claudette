@@ -6,6 +6,7 @@ import {
   CONFIG_SECTIONS,
   NATIVE_HANDLERS,
   describeSlashQuery,
+  describeSlashQueryAtCursor,
   formatHelpMessage,
   formatVersionMessage,
   parseSlashInput,
@@ -228,6 +229,56 @@ describe("describeSlashQuery", () => {
   it("does not consume a leading slash inside a longer prefix", async () => {
     expect(describeSlashQuery("  /plugin")).toBeNull();
     expect(describeSlashQuery("not/a/command")).toBeNull();
+  });
+});
+
+describe("describeSlashQueryAtCursor", () => {
+  it("detects a command at position 0", () => {
+    expect(describeSlashQueryAtCursor("/review", 7)).toEqual({
+      token: "review",
+      start: 0,
+      end: 7,
+    });
+  });
+
+  it("returns empty token for a bare slash", () => {
+    expect(describeSlashQueryAtCursor("/", 1)).toEqual({
+      token: "",
+      start: 0,
+      end: 1,
+    });
+  });
+
+  it("detects a command after a newline", () => {
+    expect(describeSlashQueryAtCursor("some text\n/rev", 14)).toEqual({
+      token: "rev",
+      start: 10,
+      end: 14,
+    });
+  });
+
+  it("returns null when slash is mid-line (not after newline)", () => {
+    expect(describeSlashQueryAtCursor("some text /rev", 14)).toBeNull();
+  });
+
+  it("returns null when cursor is past whitespace after the token", () => {
+    expect(describeSlashQueryAtCursor("/review args", 12)).toBeNull();
+  });
+
+  it("returns null for empty string", () => {
+    expect(describeSlashQueryAtCursor("", 0)).toBeNull();
+  });
+
+  it("detects bare slash after newline", () => {
+    expect(describeSlashQueryAtCursor("text\n/", 6)).toEqual({
+      token: "",
+      start: 5,
+      end: 6,
+    });
+  });
+
+  it("returns null for plain text with no slash", () => {
+    expect(describeSlashQueryAtCursor("just some text", 14)).toBeNull();
   });
 });
 

@@ -62,6 +62,10 @@
   border-color: var(--text-dim);
 }
 
+.textareaWrapper {
+  position: relative;
+}
+
 .controlsRow {
   display: flex;
   align-items: center;

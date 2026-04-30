@@ -1,15 +1,19 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Plus, Save, Trash2 } from "lucide-react";
 import {
   type PinnedPrompt,
+  type SlashCommand,
   createPinnedPrompt,
   deletePinnedPrompt,
+  listSlashCommands,
   reorderPinnedPrompts,
   updatePinnedPrompt,
 } from "../../../services/tauri";
 import { useAppStore } from "../../../stores/useAppStore";
 import { EMPTY_PINNED_PROMPTS } from "../../../stores/slices/pinnedPromptsSlice";
+import { useSlashAutocomplete } from "../../../hooks/useSlashAutocomplete";
+import { SlashCommandPicker } from "../../chat/SlashCommandPicker";
 import styles from "./PinnedPromptsManager.module.css";
 
 export type PinnedPromptScope =
@@ -18,6 +22,7 @@ export type PinnedPromptScope =
 
 interface PinnedPromptsManagerProps {
   scope: PinnedPromptScope;
+  projectPath?: string;
 }
 
 interface DraftRow {
@@ -38,8 +43,17 @@ function makeDraftId(): string {
  * exposes an "Add prompt" affordance. Persistence is optimistic; failures
  * roll back and surface an inline error.
  */
-export function PinnedPromptsManager({ scope }: PinnedPromptsManagerProps) {
+export function PinnedPromptsManager({ scope, projectPath }: PinnedPromptsManagerProps) {
   const { t } = useTranslation("settings");
+
+  const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    listSlashCommands(projectPath ?? undefined)
+      .then((cmds) => { if (!cancelled) setSlashCommands(cmds); })
+      .catch((e) => console.error("Failed to load slash commands:", e));
+    return () => { cancelled = true; };
+  }, [projectPath]);
 
   // `null` for global scope, repo id string for repo scope. Used both as the
   // store key and as the API parameter — they're the same primitive.
@@ -295,6 +309,7 @@ export function PinnedPromptsManager({ scope }: PinnedPromptsManagerProps) {
               onMoveDown={() => handleMove(i, +1)}
               onDelete={() => handleDelete(p)}
               onCommit={(next) => commitEdit(p, next)}
+              slashCommands={slashCommands}
             />
           ))}
           {drafts.map((d) => (
@@ -308,6 +323,7 @@ export function PinnedPromptsManager({ scope }: PinnedPromptsManagerProps) {
                 setError(d.draftId, null);
                 removeDraft(d.draftId);
               }}
+              slashCommands={slashCommands}
             />
           ))}
         </div>
@@ -338,6 +354,7 @@ interface PromptRowProps {
     prompt: string;
     auto_send: boolean;
   }) => void;
+  slashCommands: SlashCommand[];
 }
 
 function PromptRow({
@@ -349,11 +366,14 @@ function PromptRow({
   onMoveDown,
   onDelete,
   onCommit,
+  slashCommands,
 }: PromptRowProps) {
   const { t } = useTranslation("settings");
   const [name, setName] = useState(prompt.display_name);
   const [body, setBody] = useState(prompt.prompt);
   const [autoSend, setAutoSend] = useState(prompt.auto_send);
+  const [cursorPos, setCursorPos] = useState(0);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Sync local state when the prompt is replaced from the store (e.g. after a
   // successful save returns the canonical row, or another tab reloads).
@@ -366,6 +386,34 @@ function PromptRow({
   const flush = useCallback(() => {
     onCommit({ display_name: name, prompt: body, auto_send: autoSend });
   }, [onCommit, name, body, autoSend]);
+
+  const onSlashInsert = useCallback(
+    (replacement: string, start: number, end: number) => {
+      const next = body.slice(0, start) + replacement + body.slice(end);
+      setBody(next);
+      const newCursor = start + replacement.length;
+      setCursorPos(newCursor);
+      requestAnimationFrame(() => {
+        const ta = textareaRef.current;
+        if (ta) {
+          ta.selectionStart = ta.selectionEnd = newCursor;
+          ta.focus();
+        }
+      });
+    },
+    [body],
+  );
+
+  const slash = useSlashAutocomplete({
+    value: body,
+    cursorPosition: cursorPos,
+    commands: slashCommands,
+    onInsert: onSlashInsert,
+  });
+
+  const updateCursor = useCallback((el: HTMLTextAreaElement) => {
+    setCursorPos(el.selectionStart);
+  }, []);
 
   return (
     <div className={styles.row}>
@@ -410,15 +458,29 @@ function PromptRow({
           </button>
         </div>
       </div>
-      <textarea
-        className={styles.promptInput}
-        value={body}
-        onChange={(e) => setBody(e.target.value)}
-        onBlur={flush}
-        rows={3}
-        placeholder={t("pinned_prompts_prompt_placeholder")}
-        aria-label={t("pinned_prompts_prompt_label")}
-      />
+      <div className={styles.textareaWrapper}>
+        <textarea
+          ref={textareaRef}
+          className={styles.promptInput}
+          value={body}
+          onChange={(e) => { setBody(e.target.value); updateCursor(e.target); }}
+          onSelect={(e) => updateCursor(e.currentTarget)}
+          onBlur={flush}
+          onKeyDown={(e) => { if (slash.handleKeyDown(e)) e.preventDefault(); }}
+          rows={3}
+          placeholder={t("pinned_prompts_prompt_placeholder")}
+          aria-label={t("pinned_prompts_prompt_label")}
+        />
+        {slash.showPicker && (
+          <SlashCommandPicker
+            commands={slash.filteredCommands}
+            selectedIndex={slash.selectedIndex}
+            onSelect={slash.selectCommand}
+            onHover={slash.setSelectedIndex}
+            placement="below"
+          />
+        )}
+      </div>
       <div className={styles.controlsRow}>
         <label className={styles.autoSendLabel}>
           <input
@@ -447,6 +509,7 @@ interface DraftRowViewProps {
   onChange: (patch: Partial<DraftRow>) => void;
   onCommit: () => void;
   onCancel: () => void;
+  slashCommands: SlashCommand[];
 }
 
 function DraftRowView({
@@ -455,8 +518,40 @@ function DraftRowView({
   onChange,
   onCommit,
   onCancel,
+  slashCommands,
 }: DraftRowViewProps) {
   const { t } = useTranslation("settings");
+  const [cursorPos, setCursorPos] = useState(0);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const onSlashInsert = useCallback(
+    (replacement: string, start: number, end: number) => {
+      const next = draft.prompt.slice(0, start) + replacement + draft.prompt.slice(end);
+      onChange({ prompt: next });
+      const newCursor = start + replacement.length;
+      setCursorPos(newCursor);
+      requestAnimationFrame(() => {
+        const ta = textareaRef.current;
+        if (ta) {
+          ta.selectionStart = ta.selectionEnd = newCursor;
+          ta.focus();
+        }
+      });
+    },
+    [draft.prompt, onChange],
+  );
+
+  const slash = useSlashAutocomplete({
+    value: draft.prompt,
+    cursorPosition: cursorPos,
+    commands: slashCommands,
+    onInsert: onSlashInsert,
+  });
+
+  const updateCursor = useCallback((el: HTMLTextAreaElement) => {
+    setCursorPos(el.selectionStart);
+  }, []);
+
   return (
     <div className={styles.row}>
       <div className={styles.rowHeader}>
@@ -480,14 +575,28 @@ function DraftRowView({
           </button>
         </div>
       </div>
-      <textarea
-        className={styles.promptInput}
-        value={draft.prompt}
-        onChange={(e) => onChange({ prompt: e.target.value })}
-        rows={3}
-        placeholder={t("pinned_prompts_prompt_placeholder")}
-        aria-label={t("pinned_prompts_prompt_label")}
-      />
+      <div className={styles.textareaWrapper}>
+        <textarea
+          ref={textareaRef}
+          className={styles.promptInput}
+          value={draft.prompt}
+          onChange={(e) => { onChange({ prompt: e.target.value }); updateCursor(e.target); }}
+          onSelect={(e) => updateCursor(e.currentTarget)}
+          onKeyDown={(e) => { if (slash.handleKeyDown(e)) e.preventDefault(); }}
+          rows={3}
+          placeholder={t("pinned_prompts_prompt_placeholder")}
+          aria-label={t("pinned_prompts_prompt_label")}
+        />
+        {slash.showPicker && (
+          <SlashCommandPicker
+            commands={slash.filteredCommands}
+            selectedIndex={slash.selectedIndex}
+            onSelect={slash.selectCommand}
+            onHover={slash.setSelectedIndex}
+            placement="below"
+          />
+        )}
+      </div>
       <div className={styles.controlsRow}>
         <label className={styles.autoSendLabel}>
           <input
@@ -506,7 +615,7 @@ function DraftRowView({
             title={t("pinned_prompts_save_draft")}
             aria-label={t("pinned_prompts_save_draft")}
           >
-            <Plus size={14} />
+            <Save size={14} />
           </button>
         </div>
       </div>
