@@ -138,6 +138,25 @@ describe("selectWorkspace diff selection persistence", () => {
     expect(useAppStore.getState().diffSelectionByWorkspace["ws-a"]).toBeUndefined();
   });
 
+  it("clears stale selection when leaving a workspace in chat view", () => {
+    // User opens a diff, then clicks a chat tab (which nulls diffSelectedFile
+    // via selectSession), then switches workspaces. The previously-saved
+    // selection must be cleared so it doesn't resurrect on return.
+    useAppStore.getState().openDiffTab("ws-a", "file.ts", "unstaged");
+    useAppStore.getState().selectWorkspace("ws-b");
+    useAppStore.getState().selectWorkspace("ws-a");
+    expect(useAppStore.getState().diffSelectedFile).toBe("file.ts");
+
+    useAppStore.getState().selectSession("ws-a", "s-a1");
+    expect(useAppStore.getState().diffSelectedFile).toBeNull();
+
+    useAppStore.getState().selectWorkspace("ws-b");
+    expect(useAppStore.getState().diffSelectionByWorkspace["ws-a"]).toBeUndefined();
+
+    useAppStore.getState().selectWorkspace("ws-a");
+    expect(useAppStore.getState().diffSelectedFile).toBeNull();
+  });
+
   it("clears diff content on workspace switch even when restoring selection", () => {
     useAppStore.getState().openDiffTab("ws-a", "file.ts", "unstaged");
     useAppStore.setState({ diffContent: { path: "file.ts", hunks: [], is_binary: false } });
@@ -202,6 +221,14 @@ describe("chatDrafts store operations", () => {
     const before = useAppStore.getState().chatDrafts;
     useAppStore.getState().clearChatDraft("nonexistent");
     expect(useAppStore.getState().chatDrafts).toBe(before);
+  });
+
+  it("clearChatDraft no-op preserves overall state identity", () => {
+    // Returning {} from a Zustand setter still merges into a new state object.
+    // Returning s preserves identity so subscribers aren't woken up.
+    const before = useAppStore.getState();
+    useAppStore.getState().clearChatDraft("nonexistent");
+    expect(useAppStore.getState()).toBe(before);
   });
 
   it("drafts are independent per session", () => {

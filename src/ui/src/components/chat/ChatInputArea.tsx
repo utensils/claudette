@@ -105,7 +105,11 @@ export function ChatInputArea({
     attachment: DownloadableAttachment,
   ) => void;
 }) {
-  const [chatInput, setChatInput] = useState("");
+  // Lazy-init from the store so a saved draft is restored on mount (e.g. when
+  // returning to a session after the component unmounted via workspace switch).
+  const [chatInput, setChatInput] = useState(
+    () => useAppStore.getState().chatDrafts[sessionId] ?? "",
+  );
   const [cursorPos, setCursorPos] = useState(0);
   const [inputScrollTop, setInputScrollTop] = useState(0);
   const [slashPickerIndex, setSlashPickerIndex] = useState(0);

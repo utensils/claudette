@@ -436,7 +436,7 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
     })),
   clearChatDraft: (sessionId) =>
     set((s) => {
-      if (!(sessionId in s.chatDrafts)) return {};
+      if (!(sessionId in s.chatDrafts)) return s;
       const next = { ...s.chatDrafts };
       delete next[sessionId];
       return { chatDrafts: next };

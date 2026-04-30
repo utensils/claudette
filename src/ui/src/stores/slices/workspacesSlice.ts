@@ -76,14 +76,24 @@ export const createWorkspacesSlice: StateCreator<
     set((s) => {
       if (id === s.selectedWorkspaceId) return s;
 
-      // Save outgoing workspace's active diff selection.
+      // Save the outgoing workspace's active diff selection, or clear it if
+      // the user left that workspace in chat view (e.g. they clicked a chat
+      // tab, which nulls diffSelectedFile while leaving diff tabs open).
+      // Without the explicit clear, a stale selection from an earlier diff
+      // visit would resurrect the diff view on workspace return.
       const prev = s.selectedWorkspaceId;
       let selectionMap = s.diffSelectionByWorkspace;
-      if (prev && s.diffSelectedFile) {
-        selectionMap = {
-          ...selectionMap,
-          [prev]: { path: s.diffSelectedFile, layer: s.diffSelectedLayer },
-        };
+      if (prev) {
+        if (s.diffSelectedFile) {
+          selectionMap = {
+            ...selectionMap,
+            [prev]: { path: s.diffSelectedFile, layer: s.diffSelectedLayer },
+          };
+        } else if (prev in selectionMap) {
+          const next = { ...selectionMap };
+          delete next[prev];
+          selectionMap = next;
+        }
       }
 
       // Restore incoming workspace's selection, validated against open tabs.
