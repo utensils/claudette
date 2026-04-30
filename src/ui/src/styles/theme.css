@@ -861,6 +861,22 @@
   box-sizing: border-box;
 }
 
+/* xterm.js (DOM renderer) assumes browser-default `box-sizing` and
+   `line-height: normal` inside its own DOM tree. The universal reset
+   above and the `line-height` set on `#root` desync xterm's cell-size
+   measurement from its rendered rows, which manifests as mouse selection
+   and web-link clicks landing one row above the cursor. See issue #547.
+   Do not remove without re-testing terminal text selection and URL
+   clicking. */
+.xterm,
+.xterm * {
+  box-sizing: content-box;
+}
+
+.xterm {
+  line-height: normal;
+}
+
 html,
 body,
 #root {
