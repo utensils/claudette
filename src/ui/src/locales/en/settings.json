@@ -282,5 +282,12 @@
   "pinned_prompts_error_name_unique": "Another prompt already uses that name",
   "pinned_prompts_error_prompt_required": "Prompt body is required",
   "pinned_prompts_inherited_label": "Inherited from global",
-  "pinned_prompts_overridden_badge": "Overridden"
+  "pinned_prompts_overridden_badge": "Overridden",
+  "pinned_prompts_edit_action": "Edit {{name}}",
+  "pinned_prompts_cancel": "Cancel",
+  "pinned_prompts_save_changes": "Save changes",
+  "pinned_prompts_keep": "Keep",
+  "pinned_prompts_delete_prompt": "Delete prompt",
+  "pinned_prompts_confirm_delete_title": "Delete this prompt?",
+  "pinned_prompts_confirm_delete_subtitle": "This action cannot be undone."
 }

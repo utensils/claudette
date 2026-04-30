@@ -124,6 +124,41 @@ export function describeSlashQuery(
   return { token: match[1] ?? "", hasArgs: match[2] !== undefined };
 }
 
+/**
+ * Detect a `/command` token at `cursor` inside multi-line `text`.
+ *
+ * A `/` triggers autocomplete when it sits at position 0 of the text or
+ * immediately after a newline. Returns the token (text between `/` and the
+ * next whitespace or end-of-input) plus the character range it occupies so
+ * the caller can replace it on selection.
+ */
+export function describeSlashQueryAtCursor(
+  text: string,
+  cursor: number,
+): { token: string; start: number; end: number } | null {
+  const before = text.slice(0, cursor);
+  const lineStart = before.lastIndexOf("\n") + 1;
+  const linePrefix = before.slice(lineStart);
+  if (!linePrefix.startsWith("/")) return null;
+  // Only the first word on the line qualifies — if there's whitespace
+  // between the `/` and the cursor, the command token is closed.
+  const tokenMatch = linePrefix.match(/^\/(\S*)$/);
+  if (!tokenMatch) return null;
+  // Extend end past the cursor so replacement covers the full token even when
+  // the caret sits inside an existing `/command` (e.g. clicking into `/review`
+  // halfway through). The token used for filtering stays the prefix up to the
+  // cursor — that's what the user has committed to so far.
+  let tokenEnd = cursor;
+  while (tokenEnd < text.length && /\S/.test(text[tokenEnd] ?? "")) {
+    tokenEnd += 1;
+  }
+  return {
+    token: tokenMatch[1],
+    start: lineStart,
+    end: tokenEnd,
+  };
+}
+
 function pluginHandler(root: "plugin" | "marketplace"): NativeHandler {
   return {
     name: root,

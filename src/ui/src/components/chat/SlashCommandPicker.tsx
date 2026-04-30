@@ -6,6 +6,7 @@ interface SlashCommandPickerProps {
   selectedIndex: number;
   onSelect: (command: SlashCommand) => void;
   onHover: (index: number) => void;
+  placement?: "above" | "below";
 }
 
 export function SlashCommandPicker({
@@ -13,11 +14,20 @@ export function SlashCommandPicker({
   selectedIndex,
   onSelect,
   onHover,
+  placement = "above",
 }: SlashCommandPickerProps) {
   if (commands.length === 0) return null;
 
+  const className = placement === "below"
+    ? `${styles.picker} ${styles.pickerBelow}`
+    : styles.picker;
+
   return (
-    <div className={styles.picker} role="listbox">
+    <div
+      className={className}
+      role="listbox"
+      onMouseDown={(e) => e.preventDefault()}
+    >
       {commands.map((cmd, i) => (
         <div
           key={cmd.name}

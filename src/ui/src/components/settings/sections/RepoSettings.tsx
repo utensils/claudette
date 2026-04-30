@@ -695,6 +695,7 @@ function RepoPinnedPromptsField({ repoId }: RepoPinnedPromptsFieldProps) {
   );
   const globalPrompts = useAppStore((s) => s.globalPinnedPrompts);
   const loadGlobals = useAppStore((s) => s.loadGlobalPinnedPrompts);
+  const repoPath = useAppStore((s) => s.repositories.find((r) => r.id === repoId)?.path);
 
   // Hydrate globals so the inherited list reflects current global state.
   useEffect(() => {
@@ -714,7 +715,7 @@ function RepoPinnedPromptsField({ repoId }: RepoPinnedPromptsFieldProps) {
       <div className={`${styles.fieldHint} ${styles.fieldHintSpaced}`}>
         {t("pinned_prompts_repo_description")}
       </div>
-      <PinnedPromptsManager scope={{ kind: "repo", repoId }} />
+      <PinnedPromptsManager scope={{ kind: "repo", repoId }} projectPath={repoPath} />
       <InheritedGlobalsList globals={globalPrompts} repoNames={repoNames} />
     </div>
   );

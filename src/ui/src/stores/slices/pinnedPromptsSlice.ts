@@ -23,6 +23,9 @@ export interface PinnedPromptsSlice {
   loadRepoPinnedPrompts: (repoId: string) => Promise<void>;
 }
 
+let inflightGlobal: Promise<void> | null = null;
+const inflightRepo: Record<string, Promise<void>> = {};
+
 export const createPinnedPromptsSlice: StateCreator<
   AppState,
   [],
@@ -89,13 +92,25 @@ export const createPinnedPromptsSlice: StateCreator<
     });
   },
 
-  loadGlobalPinnedPrompts: async () => {
-    const prompts = await listPinnedPromptsInScope(null);
-    get().setGlobalPinnedPrompts(prompts);
+  loadGlobalPinnedPrompts: () => {
+    if (inflightGlobal) return inflightGlobal;
+    inflightGlobal = listPinnedPromptsInScope(null)
+      .then((prompts) => get().setGlobalPinnedPrompts(prompts))
+      .finally(() => {
+        inflightGlobal = null;
+      });
+    return inflightGlobal;
   },
-  loadRepoPinnedPrompts: async (repoId) => {
-    const prompts = await listPinnedPromptsInScope(repoId);
-    get().setRepoPinnedPrompts(repoId, prompts);
+  loadRepoPinnedPrompts: (repoId) => {
+    const existing = inflightRepo[repoId];
+    if (existing) return existing;
+    const p = listPinnedPromptsInScope(repoId)
+      .then((prompts) => get().setRepoPinnedPrompts(repoId, prompts))
+      .finally(() => {
+        delete inflightRepo[repoId];
+      });
+    inflightRepo[repoId] = p;
+    return p;
   },
 });
 
