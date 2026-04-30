@@ -43,8 +43,7 @@ pub async fn cesp_install_pack(
     source_ref: String,
     source_path: String,
 ) -> Result<InstalledPack, String> {
-    let tarball_url =
-        format!("https://github.com/{source_repo}/archive/refs/tags/{source_ref}.tar.gz");
+    let tarball_url = format!("https://github.com/{source_repo}/archive/{source_ref}.tar.gz");
     let resp = http_client()
         .get(&tarball_url)
         .send()
