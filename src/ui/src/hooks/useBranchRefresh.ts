@@ -4,6 +4,7 @@ import { refreshBranches, refreshWorkspaceBranch } from "../services/tauri";
 import type { Workspace } from "../types/workspace";
 
 type UpdateWorkspace = (id: string, updates: Partial<Workspace>) => void;
+type GetCurrentBranch = (workspaceId: string) => string | undefined;
 
 /** Base poll interval when the window is focused and we have just observed drift. */
 export const BRANCH_POLL_BASE_MS = 5_000;
@@ -25,20 +26,27 @@ export function nextBranchPollDelay(consecutiveEmpty: number): number {
  * Poll all active workspaces and mirror the backend-reported branch into the
  * Zustand store. The backend returns one entry per active workspace
  * (level-triggered, see issue 538), so this also self-heals a store that
- * has somehow drifted from the DB. Errors are caught so a transient git/IPC
- * failure doesn't break the polling loop, but they're surfaced to the
- * console so the failure mode isn't invisible. Returns the number of
- * entries applied so the caller can adapt its cadence.
+ * has somehow drifted from the DB. To avoid pointless re-renders and to
+ * keep the back-off loop meaningful, `updateWorkspace` is only called when
+ * the backend value differs from the current store value, and the returned
+ * count reflects only those actual writes. Errors are caught so a
+ * transient git/IPC failure doesn't break the polling loop, but they're
+ * surfaced to the console so the failure mode isn't invisible.
  */
 export async function pollAndApplyBranchUpdates(
   updateWorkspace: UpdateWorkspace,
+  getCurrentBranch: GetCurrentBranch,
 ): Promise<number> {
   try {
     const updates = await refreshBranches();
+    let applied = 0;
     for (const [wsId, branchName] of updates) {
-      updateWorkspace(wsId, { branch_name: branchName });
+      if (getCurrentBranch(wsId) !== branchName) {
+        updateWorkspace(wsId, { branch_name: branchName });
+        applied++;
+      }
     }
-    return updates.length;
+    return applied;
   } catch (err) {
     console.warn("[branch-refresh] poll failed:", err);
     return 0;
@@ -48,17 +56,19 @@ export async function pollAndApplyBranchUpdates(
 /**
  * Immediate refresh for a single workspace — called when the user selects
  * one so external renames appear without waiting on the poll. The backend
- * returns the current branch (not just on drift) per issue 538, so any
- * non-null value is written through to the store unconditionally. Returns
- * the resolved branch (or `null` if the backend couldn't determine one).
+ * returns the current branch (not just on drift) per issue 538; the store
+ * is only written when that value actually differs, so a no-op refresh
+ * does not trigger re-renders. Returns the resolved branch (or `null` if
+ * the backend couldn't determine one).
  */
 export async function refreshSelectedWorkspaceBranch(
   workspaceId: string,
   updateWorkspace: UpdateWorkspace,
+  getCurrentBranch: GetCurrentBranch,
 ): Promise<string | null> {
   try {
     const branch = await refreshWorkspaceBranch(workspaceId);
-    if (branch !== null) {
+    if (branch !== null && getCurrentBranch(workspaceId) !== branch) {
       updateWorkspace(workspaceId, { branch_name: branch });
     }
     return branch;
@@ -79,6 +89,12 @@ function isAppActive(): boolean {
   // hiding the document, so a hidden-only check would still poll there.
   return !document.hidden && document.hasFocus();
 }
+
+// Reads the live workspace branch name straight from the store at call
+// time so the polling/selection helpers don't depend on a snapshot
+// captured when an effect was set up.
+const getCurrentBranchFromStore: GetCurrentBranch = (id) =>
+  useAppStore.getState().workspaces.find((w) => w.id === id)?.branch_name;
 
 export function useBranchRefresh() {
   const updateWorkspace = useAppStore((s) => s.updateWorkspace);
@@ -117,7 +133,10 @@ export function useBranchRefresh() {
         return;
       }
       inFlight = true;
-      const applied = await pollAndApplyBranchUpdates(updateWorkspace);
+      const applied = await pollAndApplyBranchUpdates(
+        updateWorkspace,
+        getCurrentBranchFromStore,
+      );
       inFlight = false;
       if (cancelled) return;
       consecutiveEmpty = applied > 0 ? 0 : consecutiveEmpty + 1;
@@ -164,6 +183,10 @@ export function useBranchRefresh() {
   // poll tick.
   useEffect(() => {
     if (!selectedWorkspaceId) return;
-    refreshSelectedWorkspaceBranch(selectedWorkspaceId, updateWorkspace);
+    refreshSelectedWorkspaceBranch(
+      selectedWorkspaceId,
+      updateWorkspace,
+      getCurrentBranchFromStore,
+    );
   }, [selectedWorkspaceId, updateWorkspace]);
 }
