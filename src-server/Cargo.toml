@@ -1,6 +1,6 @@
 [package]
 name = "claudette-server"
-version = "0.20.1"
+version = "0.21.0"
 edition = "2024"
 description = "Headless Claudette backend for remote access"
 license = "MIT"
