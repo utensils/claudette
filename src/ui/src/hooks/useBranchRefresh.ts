@@ -24,7 +24,7 @@ export function nextBranchPollDelay(consecutiveEmpty: number): number {
 /**
  * Poll all active workspaces and mirror the backend-reported branch into the
  * Zustand store. The backend returns one entry per active workspace
- * (level-triggered, see issue #538), so this also self-heals a store that
+ * (level-triggered, see issue 538), so this also self-heals a store that
  * has somehow drifted from the DB. Errors are caught so a transient git/IPC
  * failure doesn't break the polling loop, but they're surfaced to the
  * console so the failure mode isn't invisible. Returns the number of
@@ -48,7 +48,7 @@ export async function pollAndApplyBranchUpdates(
 /**
  * Immediate refresh for a single workspace — called when the user selects
  * one so external renames appear without waiting on the poll. The backend
- * returns the current branch (not just on drift) per issue #538, so any
+ * returns the current branch (not just on drift) per issue 538, so any
  * non-null value is written through to the store unconditionally. Returns
  * the resolved branch (or `null` if the backend couldn't determine one).
  */
