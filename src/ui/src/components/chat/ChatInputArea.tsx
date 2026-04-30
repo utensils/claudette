@@ -199,7 +199,10 @@ export function ChatInputArea({
     textareaRef.current?.focus();
   }, []);
 
-  const chatDrafts = useAppStore((s) => s.chatDrafts);
+  // Don't subscribe to chatDrafts — drafts are read inside the session-switch
+  // effect (one-shot) and via getState() in the lazy initializer above. A
+  // selector subscription would re-render this component on every keystroke
+  // in *any* session.
   const setChatDraft = useAppStore((s) => s.setChatDraft);
   const chatInputRef = useRef(chatInput);
   chatInputRef.current = chatInput;
@@ -209,7 +212,7 @@ export function ChatInputArea({
     const prev = prevSessionRef.current;
     if (prev !== sessionId) {
       setChatDraft(prev, chatInput);
-      setChatInput(chatDrafts[sessionId] ?? "");
+      setChatInput(useAppStore.getState().chatDrafts[sessionId] ?? "");
       prevSessionRef.current = sessionId;
       setFilesLoaded(false);
       setWorkspaceFiles([]);
