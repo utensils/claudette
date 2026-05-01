@@ -976,6 +976,12 @@ pub async fn import_worktrees(
     db.insert_workspaces_batch(&created)
         .map_err(|e| e.to_string())?;
 
+    // Imported workspaces already have user-defined branch names — pre-claim
+    // the auto-rename slot so the first-message rename never fires.
+    for ws in &created {
+        let _ = db.claim_branch_auto_rename(&ws.id);
+    }
+
     crate::tray::rebuild_tray(&app);
 
     Ok(created)
