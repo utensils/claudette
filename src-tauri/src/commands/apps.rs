@@ -420,13 +420,8 @@ async fn open_in_terminal(
     // If the terminal was detected via .app bundle, use AppleScript on macOS.
     #[cfg(target_os = "macos")]
     if terminal.detected_path.ends_with(".app") {
-        return open_tui_via_applescript(
-            editor_entry,
-            editor_detected,
-            worktree_path,
-            &terminal,
-        )
-        .await;
+        return open_tui_via_applescript(editor_entry, editor_detected, worktree_path, &terminal)
+            .await;
     }
 
     let terminal_entry = config
