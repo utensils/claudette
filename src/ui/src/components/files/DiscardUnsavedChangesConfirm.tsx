@@ -15,7 +15,7 @@ export function DiscardUnsavedChangesConfirm({
   return (
     <Modal title="Discard unsaved changes?" onClose={onClose}>
       <div className={shared.warning}>
-        You have unsaved changes in the open file. Switching files will
+        You have unsaved changes in this file. Closing this tab will
         discard them. <strong>This cannot be undone.</strong>
       </div>
       <div className={shared.actions}>

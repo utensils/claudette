@@ -12,7 +12,8 @@ export interface FileBufferState {
   /** Last-saved content. Updated on initial load and after each successful
    *  save. The dirty flag is derived as `buffer !== baseline`. */
   baseline: string;
-  /** Current editor content. Mirrored back from CodeMirror via `onChange`. */
+  /** Current editor content. Mirrored back from the file viewer's editor
+   *  via its `onChange` callback. */
   buffer: string;
   isBinary: boolean;
   sizeBytes: number;
@@ -84,6 +85,12 @@ export interface FileTreeSlice {
    *  active, an adjacent tab takes its place; the workspace falls back to
    *  diff/chat when no tabs remain. */
   closeFileTab: (workspaceId: string, path: string) => void;
+  /** Deactivate the file viewer for this workspace without closing any
+   *  tabs. Used when the user selects a chat-session or diff tab in the
+   *  shared tab strip — `AppLayout` prioritizes the file viewer whenever
+   *  a file tab is active, so we have to explicitly clear the active
+   *  pointer for the chat/diff selection to take effect visually. */
+  clearActiveFileTab: (workspaceId: string) => void;
 
   // Per-tab buffer/UI state
   setFileBufferLoaded: (
@@ -185,6 +192,17 @@ export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> 
         activeFileTabByWorkspace: {
           ...s.activeFileTabByWorkspace,
           [workspaceId]: path,
+        },
+      };
+    }),
+
+  clearActiveFileTab: (workspaceId) =>
+    set((s) => {
+      if (s.activeFileTabByWorkspace[workspaceId] == null) return s;
+      return {
+        activeFileTabByWorkspace: {
+          ...s.activeFileTabByWorkspace,
+          [workspaceId]: null,
         },
       };
     }),

@@ -45,10 +45,11 @@ export function AppLayout() {
   useAutoUpdater();
 
 
-  // Main-pane priority: an explicitly-opened file from the All-Files tree
-  // wins over a diff selection, which wins over the chat. The user always
-  // has an explicit way back (close button on the file viewer toolbar
-  // clears `allFilesOpenedFile`; deselecting a diff file clears that).
+  // Main-pane priority: an explicitly opened file from the Files tree
+  // takes precedence over a diff selection, and a diff selection takes
+  // precedence over the chat view. Selecting a chat-session or diff tab
+  // in the shared tab strip dispatches `clearActiveFileTab`, which
+  // releases the file viewer's hold so the lower-priority pane is shown.
   const showFileViewer = allFilesOpenedFile !== null;
   const showDiff = !showFileViewer && diffSelectedFile !== null;
 

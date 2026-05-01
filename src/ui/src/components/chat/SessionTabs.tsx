@@ -81,6 +81,28 @@ export function SessionTabs({ workspaceId }: Props) {
   const closeDiffTab = useAppStore((s) => s.closeDiffTab);
   const selectFileTab = useAppStore((s) => s.selectFileTab);
   const closeFileTab = useAppStore((s) => s.closeFileTab);
+  const clearActiveFileTab = useAppStore((s) => s.clearActiveFileTab);
+
+  // Clearing the active file tab is what makes the chat/diff tab visually
+  // "win" — `AppLayout` prioritizes the file viewer whenever a workspace
+  // has an active file tab, so we have to explicitly deactivate it when
+  // the user wants to go back to chat or diff. Wrap the underlying slice
+  // actions so every chat/diff selection path (click, keyboard nav,
+  // session create) clears the file selection in lockstep.
+  const switchToSession = useCallback(
+    (sessionId: string) => {
+      clearActiveFileTab(workspaceId);
+      selectSession(workspaceId, sessionId);
+    },
+    [clearActiveFileTab, selectSession, workspaceId],
+  );
+  const switchToDiff = useCallback(
+    (path: string, layer: DiffLayer | null) => {
+      clearActiveFileTab(workspaceId);
+      selectDiffTab(path, layer);
+    },
+    [clearActiveFileTab, selectDiffTab, workspaceId],
+  );
 
   // Per-instance dirty-close prompt: when the user clicks X on a file tab
   // with unsaved edits, we route through this state instead of dispatching
@@ -121,7 +143,7 @@ export function SessionTabs({ workspaceId }: Props) {
       // Invalidate any in-flight load — our local addChatSession is authoritative.
       loadVersionRef.current += 1;
       addChatSession(session);
-      selectSession(workspaceId, session.id);
+      switchToSession(session.id);
     } catch (err) {
       console.error("[SessionTabs] Failed to create session:", err);
     }
@@ -251,15 +273,15 @@ export function SessionTabs({ workspaceId }: Props) {
       }
       const target = navEntries[targetIdx];
       if (target.kind === "session") {
-        selectSession(workspaceId, target.sessionId);
+        switchToSession(target.sessionId);
       } else if (target.kind === "diff") {
-        selectDiffTab(target.path, target.layer);
+        switchToDiff(target.path, target.layer);
       } else {
         selectFileTab(workspaceId, target.path);
       }
       tabRefs.current.get(target.key)?.focus();
     },
-    [navEntries, selectSession, selectDiffTab, selectFileTab, workspaceId],
+    [navEntries, switchToSession, switchToDiff, selectFileTab, workspaceId],
   );
 
   // Close handler for file tabs — checks the dirty flag and routes to the
@@ -342,7 +364,7 @@ export function SessionTabs({ workspaceId }: Props) {
               diffSelectedFile === null &&
               activeFileTab === null
             }
-            onSelect={() => selectSession(workspaceId, session.id)}
+            onSelect={() => switchToSession(session.id)}
             onClose={() => handleArchive(session)}
             onRename={(name) => {
               updateChatSession(session.id, { name, name_edited: true });
@@ -370,7 +392,7 @@ export function SessionTabs({ workspaceId }: Props) {
             key={navKey}
             tab={tab}
             isActive={isActive}
-            onSelect={() => selectDiffTab(tab.path, tab.layer)}
+            onSelect={() => switchToDiff(tab.path, tab.layer)}
             onClose={() => closeDiffTab(workspaceId, tab.path, tab.layer)}
             onNavigate={(direction) => navigateTabs(navKey, direction)}
             onContextMenu={(x, y) => openContextMenu(navKey, x, y)}

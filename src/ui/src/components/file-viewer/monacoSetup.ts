@@ -22,10 +22,11 @@ import cssWorker from "monaco-editor/esm/vs/language/css/css.worker?worker";
 import htmlWorker from "monaco-editor/esm/vs/language/html/html.worker?worker";
 import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
 
-// Monaco reads `globalThis.MonacoEnvironment` at module init time. We must
-// install our `getWorker` hook before any Monaco code runs — including the
-// `import * as monaco from "monaco-editor"` above, which is why this file
-// is imported only via the lazy MonacoEditor entry point.
+// Monaco reads `globalThis.MonacoEnvironment.getWorker` whenever it needs
+// to instantiate a language-service worker — that happens lazily, when an
+// editor first activates a language with a worker (TS/JSON/CSS/HTML). The
+// hook therefore needs to be in place before the editor mounts, which is
+// why this file is imported only via the lazy MonacoEditor entry point.
 //
 // The label argument identifies which language service Monaco wants a
 // worker for; everything else (the bare editor, plain-text, languages

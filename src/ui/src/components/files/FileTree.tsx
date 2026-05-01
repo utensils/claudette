@@ -5,7 +5,6 @@ import {
   useMemo,
   useRef,
   type KeyboardEvent as ReactKeyboardEvent,
-  type RefObject,
 } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
@@ -43,12 +42,38 @@ export const FileTree = memo(function FileTree({
   );
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const selectedRowRef = useRef<HTMLDivElement>(null);
+  // Map of treeitem element refs keyed by node path. Used to programmatically
+  // move focus on keyboard navigation — the WAI-ARIA tree pattern requires
+  // focus to follow the selection so the screen reader announces the row.
+  const rowRefsRef = useRef<Map<string, HTMLDivElement>>(new Map());
 
-  // Keep the selected row in view when it changes (e.g. via keyboard).
+  /** The row that should currently be in the tab order (roving tabindex).
+   *  Falls back to the first visible row when no row is selected, so the
+   *  tree is reachable via keyboard from a fresh state. */
+  const focusedIndex = useMemo(() => {
+    if (visible.length === 0) return -1;
+    const idx = selected
+      ? visible.findIndex((v) => v.node.path === selected)
+      : -1;
+    return idx >= 0 ? idx : 0;
+  }, [visible, selected]);
+  const focusedPath =
+    focusedIndex >= 0 ? visible[focusedIndex].node.path : null;
+
+  // Keep the focused row in view, and re-focus it programmatically when the
+  // selection changes — but only when focus is already inside the tree. The
+  // guard prevents the tree from yanking focus away when the user's typing
+  // in chat or the diff viewer and the selection changes for an unrelated
+  // reason (e.g. an external action).
   useEffect(() => {
-    selectedRowRef.current?.scrollIntoView({ block: "nearest" });
-  }, [selected]);
+    if (!focusedPath) return;
+    const el = rowRefsRef.current.get(focusedPath);
+    if (!el) return;
+    el.scrollIntoView({ block: "nearest" });
+    if (containerRef.current?.contains(document.activeElement)) {
+      el.focus();
+    }
+  }, [focusedPath]);
 
   const findVisibleIndex = useCallback(
     (path: string | null) =>
@@ -132,6 +157,17 @@ export const FileTree = memo(function FileTree({
     ],
   );
 
+  // ref-callback factory: register/unregister each row in the focus map by
+  // path so the focusedPath effect can `.focus()` whichever row becomes
+  // focused, regardless of where it lives in the visible list.
+  const registerRowRef = useCallback(
+    (path: string) => (el: HTMLDivElement | null) => {
+      if (el) rowRefsRef.current.set(path, el);
+      else rowRefsRef.current.delete(path);
+    },
+    [],
+  );
+
   if (entries.length === 0) {
     return <div className={styles.empty}>No files</div>;
   }
@@ -140,19 +176,22 @@ export const FileTree = memo(function FileTree({
     <div
       className={styles.tree}
       ref={containerRef}
-      tabIndex={0}
       role="tree"
       aria-label="Project files"
       onKeyDown={handleKeyDown}
     >
-      {visible.map(({ node, depth }) => (
+      {visible.map(({ node, depth }, idx) => (
         <Row
           key={node.path}
           node={node}
           depth={depth}
           expanded={node.kind === "dir" ? !!expanded[node.path] : false}
           selected={selected === node.path}
-          rowRef={selected === node.path ? selectedRowRef : undefined}
+          // Roving tabindex: exactly one row in the tree is in the tab
+          // order at any time. Tab moves focus into the tree (or out of
+          // it); arrow keys move within.
+          tabbable={idx === focusedIndex}
+          rowRef={registerRowRef(node.path)}
           onClick={() => {
             setSelected(node.path);
             if (node.kind === "dir") {
@@ -172,11 +211,12 @@ interface RowProps {
   depth: number;
   expanded: boolean;
   selected: boolean;
-  rowRef?: RefObject<HTMLDivElement | null>;
+  tabbable: boolean;
+  rowRef: (el: HTMLDivElement | null) => void;
   onClick: () => void;
 }
 
-function Row({ node, depth, expanded, selected, rowRef, onClick }: RowProps) {
+function Row({ node, depth, expanded, selected, tabbable, rowRef, onClick }: RowProps) {
   const isDir = node.kind === "dir";
   const ChevronIcon = isDir
     ? expanded
@@ -191,7 +231,13 @@ function Row({ node, depth, expanded, selected, rowRef, onClick }: RowProps) {
       className={`${styles.row} ${selected ? styles.rowSelected : ""}`}
       style={{ ["--depth" as string]: depth }}
       role="treeitem"
+      tabIndex={tabbable ? 0 : -1}
       aria-selected={selected}
+      // WAI-ARIA tree levels are 1-indexed; root rows are level 1.
+      aria-level={depth + 1}
+      // Per the spec, `aria-expanded` is meaningful only on rows that have
+      // children (or could). Omit it on file rows entirely so screen
+      // readers don't announce a misleading collapsed/expanded state.
       aria-expanded={isDir ? expanded : undefined}
       onClick={onClick}
     >

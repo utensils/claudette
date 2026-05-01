@@ -28,6 +28,19 @@
   background: var(--hover-bg);
 }
 
+/* Roving-tabindex focus ring: visible only on keyboard focus so mouse
+ * users don't see a permanent ring on the active row. The `outline-offset:
+ * -1px` keeps the ring inside the row bounds so adjacent rows aren't
+ * pushed by the visual stroke. */
+.row:focus {
+  outline: none;
+}
+
+.row:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
 .rowSelected {
   background: var(--selected-bg);
   color: var(--text-primary);

@@ -257,7 +257,7 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
                     : t("diff_tooltip_copy_contents")
               }
               aria-live="polite"
-              disabled={isImage || bufferState?.isBinary}
+              disabled={isImage || !bufferState?.loaded || bufferState?.isBinary}
             >
               {copyState === "copied" ? (
                 <Check size={14} aria-hidden="true" />
