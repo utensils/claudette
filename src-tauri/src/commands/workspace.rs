@@ -977,9 +977,16 @@ pub async fn import_worktrees(
         .map_err(|e| e.to_string())?;
 
     // Imported workspaces already have user-defined branch names — pre-claim
-    // the auto-rename slot so the first-message rename never fires.
+    // the auto-rename slot so the first-message rename never fires. Match the
+    // logging in chat/send.rs so a SQLite failure here is visible rather than
+    // silently leaving the workspace eligible for rename.
     for ws in &created {
-        let _ = db.claim_branch_auto_rename(&ws.id);
+        if let Err(e) = db.claim_branch_auto_rename(&ws.id) {
+            eprintln!(
+                "[import] claim_branch_auto_rename failed for {} ({}): {e}",
+                ws.name, ws.id
+            );
+        }
     }
 
     crate::tray::rebuild_tray(&app);
