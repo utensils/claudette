@@ -812,7 +812,7 @@ export function ChatInputArea({
     const history = historyRef.current[sessionId] ?? [];
     if (history.length === 0) return;
 
-    if (e.key === "ArrowUp" && e.ctrlKey) {
+    if (e.key === "ArrowUp" && e.shiftKey) {
       e.preventDefault();
       if (historyIndexRef.current === -1) {
         draftRef.current = chatInput;
@@ -821,7 +821,7 @@ export function ChatInputArea({
         historyIndexRef.current -= 1;
       }
       setChatInput(history[historyIndexRef.current]);
-    } else if (e.key === "ArrowDown" && e.ctrlKey) {
+    } else if (e.key === "ArrowDown" && e.shiftKey) {
       e.preventDefault();
       if (historyIndexRef.current === -1) return;
       if (historyIndexRef.current < history.length - 1) {
