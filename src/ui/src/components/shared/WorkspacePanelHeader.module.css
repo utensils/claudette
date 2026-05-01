@@ -1,0 +1,65 @@
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 20px;
+  background: var(--chat-header-bg);
+  border-bottom: 1px solid var(--divider);
+  box-shadow: var(--shadow-sm);
+}
+
+.headerLeft {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.headerRight {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.branchInfo {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  font-family: var(--font-mono);
+  min-width: 0;
+}
+
+.repoName {
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.branchSep {
+  color: var(--text-faint);
+}
+
+.branchIcon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.branchName {
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.branchArrow {
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+
+.baseBranch {
+  color: var(--text-dim);
+  white-space: nowrap;
+}

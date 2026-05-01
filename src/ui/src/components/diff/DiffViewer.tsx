@@ -1,8 +1,10 @@
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { AlignJustify, Check, Columns2, Copy, Eye, GitCompare } from "lucide-react";
+import { writeText as clipboardWriteText } from "@tauri-apps/plugin-clipboard-manager";
 import { useAppStore } from "../../stores/useAppStore";
 import { loadFileDiff, readWorkspaceFile } from "../../services/tauri";
-import { PanelToggles } from "../shared/PanelToggles";
+import { WorkspacePanelHeader } from "../shared/WorkspacePanelHeader";
 import { SessionTabs } from "../chat/SessionTabs";
 import { MessageMarkdown } from "../chat/MessageMarkdown";
 import { highlightLine, languageForFile } from "../../utils/syntaxHighlight";
@@ -82,6 +84,7 @@ export function DiffViewer() {
   const diffContent = useAppStore((s) => s.diffContent);
   const diffMergeBase = useAppStore((s) => s.diffMergeBase);
   const diffViewMode = useAppStore((s) => s.diffViewMode);
+  const setDiffViewMode = useAppStore((s) => s.setDiffViewMode);
   const diffLoading = useAppStore((s) => s.diffLoading);
   const setDiffContent = useAppStore((s) => s.setDiffContent);
   const setDiffLoading = useAppStore((s) => s.setDiffLoading);
@@ -100,6 +103,50 @@ export function DiffViewer() {
   const ws = workspaces.find((w) => w.id === selectedWorkspaceId);
   const isMarkdown = !!diffSelectedFile && MARKDOWN_EXT.test(diffSelectedFile);
   const showRendered = isMarkdown && diffPreviewMode === "rendered";
+
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
+  const copyResetRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    setCopyState("idle");
+    if (copyResetRef.current !== null) {
+      window.clearTimeout(copyResetRef.current);
+      copyResetRef.current = null;
+    }
+  }, [diffSelectedFile]);
+
+  useEffect(() => {
+    return () => {
+      if (copyResetRef.current !== null) window.clearTimeout(copyResetRef.current);
+    };
+  }, []);
+
+  const handleCopyContents = useCallback(async () => {
+    if (!selectedWorkspaceId || !diffSelectedFile) return;
+    // Capture path at invocation; if the user switches files before the
+    // async work resolves we bail so the copy result doesn't apply to a
+    // different file's button (would show a stale checkmark).
+    const requestedFile = diffSelectedFile;
+    let nextState: "copied" | "error";
+    try {
+      const file = await readWorkspaceFile(selectedWorkspaceId, requestedFile);
+      // The backend caps reads at 100 KB. Copying a truncated prefix would
+      // silently mislead the user — treat truncation as a copy failure.
+      if (file.is_binary || file.content === null || file.truncated) {
+        nextState = "error";
+      } else {
+        await clipboardWriteText(file.content);
+        nextState = "copied";
+      }
+    } catch (e) {
+      console.error("Copy file contents failed:", e);
+      nextState = "error";
+    }
+    if (useAppStore.getState().diffSelectedFile !== requestedFile) return;
+    setCopyState(nextState);
+    if (copyResetRef.current !== null) window.clearTimeout(copyResetRef.current);
+    copyResetRef.current = window.setTimeout(() => setCopyState("idle"), 1500);
+  }, [selectedWorkspaceId, diffSelectedFile]);
 
   // Monotonic version token: each new fetch bumps it so a stale in-flight
   // response (e.g. user already switched diff tabs) gets dropped instead of
@@ -183,43 +230,105 @@ export function DiffViewer() {
 
   return (
     <div className={styles.viewer}>
-      <div className={styles.header} data-tauri-drag-region>
-        <div className={styles.headerLeft}>
-          <span className={styles.fileName}>{diffSelectedFile}</span>
-        </div>
-        <div className={styles.headerRight}>
-          {isMarkdown && (
+      <WorkspacePanelHeader />
+      {selectedWorkspaceId && <SessionTabs workspaceId={selectedWorkspaceId} />}
+      {diffSelectedFile && (
+        <div className={styles.toolbar}>
+          <span className={styles.toolbarPath} title={diffSelectedFile}>
+            {diffSelectedFile}
+          </span>
+          <div className={styles.toolbarActions}>
+            <button
+              type="button"
+              className={styles.iconButton}
+              onClick={handleCopyContents}
+              title={
+                copyState === "copied"
+                  ? t("diff_tooltip_copied")
+                  : copyState === "error"
+                    ? t("diff_tooltip_copy_failed")
+                    : t("diff_tooltip_copy_contents")
+              }
+              aria-label={
+                copyState === "copied"
+                  ? t("diff_tooltip_copied")
+                  : copyState === "error"
+                    ? t("diff_tooltip_copy_failed")
+                    : t("diff_tooltip_copy_contents")
+              }
+              aria-live="polite"
+            >
+              {copyState === "copied" ? (
+                <Check size={14} aria-hidden="true" />
+              ) : (
+                <Copy size={14} aria-hidden="true" />
+              )}
+            </button>
+            {isMarkdown && (
+              <div
+                className={styles.modeToggle}
+                role="group"
+                aria-label={t("diff_markdown_view_mode_aria")}
+              >
+                <button
+                  type="button"
+                  aria-pressed={diffPreviewMode === "diff"}
+                  className={`${styles.modeToggleButton} ${
+                    diffPreviewMode === "diff" ? styles.modeToggleButtonActive : ""
+                  }`}
+                  onClick={() => setDiffPreviewMode("diff")}
+                  title={t("diff_tooltip_diff_view")}
+                  aria-label={t("diff_tooltip_diff_view")}
+                >
+                  <GitCompare size={14} aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={diffPreviewMode === "rendered"}
+                  className={`${styles.modeToggleButton} ${
+                    diffPreviewMode === "rendered" ? styles.modeToggleButtonActive : ""
+                  }`}
+                  onClick={() => setDiffPreviewMode("rendered")}
+                  title={t("diff_tooltip_preview")}
+                  aria-label={t("diff_tooltip_preview")}
+                >
+                  <Eye size={14} aria-hidden="true" />
+                </button>
+              </div>
+            )}
             <div
               className={styles.modeToggle}
               role="group"
-              aria-label={t("diff_markdown_view_mode_aria")}
+              aria-label={t("diff_view_mode_aria")}
             >
               <button
                 type="button"
-                aria-pressed={diffPreviewMode === "diff"}
+                aria-pressed={diffViewMode === "Unified"}
                 className={`${styles.modeToggleButton} ${
-                  diffPreviewMode === "diff" ? styles.modeToggleButtonActive : ""
+                  diffViewMode === "Unified" ? styles.modeToggleButtonActive : ""
                 }`}
-                onClick={() => setDiffPreviewMode("diff")}
+                onClick={() => setDiffViewMode("Unified")}
+                title={t("diff_tooltip_unified_view")}
+                aria-label={t("diff_tooltip_unified_view")}
               >
-                {t("diff_mode_diff")}
+                <AlignJustify size={14} aria-hidden="true" />
               </button>
               <button
                 type="button"
-                aria-pressed={diffPreviewMode === "rendered"}
+                aria-pressed={diffViewMode === "SideBySide"}
                 className={`${styles.modeToggleButton} ${
-                  diffPreviewMode === "rendered" ? styles.modeToggleButtonActive : ""
+                  diffViewMode === "SideBySide" ? styles.modeToggleButtonActive : ""
                 }`}
-                onClick={() => setDiffPreviewMode("rendered")}
+                onClick={() => setDiffViewMode("SideBySide")}
+                title={t("diff_tooltip_split_view")}
+                aria-label={t("diff_tooltip_split_view")}
               >
-                {t("diff_mode_preview")}
+                <Columns2 size={14} aria-hidden="true" />
               </button>
             </div>
-          )}
-          <PanelToggles />
+          </div>
         </div>
-      </div>
-      {selectedWorkspaceId && <SessionTabs workspaceId={selectedWorkspaceId} />}
+      )}
       <div className={styles.content}>
         {showRendered ? (
           diffPreviewLoading ? (
