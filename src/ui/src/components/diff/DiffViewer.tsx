@@ -4,7 +4,7 @@ import { AlignJustify, Check, Columns2, Copy, Eye, GitCompare } from "lucide-rea
 import { writeText as clipboardWriteText } from "@tauri-apps/plugin-clipboard-manager";
 import { useAppStore } from "../../stores/useAppStore";
 import { loadFileDiff, readWorkspaceFile } from "../../services/tauri";
-import { PanelToggles } from "../shared/PanelToggles";
+import { WorkspacePanelHeader } from "../shared/WorkspacePanelHeader";
 import { SessionTabs } from "../chat/SessionTabs";
 import { MessageMarkdown } from "../chat/MessageMarkdown";
 import { highlightLine, languageForFile } from "../../utils/syntaxHighlight";
@@ -221,12 +221,7 @@ export function DiffViewer() {
 
   return (
     <div className={styles.viewer}>
-      <div className={styles.header} data-tauri-drag-region>
-        <div className={styles.headerLeft} />
-        <div className={styles.headerRight}>
-          <PanelToggles />
-        </div>
-      </div>
+      <WorkspacePanelHeader />
       {selectedWorkspaceId && <SessionTabs workspaceId={selectedWorkspaceId} />}
       {diffSelectedFile && (
         <div className={styles.toolbar}>
