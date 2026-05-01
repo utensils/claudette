@@ -5,6 +5,7 @@ import { loadFileDiff, readWorkspaceFile } from "../../services/tauri";
 import { PanelToggles } from "../shared/PanelToggles";
 import { SessionTabs } from "../chat/SessionTabs";
 import { MessageMarkdown } from "../chat/MessageMarkdown";
+import { WorkspaceActions } from "../chat/WorkspaceActions";
 import { highlightLine, languageForFile } from "../../utils/syntaxHighlight";
 import type { DiffLine } from "../../types/diff";
 import styles from "./DiffViewer.module.css";
@@ -216,6 +217,10 @@ export function DiffViewer() {
               </button>
             </div>
           )}
+          <WorkspaceActions
+            worktreePath={ws?.worktree_path ?? null}
+            filePath={diffSelectedFile}
+          />
           <PanelToggles />
         </div>
       </div>
