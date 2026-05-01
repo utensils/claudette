@@ -123,18 +123,27 @@ export function DiffViewer() {
 
   const handleCopyContents = useCallback(async () => {
     if (!selectedWorkspaceId || !diffSelectedFile) return;
+    // Capture path at invocation; if the user switches files before the
+    // async work resolves we bail so the copy result doesn't apply to a
+    // different file's button (would show a stale checkmark).
+    const requestedFile = diffSelectedFile;
+    let nextState: "copied" | "error";
     try {
-      const file = await readWorkspaceFile(selectedWorkspaceId, diffSelectedFile);
-      if (file.is_binary || file.content === null) {
-        setCopyState("error");
+      const file = await readWorkspaceFile(selectedWorkspaceId, requestedFile);
+      // The backend caps reads at 100 KB. Copying a truncated prefix would
+      // silently mislead the user — treat truncation as a copy failure.
+      if (file.is_binary || file.content === null || file.truncated) {
+        nextState = "error";
       } else {
         await clipboardWriteText(file.content);
-        setCopyState("copied");
+        nextState = "copied";
       }
     } catch (e) {
       console.error("Copy file contents failed:", e);
-      setCopyState("error");
+      nextState = "error";
     }
+    if (useAppStore.getState().diffSelectedFile !== requestedFile) return;
+    setCopyState(nextState);
     if (copyResetRef.current !== null) window.clearTimeout(copyResetRef.current);
     copyResetRef.current = window.setTimeout(() => setCopyState("idle"), 1500);
   }, [selectedWorkspaceId, diffSelectedFile]);
@@ -240,7 +249,14 @@ export function DiffViewer() {
                     ? t("diff_tooltip_copy_failed")
                     : t("diff_tooltip_copy_contents")
               }
-              aria-label={t("diff_tooltip_copy_contents")}
+              aria-label={
+                copyState === "copied"
+                  ? t("diff_tooltip_copied")
+                  : copyState === "error"
+                    ? t("diff_tooltip_copy_failed")
+                    : t("diff_tooltip_copy_contents")
+              }
+              aria-live="polite"
             >
               {copyState === "copied" ? (
                 <Check size={14} aria-hidden="true" />
