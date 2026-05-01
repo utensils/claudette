@@ -240,10 +240,10 @@ pub async fn detect_installed_apps(state: State<'_, AppState>) -> Result<Vec<Det
 
 /// Launch an app using macOS `open -a` command.
 #[cfg(target_os = "macos")]
-async fn open_macos_app(app_name: &str, worktree_path: &str) -> Result<(), String> {
+async fn open_macos_app(app_name: &str, target_path: &str) -> Result<(), String> {
     tokio::process::Command::new("open")
         .no_console_window()
-        .args(["-a", app_name, worktree_path])
+        .args(["-a", app_name, target_path])
         .spawn()
         .map_err(|e| format!("Failed to launch {app_name}: {e}"))?;
     Ok(())
@@ -442,8 +442,6 @@ async fn open_in_terminal(
         cmd.arg(arg);
     }
 
-    // Use the editor's configured open_args, substituting {} with "."
-    // (cwd is already set by the terminal's --working-directory flag).
     cmd.arg(&editor_detected.detected_path);
     for arg in &editor_entry.open_args {
         cmd.arg(arg.replace("{}", "."));

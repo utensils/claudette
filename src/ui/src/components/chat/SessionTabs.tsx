@@ -9,6 +9,10 @@ import {
   archiveChatSession,
 } from "../../services/tauri";
 import { SessionStatusIcon, type SessionStatusKind } from "../shared/SessionStatusIcon";
+import {
+  AttachmentContextMenu,
+  type AttachmentContextMenuItem,
+} from "./AttachmentContextMenu";
 import type { ChatSession, DiffFileTab, DiffLayer } from "../../types";
 import styles from "./SessionTabs.module.css";
 
@@ -102,6 +106,28 @@ export function SessionTabs({ workspaceId }: Props) {
     }
   };
 
+  const archiveSessionImmediate = useCallback(
+    async (session: ChatSession) => {
+      try {
+        const autoCreated = await archiveChatSession(session.id);
+        loadVersionRef.current += 1;
+        removeChatSession(session.id);
+        if (autoCreated) {
+          addChatSession(autoCreated);
+          // Only navigate to the new session when the diff panel isn't active —
+          // bulk-closing sessions while a diff tab is focused should leave the
+          // diff view undisturbed.
+          if (useAppStore.getState().diffSelectedFile === null) {
+            selectSession(workspaceId, autoCreated.id);
+          }
+        }
+      } catch (err) {
+        console.error("[SessionTabs] Failed to archive session:", err);
+      }
+    },
+    [removeChatSession, addChatSession, selectSession, workspaceId],
+  );
+
   const handleArchive = async (session: ChatSession) => {
     if (session.agent_status === "Running") {
       const ok = window.confirm(
@@ -109,17 +135,7 @@ export function SessionTabs({ workspaceId }: Props) {
       );
       if (!ok) return;
     }
-    try {
-      const autoCreated = await archiveChatSession(session.id);
-      loadVersionRef.current += 1;
-      removeChatSession(session.id);
-      if (autoCreated) {
-        addChatSession(autoCreated);
-        selectSession(workspaceId, autoCreated.id);
-      }
-    } catch (err) {
-      console.error("[SessionTabs] Failed to archive session:", err);
-    }
+    await archiveSessionImmediate(session);
   };
 
   // Refs keyed by a unified nav key (sessionNavKey / diffNavKey) so arrow-key
@@ -146,6 +162,45 @@ export function SessionTabs({ workspaceId }: Props) {
     }));
     return [...sessionEntries, ...diffEntries];
   }, [activeSessions, diffTabs]);
+
+  // Right-click menu state. Tracks which tab was clicked (by its NavEntry key)
+  // and the click position. Rendered once at the bottom; portal'd to body so
+  // tab-strip overflow doesn't clip it.
+  const [contextMenu, setContextMenu] = useState<
+    { entryKey: string; x: number; y: number } | null
+  >(null);
+
+  // Close a list of tabs (sessions and/or diffs) sequentially. Sessions get
+  // archived through the same backend command as the close button; diffs just
+  // drop from the local store. If any sessions are still running we confirm
+  // once for the whole batch instead of once per tab.
+  const closeEntries = useCallback(
+    async (entries: NavEntry[]) => {
+      if (entries.length === 0) return;
+      const sessionEntries = entries.flatMap((e) =>
+        e.kind === "session" ? [e] : [],
+      );
+      const runningSessions = sessionEntries
+        .map((e) => activeSessions.find((s) => s.id === e.sessionId))
+        .filter((s): s is ChatSession => !!s && s.agent_status === "Running");
+      if (runningSessions.length > 0) {
+        const message =
+          runningSessions.length === 1
+            ? t("session_running_confirm_close", { name: runningSessions[0].name })
+            : t("session_running_confirm_close_multi", { count: runningSessions.length });
+        if (!window.confirm(message)) return;
+      }
+      for (const entry of entries) {
+        if (entry.kind === "session") {
+          const session = activeSessions.find((s) => s.id === entry.sessionId);
+          if (session) await archiveSessionImmediate(session);
+        } else {
+          closeDiffTab(workspaceId, entry.path, entry.layer);
+        }
+      }
+    },
+    [activeSessions, archiveSessionImmediate, closeDiffTab, t, workspaceId],
+  );
 
   const navigateTabs = useCallback(
     (fromKey: string, direction: NavDirection) => {
@@ -178,6 +233,57 @@ export function SessionTabs({ workspaceId }: Props) {
     [navEntries, selectSession, selectDiffTab, workspaceId],
   );
 
+  const openContextMenu = useCallback(
+    (entryKey: string, x: number, y: number) => {
+      setContextMenu({ entryKey, x, y });
+    },
+    [],
+  );
+
+  // Helper to activate a nav entry (session or diff tab).
+  const selectEntry = useCallback(
+    (entry: NavEntry) => {
+      if (entry.kind === "session") {
+        selectSession(workspaceId, entry.sessionId);
+      } else {
+        selectDiffTab(entry.path, entry.layer);
+      }
+    },
+    [selectSession, selectDiffTab, workspaceId],
+  );
+
+  // Build the menu items lazily from the entry that was right-clicked. The
+  // unified navEntries order is what "to the right" / "others" resolve against,
+  // matching the order the user sees in the strip.
+  const contextMenuItems = useMemo<AttachmentContextMenuItem[]>(() => {
+    if (!contextMenu) return [];
+    const idx = navEntries.findIndex((e) => e.key === contextMenu.entryKey);
+    if (idx < 0) return [];
+    const target = navEntries[idx];
+    const others = navEntries.filter((_, i) => i !== idx);
+    const toRight = navEntries.slice(idx + 1);
+    return [
+      { label: t("tab_close"), onSelect: () => void closeEntries([target]) },
+      {
+        label: t("tab_close_others"),
+        onSelect: async () => {
+          await closeEntries(others);
+          selectEntry(target);
+        },
+        disabled: others.length === 0,
+      },
+      {
+        label: t("tab_close_to_right"),
+        onSelect: async () => {
+          await closeEntries(toRight);
+          selectEntry(target);
+        },
+        disabled: toRight.length === 0,
+      },
+      { label: t("tab_close_all"), onSelect: () => void closeEntries(navEntries) },
+    ];
+  }, [contextMenu, navEntries, closeEntries, selectEntry, t]);
+
   return (
     <div className={styles.tabBar} role="tablist">
       {activeSessions.map((session) => {
@@ -193,6 +299,7 @@ export function SessionTabs({ workspaceId }: Props) {
               updateChatSession(session.id, { name, name_edited: true });
             }}
             onNavigate={(direction) => navigateTabs(navKey, direction)}
+            onContextMenu={(x, y) => openContextMenu(navKey, x, y)}
             tabRef={(el) => {
               if (el) tabRefs.current.set(navKey, el);
               else tabRefs.current.delete(navKey);
@@ -212,6 +319,7 @@ export function SessionTabs({ workspaceId }: Props) {
             onSelect={() => selectDiffTab(tab.path, tab.layer)}
             onClose={() => closeDiffTab(workspaceId, tab.path, tab.layer)}
             onNavigate={(direction) => navigateTabs(navKey, direction)}
+            onContextMenu={(x, y) => openContextMenu(navKey, x, y)}
             tabRef={(el) => {
               if (el) tabRefs.current.set(navKey, el);
               else tabRefs.current.delete(navKey);
@@ -228,6 +336,14 @@ export function SessionTabs({ workspaceId }: Props) {
       >
         <Plus size={14} />
       </button>
+      {contextMenu && contextMenuItems.length > 0 && (
+        <AttachmentContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={contextMenuItems}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
     </div>
   );
 }
@@ -239,6 +355,7 @@ interface TabProps {
   onClose: () => void;
   onRename: (name: string) => void;
   onNavigate: (direction: "prev" | "next" | "first" | "last") => void;
+  onContextMenu: (x: number, y: number) => void;
   tabRef: (el: HTMLDivElement | null) => void;
 }
 
@@ -249,6 +366,7 @@ function SessionTab({
   onClose,
   onRename,
   onNavigate,
+  onContextMenu,
   tabRef,
 }: TabProps) {
   const { t } = useTranslation("chat");
@@ -298,6 +416,13 @@ function SessionTab({
       className={`${styles.tab} ${isActive ? styles.active : ""}`}
       onClick={() => {
         if (!editing) onSelect();
+      }}
+      onContextMenu={(e) => {
+        // Skip while inline-renaming so the input's native context menu
+        // (cut/copy/paste) still works.
+        if (editing) return;
+        e.preventDefault();
+        onContextMenu(e.clientX, e.clientY);
       }}
       onDoubleClick={(e) => {
         e.stopPropagation();
@@ -371,10 +496,19 @@ interface DiffTabProps {
   onSelect: () => void;
   onClose: () => void;
   onNavigate: (direction: NavDirection) => void;
+  onContextMenu: (x: number, y: number) => void;
   tabRef: (el: HTMLDivElement | null) => void;
 }
 
-function DiffTab({ tab, isActive, onSelect, onClose, onNavigate, tabRef }: DiffTabProps) {
+function DiffTab({
+  tab,
+  isActive,
+  onSelect,
+  onClose,
+  onNavigate,
+  onContextMenu,
+  tabRef,
+}: DiffTabProps) {
   const { t } = useTranslation("chat");
   // Show just the basename in the tab; the full path goes in the tooltip
   // (mirrors how editors label file tabs). `path.split("/").pop()` is fine
@@ -389,6 +523,10 @@ function DiffTab({ tab, isActive, onSelect, onClose, onNavigate, tabRef }: DiffT
       tabIndex={isActive ? 0 : -1}
       className={`${styles.tab} ${isActive ? styles.active : ""}`}
       onClick={onSelect}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onContextMenu(e.clientX, e.clientY);
+      }}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();

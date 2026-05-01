@@ -37,7 +37,9 @@ export function WorkspacePanelHeader() {
         ))}
       </div>
       <div className={styles.headerRight}>
-        <WorkspaceActions worktreePath={ws?.worktree_path ?? null} />
+        <WorkspaceActions
+          worktreePath={ws?.worktree_path ?? null}
+        />
         <PanelToggles />
       </div>
     </div>
