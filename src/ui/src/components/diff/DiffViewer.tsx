@@ -222,9 +222,7 @@ export function DiffViewer() {
   return (
     <div className={styles.viewer}>
       <div className={styles.header} data-tauri-drag-region>
-        <div className={styles.headerLeft}>
-          <span className={styles.fileName}>{diffSelectedFile}</span>
-        </div>
+        <div className={styles.headerLeft} />
         <div className={styles.headerRight}>
           <PanelToggles />
         </div>

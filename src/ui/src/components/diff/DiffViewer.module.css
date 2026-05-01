@@ -28,11 +28,6 @@
   gap: 12px;
 }
 
-.fileName {
-  font-family: var(--font-mono);
-  font-size: 13px;
-}
-
 .toolbar {
   display: flex;
   align-items: center;
