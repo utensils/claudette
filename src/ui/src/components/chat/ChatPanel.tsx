@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { GitBranch, LoaderCircle } from "lucide-react";
+import { LoaderCircle } from "lucide-react";
 import { ChatSearchBar } from "./ChatSearchBar";
 import { useAppStore } from "../../stores/useAppStore";
 import {
@@ -52,11 +52,10 @@ import {
 } from "./nativeSlashCommands";
 import { resolveUltrathinkEffort } from "./ultrathink";
 import { extractCompactionEvents } from "../../utils/compactionSentinel";
-import { PanelToggles } from "../shared/PanelToggles";
+import { WorkspacePanelHeader } from "../shared/WorkspacePanelHeader";
 import { SessionTabs } from "./SessionTabs";
 import { AgentQuestionCard } from "./AgentQuestionCard";
 import { PlanApprovalCard } from "./PlanApprovalCard";
-import { WorkspaceActions } from "./WorkspaceActions";
 import { ScrollToBottomPill } from "./ScrollToBottomPill";
 import { useStickyScroll } from "../../hooks/useStickyScroll";
 import styles from "./ChatPanel.module.css";
@@ -857,32 +856,7 @@ export function ChatPanel() {
 
   return (
     <div className={styles.panel}>
-      <div className={styles.header} data-tauri-drag-region>
-        <div className={styles.headerLeft}>
-          {repo ? (
-            <span className={styles.branchInfo}>
-              <span className={styles.repoName}>{repo.name}</span>
-              <span className={styles.branchSep}>/</span>
-              <GitBranch size={12} className={styles.branchIcon} />
-              <span className={styles.branchName}>{ws.branch_name}</span>
-              {defaultBranch && (
-                <>
-                  <span className={styles.branchArrow}>{'>'}</span>
-                  <span className={styles.baseBranch}>{defaultBranch.replace(/^origin\//, '')}</span>
-                </>
-              )}
-            </span>
-          ) : (
-            <span className={styles.repoName}>{ws.name}</span>
-          )}
-        </div>
-        <div className={styles.headerRight}>
-          <WorkspaceActions
-            worktreePath={ws.worktree_path}
-          />
-          <PanelToggles />
-        </div>
-      </div>
+      <WorkspacePanelHeader />
       {selectedWorkspaceId && <SessionTabs workspaceId={selectedWorkspaceId} />}
 
       <div className={styles.messagesWrapper}>
