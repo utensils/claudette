@@ -985,12 +985,10 @@ export function detectInstalledApps(): Promise<DetectedApp[]> {
 export function openWorkspaceInApp(
   appId: string,
   worktreePath: string,
-  fileRelpath?: string | null,
 ): Promise<void> {
   return invoke("open_workspace_in_app", {
     appId,
     worktreePath,
-    fileRelpath: fileRelpath ?? null,
   });
 }
 

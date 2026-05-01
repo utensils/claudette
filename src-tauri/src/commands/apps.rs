@@ -325,14 +325,12 @@ async fn open_tui_via_applescript(
     editor_entry: &AppEntry,
     editor_detected: &DetectedApp,
     worktree_path: &str,
-    file_relpath: Option<&str>,
     terminal: &DetectedApp,
 ) -> Result<(), String> {
     // Build a properly shell-quoted command: cd '<path>' && '<editor>' '<arg1>' '<arg2>' ...
     let mut editor_parts = vec![shell_quote(&editor_detected.detected_path)];
-    let editor_target = file_relpath.unwrap_or(".");
     for arg in &editor_entry.open_args {
-        editor_parts.push(shell_quote(&arg.replace("{}", editor_target)));
+        editor_parts.push(shell_quote(&arg.replace("{}", ".")));
     }
     let full_cmd = format!(
         "cd {} && {}",
@@ -398,7 +396,6 @@ async fn open_in_terminal(
     editor_entry: &AppEntry,
     editor_detected: &DetectedApp,
     worktree_path: &str,
-    file_relpath: Option<&str>,
     state: &State<'_, AppState>,
 ) -> Result<(), String> {
     let config = load_apps_config();
@@ -427,7 +424,6 @@ async fn open_in_terminal(
             editor_entry,
             editor_detected,
             worktree_path,
-            file_relpath,
             &terminal,
         )
         .await;
@@ -451,13 +447,9 @@ async fn open_in_terminal(
         cmd.arg(arg);
     }
 
-    // Use the editor's configured open_args, substituting {} with the relative
-    // file path (when opened from a diff) or "." (cwd is already set by the
-    // terminal's --working-directory flag).
     cmd.arg(&editor_detected.detected_path);
-    let editor_target = file_relpath.unwrap_or(".");
     for arg in &editor_entry.open_args {
-        cmd.arg(arg.replace("{}", editor_target));
+        cmd.arg(arg.replace("{}", "."));
     }
 
     cmd.spawn().map_err(|e| {
@@ -473,7 +465,6 @@ async fn open_in_terminal(
 pub async fn open_workspace_in_app(
     app_id: String,
     worktree_path: String,
-    file_relpath: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     // Reload config each time so edits to open_args, needs_terminal, etc. take
@@ -487,21 +478,7 @@ pub async fn open_workspace_in_app(
         .ok_or_else(|| format!("App '{app_id}' not found in apps.json"))?
         .clone();
 
-    // For apps that open a single path argument (editors / IDEs / `open -a`),
-    // resolve to the absolute file path when the caller targeted a specific
-    // file (e.g. opening from the diff viewer). For terminal hosts the file
-    // relpath is plumbed through separately so the shell still cds into the
-    // worktree.
-    let target_path: String = match file_relpath.as_deref() {
-        Some(rel) => Path::new(&worktree_path)
-            .join(rel)
-            .to_string_lossy()
-            .into_owned(),
-        None => worktree_path.clone(),
-    };
-
-    // Handle AppleScript sentinel (iTerm2, Terminal.app). These shell into the
-    // worktree directory; the file path is irrelevant.
+    // Handle AppleScript sentinel (iTerm2, Terminal.app).
     #[cfg(target_os = "macos")]
     if entry
         .open_args
@@ -521,7 +498,7 @@ pub async fn open_workspace_in_app(
             .ok_or_else(|| format!("App '{app_id}' not detected on this system"))?;
         let app_path = detected.detected_path.clone();
         drop(detected_apps);
-        return open_macos_app(&app_path, &target_path).await;
+        return open_macos_app(&app_path, &worktree_path).await;
     }
 
     // Look up the detected path for this app.
@@ -535,28 +512,20 @@ pub async fn open_workspace_in_app(
 
     // Handle TUI editors that need a terminal host.
     if entry.needs_terminal {
-        return open_in_terminal(
-            &entry,
-            &detected,
-            &worktree_path,
-            file_relpath.as_deref(),
-            &state,
-        )
-        .await;
+        return open_in_terminal(&entry, &detected, &worktree_path, &state).await;
     }
 
     // Handle .app-only detection on macOS (CLI not in PATH).
     #[cfg(target_os = "macos")]
     if detected.detected_path.ends_with(".app") {
-        return open_macos_app(&detected.detected_path, &target_path).await;
+        return open_macos_app(&detected.detected_path, &worktree_path).await;
     }
 
-    // Normal binary launch: substitute {} in open_args with the target path
-    // (file when launched from a diff, otherwise the worktree).
+    // Normal binary launch: substitute {} in open_args with the worktree path.
     let args: Vec<String> = entry
         .open_args
         .iter()
-        .map(|a| a.replace("{}", &target_path))
+        .map(|a| a.replace("{}", &worktree_path))
         .collect();
 
     tokio::process::Command::new(&detected.detected_path)

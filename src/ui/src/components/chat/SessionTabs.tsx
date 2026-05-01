@@ -114,7 +114,12 @@ export function SessionTabs({ workspaceId }: Props) {
         removeChatSession(session.id);
         if (autoCreated) {
           addChatSession(autoCreated);
-          selectSession(workspaceId, autoCreated.id);
+          // Only navigate to the new session when the diff panel isn't active —
+          // bulk-closing sessions while a diff tab is focused should leave the
+          // diff view undisturbed.
+          if (useAppStore.getState().diffSelectedFile === null) {
+            selectSession(workspaceId, autoCreated.id);
+          }
         }
       } catch (err) {
         console.error("[SessionTabs] Failed to archive session:", err);
@@ -179,14 +184,10 @@ export function SessionTabs({ workspaceId }: Props) {
         .map((e) => activeSessions.find((s) => s.id === e.sessionId))
         .filter((s): s is ChatSession => !!s && s.agent_status === "Running");
       if (runningSessions.length > 0) {
-        let message: string;
-        if (entries.length === 1 && runningSessions.length === 1) {
-          message = `This session is still running. Stop and close "${runningSessions[0].name}"?`;
-        } else if (runningSessions.length === sessionEntries.length) {
-          message = `${runningSessions.length} of these sessions are still running. Stop and close them?`;
-        } else {
-          message = `${runningSessions.length} of these sessions are still running. Stop and close all selected tabs?`;
-        }
+        const message =
+          entries.length === 1 && runningSessions.length === 1
+            ? t("session_running_confirm_close", { name: runningSessions[0].name })
+            : t("session_running_confirm_close_multi", { count: runningSessions.length });
         if (!window.confirm(message)) return;
       }
       for (const entry of entries) {

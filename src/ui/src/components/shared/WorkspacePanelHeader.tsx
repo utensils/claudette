@@ -9,7 +9,6 @@ export function WorkspacePanelHeader() {
   const workspaces = useAppStore((s) => s.workspaces);
   const repositories = useAppStore((s) => s.repositories);
   const defaultBranchesMap = useAppStore((s) => s.defaultBranches);
-  const diffSelectedFile = useAppStore((s) => s.diffSelectedFile);
 
   const ws = workspaces.find((w) => w.id === selectedWorkspaceId);
   const repo = repositories.find((r) => r.id === ws?.repository_id);
@@ -40,7 +39,6 @@ export function WorkspacePanelHeader() {
       <div className={styles.headerRight}>
         <WorkspaceActions
           worktreePath={ws?.worktree_path ?? null}
-          filePath={diffSelectedFile}
         />
         <PanelToggles />
       </div>

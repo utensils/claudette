@@ -80,6 +80,7 @@
   "session_close": "Close session",
   "session_close_diff": "Close diff",
   "session_running_confirm_close": "This session is still running. Stop and close \"{{name}}\"?",
+  "session_running_confirm_close_multi": "{{count}} sessions are still running. Stop and close them?",
 
   "chat_search_aria": "Search chat",
   "chat_search_placeholder": "Search chat…",

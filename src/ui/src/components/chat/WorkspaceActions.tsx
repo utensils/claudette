@@ -6,10 +6,6 @@ import { HeaderMenu } from "./HeaderMenu";
 
 interface WorkspaceActionsProps {
   worktreePath: string | null;
-  /** When set, "Open in <app>" targets this workspace-relative file (used by
-   *  the diff viewer so editors jump straight to the file being inspected).
-   *  "Copy Path" also copies the absolute file path instead of the worktree. */
-  filePath?: string | null;
   disabled?: boolean;
 }
 
@@ -23,7 +19,6 @@ const CATEGORY_ORDER = ["editor", "terminal", "ide"] as const;
 
 export function WorkspaceActions({
   worktreePath,
-  filePath = null,
   disabled = false,
 }: WorkspaceActionsProps) {
   const detectedApps = useAppStore((s) => s.detectedApps);
@@ -58,17 +53,13 @@ export function WorkspaceActions({
     if (action.startsWith("open:")) {
       const appId = action.slice(5);
       try {
-        await openWorkspaceInApp(appId, worktreePath, filePath);
+        await openWorkspaceInApp(appId, worktreePath);
       } catch (err) {
         console.error(`Failed to open in app ${appId}:`, err);
       }
     } else if (action === "copy-path") {
-      // Naive path join: file paths from git use forward slashes on every
-      // platform, and worktree paths from the backend never have a trailing
-      // separator, so concatenation lands at the right absolute file path.
-      const target = filePath ? `${worktreePath}/${filePath}` : worktreePath;
       try {
-        await writeText(target);
+        await writeText(worktreePath);
       } catch (err) {
         console.error("Failed to copy path:", err);
       }

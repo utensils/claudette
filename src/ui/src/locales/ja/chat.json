@@ -80,6 +80,7 @@
   "session_close": "セッションを閉じる",
   "session_close_diff": "差分を閉じる",
   "session_running_confirm_close": "このセッションは実行中です。「{{name}}」を停止して閉じますか？",
+  "session_running_confirm_close_multi": "{{count}} 件のセッションが実行中です。停止して閉じますか？",
 
   "chat_search_aria": "チャットを検索",
   "chat_search_placeholder": "チャットを検索…",
