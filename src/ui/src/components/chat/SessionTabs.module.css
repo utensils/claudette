@@ -100,6 +100,18 @@
   text-overflow: ellipsis;
 }
 
+/* Unsaved-changes indicator on file tabs (VS Code convention). Renders to
+ * the right of the basename inside the same .name span. */
+.dirtyDot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  vertical-align: middle;
+}
+
 .nameInput {
   flex: 1;
   min-width: 0;

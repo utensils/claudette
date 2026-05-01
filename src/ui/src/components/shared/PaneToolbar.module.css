@@ -1,0 +1,52 @@
+/* In-pane toolbar shared by the diff viewer and the file viewer.
+ * Sits directly under the workspace header; left slot for path/breadcrumb,
+ * right slot for icon-only segmented controls and standalone icon buttons. */
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 20px;
+  background: transparent;
+  border-bottom: 1px solid var(--divider);
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.path {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* RTL trick keeps the filename visible when the path is long by
+   * ellipsizing leading directories instead of the trailing filename. */
+  direction: rtl;
+  text-align: left;
+  unicode-bidi: plaintext;
+}
+
+.pathDirty::after {
+  /* Unsaved-changes dot, matching VS Code's modified-tab convention. */
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  /* The toolbar uses RTL for ellipsis; flip the dot's logical position
+   * back to the visual right of the filename. */
+  direction: ltr;
+  vertical-align: middle;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}

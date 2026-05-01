@@ -11,8 +11,8 @@ import {
   type AttachmentContextMenuItem,
 } from "../chat/AttachmentContextMenu";
 import { TaskList } from "./TaskList";
-import { ScmPanel } from "./ScmPanel";
 import { PrStatusBanner } from "./PrStatusBanner";
+import { FilesPanel } from "../files/FilesPanel";
 import {
   DiscardChangesConfirm,
   type DiscardableLayer,
@@ -271,6 +271,12 @@ export const RightSidebar = memo(function RightSidebar() {
       <PrStatusBanner />
       <div className={styles.tabBar} data-tauri-drag-region>
         <button
+          className={`${styles.tab} ${activeTab === "files" ? styles.tabActive : ""}`}
+          onClick={() => setActiveTab("files")}
+        >
+          Files
+        </button>
+        <button
           className={`${styles.tab} ${activeTab === "changes" ? styles.tabActive : ""}`}
           onClick={() => setActiveTab("changes")}
         >
@@ -288,13 +294,9 @@ export const RightSidebar = memo(function RightSidebar() {
             <span className={styles.tabBadge}>{taskCount}</span>
           )}
         </button>
-        <button
-          className={`${styles.tab} ${activeTab === "scm" ? styles.tabActive : ""}`}
-          onClick={() => setActiveTab("scm")}
-        >
-          SCM
-        </button>
       </div>
+
+      {activeTab === "files" && <FilesPanel />}
 
       {activeTab === "changes" && (
         <>
@@ -347,8 +349,6 @@ export const RightSidebar = memo(function RightSidebar() {
           ? <TaskList sessionId={activeSessionId} />
           : <div className={styles.list}><div className={styles.empty}>No workspace selected</div></div>
       )}
-
-      {activeTab === "scm" && <ScmPanel />}
 
       {contextMenu && (
         <AttachmentContextMenu

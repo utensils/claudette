@@ -5,6 +5,9 @@ import { writeText as clipboardWriteText } from "@tauri-apps/plugin-clipboard-ma
 import { useAppStore } from "../../stores/useAppStore";
 import { loadFileDiff, readWorkspaceFile } from "../../services/tauri";
 import { WorkspacePanelHeader } from "../shared/WorkspacePanelHeader";
+import { PaneToolbar } from "../shared/PaneToolbar";
+import { SegmentedControl } from "../shared/SegmentedControl";
+import { IconButton } from "../shared/IconButton";
 import { SessionTabs } from "../chat/SessionTabs";
 import { MessageMarkdown } from "../chat/MessageMarkdown";
 import { highlightLine, languageForFile } from "../../utils/syntaxHighlight";
@@ -233,101 +236,66 @@ export function DiffViewer() {
       <WorkspacePanelHeader />
       {selectedWorkspaceId && <SessionTabs workspaceId={selectedWorkspaceId} />}
       {diffSelectedFile && (
-        <div className={styles.toolbar}>
-          <span className={styles.toolbarPath} title={diffSelectedFile}>
-            {diffSelectedFile}
-          </span>
-          <div className={styles.toolbarActions}>
-            <button
-              type="button"
-              className={styles.iconButton}
-              onClick={handleCopyContents}
-              title={
-                copyState === "copied"
-                  ? t("diff_tooltip_copied")
-                  : copyState === "error"
-                    ? t("diff_tooltip_copy_failed")
-                    : t("diff_tooltip_copy_contents")
-              }
-              aria-label={
-                copyState === "copied"
-                  ? t("diff_tooltip_copied")
-                  : copyState === "error"
-                    ? t("diff_tooltip_copy_failed")
-                    : t("diff_tooltip_copy_contents")
-              }
-              aria-live="polite"
-            >
-              {copyState === "copied" ? (
-                <Check size={14} aria-hidden="true" />
-              ) : (
-                <Copy size={14} aria-hidden="true" />
+        <PaneToolbar
+          path={diffSelectedFile}
+          actions={
+            <>
+              <IconButton
+                onClick={handleCopyContents}
+                tooltip={
+                  copyState === "copied"
+                    ? t("diff_tooltip_copied")
+                    : copyState === "error"
+                      ? t("diff_tooltip_copy_failed")
+                      : t("diff_tooltip_copy_contents")
+                }
+                aria-live="polite"
+              >
+                {copyState === "copied" ? (
+                  <Check size={14} aria-hidden="true" />
+                ) : (
+                  <Copy size={14} aria-hidden="true" />
+                )}
+              </IconButton>
+              {isMarkdown && (
+                <SegmentedControl
+                  ariaLabel={t("diff_markdown_view_mode_aria")}
+                  value={diffPreviewMode}
+                  onChange={setDiffPreviewMode}
+                  options={[
+                    {
+                      value: "diff",
+                      icon: <GitCompare size={14} aria-hidden="true" />,
+                      tooltip: t("diff_tooltip_diff_view"),
+                    },
+                    {
+                      value: "rendered",
+                      icon: <Eye size={14} aria-hidden="true" />,
+                      tooltip: t("diff_tooltip_preview"),
+                    },
+                  ]}
+                />
               )}
-            </button>
-            {isMarkdown && (
-              <div
-                className={styles.modeToggle}
-                role="group"
-                aria-label={t("diff_markdown_view_mode_aria")}
-              >
-                <button
-                  type="button"
-                  aria-pressed={diffPreviewMode === "diff"}
-                  className={`${styles.modeToggleButton} ${
-                    diffPreviewMode === "diff" ? styles.modeToggleButtonActive : ""
-                  }`}
-                  onClick={() => setDiffPreviewMode("diff")}
-                  title={t("diff_tooltip_diff_view")}
-                  aria-label={t("diff_tooltip_diff_view")}
-                >
-                  <GitCompare size={14} aria-hidden="true" />
-                </button>
-                <button
-                  type="button"
-                  aria-pressed={diffPreviewMode === "rendered"}
-                  className={`${styles.modeToggleButton} ${
-                    diffPreviewMode === "rendered" ? styles.modeToggleButtonActive : ""
-                  }`}
-                  onClick={() => setDiffPreviewMode("rendered")}
-                  title={t("diff_tooltip_preview")}
-                  aria-label={t("diff_tooltip_preview")}
-                >
-                  <Eye size={14} aria-hidden="true" />
-                </button>
-              </div>
-            )}
-            <div
-              className={styles.modeToggle}
-              role="group"
-              aria-label={t("diff_view_mode_aria")}
-            >
-              <button
-                type="button"
-                aria-pressed={diffViewMode === "Unified"}
-                className={`${styles.modeToggleButton} ${
-                  diffViewMode === "Unified" ? styles.modeToggleButtonActive : ""
-                }`}
-                onClick={() => setDiffViewMode("Unified")}
-                title={t("diff_tooltip_unified_view")}
-                aria-label={t("diff_tooltip_unified_view")}
-              >
-                <AlignJustify size={14} aria-hidden="true" />
-              </button>
-              <button
-                type="button"
-                aria-pressed={diffViewMode === "SideBySide"}
-                className={`${styles.modeToggleButton} ${
-                  diffViewMode === "SideBySide" ? styles.modeToggleButtonActive : ""
-                }`}
-                onClick={() => setDiffViewMode("SideBySide")}
-                title={t("diff_tooltip_split_view")}
-                aria-label={t("diff_tooltip_split_view")}
-              >
-                <Columns2 size={14} aria-hidden="true" />
-              </button>
-            </div>
-          </div>
-        </div>
+              <SegmentedControl
+                ariaLabel={t("diff_view_mode_aria")}
+                value={diffViewMode}
+                onChange={setDiffViewMode}
+                options={[
+                  {
+                    value: "Unified",
+                    icon: <AlignJustify size={14} aria-hidden="true" />,
+                    tooltip: t("diff_tooltip_unified_view"),
+                  },
+                  {
+                    value: "SideBySide",
+                    icon: <Columns2 size={14} aria-hidden="true" />,
+                    tooltip: t("diff_tooltip_split_view"),
+                  },
+                ]}
+              />
+            </>
+          }
+        />
       )}
       <div className={styles.content}>
         {showRendered ? (

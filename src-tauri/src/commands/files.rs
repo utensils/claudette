@@ -27,6 +27,27 @@ pub struct FileContent {
     pub truncated: bool,
 }
 
+#[derive(Clone, Serialize)]
+pub struct FileBytesContent {
+    pub path: String,
+    /// Base64-encoded bytes. Used for image rendering in the file viewer
+    /// where we want to embed the bytes as a data URL on the frontend.
+    pub bytes_b64: String,
+    pub size_bytes: u64,
+    pub truncated: bool,
+}
+
+/// Hard cap for raw-bytes reads (e.g. image previews). Larger than the
+/// editor cap because image files frequently exceed 5 MB but we still
+/// want to bound memory pressure on a single open.
+const MAX_VIEWER_BYTES_READ: usize = 25 * 1024 * 1024;
+
+/// Hard cap for the file viewer's text reads. Beyond this we refuse to
+/// open the file for editing — the user would have to use a different
+/// editor for files this size, and Monaco/CodeMirror struggle past this
+/// point too.
+const MAX_VIEWER_FILE_SIZE: usize = 10 * 1024 * 1024;
+
 /// List files in a workspace's worktree using `git ls-files`.
 ///
 /// Returns tracked files plus untracked-but-not-ignored files, capped at 10,000
@@ -128,6 +149,106 @@ pub async fn read_workspace_file(
         size_bytes: read.size_bytes,
         truncated: read.truncated,
     })
+}
+
+/// Read a file from a workspace's worktree with the file-viewer/editor
+/// truncation cap (10 MB) instead of the default 100 KB. Used by the
+/// All-Files file viewer where the user has explicitly asked to open the
+/// file. Binary detection still applies — binaries return
+/// `content: None, is_binary: true`.
+#[tauri::command]
+pub async fn read_workspace_file_for_viewer(
+    workspace_id: String,
+    relative_path: String,
+    state: State<'_, AppState>,
+) -> Result<FileContent, String> {
+    let worktree_path = resolve_worktree_path(&workspace_id, &state)?;
+
+    let read = file_expand::read_worktree_file_with_limit(
+        std::path::Path::new(&worktree_path),
+        &relative_path,
+        MAX_VIEWER_FILE_SIZE,
+    )
+    .await
+    .ok_or("File not found or path escapes worktree")?;
+
+    Ok(FileContent {
+        path: relative_path,
+        content: read.content,
+        is_binary: read.is_binary,
+        size_bytes: read.size_bytes,
+        truncated: read.truncated,
+    })
+}
+
+/// Read raw bytes from a file in a workspace's worktree, base64-encoded
+/// for transport. Used by the file viewer to render image previews via a
+/// data URL. The read is capped at `MAX_VIEWER_BYTES_READ` (25 MB) to
+/// bound memory pressure.
+#[tauri::command]
+pub async fn read_workspace_file_bytes(
+    workspace_id: String,
+    relative_path: String,
+    state: State<'_, AppState>,
+) -> Result<FileBytesContent, String> {
+    use base64::Engine as _;
+
+    let worktree_path = resolve_worktree_path(&workspace_id, &state)?;
+
+    let read = file_expand::read_worktree_file_bytes(
+        std::path::Path::new(&worktree_path),
+        &relative_path,
+        MAX_VIEWER_BYTES_READ,
+    )
+    .await
+    .ok_or("File not found or path escapes worktree")?;
+
+    let bytes_b64 = base64::engine::general_purpose::STANDARD.encode(&read.bytes);
+    Ok(FileBytesContent {
+        path: relative_path,
+        bytes_b64,
+        size_bytes: read.size_bytes,
+        truncated: read.truncated,
+    })
+}
+
+/// Write UTF-8 text to a file in a workspace's worktree. Path-traversal
+/// protected. Creates the file if missing; truncates if it exists.
+///
+/// Returns an error string on failure (path escapes, IO error). The
+/// frontend surfaces these via the toast notification system.
+#[tauri::command]
+pub async fn write_workspace_file(
+    workspace_id: String,
+    relative_path: String,
+    content: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let worktree_path = resolve_worktree_path(&workspace_id, &state)?;
+
+    file_expand::write_worktree_file(
+        std::path::Path::new(&worktree_path),
+        &relative_path,
+        &content,
+    )
+    .await
+}
+
+/// Resolve `workspace_id` to its worktree path, returning a string error
+/// if the workspace is missing or has no worktree configured.
+fn resolve_worktree_path(
+    workspace_id: &str,
+    state: &State<'_, AppState>,
+) -> Result<String, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
+    let ws = workspaces
+        .iter()
+        .find(|w| w.id == workspace_id)
+        .ok_or("Workspace not found")?;
+    ws.worktree_path
+        .clone()
+        .ok_or_else(|| "Workspace has no worktree".to_string())
 }
 
 /// Write raw bytes to a filesystem path chosen by the user via a save dialog.

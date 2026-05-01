@@ -14,7 +14,7 @@ export interface UiSlice {
   sidebarWidth: number;
   rightSidebarWidth: number;
   terminalHeight: number;
-  rightSidebarTab: "changes" | "tasks" | "scm";
+  rightSidebarTab: "files" | "changes" | "tasks";
   sidebarGroupBy: "status" | "repo";
   sidebarRepoFilter: string; // repo ID or "all"
   sidebarShowArchived: boolean;
@@ -24,7 +24,7 @@ export interface UiSlice {
   commandPaletteOpen: boolean;
   toggleSidebar: () => void;
   toggleRightSidebar: () => void;
-  setRightSidebarTab: (tab: "changes" | "tasks" | "scm") => void;
+  setRightSidebarTab: (tab: "files" | "changes" | "tasks") => void;
   setSidebarWidth: (w: number) => void;
   setRightSidebarWidth: (w: number) => void;
   setTerminalHeight: (h: number) => void;

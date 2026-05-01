@@ -1,0 +1,62 @@
+.tree {
+  flex: 1;
+  overflow-y: auto;
+  outline: none;
+  padding: 4px 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-family: var(--font-sans);
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Indent provided as inline style via --depth so each level matches the
+   * "tree" feel without a hardcoded class explosion. */
+  padding-left: calc(8px + var(--depth, 0) * 12px);
+  user-select: none;
+  transition: background var(--transition-fast);
+}
+
+.row:hover {
+  background: var(--hover-bg);
+}
+
+.rowSelected {
+  background: var(--selected-bg);
+  color: var(--text-primary);
+}
+
+.chevron {
+  flex-shrink: 0;
+  color: var(--text-dim);
+}
+
+.icon {
+  flex-shrink: 0;
+  color: var(--text-dim);
+}
+
+.rowSelected .icon,
+.rowSelected .chevron {
+  color: var(--text-muted);
+}
+
+.name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 12px;
+}
