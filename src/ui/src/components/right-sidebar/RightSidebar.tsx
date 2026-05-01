@@ -34,8 +34,6 @@ export const RightSidebar = memo(function RightSidebar() {
   const setDiffFiles = useAppStore((s) => s.setDiffFiles);
   const openDiffTab = useAppStore((s) => s.openDiffTab);
   const setDiffLoading = useAppStore((s) => s.setDiffLoading);
-  const setDiffViewMode = useAppStore((s) => s.setDiffViewMode);
-  const diffViewMode = useAppStore((s) => s.diffViewMode);
   const activeTab = useAppStore((s) => s.rightSidebarTab);
   const setActiveTab = useAppStore((s) => s.setRightSidebarTab);
 
@@ -300,24 +298,6 @@ export const RightSidebar = memo(function RightSidebar() {
 
       {activeTab === "changes" && (
         <>
-          <div className={styles.header}>
-            <span className={styles.title}>
-              Changed Files ({diffFiles.length})
-            </span>
-            <div className={styles.controls}>
-              <button
-                className={styles.modeBtn}
-                onClick={() =>
-                  setDiffViewMode(
-                    diffViewMode === "Unified" ? "SideBySide" : "Unified"
-                  )
-                }
-                title="Toggle view mode"
-              >
-                {diffViewMode === "Unified" ? "≡" : "‖"}
-              </button>
-            </div>
-          </div>
           <div className={styles.list}>
             {diffLoading ? (
               <div className={styles.empty}>Loading...</div>

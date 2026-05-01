@@ -114,8 +114,16 @@
   "diff_preview_not_text": "Cannot render: file is not text",
   "diff_preview_truncated": "Preview truncated — full file is {{size}}",
   "diff_markdown_view_mode_aria": "Markdown view mode",
+  "diff_view_mode_aria": "Diff layout",
   "diff_mode_diff": "Diff",
   "diff_mode_preview": "Preview",
+  "diff_tooltip_diff_view": "Diff view",
+  "diff_tooltip_preview": "Preview",
+  "diff_tooltip_unified_view": "Unified view",
+  "diff_tooltip_split_view": "Split view",
+  "diff_tooltip_copy_contents": "Copy file contents",
+  "diff_tooltip_copied": "Copied!",
+  "diff_tooltip_copy_failed": "Copy failed",
 
   "terminal_failed_to_start": "Failed to start shell"
 }
