@@ -82,6 +82,11 @@
   "session_running_confirm_close": "このセッションは実行中です。「{{name}}」を停止して閉じますか？",
   "session_running_confirm_close_multi": "{{count}} 件のセッションが実行中です。停止して閉じますか？",
 
+  "tab_close": "閉じる",
+  "tab_close_others": "他を閉じる",
+  "tab_close_to_right": "右側を閉じる",
+  "tab_close_all": "すべて閉じる",
+
   "chat_search_aria": "チャットを検索",
   "chat_search_placeholder": "チャットを検索…",
   "chat_search_query_aria": "検索クエリ",

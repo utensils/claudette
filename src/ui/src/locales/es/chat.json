@@ -82,6 +82,11 @@
   "session_running_confirm_close": "Esta sesión sigue en ejecución. ¿Detener y cerrar «{{name}}»?",
   "session_running_confirm_close_multi": "{{count}} sesiones siguen en ejecución. ¿Detener y cerrarlas?",
 
+  "tab_close": "Cerrar",
+  "tab_close_others": "Cerrar otras",
+  "tab_close_to_right": "Cerrar a la derecha",
+  "tab_close_all": "Cerrar todas",
+
   "chat_search_aria": "Buscar en el chat",
   "chat_search_placeholder": "Buscar en el chat…",
   "chat_search_query_aria": "Consulta de búsqueda",

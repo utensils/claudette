@@ -185,7 +185,7 @@ export function SessionTabs({ workspaceId }: Props) {
         .filter((s): s is ChatSession => !!s && s.agent_status === "Running");
       if (runningSessions.length > 0) {
         const message =
-          entries.length === 1 && runningSessions.length === 1
+          runningSessions.length === 1
             ? t("session_running_confirm_close", { name: runningSessions[0].name })
             : t("session_running_confirm_close_multi", { count: runningSessions.length });
         if (!window.confirm(message)) return;
@@ -199,7 +199,7 @@ export function SessionTabs({ workspaceId }: Props) {
         }
       }
     },
-    [activeSessions, archiveSessionImmediate, closeDiffTab, workspaceId],
+    [activeSessions, archiveSessionImmediate, closeDiffTab, t, workspaceId],
   );
 
   const navigateTabs = useCallback(
@@ -240,6 +240,18 @@ export function SessionTabs({ workspaceId }: Props) {
     [],
   );
 
+  // Helper to activate a nav entry (session or diff tab).
+  const selectEntry = useCallback(
+    (entry: NavEntry) => {
+      if (entry.kind === "session") {
+        selectSession(workspaceId, entry.sessionId);
+      } else {
+        selectDiffTab(entry.path, entry.layer);
+      }
+    },
+    [selectSession, selectDiffTab, workspaceId],
+  );
+
   // Build the menu items lazily from the entry that was right-clicked. The
   // unified navEntries order is what "to the right" / "others" resolve against,
   // matching the order the user sees in the strip.
@@ -251,20 +263,26 @@ export function SessionTabs({ workspaceId }: Props) {
     const others = navEntries.filter((_, i) => i !== idx);
     const toRight = navEntries.slice(idx + 1);
     return [
-      { label: "Close", onSelect: () => void closeEntries([target]) },
+      { label: t("tab_close"), onSelect: () => void closeEntries([target]) },
       {
-        label: "Close Others",
-        onSelect: () => void closeEntries(others),
+        label: t("tab_close_others"),
+        onSelect: async () => {
+          await closeEntries(others);
+          selectEntry(target);
+        },
         disabled: others.length === 0,
       },
       {
-        label: "Close to the Right",
-        onSelect: () => void closeEntries(toRight),
+        label: t("tab_close_to_right"),
+        onSelect: async () => {
+          await closeEntries(toRight);
+          selectEntry(target);
+        },
         disabled: toRight.length === 0,
       },
-      { label: "Close All", onSelect: () => void closeEntries(navEntries) },
+      { label: t("tab_close_all"), onSelect: () => void closeEntries(navEntries) },
     ];
-  }, [contextMenu, navEntries, closeEntries]);
+  }, [contextMenu, navEntries, closeEntries, selectEntry, t]);
 
   return (
     <div className={styles.tabBar} role="tablist">
