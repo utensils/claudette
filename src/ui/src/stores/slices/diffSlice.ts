@@ -142,10 +142,25 @@ export const createDiffSlice: StateCreator<AppState, [], [], DiffSlice> = (
       // wouldn't refire on identical deps, leaving the user staring at empty).
       const isSameSelection =
         s.diffSelectedFile === path && s.diffSelectedLayer === normalizedLayer;
+      // issue 573: AppLayout gives the file viewer strict precedence over the
+      // diff viewer, so opening a diff while a file tab is active would
+      // leave the user staring at Monaco. Release the active file pointer
+      // for this workspace so the diff actually becomes visible. Only the
+      // active pointer is cleared — the file tab itself stays in the strip
+      // so the user can switch back. Other workspaces are untouched.
+      const wsActiveFile = s.activeFileTabByWorkspace[workspaceId] ?? null;
+      const nextActiveFileTabByWorkspace =
+        wsActiveFile === null
+          ? s.activeFileTabByWorkspace
+          : {
+              ...s.activeFileTabByWorkspace,
+              [workspaceId]: null,
+            };
       return {
         diffTabsByWorkspace: nextTabs,
         diffSelectedFile: path,
         diffSelectedLayer: normalizedLayer,
+        activeFileTabByWorkspace: nextActiveFileTabByWorkspace,
         ...(isSameSelection
           ? {}
           : {
