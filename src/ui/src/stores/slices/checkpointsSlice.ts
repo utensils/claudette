@@ -63,6 +63,24 @@ export const createCheckpointsSlice: StateCreator<
         ...s.compactionEvents,
         [sessionId]: extractCompactionEvents(messages),
       };
+      // Pagination state must follow the rolled-back message list. The new
+      // total IS what we now hold (rollback returns the full surviving set,
+      // not a window), so totalCount = messages.length, hasMore = false,
+      // and the cursor points to the new oldest message — leaving the prior
+      // entry would let `globalOffset` and the scroll-to-top loader race
+      // against a conversation that has already been truncated or cleared.
+      const nextChatPagination =
+        sessionId in s.chatPagination
+          ? {
+              ...s.chatPagination,
+              [sessionId]: {
+                hasMore: false,
+                isLoadingMore: false,
+                totalCount: messages.length,
+                oldestMessageId: messages[0]?.id ?? null,
+              },
+            }
+          : s.chatPagination;
       return {
         chatMessages: { ...s.chatMessages, [sessionId]: messages },
         lastMessages: updatedLastMessages,
@@ -85,6 +103,7 @@ export const createCheckpointsSlice: StateCreator<
         },
         latestTurnUsage,
         compactionEvents: nextCompactionEvents,
+        chatPagination: nextChatPagination,
       };
     }),
 });

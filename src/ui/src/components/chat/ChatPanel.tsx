@@ -324,11 +324,14 @@ export function ChatPanel() {
 
     const onMessages = (msgs: ChatMessage[], attachments?: import("../../types").ChatAttachment[], pageState?: import("../../types").ChatPaginationState) => {
       if (cancelled) return;
-      // Filter out empty assistant messages (legacy data), but keep
-      // those that carry thinking content.
-      const filtered = msgs.filter(
-        (m) => m.role !== "Assistant" || m.content.trim() !== "" || !!m.thinking
-      );
+      // The paginated backend already drops legacy empty-assistant rows so
+      // `total_count` matches the page contents. The remote (non-paginated)
+      // path still needs the filter — apply it only when no pageState exists.
+      const filtered = pageState
+        ? msgs
+        : msgs.filter(
+            (m) => m.role !== "Assistant" || m.content.trim() !== "" || !!m.thinking
+          );
       debugChat("ChatPanel", "load-history:success", {
         sessionId,
         rawMessageCount: msgs.length,
@@ -342,6 +345,12 @@ export function ChatPanel() {
       if (pageState) {
         setChatPagination(sessionId, pageState);
       }
+      // Global index of the first loaded message — needed below so persisted
+      // CompletedTurn rows whose checkpoint sits inside the loaded window
+      // resolve to the correct GLOBAL afterMessageIndex.
+      const loadGlobalOffset = pageState
+        ? pageState.totalCount - filtered.length
+        : 0;
       historyRef.current[sessionId] = filtered
         .filter((m) => m.role === "User")
         .map((m) => m.content);
@@ -373,7 +382,7 @@ export function ChatPanel() {
           loadCompletedTurns(sessionId)
             .then((turnData) => {
               if (cancelled) return;
-              const turns = reconstructCompletedTurns(filtered, turnData);
+              const turns = reconstructCompletedTurns(filtered, turnData, loadGlobalOffset);
               debugChat("ChatPanel", "load-completed-turns:success", {
                 sessionId,
                 dbTurnIds: turnData.map((turn) => turn.checkpoint_id),
@@ -476,6 +485,30 @@ export function ChatPanel() {
             requestAnimationFrame(() => {
               container.scrollTop += container.scrollHeight - prevScrollHeight;
             });
+            // Re-hydrate persisted completed turns: any whose checkpoint
+            // message_id was in the just-loaded older range was filtered out
+            // of `reconstructCompletedTurns` on the initial load. Re-running
+            // against the now-larger message window resolves them.
+            const merged =
+              useAppStore.getState().chatMessages[sessionId] ?? [];
+            const mergedOffset = page.total_count - merged.length;
+            loadCompletedTurns(sessionId)
+              .then((turnData) => {
+                const turns = reconstructCompletedTurns(
+                  merged,
+                  turnData,
+                  mergedOffset,
+                );
+                useAppStore
+                  .getState()
+                  .hydrateCompletedTurns(sessionId, turns);
+              })
+              .catch((err) =>
+                console.error(
+                  "Failed to re-hydrate completed turns after prepend:",
+                  err,
+                ),
+              );
           })
           .catch((e) => {
             console.error("Failed to load older messages:", e);
@@ -637,21 +670,25 @@ export function ChatPanel() {
         const isRemoteWorkspace = !!ws.remote_connection_id;
 
         const addLocalMessage = (text: string) => {
-          addChatMessage(sessionId, {
-            id: crypto.randomUUID(),
-            workspace_id: workspaceId,
-            chat_session_id: sessionId,
-            role: "System",
-            content: text,
-            cost_usd: null,
-            duration_ms: null,
-            created_at: new Date().toISOString(),
-            thinking: null,
-            input_tokens: null,
-            output_tokens: null,
-            cache_read_tokens: null,
-            cache_creation_tokens: null,
-          });
+          addChatMessage(
+            sessionId,
+            {
+              id: crypto.randomUUID(),
+              workspace_id: workspaceId,
+              chat_session_id: sessionId,
+              role: "System",
+              content: text,
+              cost_usd: null,
+              duration_ms: null,
+              created_at: new Date().toISOString(),
+              thinking: null,
+              input_tokens: null,
+              output_tokens: null,
+              cache_read_tokens: null,
+              cache_creation_tokens: null,
+            },
+            { persisted: false },
+          );
         };
 
         const setSelectedModelBound = (nextModel: string) =>

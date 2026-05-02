@@ -104,7 +104,22 @@ export interface ChatSlice {
   prependChatMessages: (sessionId: string, messages: ChatMessage[]) => void;
   prependChatAttachments: (sessionId: string, attachments: ChatAttachment[]) => void;
   setChatMessages: (sessionId: string, messages: ChatMessage[]) => void;
-  addChatMessage: (sessionId: string, message: ChatMessage) => void;
+  /**
+   * Append a chat message to the session's list.
+   *
+   * Pass `{ persisted: false }` for client-only messages that have no
+   * matching DB row (e.g. the System messages produced by local slash
+   * commands like `/help`, `/plan`, `/status`). Persisted messages bump
+   * `chatPagination[sessionId].totalCount` so `globalOffset` stays correct
+   * during streaming; client-only ones must NOT, or the next paginated
+   * load returns a smaller total than the in-memory list and turn
+   * placement drifts.
+   */
+  addChatMessage: (
+    sessionId: string,
+    message: ChatMessage,
+    options?: { persisted?: boolean },
+  ) => void;
   setStreamingContent: (sessionId: string, content: string) => void;
   appendStreamingContent: (sessionId: string, text: string) => void;
   setPendingTypewriter: (sessionId: string, messageId: string, text: string) => void;
@@ -230,9 +245,10 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
     set((s) => ({
       chatMessages: { ...s.chatMessages, [sessionId]: messages },
     })),
-  addChatMessage: (sessionId, message) =>
+  addChatMessage: (sessionId, message, options) =>
     set((s) => {
       const pagination = s.chatPagination[sessionId];
+      const persisted = options?.persisted ?? true;
       return {
         chatMessages: {
           ...s.chatMessages,
@@ -240,7 +256,9 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
         },
         lastMessages: { ...s.lastMessages, [sessionId]: message },
         // Keep totalCount in sync so globalOffset stays correct during streaming.
-        ...(pagination
+        // Client-only messages (no DB row) opt out so the count doesn't drift
+        // ahead of the persisted set.
+        ...(pagination && persisted
           ? {
               chatPagination: {
                 ...s.chatPagination,

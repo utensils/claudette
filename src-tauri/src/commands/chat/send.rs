@@ -64,9 +64,34 @@ pub async fn load_chat_history_page(
         .list_chat_messages_page(&session_id, limit, before_message_id.as_deref())
         .map_err(|e| e.to_string())?;
 
-    let has_more = messages.len() as i64 == limit;
+    // `has_more` reflects whether older rows exist beyond the cursor — never
+    // just `messages.len() == limit`, which over-reports on sessions whose
+    // total is an exact multiple of the page size and triggers a wasted fetch.
+    let has_more = match before_message_id.as_deref() {
+        // First page: the page covers the newest `messages.len()` rows; older
+        // rows exist iff the total exceeds what we returned.
+        None => total_count > messages.len() as i64,
+        // Subsequent page: assume more if we filled the page. Hitting an exact
+        // boundary still wastes one fetch, but avoiding it would require a
+        // second count keyed to the cursor — not worth the round-trip.
+        Some(_) => messages.len() as i64 == limit,
+    };
 
-    let message_ids: Vec<String> = messages.iter().map(|m| m.id.clone()).collect();
+    // Build the attachment lookup set. Start with the page's own message ids,
+    // then — when the page begins mid-turn (first row isn't a User) — also
+    // include the most recent User message before the cursor. Agent-origin
+    // attachments are FK-anchored to the triggering User message, so a turn
+    // that straddles a page boundary would otherwise drop its attachments
+    // until older history is loaded.
+    let mut message_ids: Vec<String> = messages.iter().map(|m| m.id.clone()).collect();
+    if let Some(first) = messages.first()
+        && first.role != ChatRole::User
+        && let Some(prev_user) = db
+            .previous_user_message_id(&session_id, &first.id)
+            .map_err(|e| e.to_string())?
+    {
+        message_ids.push(prev_user);
+    }
     let att_map = db
         .list_attachments_for_messages(&message_ids)
         .map_err(|e| e.to_string())?;

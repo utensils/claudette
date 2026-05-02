@@ -6,11 +6,17 @@ import { debugChat } from "./chatDebug";
 /**
  * Reconstruct CompletedTurn[] from persisted turn data and loaded messages.
  * Resolves afterMessageIndex by finding the checkpoint's message_id in the
- * messages array and setting it to index + 1 (the turn renders after that message).
+ * messages array and setting it to (local index + 1) + globalOffset.
+ *
+ * `globalOffset` is the number of older messages that exist in the session
+ * but aren't in `messages` because of pagination — pass it so the returned
+ * `afterMessageIndex` values are global session positions, matching the rest
+ * of the rendering pipeline. Defaults to 0 for fully-loaded sessions.
  */
 export function reconstructCompletedTurns(
   messages: ChatMessage[],
   turnData: CompletedTurnData[],
+  globalOffset = 0,
 ): CompletedTurn[] {
   const msgIdToIndex = new Map(messages.map((m, i) => [m.id, i]));
   const droppedTurnIds = turnData
@@ -30,7 +36,8 @@ export function reconstructCompletedTurns(
   const valid = turnData.filter((td) => msgIdToIndex.has(td.message_id));
 
   return valid.map((td, i) => {
-    const afterMessageIndex = msgIdToIndex.get(td.message_id)! + 1;
+    const localAfter = msgIdToIndex.get(td.message_id)! + 1;
+    const afterMessageIndex = localAfter + globalOffset;
     const priorBoundary =
       i > 0 ? msgIdToIndex.get(valid[i - 1].message_id)! + 1 : 0;
     const turnAssistantMessages = messages
