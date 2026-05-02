@@ -7,11 +7,16 @@ use claudette::agent::{
     PersistentSession, StartContentBlock, StreamEvent,
 };
 use claudette::base64_decode;
+use claudette::chat::{
+    BuildAssistantArgs, RequestedFlags, SessionFlags, build_assistant_chat_message,
+    build_compaction_sentinel, build_permission_response, extract_assistant_text,
+    extract_event_thinking, persistent_session_flags_drifted,
+};
 use claudette::db::Database;
 use claudette::env::WorkspaceEnv;
 use claudette::mcp_supervisor::McpSupervisor;
 use claudette::model::{ChatMessage, ChatRole, ConversationCheckpoint};
-use claudette::permissions::{is_bypass_tools, tools_for_level};
+use claudette::permissions::tools_for_level;
 use claudette::snapshot;
 
 use crate::state::{AgentSessionState, AppState, PendingPermission};
@@ -22,94 +27,6 @@ use super::{
     ATTENTION_NOTIFY_DELAY_MS, AgentStreamPayload, AttachmentInput, fire_completion_notification,
     now_iso, start_bridge_and_inject_mcp,
 };
-
-/// Spawn-time flags of the currently running persistent session, plus the
-/// backend-observed `exited_plan` latch (set when the agent emits
-/// `ExitPlanMode` during this session).
-pub(crate) struct SessionFlags<'a> {
-    pub plan_mode: bool,
-    pub allowed_tools: &'a [String],
-    pub exited_plan: bool,
-    pub disable_1m_context: bool,
-}
-
-/// Flags the next turn is asking for. Compared against [`SessionFlags`] to
-/// decide whether the process must be torn down and respawned.
-pub(crate) struct RequestedFlags<'a> {
-    pub plan_mode: bool,
-    pub allowed_tools: &'a [String],
-    pub disable_1m_context: bool,
-}
-
-/// Detect whether the persistent session's spawn-time flags have drifted
-/// from what the current turn is asking for. Both `--permission-mode` and
-/// `--allowedTools` are only applied when the `claude` process starts, so
-/// a drift means the running process cannot serve this turn correctly and
-/// must be torn down.
-///
-/// `exited_plan` is a backend-observed signal that the agent called
-/// `ExitPlanMode` during the current session. When set alongside
-/// `plan_mode`, the plan phase is over regardless of whether the frontend
-/// remembered to send `plan_mode=false` — force a teardown so the CLI
-/// respawns without `--permission-mode plan`.
-pub(crate) fn persistent_session_flags_drifted(
-    session: SessionFlags<'_>,
-    requested: RequestedFlags<'_>,
-) -> bool {
-    session.plan_mode != requested.plan_mode
-        || session.allowed_tools != requested.allowed_tools
-        || session.disable_1m_context != requested.disable_1m_context
-        || (session.plan_mode && session.exited_plan)
-}
-
-/// Decide how to respond to a `can_use_tool` control_request that reached the
-/// handler for a tool other than AskUserQuestion / ExitPlanMode.
-///
-/// Bypass mode + plan not active → allow (echo `updatedInput` — required by
-/// the CLI's `PermissionPromptToolResultSchema`). This is the fix for "full"
-/// sessions seeing spurious denials: the CLI still routes certain tools
-/// (MCP servers, Skills, some built-in edge paths) through
-/// `--permission-prompt-tool stdio` even under `--permission-mode
-/// bypassPermissions`, so we must answer allow rather than fall through.
-///
-/// Plan mode is considered **inactive** once the agent has emitted
-/// `ExitPlanMode` (`session_exited_plan = true`) — even though the
-/// subprocess still runs with `--permission-mode plan` until the drift
-/// detector respawns it on the next turn. Without this, a bypass session
-/// that just had its plan approved would still deny every mutating tool
-/// for the remainder of the current turn.
-///
-/// Otherwise (standard/readonly, or plan-mode genuinely active) → deny with
-/// a message that names the escalation path; the model paraphrases this
-/// string to the user.
-///
-/// Auto-allow in bypass mode does not bypass an MCP server's own
-/// authorization — servers refuse at their layer via a normal tool_result,
-/// not a control_request.
-pub(crate) fn build_permission_response(
-    session_allowed_tools: &[String],
-    session_plan_mode: bool,
-    session_exited_plan: bool,
-    tool_name: &str,
-    original_input: &serde_json::Value,
-) -> serde_json::Value {
-    let bypass = is_bypass_tools(session_allowed_tools);
-    let plan_active = session_plan_mode && !session_exited_plan;
-    if bypass && !plan_active {
-        serde_json::json!({
-            "behavior": "allow",
-            "updatedInput": original_input,
-        })
-    } else {
-        let msg = format!(
-            "{tool_name} isn't enabled at the current permission level. Switch to 'full' in the chat toolbar (or run /permissions full) to allow it."
-        );
-        serde_json::json!({
-            "behavior": "deny",
-            "message": msg,
-        })
-    }
-}
 
 #[tauri::command]
 pub async fn load_chat_history(
@@ -1044,25 +961,8 @@ pub async fn send_chat_message(
                 && subtype == "compact_boundary"
                 && let Ok(db) = Database::open(&db_path)
             {
-                let sentinel = format!(
-                    "COMPACTION:{}:{}:{}:{}",
-                    meta.trigger, meta.pre_tokens, meta.post_tokens, meta.duration_ms
-                );
-                let msg = ChatMessage {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    workspace_id: ws_id.clone(),
-                    chat_session_id: chat_session_id_for_stream.clone(),
-                    role: ChatRole::System,
-                    content: sentinel,
-                    cost_usd: None,
-                    duration_ms: None,
-                    created_at: now_iso(),
-                    thinking: None,
-                    input_tokens: None,
-                    output_tokens: None,
-                    cache_read_tokens: Some(meta.post_tokens as i64),
-                    cache_creation_tokens: None,
-                };
+                let msg =
+                    build_compaction_sentinel(&ws_id, &chat_session_id_for_stream, meta, now_iso());
                 let _ = db.insert_chat_message(&msg);
             }
 
@@ -1472,41 +1372,10 @@ pub async fn send_chat_message(
             // thinking blocks only, then one with text. We accumulate thinking
             // and only save when we have text content to attach it to.
             if let AgentEvent::Stream(StreamEvent::Assistant { ref message }) = event {
-                let full_text: String = message
-                    .content
-                    .iter()
-                    .filter_map(|block| {
-                        if let claudette::agent::ContentBlock::Text { text } = block {
-                            Some(text.as_str())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join("");
-
-                // Extract thinking from this event.
-                let event_thinking: Option<String> = {
-                    let parts: Vec<&str> = message
-                        .content
-                        .iter()
-                        .filter_map(|block| {
-                            if let claudette::agent::ContentBlock::Thinking { thinking } = block {
-                                Some(thinking.as_str())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    if parts.is_empty() {
-                        None
-                    } else {
-                        Some(parts.join(""))
-                    }
-                };
+                let full_text = extract_assistant_text(message);
 
                 // Accumulate thinking from this event.
-                if let Some(t) = event_thinking {
+                if let Some(t) = extract_event_thinking(message) {
                     pending_thinking = Some(match pending_thinking.take() {
                         Some(mut existing) => {
                             existing.push_str(&t);
@@ -1520,27 +1389,15 @@ pub async fn send_chat_message(
                 if !full_text.trim().is_empty()
                     && let Ok(db) = Database::open(&db_path)
                 {
-                    let msg_id = uuid::Uuid::new_v4().to_string();
-                    let taken_usage = latest_usage.take();
-                    let msg = ChatMessage {
-                        id: msg_id.clone(),
-                        workspace_id: ws_id.clone(),
-                        chat_session_id: chat_session_id_for_stream.clone(),
-                        role: ChatRole::Assistant,
+                    let msg = build_assistant_chat_message(BuildAssistantArgs {
+                        workspace_id: &ws_id,
+                        chat_session_id: &chat_session_id_for_stream,
                         content: full_text,
-                        cost_usd: None,
-                        duration_ms: None,
-                        created_at: now_iso(),
                         thinking: pending_thinking.take(),
-                        input_tokens: taken_usage.as_ref().map(|u| u.input_tokens as i64),
-                        output_tokens: taken_usage.as_ref().map(|u| u.output_tokens as i64),
-                        cache_read_tokens: taken_usage
-                            .as_ref()
-                            .and_then(|u| u.cache_read_input_tokens.map(|n| n as i64)),
-                        cache_creation_tokens: taken_usage
-                            .as_ref()
-                            .and_then(|u| u.cache_creation_input_tokens.map(|n| n as i64)),
-                    };
+                        usage: latest_usage.take(),
+                        created_at: now_iso(),
+                    });
+                    let msg_id = msg.id.clone();
                     if db.insert_chat_message(&msg).is_ok() {
                         last_assistant_msg_id = Some(msg_id);
                     }
@@ -1620,272 +1477,4 @@ pub async fn send_chat_message(
     });
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        RequestedFlags, SessionFlags, build_permission_response, persistent_session_flags_drifted,
-    };
-
-    fn s(values: &[&str]) -> Vec<String> {
-        values.iter().map(|v| (*v).to_string()).collect()
-    }
-
-    fn session<'a>(
-        plan_mode: bool,
-        allowed_tools: &'a [String],
-        exited_plan: bool,
-    ) -> SessionFlags<'a> {
-        SessionFlags {
-            plan_mode,
-            allowed_tools,
-            exited_plan,
-            disable_1m_context: false,
-        }
-    }
-
-    fn requested<'a>(plan_mode: bool, allowed_tools: &'a [String]) -> RequestedFlags<'a> {
-        RequestedFlags {
-            plan_mode,
-            allowed_tools,
-            disable_1m_context: false,
-        }
-    }
-
-    #[test]
-    fn no_drift_when_plan_mode_and_tools_match() {
-        let tools = s(&["Read", "Write"]);
-        assert!(!persistent_session_flags_drifted(
-            session(false, &tools, false),
-            requested(false, &tools),
-        ));
-    }
-
-    #[test]
-    fn drift_when_plan_mode_flips_off_after_approval() {
-        // Session was spawned with --permission-mode plan; next turn is not.
-        let tools = s(&["Read", "Write"]);
-        assert!(persistent_session_flags_drifted(
-            session(true, &tools, false),
-            requested(false, &tools),
-        ));
-    }
-
-    #[test]
-    fn drift_when_plan_mode_flips_on() {
-        let tools = s(&["Read"]);
-        assert!(persistent_session_flags_drifted(
-            session(false, &tools, false),
-            requested(true, &tools),
-        ));
-    }
-
-    #[test]
-    fn drift_when_permission_level_changes() {
-        let before = s(&["Read", "Glob"]);
-        let after = s(&["Read", "Write", "Edit"]);
-        assert!(persistent_session_flags_drifted(
-            session(false, &before, false),
-            requested(false, &after),
-        ));
-    }
-
-    #[test]
-    fn drift_when_allowed_tools_reordered() {
-        // Strict equality: a different order counts as drift. Callers build
-        // the list deterministically from the permission level, so any
-        // observed diff signals a real configuration change.
-        let before = s(&["Read", "Write"]);
-        let after = s(&["Write", "Read"]);
-        assert!(persistent_session_flags_drifted(
-            session(false, &before, false),
-            requested(false, &after),
-        ));
-    }
-
-    #[test]
-    fn no_drift_when_wildcard_unchanged() {
-        // Permission level "full" resolves to the wildcard sentinel; reusing
-        // the same bypass-permissions session should not trigger a respawn.
-        let full = s(&["*"]);
-        assert!(!persistent_session_flags_drifted(
-            session(false, &full, false),
-            requested(false, &full),
-        ));
-    }
-
-    #[test]
-    fn drift_when_escalating_to_wildcard() {
-        // Switching from a concrete list ("standard"/"readonly") up to "full"
-        // needs a respawn so `build_claude_args` can apply
-        // `--permission-mode bypassPermissions`.
-        let standard = s(&["Read", "Write", "Edit"]);
-        let full = s(&["*"]);
-        assert!(persistent_session_flags_drifted(
-            session(false, &standard, false),
-            requested(false, &full),
-        ));
-    }
-
-    #[test]
-    fn drift_when_demoting_from_wildcard() {
-        // Dropping from "full" back to a concrete list needs a respawn so
-        // the bypass-permissions mode is cleared and `--allowedTools` is
-        // constrained.
-        let full = s(&["*"]);
-        let readonly = s(&["Read", "Glob", "Grep"]);
-        assert!(persistent_session_flags_drifted(
-            session(false, &full, false),
-            requested(false, &readonly),
-        ));
-    }
-
-    #[test]
-    fn drift_when_session_exited_plan_even_if_request_still_says_plan() {
-        // Safety net: agent emitted ExitPlanMode so the plan phase is over.
-        // Even if the frontend forgets to flip plan_mode=false on the next
-        // turn (known bug class), the backend must still respawn so the CLI
-        // no longer auto-denies mutating tools.
-        let tools = s(&["Read", "Write"]);
-        assert!(persistent_session_flags_drifted(
-            session(true, &tools, true),
-            requested(true, &tools),
-        ));
-    }
-
-    #[test]
-    fn no_drift_when_exited_plan_but_session_never_had_plan() {
-        // Nonsense state defensively handled: if session_plan_mode is false
-        // the exited-plan flag is irrelevant and should not trigger drift.
-        let tools = s(&["Read"]);
-        assert!(!persistent_session_flags_drifted(
-            session(false, &tools, true),
-            requested(false, &tools),
-        ));
-    }
-
-    #[test]
-    fn drift_when_disable_1m_context_flips() {
-        // Switching between a 200k model SKU (disable_1m_context=true) and a
-        // 1M SKU (false) must respawn: CLAUDE_CODE_DISABLE_1M_CONTEXT is baked
-        // into the subprocess env at spawn and cannot be changed per-turn.
-        let tools = s(&["Read", "Write"]);
-        assert!(persistent_session_flags_drifted(
-            SessionFlags {
-                plan_mode: false,
-                allowed_tools: &tools,
-                exited_plan: false,
-                disable_1m_context: false,
-            },
-            RequestedFlags {
-                plan_mode: false,
-                allowed_tools: &tools,
-                disable_1m_context: true,
-            },
-        ));
-        assert!(persistent_session_flags_drifted(
-            SessionFlags {
-                plan_mode: false,
-                allowed_tools: &tools,
-                exited_plan: false,
-                disable_1m_context: true,
-            },
-            RequestedFlags {
-                plan_mode: false,
-                allowed_tools: &tools,
-                disable_1m_context: false,
-            },
-        ));
-    }
-
-    #[test]
-    fn no_drift_when_disable_1m_context_matches() {
-        let tools = s(&["Read"]);
-        assert!(!persistent_session_flags_drifted(
-            SessionFlags {
-                plan_mode: false,
-                allowed_tools: &tools,
-                exited_plan: false,
-                disable_1m_context: true,
-            },
-            RequestedFlags {
-                plan_mode: false,
-                allowed_tools: &tools,
-                disable_1m_context: true,
-            },
-        ));
-    }
-
-    use serde_json::json;
-
-    #[test]
-    fn permission_response_allows_bypass_session_non_plan() {
-        let input = json!({ "path": "/tmp/foo" });
-        let response = build_permission_response(&s(&["*"]), false, false, "Skill", &input);
-        assert_eq!(response["behavior"], "allow");
-        assert_eq!(response["updatedInput"], input);
-    }
-
-    #[test]
-    fn permission_response_denies_bypass_session_during_active_plan() {
-        let input = json!({});
-        let response = build_permission_response(&s(&["*"]), true, false, "Edit", &input);
-        assert_eq!(response["behavior"], "deny");
-    }
-
-    #[test]
-    fn permission_response_allows_bypass_session_after_plan_exit() {
-        // The agent emitted ExitPlanMode and the user approved, so the plan
-        // phase is over. The subprocess still has --permission-mode plan
-        // until the next turn's drift detection respawns it, but within
-        // this turn we should auto-allow because the user chose bypass.
-        let input = json!({ "file_path": "/tmp/fib.py", "content": "..." });
-        let response = build_permission_response(&s(&["*"]), true, true, "Write", &input);
-        assert_eq!(response["behavior"], "allow");
-        assert_eq!(response["updatedInput"], input);
-    }
-
-    #[test]
-    fn permission_response_denies_standard_session() {
-        let input = json!({});
-        let response =
-            build_permission_response(&s(&["Read", "Write"]), false, false, "Edit", &input);
-        assert_eq!(response["behavior"], "deny");
-        let msg = response["message"].as_str().expect("message");
-        assert!(
-            msg.contains("full"),
-            "message should name the escalation: {msg}"
-        );
-        assert!(
-            msg.contains("/permissions"),
-            "message should point at the slash command: {msg}"
-        );
-    }
-
-    #[test]
-    fn permission_response_denies_standard_session_after_plan_exit() {
-        // Non-bypass sessions should still deny after ExitPlanMode — they
-        // need the drift-triggered respawn to pick up the concrete
-        // --allowedTools list, and auto-allowing any tool would exceed the
-        // user's chosen permission scope.
-        let input = json!({});
-        let response =
-            build_permission_response(&s(&["Read", "Write"]), true, true, "Bash", &input);
-        assert_eq!(response["behavior"], "deny");
-    }
-
-    #[test]
-    fn permission_response_denies_empty_session() {
-        let input = json!({});
-        let response = build_permission_response(&[], false, false, "Edit", &input);
-        assert_eq!(response["behavior"], "deny");
-    }
-
-    #[test]
-    fn permission_response_rejects_multi_element_wildcard() {
-        let input = json!({});
-        let response = build_permission_response(&s(&["*", "Read"]), false, false, "Edit", &input);
-        assert_eq!(response["behavior"], "deny");
-    }
 }
