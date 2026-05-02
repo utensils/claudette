@@ -35,11 +35,27 @@ use crate::state::AppState;
 const REGISTRY_URL: &str =
     "https://raw.githubusercontent.com/utensils/claudette-community/main/registry.json";
 
+/// Detached minisign signature for [`REGISTRY_URL`]. Fetched in
+/// parallel with the registry; verified against an embedded public
+/// key (see `claudette::community::signature`) before the JSON is
+/// parsed. The .sig URL is also on mutable `main`, but its bytes
+/// only verify against an *immutable* embedded pubkey — an attacker
+/// who swaps it can DoS but not forge.
+const REGISTRY_SIG_URL: &str =
+    "https://raw.githubusercontent.com/utensils/claudette-community/main/registry.json.sig";
+
 /// `codeload.github.com/<repo>/tar.gz/<sha>` template. The `<repo>`
 /// is intentionally pinned — installing from arbitrary repos is the
 /// "direct install" path (PR #4), not this command.
 fn codeload_url(repo: &str, sha: &str) -> String {
     format!("https://codeload.github.com/{repo}/tar.gz/{sha}")
+}
+
+/// Pinned URL for an `External` mirror tarball. Uses the registry's
+/// `source.sha` rather than the mutable `main` ref so the bytes we
+/// fetch are bound to a specific commit reviewable in git history.
+fn mirror_url(repo: &str, sha: &str, mirror_path: &str) -> String {
+    format!("https://raw.githubusercontent.com/{repo}/{sha}/{mirror_path}")
 }
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(60);
@@ -53,26 +69,47 @@ fn http_client() -> Result<reqwest::Client, String> {
 }
 
 /// Fetch and parse the community registry.
+///
+/// Trust path:
+///   1. Fetch `registry.json` and `registry.json.sig` in parallel.
+///   2. Verify the signature against the pubkey embedded in the
+///      Claudette binary (`claudette::community::verify_registry_signature`).
+///   3. Only after the sig verifies, parse the JSON.
+///
+/// Any of the three steps failing produces a distinct, user-visible
+/// error so the UI can distinguish "missing signature" (publication
+/// failure) from "invalid signature" (tamper / wrong key) from
+/// "parse error" (signed but malformed JSON).
 #[tauri::command]
 pub async fn community_registry_fetch(_force: bool) -> Result<Registry, String> {
     let client = http_client()?;
+    let (json_bytes, sig_bytes) = tokio::try_join!(
+        fetch_url_bytes(&client, REGISTRY_URL, "registry"),
+        fetch_url_bytes(&client, REGISTRY_SIG_URL, "registry signature"),
+    )?;
+    claudette::community::verify_registry_signature(&json_bytes, &sig_bytes)
+        .map_err(|e| format!("registry signature: {e}"))?;
+    serde_json::from_slice(&json_bytes).map_err(|e| format!("registry parse: {e}"))
+}
+
+async fn fetch_url_bytes(
+    client: &reqwest::Client,
+    url: &str,
+    label: &str,
+) -> Result<Vec<u8>, String> {
     let resp = client
-        .get(REGISTRY_URL)
+        .get(url)
         .send()
         .await
-        .map_err(|e| format!("registry fetch: {e}"))?;
+        .map_err(|e| format!("{label} fetch: {e}"))?;
     if !resp.status().is_success() {
-        return Err(format!(
-            "registry fetch returned {}: {}",
-            resp.status(),
-            REGISTRY_URL
-        ));
+        return Err(format!("{label} fetch returned {}: {url}", resp.status()));
     }
     let bytes = resp
         .bytes()
         .await
-        .map_err(|e| format!("registry body: {e}"))?;
-    serde_json::from_slice(&bytes).map_err(|e| format!("registry parse: {e}"))
+        .map_err(|e| format!("{label} body: {e}"))?;
+    Ok(bytes.to_vec())
 }
 
 /// Frontend-facing summary of an installed contribution. Sent to the
@@ -129,6 +166,11 @@ pub async fn community_install(
         granted_capabilities: entry.capabilities(),
         registry_sha: registry.source.sha.clone(),
     };
+    // Commit-pin the download URL to registry.source.sha — the SHA
+    // that the just-verified signature attests to. Per-entry sha is
+    // still recorded in .install_meta.json for diagnostics, but the
+    // bytes we fetch come from one reviewable commit, not N.
+    let registry_source_sha = registry.source.sha.clone();
     let display_name = match &entry {
         community::ContributionRef::Theme(t) => t.name.clone(),
         community::ContributionRef::Plugin(p) => p.display_name.clone(),
@@ -142,7 +184,7 @@ pub async fn community_install(
         community::ContributionRef::Plugin(p) => p.license.clone(),
     };
 
-    let tarball = fetch_tarball(&plan).await?;
+    let tarball = fetch_tarball(&plan, &registry_source_sha).await?;
     let roots = resolve_install_roots(&state).await?;
     tokio::fs::create_dir_all(&roots.plugins_dir)
         .await
@@ -480,17 +522,26 @@ pub async fn community_grant_capabilities(
 // Helpers
 // ---------------------------------------------------------------------------
 
-async fn fetch_tarball(plan: &InstallPlan) -> Result<Vec<u8>, String> {
+async fn fetch_tarball(plan: &InstallPlan, registry_source_sha: &str) -> Result<Vec<u8>, String> {
+    // Both URL forms commit-pin to `registry_source_sha` — the commit
+    // SHA that the just-verified signature attests to. The per-entry
+    // `source.sha` is the commit that last touched the contribution
+    // dir, which equals registry.source.sha for any freshly-regenerated
+    // registry (regen.yml runs on every push to main); using
+    // registry.source.sha consistently here makes the URL bind to one
+    // reviewable commit even in the rare drift case.
     let url = match &plan.source {
-        ContributionSource::InTree { sha, .. } => {
+        ContributionSource::InTree { .. } => {
             // PR #2 only handles in-tree contributions — the registry
             // schema rejects external themes outright, and we have no
             // external plugins yet. Direct-install (PR #4) handles
             // arbitrary repos.
-            codeload_url("utensils/claudette-community", sha)
+            codeload_url("utensils/claudette-community", registry_source_sha)
         }
-        ContributionSource::External { mirror_path, .. } => format!(
-            "https://raw.githubusercontent.com/utensils/claudette-community/main/{mirror_path}"
+        ContributionSource::External { mirror_path, .. } => mirror_url(
+            "utensils/claudette-community",
+            registry_source_sha,
+            mirror_path,
         ),
     };
 
@@ -600,4 +651,60 @@ fn read_theme_manifest(dir: &std::path::Path) -> Result<ThemeManifestLite, Strin
     let path = dir.join("theme.json");
     let bytes = std::fs::read(&path).map_err(|e| format!("read theme.json: {e}"))?;
     serde_json::from_slice(&bytes).map_err(|e| format!("parse theme.json: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// codeload URL is built from the repo + a single commit SHA;
+    /// constructing the URL is a pure function and the only place we
+    /// can test commit-pinning without spinning up an HTTP server.
+    /// The behavioral guarantee: nothing about the URL ever encodes
+    /// `main` or any other mutable ref.
+    #[test]
+    fn codeload_url_uses_immutable_commit_sha() {
+        let url = codeload_url(
+            "utensils/claudette-community",
+            "382298b4206010cea7865ae811c39e2a90d5c7fa",
+        );
+        assert_eq!(
+            url,
+            "https://codeload.github.com/utensils/claudette-community/tar.gz/382298b4206010cea7865ae811c39e2a90d5c7fa"
+        );
+        assert!(!url.contains("/main"));
+        assert!(!url.contains("HEAD"));
+    }
+
+    /// External (mirror) URL must also commit-pin to registry.source.sha.
+    /// Pre-PR, this URL was constructed against `main` — the bug being
+    /// fixed in this PR. Lock the commit-pinned shape in.
+    #[test]
+    fn mirror_url_pins_to_registry_source_sha_not_main() {
+        let url = mirror_url(
+            "utensils/claudette-community",
+            "382298b4206010cea7865ae811c39e2a90d5c7fa",
+            "mirrors/foo-bar-1234.tar.gz",
+        );
+        assert_eq!(
+            url,
+            "https://raw.githubusercontent.com/utensils/claudette-community/382298b4206010cea7865ae811c39e2a90d5c7fa/mirrors/foo-bar-1234.tar.gz"
+        );
+        assert!(!url.contains("/main/"));
+    }
+
+    /// Sanity: REGISTRY_SIG_URL must sit next to REGISTRY_URL on the
+    /// same path so swapping one without the other is server-visible.
+    /// (Anyone with write to the community repo can update both files
+    /// at once anyway — the signature check is what stops a forgery,
+    /// not URL co-location — but this catches accidental drift in the
+    /// constants.)
+    #[test]
+    fn registry_sig_url_is_sibling_of_registry_url() {
+        assert_eq!(
+            REGISTRY_SIG_URL,
+            format!("{REGISTRY_URL}.sig"),
+            "registry sig URL should be `{{registry url}}.sig`",
+        );
+    }
 }

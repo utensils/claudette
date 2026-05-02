@@ -387,6 +387,14 @@
               # generation; awscli2 drives the EC2 API calls.
               pkgs.awscli2
               pkgs.openssl
+              # Community registry signing — minisign is the canonical C
+              # impl, rsign2 (binary name `rsign`) is the pure-Rust signer.
+              # Either signs/verifies the same on-wire format. Used by
+              # claudette-community CI to sign registry.json; mirrored
+              # into the devshell so maintainers can re-sign locally
+              # when bootstrapping a new key or auditing a published sig.
+              pkgs.minisign
+              pkgs.rsign2
             ]
             ++ darwinBuildInputs
             ++ linuxBuildInputs
