@@ -261,15 +261,14 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
     );
   }, [workspaceId, path, previewMode, setFileTabPreview]);
 
-  // Cmd/Ctrl+Shift+V — toggle source/preview for markdown files. Mirrors the
-  // VS Code shortcut. The handler bows out when:
-  //   * the active file isn't markdown or its toggle is otherwise unavailable
-  //     (binary/image/oversize/truncated → editDisabled),
-  //   * an overlay owns focus (settings, command palette, fuzzy finder, modal),
-  //   * a typing target is focused — Monaco's hidden <textarea>, the chat
-  //     composer, and the terminal all show as input/textarea/contenteditable,
-  //     and the user almost always means "paste as plain text" there. Buttons
-  //     and other non-typing focus targets still let the shortcut through.
+  // Cmd/Ctrl+Shift+V — toggle source/preview for the active markdown file
+  // tab, mirroring the VS Code shortcut. We deliberately don't gate on which
+  // element has focus: the user typically presses this from inside Monaco's
+  // source view, whose hidden <textarea> would otherwise swallow the
+  // shortcut. The shortcut isn't a native browser binding and Tauri's webview
+  // doesn't bind it either (macOS "Paste and Match Style" is ⌥⇧⌘V), so we're
+  // not hijacking anything by claiming it. The handler still bows out when
+  // an overlay owns focus, since those overlays own the keyboard.
   useEffect(() => {
     if (!showMarkdownToggle) return;
     const handler = (e: KeyboardEvent) => {
@@ -282,11 +281,6 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
         state.commandPaletteOpen ||
         state.fuzzyFinderOpen
       ) {
-        return;
-      }
-      const el = document.activeElement as HTMLElement | null;
-      const tag = el?.tagName?.toLowerCase();
-      if (tag === "input" || tag === "textarea" || el?.isContentEditable) {
         return;
       }
       e.preventDefault();

@@ -4,15 +4,16 @@
    same rendering. Surface-specific layout (padding, max-width, background,
    role variants) lives in each consumer's own module.
 
-   Every rule wraps the wrapper class in `:where()` so its specificity drops
-   to the descendant element only. That makes consumer-side per-element
-   overrides (e.g. `.previewBody h1` in DiffViewer, `.planContent h1` in
-   PlanApprovalCard) win deterministically without depending on CSS-bundle
-   import ordering, while still letting the defaults apply on surfaces with
-   no overrides (FileViewer's `.markdownBody`, MarkdownAttachmentCard's
-   `.markdownBody`). */
+   Selectors are plain `.body <element>` (specificity 0,1,1). That:
+   - beats global element resets in `styles/theme.css` (e.g. `h1` at 0,0,1)
+     by specificity, regardless of CSS-bundle ordering;
+   - ties with host-surface overrides such as `.previewBody h1` (DiffViewer)
+     or `.planContent h1` (PlanApprovalCard) — those win on the cascade
+     because consumer modules import MessageMarkdown.tsx (and hence this
+     stylesheet) before their own module, putting their rules later in the
+     bundle. */
 
-:where(.body) {
+.body {
   font-size: 14px;
   line-height: 1.7;
   word-break: break-word;
@@ -20,7 +21,7 @@
 }
 
 /* Headings */
-:where(.body) h1 {
+.body h1 {
   font-size: 1.5em;
   font-weight: 700;
   color: var(--text-primary);
@@ -29,23 +30,23 @@
   border-bottom: 1px solid rgba(var(--accent-primary-rgb), 0.15);
 }
 
-:where(.body) h2 {
+.body h2 {
   font-size: 1.25em;
   font-weight: 700;
   color: var(--text-primary);
   margin: 18px 0 8px;
 }
 
-:where(.body) h3 {
+.body h3 {
   font-size: 1.1em;
   font-weight: 600;
   color: var(--accent-primary);
   margin: 14px 0 6px;
 }
 
-:where(.body) h4,
-:where(.body) h5,
-:where(.body) h6 {
+.body h4,
+.body h5,
+.body h6 {
   font-size: 1em;
   font-weight: 600;
   color: var(--text-muted);
@@ -55,21 +56,27 @@
 }
 
 /* Bold text */
-:where(.body) strong {
+.body strong {
   font-weight: 600;
   color: var(--text-primary);
 }
 
 /* Italic */
-:where(.body) em {
+.body em {
   color: var(--text-muted);
   font-style: italic;
 }
 
-/* Code blocks — Claudette palette + Shiki token coloring (theme.css) */
-:where(.body) pre {
+/* Code blocks — Claudette palette + Shiki token coloring (theme.css).
+   No `!important` on the background: Shiki's HTML lands inside the `<code>`
+   we construct via `dangerouslySetInnerHTML` (token spans, not the outer
+   `<pre>`), so nothing inline is fighting this rule. Keeping it as plain
+   declaration lets surface-specific overrides like PlanApprovalCard's
+   `.planContent pre { background: var(--overlay-bg); }` win on the
+   cascade. */
+.body pre {
   position: relative;
-  background: var(--chat-input-bg) !important;
+  background: var(--chat-input-bg);
   border: 1px solid var(--divider);
   border-top: 2px solid rgba(var(--accent-primary-rgb), 0.2);
   border-radius: 8px;
@@ -86,7 +93,7 @@
   user-select: none;
 }
 
-:where(.body) pre code {
+.body pre code {
   background: none !important;
   color: inherit;
   padding: 0 !important;
@@ -101,7 +108,7 @@
 }
 
 /* Inline code — accent tint */
-:where(.body) code {
+.body code {
   background: rgba(var(--accent-primary-rgb), 0.08);
   color: var(--accent-dim);
   padding: 1px 6px;
@@ -110,35 +117,35 @@
   font-family: var(--font-mono);
 }
 
-:where(.body) p {
+.body p {
   margin: 6px 0;
 }
 
-:where(.body) p:first-child {
+.body p:first-child {
   margin-top: 0;
 }
 
-:where(.body) p:last-child {
+.body p:last-child {
   margin-bottom: 0;
 }
 
 /* Lists — colored markers */
-:where(.body) ul,
-:where(.body) ol {
+.body ul,
+.body ol {
   margin: 8px 0;
   padding-left: 22px;
 }
 
-:where(.body) ul {
+.body ul {
   list-style: none;
 }
 
-:where(.body) ul > li {
+.body ul > li {
   position: relative;
   padding-left: 4px;
 }
 
-:where(.body) ul > li::before {
+.body ul > li::before {
   content: "▸";
   position: absolute;
   left: -16px;
@@ -146,18 +153,18 @@
   font-size: 12px;
 }
 
-:where(.body) ol {
+.body ol {
   list-style: none;
   counter-reset: ol-counter;
 }
 
-:where(.body) ol > li {
+.body ol > li {
   position: relative;
   padding-left: 4px;
   counter-increment: ol-counter;
 }
 
-:where(.body) ol > li::before {
+.body ol > li::before {
   content: counter(ol-counter) ".";
   position: absolute;
   left: -22px;
@@ -169,12 +176,12 @@
   font-variant-numeric: tabular-nums;
 }
 
-:where(.body) li {
+.body li {
   margin: 3px 0;
 }
 
 /* Nested lists — dimmer markers */
-:where(.body) li ul > li::before {
+.body li ul > li::before {
   content: "·";
   color: var(--text-faint);
   font-size: 16px;
@@ -182,19 +189,19 @@
 }
 
 /* Links */
-:where(.body) a {
+.body a {
   color: var(--accent-primary);
   text-decoration: none;
   border-bottom: 1px solid rgba(var(--accent-primary-rgb), 0.25);
   transition: border-color var(--transition-fast);
 }
 
-:where(.body) a:hover {
+.body a:hover {
   border-color: var(--accent-primary);
 }
 
 /* Horizontal rules */
-:where(.body) hr {
+.body hr {
   border: none;
   height: 1px;
   background: var(--accent-bg-strong);
@@ -202,7 +209,7 @@
 }
 
 /* Claude Code callout blocks (★ Insight, ⚠ Warning, etc.) */
-:where(.body) :global(.cc-callout) {
+.body :global(.cc-callout) {
   background: var(--chat-system-bg);
   border: 1px solid var(--accent-bg-strong);
   border-left: 3px solid var(--accent-primary);
@@ -212,17 +219,17 @@
   box-shadow: var(--shadow-sm);
 }
 
-:where(.body) :global(.cc-callout) p {
+.body :global(.cc-callout) p {
   margin: 4px 0;
   color: var(--text-primary);
 }
 
-:where(.body) :global(.cc-callout) code {
+.body :global(.cc-callout) code {
   background: rgba(var(--accent-primary-rgb), 0.1);
   color: var(--accent-primary);
 }
 
-:where(.body) :global(.cc-callout-header) {
+.body :global(.cc-callout-header) {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -236,20 +243,20 @@
   border-bottom: 1px solid rgba(var(--accent-primary-rgb), 0.2);
 }
 
-:where(.body) :global(.cc-callout-icon) {
+.body :global(.cc-callout-icon) {
   font-size: 15px;
   filter: drop-shadow(0 0 4px rgba(var(--accent-primary-rgb), 0.5));
 }
 
 /* Standalone header (no wrapping callout container) */
-:where(.body) > :global(.cc-callout-header) {
+.body > :global(.cc-callout-header) {
   color: var(--accent-primary);
   margin: 16px 0 8px;
   padding-bottom: 6px;
   border-bottom: 1px solid rgba(var(--accent-primary-rgb), 0.2);
 }
 
-:where(.body) :global(hr.cc-callout-rule) {
+.body :global(hr.cc-callout-rule) {
   border: none;
   border-top: 1px solid rgba(var(--accent-primary-rgb), 0.15);
   margin: 8px 0 16px;
@@ -260,7 +267,7 @@
    away from the prose around it. The path text itself is monospace (matching
    how Claude usually writes paths) so the click target reads as
    path-shaped rather than as a generic link. */
-:where(.body) :global(a.cc-file-path-link) {
+.body :global(a.cc-file-path-link) {
   font-family: var(--font-mono, ui-monospace, monospace);
   color: var(--text-primary);
   text-decoration: underline;
@@ -270,13 +277,13 @@
   word-break: break-all;
 }
 
-:where(.body) :global(a.cc-file-path-link:hover) {
+.body :global(a.cc-file-path-link:hover) {
   color: var(--accent-primary);
   text-decoration-color: currentColor;
 }
 
 /* Blockquotes — subtle card with left accent */
-:where(.body) blockquote {
+.body blockquote {
   border-left: 2px solid var(--text-faint);
   background: var(--hover-bg-subtle);
   border-radius: 0 6px 6px 0;
@@ -286,12 +293,12 @@
   font-style: italic;
 }
 
-:where(.body) blockquote p {
+.body blockquote p {
   margin: 2px 0;
 }
 
 /* Tables — accent header, alternating rows */
-:where(.body) table {
+.body table {
   border-collapse: collapse;
   margin: 12px 0;
   font-size: 13px;
@@ -301,7 +308,7 @@
   overflow: hidden;
 }
 
-:where(.body) th {
+.body th {
   background: rgba(var(--accent-primary-rgb), 0.06);
   color: var(--accent-primary);
   font-weight: 600;
@@ -313,29 +320,29 @@
   border-bottom: 1px solid rgba(var(--accent-primary-rgb), 0.12);
 }
 
-:where(.body) td {
+.body td {
   padding: 7px 12px;
   text-align: left;
   border-bottom: 1px solid var(--divider);
 }
 
-:where(.body) tr:nth-child(even) td {
+.body tr:nth-child(even) td {
   background: var(--hover-bg-subtle);
 }
 
-:where(.body) tr:last-child td {
+.body tr:last-child td {
   border-bottom: none;
 }
 
 /* Inline code inside table cells */
-:where(.body) td code {
+.body td code {
   font-size: 0.85em;
   padding: 2px 6px;
   white-space: nowrap;
 }
 
 /* Wide tables get horizontal scroll */
-:where(.body) .table-wrapper {
+.body .table-wrapper {
   overflow-x: auto;
   margin: 12px 0;
 }
