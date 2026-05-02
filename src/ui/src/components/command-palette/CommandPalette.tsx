@@ -101,6 +101,7 @@ export function CommandPalette() {
   const [mode, setMode] = useState<"main" | "theme" | "model" | "effort" | "file">("main");
   const [fileEntries, setFileEntries] = useState<FileEntry[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
+  const [filesLoadError, setFilesLoadError] = useState<string | null>(null);
   const originalThemeIdRef = useRef(currentThemeId);
   const resultsRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -242,12 +243,18 @@ export function CommandPalette() {
     setQuery("");
     setSelectedIndex(0);
     setFilesLoading(true);
+    setFilesLoadError(null);
     listWorkspaceFiles(selectedWorkspaceId)
       .then((entries) => {
         setFileEntries(entries);
         setFilesLoading(false);
       })
-      .catch(() => setFilesLoading(false));
+      .catch((err) => {
+        console.error("[CommandPalette] Failed to load workspace files:", err);
+        setFileEntries([]);
+        setFilesLoadError(String(err));
+        setFilesLoading(false);
+      });
   }, [selectedWorkspaceId]);
 
   // If the palette was opened with an initial file mode (e.g. via Cmd+O), enter it.
@@ -531,7 +538,7 @@ export function CommandPalette() {
               {mode === "theme" ? "No matching themes"
                 : mode === "model" ? "No matching models"
                 : mode === "effort" ? "No matching levels"
-                : mode === "file" ? (filesLoading ? "Loading files..." : "No matching files")
+                : mode === "file" ? (filesLoading ? "Loading files..." : filesLoadError ? `Failed to load files: ${filesLoadError}` : "No matching files")
                 : "No matching commands"}
             </div>
           ) : (

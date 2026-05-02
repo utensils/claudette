@@ -137,6 +137,7 @@
   "file_no_content": "No content",
   "file_preview_not_available": "Preview not available",
   "file_truncated_banner": "File truncated — full file is {{size}}",
+  "file_image_truncated": "Image too large to preview ({{size}})",
   "file_view_mode_aria": "File view mode",
   "file_markdown_view_mode_aria": "Markdown view mode",
   "file_tooltip_view": "View",

@@ -79,14 +79,17 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
   const [saving, setSaving] = useState(false);
   const copyResetRef = useRef<number | null>(null);
 
-  // Reset copy UI state when the active tab changes.
+  // Reset transient per-tab UI state when the active tab/workspace changes
+  // so an in-flight save/copy on a previous tab can't leak its disabled state
+  // or pending callbacks into the newly mounted view.
   useEffect(() => {
     setCopyState("idle");
+    setSaving(false);
     if (copyResetRef.current !== null) {
       window.clearTimeout(copyResetRef.current);
       copyResetRef.current = null;
     }
-  }, [path]);
+  }, [workspaceId, path]);
 
   useEffect(() => {
     return () => {
@@ -182,6 +185,7 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
 
   const handleCopy = useCallback(async () => {
     if (!bufferState) return;
+    const requestedWorkspaceId = workspaceId;
     const requestedPath = path;
     let nextState: "copied" | "error";
     try {
@@ -195,26 +199,39 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
       console.error("Copy file contents failed:", e);
       nextState = "error";
     }
-    // Bail if the user switched tabs mid-async.
-    if (selectActiveFileTabPath(useAppStore.getState()) !== requestedPath) return;
+    // Bail if the user switched tabs (or workspaces) mid-async — otherwise a
+    // late completion would flip copy state on a different file.
+    const state = useAppStore.getState();
+    if (
+      state.selectedWorkspaceId !== requestedWorkspaceId ||
+      selectActiveFileTabPath(state) !== requestedPath
+    ) {
+      return;
+    }
     setCopyState(nextState);
     if (copyResetRef.current !== null) window.clearTimeout(copyResetRef.current);
     copyResetRef.current = window.setTimeout(() => setCopyState("idle"), 1500);
-  }, [bufferState, isImage, path]);
+  }, [bufferState, isImage, workspaceId, path]);
 
   const handleSave = useCallback(async () => {
     if (!bufferState || !dirty || saving) return;
+    const requestedWorkspaceId = workspaceId;
     const requestedPath = path;
     const snapshot = bufferState.buffer;
     setSaving(true);
     try {
-      await writeWorkspaceFile(workspaceId, requestedPath, snapshot);
+      await writeWorkspaceFile(requestedWorkspaceId, requestedPath, snapshot);
       // The user may have switched tabs mid-save. Always update the
       // baseline of the path we actually wrote — the saved file is canonical
       // regardless of which tab is now active. Just don't show the toast on
-      // a different tab to avoid confusing the user about which file saved.
-      setFileBufferSaved(workspaceId, requestedPath, snapshot);
-      if (selectActiveFileTabPath(useAppStore.getState()) === requestedPath) {
+      // a different tab/workspace to avoid confusing the user about which
+      // file saved.
+      setFileBufferSaved(requestedWorkspaceId, requestedPath, snapshot);
+      const state = useAppStore.getState();
+      if (
+        state.selectedWorkspaceId === requestedWorkspaceId &&
+        selectActiveFileTabPath(state) === requestedPath
+      ) {
         addToast(t("file_save_success"));
       }
     } catch (e) {
@@ -323,6 +340,12 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
         ) : bufferState.loadError ? (
           <div className={styles.center}>
             {t("file_load_failed", { error: bufferState.loadError })}
+          </div>
+        ) : isImage && bufferState.truncated ? (
+          // Partial image bytes won't decode cleanly — surface a clear message
+          // instead of letting the browser render a broken-image placeholder.
+          <div className={styles.center}>
+            {t("file_image_truncated", { size: formatBytes(bufferState.sizeBytes) })}
           </div>
         ) : isImage && bufferState.imageBytesB64 ? (
           <ImageView

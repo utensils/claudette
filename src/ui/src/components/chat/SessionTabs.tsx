@@ -219,10 +219,27 @@ export function SessionTabs({ workspaceId }: Props) {
     { entryKey: string; x: number; y: number } | null
   >(null);
 
-  // Close a list of tabs (sessions and/or diffs) sequentially. Sessions get
-  // archived through the same backend command as the close button; diffs just
-  // drop from the local store. If any sessions are still running we confirm
-  // once for the whole batch instead of once per tab.
+  // Close handler for file tabs — checks the dirty flag and routes to the
+  // confirm-discard modal when there are unsaved edits. Reads dirty from
+  // a fresh store snapshot so we always get the latest buffer state, not
+  // a stale closure value.
+  const requestCloseFileTab = useCallback(
+    (path: string) => {
+      const dirty = isFileTabDirty(useAppStore.getState(), workspaceId, path);
+      if (dirty) {
+        setPendingClosePath(path);
+      } else {
+        closeFileTab(workspaceId, path);
+      }
+    },
+    [workspaceId, closeFileTab],
+  );
+
+  // Close a list of tabs (sessions, diffs, and/or files) sequentially. Sessions
+  // get archived through the same backend command as the close button; diffs
+  // and files drop from the local store (file tabs route through the
+  // dirty-confirm modal). If any sessions are still running we confirm once
+  // for the whole batch instead of once per tab.
   const closeEntries = useCallback(
     async (entries: NavEntry[]) => {
       if (entries.length === 0) return;
@@ -243,12 +260,14 @@ export function SessionTabs({ workspaceId }: Props) {
         if (entry.kind === "session") {
           const session = activeSessions.find((s) => s.id === entry.sessionId);
           if (session) await archiveSessionImmediate(session);
-        } else {
+        } else if (entry.kind === "diff") {
           closeDiffTab(workspaceId, entry.path, entry.layer);
+        } else {
+          requestCloseFileTab(entry.path);
         }
       }
     },
-    [activeSessions, archiveSessionImmediate, closeDiffTab, t, workspaceId],
+    [activeSessions, archiveSessionImmediate, closeDiffTab, requestCloseFileTab, t, workspaceId],
   );
 
   const navigateTabs = useCallback(
@@ -284,22 +303,6 @@ export function SessionTabs({ workspaceId }: Props) {
     [navEntries, switchToSession, switchToDiff, selectFileTab, workspaceId],
   );
 
-  // Close handler for file tabs — checks the dirty flag and routes to the
-  // confirm-discard modal when there are unsaved edits. Reads dirty from
-  // a fresh store snapshot so we always get the latest buffer state, not
-  // a stale closure value.
-  const requestCloseFileTab = useCallback(
-    (path: string) => {
-      const dirty = isFileTabDirty(useAppStore.getState(), workspaceId, path);
-      if (dirty) {
-        setPendingClosePath(path);
-      } else {
-        closeFileTab(workspaceId, path);
-      }
-    },
-    [workspaceId, closeFileTab],
-  );
-
   const openContextMenu = useCallback(
     (entryKey: string, x: number, y: number) => {
       setContextMenu({ entryKey, x, y });
@@ -307,16 +310,18 @@ export function SessionTabs({ workspaceId }: Props) {
     [],
   );
 
-  // Helper to activate a nav entry (session or diff tab).
+  // Helper to activate a nav entry (session, diff, or file tab).
   const selectEntry = useCallback(
     (entry: NavEntry) => {
       if (entry.kind === "session") {
-        selectSession(workspaceId, entry.sessionId);
+        switchToSession(entry.sessionId);
+      } else if (entry.kind === "diff") {
+        switchToDiff(entry.path, entry.layer);
       } else {
-        selectDiffTab(entry.path, entry.layer);
+        selectFileTab(workspaceId, entry.path);
       }
     },
-    [selectSession, selectDiffTab, workspaceId],
+    [switchToSession, switchToDiff, selectFileTab, workspaceId],
   );
 
   // Build the menu items lazily from the entry that was right-clicked. The
