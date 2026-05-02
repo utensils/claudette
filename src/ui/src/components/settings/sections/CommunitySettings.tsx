@@ -2,12 +2,15 @@ import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "reac
 import {
   fetchRegistry,
   flattenRegistry,
+  grantCommunityCapabilities,
   installContribution,
   listInstalled,
+  listPendingReconsent,
   uninstallContribution,
   type BrowseEntry,
   type ContributionKindWire,
   type InstalledContribution,
+  type PendingReconsent,
   type Registry,
 } from "../../../services/community";
 import { refreshGrammars } from "../../../utils/grammarRegistry";
@@ -42,6 +45,9 @@ export function CommunitySettings() {
   const [tab, setTab] = useState<Tab>("browse");
   const [registry, setRegistry] = useState<Registry | null>(null);
   const [installed, setInstalled] = useState<InstalledContribution[] | null>(null);
+  const [pendingReconsent, setPendingReconsent] = useState<PendingReconsent[]>(
+    [],
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busyIdent, setBusyIdent] = useState<string | null>(null);
@@ -51,18 +57,36 @@ export function CommunitySettings() {
     setLoading(true);
     setError(null);
     try {
-      const [reg, inst] = await Promise.all([
+      const [reg, inst, pending] = await Promise.all([
         fetchRegistry(false),
         listInstalled(),
+        listPendingReconsent(),
       ]);
       setRegistry(reg);
       setInstalled(inst);
+      setPendingReconsent(pending);
     } catch (e) {
       setError(String(e));
     } finally {
       setLoading(false);
     }
   }, []);
+
+  const handleApproveReconsent = useCallback(
+    async (ident: string) => {
+      setBusyIdent(`reconsent:${ident}`);
+      setError(null);
+      try {
+        await grantCommunityCapabilities(ident);
+        await refresh();
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setBusyIdent(null);
+      }
+    },
+    [refresh],
+  );
 
   useEffect(() => {
     void refresh();
@@ -141,6 +165,65 @@ export function CommunitySettings() {
         . Each install is verified against the published content hash before
         anything lands on disk.
       </div>
+
+      {pendingReconsent.length > 0 && (
+        <ul className={own.list}>
+          {pendingReconsent.map((p) => {
+            const isBusy = busyIdent === `reconsent:${p.ident}`;
+            return (
+              <li key={p.ident} className={own.row}>
+                <div className={own.rowHeader}>
+                  <strong>{p.display_name}</strong>
+                  <span className={own.meta}>needs re-consent</span>
+                </div>
+                <p className={own.description}>
+                  This plugin's update requested new CLI capabilities. The
+                  plugin is blocked from running until you review and
+                  approve.
+                </p>
+                <p className={own.meta}>
+                  Already approved:{" "}
+                  {p.granted.length === 0 ? (
+                    <em>none</em>
+                  ) : (
+                    p.granted.map((c) => (
+                      <code key={c} className={own.cli}>
+                        {c}
+                      </code>
+                    ))
+                  )}
+                </p>
+                <p className={own.meta}>
+                  New capabilities requested:{" "}
+                  {p.missing.map((c) => (
+                    <code key={c} className={own.cli}>
+                      {c}
+                    </code>
+                  ))}
+                </p>
+                <div className={own.actions}>
+                  <button
+                    type="button"
+                    className={own.primaryButton}
+                    disabled={isBusy}
+                    onClick={() => handleApproveReconsent(p.ident)}
+                  >
+                    {isBusy ? "Approving…" : "Approve new capabilities"}
+                  </button>
+                  <button
+                    type="button"
+                    className={own.dangerButton}
+                    disabled={isBusy}
+                    onClick={() => handleUninstall(p.kind, p.ident)}
+                  >
+                    Uninstall
+                  </button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
 
       <div className={own.tabRow}>
         <button

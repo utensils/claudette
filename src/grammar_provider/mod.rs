@@ -608,6 +608,7 @@ mod tests {
             dir: dir.path().to_path_buf(),
             config: HashMap::new(),
             cli_available: true,
+            trust: crate::plugin_runtime::PluginTrust::Unknown,
         };
         // Just confirm we can read its fields.
         assert_eq!(plugin.manifest.name, "smoke");

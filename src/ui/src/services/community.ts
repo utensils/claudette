@@ -121,6 +121,29 @@ export function listInstalled(): Promise<InstalledContribution[]> {
   return invoke("community_list_installed");
 }
 
+export interface PendingReconsent {
+  kind: ContributionKindWire;
+  ident: string;
+  display_name: string;
+  granted: string[];
+  missing: string[];
+}
+
+/** List community plugins whose live manifest declares CLI
+ *  capabilities the user hasn't yet approved. While present, those
+ *  plugins fail closed at every `host.exec` and the operation
+ *  surfaces a "needs re-consent" error. */
+export function listPendingReconsent(): Promise<PendingReconsent[]> {
+  return invoke("community_pending_reconsent");
+}
+
+/** Approve the live manifest's required_clis as the new grant set
+ *  for a community plugin. Rewrites `.install_meta.json` and
+ *  rehydrates the runtime. The next operation succeeds. */
+export function grantCommunityCapabilities(ident: string): Promise<void> {
+  return invoke("community_grant_capabilities", { ident });
+}
+
 /** Helper: flatten a Registry into a single typed list useful for
  *  rendering a single browse grid filtered by kind. */
 export interface BrowseEntry {

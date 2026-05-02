@@ -29,12 +29,74 @@ impl fmt::Display for LuaOperationTimeout {
 
 impl std::error::Error for LuaOperationTimeout {}
 
+/// Source-of-trust marker resolved once at discovery time. Drives
+/// whether a plugin's privileged `host.*` calls are gated by stored
+/// `granted_capabilities` (community installs) or pass through with
+/// the live manifest as the allowlist (bundled and hand-installed).
+#[derive(Debug, Clone)]
+pub enum PluginTrust {
+    /// Shipped inside the binary (seeded from `BUNDLED_PLUGINS` on
+    /// startup). The seeder writes a `.version` file alongside
+    /// `init.lua`; presence of that file in a directory whose name
+    /// matches a bundled plugin is the sentinel. Bundled plugins are
+    /// trusted: their `required_clis` is the install-time grant by
+    /// definition.
+    Bundled,
+    /// Installed via the community registry (`.install_meta.json`
+    /// with `source = "community"`). The `Vec<String>` is the
+    /// `granted_capabilities` recorded at install time and is the
+    /// authoritative allowlist for `host.exec`.
+    Community { granted: Vec<String> },
+    /// Plugin directory present in `~/.claudette/plugins/<name>/`
+    /// without an `.install_meta.json` and not matching a bundled
+    /// name. Pre-existing user-installed plugins fall here. We treat
+    /// these as trusted (allowlist = manifest) for backward
+    /// compatibility — flipping to deny is tracked as a follow-up to
+    /// avoid breaking hand-installed setups.
+    Unknown,
+}
+
+impl PluginTrust {
+    /// Effective CLI allowlist for `host.exec`. For community
+    /// plugins this is `manifest.required_clis ∩ granted_capabilities`
+    /// — never broader than what was declared at install. For
+    /// bundled and unknown trust, the manifest itself is the
+    /// allowlist.
+    pub fn effective_allowlist(&self, required: &[String]) -> Vec<String> {
+        match self {
+            Self::Community { granted } => required
+                .iter()
+                .filter(|c| granted.iter().any(|g| g == *c))
+                .cloned()
+                .collect(),
+            Self::Bundled | Self::Unknown => required.to_vec(),
+        }
+    }
+
+    /// Capabilities the live manifest requests that the user has not
+    /// yet approved. Empty for trusted (bundled / unknown) trust;
+    /// for community plugins it's `manifest.required_clis -
+    /// granted_capabilities`. Non-empty means the runtime must fail
+    /// closed and surface a re-consent prompt.
+    pub fn missing_capabilities(&self, required: &[String]) -> Vec<String> {
+        match self {
+            Self::Community { granted } => required
+                .iter()
+                .filter(|c| !granted.iter().any(|g| g == *c))
+                .cloned()
+                .collect(),
+            Self::Bundled | Self::Unknown => Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct LoadedPlugin {
     pub manifest: PluginManifest,
     pub dir: PathBuf,
     pub config: HashMap<String, serde_json::Value>,
     pub cli_available: bool,
+    pub trust: PluginTrust,
 }
 
 #[derive(Debug, Clone)]
@@ -53,6 +115,15 @@ pub enum PluginError {
     OperationNotSupported(String),
     PluginNotFound(String),
     PluginDisabled(String),
+    /// The plugin's live manifest declares CLI capabilities that the
+    /// user-approved `granted_capabilities` does not cover. Fail
+    /// closed: the runtime must NOT load the script or invoke
+    /// `host.exec` — the user has to review and approve the new
+    /// capabilities first via the Community settings UI.
+    NeedsReconsent {
+        plugin: String,
+        missing: Vec<String>,
+    },
 }
 
 impl fmt::Display for PluginError {
@@ -72,6 +143,11 @@ impl fmt::Display for PluginError {
             Self::OperationNotSupported(op) => write!(f, "Operation '{op}' is not supported"),
             Self::PluginNotFound(name) => write!(f, "Plugin '{name}' not found"),
             Self::PluginDisabled(name) => write!(f, "Plugin '{name}' is disabled"),
+            Self::NeedsReconsent { plugin, missing } => write!(
+                f,
+                "Plugin '{plugin}' needs re-consent: new capabilities {missing:?}. \
+                 Open Settings → Community to review and approve."
+            ),
         }
     }
 }
@@ -151,6 +227,7 @@ impl PluginRegistry {
                         continue;
                     }
                     let cli_available = check_clis_available(&manifest.required_clis);
+                    let trust = resolve_trust(&manifest.name, &path);
                     let name = manifest.name.clone();
                     plugins.insert(
                         name,
@@ -159,6 +236,7 @@ impl PluginRegistry {
                             dir: path,
                             config: HashMap::new(),
                             cli_available,
+                            trust,
                         },
                     );
                 }
@@ -300,6 +378,23 @@ impl PluginRegistry {
             return Err(PluginError::PluginDisabled(plugin_name.to_string()));
         }
 
+        // Capability gate (#580): for community-installed plugins,
+        // the live manifest's required_clis must be a subset of the
+        // user's approved grants. A plugin update that grew its
+        // required CLI set fails closed here — before init.lua is
+        // even read, and ahead of the cli_available probe so the
+        // user sees the consent prompt regardless of whether the
+        // tool is on PATH.
+        let missing = plugin
+            .trust
+            .missing_capabilities(&plugin.manifest.required_clis);
+        if !missing.is_empty() {
+            return Err(PluginError::NeedsReconsent {
+                plugin: plugin_name.to_string(),
+                missing,
+            });
+        }
+
         if !plugin.cli_available {
             let cli_list = plugin.manifest.required_clis.join(", ");
             return Err(PluginError::CliNotFound(cli_list));
@@ -316,10 +411,13 @@ impl PluginRegistry {
             .await
             .map_err(|e| PluginError::ScriptError(format!("Failed to read init.lua: {e}")))?;
 
+        let allowed_clis = plugin
+            .trust
+            .effective_allowlist(&plugin.manifest.required_clis);
         let ctx = HostContext {
             plugin_name: plugin_name.to_string(),
             kind: plugin.manifest.kind,
-            allowed_clis: plugin.manifest.required_clis.clone(),
+            allowed_clis,
             workspace_info,
             config: self.effective_config(plugin_name),
         };
@@ -429,6 +527,70 @@ fn is_lua_operation_timeout(error: &mlua::Error) -> bool {
 fn check_clis_available(clis: &[String]) -> bool {
     clis.iter()
         .all(|cli| crate::env::which_in_enriched_path(cli).is_ok())
+}
+
+/// Resolve a plugin directory's trust source at discovery time.
+///
+/// Decision order:
+/// 1. `.install_meta.json` is present on disk and parses with
+///    `source = "community"` → community install. Use recorded
+///    `granted_capabilities`. If it parses with a non-community
+///    source, fall through. If it fails to parse (corrupt /
+///    truncated / partial write), fail closed: treat as community
+///    with empty grants so the runtime returns `NeedsReconsent`,
+///    rather than silently falling through to Unknown
+///    (allow-everything).
+/// 2. Plugin name matches a bundled name AND a `.version` sentinel
+///    is present (written by `seed_bundled_plugins`) → bundled
+///    and trusted.
+/// 3. Anything else (no meta file, no bundled match) → unknown
+///    hand-installed plugin; trusted for backward compat.
+///
+/// The check is one disk read per plugin at startup, never on hot
+/// paths — `call_operation` consults the cached `LoadedPlugin.trust`.
+fn resolve_trust(name: &str, dir: &Path) -> PluginTrust {
+    let meta_path = dir.join(".install_meta.json");
+    if meta_path.exists() {
+        match crate::community::read_install_meta(dir) {
+            Ok(Some(meta)) if meta.source == crate::community::InstallSource::Community => {
+                return PluginTrust::Community {
+                    granted: meta.granted_capabilities,
+                };
+            }
+            Ok(Some(_)) => {
+                // Meta file present but not community-sourced
+                // (`direct` / `bundled`). No grant model applies —
+                // fall through to bundled / unknown resolution.
+            }
+            Ok(None) => {
+                // The exists() check passed but the read returned
+                // None — narrow race window where the file
+                // disappeared between checks. Fail closed: treat as
+                // community with empty grants.
+                eprintln!(
+                    "[plugin] {name}: .install_meta.json vanished during discovery — failing closed"
+                );
+                return PluginTrust::Community {
+                    granted: Vec::new(),
+                };
+            }
+            Err(e) => {
+                // Corrupt / truncated / partially-written meta file.
+                // Fail closed rather than silently allowing the
+                // manifest's full required_clis through.
+                eprintln!(
+                    "[plugin] {name}: failed to read .install_meta.json ({e}) — failing closed"
+                );
+                return PluginTrust::Community {
+                    granted: Vec::new(),
+                };
+            }
+        }
+    }
+    if seed::is_bundled_plugin_name(name) && dir.join(".version").exists() {
+        return PluginTrust::Bundled;
+    }
+    PluginTrust::Unknown
 }
 
 /// Whether discovery should require an `init.lua` for a plugin of this
@@ -971,5 +1133,387 @@ mod tests {
         // entries in the map.
         let overrides = registry.setting_overrides.read().unwrap();
         assert!(!overrides.contains_key("does-not-exist"));
+    }
+
+    // ---- Capability enforcement (#580) -------------------------------------
+
+    /// Build a plugin directory whose `.install_meta.json` records
+    /// `granted_capabilities` — i.e. the registry-installed shape.
+    /// Manifest `required_clis` is configurable so tests can simulate
+    /// post-install manifest drift (the threat model in #580).
+    fn write_community_plugin(
+        dir: &Path,
+        name: &str,
+        manifest_required_clis: &[&str],
+        granted: &[&str],
+        operations: &[&str],
+        init_lua: &str,
+    ) {
+        let plugin_dir = dir.join(name);
+        std::fs::create_dir(&plugin_dir).unwrap();
+        let manifest = serde_json::json!({
+            "name": name,
+            "display_name": name,
+            "version": "1.0.0",
+            "description": "test plugin",
+            "required_clis": manifest_required_clis,
+            "operations": operations,
+        });
+        std::fs::write(plugin_dir.join("plugin.json"), manifest.to_string()).unwrap();
+        std::fs::write(plugin_dir.join("init.lua"), init_lua).unwrap();
+        let meta = serde_json::json!({
+            "source": "community",
+            "kind": "plugin:scm",
+            "registry_sha": "0".repeat(40),
+            "contribution_sha": "1".repeat(40),
+            "sha256": "2".repeat(64),
+            "installed_at": "2026-05-02T00:00:00Z",
+            "granted_capabilities": granted,
+            "version": "1.0.0",
+        });
+        std::fs::write(
+            plugin_dir.join(".install_meta.json"),
+            serde_json::to_string_pretty(&meta).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn community_plugin_with_grant_superset_is_allowed() {
+        // grant ⊇ manifest: pre-flight passes, op runs.
+        let dir = tempfile::tempdir().unwrap();
+        write_community_plugin(
+            dir.path(),
+            "ok-plugin",
+            &[], // empty required_clis so cli_available stays true
+            &["git", "gh"],
+            &["echo"],
+            r#"
+            local M = {}
+            function M.echo() return { ok = true } end
+            return M
+            "#,
+        );
+        let registry = PluginRegistry::discover(dir.path());
+        let trust = &registry.plugins["ok-plugin"].trust;
+        assert!(matches!(trust, PluginTrust::Community { .. }));
+
+        let result = registry
+            .call_operation("ok-plugin", "echo", serde_json::json!({}), test_workspace())
+            .await
+            .expect("op must succeed");
+        assert_eq!(result["ok"], true);
+    }
+
+    #[tokio::test]
+    async fn community_plugin_with_manifest_exceeding_grants_fails_closed() {
+        // grant ⊊ manifest: pre-flight returns NeedsReconsent before
+        // the script even loads. Use a CLI-less manifest? No — we need
+        // required_clis to drift, and `check_clis_available` would deny
+        // first if those CLIs aren't on PATH. Solve by writing the
+        // plugin with empty required_clis at creation, then patching
+        // the manifest so cli_available was already true at discovery.
+        // A simpler approach: write plugin with empty required at
+        // discovery, then mutate the LoadedPlugin fields directly.
+        let dir = tempfile::tempdir().unwrap();
+        write_community_plugin(
+            dir.path(),
+            "drift-plugin",
+            &[], // discovery sees empty list → cli_available = true
+            &["git"],
+            &["op"],
+            r#"
+            local M = {}
+            function M.op() return { ok = true } end
+            return M
+            "#,
+        );
+        let mut registry = PluginRegistry::discover(dir.path());
+        // Simulate post-install manifest drift: registry update grew
+        // required_clis. We mutate in-place rather than re-reading the
+        // manifest because cli_available was determined at discovery
+        // and we don't want PATH-resolution to vary the test.
+        let plugin = registry.plugins.get_mut("drift-plugin").unwrap();
+        plugin.manifest.required_clis =
+            vec!["git".to_string(), "curl".to_string(), "sh".to_string()];
+
+        let result = registry
+            .call_operation(
+                "drift-plugin",
+                "op",
+                serde_json::json!({}),
+                test_workspace(),
+            )
+            .await;
+        match result {
+            Err(PluginError::NeedsReconsent { plugin, missing }) => {
+                assert_eq!(plugin, "drift-plugin");
+                assert_eq!(missing, vec!["curl".to_string(), "sh".to_string()]);
+            }
+            other => panic!("expected NeedsReconsent, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn community_plugin_host_exec_uses_intersection_allowlist() {
+        // Discovery: granted=[git, cargo], manifest=[cargo] → effective
+        // allowlist = [cargo]. host.exec("cargo") works; host.exec("git")
+        // — even though it's granted — is denied because the manifest
+        // doesn't declare it. (Intersection semantics: never broader
+        // than what's in the manifest.)
+        let dir = tempfile::tempdir().unwrap();
+        write_community_plugin(
+            dir.path(),
+            "intersect-plugin",
+            &[], // empty at discovery so cli_available = true
+            &["git", "cargo"],
+            &["run_cargo", "run_git"],
+            r#"
+            local M = {}
+            function M.run_cargo()
+                return host.exec("cargo", {"--version"})
+            end
+            function M.run_git()
+                return host.exec("git", {"--version"})
+            end
+            return M
+            "#,
+        );
+        let mut registry = PluginRegistry::discover(dir.path());
+        // After discovery, narrow the manifest to just `cargo`. The
+        // pre-flight gate sees missing=[] (cargo ∈ grants), so the
+        // call proceeds; host.exec then gates against the
+        // intersection grant ∩ required = {cargo}.
+        let plugin = registry.plugins.get_mut("intersect-plugin").unwrap();
+        plugin.manifest.required_clis = vec!["cargo".to_string()];
+
+        let cargo_result = registry
+            .call_operation(
+                "intersect-plugin",
+                "run_cargo",
+                serde_json::json!({}),
+                test_workspace(),
+            )
+            .await
+            .expect("cargo must execute");
+        assert_eq!(cargo_result["code"], 0);
+
+        let git_result = registry
+            .call_operation(
+                "intersect-plugin",
+                "run_git",
+                serde_json::json!({}),
+                test_workspace(),
+            )
+            .await;
+        assert!(
+            git_result.is_err(),
+            "git must be denied — not in manifest's required_clis"
+        );
+        let err = git_result.unwrap_err().to_string();
+        assert!(
+            err.contains("not in this plugin's allowed CLIs"),
+            "expected allowlist denial, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn community_plugin_missing_install_meta_treated_as_unknown() {
+        // No `.install_meta.json` at all → trust falls through to
+        // Unknown (hand-installed compat). Manifest-required CLIs all
+        // pass. This guards against accidentally promoting "missing
+        // meta" to "deny everything" for legacy installs that pre-date
+        // the grant-recording code.
+        let dir = tempfile::tempdir().unwrap();
+        let plugin_dir = dir.path().join("legacy-plugin");
+        std::fs::create_dir(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("plugin.json"),
+            r#"{
+                "name": "legacy-plugin",
+                "display_name": "Legacy",
+                "version": "1.0.0",
+                "description": "no meta",
+                "required_clis": [],
+                "operations": ["op"]
+            }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            plugin_dir.join("init.lua"),
+            r#"
+            local M = {}
+            function M.op() return { ok = true } end
+            return M
+            "#,
+        )
+        .unwrap();
+
+        let registry = PluginRegistry::discover(dir.path());
+        assert!(matches!(
+            registry.plugins["legacy-plugin"].trust,
+            PluginTrust::Unknown
+        ));
+        let result = registry
+            .call_operation(
+                "legacy-plugin",
+                "op",
+                serde_json::json!({}),
+                test_workspace(),
+            )
+            .await
+            .expect("legacy install with no meta must still run");
+        assert_eq!(result["ok"], true);
+    }
+
+    #[test]
+    fn bundled_plugin_dir_resolves_to_bundled_trust() {
+        // A plugin whose name matches BUNDLED_PLUGINS AND has a
+        // `.version` sentinel from the seeder is trusted. Capability
+        // enforcement is skipped — the bundle's manifest is the
+        // grant by construction.
+        let dir = tempfile::tempdir().unwrap();
+        let plugin_dir = dir.path().join("github");
+        std::fs::create_dir(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("plugin.json"),
+            r#"{
+                "name": "github",
+                "display_name": "GitHub",
+                "version": "1.0.0",
+                "description": "bundled",
+                "required_clis": ["git", "gh"],
+                "operations": []
+            }"#,
+        )
+        .unwrap();
+        std::fs::write(plugin_dir.join("init.lua"), "return {}").unwrap();
+        // Sentinel that the seeder writes — proves bundled origin.
+        std::fs::write(plugin_dir.join(".version"), "0.0.0").unwrap();
+
+        let registry = PluginRegistry::discover(dir.path());
+        assert!(matches!(
+            registry.plugins["github"].trust,
+            PluginTrust::Bundled
+        ));
+        // `missing_capabilities` is empty for Bundled regardless of
+        // what the manifest declares — that's the trust bypass.
+        assert!(
+            registry.plugins["github"]
+                .trust
+                .missing_capabilities(&["git".into(), "gh".into(), "anything".into()])
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn plugin_trust_effective_allowlist_intersects_for_community() {
+        let trust = PluginTrust::Community {
+            granted: vec!["git".into(), "gh".into()],
+        };
+        let allowed = trust.effective_allowlist(&["git".into(), "curl".into()]);
+        assert_eq!(allowed, vec!["git".to_string()]);
+    }
+
+    #[test]
+    fn plugin_trust_effective_allowlist_passes_through_for_bundled() {
+        let allowed = PluginTrust::Bundled.effective_allowlist(&["git".into(), "anything".into()]);
+        assert_eq!(allowed, vec!["git".to_string(), "anything".to_string()]);
+    }
+
+    #[test]
+    fn plugin_trust_missing_capabilities_diff_for_community() {
+        let trust = PluginTrust::Community {
+            granted: vec!["git".into()],
+        };
+        let missing = trust.missing_capabilities(&["git".into(), "curl".into(), "sh".into()]);
+        assert_eq!(missing, vec!["curl".to_string(), "sh".to_string()]);
+    }
+
+    #[test]
+    fn plugin_trust_missing_capabilities_empty_for_bundled() {
+        assert!(
+            PluginTrust::Bundled
+                .missing_capabilities(&["anything".into()])
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn is_bundled_plugin_recognizes_seeded_names() {
+        assert!(seed::is_bundled_plugin_name("github"));
+        assert!(seed::is_bundled_plugin_name("env-direnv"));
+        assert!(!seed::is_bundled_plugin_name("user-installed"));
+    }
+
+    #[test]
+    fn corrupt_install_meta_fails_closed_to_empty_grants() {
+        // Defense in depth: a malformed `.install_meta.json`
+        // (corrupt JSON, partial write, manual tampering) must NOT
+        // fall through to PluginTrust::Unknown — that would let the
+        // plugin run with full manifest-required_clis, defeating the
+        // grant model. Resolve to Community { granted: [] } so
+        // `call_operation` returns NeedsReconsent for any non-empty
+        // required_clis.
+        let dir = tempfile::tempdir().unwrap();
+        let plugin_dir = dir.path().join("corrupt-meta");
+        std::fs::create_dir(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("plugin.json"),
+            r#"{
+                "name": "corrupt-meta",
+                "display_name": "Corrupt",
+                "version": "1.0.0",
+                "description": "meta is broken",
+                "operations": []
+            }"#,
+        )
+        .unwrap();
+        std::fs::write(plugin_dir.join("init.lua"), "return {}").unwrap();
+        // Garbage bytes — not valid JSON.
+        std::fs::write(
+            plugin_dir.join(".install_meta.json"),
+            "this is not json\x00",
+        )
+        .unwrap();
+
+        let registry = PluginRegistry::discover(dir.path());
+        match &registry.plugins["corrupt-meta"].trust {
+            PluginTrust::Community { granted } => assert!(
+                granted.is_empty(),
+                "corrupt meta must fail closed with empty grants"
+            ),
+            other => panic!("expected Community trust (fail-closed), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bundled_name_without_version_sentinel_is_unknown() {
+        // Defense in depth: if a user creates a plugin dir named
+        // `github` but never had it seeded (no `.version`), we treat
+        // it as Unknown rather than auto-promoting to Bundled — a
+        // shadowed bundle could otherwise dodge enforcement.
+        let dir = tempfile::tempdir().unwrap();
+        let plugin_dir = dir.path().join("github");
+        std::fs::create_dir(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("plugin.json"),
+            r#"{
+                "name": "github",
+                "display_name": "User Github",
+                "version": "1.0.0",
+                "description": "shadow",
+                "operations": []
+            }"#,
+        )
+        .unwrap();
+        std::fs::write(plugin_dir.join("init.lua"), "return {}").unwrap();
+        // No .version — discovery must NOT mark this as bundled.
+
+        let registry = PluginRegistry::discover(dir.path());
+        assert!(matches!(
+            registry.plugins["github"].trust,
+            PluginTrust::Unknown
+        ));
     }
 }

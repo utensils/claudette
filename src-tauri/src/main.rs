@@ -618,6 +618,8 @@ fn main() {
             commands::community::community_install,
             commands::community::community_uninstall,
             commands::community::community_list_installed,
+            commands::community::community_pending_reconsent,
+            commands::community::community_grant_capabilities,
             // Voice providers
             commands::voice::voice_list_providers,
             commands::voice::voice_set_selected_provider,
