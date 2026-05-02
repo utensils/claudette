@@ -1,6 +1,10 @@
 use std::sync::Arc;
 
-use claudette::agent::{self, AgentEvent, AgentSettings, StreamEvent};
+use claudette::agent::{self, AgentEvent, AgentSettings, InnerStreamEvent, StreamEvent};
+use claudette::chat::{
+    BuildAssistantArgs, build_assistant_chat_message, extract_assistant_text,
+    extract_event_thinking,
+};
 use claudette::db::Database;
 use claudette::model::{ChatMessage, ChatRole, Workspace, WorkspaceStatus};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
@@ -616,6 +620,11 @@ async fn handle_send_chat_message(
         let mut rx = turn_handle.event_rx;
         let mut got_init = false;
         let mut pending_thinking: Option<String> = None;
+        // Tracks the most recent per-message usage observed on a MessageDelta
+        // event. Written into the next persisted assistant ChatMessage and
+        // reset to None after each persistence so per-message counts stay
+        // distinct across multi-message turns. Mirrors the Tauri bridge.
+        let mut latest_usage: Option<claudette::agent::TokenUsage> = None;
         while let Some(event) = rx.recv().await {
             if let AgentEvent::Stream(StreamEvent::System { ref subtype, .. }) = event
                 && subtype == "init"
@@ -630,43 +639,24 @@ async fn handle_send_chat_message(
                 agents.remove(&chat_session_id_for_stream);
             }
 
+            // Track per-assistant-message cumulative usage as the CLI streams
+            // it. The final MessageDelta before message_stop carries the
+            // authoritative per-message total; we overwrite on every delta and
+            // consume it when the assistant message is persisted below.
+            if let AgentEvent::Stream(StreamEvent::Stream {
+                event: InnerStreamEvent::MessageDelta { usage: Some(u) },
+            }) = &event
+            {
+                latest_usage = Some(u.clone());
+            }
+
             // Persist assistant messages. The CLI may fire multiple assistant
             // events per turn (thinking-only, then text). Accumulate thinking
             // and save only when text content arrives.
             if let AgentEvent::Stream(StreamEvent::Assistant { ref message }) = event {
-                let full_text: String = message
-                    .content
-                    .iter()
-                    .filter_map(|block| {
-                        if let claudette::agent::ContentBlock::Text { text } = block {
-                            Some(text.as_str())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join("");
+                let full_text = extract_assistant_text(message);
 
-                let event_thinking: Option<String> = {
-                    let parts: Vec<&str> = message
-                        .content
-                        .iter()
-                        .filter_map(|block| {
-                            if let claudette::agent::ContentBlock::Thinking { thinking } = block {
-                                Some(thinking.as_str())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    if parts.is_empty() {
-                        None
-                    } else {
-                        Some(parts.join(""))
-                    }
-                };
-
-                if let Some(t) = event_thinking {
+                if let Some(t) = extract_event_thinking(message) {
                     pending_thinking = Some(match pending_thinking.take() {
                         Some(mut existing) => {
                             existing.push_str(&t);
@@ -679,25 +669,14 @@ async fn handle_send_chat_message(
                 if !full_text.trim().is_empty()
                     && let Ok(db) = Database::open(&db_path)
                 {
-                    // TODO(#300 phase 1+): the Tauri bridge (commands/chat.rs) tracks
-                    // `latest_usage` from MessageDelta events and stamps per-message
-                    // token counts here. The remote server path hasn't been updated
-                    // yet, so remote sessions currently persist NULL token fields.
-                    let msg = ChatMessage {
-                        id: uuid::Uuid::new_v4().to_string(),
-                        workspace_id: ws_id.clone(),
-                        chat_session_id: chat_session_id_for_stream.clone(),
-                        role: ChatRole::Assistant,
+                    let msg = build_assistant_chat_message(BuildAssistantArgs {
+                        workspace_id: &ws_id,
+                        chat_session_id: &chat_session_id_for_stream,
                         content: full_text,
-                        cost_usd: None,
-                        duration_ms: None,
-                        created_at: now_iso(),
                         thinking: pending_thinking.take(),
-                        input_tokens: None,
-                        output_tokens: None,
-                        cache_read_tokens: None,
-                        cache_creation_tokens: None,
-                    };
+                        usage: latest_usage.take(),
+                        created_at: now_iso(),
+                    });
                     let _ = db.insert_chat_message(&msg);
                 }
             }
