@@ -15,9 +15,8 @@ use claudette::chat::{
 use claudette::db::Database;
 use claudette::env::WorkspaceEnv;
 use claudette::mcp_supervisor::McpSupervisor;
-use claudette::model::{ChatMessage, ChatRole, ConversationCheckpoint};
+use claudette::model::{ChatMessage, ChatRole};
 use claudette::permissions::tools_for_level;
-use claudette::snapshot;
 
 use crate::state::{AgentSessionState, AppState, PendingPermission};
 
@@ -1410,58 +1409,30 @@ pub async fn send_chat_message(
                 duration_ms,
                 ..
             }) = &event
-                && let Ok(db) = Database::open(&db_path)
             {
-                // Update cost on the assistant message from this turn (if any).
-                if let (Some(cost), Some(dur)) = (total_cost_usd, duration_ms)
+                if let Ok(db) = Database::open(&db_path)
+                    && let (Some(cost), Some(dur)) = (total_cost_usd, duration_ms)
                     && let Some(ref msg_id) = last_assistant_msg_id
                 {
                     let _ = db.update_chat_message_cost(msg_id, *cost, *dur);
                 }
 
-                // Create a checkpoint anchored to the assistant message from
-                // this turn, or the user message for tool-only turns.
                 let anchor_msg_id = last_assistant_msg_id.as_deref().unwrap_or(&user_msg_id);
-
-                let turn_index = db
-                    .latest_checkpoint(&ws_id)
-                    .ok()
-                    .flatten()
-                    .map(|cp| cp.turn_index + 1)
-                    .unwrap_or(0);
-
-                let checkpoint = ConversationCheckpoint {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    workspace_id: ws_id.clone(),
-                    chat_session_id: chat_session_id_for_stream.clone(),
-                    message_id: anchor_msg_id.to_string(),
-                    commit_hash: None,
-                    has_file_state: false, // Updated after snapshot succeeds
-                    turn_index,
-                    message_count: 0, // Updated by frontend after finalizeTurn
-                    created_at: now_iso(),
-                };
-                if db.insert_checkpoint(&checkpoint).is_ok() {
-                    // Snapshot worktree files into SQLite.
-                    let has_files =
-                        match snapshot::save_snapshot(&db_path, &checkpoint.id, &wt_path).await {
-                            Ok(()) => true,
-                            Err(e) => {
-                                eprintln!(
-                                    "[chat] Snapshot failed for {ws_id}: {e} \
-                                 — checkpoint recorded without file restore capability"
-                                );
-                                false
-                            }
-                        };
-
-                    // Emit with up-to-date has_file_state so frontend knows.
-                    let mut cp_payload = checkpoint.clone();
-                    cp_payload.has_file_state = has_files;
+                if let Some(cp) =
+                    claudette::chat::create_turn_checkpoint(claudette::chat::CheckpointArgs {
+                        db_path: &db_path,
+                        workspace_id: &ws_id,
+                        chat_session_id: &chat_session_id_for_stream,
+                        anchor_msg_id,
+                        worktree_path: &wt_path,
+                        created_at: now_iso(),
+                    })
+                    .await
+                {
                     let payload = serde_json::json!({
                         "workspace_id": &ws_id,
                         "chat_session_id": &chat_session_id_for_stream,
-                        "checkpoint": &cp_payload,
+                        "checkpoint": &cp,
                     });
                     let _ = app.emit("checkpoint-created", &payload);
                 }

@@ -2,15 +2,16 @@
 //!
 //! The Tauri command (`src-tauri/src/commands/chat/send.rs`) and the remote
 //! WebSocket handler (`src-server/src/handler.rs`) both run a chat turn and
-//! persist the resulting messages. They duplicate a lot of logic that is
-//! pure: session-flag drift detection, the `can_use_tool` permission
-//! response, walking an `AssistantMessage`'s content blocks, and building
-//! `ChatMessage` rows for persistence.
+//! persist the resulting messages. They duplicate a lot of logic — pure
+//! helpers (session-flag drift, the `can_use_tool` permission response,
+//! walking an `AssistantMessage`'s content blocks, `ChatMessage` builders)
+//! plus an async helper that owns the per-turn checkpoint + worktree
+//! snapshot dance.
 //!
-//! This module collects those pure helpers so both call sites can share them
-//! and stay in lockstep. The transport-specific orchestration (event
-//! emission, `AppState` locking, notifications, checkpoint snapshotting)
-//! still lives in each call site — see issue #490 for the broader plan.
+//! This module collects those helpers so both call sites can share them and
+//! stay in lockstep. The remaining transport-specific orchestration (event
+//! emission, `AppState` locking, notifications) still lives in each call
+//! site — see issue #490 for the broader plan.
 //!
 //! See `docs/architecture` and the call sites for how these pieces are
 //! composed during a turn.
