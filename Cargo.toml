@@ -34,6 +34,7 @@ notify = "7"
 rand = "0.8"
 sha2 = "0.10"
 tar = "0.4"
+tempfile = "3"
 # Cross-platform local IPC: Unix domain sockets on macOS/Linux, Named Pipes
 # on Windows. One async API for both, used by `agent_mcp::bridge` to talk to
 # the Claudette-hosted MCP grandchild that the Claude CLI spawns over stdio.
@@ -46,7 +47,6 @@ interprocess = { version = "2", features = ["tokio"] }
 winreg = "0.55"
 
 [dev-dependencies]
-tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [build-dependencies]

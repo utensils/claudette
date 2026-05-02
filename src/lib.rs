@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod agent_mcp;
 pub mod cesp;
+pub mod community;
 pub mod config;
 pub mod db;
 pub mod diff;
