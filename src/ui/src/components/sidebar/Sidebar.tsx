@@ -18,7 +18,7 @@ import {
   pairWithServer,
   startLocalServer,
 } from "../../services/tauri";
-import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, CircleStop, LoaderCircle, GitPullRequestArrow, GitPullRequestDraft, GitMerge, GitPullRequestClosed, ChevronRight, ChevronDown } from "lucide-react";
+import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, CircleStop, GitPullRequestArrow, GitPullRequestDraft, GitMerge, GitPullRequestClosed, ChevronRight, ChevronDown } from "lucide-react";
 import { RepoIcon } from "../shared/RepoIcon";
 import { UpdateBanner } from "../layout/UpdateBanner";
 import { getScmSortPriority } from "../../utils/scmSortPriority";
@@ -327,7 +327,7 @@ export const Sidebar = memo(function Sidebar() {
             aria-hidden="true"
             title={ws.agent_status === "Compacting" ? t("status_compacting") : t("status_running")}
           >
-            <LoaderCircle size={14} />
+            <span className={styles.statusSpinnerRing} />
           </span>
         ) : (() => {
           if (ws.status === "Archived") {
@@ -868,7 +868,7 @@ export const Sidebar = memo(function Sidebar() {
               {!collapsed && creatingWorkspace && creatingWorkspace.repoId === repo.id && (
                 <div className={`${styles.wsItem} ${styles.wsItemLoading}`}>
                   <span className={styles.statusSpinner} aria-hidden="true">
-                    <LoaderCircle size={14} />
+                    <span className={styles.statusSpinnerRing} />
                   </span>
                   <div className={styles.wsInfo}>
                     <span className={`${styles.wsName} ${styles.wsNamePlaceholder}`}>
@@ -1208,7 +1208,7 @@ function RemoteConnectionGroup({
                   >
                     {isAgentBusy(ws.agent_status) ? (
                       <span className={styles.statusSpinner} aria-hidden="true">
-                        <LoaderCircle size={14} />
+                        <span className={styles.statusSpinnerRing} />
                       </span>
                     ) : (
                       <span

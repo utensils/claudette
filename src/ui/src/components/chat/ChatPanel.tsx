@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { LoaderCircle } from "lucide-react";
 import { ChatSearchBar } from "./ChatSearchBar";
 import { useAppStore } from "../../stores/useAppStore";
 import {
@@ -970,7 +969,9 @@ export function ChatPanel() {
                       : t("processing_aria", { elapsed: formatElapsed(elapsed) })
                   }
                 >
-                  <LoaderCircle size={14} className={styles.spinner} aria-hidden="true" />
+                  <span className={styles.spinnerWrap} aria-hidden="true">
+                    <span className={styles.spinner} />
+                  </span>
                   {ws?.agent_status === "Compacting" && (
                     <span className={styles.compactingLabel}>{t("compacting_label")}</span>
                   )}
