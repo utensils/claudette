@@ -115,7 +115,7 @@ export const FileTree = memo(function FileTree({
       // Wait one frame so the virtualizer has rendered the target row.
       const raf = requestAnimationFrame(() => {
         const el = containerRef.current?.querySelector<HTMLDivElement>(
-          `[data-path="${cssEscape(focusedPath)}"]`,
+          `[data-path="${CSS.escape(focusedPath)}"]`,
         );
         el?.focus();
       });
@@ -329,12 +329,3 @@ function Row({
   );
 }
 
-/** Escape a string for use in a CSS attribute selector. Browsers expose
- *  `CSS.escape`, but file paths can contain any character so we need a
- *  defensive wrapper that survives unusual filenames in tests too. */
-function cssEscape(value: string): string {
-  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
-    return CSS.escape(value);
-  }
-  return value.replace(/(["\\\n])/g, "\\$1");
-}

@@ -12,10 +12,13 @@ use claudette::process::CommandWindowExt as _;
 
 /// Hard cap on the number of *files* returned by
 /// [`list_workspace_files`]. Ancestor directory entries are derived from
-/// whichever files survive the cap, so the merged listing is bounded by
-/// roughly `2 × MAX_ENTRIES` in the worst case (every file in its own
-/// unique subtree). Bounds IPC payload size and gives the Files browser
-/// a known upper bound. When hit, the frontend surfaces a "results
+/// whichever files survive the cap, so the returned listing is "the
+/// capped file set plus all of their ancestor directories" — depth and
+/// branching shape determine the additional dir count, so there is no
+/// constant-factor upper bound on the merged size. In practice the dir
+/// count stays a small multiple of the file count even on deep
+/// monorepos. Bounds IPC payload size and gives the Files browser a
+/// known cap on file rows. When hit, the frontend surfaces a "results
 /// truncated" banner so the user knows some files are not listed.
 const MAX_ENTRIES: usize = 10_000;
 
@@ -28,10 +31,17 @@ pub struct FileEntry {
 #[derive(Clone, Serialize)]
 pub struct FileListing {
     pub entries: Vec<FileEntry>,
-    /// True when the worktree contained more files than `MAX_ENTRIES`
+    /// True when the worktree contained more files than `max_entries`
     /// and the file list was truncated. Drives the truncation banner in
-    /// the Files browser.
+    /// the Files browser. Note: this is set on the file count, not the
+    /// merged entry count — `entries.len()` may exceed `max_entries`
+    /// because ancestor directory rows are added on top of the capped
+    /// file set.
     pub truncated: bool,
+    /// The cap that was applied to the file count. Surfaced so the
+    /// frontend's truncation banner stays in sync with the backend
+    /// without a duplicated literal.
+    pub max_entries: usize,
 }
 
 #[derive(Clone, Serialize)]
@@ -161,7 +171,11 @@ fn cap_merged_entries(stdout: &str, max: usize) -> FileListing {
     entries.extend(dir_entries);
     entries.extend(file_entries);
 
-    FileListing { entries, truncated }
+    FileListing {
+        entries,
+        truncated,
+        max_entries: max,
+    }
 }
 
 /// Read a file from a workspace's worktree.
@@ -633,6 +647,7 @@ mod tests {
         let stdout = "src/lib.rs\nsrc/main.rs\nREADME.md\n";
         let listing = cap_merged_entries(stdout, 100);
         assert!(!listing.truncated);
+        assert_eq!(listing.max_entries, 100);
         // 1 dir ("src/") + 3 files = 4 entries.
         assert_eq!(listing.entries.len(), 4);
         // Dirs first, then files in stdout order.

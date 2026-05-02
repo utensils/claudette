@@ -39,6 +39,17 @@ function expandAll(workspaceId: string, entries: FileEntry[]): void {
 describe("FileTree", () => {
   const workspaceId = "ws-test";
 
+  // Originals are captured once and restored after each test so the
+  // happy-dom prototype mutations below don't leak into other test files
+  // sharing this environment. `clientHeight` is a property descriptor;
+  // `getBoundingClientRect` is a method.
+  const originalClientHeight = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "clientHeight",
+  );
+  const originalGetBoundingClientRect =
+    HTMLElement.prototype.getBoundingClientRect;
+
   beforeEach(() => {
     // Reset per-workspace tree state so prior test cases don't smear
     // expansion/selection into later ones.
@@ -73,7 +84,25 @@ describe("FileTree", () => {
     };
   });
 
-  afterEach(() => cleanup());
+  afterEach(() => {
+    cleanup();
+    // Restore originals so other test files in the same happy-dom
+    // environment aren't affected by our stubs.
+    if (originalClientHeight) {
+      Object.defineProperty(
+        HTMLElement.prototype,
+        "clientHeight",
+        originalClientHeight,
+      );
+    } else {
+      // happy-dom didn't have an own descriptor for clientHeight before
+      // we stubbed it — delete the stub to drop back to the inherited
+      // getter (returns 0).
+      delete (HTMLElement.prototype as unknown as Record<string, unknown>)
+        .clientHeight;
+    }
+    HTMLElement.prototype.getBoundingClientRect = originalGetBoundingClientRect;
+  });
 
   it("renders with 100 entries", () => {
     const entries = makeEntries(100);

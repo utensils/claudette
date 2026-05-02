@@ -255,10 +255,15 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
     showMarkdownToggle &&
     bufferState?.preview === "preview" &&
     bufferState?.loaded;
-  // Files past `MONACO_RENDER_LIMIT_BYTES` skip Monaco entirely and render
-  // as plain text. Edit is already disabled past the smaller edit cap, so
-  // this only affects files in the [edit-cap, render-cap, viewer-cap]
-  // range — they used to mount Monaco read-only. Now they don't.
+  // Files past `MONACO_RENDER_LIMIT_BYTES` (2 MB) skip Monaco entirely and
+  // render as plain text. Three caps stack here, smallest first:
+  //   * MONACO_RENDER_LIMIT_BYTES (2 MB) — Monaco doesn't mount.
+  //   * EDIT_SIZE_LIMIT_BYTES (5 MB) — Edit is disabled.
+  //   * MAX_VIEWER_FILE_SIZE (10 MB, backend) — file is rejected.
+  // Files between 2 MB and 10 MB used to mount Monaco read-only; now
+  // they render via the plain-text fallback below. `tooLargeToRender`
+  // implies the editor isn't mounted at all, so it's a stronger
+  // condition than `editDisabled` and doesn't need to be folded into it.
   const tooLargeToRender =
     !!bufferState &&
     bufferState.loaded &&

@@ -12,6 +12,7 @@ export function FilesPanel() {
 
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [truncated, setTruncated] = useState(false);
+  const [maxEntries, setMaxEntries] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -29,6 +30,7 @@ export function FilesPanel() {
         if (cancelled) return;
         setEntries(result.entries);
         setTruncated(result.truncated);
+        setMaxEntries(result.max_entries);
         setLoading(false);
       })
       .catch((e) => {
@@ -68,7 +70,7 @@ export function FilesPanel() {
         <>
           {truncated && (
             <div className={styles.truncatedBanner} role="status">
-              {t("files_truncated_banner", { max: 10_000 })}
+              {t("files_truncated_banner", { max: maxEntries })}
             </div>
           )}
           <FileTree
