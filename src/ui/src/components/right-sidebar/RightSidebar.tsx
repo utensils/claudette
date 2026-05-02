@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useRef, useState } from "react";
 import { isAgentBusy } from "../../utils/agentStatus";
 import { ChevronRight, Undo2, Trash2 } from "lucide-react";
 import { useAppStore, selectActiveSessionId } from "../../stores/useAppStore";
@@ -332,7 +332,11 @@ export const RightSidebar = memo(function RightSidebar() {
             ) : diffFiles.length === 0 ? (
               <div className={styles.empty}>No changes</div>
             ) : hasGrouped ? (
-              <>
+              // Key the group block on the active workspace so per-group
+              // collapse state (held in FileGroup's local useState) resets
+              // when the user switches workspaces — otherwise expanding
+              // "Committed" in workspace A would carry into workspace B.
+              <Fragment key={selectedWorkspaceId ?? ""}>
                 <FileGroup
                   label="Unstaged"
                   files={diffStagedFiles!.unstaged}
@@ -361,7 +365,7 @@ export const RightSidebar = memo(function RightSidebar() {
                   accentColor="var(--diff-added-text)"
                   renderFileRow={renderFileRow}
                 />
-              </>
+              </Fragment>
             ) : (
               // Fallback: flat list (remote server without staged_files)
               diffFiles.map((file) => renderFileRow(file))

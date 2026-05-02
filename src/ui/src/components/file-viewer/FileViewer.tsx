@@ -250,7 +250,7 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
   const showSourceEditor =
     !isImage && !bufferState?.isBinary && !showMarkdownPreview;
   const showSaveButton =
-    !editDisabled && !isImage && !bufferState?.isBinary && !showMarkdownPreview;
+    dirty && !editDisabled && !isImage && !bufferState?.isBinary && !showMarkdownPreview;
 
   return (
     <div className={styles.viewer}>
@@ -301,10 +301,8 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
             {showSaveButton && (
               <IconButton
                 onClick={handleSave}
-                tooltip={
-                  dirty ? t("file_tooltip_save") : t("file_tooltip_save_clean")
-                }
-                disabled={!dirty || saving}
+                tooltip={t("file_tooltip_save")}
+                disabled={saving}
               >
                 <Save size={14} aria-hidden="true" />
               </IconButton>
