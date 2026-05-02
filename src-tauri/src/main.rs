@@ -401,6 +401,21 @@ fn main() {
             // back to pure lazy mtime invalidation.
             commands::env::setup_env_watcher(app.handle().clone());
 
+            // Wire the host-side `Room` subscriber to fire on every new
+            // room creation. This must run before any handler that calls
+            // `RoomRegistry::get_or_create` — i.e. before the embedded
+            // collab server starts taking connections — otherwise the
+            // host UI misses the very first `participants-changed` event
+            // emitted by `handle_join_session`.
+            #[cfg(feature = "server")]
+            {
+                let rooms = app.state::<state::AppState>().rooms.clone();
+                let app_for_hook = app.handle().clone();
+                rooms.set_on_create(move |room| {
+                    commands::remote::attach_host_room_subscribers(app_for_hook.clone(), room);
+                });
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| {

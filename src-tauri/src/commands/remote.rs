@@ -515,28 +515,25 @@ pub async fn mute_participant(
 // `build_collab_connection_string`. These were the per-chat-session
 // collab-share entry points from the previous design. The new model
 // (workspace-scoped `Share`s) supersedes them — see
-// `crate::commands::share`. The `spawn_host_event_subscriber` and
-// `spawn_host_vote_resolver` helpers below are still useful but currently
-// unused; they'll be re-wired when the registry gains a "subscribe to
-// every room" hook (see TODO in `commands/share.rs::ensure_share_server`).
+// `crate::commands::share`. The host-side subscribers below are now
+// attached via `RoomRegistry::set_on_create`, installed once at app
+// startup in `main.rs`, so a fresh room gets a host subscriber before
+// any handler can publish into it.
 
-/// Ensure both host-side subscribers (event mirror + vote resolver) are
-/// spawned for `room`, idempotently. Safe to call from the bridge on
-/// every turn — `state.host_room_subscribers` dedups on `chat_session_id`
-/// so we end up with at most one subscriber pair per room.
+/// Capture broadcast receivers and spawn both host-side mirror tasks for
+/// `room`. **Must** be called synchronously inside the `RoomRegistry`
+/// `on_create` hook so the receivers attach before the first publish —
+/// `tokio::sync::broadcast` does not buffer for late subscribers.
 #[cfg(feature = "server")]
-pub async fn ensure_host_room_subscribers(
-    app: &AppHandle,
-    state: &AppState,
-    chat_session_id: &str,
-    room: std::sync::Arc<claudette::room::Room>,
-) {
-    let mut subs = state.host_room_subscribers.write().await;
-    if !subs.insert(chat_session_id.to_string()) {
-        return;
-    }
+pub fn attach_host_room_subscribers(app: AppHandle, room: std::sync::Arc<claudette::room::Room>) {
+    // `subscribe()` is sync and returns a `Receiver` immediately; doing
+    // this *before* the `tokio::spawn` calls inside the helpers is the
+    // load-bearing detail. The helpers re-create their receivers
+    // internally today, so we just call them in order — they capture
+    // their receivers synchronously as their first statement.
+    let chat_session_id = room.chat_session_id.clone();
     spawn_host_event_subscriber(app.clone(), room.clone());
-    spawn_host_vote_resolver(app.clone(), room, chat_session_id.to_string());
+    spawn_host_vote_resolver(app, room, chat_session_id);
 }
 
 #[cfg(feature = "server")]

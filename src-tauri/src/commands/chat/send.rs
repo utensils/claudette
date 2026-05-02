@@ -1011,22 +1011,14 @@ pub async fn send_chat_message(
     // clients). In solo mode this is `None` and the bridge keeps emitting
     // directly via `app.emit("agent-stream", ...)`.
     let room_for_stream = state.rooms.get(&chat_session_id).await;
-    // The host's own UI is just another subscriber of this room. Without
-    // this, the bridge would publish events that only WebSocket clients
-    // could see — the host's webview would go silent the moment a remote
-    // joined and a room came into existence. `ensure_host_room_subscribers`
-    // is idempotent (dedups on chat_session_id) so this is safe to call
-    // on every turn.
-    #[cfg(feature = "server")]
-    if let Some(room) = &room_for_stream {
-        crate::commands::remote::ensure_host_room_subscribers(
-            &app,
-            &state,
-            &chat_session_id,
-            room.clone(),
-        )
-        .await;
-    }
+    // The host's own UI is just another subscriber of this room. The
+    // host-side mirror task that re-emits room events into the local
+    // webview is attached at room *creation* time via
+    // `RoomRegistry::set_on_create` (installed once in `main.rs::setup`),
+    // so by the time we get here the host is already listening — even
+    // if the room was first created by a remote `join_session` whose
+    // `participants-changed` publish would otherwise have raced ahead
+    // of any subscriber spawned on the bridge path.
     // Acquire the turn lock just before spawning the bridge so we never
     // leak the lock across an early `?` propagation. Hard reject — the
     // composer in other clients greys out on `turn-started`, so by the

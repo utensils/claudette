@@ -196,17 +196,48 @@ impl Room {
     }
 }
 
+/// Synchronous callback fired exactly once per newly-created room, before
+/// the room becomes visible to any other caller. The Tauri host installs
+/// this so it can capture a `broadcast::Receiver` (and spawn the local
+/// event-mirror / vote-resolver tasks) *before* any handler — including
+/// `handle_join_session` on the server side — publishes into the room.
+///
+/// Without this, the host would miss the very first `participants-changed`
+/// event, because `tokio::sync::broadcast` does not buffer for late
+/// subscribers.
+type OnCreateHook = Box<dyn Fn(Arc<Room>) + Send + Sync>;
+
 /// Process-wide registry shared between the Tauri host and the embedded
 /// `claudette-server`. Both sides hold the same `Arc<RoomRegistry>` so a
 /// publish from either side reaches subscribers on the other.
 #[derive(Default)]
 pub struct RoomRegistry {
     rooms: RwLock<HashMap<String, Arc<Room>>>,
+    /// Optional hook invoked synchronously during `get_or_create` whenever a
+    /// brand-new room is constructed. See [`OnCreateHook`] for the rationale.
+    on_create: std::sync::Mutex<Option<OnCreateHook>>,
 }
 
 impl RoomRegistry {
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
+    }
+
+    /// Install the creation hook. The callback is fired with the new
+    /// `Arc<Room>` before the room is published into the registry's map,
+    /// so any `subscribe()` call inside the callback is guaranteed to
+    /// observe every subsequent publish. There is at most one hook —
+    /// later calls replace the previous one.
+    pub fn set_on_create<F>(&self, callback: F)
+    where
+        F: Fn(Arc<Room>) + Send + Sync + 'static,
+    {
+        // `std::sync::Mutex` here (not tokio): the hook is set once at
+        // startup and read on the (sync) creation path. We never await
+        // while holding it.
+        if let Ok(mut guard) = self.on_create.lock() {
+            *guard = Some(Box::new(callback));
+        }
     }
 
     /// Look up an existing room. Returns `None` for solo / 1:1 sessions.
@@ -230,6 +261,19 @@ impl RoomRegistry {
             return room;
         }
         let room = Room::new(chat_session_id.to_string(), consensus_required);
+        // Fire the creation hook *before* publishing into the map. This is
+        // load-bearing: callers (e.g. the server's `handle_join_session`)
+        // call `room.publish(...)` shortly after `get_or_create` returns,
+        // and `tokio::sync::broadcast` does not deliver historical events
+        // to subscribers attached after a publish. By calling the hook
+        // here — synchronously, while we still hold the only `Arc<Room>`
+        // outside the function — we guarantee any subscribers it spawns
+        // see every subsequent event from turn one.
+        if let Ok(hook) = self.on_create.lock()
+            && let Some(cb) = hook.as_ref()
+        {
+            cb(room.clone());
+        }
         guard.insert(chat_session_id.to_string(), room.clone());
         room
     }
@@ -319,6 +363,53 @@ mod tests {
         assert!(!room.set_muted(&pid("nobody"), true).await);
         assert!(room.remove_participant(&pid("alice")).await.is_some());
         assert!(room.remove_participant(&pid("alice")).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn on_create_hook_subscribes_before_first_publish() {
+        // Regression test for the publish-before-subscribe race: a hook
+        // installed on the registry must run synchronously when a brand-new
+        // room is created, *before* any caller can publish into it. Without
+        // this guarantee the host UI loses the very first
+        // `participants-changed` event of every collaborative session.
+        let reg = RoomRegistry::new();
+        let captured: std::sync::Arc<
+            std::sync::Mutex<Option<tokio::sync::broadcast::Receiver<RoomEvent>>>,
+        > = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let captured_clone = captured.clone();
+        reg.set_on_create(move |room| {
+            // Synchronous capture mirrors what the Tauri host does in
+            // `attach_host_room_subscribers`.
+            let rx = room.subscribe();
+            *captured_clone.lock().unwrap() = Some(rx);
+        });
+
+        let room = reg.get_or_create("s1", false).await;
+        // Simulate the publish that `handle_join_session` does immediately
+        // after `get_or_create` returns.
+        room.publish(json!({"event": "participants-changed"}));
+
+        let mut rx = captured
+            .lock()
+            .unwrap()
+            .take()
+            .expect("hook should have run");
+        let evt = rx
+            .recv()
+            .await
+            .expect("first publish must reach hook subscriber");
+        assert_eq!(evt.0, json!({"event": "participants-changed"}));
+
+        // Hook fires only on creation, not on subsequent get_or_creates.
+        let captured2: std::sync::Arc<std::sync::Mutex<u32>> =
+            std::sync::Arc::new(std::sync::Mutex::new(0));
+        let counter = captured2.clone();
+        reg.set_on_create(move |_| {
+            *counter.lock().unwrap() += 1;
+        });
+        let _ = reg.get_or_create("s1", false).await; // existing → no fire
+        let _ = reg.get_or_create("s2", false).await; // new → fires once
+        assert_eq!(*captured2.lock().unwrap(), 1);
     }
 
     #[tokio::test]
