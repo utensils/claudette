@@ -4,12 +4,11 @@ import {
   memo,
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { BookOpen, Check, Code, Copy, Eye, Pencil, Save } from "lucide-react";
+import { BookOpen, Check, Code, Copy, Save } from "lucide-react";
 import { writeText as clipboardWriteText } from "@tauri-apps/plugin-clipboard-manager";
 import {
   selectActiveFileTabPath,
@@ -69,7 +68,6 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
   const setFileBufferLoadError = useAppStore((s) => s.setFileBufferLoadError);
   const setFileBufferContent = useAppStore((s) => s.setFileBufferContent);
   const setFileBufferSaved = useAppStore((s) => s.setFileBufferSaved);
-  const setFileTabMode = useAppStore((s) => s.setFileTabMode);
   const setFileTabPreview = useAppStore((s) => s.setFileTabPreview);
   const addToast = useAppStore((s) => s.addToast);
 
@@ -154,27 +152,19 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
 
   const dirty = !!bufferState && bufferState.buffer !== bufferState.baseline;
 
-  const editDisabledReason = useMemo<string | null>(() => {
-    if (!bufferState || !bufferState.loaded) return null;
-    if (isImage) return t("file_edit_disabled_image");
-    if (bufferState.isBinary) return t("file_edit_disabled_binary");
-    if (bufferState.sizeBytes > EDIT_SIZE_LIMIT_BYTES) {
-      return t("file_edit_disabled_too_large", {
-        size: formatBytes(bufferState.sizeBytes),
-      });
-    }
-    if (bufferState.truncated) return t("file_edit_disabled_truncated");
-    return null;
-  }, [bufferState, isImage, t]);
-  const editDisabled = editDisabledReason !== null;
-
-  // If the user toggled Edit on and then opened (or switched to) a file
-  // that can't be edited, force the mode back to View.
-  useEffect(() => {
-    if (editDisabled && bufferState?.mode === "edit") {
-      setFileTabMode(workspaceId, path, "view");
-    }
-  }, [editDisabled, bufferState?.mode, workspaceId, path, setFileTabMode]);
+  // Files we render in the editor but won't let the user mutate. The
+  // truncated banner below the editor explains the truncated case; the
+  // others are obvious from the rendered output (image, "preview not
+  // available" for binary) or rare enough not to warrant chrome (oversize
+  // files between the edit cap and the viewer cap render read-only with
+  // no banner — Monaco's read-only cursor signals it).
+  const editDisabled =
+    !!bufferState &&
+    bufferState.loaded &&
+    (isImage ||
+      bufferState.isBinary ||
+      bufferState.sizeBytes > EDIT_SIZE_LIMIT_BYTES ||
+      bufferState.truncated);
 
   const handleBufferChange = useCallback(
     (next: string) => {
@@ -252,17 +242,15 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
     }
   }, [bufferState, dirty, saving, workspaceId, path, setFileBufferSaved, addToast, t]);
 
-  const showMarkdownToggle = isMarkdown && bufferState?.mode === "view";
-  const showSourceEditor =
-    !isImage &&
-    !bufferState?.isBinary &&
-    (bufferState?.mode === "edit" ||
-      !showMarkdownToggle ||
-      bufferState?.preview === "source");
+  const showMarkdownToggle = isMarkdown && !editDisabled;
   const showMarkdownPreview =
     showMarkdownToggle &&
     bufferState?.preview === "preview" &&
     bufferState?.loaded;
+  const showSourceEditor =
+    !isImage && !bufferState?.isBinary && !showMarkdownPreview;
+  const showSaveButton =
+    dirty && !editDisabled && !isImage && !bufferState?.isBinary && !showMarkdownPreview;
 
   return (
     <div className={styles.viewer}>
@@ -310,32 +298,11 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
                 ]}
               />
             )}
-            <SegmentedControl
-              ariaLabel={t("file_view_mode_aria")}
-              value={bufferState?.mode ?? "view"}
-              onChange={(m) => setFileTabMode(workspaceId, path, m)}
-              options={[
-                {
-                  value: "view",
-                  icon: <Eye size={14} aria-hidden="true" />,
-                  tooltip: t("file_tooltip_view"),
-                },
-                {
-                  value: "edit",
-                  icon: <Pencil size={14} aria-hidden="true" />,
-                  tooltip: t("file_tooltip_edit"),
-                  disabled: editDisabled,
-                  disabledTooltip: editDisabledReason ?? undefined,
-                },
-              ]}
-            />
-            {bufferState?.mode === "edit" && (
+            {showSaveButton && (
               <IconButton
                 onClick={handleSave}
-                tooltip={
-                  dirty ? t("file_tooltip_save") : t("file_tooltip_save_clean")
-                }
-                disabled={!dirty || saving}
+                tooltip={t("file_tooltip_save")}
+                disabled={saving}
               >
                 <Save size={14} aria-hidden="true" />
               </IconButton>
@@ -374,7 +341,7 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
               key={path}
               initialValue={bufferState.buffer}
               filename={path}
-              readOnly={bufferState.mode === "view"}
+              readOnly={editDisabled}
               onChange={handleBufferChange}
               onSave={handleSave}
             />

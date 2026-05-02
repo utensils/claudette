@@ -931,7 +931,7 @@
   border: 1px solid var(--sidebar-border);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-md);
-  margin: 0 6px;
+  margin: 0 6px 6px;
   outline: none;
 }
 

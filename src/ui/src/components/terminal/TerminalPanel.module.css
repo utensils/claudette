@@ -6,10 +6,10 @@
 
 .tabBar {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   height: 32px;
   padding: 0 4px;
-  background: var(--terminal-tab-bg);
+  background: transparent;
   border-bottom: 1px solid var(--sidebar-border);
   gap: 2px;
   flex-shrink: 0;
@@ -19,23 +19,15 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 8px;
+  padding: 0 8px;
   cursor: pointer;
   font-size: 12px;
   color: var(--text-dim);
   position: relative;
-  transition: color var(--transition-fast), background var(--transition-fast);
-}
-
-.tab::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 1px;
-  background: transparent;
-  transition: background var(--transition-fast);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color var(--transition-fast), background var(--transition-fast),
+    border-color var(--transition-fast);
 }
 
 .tab:hover {
@@ -46,10 +38,7 @@
 .tabActive {
   color: var(--text-primary);
   background: transparent;
-}
-
-.tabActive::after {
-  background: var(--accent-primary);
+  border-bottom-color: var(--accent-primary);
 }
 
 .tabTitle {
@@ -167,20 +156,19 @@
  * layout — xterm itself keeps its own cursor-blink visual cue. */
 .paneRoot {
   position: absolute;
-  inset: 0;
+  inset: 8px;
 }
 
 .paneLeaf {
   position: relative;
   width: 100%;
   height: 100%;
-  outline: 1px solid transparent;
-  outline-offset: -1px;
-  transition: outline-color var(--transition-fast);
 }
 
 .paneLeafActive {
-  outline-color: var(--accent-primary);
+  /* Active-pane indicator removed — the cursor blink in xterm already
+   * signals focus, and a 1px outline produced a faint orange line at
+   * the panel's bottom edge in single-pane layouts. */
 }
 
 .paneHandleVertical,

@@ -1,7 +1,6 @@
 import type { StateCreator } from "zustand";
 import type { AppState } from "../useAppStore";
 
-export type FileViewerMode = "view" | "edit";
 export type FileViewerPreviewMode = "source" | "preview";
 
 /** Per-tab buffer + UI state. Lives in the store keyed by `${wsId}:${path}`
@@ -24,7 +23,6 @@ export interface FileBufferState {
    *  False entries are still in flight or never started. */
   loaded: boolean;
   loadError: string | null;
-  mode: FileViewerMode;
   preview: FileViewerPreviewMode;
 }
 
@@ -47,7 +45,6 @@ export function makeUnloadedBuffer(): FileBufferState {
     imageBytesB64: null,
     loaded: false,
     loadError: null,
-    mode: "view",
     preview: "source",
   };
 }
@@ -127,11 +124,6 @@ export interface FileTreeSlice {
     workspaceId: string,
     path: string,
     baseline: string,
-  ) => void;
-  setFileTabMode: (
-    workspaceId: string,
-    path: string,
-    mode: FileViewerMode,
   ) => void;
   setFileTabPreview: (
     workspaceId: string,
@@ -322,19 +314,6 @@ export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> 
         fileBuffers: {
           ...s.fileBuffers,
           [key]: { ...prev, baseline },
-        },
-      };
-    }),
-
-  setFileTabMode: (workspaceId, path, mode) =>
-    set((s) => {
-      const key = fileBufferKey(workspaceId, path);
-      const prev = s.fileBuffers[key];
-      if (!prev) return s;
-      return {
-        fileBuffers: {
-          ...s.fileBuffers,
-          [key]: { ...prev, mode },
         },
       };
     }),
