@@ -16,6 +16,8 @@
 #     hex in `styles/themes/index.ts`, consumed by CommandPalette to
 #     render theme swatches without a runtime style lookup. Each entry
 #     must match the hex in the corresponding `[data-theme]` block.
+#   * `accent_preview: "#..."` — same as above but in snake_case (the
+#     wire format used by the community-registry parsers in tests).
 #
 # Runs from src/ui. Exits non-zero with a report when violations are found.
 
@@ -42,7 +44,7 @@ hex_hits=$(grep -rnE '#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b' src \
   | grep -vE '&#[0-9]+;' \
   | grep -vE 'getPropertyValue\(.*\)\.trim\(\) \|\| "#' \
   | grep -vE 'getPropertyValue\(.*\)\.trim\(\)\s*\|\| \(.*\?.*"#' \
-  | grep -vE 'accentPreview:\s*"#' \
+  | grep -vE '(accentPreview|accent_preview):\s*"#' \
   || true)
 
 if [ -n "$hex_hits" ]; then

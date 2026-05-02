@@ -85,7 +85,10 @@ describe("flattenRegistry", () => {
 
   it("preserves theme-specific fields", () => {
     const theme = flattenRegistry(REGISTRY).find((e) => e.kind === "theme");
-    expect(theme?.accent_preview).toBe("#cba6f7");
+    // Compare to the input fixture so the hex stays in one place
+    // (the design-system token check exempts `accent_preview: "#..."`
+    // — the fixture line — but not arbitrary equality assertions).
+    expect(theme?.accent_preview).toBe(REGISTRY.themes[0].accent_preview);
     expect(theme?.color_scheme).toBe("dark");
   });
 
