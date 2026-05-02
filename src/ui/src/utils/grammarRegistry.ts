@@ -86,24 +86,35 @@ function normalizeGrammar(
  * Run once at app startup. Idempotent — concurrent callers share the
  * same in-flight promise so we never duplicate the network/registry
  * calls. Safe to call before React renders; safe to call repeatedly.
+ *
+ * On failure (backend unreachable, malformed registry response, etc.)
+ * we clear `bootstrapPromise` and leave `bootstrapped = false` so a
+ * later call can retry — a transient invoke failure during boot
+ * should not permanently brick grammar registration for the session.
  */
 export function bootstrapGrammarRegistry(): Promise<void> {
   if (state.bootstrapped) return Promise.resolve();
   if (state.bootstrapPromise) return state.bootstrapPromise;
-  state.bootstrapPromise = bootstrapInner().finally(() => {
-    state.bootstrapped = true;
-  });
-  return state.bootstrapPromise;
+  const inFlight = bootstrapInner().then(
+    () => {
+      state.bootstrapped = true;
+      state.bootstrapPromise = null;
+    },
+    (e) => {
+      console.warn("[grammars] Bootstrap failed; will retry on next call:", e);
+      state.bootstrapPromise = null;
+    },
+  );
+  state.bootstrapPromise = inFlight;
+  return inFlight;
 }
 
 async function bootstrapInner(): Promise<void> {
-  let registry;
-  try {
-    registry = await listLanguageGrammars();
-  } catch (e) {
-    console.warn("[grammars] Failed to list language grammars:", e);
-    return;
-  }
+  // Listing failures throw so `bootstrapGrammarRegistry` can clear
+  // `bootstrapPromise` and let a retry happen. Per-grammar load
+  // failures inside the loop are isolated below — one bad grammar
+  // must not poison the others.
+  const registry = await listLanguageGrammars();
 
   state.languages = registry.languages;
 
@@ -163,9 +174,13 @@ export async function applyGrammarsToMonaco(
 ): Promise<void> {
   if (state.monacoApplied) return;
   await bootstrapGrammarRegistry();
-  state.monacoApplied = true;
 
-  if (state.languages.length === 0) return;
+  if (state.languages.length === 0) {
+    // Nothing to bind, but mark applied so we don't retry on every
+    // mount when the registry is genuinely empty.
+    state.monacoApplied = true;
+    return;
+  }
 
   // Register every language id with Monaco so file-extension and
   // alias resolution work in `MonacoEditor`'s `path={filename}`
@@ -230,6 +245,15 @@ export async function applyGrammarsToMonaco(
   // newly-registered languages — Monaco re-tokenizes synchronously
   // and Shiki's just-bound provider supplies colors.
   reevaluateOpenModelLanguages(monaco);
+
+  // Mark applied only after the function ran to completion. If
+  // anything before this point threw (`monaco.languages.register`
+  // rejecting an unexpected manifest shape, etc.), a later mount
+  // will retry. The shikiToMonaco import path is wrapped in its own
+  // try/catch above and warns rather than throwing, so its failure
+  // doesn't keep the flag false — that import isn't transiently
+  // recoverable in a single session anyway.
+  state.monacoApplied = true;
 }
 
 function reevaluateOpenModelLanguages(

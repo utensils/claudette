@@ -110,6 +110,25 @@ export function PluginsSettings() {
     }
   }, []);
 
+  const refreshGrammarLanguages = useCallback(async () => {
+    // The grammar registry filters disabled plugins on the backend,
+    // so toggling a language-grammar plugin must refresh this list
+    // for the per-plugin "File extensions" chips to reflect reality.
+    try {
+      const result = await listLanguageGrammars();
+      const byPlugin = new Map<string, LanguageInfo[]>();
+      for (const lang of result.languages) {
+        const existing = byPlugin.get(lang.plugin_name) ?? [];
+        existing.push(lang);
+        byPlugin.set(lang.plugin_name, existing);
+      }
+      setGrammarLanguages(byPlugin);
+    } catch {
+      // Soft-fail: a transient backend hiccup shouldn't reset the
+      // chips to empty for every plugin. Keep the previous snapshot.
+    }
+  }, []);
+
   const refreshBuiltins = useCallback(async () => {
     setError(null);
     try {
@@ -240,12 +259,16 @@ export function PluginsSettings() {
     async (pluginName: string, nextEnabled: boolean) => {
       try {
         await setClaudettePluginEnabled(pluginName, nextEnabled);
-        await refreshPlugins();
+        // Refresh both: `refreshPlugins` updates the enabled badge
+        // for every plugin kind; `refreshGrammarLanguages` keeps the
+        // language-grammar chips in sync with the backend's
+        // enabled-only registry.
+        await Promise.all([refreshPlugins(), refreshGrammarLanguages()]);
       } catch (e) {
         setError(String(e));
       }
     },
-    [refreshPlugins],
+    [refreshPlugins, refreshGrammarLanguages],
   );
 
   const handleSettingChange = useCallback(
@@ -597,8 +620,13 @@ function PluginRow({
   // contributions instead so the row carries useful detail when
   // expanded.
   const isGrammar = plugin.kind === "language-grammar";
+  // Multiple LanguageInfo entries from the same plugin may contribute
+  // overlapping extensions (e.g. two language ids both claiming
+  // `.json`). Deduplicate so the UI shows each extension once and so
+  // React keys stay unique. Set preserves insertion order, which keeps
+  // the chip layout stable across renders.
   const grammarExtensions = isGrammar
-    ? (languages ?? []).flatMap((l) => l.extensions)
+    ? Array.from(new Set((languages ?? []).flatMap((l) => l.extensions)))
     : [];
   const hasGrammarExtensions = grammarExtensions.length > 0;
   // CLI checks are meaningless for grammar plugins (no executables to

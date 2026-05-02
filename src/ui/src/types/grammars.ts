@@ -2,8 +2,11 @@
  * Frontend types for the `language-grammar` plugin kind. Mirrors
  * `claudette::grammar_provider` in the Rust backend. Frontend uses
  * these to register Monaco languages and seed Shiki's known-language
- * list at startup, then fetches each grammar's TextMate JSON lazily
- * via {@link readLanguageGrammar} when the language is first needed.
+ * list at app bootstrap; each grammar's TextMate JSON is fetched
+ * eagerly via {@link readLanguageGrammar} during that bootstrap (see
+ * `utils/grammarRegistry.ts`) so the first highlight request after
+ * boot doesn't pay a backend round-trip. Lazy per-language load is a
+ * future enhancement gated on usage data showing it matters.
  */
 
 /** Metadata for a language declared by a plugin. */

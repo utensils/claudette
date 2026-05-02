@@ -6,8 +6,14 @@
  * Resolution order (most specific → most general):
  *   1. Plugin-contributed filenames (e.g. `Dockerfile` → "dockerfile")
  *   2. Built-in filename mappings
- *   3. Plugin-contributed extensions (longest match wins)
+ *   3. Plugin-contributed extensions — first match wins (iteration
+ *      order of the plugin language list)
  *   4. Built-in extension mappings
+ *
+ * Extension matching is single-segment: only the last `.<ext>` is
+ * consulted, so multi-segment extensions like `.d.ts` resolve to `.ts`
+ * (typescript), not a separate `.d.ts` mapping. Longest-match resolution
+ * is a future enhancement gated on a real grammar needing it.
  *
  * Returns `null` when no language matches; callers should render plain
  * text. The returned id is the same one accepted by the Shiki worker

@@ -52,6 +52,7 @@ const LANG_LOADERS: Record<string, () => Promise<unknown>> = {
   jsx: () => import("@shikijs/langs/jsx"),
   kotlin: () => import("@shikijs/langs/kotlin"),
   lua: () => import("@shikijs/langs/lua"),
+  make: () => import("@shikijs/langs/make"),
   markdown: () => import("@shikijs/langs/markdown"),
   nix: () => import("@shikijs/langs/nix"),
   php: () => import("@shikijs/langs/php"),
@@ -89,6 +90,7 @@ const LANG_ALIASES: Record<string, string> = {
   golang: "go",
   kt: "kotlin",
   htm: "html",
+  makefile: "make",
 };
 
 let highlighterPromise: Promise<HighlighterCore> | null = null;

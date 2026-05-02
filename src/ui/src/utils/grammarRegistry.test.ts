@@ -286,6 +286,43 @@ describe("bootstrapGrammarRegistry", () => {
     expect(mainShikiMock.loadLanguage).not.toHaveBeenCalled();
   });
 
+  it("retries bootstrap on a later call after a transient list failure", async () => {
+    // First call: backend rejects. Second call: backend succeeds.
+    // The registry must NOT latch into a permanently-bootstrapped state
+    // after the first failure — otherwise a transient invoke error
+    // during app boot would leave grammars un-registered for the
+    // whole session.
+    let callCount = 0;
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "list_language_grammars") {
+        callCount += 1;
+        if (callCount === 1) throw new Error("backend down");
+        return {
+          languages: [langInfo("nix", [".nix"])],
+          grammars: [grammarInfo("lang-nix", "nix", "grammars/nix.tmLanguage.json")],
+        };
+      }
+      if (cmd === "read_language_grammar") {
+        return '{"scopeName":"source.nix","patterns":[]}';
+      }
+      throw new Error(`unexpected: ${cmd}`);
+    });
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await bootstrapGrammarRegistry();
+      expect(getRegisteredPluginLanguages()).toEqual([]);
+      // Second attempt: backend recovers.
+      await bootstrapGrammarRegistry();
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    expect(callCount).toBe(2);
+    expect(getRegisteredPluginLanguages()).toHaveLength(1);
+    expect(getRegisteredPluginLanguages()[0].id).toBe("nix");
+  });
+
   it("malformed grammar JSON is reported and skipped", async () => {
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === "list_language_grammars") {

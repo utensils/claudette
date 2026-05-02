@@ -72,6 +72,15 @@ pub struct GrammarRegistry {
 pub enum GrammarError {
     PluginNotFound(String),
     NotGrammarKind(String),
+    PluginDisabled(String),
+    /// The requested path isn't listed in the plugin's `grammars` manifest
+    /// slot. Distinct from `PathOutsidePlugin` so callers (and humans
+    /// reading logs) can tell an undeclared internal path from a
+    /// directory-escape attempt.
+    PathNotDeclared {
+        plugin: String,
+        path: String,
+    },
     PathOutsidePlugin {
         plugin: String,
         path: String,
@@ -95,6 +104,11 @@ impl std::fmt::Display for GrammarError {
             Self::NotGrammarKind(name) => {
                 write!(f, "Plugin '{name}' is not a language-grammar plugin")
             }
+            Self::PluginDisabled(name) => write!(f, "Plugin '{name}' is disabled"),
+            Self::PathNotDeclared { plugin, path } => write!(
+                f,
+                "Grammar path '{path}' is not declared in plugin '{plugin}' manifest"
+            ),
             Self::PathOutsidePlugin { plugin, path } => write!(
                 f,
                 "Grammar path '{path}' for plugin '{plugin}' escapes the plugin directory"
@@ -172,6 +186,9 @@ pub fn list_registry(registry: &PluginRegistry) -> GrammarRegistry {
 /// - exist in the registry
 /// - be of `language-grammar` kind (we won't surface arbitrary files
 ///   from operation-driven plugins)
+/// - be enabled — disabled plugins are filtered out of `list_registry`,
+///   and reading their bytes anyway would let a stale frontend
+///   reference resurrect a grammar the user explicitly turned off
 /// - declare the requested path in its `grammars` manifest slot
 ///   (defends against a frontend asking for arbitrary files inside
 ///   the plugin directory)
@@ -195,6 +212,10 @@ pub fn read_grammar(
         return Err(GrammarError::NotGrammarKind(plugin_name.to_string()));
     }
 
+    if registry.is_disabled(plugin_name) {
+        return Err(GrammarError::PluginDisabled(plugin_name.to_string()));
+    }
+
     // Path must be one the manifest declared. Without this check, a
     // compromised webview could read any file inside the plugin dir.
     let declared = plugin
@@ -203,7 +224,7 @@ pub fn read_grammar(
         .iter()
         .any(|g| g.path == relative_path);
     if !declared {
-        return Err(GrammarError::PathOutsidePlugin {
+        return Err(GrammarError::PathNotDeclared {
             plugin: plugin_name.to_string(),
             path: relative_path.to_string(),
         });
@@ -407,7 +428,9 @@ mod tests {
     fn read_grammar_rejects_path_not_declared_in_manifest() {
         // Even files that exist inside the plugin directory must be
         // refused unless the manifest declared them. Defends against
-        // a compromised webview reading arbitrary plugin files.
+        // a compromised webview reading arbitrary plugin files. The
+        // distinct `PathNotDeclared` variant lets logs/UI distinguish
+        // an undeclared internal file from a directory-escape attempt.
         let dir = tempfile::tempdir().unwrap();
         let plugin_dir = dir.path().join("lang-test");
         write_grammar_plugin(
@@ -420,10 +443,7 @@ mod tests {
 
         let registry = PluginRegistry::discover(dir.path());
         let result = read_grammar(&registry, "lang-test", "plugin.json.bak");
-        assert!(matches!(
-            result,
-            Err(GrammarError::PathOutsidePlugin { .. })
-        ));
+        assert!(matches!(result, Err(GrammarError::PathNotDeclared { .. })));
     }
 
     #[test]
@@ -438,13 +458,30 @@ mod tests {
 
         let registry = PluginRegistry::discover(dir.path());
         // Manifest doesn't declare this path, so the manifest check
-        // catches it before resolution would. That's the layered
-        // defense.
+        // catches it before resolution would — surfaces as
+        // `PathNotDeclared`, not `PathOutsidePlugin`. That's the
+        // layered defense; either rejection is sufficient.
         let result = read_grammar(&registry, "lang-test", "../../../etc/passwd");
-        assert!(matches!(
-            result,
-            Err(GrammarError::PathOutsidePlugin { .. })
-        ));
+        assert!(matches!(result, Err(GrammarError::PathNotDeclared { .. })));
+    }
+
+    #[test]
+    fn read_grammar_rejects_disabled_plugin() {
+        // Disabled plugins are filtered out of `list_registry`; reading
+        // their bytes via a stale frontend reference would resurrect
+        // a grammar the user explicitly turned off.
+        let dir = tempfile::tempdir().unwrap();
+        let plugin_dir = dir.path().join("lang-test");
+        write_grammar_plugin(
+            &plugin_dir,
+            make_grammar_manifest("lang-test"),
+            r#"{"scopeName":"source.test","patterns":[]}"#,
+        );
+
+        let registry = PluginRegistry::discover(dir.path());
+        registry.set_disabled("lang-test", true);
+        let result = read_grammar(&registry, "lang-test", "grammars/test.tmLanguage.json");
+        assert!(matches!(result, Err(GrammarError::PluginDisabled(_))));
     }
 
     #[test]
