@@ -470,37 +470,15 @@ pub async fn send_chat_message(
     // agent has neither the tool nor any hint it exists.
     let send_to_user_enabled = claudette::agent_mcp::is_builtin_plugin_enabled(&db, "send_to_user");
 
-    // Prepend the agent-MCP nudge to the user's repo-level instructions so
-    // the model knows to reach for `mcp__claudette__send_to_user` when the
-    // user asks for an inline file delivery. The nudge is session-level
-    // (only applied on fresh spawns via `--append-system-prompt`); on resume
-    // turns the original spawn's prompt is already in the CLI process.
-    let custom_instructions = if send_to_user_enabled {
-        let nudge = claudette::agent_mcp::SYSTEM_PROMPT_NUDGE;
-        match session.custom_instructions.as_deref() {
-            Some(existing) if !existing.trim().is_empty() => Some(format!("{nudge}\n\n{existing}")),
-            _ => Some(nudge.to_string()),
-        }
-    } else {
-        session.custom_instructions.clone()
-    };
-
-    // Prepend the developer-bundled global system prompt to every fresh
-    // session. The global prompt is compiled into the binary via include_str!
-    // and sits outermost so it frames all per-repo and MCP instructions.
-    let custom_instructions = {
-        let global = claudette::global_prompt::GLOBAL_SYSTEM_PROMPT;
-        if global.trim().is_empty() {
-            custom_instructions
-        } else {
-            match custom_instructions.as_deref() {
-                Some(existing) if !existing.trim().is_empty() => {
-                    Some(format!("{global}\n\n{existing}"))
-                }
-                _ => Some(global.to_string()),
-            }
-        }
-    };
+    // Compose the system prompt for fresh spawns: bundled global prompt →
+    // MCP nudge (so the model reaches for `mcp__claudette__send_to_user`
+    // when asked to deliver a file) → per-repo instructions. Resume turns
+    // reuse the persistent CLI process and never re-pass the prompt.
+    let nudge = send_to_user_enabled.then_some(claudette::agent_mcp::SYSTEM_PROMPT_NUDGE);
+    let custom_instructions = claudette::global_prompt::compose_system_prompt(
+        session.custom_instructions.as_deref(),
+        nudge,
+    );
     session.turn_count += 1;
     session.needs_attention = false;
     session.attention_kind = None;
