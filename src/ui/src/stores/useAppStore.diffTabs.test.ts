@@ -14,6 +14,9 @@ function reset() {
     diffError: null,
     sessionsByWorkspace: {},
     selectedSessionIdByWorkspaceId: {},
+    fileTabsByWorkspace: {},
+    activeFileTabByWorkspace: {},
+    fileBuffers: {},
   });
 }
 
@@ -226,6 +229,81 @@ describe("workspace removal cleans up diff tabs", () => {
     expect(state.diffTabsByWorkspace[WS_B]).toEqual([
       { path: "b.ts", layer: "unstaged" },
     ]);
+  });
+});
+
+// Regression for issue 573: opening a Changes-panel diff entry while a file tab
+// is active in the FileViewer must release the file tab so AppLayout's
+// "file viewer beats diff viewer" precedence stops blocking the diff. The
+// fix lives in the slice so every caller of openDiffTab gets the right
+// behavior automatically (previously only SessionTabs.switchToDiff
+// remembered to call clearActiveFileTab — RightSidebar's row click forgot).
+describe("openDiffTab releases the active file tab (issue 573)", () => {
+  beforeEach(reset);
+
+  it("clears activeFileTabByWorkspace[workspaceId] so the diff is visible", () => {
+    useAppStore.getState().openFileTab(WS_A, "src/foo.ts");
+    expect(useAppStore.getState().activeFileTabByWorkspace[WS_A]).toBe(
+      "src/foo.ts",
+    );
+
+    useAppStore.getState().openDiffTab(WS_A, "src/bar.ts", "unstaged");
+
+    const state = useAppStore.getState();
+    expect(state.activeFileTabByWorkspace[WS_A]).toBeNull();
+    expect(state.diffSelectedFile).toBe("src/bar.ts");
+    expect(state.diffSelectedLayer).toBe("unstaged");
+    // The file tab itself stays open in the strip so the user can switch
+    // back; only the active pointer is released.
+    expect(state.fileTabsByWorkspace[WS_A]).toEqual(["src/foo.ts"]);
+  });
+
+  it("does not touch other workspaces' active file tabs", () => {
+    useAppStore.getState().openFileTab(WS_A, "src/a.ts");
+    useAppStore.getState().openFileTab(WS_B, "src/b.ts");
+
+    useAppStore.getState().openDiffTab(WS_A, "src/diff.ts", "unstaged");
+
+    const state = useAppStore.getState();
+    expect(state.activeFileTabByWorkspace[WS_A]).toBeNull();
+    expect(state.activeFileTabByWorkspace[WS_B]).toBe("src/b.ts");
+  });
+
+  it("is a no-op when no file tab was active", () => {
+    // Sanity: workspace has no open file tabs at all.
+    useAppStore.getState().openDiffTab(WS_A, "src/bar.ts", "unstaged");
+
+    const state = useAppStore.getState();
+    expect(state.activeFileTabByWorkspace[WS_A] ?? null).toBeNull();
+    expect(state.diffSelectedFile).toBe("src/bar.ts");
+  });
+});
+
+// Baseline: the SessionTabs.switchToDiff path (clearActiveFileTab +
+// selectDiffTab, in that order) was the only diff-navigation entry point
+// that already honored the file-viewer release contract before issue 573. Keep
+// a regression on it so a future refactor of switchToDiff can't silently
+// break the working baseline.
+describe("SessionTabs.switchToDiff baseline still releases the file tab", () => {
+  beforeEach(reset);
+
+  it("clearActiveFileTab + selectDiffTab leaves the diff visible", () => {
+    useAppStore.getState().openFileTab(WS_A, "src/foo.ts");
+    useAppStore.getState().openDiffTab(WS_A, "src/bar.ts", "unstaged");
+    // Re-open the file tab to mimic the user clicking back to the file
+    // viewer; that re-asserts activeFileTabByWorkspace[WS_A].
+    useAppStore.getState().openFileTab(WS_A, "src/foo.ts");
+    expect(useAppStore.getState().activeFileTabByWorkspace[WS_A]).toBe(
+      "src/foo.ts",
+    );
+
+    // Mirror SessionTabs.switchToDiff exactly.
+    useAppStore.getState().clearActiveFileTab(WS_A);
+    useAppStore.getState().selectDiffTab("src/bar.ts", "unstaged");
+
+    const state = useAppStore.getState();
+    expect(state.activeFileTabByWorkspace[WS_A]).toBeNull();
+    expect(state.diffSelectedFile).toBe("src/bar.ts");
   });
 });
 
