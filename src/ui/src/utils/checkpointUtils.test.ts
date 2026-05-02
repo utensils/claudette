@@ -261,4 +261,35 @@ describe("buildRollbackMap", () => {
     expect(result.has(0)).toBe(false);
     expect(result.has(1)).toBe(false);
   });
+
+  // When the loaded `messages` array is a paginated window into a longer
+  // session, the top user is NOT the conversation root and must NOT get the
+  // clear-all sentinel — that would let users wipe the whole session by
+  // clicking rollback on a top-of-window user.
+  it("suppresses clear-all on top user when globalOffset > 0", () => {
+    const messages = [msg("m50", "User"), msg("m51", "Assistant")];
+    const cps = [{ ...cp("cp1", "aaa", 0), message_id: "m51" }];
+    const result = buildRollbackMap(messages, cps, /* globalOffset */ 50);
+    // Top user (index 0) is NOT the root, so no clear-all entry.
+    expect(result.has(0)).toBe(false);
+  });
+
+  it("falls back to latest preceding checkpoint for top user on paginated window", () => {
+    // The top user has a preceding checkpoint inside the window — it should
+    // resolve to that checkpoint, not clear-all.
+    const messages = [
+      msg("m50", "Assistant"), // carry-over assistant from previous page
+      msg("m51", "User"),
+      msg("m52", "Assistant"),
+    ];
+    const cps = [{ ...cp("cp1", "aaa", 0), message_id: "m50" }];
+    const result = buildRollbackMap(messages, cps, /* globalOffset */ 50);
+    expect(result.get(1)?.id).toBe("cp1");
+  });
+
+  it("globalOffset = 0 still maps top user to clear-all (default behavior)", () => {
+    const messages = [msg("m1", "User"), msg("m2", "Assistant")];
+    const result = buildRollbackMap(messages, [], 0);
+    expect(result.get(0)).toBeNull();
+  });
 });

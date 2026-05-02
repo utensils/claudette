@@ -39,18 +39,28 @@ export function clearAllHasFileChanges(
  * before it, so users can always roll back — even past interrupted
  * turns that didn't produce a checkpoint.
  *
- * The first User message always maps to `null` (clear-all) — clearing the
- * conversation doesn't require a checkpoint. Subsequent User messages map
- * to the most recent checkpoint seen so far. Uses a single forward pass
- * (O(n)) by tracking the latest checkpoint while iterating.
+ * The first User message of the FULL conversation maps to `null`
+ * (clear-all) — clearing the conversation doesn't require a checkpoint.
+ * Subsequent User messages map to the most recent checkpoint seen so far.
+ * Uses a single forward pass (O(n)) by tracking the latest checkpoint
+ * while iterating.
+ *
+ * `globalOffset` is the number of older messages that exist in the session
+ * but aren't in `messages` (pagination). When > 0 the top user message in
+ * the loaded window is NOT the conversation root, so the clear-all sentinel
+ * is suppressed for it: that user gets the latest preceding checkpoint
+ * (or no entry if none has been seen yet — checkpoints belonging to older
+ * pages will surface once the user scrolls them into view and the merged
+ * window is re-evaluated). Defaults to 0 for fully-loaded sessions.
  */
 export function buildRollbackMap(
   messages: ChatMessage[],
   checkpoints: ConversationCheckpoint[],
+  globalOffset = 0,
 ): Map<number, ConversationCheckpoint | null> {
   const msgIdToCp = new Map(checkpoints.map((cp) => [cp.message_id, cp]));
   const result = new Map<number, ConversationCheckpoint | null>();
-  let firstUser = true;
+  let firstUser = globalOffset === 0;
   let latestCp: ConversationCheckpoint | undefined;
 
   for (let i = 0; i < messages.length; i++) {
@@ -60,7 +70,7 @@ export function buildRollbackMap(
 
     if (messages[i].role === "User") {
       if (firstUser) {
-        // First user message always gets clear-all (no checkpoint needed).
+        // First user message of the full conversation: clear-all.
         result.set(i, null);
         firstUser = false;
       } else if (latestCp) {

@@ -193,12 +193,22 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
       },
     })),
   prependChatAttachments: (sessionId, attachments) =>
-    set((s) => ({
-      chatAttachments: {
-        ...s.chatAttachments,
-        [sessionId]: [...attachments, ...(s.chatAttachments[sessionId] ?? [])],
-      },
-    })),
+    set((s) => {
+      // Dedupe by id: when a page begins mid-turn, the page loader includes
+      // the previous user message's anchor id so its attachments come back
+      // again. Without this guard the same row would render twice once the
+      // older page is loaded.
+      const existing = s.chatAttachments[sessionId] ?? [];
+      const seen = new Set(existing.map((a) => a.id));
+      const fresh = attachments.filter((a) => !seen.has(a.id));
+      if (fresh.length === 0) return {};
+      return {
+        chatAttachments: {
+          ...s.chatAttachments,
+          [sessionId]: [...fresh, ...existing],
+        },
+      };
+    }),
   streamingContent: {},
   streamingThinking: {},
   pendingTypewriter: {},

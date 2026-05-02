@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
+import { LoaderCircle } from "lucide-react";
 import { ChatSearchBar } from "./ChatSearchBar";
 import { useAppStore } from "../../stores/useAppStore";
 import {
@@ -396,17 +397,32 @@ export function ChatPanel() {
     };
 
     if (isLocal) {
-      // Load newest page of messages and their attachments in one round-trip.
-      loadChatHistoryPage(sessionId, 50)
-        .then((page) => {
-          onMessages(page.messages, page.attachments, {
-            hasMore: page.has_more,
-            isLoadingMore: false,
-            totalCount: page.total_count,
-            oldestMessageId: page.messages[0]?.id ?? null,
-          });
-        })
-        .catch((e) => console.error("Failed to load chat history:", e));
+      // Skip the reload when we've already loaded this session — otherwise
+      // bouncing between long conversations would drop any older pages the
+      // user already scrolled through and snap them back to the newest 50.
+      // CompletedTurns and attachments are kept live in the store via the
+      // streaming path, so re-fetching from the DB here would also clobber
+      // in-flight state.
+      const existingPagination =
+        useAppStore.getState().chatPagination[sessionId];
+      if (existingPagination) {
+        debugChat("ChatPanel", "load-history:skip-already-loaded", {
+          sessionId,
+          totalCount: existingPagination.totalCount,
+        });
+      } else {
+        // Load newest page of messages and their attachments in one round-trip.
+        loadChatHistoryPage(sessionId, 50)
+          .then((page) => {
+            onMessages(page.messages, page.attachments, {
+              hasMore: page.has_more,
+              isLoadingMore: false,
+              totalCount: page.total_count,
+              oldestMessageId: page.messages[0]?.id ?? null,
+            });
+          })
+          .catch((e) => console.error("Failed to load chat history:", e));
+      }
     } else {
       sendRemoteCommand(currentWs!.remote_connection_id!, "load_chat_history", {
         chat_session_id: sessionId,
@@ -467,6 +483,11 @@ export function ChatPanel() {
         const pagination = store.chatPagination[sessionId];
         if (!pagination) return;
 
+        // Flip the ref synchronously: subsequent scroll events fire before
+        // React commits the store update, so without this guard fast scrolls
+        // at the top can dispatch multiple page fetches with the same cursor
+        // and prepend the same rows repeatedly.
+        isLoadingMoreRef.current = true;
         store.setChatPagination(sessionId, { ...pagination, isLoadingMore: true });
         const prevScrollHeight = container.scrollHeight;
 
@@ -480,6 +501,20 @@ export function ChatPanel() {
               totalCount: page.total_count,
               oldestMessageId: page.messages[0]?.id ?? cursorId,
             });
+            // Backfill prompt history: Shift+Up walks `historyRef`, which was
+            // seeded from the initial page only. Without this, older user
+            // messages stay invisible to history navigation even after the
+            // user scrolls them into view.
+            const olderUserPrompts = page.messages
+              .filter((m) => m.role === "User")
+              .map((m) => m.content);
+            if (olderUserPrompts.length > 0) {
+              const existing = historyRef.current[sessionId] ?? [];
+              historyRef.current[sessionId] = [
+                ...olderUserPrompts,
+                ...existing,
+              ];
+            }
             // Restore scroll position so prepended messages don't push the
             // view upward.
             requestAnimationFrame(() => {
