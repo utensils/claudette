@@ -271,9 +271,9 @@ pub struct CheckpointArgs<'a> {
 /// Create the conversation checkpoint for a just-completed turn and snapshot
 /// the worktree files into SQLite.
 ///
-/// Returns the inserted checkpoint with `has_file_state` reflecting whether
-/// `save_snapshot` succeeded — callers should use it as the payload for any
-/// `checkpoint-created` event they emit.
+/// Returns the inserted checkpoint with `has_file_state` set to `true` only
+/// when the snapshot inserted at least one `checkpoint_files` row — callers
+/// should use it as the payload for any `checkpoint-created` event they emit.
 ///
 /// Returns `None` only when the DB connection or the checkpoint insert itself
 /// fails. Snapshot failures are logged to stderr (mirroring the prior Tauri
@@ -283,7 +283,8 @@ pub struct CheckpointArgs<'a> {
 /// Note: `has_file_state` is **derived** by SQL on read (EXISTS over
 /// `checkpoint_files`), so we don't persist the bool — we only set it on the
 /// returned struct to keep the emitted payload consistent with subsequent DB
-/// reads.
+/// reads. Zero-file snapshots (empty repo, all files gitignored) return
+/// `has_file_state = false` for the same reason.
 pub async fn create_turn_checkpoint(args: CheckpointArgs<'_>) -> Option<ConversationCheckpoint> {
     let CheckpointArgs {
         db_path,
@@ -318,8 +319,11 @@ pub async fn create_turn_checkpoint(args: CheckpointArgs<'_>) -> Option<Conversa
     db.insert_checkpoint(&checkpoint).ok()?;
     drop(db); // release the non-Send connection before awaiting save_snapshot
 
+    // Match the DB-derived `has_file_state` (EXISTS over `checkpoint_files`):
+    // a successful snapshot that inserted zero rows still means no restore
+    // capability — happens for empty / fully-ignored worktrees.
     let has_files = match snapshot::save_snapshot(db_path, &checkpoint.id, worktree_path).await {
-        Ok(()) => true,
+        Ok(count) => count > 0,
         Err(e) => {
             eprintln!(
                 "[chat] Snapshot failed for {workspace_id}: {e} \
@@ -366,13 +370,28 @@ mod tests {
         let wt = parent.join("wt");
         std::fs::create_dir_all(&wt).unwrap();
         std::fs::write(wt.join("hello.txt"), "hi").unwrap();
-        // Initialise a real git repo so git ls-files works during save_snapshot.
-        tokio::process::Command::new(crate::git::resolve_git_path_blocking())
+        init_git_repo(&wt).await;
+        wt
+    }
+
+    async fn make_empty_test_worktree(parent: &std::path::Path) -> PathBuf {
+        let wt = parent.join("empty_wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        init_git_repo(&wt).await;
+        wt
+    }
+
+    async fn init_git_repo(wt: &std::path::Path) {
+        let output = tokio::process::Command::new(crate::git::resolve_git_path_blocking())
             .args(["init", wt.to_str().unwrap()])
             .output()
             .await
-            .unwrap();
-        wt
+            .expect("spawn git init");
+        assert!(
+            output.status.success(),
+            "git init failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     // -- Session-flag drift -------------------------------------------------
@@ -849,5 +868,35 @@ mod tests {
             !row.has_file_state,
             "no checkpoint_files rows ⇒ derived false"
         );
+    }
+
+    #[tokio::test]
+    async fn checkpoint_has_file_state_false_when_snapshot_inserts_zero_files() {
+        // Empty git-init'd worktree → save_snapshot succeeds with 0 files.
+        // The emitted payload's has_file_state must agree with the SQL EXISTS
+        // derivation (false), or the frontend will advertise a restorable
+        // checkpoint that has nothing to restore.
+        let (dir, db_path) = make_test_db().await;
+        let wt = make_empty_test_worktree(dir.path()).await;
+
+        let cp = create_turn_checkpoint(CheckpointArgs {
+            db_path: &db_path,
+            workspace_id: "ws-1",
+            chat_session_id: "cs-1",
+            anchor_msg_id: "msg-1",
+            worktree_path: wt.to_str().unwrap(),
+            created_at: "now".into(),
+        })
+        .await
+        .expect("checkpoint");
+
+        assert!(
+            !cp.has_file_state,
+            "zero-file snapshot must report has_file_state = false"
+        );
+
+        let db = crate::db::Database::open(&db_path).unwrap();
+        let row = db.latest_checkpoint("ws-1").unwrap().expect("row present");
+        assert!(!row.has_file_state, "DB-derived value agrees with payload");
     }
 }
