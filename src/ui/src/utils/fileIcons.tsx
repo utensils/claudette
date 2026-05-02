@@ -120,6 +120,8 @@ const IMAGE_EXTS = new Set([
   "svg",
   "ico",
   "bmp",
+  "avif",
+  "apng",
 ]);
 
 export function getFileIcon(filename: string): IconComponent {
@@ -159,6 +161,10 @@ export function imageMediaType(filename: string): string | null {
       return "image/x-icon";
     case "bmp":
       return "image/bmp";
+    case "avif":
+      return "image/avif";
+    case "apng":
+      return "image/apng";
     default:
       return null;
   }
