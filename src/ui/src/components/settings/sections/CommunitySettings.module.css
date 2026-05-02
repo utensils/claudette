@@ -1,24 +1,6 @@
 .section {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding: 18px 20px 24px;
-  max-width: 920px;
-}
-
-.header {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  border-bottom: 1px solid var(--divider);
-  padding-bottom: 12px;
-}
-
-.title {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text-primary);
 }
 
 .subtle {
@@ -41,6 +23,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
+  margin-top: 24px;
   border-bottom: 1px solid var(--divider);
   padding-bottom: 8px;
 }

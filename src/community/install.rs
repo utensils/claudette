@@ -347,9 +347,6 @@ fn extract_subtree(
         }
 
         let entry_type = entry.header().entry_type();
-        if entry_type.is_symlink() || entry_type.is_hard_link() {
-            return Err(InstallError::Symlink(path_str));
-        }
 
         // Sniff the codeload prefix from the first directory entry.
         if prefix.is_none()
@@ -370,7 +367,11 @@ fn extract_subtree(
             _ => path_str.as_str(),
         };
 
-        // Path-filter to the requested subtree.
+        // Path-filter to the requested subtree. Anything outside the
+        // contribution's path (including symlinks at the repo root
+        // like AGENTS.md → CLAUDE.md) is silently skipped — its
+        // presence in the tarball is not our problem because we
+        // never write it.
         if !contribution_path.is_empty() {
             let want = format!("{contribution_path}/");
             if !stripped.starts_with(&want) && stripped != contribution_path {
@@ -388,6 +389,16 @@ fn extract_subtree(
         if rel.is_empty() {
             // The path itself; nothing to write.
             continue;
+        }
+
+        // Reject special entries that fall *inside* the subtree we're
+        // about to extract. Symlinks and hardlinks could redirect to
+        // arbitrary paths outside `out_dir` once Claudette later
+        // reads the installed files; safer to refuse the install
+        // than to follow. Symlinks elsewhere in the tarball are fine
+        // because we already filtered them out above.
+        if entry_type.is_symlink() || entry_type.is_hard_link() {
+            return Err(InstallError::Symlink(stripped.into()));
         }
 
         // Defense in depth: rel must be relative + not contain `..`.
@@ -654,6 +665,100 @@ mod tests {
         let tmp = tempdir().unwrap();
         let err = extract_subtree(&gz_bytes, "plugins/foo", tmp.path()).unwrap_err();
         assert!(matches!(err, InstallError::Traversal(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn symlink_outside_subtree_is_skipped() {
+        // The community repo has AGENTS.md → CLAUDE.md at the root.
+        // Installing a contribution under plugins/foo/ must succeed;
+        // root-level symlinks are not files we write.
+        let payload: &[(&str, &[u8])] = &[
+            ("plugins/language-grammars/lang-foo/plugin.json", b"{}"),
+            ("plugins/language-grammars/lang-foo/grammars/x.json", b"[]"),
+        ];
+        let mut tar_bytes = Vec::new();
+        {
+            let gz = GzEncoder::new(&mut tar_bytes, Compression::fast());
+            let mut builder = tar::Builder::new(gz);
+            for (path, data) in payload {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(data.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                builder
+                    .append_data(&mut header, format!("repo-x/{path}"), *data)
+                    .unwrap();
+            }
+            // Root-level symlink: AGENTS.md -> CLAUDE.md
+            let mut sym_header = tar::Header::new_gnu();
+            sym_header.set_size(0);
+            sym_header.set_mode(0o644);
+            sym_header.set_entry_type(tar::EntryType::Symlink);
+            sym_header.set_link_name("CLAUDE.md").unwrap();
+            sym_header.set_cksum();
+            builder
+                .append_data(&mut sym_header, "repo-x/AGENTS.md", &[][..])
+                .unwrap();
+            builder.finish().unwrap();
+        }
+
+        let probe = tempdir().unwrap();
+        extract_subtree(&tar_bytes, "plugins/language-grammars/lang-foo", probe.path()).unwrap();
+        let h = verify::content_hash(probe.path()).unwrap();
+
+        let plan = make_plan("lang-foo", &h);
+        let (_tmp_root, roots) = make_roots();
+        install(&plan, &tar_bytes, &roots).expect("symlink outside subtree must not block install");
+        assert!(roots.plugins_dir.join("lang-foo").exists());
+        assert!(!roots.plugins_dir.join("lang-foo/AGENTS.md").exists());
+    }
+
+    #[test]
+    fn symlink_inside_subtree_is_rejected() {
+        // A symlink within the contribution path stays a hard error
+        // — once Claudette installs and reads from it, the link could
+        // resolve outside the install root.
+        let mut tar_bytes = Vec::new();
+        {
+            let gz = GzEncoder::new(&mut tar_bytes, Compression::fast());
+            let mut builder = tar::Builder::new(gz);
+            // One real file so the subtree exists.
+            let mut header = tar::Header::new_gnu();
+            let data: &[u8] = b"{}";
+            header.set_size(data.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(
+                    &mut header,
+                    "repo-x/plugins/language-grammars/lang-foo/plugin.json",
+                    data,
+                )
+                .unwrap();
+            // Malicious symlink inside the subtree.
+            let mut sym_header = tar::Header::new_gnu();
+            sym_header.set_size(0);
+            sym_header.set_mode(0o644);
+            sym_header.set_entry_type(tar::EntryType::Symlink);
+            sym_header.set_link_name("/etc/passwd").unwrap();
+            sym_header.set_cksum();
+            builder
+                .append_data(
+                    &mut sym_header,
+                    "repo-x/plugins/language-grammars/lang-foo/sneaky",
+                    &[][..],
+                )
+                .unwrap();
+            builder.finish().unwrap();
+        }
+        let tmp = tempdir().unwrap();
+        let err = extract_subtree(
+            &tar_bytes,
+            "plugins/language-grammars/lang-foo",
+            tmp.path(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, InstallError::Symlink(_)), "got {err:?}");
     }
 
     #[test]

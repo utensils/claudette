@@ -109,23 +109,21 @@ export function CommunitySettings() {
 
   return (
     <div className={own.section}>
-      <header className={own.header}>
-        <h2 className={own.title}>Community</h2>
-        <p className={own.subtle}>
-          Browse and install community-contributed themes, plugins, and language
-          grammars from{" "}
-          <a
-            href="https://github.com/utensils/claudette-community"
-            target="_blank"
-            rel="noreferrer"
-            className={own.link}
-          >
-            utensils/claudette-community
-          </a>
-          . Verified by content hash on install. Themes appear on disk but
-          aren&apos;t yet rendered at runtime — see TDD 567 PR 3.
-        </p>
-      </header>
+      <h2 className={styles.sectionTitle}>Community</h2>
+      <div className={styles.settingDescription}>
+        Browse and install community-contributed themes, plugins, and language
+        grammars from{" "}
+        <a
+          href="https://github.com/utensils/claudette-community"
+          target="_blank"
+          rel="noreferrer"
+          className={own.link}
+        >
+          utensils/claudette-community
+        </a>
+        . Each install is verified against the published content hash before
+        anything lands on disk.
+      </div>
 
       <div className={own.tabRow}>
         <button
