@@ -11,6 +11,7 @@
   "dependencies": {
     "@astrojs/starlight": "^0.34",
     "@fontsource/inter": "^5.2.8",
+    "@fontsource/silkscreen": "^5.2.8",
     "astro": "^5",
     "sharp": "^0.33"
   }

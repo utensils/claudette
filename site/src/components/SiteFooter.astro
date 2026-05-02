@@ -1,0 +1,64 @@
+---
+const project = [
+  { label: 'GitHub', href: 'https://github.com/utensils/Claudette' },
+  { label: 'Releases', href: 'https://github.com/utensils/Claudette/releases' },
+  { label: 'Changelog', href: 'https://github.com/utensils/Claudette/blob/main/CHANGELOG.md' },
+  { label: 'License', href: 'https://github.com/utensils/Claudette/blob/main/LICENSE' },
+];
+
+const community = [
+  { label: 'Discord', href: 'https://discord.gg/aumGBKccmD' },
+  { label: 'r/ClaudetteApp', href: 'https://www.reddit.com/r/ClaudetteApp/' },
+  { label: 'Issues', href: 'https://github.com/utensils/Claudette/issues' },
+  { label: 'Contributing', href: 'https://github.com/utensils/Claudette/blob/main/CONTRIBUTING.md' },
+];
+
+const docs = [
+  { label: 'Install', href: '/claudette/getting-started/installation/' },
+  { label: 'Worktrees', href: '/claudette/features/git-worktrees/' },
+  { label: 'Remote', href: '/claudette/features/remote-workspaces/' },
+  { label: 'Themes', href: '/claudette/features/theming/' },
+];
+
+const year = new Date().getFullYear();
+---
+
+<footer class="site-footer">
+  <div class="f-inner">
+    <div class="f-brand">
+      <div class="brand-lockup">
+        <img src="/claudette/logo.png" alt="" />
+        <span class="brand-mark">Claudette</span>
+      </div>
+      <p class="blurb">
+        Built by <a href="https://utensils.io">Utensils</a> — a small group of engineers making focused tools for working with AI. Independent, self-funded, MIT.
+      </p>
+    </div>
+
+    <div class="f-col">
+      <h5>Project</h5>
+      <ul>
+        {project.map((l) => <li><a href={l.href}>{l.label}</a></li>)}
+      </ul>
+    </div>
+
+    <div class="f-col">
+      <h5>Community</h5>
+      <ul>
+        {community.map((l) => <li><a href={l.href}>{l.label}</a></li>)}
+      </ul>
+    </div>
+
+    <div class="f-col">
+      <h5>Docs</h5>
+      <ul>
+        {docs.map((l) => <li><a href={l.href}>{l.label}</a></li>)}
+      </ul>
+    </div>
+  </div>
+
+  <div class="f-bottom">
+    <span>© {year} Utensils · MIT licensed</span>
+    <span>Made with Tauri 2 · Rust · React</span>
+  </div>
+</footer>

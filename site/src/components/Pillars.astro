@@ -1,0 +1,88 @@
+---
+const pillars = [
+  {
+    num: '01 / Parallel sessions',
+    title: 'Run Claude Code on every branch at once.',
+    desc: 'Each agent gets its own git worktree, its own session, its own terminal. Spin up an experiment without stashing — and switch between them like browser tabs.',
+    bullets: [
+      'Worktree per agent — no merge conflicts mid-conversation',
+      'Multi-session tabs per workspace',
+      'Auto-named branches from your first prompt',
+    ],
+    media: { caption: 'sidebar showing 3 agents on 3 branches', filename: 'parallel-sessions.webm', meta: '.webm · ~8s loop' },
+    flip: false,
+  },
+  {
+    num: '02 / Live context tracking',
+    title: 'See your token budget as it happens.',
+    desc: 'Claudette reads streaming usage events and shows a segmented context meter on every turn. When you’re nearing the wall, hit /compact — the timeline marks it, and history stays intact.',
+    bullets: [
+      'Per-turn token usage with input / output / cache breakdown',
+      'Compaction divider in the timeline so nothing gets lost',
+      'Per-workspace analytics — tokens, sessions, hot files',
+    ],
+    media: { caption: 'composer w/ segmented meter + /compact', filename: 'context-meter.webm', meta: '.webm · ~10s loop' },
+    flip: true,
+  },
+  {
+    num: '03 / Remote workspaces',
+    title: 'Drive a session running on another machine.',
+    desc: 'Point Claudette at a beefy dev box. mDNS finds it on your LAN; encrypted WebSocket and trust-on-first-use keep it private. The UI is identical — local and remote agents live side by side.',
+    bullets: [
+      'TLS encrypted, certificate-pinned, no relay',
+      'Embedded server — no separate install needed',
+      'Auto-discovered via mDNS, paired with a token',
+    ],
+    media: { caption: '"Nearby" section, pair, connect', filename: 'remote-workspaces.webm', meta: '.webm · ~12s loop' },
+    flip: false,
+  },
+];
+---
+
+<section class="pillars-section" id="pillars">
+  <div class="container">
+    <header class="section-head">
+      <span class="eyebrow">Three things you won't find elsewhere</span>
+      <h2>Built for how you actually work with Claude Code.</h2>
+      <p>One app, multiple agents on the same repo, real visibility into what the model is doing, and a path off your laptop when you need more horsepower.</p>
+    </header>
+
+    <div class="pillars">
+      {pillars.map((p) => (
+        <article class={p.flip ? 'pillar flip' : 'pillar'}>
+          <div class="pillar-text">
+            <span class="num">{p.num}</span>
+            <h3>{p.title}</h3>
+            <p>{p.desc}</p>
+            <ul>
+              {p.bullets.map((b) => (
+                <li>
+                  <span class="check">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <polyline points="20 6 9 17 4 12"/>
+                    </svg>
+                  </span>
+                  {b}
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div class="pillar-media">
+            <div class="demo-tab">
+              <span class="traffic r"></span><span class="traffic y"></span><span class="traffic g"></span>
+              <span class="tt-title">{p.media.filename}</span>
+            </div>
+            <div class="demo-body">
+              <span class="play-pill">
+                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                demo loop
+              </span>
+              <div class="demo-caption">{p.media.caption}</div>
+              <div class="demo-meta">{p.media.meta}</div>
+            </div>
+          </div>
+        </article>
+      ))}
+    </div>
+  </div>
+</section>

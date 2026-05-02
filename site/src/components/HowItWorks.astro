@@ -1,23 +1,36 @@
 ---
 const steps = [
-  { num: 1, title: 'Add your repos', desc: 'Connect local or remote git repositories. Set up custom instructions and scripts for each.' },
-  { num: 2, title: 'Spin up workspaces', desc: 'Each workspace gets its own git worktree and dedicated Claude Code agent session.' },
-  { num: 3, title: 'Work in parallel', desc: 'Multiple agents coding simultaneously, each in full isolation. Review diffs, merge, and ship.' },
+  {
+    num: 1,
+    title: 'Install toolchain',
+    desc: 'Rust, Bun, and the Tauri CLI. Full guide in the docs.',
+  },
+  {
+    num: 2,
+    title: 'Clone & build',
+    descHtml: '<code>git clone</code> and <code>cargo tauri dev</code> — a native binary for your OS.',
+  },
+  {
+    num: 3,
+    title: 'Open a workspace',
+    desc: 'Point at any git repo. Claudette spawns a worktree and you\'re in.',
+  },
 ];
 ---
 
-<section class="how-it-works">
-  <h2>Up and running in minutes</h2>
-  <p class="section-subtitle">Three simple steps to supercharge your Claude Code workflow.</p>
-  <div class="steps">
-    {steps.map((s) => (
-      <div class="step">
-        <div class="step-number">{s.num}</div>
-        <div>
-          <h3>{s.title}</h3>
-          <p>{s.desc}</p>
+<section class="howto-slim">
+  <div class="howto-slim-inner">
+    <h2>Building from source?</h2>
+    <p>Most people just download. If you want to hack on it, three commands get you there.</p>
+    <div class="howto-row">
+      {steps.map((s) => (
+        <div class="howto-step">
+          <div class="num">{s.num}</div>
+          <h4>{s.title}</h4>
+          {s.descHtml ? <p set:html={s.descHtml} /> : <p>{s.desc}</p>}
         </div>
-      </div>
-    ))}
+      ))}
+    </div>
+    <a class="howto-link" href="/claudette/getting-started/installation/">Read the install guide</a>
   </div>
 </section>

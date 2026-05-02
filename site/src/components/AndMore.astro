@@ -1,0 +1,32 @@
+---
+const items = [
+  '13 built-in themes, fully re-themeable',
+  'Pinned slash commands in the composer',
+  'Native <code>/review</code>, <code>/plan</code>, <code>/compact</code>, <code>/usage</code>',
+  'Stable + nightly update channels',
+  'Drag-and-drop file attachments',
+  'SCM status persistence + PR integration',
+  'Typewriter-style streaming reveal',
+  'MCP server supervision + connectors',
+  'Conversation forking + rollback per turn',
+  'Cmd/Ctrl+F search across the chat session',
+  'Localized UI for non-English users',
+];
+---
+
+<section class="andmore">
+  <div class="andmore-inner">
+    <div>
+      <h2>And more, quietly.</h2>
+      <p class="lede">A lot of small things that add up over a long week of use.</p>
+    </div>
+    <ul class="andmore-list">
+      {items.map((item) => (
+        <li>
+          <span class="dot"></span>
+          <span set:html={item} />
+        </li>
+      ))}
+    </ul>
+  </div>
+</section>

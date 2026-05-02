@@ -1,0 +1,17 @@
+---
+/*
+ * Override of Starlight's `SiteTitle` component (configured via
+ * `components.SiteTitle` in astro.config.mjs). Renders the default brand
+ * lockup, then a small primary-nav alongside it so Features / Docs /
+ * Releases live next to the logo. Both nodes end up inside Starlight's
+ * `.title-wrapper`, so they read as one logical group on the left.
+ */
+import Default from '@astrojs/starlight/components/SiteTitle.astro';
+---
+
+<Default><slot /></Default>
+<nav class="site-nav-links" aria-label="Primary">
+  <a href="/claudette/#pillars">Features</a>
+  <a href="/claudette/getting-started/installation/">Docs</a>
+  <a href="https://github.com/utensils/Claudette/releases">Releases</a>
+</nav>

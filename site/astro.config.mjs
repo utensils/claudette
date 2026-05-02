@@ -16,23 +16,39 @@ export default defineConfig({
       favicon: '/favicon.png',
       social: [
         {
-          icon: 'github',
-          label: 'GitHub',
-          href: 'https://github.com/utensils/Claudette',
-        },
-        {
           icon: 'discord',
           label: 'Discord',
           href: 'https://discord.gg/aumGBKccmD',
         },
+        {
+          icon: 'reddit',
+          label: 'r/ClaudetteApp',
+          href: 'https://www.reddit.com/r/ClaudetteApp/',
+        },
+        {
+          icon: 'github',
+          label: 'GitHub',
+          href: 'https://github.com/utensils/Claudette',
+        },
       ],
       customCss: [
+        // Inter is the body font on every route — keep global.
         '@fontsource/inter/400.css',
         '@fontsource/inter/500.css',
         '@fontsource/inter/600.css',
+        // Header chrome (nav links, social icons, search-centering grid)
+        // applies site-wide — also global.
         './src/styles/custom.css',
-        './src/styles/homepage.css',
+        // Note: `homepage.css` and `@fontsource/silkscreen/{400,700}.css`
+        // are intentionally NOT here. They're imported in
+        // `src/content/docs/index.mdx` so they only load on the splash
+        // homepage, not on every docs page.
       ],
+      components: {
+        // Renders the default site title plus our primary nav (Features /
+        // Docs / Releases) next to the logo. See `src/components/SiteTitle.astro`.
+        SiteTitle: './src/components/SiteTitle.astro',
+      },
       sidebar: [
         {
           label: 'Getting Started',
