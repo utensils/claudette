@@ -72,6 +72,25 @@ Terminal <──TCP─────── debug server <──invoke── webvie
 - **Port**: `19432` by default, overridable via `$CLAUDETTE_DEBUG_PORT` (set by the devshell `dev` helper per-instance)
 - **Input cap**: 1 MB max per eval request
 
+## Troubleshooting
+
+Symptoms ↔ likely cause when something feels off:
+
+- **Tauri command returns `"Command <name> not found"`** — the running binary predates the command's registration. `cargo tauri dev` only rebuilds the Rust binary on launch; webview reload (Cmd+R) does **not** trigger a rebuild. After backend changes, kill `cargo tauri dev` (Ctrl+C in its terminal) and re-run it.
+- **`window.__CLAUDETTE_INVOKE__` / `__CLAUDETTE_STORE__` is `undefined`** — likely targeting the wrong process (see next bullet) or the React tree hasn't mounted yet (extremely rare).
+- **`document.title` returns something other than "Claudette"** — `debug-eval.sh` connected to a different app's debug server. Multiple Tauri apps in this account use the same discovery directory and port range (Aethon uses 19433+, etc.). Sanity check the port → process binding:
+  ```bash
+  lsof -nP -iTCP -sTCP:LISTEN | awk '$9 ~ /:194[0-9]/'
+  ```
+  Then force the right port: `CLAUDETTE_DEBUG_PORT=<port> debug-eval.sh '...'`.
+- **Discovery file points at a wrong/dead pid** — only the devshell `dev` helper writes `${TMPDIR}/claudette-dev/<pid>.json`. Plain `cargo tauri dev` doesn't, so its instance won't appear in discovery; `debug-eval.sh` falls back to legacy port `19432`. If a stale discovery file from a previous instance exists, it can mislead — `rm /tmp/claudette-dev/*.json` to clear.
+- **Bundled-plugin file missing on disk after a code change** — the `BUNDLED_PLUGINS` slice is embedded via `include_str!` at compile time. Adding a plugin to the slice + restarting `cargo tauri dev` is the only way to seed it; the seed runs on app startup against `~/.claudette/plugins/`.
+
+Quick identity check for any port:
+```bash
+CLAUDETTE_DEBUG_PORT=19432 debug-eval.sh 'return document.title'   # expect: "Claudette"
+```
+
 ## How to Execute JS
 
 JS must use `return` to send a value back:
