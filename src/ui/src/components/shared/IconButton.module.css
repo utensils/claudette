@@ -1,0 +1,23 @@
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  appearance: none;
+  border: 1px solid var(--divider);
+  background: var(--surface-subtle, transparent);
+  color: var(--text-muted);
+  border-radius: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.button:hover:not(:disabled) {
+  background: var(--hover-bg-subtle);
+  color: var(--text-primary);
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

@@ -471,6 +471,9 @@ fn main() {
             // Files
             commands::files::list_workspace_files,
             commands::files::read_workspace_file,
+            commands::files::read_workspace_file_for_viewer,
+            commands::files::read_workspace_file_bytes,
+            commands::files::write_workspace_file,
             commands::files::save_attachment_bytes,
             commands::files::open_attachment_in_browser,
             commands::files::open_attachment_with_default_app,

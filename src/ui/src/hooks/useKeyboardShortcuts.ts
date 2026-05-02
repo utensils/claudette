@@ -15,6 +15,7 @@ export function useKeyboardShortcuts() {
   const toggleTerminalPanel = useAppStore((s) => s.toggleTerminalPanel);
   const toggleFuzzyFinder = useAppStore((s) => s.toggleFuzzyFinder);
   const toggleCommandPalette = useAppStore((s) => s.toggleCommandPalette);
+  const openCommandPaletteFileMode = useAppStore((s) => s.openCommandPaletteFileMode);
   const closeModal = useAppStore((s) => s.closeModal);
   const activeModal = useAppStore((s) => s.activeModal);
   const fuzzyFinderOpen = useAppStore((s) => s.fuzzyFinderOpen);
@@ -212,6 +213,12 @@ export function useKeyboardShortcuts() {
           e.preventDefault();
           toggleCommandPalette();
           break;
+        case "o":
+          if (!e.shiftKey && !e.altKey && selectedWorkspaceId) {
+            e.preventDefault();
+            openCommandPaletteFileMode();
+          }
+          break;
         case "d":
           e.preventDefault();
           toggleRightSidebar();
@@ -299,6 +306,7 @@ export function useKeyboardShortcuts() {
     toggleTerminalPanel,
     toggleFuzzyFinder,
     toggleCommandPalette,
+    openCommandPaletteFileMode,
     closeModal,
     activeModal,
     fuzzyFinderOpen,

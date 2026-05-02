@@ -24,6 +24,10 @@ import {
 } from "./slices/checkpointsSlice";
 import { createDiffSlice, type DiffSlice } from "./slices/diffSlice";
 import {
+  createFileTreeSlice,
+  type FileTreeSlice,
+} from "./slices/fileTreeSlice";
+import {
   createNotificationsSlice,
   type NotificationsSlice,
 } from "./slices/notificationsSlice";
@@ -79,6 +83,7 @@ export type AppState = RepositoriesSlice &
   ToolbarSlice &
   PermissionsSlice &
   DiffSlice &
+  FileTreeSlice &
   TerminalSlice &
   ScmSlice &
   UiSlice &
@@ -98,6 +103,7 @@ export const useAppStore = create<AppState>()((...a) => ({
   ...createToolbarSlice(...a),
   ...createPermissionsSlice(...a),
   ...createDiffSlice(...a),
+  ...createFileTreeSlice(...a),
   ...createTerminalSlice(...a),
   ...createScmSlice(...a),
   ...createUiSlice(...a),
@@ -116,6 +122,17 @@ export const selectActiveSessionId = (s: AppState): string | null => {
   const wsId = s.selectedWorkspaceId;
   if (!wsId) return null;
   return s.selectedSessionIdByWorkspaceId[wsId] ?? null;
+};
+
+/**
+ * Returns the path of the file tab currently active in the active workspace,
+ * or `null` if no file tab is active there. AppLayout uses this to decide
+ * whether to render the FileViewer.
+ */
+export const selectActiveFileTabPath = (s: AppState): string | null => {
+  const wsId = s.selectedWorkspaceId;
+  if (!wsId) return null;
+  return s.activeFileTabByWorkspace[wsId] ?? null;
 };
 
 // Expose store on window in dev builds for debug_eval_js access.

@@ -719,11 +719,47 @@ export interface FileContent {
   truncated: boolean;
 }
 
+export interface FileBytesContent {
+  path: string;
+  bytes_b64: string;
+  size_bytes: number;
+  truncated: boolean;
+}
+
 export function readWorkspaceFile(
   workspaceId: string,
   relativePath: string,
 ): Promise<FileContent> {
   return invoke("read_workspace_file", { workspaceId, relativePath });
+}
+
+export function readWorkspaceFileForViewer(
+  workspaceId: string,
+  relativePath: string,
+): Promise<FileContent> {
+  return invoke("read_workspace_file_for_viewer", {
+    workspaceId,
+    relativePath,
+  });
+}
+
+export function readWorkspaceFileBytes(
+  workspaceId: string,
+  relativePath: string,
+): Promise<FileBytesContent> {
+  return invoke("read_workspace_file_bytes", { workspaceId, relativePath });
+}
+
+export function writeWorkspaceFile(
+  workspaceId: string,
+  relativePath: string,
+  content: string,
+): Promise<void> {
+  return invoke("write_workspace_file", {
+    workspaceId,
+    relativePath,
+    content,
+  });
 }
 
 export function discardFile(
@@ -1067,10 +1103,6 @@ export function scmMergePr(
   prNumber: number
 ): Promise<unknown> {
   return invoke("scm_merge_pr", { workspaceId, prNumber });
-}
-
-export function scmRefresh(workspaceId: string): Promise<ScmDetail> {
-  return invoke("scm_refresh", { workspaceId });
 }
 
 // -- Debug (dev builds only) --

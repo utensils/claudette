@@ -1,0 +1,18 @@
+.host {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+}
+
+.host > :global(section) {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Monaco renders into a nested div with class .monaco-editor; ensure it
+ * fills the host without imposing its own height calculation that would
+ * race the surrounding flex layout. */
+.host :global(.monaco-editor) {
+  width: 100%;
+}

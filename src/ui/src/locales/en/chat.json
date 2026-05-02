@@ -79,6 +79,7 @@
   "session_new": "New session",
   "session_close": "Close session",
   "session_close_diff": "Close diff",
+  "session_close_file": "Close file",
   "session_running_confirm_close": "This session is still running. Stop and close \"{{name}}\"?",
   "session_running_confirm_close_multi": "{{count}} sessions are still running. Stop and close them?",
 
@@ -130,6 +131,29 @@
   "diff_tooltip_copy_contents": "Copy file contents",
   "diff_tooltip_copied": "Copied!",
   "diff_tooltip_copy_failed": "Copy failed",
+
+  "file_loading": "Loading file…",
+  "file_load_failed": "Failed to load: {{error}}",
+  "file_no_content": "No content",
+  "file_preview_not_available": "Preview not available",
+  "file_truncated_banner": "File truncated — full file is {{size}}",
+  "file_image_truncated": "Image too large to preview ({{size}})",
+  "file_view_mode_aria": "File view mode",
+  "file_markdown_view_mode_aria": "Markdown view mode",
+  "file_tooltip_view": "View",
+  "file_tooltip_edit": "Edit",
+  "file_tooltip_source": "Source",
+  "file_tooltip_markdown_preview": "Preview",
+  "file_tooltip_save": "Save (⌘S)",
+  "file_tooltip_save_clean": "Save",
+  "file_tooltip_close": "Close file",
+  "file_edit_disabled_image": "Editing images is not supported",
+  "file_edit_disabled_binary": "Cannot edit a binary file",
+  "file_edit_disabled_too_large": "File too large to edit ({{size}})",
+  "file_edit_disabled_truncated": "File too large to edit",
+  "file_save_success": "Saved",
+  "file_save_failed": "Save failed: {{error}}",
+  "file_dirty_aria": "Unsaved changes",
 
   "terminal_failed_to_start": "Failed to start shell"
 }

@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useAppStore } from "../../stores/useAppStore";
+import {
+  selectActiveFileTabPath,
+  useAppStore,
+} from "../../stores/useAppStore";
 import { Sidebar } from "../sidebar/Sidebar";
 import { ChatPanel } from "../chat/ChatPanel";
 import { DiffViewer } from "../diff/DiffViewer";
+import { FileViewer } from "../file-viewer/FileViewer";
 import { TerminalPanel } from "../terminal/TerminalPanel";
 import { RightSidebar } from "../right-sidebar/RightSidebar";
 import { FuzzyFinder } from "../fuzzy-finder/FuzzyFinder";
@@ -27,6 +31,7 @@ export function AppLayout() {
   const setRightSidebarWidth = useAppStore((s) => s.setRightSidebarWidth);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const diffSelectedFile = useAppStore((s) => s.diffSelectedFile);
+  const allFilesOpenedFile = useAppStore(selectActiveFileTabPath);
   const terminalPanelVisible = useAppStore((s) => s.terminalPanelVisible);
   const terminalHeight = useAppStore((s) => s.terminalHeight);
   const setTerminalHeight = useAppStore((s) => s.setTerminalHeight);
@@ -40,7 +45,13 @@ export function AppLayout() {
   useAutoUpdater();
 
 
-  const showDiff = diffSelectedFile !== null;
+  // Main-pane priority: an explicitly opened file from the Files tree
+  // takes precedence over a diff selection, and a diff selection takes
+  // precedence over the chat view. Selecting a chat-session or diff tab
+  // in the shared tab strip dispatches `clearActiveFileTab`, which
+  // releases the file viewer's hold so the lower-priority pane is shown.
+  const showFileViewer = allFilesOpenedFile !== null;
+  const showDiff = !showFileViewer && diffSelectedFile !== null;
 
   // Ref for the .main flex container — CSS variables are set here.
   const mainRef = useRef<HTMLDivElement>(null);
@@ -112,7 +123,9 @@ export function AppLayout() {
           <div className={styles.center}>
             <div className={styles.content}>
               {selectedWorkspaceId ? (
-                showDiff ? (
+                showFileViewer ? (
+                  <FileViewer />
+                ) : showDiff ? (
                   <DiffViewer />
                 ) : (
                   <ChatPanel />

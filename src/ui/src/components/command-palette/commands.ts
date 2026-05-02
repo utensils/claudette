@@ -20,6 +20,8 @@ import {
   Sparkles,
   ZoomIn,
   ZoomOut,
+  FolderOpen,
+  File,
 } from "lucide-react";
 import type { ThemeDefinition } from "../../types/theme";
 import { MODELS } from "../chat/ModelSelector";
@@ -84,6 +86,7 @@ export interface CommandContext {
   enterThemeMode: () => void;
   enterModelMode: () => void;
   enterEffortMode: () => void;
+  enterFileMode: () => void;
 
   // Workspace context
   selectedWorkspaceId: string | null;
@@ -177,6 +180,34 @@ export function buildEffortCommands(
     keywords: ["effort", "reasoning", l.label.toLowerCase()],
     execute: () => { onSelect(l.id); close(); },
   }));
+}
+
+export interface FileEntry {
+  path: string;
+  is_directory: boolean;
+}
+
+/** Build file sub-menu commands from a flat list of workspace file entries. */
+export function buildFileCommands(
+  files: FileEntry[],
+  openFile: (path: string) => void,
+  close: () => void,
+): Command[] {
+  return files
+    .filter((f) => !f.is_directory)
+    .map((f) => {
+      const name = f.path.split("/").pop() ?? f.path;
+      const dir = f.path.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/")) : "";
+      return {
+        id: `file:${f.path}`,
+        name,
+        description: dir || undefined,
+        category: "navigation" as const,
+        icon: File,
+        keywords: f.path.split("/").filter(Boolean),
+        execute: () => { openFile(f.path); close(); },
+      };
+    });
 }
 
 export function buildCommands(ctx: CommandContext): Command[] {
@@ -358,6 +389,18 @@ export function buildCommands(ctx: CommandContext): Command[] {
   }
 
   // -- Navigation --
+  if (ctx.selectedWorkspaceId) {
+    cmds.push({
+      id: "open-file",
+      name: "Open File...",
+      description: "Browse and open a workspace file",
+      category: "navigation",
+      icon: FolderOpen,
+      shortcut: `${mod}+O`,
+      keywords: ["file", "open", "browse", "search", "viewer", "editor"],
+      execute: () => { ctx.enterFileMode(); },
+    });
+  }
   cmds.push({
     id: "switch-workspace",
     name: "Switch Workspace",

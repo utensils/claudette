@@ -29,6 +29,10 @@ violations=0
 # Match #rgb / #rrggbb / #rrggbbaa. Exclusions:
 #   * `&#NNNN;` HTML numeric entities (decimal codepoints, not hex colors)
 #   * `getPropertyValue("..."). … || "#..."` — theme.ts fallback pattern
+#   * `getPropertyValue("..."). … || (… "#…" : "#…"…)` — same fallback
+#     pattern but with a dark/light ternary picking the right hex (used in
+#     monacoTheme.ts where the safety fallback depends on the active theme
+#     mode).
 hex_hits=$(grep -rnE '#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b' src \
   --include='*.module.css' \
   --include='*.tsx' \
@@ -37,6 +41,7 @@ hex_hits=$(grep -rnE '#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b' src \
   2>/dev/null \
   | grep -vE '&#[0-9]+;' \
   | grep -vE 'getPropertyValue\(.*\)\.trim\(\) \|\| "#' \
+  | grep -vE 'getPropertyValue\(.*\)\.trim\(\)\s*\|\| \(.*\?.*"#' \
   | grep -vE 'accentPreview:\s*"#' \
   || true)
 

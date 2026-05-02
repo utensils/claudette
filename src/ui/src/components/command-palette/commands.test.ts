@@ -10,7 +10,7 @@ if (typeof globalThis.navigator === "undefined") {
 }
 afterAll(() => { vi.unstubAllGlobals(); });
 
-const { buildCommands, buildModelCommands } = await import("./commands");
+const { buildCommands, buildModelCommands, buildFileCommands } = await import("./commands");
 
 /** Minimal CommandContext stub — only the fields buildCommands needs. */
 function makeContext(overrides: Partial<CommandContext> = {}): CommandContext {
@@ -30,6 +30,7 @@ function makeContext(overrides: Partial<CommandContext> = {}): CommandContext {
     enterThemeMode: vi.fn(),
     enterModelMode: vi.fn(),
     enterEffortMode: vi.fn(),
+    enterFileMode: vi.fn(),
     selectedWorkspaceId: null,
     selectedSessionId: null,
     currentRepoId: null,
@@ -136,6 +137,53 @@ describe("buildModelCommands — extraUsage icon and description", () => {
     expect(selected.name).toContain("✓");
     const notSelected = cmds.find((c) => c.id === "model:claude-opus-4-7")!;
     expect(notSelected.name).not.toContain("✓");
+  });
+});
+
+describe("buildFileCommands", () => {
+  const sampleFiles = [
+    { path: "src/main.ts", is_directory: false },
+    { path: "src/components/Foo.tsx", is_directory: false },
+    { path: "README.md", is_directory: false },
+    { path: "src/components", is_directory: true },
+    { path: "src", is_directory: true },
+  ];
+
+  it("filters out directory entries", () => {
+    const cmds = buildFileCommands(sampleFiles, vi.fn(), vi.fn());
+    expect(cmds).toHaveLength(3);
+    expect(cmds.find((c) => c.id === "file:src/components")).toBeUndefined();
+    expect(cmds.find((c) => c.id === "file:src")).toBeUndefined();
+  });
+
+  it("uses basename as command name and parent dir as description", () => {
+    const cmds = buildFileCommands(sampleFiles, vi.fn(), vi.fn());
+    const nested = cmds.find((c) => c.id === "file:src/components/Foo.tsx")!;
+    expect(nested.name).toBe("Foo.tsx");
+    expect(nested.description).toBe("src/components");
+
+    const root = cmds.find((c) => c.id === "file:README.md")!;
+    expect(root.name).toBe("README.md");
+    expect(root.description).toBeUndefined();
+  });
+
+  it("populates path segments as keywords for fuzzy matching", () => {
+    const cmds = buildFileCommands(sampleFiles, vi.fn(), vi.fn());
+    const nested = cmds.find((c) => c.id === "file:src/components/Foo.tsx")!;
+    expect(nested.keywords).toEqual(["src", "components", "Foo.tsx"]);
+  });
+
+  it("execute calls openFile with the path and then close", () => {
+    const openFile = vi.fn();
+    const close = vi.fn();
+    const cmds = buildFileCommands(sampleFiles, openFile, close);
+    cmds.find((c) => c.id === "file:src/main.ts")!.execute();
+    expect(openFile).toHaveBeenCalledWith("src/main.ts");
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("returns an empty array when given no files", () => {
+    expect(buildFileCommands([], vi.fn(), vi.fn())).toEqual([]);
   });
 });
 

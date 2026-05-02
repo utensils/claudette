@@ -3,6 +3,10 @@ import { useTranslation } from "react-i18next";
 import { FileDiff as FileDiffIcon, Plus, X } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import {
+  fileBufferKey,
+  isFileTabDirty,
+} from "../../stores/slices/fileTreeSlice";
+import {
   listChatSessions,
   createChatSession,
   renameChatSession,
@@ -13,18 +17,21 @@ import {
   AttachmentContextMenu,
   type AttachmentContextMenuItem,
 } from "./AttachmentContextMenu";
+import { DiscardUnsavedChangesConfirm } from "../files/DiscardUnsavedChangesConfirm";
+import { getFileIcon } from "../../utils/fileIcons";
 import type { ChatSession, DiffFileTab, DiffLayer } from "../../types";
 import styles from "./SessionTabs.module.css";
 
 type NavDirection = "prev" | "next" | "first" | "last";
 
 // Unified key namespace for the tab strip's keyboard nav and ref map.
-// Sessions and diff tabs occupy a single ordered list; encoding the kind in
-// the key keeps the navigation logic flat without touching the underlying
-// data shapes.
+// Sessions, diff tabs, and file tabs occupy a single ordered list;
+// encoding the kind in the key keeps the navigation logic flat without
+// touching the underlying data shapes.
 const sessionNavKey = (id: string) => `s:${id}`;
 const diffNavKey = (path: string, layer: DiffLayer | null) =>
   `d:${path}:${layer ?? "null"}`;
+const fileNavKey = (path: string) => `f:${path}`;
 
 interface Props {
   workspaceId: string;
@@ -44,6 +51,7 @@ function statusFor(session: ChatSession): SessionStatusKind {
 // a fresh `[]` every call turns that into an infinite render loop.
 const EMPTY_SESSIONS: ChatSession[] = [];
 const EMPTY_DIFF_TABS: DiffFileTab[] = [];
+const EMPTY_FILE_TABS: string[] = [];
 
 export function SessionTabs({ workspaceId }: Props) {
   const { t } = useTranslation("chat");
@@ -58,6 +66,12 @@ export function SessionTabs({ workspaceId }: Props) {
   );
   const diffSelectedFile = useAppStore((s) => s.diffSelectedFile);
   const diffSelectedLayer = useAppStore((s) => s.diffSelectedLayer);
+  const fileTabs = useAppStore(
+    (s) => s.fileTabsByWorkspace[workspaceId] ?? EMPTY_FILE_TABS,
+  );
+  const activeFileTab = useAppStore(
+    (s) => s.activeFileTabByWorkspace[workspaceId] ?? null,
+  );
   const setSessionsForWorkspace = useAppStore((s) => s.setSessionsForWorkspace);
   const addChatSession = useAppStore((s) => s.addChatSession);
   const updateChatSession = useAppStore((s) => s.updateChatSession);
@@ -65,6 +79,39 @@ export function SessionTabs({ workspaceId }: Props) {
   const selectSession = useAppStore((s) => s.selectSession);
   const selectDiffTab = useAppStore((s) => s.selectDiffTab);
   const closeDiffTab = useAppStore((s) => s.closeDiffTab);
+  const selectFileTab = useAppStore((s) => s.selectFileTab);
+  const closeFileTab = useAppStore((s) => s.closeFileTab);
+  const clearActiveFileTab = useAppStore((s) => s.clearActiveFileTab);
+
+  // Clearing the active file tab is what makes the chat/diff tab visually
+  // "win" — `AppLayout` prioritizes the file viewer whenever a workspace
+  // has an active file tab, so we have to explicitly deactivate it when
+  // the user wants to go back to chat or diff. Wrap the underlying slice
+  // actions so every chat/diff selection path (click, keyboard nav,
+  // session create) clears the file selection in lockstep.
+  const switchToSession = useCallback(
+    (sessionId: string) => {
+      clearActiveFileTab(workspaceId);
+      selectSession(workspaceId, sessionId);
+    },
+    [clearActiveFileTab, selectSession, workspaceId],
+  );
+  const switchToDiff = useCallback(
+    (path: string, layer: DiffLayer | null) => {
+      clearActiveFileTab(workspaceId);
+      selectDiffTab(path, layer);
+    },
+    [clearActiveFileTab, selectDiffTab, workspaceId],
+  );
+
+  // Per-instance dirty-close prompt: when the user closes one or more file
+  // tabs with unsaved edits, we route through this state instead of
+  // dispatching closeFileTab directly. A list (rather than a single path)
+  // is required so bulk-close paths ("Close all", "Close others",
+  // "Close to the right") can confirm every dirty tab in one prompt
+  // instead of overwriting the slot per iteration. Confirming closes the
+  // whole batch; cancelling leaves the tabs intact.
+  const [pendingClosePaths, setPendingClosePaths] = useState<string[]>([]);
 
   // Monotonic version token: each local mutation (create/archive) bumps this so
   // an in-flight `listChatSessions` response can detect it's stale and skip the
@@ -100,7 +147,7 @@ export function SessionTabs({ workspaceId }: Props) {
       // Invalidate any in-flight load — our local addChatSession is authoritative.
       loadVersionRef.current += 1;
       addChatSession(session);
-      selectSession(workspaceId, session.id);
+      switchToSession(session.id);
     } catch (err) {
       console.error("[SessionTabs] Failed to create session:", err);
     }
@@ -147,7 +194,8 @@ export function SessionTabs({ workspaceId }: Props) {
   // navigateTabs callback identity stays stable across unrelated re-renders.
   type NavEntry =
     | { key: string; kind: "session"; sessionId: string }
-    | { key: string; kind: "diff"; path: string; layer: DiffLayer | null };
+    | { key: string; kind: "diff"; path: string; layer: DiffLayer | null }
+    | { key: string; kind: "file"; path: string };
   const navEntries = useMemo<NavEntry[]>(() => {
     const sessionEntries: NavEntry[] = activeSessions.map((s) => ({
       key: sessionNavKey(s.id),
@@ -160,8 +208,13 @@ export function SessionTabs({ workspaceId }: Props) {
       path: t.path,
       layer: t.layer,
     }));
-    return [...sessionEntries, ...diffEntries];
-  }, [activeSessions, diffTabs]);
+    const fileEntries: NavEntry[] = fileTabs.map((p) => ({
+      key: fileNavKey(p),
+      kind: "file",
+      path: p,
+    }));
+    return [...sessionEntries, ...diffEntries, ...fileEntries];
+  }, [activeSessions, diffTabs, fileTabs]);
 
   // Right-click menu state. Tracks which tab was clicked (by its NavEntry key)
   // and the click position. Rendered once at the bottom; portal'd to body so
@@ -170,10 +223,52 @@ export function SessionTabs({ workspaceId }: Props) {
     { entryKey: string; x: number; y: number } | null
   >(null);
 
-  // Close a list of tabs (sessions and/or diffs) sequentially. Sessions get
-  // archived through the same backend command as the close button; diffs just
-  // drop from the local store. If any sessions are still running we confirm
-  // once for the whole batch instead of once per tab.
+  // Close handler for file tabs — checks the dirty flag and routes to the
+  // confirm-discard modal when there are unsaved edits. Reads dirty from
+  // a fresh store snapshot so we always get the latest buffer state, not
+  // a stale closure value.
+  const requestCloseFileTab = useCallback(
+    (path: string) => {
+      const dirty = isFileTabDirty(useAppStore.getState(), workspaceId, path);
+      if (dirty) {
+        setPendingClosePaths([path]);
+      } else {
+        closeFileTab(workspaceId, path);
+      }
+    },
+    [workspaceId, closeFileTab],
+  );
+
+  // Bulk variant: separate clean from dirty file paths, close clean ones
+  // immediately, and queue the dirty ones into a single confirmation
+  // prompt. Returns true if the caller can keep going with the rest of the
+  // batch (no dirty files), false if the prompt is now blocking and the
+  // caller should stop scheduling further closes for this iteration.
+  const requestCloseFileTabsBatch = useCallback(
+    (paths: string[]): boolean => {
+      if (paths.length === 0) return true;
+      const state = useAppStore.getState();
+      const dirty: string[] = [];
+      const clean: string[] = [];
+      for (const p of paths) {
+        if (isFileTabDirty(state, workspaceId, p)) dirty.push(p);
+        else clean.push(p);
+      }
+      for (const p of clean) closeFileTab(workspaceId, p);
+      if (dirty.length > 0) {
+        setPendingClosePaths(dirty);
+        return false;
+      }
+      return true;
+    },
+    [workspaceId, closeFileTab],
+  );
+
+  // Close a list of tabs (sessions, diffs, and/or files) sequentially. Sessions
+  // get archived through the same backend command as the close button; diffs
+  // and files drop from the local store (file tabs route through the
+  // dirty-confirm modal). If any sessions are still running we confirm once
+  // for the whole batch instead of once per tab.
   const closeEntries = useCallback(
     async (entries: NavEntry[]) => {
       if (entries.length === 0) return;
@@ -190,16 +285,23 @@ export function SessionTabs({ workspaceId }: Props) {
             : t("session_running_confirm_close_multi", { count: runningSessions.length });
         if (!window.confirm(message)) return;
       }
+      // File tabs: collect first, close clean ones immediately, route
+      // dirty ones through a single batched confirm. Sessions and diffs
+      // close inline as before.
+      const filePaths: string[] = [];
       for (const entry of entries) {
         if (entry.kind === "session") {
           const session = activeSessions.find((s) => s.id === entry.sessionId);
           if (session) await archiveSessionImmediate(session);
-        } else {
+        } else if (entry.kind === "diff") {
           closeDiffTab(workspaceId, entry.path, entry.layer);
+        } else {
+          filePaths.push(entry.path);
         }
       }
+      requestCloseFileTabsBatch(filePaths);
     },
-    [activeSessions, archiveSessionImmediate, closeDiffTab, t, workspaceId],
+    [activeSessions, archiveSessionImmediate, closeDiffTab, requestCloseFileTabsBatch, t, workspaceId],
   );
 
   const navigateTabs = useCallback(
@@ -224,13 +326,15 @@ export function SessionTabs({ workspaceId }: Props) {
       }
       const target = navEntries[targetIdx];
       if (target.kind === "session") {
-        selectSession(workspaceId, target.sessionId);
+        switchToSession(target.sessionId);
+      } else if (target.kind === "diff") {
+        switchToDiff(target.path, target.layer);
       } else {
-        selectDiffTab(target.path, target.layer);
+        selectFileTab(workspaceId, target.path);
       }
       tabRefs.current.get(target.key)?.focus();
     },
-    [navEntries, selectSession, selectDiffTab, workspaceId],
+    [navEntries, switchToSession, switchToDiff, selectFileTab, workspaceId],
   );
 
   const openContextMenu = useCallback(
@@ -240,16 +344,18 @@ export function SessionTabs({ workspaceId }: Props) {
     [],
   );
 
-  // Helper to activate a nav entry (session or diff tab).
+  // Helper to activate a nav entry (session, diff, or file tab).
   const selectEntry = useCallback(
     (entry: NavEntry) => {
       if (entry.kind === "session") {
-        selectSession(workspaceId, entry.sessionId);
+        switchToSession(entry.sessionId);
+      } else if (entry.kind === "diff") {
+        switchToDiff(entry.path, entry.layer);
       } else {
-        selectDiffTab(entry.path, entry.layer);
+        selectFileTab(workspaceId, entry.path);
       }
     },
-    [selectSession, selectDiffTab, workspaceId],
+    [switchToSession, switchToDiff, selectFileTab, workspaceId],
   );
 
   // Build the menu items lazily from the entry that was right-clicked. The
@@ -292,8 +398,12 @@ export function SessionTabs({ workspaceId }: Props) {
           <SessionTab
             key={session.id}
             session={session}
-            isActive={session.id === selectedSessionId && diffSelectedFile === null}
-            onSelect={() => selectSession(workspaceId, session.id)}
+            isActive={
+              session.id === selectedSessionId &&
+              diffSelectedFile === null &&
+              activeFileTab === null
+            }
+            onSelect={() => switchToSession(session.id)}
             onClose={() => handleArchive(session)}
             onRename={(name) => {
               updateChatSession(session.id, { name, name_edited: true });
@@ -309,17 +419,41 @@ export function SessionTabs({ workspaceId }: Props) {
       })}
       {diffTabs.map((tab) => {
         const navKey = diffNavKey(tab.path, tab.layer);
+        // A file tab takes visual priority — if a file is open, the diff
+        // tab is no longer the "active" pane even if its path/layer still
+        // matches the diff selection.
         const isActive =
-          diffSelectedFile === tab.path && diffSelectedLayer === tab.layer;
+          activeFileTab === null &&
+          diffSelectedFile === tab.path &&
+          diffSelectedLayer === tab.layer;
         return (
           <DiffTab
             key={navKey}
             tab={tab}
             isActive={isActive}
-            onSelect={() => selectDiffTab(tab.path, tab.layer)}
+            onSelect={() => switchToDiff(tab.path, tab.layer)}
             onClose={() => closeDiffTab(workspaceId, tab.path, tab.layer)}
             onNavigate={(direction) => navigateTabs(navKey, direction)}
             onContextMenu={(x, y) => openContextMenu(navKey, x, y)}
+            tabRef={(el) => {
+              if (el) tabRefs.current.set(navKey, el);
+              else tabRefs.current.delete(navKey);
+            }}
+          />
+        );
+      })}
+      {fileTabs.map((path) => {
+        const navKey = fileNavKey(path);
+        const isActive = activeFileTab === path;
+        return (
+          <FileTab
+            key={navKey}
+            workspaceId={workspaceId}
+            path={path}
+            isActive={isActive}
+            onSelect={() => selectFileTab(workspaceId, path)}
+            onClose={() => requestCloseFileTab(path)}
+            onNavigate={(direction) => navigateTabs(navKey, direction)}
             tabRef={(el) => {
               if (el) tabRefs.current.set(navKey, el);
               else tabRefs.current.delete(navKey);
@@ -342,6 +476,18 @@ export function SessionTabs({ workspaceId }: Props) {
           y={contextMenu.y}
           items={contextMenuItems}
           onClose={() => setContextMenu(null)}
+        />
+      )}
+      {pendingClosePaths.length > 0 && (
+        <DiscardUnsavedChangesConfirm
+          count={pendingClosePaths.length}
+          onConfirm={() => {
+            for (const p of pendingClosePaths) {
+              closeFileTab(workspaceId, p);
+            }
+            setPendingClosePaths([]);
+          }}
+          onClose={() => setPendingClosePaths([])}
         />
       )}
     </div>
@@ -483,6 +629,89 @@ function SessionTab({
         }}
         title={t("session_close")}
         aria-label={t("session_close")}
+      >
+        <X size={12} />
+      </button>
+    </div>
+  );
+}
+
+interface FileTabProps {
+  workspaceId: string;
+  path: string;
+  isActive: boolean;
+  onSelect: () => void;
+  onClose: () => void;
+  onNavigate: (direction: NavDirection) => void;
+  tabRef: (el: HTMLDivElement | null) => void;
+}
+
+function FileTab({
+  workspaceId,
+  path,
+  isActive,
+  onSelect,
+  onClose,
+  onNavigate,
+  tabRef,
+}: FileTabProps) {
+  const { t } = useTranslation("chat");
+  // Subscribe only to dirty state for this tab's buffer. Reading the whole
+  // buffer would re-render the tab on every keystroke; reading just dirty
+  // means we re-render only when it crosses the saved/unsaved boundary.
+  const dirty = useAppStore(
+    (s) =>
+      !!s.fileBuffers[fileBufferKey(workspaceId, path)] &&
+      s.fileBuffers[fileBufferKey(workspaceId, path)].buffer !==
+        s.fileBuffers[fileBufferKey(workspaceId, path)].baseline,
+  );
+  const basename = path.split("/").pop() || path;
+  const Icon = getFileIcon(basename);
+  return (
+    <div
+      ref={tabRef}
+      role="tab"
+      aria-selected={isActive}
+      tabIndex={isActive ? 0 : -1}
+      className={`${styles.tab} ${isActive ? styles.active : ""}`}
+      onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        } else if (e.key === "ArrowLeft") {
+          e.preventDefault();
+          onNavigate("prev");
+        } else if (e.key === "ArrowRight") {
+          e.preventDefault();
+          onNavigate("next");
+        } else if (e.key === "Home") {
+          e.preventDefault();
+          onNavigate("first");
+        } else if (e.key === "End") {
+          e.preventDefault();
+          onNavigate("last");
+        }
+      }}
+    >
+      <span className={styles.icon}>
+        <Icon size={12} />
+      </span>
+      <span className={styles.name} title={path}>
+        {basename}
+        {dirty && (
+          <span className={styles.dirtyDot} aria-label={t("file_dirty_aria")} />
+        )}
+      </span>
+      <button
+        type="button"
+        className={styles.closeBtn}
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose();
+        }}
+        title={t("session_close_file")}
+        aria-label={t("session_close_file")}
       >
         <X size={12} />
       </button>
