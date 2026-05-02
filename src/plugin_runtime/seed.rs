@@ -55,15 +55,6 @@ const BUNDLED_PLUGINS: &[BundledPlugin] = &[
         init_lua: Some(include_str!("../../plugins/env-nix-devshell/init.lua")),
         extra_files: &[],
     },
-    BundledPlugin {
-        name: "lang-nix",
-        plugin_json: include_str!("../../plugins/lang-nix/plugin.json"),
-        init_lua: None,
-        extra_files: &[(
-            "grammars/nix.tmLanguage.json",
-            include_str!("../../plugins/lang-nix/grammars/nix.tmLanguage.json"),
-        )],
-    },
 ];
 
 /// The current app version, used for the .version sentinel file.
@@ -866,40 +857,6 @@ mod tests {
         std::fs::create_dir_all(plugin_dir.join("grammars")).unwrap();
         std::fs::write(plugin_dir.join("grammars/test.tmLanguage.json"), "{}").unwrap();
         assert!(!is_first_run(plugin, &plugin_dir));
-    }
-
-    #[test]
-    fn bundled_lang_nix_seeds_grammar_file() {
-        // Regression guard for the bundled language-grammar plugin.
-        // The seeding path must materialize both `plugin.json` and
-        // the grammar file, with the content hash covering all of
-        // it so future drift detection works.
-        let dir = tempfile::tempdir().unwrap();
-        let warnings = seed_bundled_plugins(dir.path());
-        let lang_warnings: Vec<_> = warnings.iter().filter(|w| w.contains("lang-nix")).collect();
-        assert!(
-            lang_warnings.is_empty(),
-            "lang-nix must seed cleanly: {lang_warnings:?}"
-        );
-
-        let plugin_dir = dir.path().join("lang-nix");
-        assert!(plugin_dir.join("plugin.json").exists());
-        assert!(plugin_dir.join("grammars/nix.tmLanguage.json").exists());
-        assert!(
-            !plugin_dir.join("init.lua").exists(),
-            "grammar plugins must not write init.lua"
-        );
-        assert!(plugin_dir.join(".content_hash").exists());
-
-        let bundled = BUNDLED_PLUGINS
-            .iter()
-            .find(|p| p.name == "lang-nix")
-            .unwrap();
-        let stamped = std::fs::read_to_string(plugin_dir.join(".content_hash"))
-            .unwrap()
-            .trim()
-            .to_string();
-        assert_eq!(stamped, bundled_content_hash(bundled));
     }
 
     #[test]
