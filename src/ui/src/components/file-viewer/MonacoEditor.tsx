@@ -2,6 +2,7 @@ import { memo, useEffect, useRef } from "react";
 import Editor, { type BeforeMount, type OnMount } from "@monaco-editor/react";
 import "./monacoSetup";
 import { applyMonacoTheme, initMonacoThemeSync } from "./monacoTheme";
+import { DEFAULT_MONO_STACK } from "../../styles/fonts";
 import styles from "./MonacoEditor.module.css";
 
 interface MonacoEditorProps {
@@ -101,9 +102,12 @@ export const MonacoEditor = memo(function MonacoEditor({
           // Literal stack rather than `var(--font-mono)`: Monaco computes
           // character widths via `canvas.measureText`, which does not
           // resolve CSS variables. Mismatched widths cause cursor and
-          // selection positioning to drift on every keystroke. Mirrors
-          // the value of `--font-mono` in styles/theme.css.
-          fontFamily: '"JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code", monospace',
+          // selection positioning to drift on every keystroke. The
+          // canonical value lives in `src/styles/fonts.ts` and is mirrored
+          // into `--font-mono` in `styles/theme.css`; the drift check at
+          // `scripts/check-font-mono.mjs` (run by `lint:css`) asserts the
+          // two stay equal.
+          fontFamily: DEFAULT_MONO_STACK,
           fontSize: 13,
         }}
       />
