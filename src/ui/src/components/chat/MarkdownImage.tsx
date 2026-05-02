@@ -28,11 +28,16 @@ export function useMarkdownImageBase(): MarkdownImageBase | null {
 const ABSOLUTE_HREF = /^(?:[a-z]+:|\/\/)/i;
 
 function joinRelative(dir: string, href: string): string {
-  // Strip `./` prefix and normalize. We don't try to traverse `..` — repo
-  // READMEs almost never reference parent directories, and the backend
-  // enforces workspace-relative paths anyway. If `..` is seen, leave it for
-  // the backend to reject so the failure surfaces visibly.
-  const cleaned = href.replace(/^\.\//, "").replace(/^\/+/, "");
+  // Leading `/` — treat as workspace-root relative. Common in READMEs that
+  // reference assets via paths like `/assets/logo.png` regardless of which
+  // file is rendering them. Drop the slash and skip the dir prefix.
+  if (href.startsWith("/")) return href.replace(/^\/+/, "");
+  // Otherwise treat as relative to the markdown file's own directory. We
+  // don't try to traverse `..` — repo READMEs almost never reference parent
+  // directories, and the backend enforces workspace-relative paths anyway.
+  // If `..` is seen, leave it for the backend to reject so the failure
+  // surfaces visibly.
+  const cleaned = href.replace(/^\.\//, "");
   if (!dir) return cleaned;
   return `${dir}/${cleaned}`;
 }

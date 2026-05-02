@@ -354,8 +354,11 @@
   white-space: nowrap;
 }
 
-/* Wide tables get horizontal scroll */
-.body :where(.table-wrapper) {
+/* Wide tables get horizontal scroll. `:global()` because authors reach this
+ * via raw HTML `<div class="table-wrapper">…</div>` (rehypeRaw is enabled);
+ * a non-global selector here would be CSS-Module-mangled and never match
+ * the literal class name in their markup. */
+.body :where(:global(.table-wrapper)) {
   overflow-x: auto;
   margin: 12px 0;
 }
