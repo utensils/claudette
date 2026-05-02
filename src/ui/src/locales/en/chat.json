@@ -155,5 +155,8 @@
   "file_save_failed": "Save failed: {{error}}",
   "file_dirty_aria": "Unsaved changes",
 
+  "files_truncated_banner": "Showing first {{max}} entries — repository may have more files.",
+  "file_render_fallback_banner": "File too large to render in editor ({{size}}) — showing as plain text. Editing disabled.",
+
   "terminal_failed_to_start": "Failed to start shell"
 }

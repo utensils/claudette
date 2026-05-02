@@ -1,20 +1,24 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { listWorkspaceFiles, type FileEntry } from "../../services/tauri";
 import { FileTree } from "./FileTree";
 import styles from "./FilesPanel.module.css";
 
 export function FilesPanel() {
+  const { t } = useTranslation("chat");
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const openFileTab = useAppStore((s) => s.openFileTab);
 
   const [entries, setEntries] = useState<FileEntry[]>([]);
+  const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!selectedWorkspaceId) {
       setEntries([]);
+      setTruncated(false);
       return;
     }
     let cancelled = false;
@@ -23,7 +27,8 @@ export function FilesPanel() {
     listWorkspaceFiles(selectedWorkspaceId)
       .then((result) => {
         if (cancelled) return;
-        setEntries(result);
+        setEntries(result.entries);
+        setTruncated(result.truncated);
         setLoading(false);
       })
       .catch((e) => {
@@ -60,11 +65,18 @@ export function FilesPanel() {
       ) : error ? (
         <div className={styles.empty}>Failed to load: {error}</div>
       ) : (
-        <FileTree
-          workspaceId={selectedWorkspaceId}
-          entries={entries}
-          onActivateFile={handleActivateFile}
-        />
+        <>
+          {truncated && (
+            <div className={styles.truncatedBanner} role="status">
+              {t("files_truncated_banner", { max: 10_000 })}
+            </div>
+          )}
+          <FileTree
+            workspaceId={selectedWorkspaceId}
+            entries={entries}
+            onActivateFile={handleActivateFile}
+          />
+        </>
       )}
     </div>
   );

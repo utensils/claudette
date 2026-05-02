@@ -40,6 +40,12 @@ const MARKDOWN_EXT = /\.(md|markdown|mdx)$/i;
  *  viewer-text cap so the user gets the disabled-button affordance before
  *  hitting a backend truncation. */
 const EDIT_SIZE_LIMIT_BYTES = 5 * 1024 * 1024;
+/** Hard cap above which Monaco is replaced by a plain-text `<pre>`. A
+ *  10 MB single-line minified bundle freezes Monaco's tokenizer for tens
+ *  of seconds; a `<pre>` with `white-space: pre` shows the same content
+ *  without the layout/highlight cost. The backend will still happily
+ *  read up to 10 MB — this cap is purely about render perf. */
+const MONACO_RENDER_LIMIT_BYTES = 2 * 1024 * 1024;
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -249,8 +255,21 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
     showMarkdownToggle &&
     bufferState?.preview === "preview" &&
     bufferState?.loaded;
+  // Files past `MONACO_RENDER_LIMIT_BYTES` skip Monaco entirely and render
+  // as plain text. Edit is already disabled past the smaller edit cap, so
+  // this only affects files in the [edit-cap, render-cap, viewer-cap]
+  // range — they used to mount Monaco read-only. Now they don't.
+  const tooLargeToRender =
+    !!bufferState &&
+    bufferState.loaded &&
+    !isImage &&
+    !bufferState.isBinary &&
+    bufferState.sizeBytes > MONACO_RENDER_LIMIT_BYTES;
   const showSourceEditor =
-    !isImage && !bufferState?.isBinary && !showMarkdownPreview;
+    !isImage &&
+    !bufferState?.isBinary &&
+    !showMarkdownPreview &&
+    !tooLargeToRender;
   const showSaveButton =
     dirty && !editDisabled && !isImage && !bufferState?.isBinary && !showMarkdownPreview;
 
@@ -404,6 +423,19 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
               <MessageMarkdown content={bufferState.buffer} />
             </MarkdownImageBaseProvider>
           </div>
+        ) : tooLargeToRender ? (
+          // Plain-text fallback for files that would lock Monaco's
+          // tokenizer (e.g. multi-MB minified bundles). `white-space: pre`
+          // avoids the cost of breaking a single huge line; the browser
+          // handles a `<pre>` of this size cheaply.
+          <>
+            <div className={styles.renderFallbackBanner}>
+              {t("file_render_fallback_banner", {
+                size: formatBytes(bufferState.sizeBytes),
+              })}
+            </div>
+            <pre className={styles.plainTextFallback}>{bufferState.buffer}</pre>
+          </>
         ) : showSourceEditor ? (
           <Suspense fallback={<div className={styles.center}>{t("file_loading")}</div>}>
             <MonacoEditor

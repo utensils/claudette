@@ -474,9 +474,18 @@ export interface FileEntry {
   is_directory: boolean;
 }
 
+/** Result of a workspace file listing. `truncated` is true when the
+ *  merged file+directory total exceeded the backend's MAX_ENTRIES cap
+ *  (currently 10,000) — the Files browser surfaces a banner so the user
+ *  knows some entries are not in the list. */
+export interface FileListing {
+  entries: FileEntry[];
+  truncated: boolean;
+}
+
 export function listWorkspaceFiles(
   workspaceId: string,
-): Promise<FileEntry[]> {
+): Promise<FileListing> {
   return invoke("list_workspace_files", { workspaceId });
 }
 

@@ -1,12 +1,13 @@
 import {
   memo,
   useCallback,
-  useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAppStore } from "../../stores/useAppStore";
 import {
   buildFileTree,
@@ -30,6 +31,14 @@ interface FileTreeProps {
 }
 
 const EMPTY_EXPANDED: Record<string, boolean> = {};
+
+/** Row height in pixels. Must match `.row` height in FileTree.module.css —
+ *  the virtualizer sizes the scroll container off this estimate. */
+const ROW_HEIGHT = 22;
+
+/** Number of off-screen rows to keep mounted on each side of the viewport.
+ *  Larger values give smoother scroll at the cost of more DOM nodes. */
+const OVERSCAN = 12;
 
 export const FileTree = memo(function FileTree({
   workspaceId,
@@ -69,10 +78,13 @@ export const FileTree = memo(function FileTree({
   );
 
   const containerRef = useRef<HTMLDivElement>(null);
-  // Map of treeitem element refs keyed by node path. Used to programmatically
-  // move focus on keyboard navigation — the WAI-ARIA tree pattern requires
-  // focus to follow the selection so the screen reader announces the row.
-  const rowRefsRef = useRef<Map<string, HTMLDivElement>>(new Map());
+
+  const virtualizer = useVirtualizer({
+    count: visible.length,
+    getScrollElement: () => containerRef.current,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: OVERSCAN,
+  });
 
   /** The row that should currently be in the tab order (roving tabindex).
    *  Falls back to the first visible row when no row is selected, so the
@@ -92,15 +104,24 @@ export const FileTree = memo(function FileTree({
   // guard prevents the tree from yanking focus away when the user's typing
   // in chat or the diff viewer and the selection changes for an unrelated
   // reason (e.g. an external action).
-  useEffect(() => {
-    if (!focusedPath) return;
-    const el = rowRefsRef.current.get(focusedPath);
-    if (!el) return;
-    el.scrollIntoView({ block: "nearest" });
+  //
+  // Virtualization caveat: the focused row may not be rendered yet. Ask the
+  // virtualizer to scroll it into view first, then on the next layout pass
+  // query the DOM by data-path and focus the (now-rendered) row.
+  useLayoutEffect(() => {
+    if (focusedIndex < 0 || !focusedPath) return;
+    virtualizer.scrollToIndex(focusedIndex, { align: "auto" });
     if (containerRef.current?.contains(document.activeElement)) {
-      el.focus();
+      // Wait one frame so the virtualizer has rendered the target row.
+      const raf = requestAnimationFrame(() => {
+        const el = containerRef.current?.querySelector<HTMLDivElement>(
+          `[data-path="${cssEscape(focusedPath)}"]`,
+        );
+        el?.focus();
+      });
+      return () => cancelAnimationFrame(raf);
     }
-  }, [focusedPath]);
+  }, [focusedIndex, focusedPath, virtualizer]);
 
   const findVisibleIndex = useCallback(
     (path: string | null) =>
@@ -184,20 +205,12 @@ export const FileTree = memo(function FileTree({
     ],
   );
 
-  // ref-callback factory: register/unregister each row in the focus map by
-  // path so the focusedPath effect can `.focus()` whichever row becomes
-  // focused, regardless of where it lives in the visible list.
-  const registerRowRef = useCallback(
-    (path: string) => (el: HTMLDivElement | null) => {
-      if (el) rowRefsRef.current.set(path, el);
-      else rowRefsRef.current.delete(path);
-    },
-    [],
-  );
-
   if (entries.length === 0) {
     return <div className={styles.empty}>No files</div>;
   }
+
+  const totalSize = virtualizer.getTotalSize();
+  const items = virtualizer.getVirtualItems();
 
   return (
     <div
@@ -207,28 +220,43 @@ export const FileTree = memo(function FileTree({
       aria-label="Project files"
       onKeyDown={handleKeyDown}
     >
-      {visible.map(({ node, depth }, idx) => (
-        <Row
-          key={node.path}
-          node={node}
-          depth={depth}
-          expanded={node.kind === "dir" ? !!expanded[node.path] : false}
-          selected={selected === node.path}
-          // Roving tabindex: exactly one row in the tree is in the tab
-          // order at any time. Tab moves focus into the tree (or out of
-          // it); arrow keys move within.
-          tabbable={idx === focusedIndex}
-          rowRef={registerRowRef(node.path)}
-          onClick={() => {
-            setSelected(node.path);
-            if (node.kind === "dir") {
-              toggleDir(node.path);
-            } else {
-              onActivateFile(node.path);
-            }
-          }}
-        />
-      ))}
+      {/* Sized inner container; height equals the full virtual list so the
+       * scrollbar reflects the real range, even though only the visible
+       * window is in the DOM. */}
+      <div
+        className={styles.virtualInner}
+        style={{ height: `${totalSize}px` }}
+      >
+        {items.map((vi) => {
+          const { node, depth } = visible[vi.index];
+          return (
+            <Row
+              key={vi.key}
+              node={node}
+              depth={depth}
+              expanded={node.kind === "dir" ? !!expanded[node.path] : false}
+              selected={selected === node.path}
+              // Roving tabindex: exactly one row in the tree is in the tab
+              // order at any time. Tab moves focus into the tree (or out of
+              // it); arrow keys move within.
+              tabbable={vi.index === focusedIndex}
+              // ARIA: communicate the full virtual list size to assistive
+              // tech, since the rendered row count is bounded by overscan.
+              ariaPosInSet={vi.index + 1}
+              ariaSetSize={visible.length}
+              translateY={vi.start}
+              onClick={() => {
+                setSelected(node.path);
+                if (node.kind === "dir") {
+                  toggleDir(node.path);
+                } else {
+                  onActivateFile(node.path);
+                }
+              }}
+            />
+          );
+        })}
+      </div>
     </div>
   );
 });
@@ -239,11 +267,23 @@ interface RowProps {
   expanded: boolean;
   selected: boolean;
   tabbable: boolean;
-  rowRef: (el: HTMLDivElement | null) => void;
+  ariaPosInSet: number;
+  ariaSetSize: number;
+  translateY: number;
   onClick: () => void;
 }
 
-function Row({ node, depth, expanded, selected, tabbable, rowRef, onClick }: RowProps) {
+function Row({
+  node,
+  depth,
+  expanded,
+  selected,
+  tabbable,
+  ariaPosInSet,
+  ariaSetSize,
+  translateY,
+  onClick,
+}: RowProps) {
   const isDir = node.kind === "dir";
   const ChevronIcon = isDir
     ? expanded
@@ -254,9 +294,16 @@ function Row({ node, depth, expanded, selected, tabbable, rowRef, onClick }: Row
 
   return (
     <div
-      ref={rowRef}
+      // Position by transform — the inner container has explicit height,
+      // each row is absolutely-positioned with a translateY offset. This
+      // is the recommended pattern from @tanstack/react-virtual for
+      // hardware-accelerated scrolling.
       className={`${styles.row} ${selected ? styles.rowSelected : ""}`}
-      style={{ ["--depth" as string]: depth }}
+      style={{
+        ["--depth" as string]: depth,
+        transform: `translateY(${translateY}px)`,
+      }}
+      data-path={node.path}
       role="treeitem"
       tabIndex={tabbable ? 0 : -1}
       aria-selected={selected}
@@ -266,6 +313,8 @@ function Row({ node, depth, expanded, selected, tabbable, rowRef, onClick }: Row
       // children (or could). Omit it on file rows entirely so screen
       // readers don't announce a misleading collapsed/expanded state.
       aria-expanded={isDir ? expanded : undefined}
+      aria-posinset={ariaPosInSet}
+      aria-setsize={ariaSetSize}
       onClick={onClick}
     >
       {ChevronIcon ? (
@@ -278,4 +327,14 @@ function Row({ node, depth, expanded, selected, tabbable, rowRef, onClick }: Row
       <span className={styles.name}>{node.name}</span>
     </div>
   );
+}
+
+/** Escape a string for use in a CSS attribute selector. Browsers expose
+ *  `CSS.escape`, but file paths can contain any character so we need a
+ *  defensive wrapper that survives unusual filenames in tests too. */
+function cssEscape(value: string): string {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+    return CSS.escape(value);
+  }
+  return value.replace(/(["\\\n])/g, "\\$1");
 }

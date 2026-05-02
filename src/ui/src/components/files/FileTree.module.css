@@ -3,9 +3,27 @@
   overflow-y: auto;
   outline: none;
   padding: 4px 0;
+  /* Containing block for the absolutely-positioned virtualized rows. */
+  position: relative;
+}
+
+/* Inner sized container reflects the full virtual list height so the
+ * scrollbar maps to the real range; only a windowed slice of rows is
+ * actually rendered into it. */
+.virtualInner {
+  position: relative;
+  width: 100%;
 }
 
 .row {
+  /* Absolute + transform positions each row in the virtual list. The
+   * sized container sets `height` for the scrollbar; rows take their
+   * vertical position from `transform: translateY(...)` set inline. */
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 22px;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -22,6 +40,9 @@
   padding-left: calc(8px + var(--depth, 0) * 12px);
   user-select: none;
   transition: background var(--transition-fast);
+  /* Hint to the compositor that the row will animate via transform —
+   * keeps virtualized scroll smooth. */
+  will-change: transform;
 }
 
 .row:hover {

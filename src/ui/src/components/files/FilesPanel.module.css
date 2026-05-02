@@ -11,3 +11,18 @@
   color: var(--text-dim);
   font-size: 12px;
 }
+
+/* Mirrors the FileViewer truncated banner style: low-contrast accent
+ * surface so the message reads as informational rather than as an error.
+ * Lives above the tree, fixed (non-scrolling). */
+.truncatedBanner {
+  margin: 8px 8px 0;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: rgba(var(--accent-primary-rgb), 0.08);
+  border: 1px solid rgba(var(--accent-primary-rgb), 0.2);
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+  flex-shrink: 0;
+}
