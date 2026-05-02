@@ -11,6 +11,7 @@
 //! for the complete design and roadmap.
 
 pub mod install;
+pub mod signature;
 pub mod types;
 pub mod verify;
 
@@ -18,6 +19,7 @@ pub use install::{
     InstallError, InstallPlan, InstallRoots, install, read_install_meta, uninstall,
     update_granted_capabilities,
 };
+pub use signature::{SignatureError, embedded_key_fingerprint, verify_registry_signature};
 pub use types::{
     ColorScheme, ContributionKind, ContributionRef, ContributionSource, InstallSource,
     InstalledMeta, PluginEntry, PluginKindWire, PluginsByKind, Registry, RegistrySource,

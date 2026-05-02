@@ -72,6 +72,7 @@ export default defineConfig({
             { slug: 'features/keyboard-shortcuts' },
             { slug: 'features/per-repo-settings' },
             { slug: 'features/settings' },
+            { slug: 'features/community-registry-trust' },
           ],
         },
         {

@@ -1,0 +1,91 @@
+---
+title: Community Registry Trust Model
+description: How Claudette verifies the integrity of community themes, plugins, and grammars.
+---
+
+The community registry lets Claudette discover and install third-party themes, plugins, and language grammars from [`utensils/claudette-community`](https://github.com/utensils/claudette-community). Because installed extensions run inside Claudette — Lua plugins drive your SCM tab, grammars set how your code is highlighted — the bytes Claudette downloads have to be authenticated before they hit your disk.
+
+This page describes the trust chain that protects that path.
+
+## The trust anchor: an embedded minisign public key
+
+Claudette ships with a [minisign](https://jedisct1.github.io/minisign/) public key compiled directly into its binary. The matching secret key lives only in GitHub Actions Secrets on the `claudette-community` repository — it never leaves CI, and it's never on a contributor's machine.
+
+The current key fingerprint is:
+
+```
+982022ABB1139C7B
+```
+
+The same public key bytes are also published in plaintext at [`keys/community-registry.pub`](https://github.com/utensils/claudette-community/blob/main/keys/community-registry.pub) for transparency, so you can compare what's in `claudette-community` against what's embedded in a Claudette release. The authoritative copy is the embedded one — the file in `claudette-community` is informational.
+
+## What gets verified, and when
+
+Every time you open the Community section of Settings or click Install, Claudette:
+
+1. Fetches `registry.json` and `registry.json.sig` in parallel from `raw.githubusercontent.com/utensils/claudette-community/main/`.
+2. Verifies that `registry.json.sig` is a valid minisign signature over `registry.json` produced by the embedded public key.
+3. Only then parses `registry.json`.
+4. When you click Install, downloads the contribution tarball from `codeload.github.com/utensils/claudette-community/tar.gz/<commit-sha>` — pinned to the commit SHA the verified registry attests to, never to a mutable branch ref.
+5. Recomputes the per-contribution content `sha256` from the unpacked bytes and compares against the value in the verified registry.
+
+If any step fails — missing signature, signature signed by a key Claudette doesn't trust, content hash mismatch — the install is refused with a user-visible error and nothing is written to disk.
+
+## What this protects against
+
+| Attack | Mitigation |
+|---|---|
+| Maintainer's GitHub account compromised; attacker pushes a malicious `registry.json` | Attacker doesn't have the signing key — the new file fails sig verification, no install |
+| Network MITM (misconfigured CA, hostile WiFi, etc.) swaps registry bytes | Same — sig won't verify against the embedded key |
+| Attacker rewrites the codeload tarball at `<commit-sha>` after publication | GitHub commit SHAs are immutable; rewriting them requires breaking SHA-1, and the secondary `sha256` content hash gates the install regardless |
+| Replay of an older signed registry to suppress a security update | Mitigated partially — the older registry still pins each contribution to its `sha256`; revocation list (forthcoming, see [issue #581](https://github.com/utensils/Claudette/issues/581)) closes this fully |
+| Tampering with `registry.json.sig` on the network | Sig fails to decode or fails to verify; install refused |
+
+## What this does NOT protect against (yet)
+
+- **Compromise of the CI signing key itself.** If the GitHub Actions secret leaks, an attacker can sign whatever they want. Mitigation: rotate the key (see below) and revoke compromised contributions. A proper transparency log (sigstore, etc.) is on the roadmap.
+- **Malicious contributions submitted normally.** The signature only attests that *this is what the maintainers reviewed* — not that what they reviewed is safe. PR review of new contributions is the human-in-the-loop gate.
+- **`revocations.json` is not yet signed.** The same gap that motivated this work exists for the revocation list. A follow-up PR will sign it the same way.
+
+## Key rotation
+
+Rotation is coordinated across two repositories and one Claudette release:
+
+1. **Generate a new keypair** with `minisign -G -W -p next.pub -s next.key` (or `rsign generate -W`).
+2. **Open a Claudette PR** that adds `next.pub` alongside the current pubkey in [`src/community/trust/`](https://github.com/utensils/Claudette/tree/main/src/community/trust). The verifier accepts a signature from any embedded key.
+3. **Release Claudette N+1** with both keys embedded. Wait for it to roll out to most users.
+4. **Switch the CI signer** by updating `COMMUNITY_REGISTRY_MINISIGN_SECRET_KEY` in `claudette-community` repo settings. The next push to `main` re-signs `registry.json` with the new key. Existing installations of Claudette N+1 keep working because both keys are accepted.
+5. **Open a Claudette PR** that removes the old key.
+6. **Release Claudette N+2.** Old key is gone; rotation complete.
+
+Today there's a single key. The verifier API takes a slice of public keys, so adding a second one is a one-line code change once you have the new `.pub` file.
+
+## Verifying a published registry yourself
+
+If you want to confirm a published registry hasn't been tampered with, install [minisign](https://jedisct1.github.io/minisign/) and run:
+
+```sh
+curl -sLO https://raw.githubusercontent.com/utensils/claudette-community/main/registry.json
+curl -sLO https://raw.githubusercontent.com/utensils/claudette-community/main/registry.json.sig
+curl -sLO https://raw.githubusercontent.com/utensils/claudette-community/main/keys/community-registry.pub
+minisign -V -p community-registry.pub -m registry.json -x registry.json.sig
+```
+
+Expected output:
+
+```
+Signature and comment signature verified
+Trusted comment: claudette-community registry signed at <ISO-8601> for source.sha=<git-sha>
+```
+
+The trusted comment binds the signature to a specific commit SHA. You can confirm that SHA exists on `main`:
+
+```sh
+git ls-remote https://github.com/utensils/claudette-community.git main
+```
+
+## See also
+
+- [`utensils/claudette-community/keys/README.md`](https://github.com/utensils/claudette-community/blob/main/keys/README.md) — the published pubkey + maintainer-side rotation procedure
+- [Claudette issue #581](https://github.com/utensils/Claudette/issues/581) — the supply-chain audit that motivated this work
+- [Claudette issue #567](https://github.com/utensils/Claudette/issues/567) — the community registry TDD

@@ -26,6 +26,12 @@ dirs = "6"
 open = "5"
 mlua = { version = "0.10", features = ["luau", "serialize", "async", "send"] }
 flate2 = "1"
+# Pure-Rust minisign signature verification. Already in our dep tree
+# transitively via tauri-plugin-updater; pulling it in directly so the
+# community-registry signature check has a stable, named dep. We only
+# verify (never sign) on the client, so the verifier-only crate is the
+# right shape and keeps the binary slim.
+minisign-verify = "0.2"
 # Cross-platform filesystem watcher used by env-provider reactive
 # invalidation. RecommendedWatcher picks FSEvents (macOS), inotify
 # (Linux), and ReadDirectoryChangesW (Windows) — single API across all
