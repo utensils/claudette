@@ -273,7 +273,10 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
     if (!showMarkdownToggle) return;
     const handler = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
-      if (!mod || !e.shiftKey || e.code !== "KeyV") return;
+      // Match on `e.key` rather than `e.code` so Cmd/Ctrl+Shift+V fires on
+      // whichever physical key the user's layout assigns to "V" — `e.code`
+      // is "KeyV" only on QWERTY-style layouts.
+      if (!mod || !e.shiftKey || e.key.toLowerCase() !== "v") return;
       const state = useAppStore.getState();
       if (
         state.settingsOpen ||

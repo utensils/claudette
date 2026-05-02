@@ -14,10 +14,25 @@
      bundle. */
 
 .body {
-  font-size: 14px;
-  line-height: 1.7;
+  /* Base font-size / line-height / color are deliberately not set here so
+   * each consumer surface (ChatPanel `.content`, FileViewer `.markdownBody`,
+   * DiffViewer `.previewBody`, PlanApprovalCard `.planContent`, etc.) can
+   * pick its own scale. The markdown rules below use `em`-relative sizes
+   * so they scale with whatever font-size is inherited from the surface. */
   word-break: break-word;
-  color: var(--text-primary);
+}
+
+/* Collapse the wrapper's first/last-child margins so consumer rules like
+ * `.markdownBody > :first-child { margin-top: 0 }` (FileViewer,
+ * MessageAttachment) keep working — without this, the new `.body` div sat
+ * between the surface class and the markdown's first/last element, leaving
+ * the actual markdown root with its full default top/bottom margin. */
+.body > :first-child {
+  margin-top: 0;
+}
+
+.body > :last-child {
+  margin-bottom: 0;
 }
 
 /* Headings */

@@ -208,7 +208,19 @@
  * file-path links, etc.) lives in MessageMarkdown.module.css so every surface
  * that renders <MessageMarkdown> — chat, Files-tab preview, attachment cards —
  * gets the same rendering. ChatPanel.module.css only carries chat-specific
- * concerns (role variants on .content, the search-mark overlay below). */
+ * concerns (the chat-baseline typography below, role variants on .content
+ * higher up, and the search-mark overlay below). */
+
+/* Chat-baseline typography. MessageMarkdown's `.body` wrapper deliberately
+ * doesn't set font-size / line-height / color so each surface can pick its
+ * own scale — chat opts into the 14px / 1.7 baseline here; the markdown
+ * `em`-relative heading sizes inside `.body` are computed against this. */
+.content {
+  font-size: 14px;
+  line-height: 1.7;
+  word-break: break-word;
+  color: var(--text-primary);
+}
 
 /* Cmd/Ctrl+F search highlights. Scoped to .messages with :global() so the
    wrapper components in this folder (and the post-render DOM walker in
