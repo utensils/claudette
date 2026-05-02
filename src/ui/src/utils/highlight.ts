@@ -95,6 +95,19 @@ export function highlightCode(code: string, lang: string): Promise<string | null
 }
 
 /**
+ * Register a plugin-contributed TextMate grammar with the same worker
+ * that serves [[highlightCode]]. Web Workers don't share Shiki state,
+ * so the grammar must reach the worker that actually runs highlight
+ * requests — otherwise plugin languages render as plain text in chat
+ * and diff. Fire-and-forget; the worker's `register-grammar` handler
+ * awaits its own `loadLanguage` so a follow-up highlight for `lang`
+ * sees it loaded.
+ */
+export function registerGrammar(lang: string, grammar: unknown): void {
+  getWorker().postMessage({ type: "register-grammar", lang, grammar });
+}
+
+/**
  * Spawn the worker and kick off Shiki + Oniguruma WASM + theme registration
  * eagerly so the first user-visible code block doesn't pay the cold-start
  * cost. Idempotent — subsequent calls are no-ops once the worker exists.

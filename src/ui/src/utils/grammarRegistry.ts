@@ -2,31 +2,45 @@
  * Bootstraps the language-grammar plugin pipeline at app startup.
  *
  * Three highlighting surfaces converge here:
- *   1. Chat code blocks — Shiki worker (`workers/highlight.worker.ts`).
- *      The worker receives a `register-grammar` message per grammar.
+ *   1. Chat code blocks — Shiki worker via [[registerGrammar]] in
+ *      `utils/highlight.ts`. We route through that module's exported
+ *      function rather than spawning a second worker — Web Workers
+ *      don't share Shiki state, so a separate worker would never see
+ *      the registrations and chat would render plugin languages as
+ *      plain text.
  *   2. Diff viewer — same Shiki worker (after the migration off
  *      highlight.js), so registering once covers it too.
  *   3. File editor (Monaco) — main-thread Shiki via
  *      `@shikijs/monaco`. Bound on first Monaco mount via
  *      [[applyGrammarsToMonaco]].
  *
- * The bootstrap fetches grammar metadata from the backend, fetches
- * each grammar's TextMate JSON lazily, parses it once, and dispatches
- * to all three surfaces. Per-grammar errors are isolated — a single
- * malformed grammar must not break the others.
+ * Before handing each grammar to Shiki/Monaco, we normalize its
+ * `name` and `scopeName` from the plugin manifest. VS Code-style
+ * `.tmLanguage.json` files don't always carry a top-level `name`
+ * matching the language id we want it registered under, and Shiki's
+ * `loadLanguage` keys grammars by `name`. Forcing both fields from
+ * the manifest guarantees `monaco.languages.register({ id })` and
+ * `getCachedHighlight(code, id)` resolve to the loaded grammar
+ * regardless of what the upstream JSON happens to declare.
+ *
+ * Per-grammar errors are isolated — a single malformed grammar must
+ * not break the others.
  *
  * Toggling a grammar plugin off/on in Settings currently requires an
  * app restart to take effect (the registry is built once at boot and
  * cached). Hot-reload is a future enhancement.
  */
 
-import HighlightWorker from "../workers/highlight.worker?worker";
 import {
   listLanguageGrammars,
   readLanguageGrammar,
 } from "../services/grammars";
 import type { LanguageInfo } from "../types/grammars";
 import { getMainShikiHighlighter } from "./mainShiki";
+import {
+  registerGrammar as registerGrammarOnWorker,
+  __testing as highlightTesting,
+} from "./highlight";
 
 interface LoadedGrammar {
   language: string;
@@ -51,21 +65,21 @@ const state: RegistryState = {
   monacoApplied: false,
 };
 
-let workerSingleton: Worker | null = null;
-
 /**
- * Lazy-create a dedicated worker for grammar registration. We could
- * reuse the highlight worker spawned by `utils/highlight.ts`, but
- * that module manages its own lifecycle (HMR disposal, error
- * recovery) and exposing its private worker handle would couple the
- * two modules unnecessarily. A second worker for fire-and-forget
- * grammar registration is cheap and isolates the concerns.
+ * Coerce the parsed grammar JSON to the shape Shiki expects, with the
+ * manifest's language id and scope name as the canonical identifiers.
+ * Shiki's `loadLanguage` keys grammars by `name` — without this, a
+ * grammar JSON missing `name` (or carrying a different one) registers
+ * under the wrong key and Monaco/`languageForFile` lookups silently
+ * fall back to plaintext.
  */
-function getWorker(): Worker {
-  if (!workerSingleton) {
-    workerSingleton = new HighlightWorker();
-  }
-  return workerSingleton;
+function normalizeGrammar(
+  language: string,
+  scopeName: string,
+  raw: unknown,
+): unknown {
+  const base = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  return { ...base, name: language, scopeName };
 }
 
 /**
@@ -99,16 +113,15 @@ async function bootstrapInner(): Promise<void> {
     registry.grammars.map(async (info) => {
       try {
         const json = await readLanguageGrammar(info.plugin_name, info.path);
-        const grammar = JSON.parse(json) as unknown;
-        // Fire-and-forget into the worker. The worker's
-        // `register-grammar` handler awaits its own loadLanguage,
-        // so subsequent highlight requests for this lang see it
-        // loaded. No response needed.
-        getWorker().postMessage({
-          type: "register-grammar",
-          lang: info.language,
-          grammar,
-        });
+        const raw = JSON.parse(json) as unknown;
+        const grammar = normalizeGrammar(info.language, info.scope_name, raw);
+        // Hand the normalized grammar to the same worker that serves
+        // chat + diff highlighting (`utils/highlight.ts`). Shiki state
+        // is per-worker, so this MUST be the same worker — a separate
+        // instance would leave plugin languages rendering as plain
+        // text in chat. Fire-and-forget; the worker awaits its own
+        // `loadLanguage`, so a follow-up highlight sees it ready.
+        registerGrammarOnWorker(info.language, grammar);
         // Eagerly load into the main-thread Shiki so Monaco
         // tokenization is ready the moment the editor mounts.
         try {
@@ -270,10 +283,10 @@ export const __testing = {
     state.languages = [];
     state.grammars = [];
     state.monacoApplied = false;
-    if (workerSingleton) {
-      workerSingleton.terminate();
-      workerSingleton = null;
-    }
+    // Also drop the highlight-worker singleton — tests assert on the
+    // FakeWorker instance count, so leaking the worker between specs
+    // would surface as cross-test contamination.
+    highlightTesting.reset();
   },
   getState(): Readonly<RegistryState> {
     return state;

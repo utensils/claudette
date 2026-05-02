@@ -115,6 +115,9 @@ function grammarInfo(plugin: string, language: string, path: string): unknown {
 
 describe("bootstrapGrammarRegistry", () => {
   it("loads plugin grammars into the worker and main-thread Shiki", async () => {
+    // Body without a `name` field — exercises the manifest-driven
+    // normalization. VS Code TextMate grammars commonly omit `name`
+    // (or use a different value than the manifest's language id).
     const fakeBody = '{"scopeName":"source.nix","patterns":[]}';
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === "list_language_grammars") {
@@ -129,7 +132,10 @@ describe("bootstrapGrammarRegistry", () => {
 
     await bootstrapGrammarRegistry();
 
-    // Worker received exactly one register-grammar with the parsed body.
+    // The worker receiving registrations is the SAME worker that
+    // serves chat/diff highlight requests (utils/highlight.ts) — not
+    // a separate one. Spawning a private worker here would leave
+    // plugin languages rendering as plain text in chat.
     expect(FakeWorker.instances).toHaveLength(1);
     const posts = FakeWorker.instances[0].posted;
     expect(posts).toHaveLength(1);
@@ -137,14 +143,21 @@ describe("bootstrapGrammarRegistry", () => {
       type: "register-grammar",
       lang: "nix",
     });
+    // Grammar payload must be normalized: `name` stamped from the
+    // manifest's language id, `scopeName` from the manifest's
+    // scope_name. Without this, Shiki keys the grammar by whatever
+    // `name` the JSON happened to carry (or rejects it outright when
+    // missing) and lookups by language id miss.
     expect(posts[0].grammar).toEqual({
+      name: "nix",
       scopeName: "source.nix",
       patterns: [],
     });
 
-    // Main-thread Shiki received the same parsed grammar.
+    // Main-thread Shiki receives the same normalized grammar.
     expect(mainShikiMock.loadLanguage).toHaveBeenCalledTimes(1);
     expect(mainShikiMock.loadLanguage).toHaveBeenCalledWith({
+      name: "nix",
       scopeName: "source.nix",
       patterns: [],
     });
@@ -152,6 +165,43 @@ describe("bootstrapGrammarRegistry", () => {
     // Public getter reflects the registered languages.
     expect(getRegisteredPluginLanguages()).toHaveLength(1);
     expect(getRegisteredPluginLanguages()[0].id).toBe("nix");
+  });
+
+  it("manifest fields override conflicting `name`/`scopeName` in the grammar JSON", async () => {
+    // Some VS Code grammars ship a `name` that doesn't match the
+    // contributing extension's language id (e.g. a fork that renamed
+    // the language). The manifest must win — otherwise lookups by
+    // language id silently miss after registration.
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "list_language_grammars") {
+        return {
+          languages: [langInfo("nix", [".nix"])],
+          grammars: [grammarInfo("lang-nix", "nix", "grammars/nix.tmLanguage.json")],
+        };
+      }
+      if (cmd === "read_language_grammar") {
+        return JSON.stringify({
+          name: "nix-legacy",
+          scopeName: "source.nix-legacy",
+          patterns: [{ name: "comment.nix", match: "#.*" }],
+        });
+      }
+      throw new Error(`unexpected: ${cmd}`);
+    });
+
+    await bootstrapGrammarRegistry();
+
+    const posts = FakeWorker.instances[0].posted;
+    expect(posts[0].grammar).toEqual({
+      name: "nix",
+      scopeName: "source.nix",
+      patterns: [{ name: "comment.nix", match: "#.*" }],
+    });
+    expect(mainShikiMock.loadLanguage).toHaveBeenCalledWith({
+      name: "nix",
+      scopeName: "source.nix",
+      patterns: [{ name: "comment.nix", match: "#.*" }],
+    });
   });
 
   it("is idempotent — concurrent and sequential calls don't duplicate work", async () => {
