@@ -1142,6 +1142,23 @@ mod tests {
             "worktree should be based on the latest remote commit, not the stale one"
         );
 
+        // The new branch must NOT track the remote base — branching off
+        // `origin/main` should not silently set it as upstream.
+        let upstream = run_git(
+            wt_path,
+            &[
+                "rev-parse",
+                "--abbrev-ref",
+                "--symbolic-full-name",
+                "@{upstream}",
+            ],
+        )
+        .await;
+        assert!(
+            upstream.is_err(),
+            "expected no upstream to be configured, but got: {upstream:?}"
+        );
+
         // Clean up.
         remove_worktree(clone_path, wt_path, true).await.unwrap();
     }
@@ -1232,6 +1249,23 @@ mod tests {
 
         let forked_head = run_git(fork_path, &["rev-parse", "HEAD"]).await.unwrap();
         assert_eq!(forked_head, hash1);
+
+        // Forked branch must NOT track any upstream — checkpoint forks are
+        // local-only by design.
+        let upstream = run_git(
+            fork_path,
+            &[
+                "rev-parse",
+                "--abbrev-ref",
+                "--symbolic-full-name",
+                "@{upstream}",
+            ],
+        )
+        .await;
+        assert!(
+            upstream.is_err(),
+            "expected no upstream to be configured, but got: {upstream:?}"
+        );
 
         remove_worktree(repo_path, fork_path, true).await.unwrap();
     }
