@@ -36,8 +36,8 @@ function extractBlock(selector: string): string {
 }
 
 describe("code-block selection CSS (regression for stair-step bug)", () => {
-  const preBlock = extractBlock(".body pre");
-  const codeBlock = extractBlock(".body pre code");
+  const preBlock = extractBlock(".body :where(pre)");
+  const codeBlock = extractBlock(".body :where(pre code)");
 
   it("disables user-select on pre to prevent padding-area selections", () => {
     expect(preBlock).toMatch(/user-select:\s*none/);

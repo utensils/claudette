@@ -264,13 +264,17 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
   }, [workspaceId, path, previewMode, setFileTabPreview]);
 
   // Cmd/Ctrl+Shift+V — toggle source/preview for the active markdown file
-  // tab, mirroring the VS Code shortcut. We deliberately don't gate on which
-  // element has focus: the user typically presses this from inside Monaco's
-  // source view, whose hidden <textarea> would otherwise swallow the
-  // shortcut. The shortcut isn't a native browser binding and Tauri's webview
-  // doesn't bind it either (macOS "Paste and Match Style" is ⌥⇧⌘V), so we're
-  // not hijacking anything by claiming it. The handler still bows out when
-  // an overlay owns focus, since those overlays own the keyboard.
+  // tab, mirroring the VS Code shortcut. The handler bows out when:
+  //   * an overlay owns focus (settings, command palette, fuzzy finder,
+  //     modal),
+  //   * focus is in a typing target outside Monaco — chat composer textarea,
+  //     terminal xterm textarea, contenteditable. On those Ctrl+Shift+V is
+  //     commonly the "paste without formatting" shortcut and we don't want
+  //     to hijack it. Monaco is exempt because that's the source view this
+  //     shortcut is meant to flip out of — its hidden <textarea> would
+  //     otherwise swallow the keystroke.
+  //   * the event is a key-repeat. Holding the keys would otherwise toggle
+  //     repeatedly, which is useless and disorienting.
   useEffect(() => {
     if (!showMarkdownToggle) return;
     const handler = (e: KeyboardEvent) => {
@@ -279,6 +283,7 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
       // whichever physical key the user's layout assigns to "V" — `e.code`
       // is "KeyV" only on QWERTY-style layouts.
       if (!mod || !e.shiftKey || e.key.toLowerCase() !== "v") return;
+      if (e.repeat) return;
       const state = useAppStore.getState();
       if (
         state.settingsOpen ||
@@ -288,6 +293,12 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
       ) {
         return;
       }
+      const el = document.activeElement as HTMLElement | null;
+      const tag = el?.tagName?.toLowerCase();
+      const editable =
+        tag === "input" || tag === "textarea" || el?.isContentEditable;
+      const inMonaco = !!el?.closest(".monaco-editor");
+      if (editable && !inMonaco) return;
       e.preventDefault();
       togglePreview();
     };
