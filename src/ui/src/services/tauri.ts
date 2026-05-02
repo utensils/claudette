@@ -4,6 +4,7 @@ import type {
   Workspace,
   ChatMessage,
   ChatAttachment,
+  ChatHistoryPage,
   AttachmentInput,
   ChatSession,
   DiffFile,
@@ -483,6 +484,18 @@ export function listWorkspaceFiles(
 
 export function loadChatHistory(sessionId: string): Promise<ChatMessage[]> {
   return invoke("load_chat_history", { sessionId });
+}
+
+export function loadChatHistoryPage(
+  sessionId: string,
+  limit: number,
+  beforeMessageId?: string,
+): Promise<ChatHistoryPage> {
+  return invoke("load_chat_history_page", {
+    sessionId,
+    limit,
+    beforeMessageId: beforeMessageId ?? null,
+  });
 }
 
 export function sendChatMessage(

@@ -86,6 +86,14 @@ impl Database {
          duration_ms, created_at, thinking, input_tokens, output_tokens, cache_read_tokens, \
          cache_creation_tokens";
 
+    /// Predicate that filters out legacy empty assistant rows (assistant role,
+    /// empty content, no thinking text). The frontend used to drop these in
+    /// the renderer; we apply it here so `count_chat_messages_for_session`
+    /// and `list_chat_messages_page` agree on what "exists" — which keeps the
+    /// `globalOffset = totalCount - messages.length` invariant honest.
+    const NON_LEGACY_MESSAGE_PREDICATE: &str =
+        "NOT (role = 'assistant' AND TRIM(content) = '' AND COALESCE(TRIM(thinking), '') = '')";
+
     #[allow(dead_code)]
     pub fn list_chat_messages(
         &self,
@@ -112,6 +120,104 @@ impl Database {
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params![chat_session_id], Self::parse_chat_message_row)?;
         rows.collect()
+    }
+
+    /// Count all non-legacy messages for a session (legacy = empty assistant
+    /// rows; see `NON_LEGACY_MESSAGE_PREDICATE`). Used to compute pagination
+    /// metadata (`total_count`) so callers can derive the global index offset
+    /// of any loaded page without a separate round-trip.
+    pub fn count_chat_messages_for_session(
+        &self,
+        chat_session_id: &str,
+    ) -> Result<i64, rusqlite::Error> {
+        let sql = format!(
+            "SELECT COUNT(*) FROM chat_messages
+             WHERE chat_session_id = ?1
+               AND {predicate}",
+            predicate = Self::NON_LEGACY_MESSAGE_PREDICATE,
+        );
+        self.conn
+            .query_row(&sql, params![chat_session_id], |row| row.get(0))
+    }
+
+    /// Return up to `limit` messages for a session in ascending chronological
+    /// order. When `before_message_id` is `None` the newest `limit` messages
+    /// are returned; when it is `Some(id)` only messages whose `rowid` is
+    /// strictly less than the row identified by that id are considered, so the
+    /// caller can page backwards through history by passing the id of the
+    /// oldest already-loaded message as the cursor.
+    ///
+    /// Legacy empty assistant rows are excluded — see
+    /// `NON_LEGACY_MESSAGE_PREDICATE`.
+    pub fn list_chat_messages_page(
+        &self,
+        chat_session_id: &str,
+        limit: i64,
+        before_message_id: Option<&str>,
+    ) -> Result<Vec<ChatMessage>, rusqlite::Error> {
+        let mut rows: Vec<ChatMessage> = match before_message_id {
+            None => {
+                let sql = format!(
+                    "SELECT {cols} FROM chat_messages
+                     WHERE chat_session_id = ?1
+                       AND {predicate}
+                     ORDER BY created_at DESC, rowid DESC
+                     LIMIT ?2",
+                    cols = Self::CHAT_MESSAGE_COLS,
+                    predicate = Self::NON_LEGACY_MESSAGE_PREDICATE,
+                );
+                let mut stmt = self.conn.prepare(&sql)?;
+                stmt.query_map(
+                    params![chat_session_id, limit],
+                    Self::parse_chat_message_row,
+                )?
+                .collect::<Result<Vec<_>, _>>()?
+            }
+            Some(cursor_id) => {
+                let sql = format!(
+                    "SELECT {cols} FROM chat_messages
+                     WHERE chat_session_id = ?1
+                       AND rowid < (SELECT rowid FROM chat_messages WHERE id = ?3)
+                       AND {predicate}
+                     ORDER BY created_at DESC, rowid DESC
+                     LIMIT ?2",
+                    cols = Self::CHAT_MESSAGE_COLS,
+                    predicate = Self::NON_LEGACY_MESSAGE_PREDICATE,
+                );
+                let mut stmt = self.conn.prepare(&sql)?;
+                stmt.query_map(
+                    params![chat_session_id, limit, cursor_id],
+                    Self::parse_chat_message_row,
+                )?
+                .collect::<Result<Vec<_>, _>>()?
+            }
+        };
+        // Reverse so callers receive messages in ascending chronological order.
+        rows.reverse();
+        Ok(rows)
+    }
+
+    /// For pagination: find the most recent user message strictly older than
+    /// the given message id, in the same session. Used to recover agent
+    /// attachments anchored to a user message that lives on the previous page
+    /// when the new page begins mid-turn.
+    pub fn previous_user_message_id(
+        &self,
+        chat_session_id: &str,
+        before_message_id: &str,
+    ) -> Result<Option<String>, rusqlite::Error> {
+        self.conn
+            .query_row(
+                "SELECT id FROM chat_messages
+                 WHERE chat_session_id = ?1
+                   AND role = 'user'
+                   AND rowid < (SELECT rowid FROM chat_messages WHERE id = ?2)
+                 ORDER BY rowid DESC
+                 LIMIT 1",
+                params![chat_session_id, before_message_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
     }
 
     #[allow(dead_code)]
@@ -722,6 +828,201 @@ mod tests {
         assert_eq!(msgs[0].output_tokens, None);
         assert_eq!(msgs[0].cache_read_tokens, None);
         assert_eq!(msgs[0].cache_creation_tokens, None);
+    }
+
+    // --- Pagination tests ---
+
+    fn session_id_for(db: &Database, workspace_id: &str) -> String {
+        db.default_session_id_for_workspace(workspace_id)
+            .unwrap()
+            .expect("workspace must have a default session for tests")
+    }
+
+    #[test]
+    fn test_count_messages_empty_session() {
+        let db = setup_db_with_workspace();
+        let sid = session_id_for(&db, "w1");
+        assert_eq!(db.count_chat_messages_for_session(&sid).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_count_messages_excludes_legacy_empty_assistant() {
+        let db = setup_db_with_workspace();
+        let sid = session_id_for(&db, "w1");
+        // Real user + assistant turn.
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "hi"))
+            .unwrap();
+        db.insert_chat_message(&make_chat_msg(
+            &db,
+            "m2",
+            "w1",
+            ChatRole::Assistant,
+            "hello",
+        ))
+        .unwrap();
+        // Legacy empty-assistant row (no content, no thinking) — should be filtered.
+        db.insert_chat_message(&make_chat_msg(&db, "m3", "w1", ChatRole::Assistant, ""))
+            .unwrap();
+        // Empty-content assistant *with* thinking is real — should count.
+        let mut thinking = make_chat_msg(&db, "m4", "w1", ChatRole::Assistant, "");
+        thinking.thinking = Some("internal monologue".into());
+        db.insert_chat_message(&thinking).unwrap();
+
+        assert_eq!(db.count_chat_messages_for_session(&sid).unwrap(), 3);
+    }
+
+    #[test]
+    fn test_list_page_first_returns_newest_in_asc_order() {
+        let db = setup_db_with_workspace();
+        let sid = session_id_for(&db, "w1");
+        for i in 1..=5 {
+            db.insert_chat_message(&make_chat_msg(
+                &db,
+                &format!("m{i}"),
+                "w1",
+                if i % 2 == 1 {
+                    ChatRole::User
+                } else {
+                    ChatRole::Assistant
+                },
+                &format!("msg {i}"),
+            ))
+            .unwrap();
+        }
+
+        let page = db.list_chat_messages_page(&sid, 3, None).unwrap();
+        assert_eq!(page.len(), 3);
+        // Newest 3 messages, returned ASC — m3, m4, m5.
+        assert_eq!(page[0].id, "m3");
+        assert_eq!(page[1].id, "m4");
+        assert_eq!(page[2].id, "m5");
+    }
+
+    #[test]
+    fn test_list_page_cursor_returns_older_batch() {
+        let db = setup_db_with_workspace();
+        let sid = session_id_for(&db, "w1");
+        for i in 1..=5 {
+            db.insert_chat_message(&make_chat_msg(
+                &db,
+                &format!("m{i}"),
+                "w1",
+                ChatRole::User,
+                &format!("msg {i}"),
+            ))
+            .unwrap();
+        }
+        // Use m3 as the cursor — should return m1 and m2 in ASC order.
+        let older = db.list_chat_messages_page(&sid, 10, Some("m3")).unwrap();
+        assert_eq!(older.len(), 2);
+        assert_eq!(older[0].id, "m1");
+        assert_eq!(older[1].id, "m2");
+    }
+
+    #[test]
+    fn test_list_page_excludes_legacy_empty_assistant() {
+        let db = setup_db_with_workspace();
+        let sid = session_id_for(&db, "w1");
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "hi"))
+            .unwrap();
+        // Legacy empty-assistant row in the middle.
+        db.insert_chat_message(&make_chat_msg(&db, "m2", "w1", ChatRole::Assistant, ""))
+            .unwrap();
+        db.insert_chat_message(&make_chat_msg(&db, "m3", "w1", ChatRole::Assistant, "real"))
+            .unwrap();
+
+        let page = db.list_chat_messages_page(&sid, 10, None).unwrap();
+        let ids: Vec<&str> = page.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, vec!["m1", "m3"]);
+    }
+
+    #[test]
+    fn test_list_page_exact_limit_signals_more_via_cursor() {
+        let db = setup_db_with_workspace();
+        let sid = session_id_for(&db, "w1");
+        for i in 1..=4 {
+            db.insert_chat_message(&make_chat_msg(
+                &db,
+                &format!("m{i}"),
+                "w1",
+                ChatRole::User,
+                &format!("msg {i}"),
+            ))
+            .unwrap();
+        }
+        // First page returns 2 newest (m3, m4); count is 4 so caller knows more exist.
+        let first = db.list_chat_messages_page(&sid, 2, None).unwrap();
+        assert_eq!(first.len(), 2);
+        assert_eq!(first[0].id, "m3");
+        assert_eq!(first[1].id, "m4");
+        let total = db.count_chat_messages_for_session(&sid).unwrap();
+        assert!(total > first.len() as i64);
+
+        // Second page (cursor = m3) returns m1, m2.
+        let second = db.list_chat_messages_page(&sid, 2, Some("m3")).unwrap();
+        assert_eq!(second.len(), 2);
+        assert_eq!(second[0].id, "m1");
+        assert_eq!(second[1].id, "m2");
+
+        // Third page (cursor = m1) returns nothing — exhausted.
+        let third = db.list_chat_messages_page(&sid, 2, Some("m1")).unwrap();
+        assert!(third.is_empty());
+    }
+
+    #[test]
+    fn test_list_page_tied_timestamps_disambiguate_via_rowid() {
+        // make_chat_msg sets `created_at = ""` so all rows tie on timestamp; the
+        // ORDER BY rowid tiebreaker must still produce a stable insertion order.
+        let db = setup_db_with_workspace();
+        let sid = session_id_for(&db, "w1");
+        for i in 1..=4 {
+            db.insert_chat_message(&make_chat_msg(
+                &db,
+                &format!("m{i}"),
+                "w1",
+                ChatRole::User,
+                &format!("msg {i}"),
+            ))
+            .unwrap();
+        }
+        let page = db.list_chat_messages_page(&sid, 2, None).unwrap();
+        assert_eq!(page[0].id, "m3");
+        assert_eq!(page[1].id, "m4");
+    }
+
+    #[test]
+    fn test_previous_user_message_id_finds_prior_user() {
+        let db = setup_db_with_workspace();
+        let sid = session_id_for(&db, "w1");
+        db.insert_chat_message(&make_chat_msg(&db, "u1", "w1", ChatRole::User, "first"))
+            .unwrap();
+        db.insert_chat_message(&make_chat_msg(&db, "a1", "w1", ChatRole::Assistant, "ok"))
+            .unwrap();
+        db.insert_chat_message(&make_chat_msg(&db, "u2", "w1", ChatRole::User, "second"))
+            .unwrap();
+        db.insert_chat_message(&make_chat_msg(&db, "a2", "w1", ChatRole::Assistant, "done"))
+            .unwrap();
+
+        // Prior user before a2 is u2.
+        assert_eq!(
+            db.previous_user_message_id(&sid, "a2").unwrap(),
+            Some("u2".into()),
+        );
+        // Prior user before u2 is u1 (skips a1).
+        assert_eq!(
+            db.previous_user_message_id(&sid, "u2").unwrap(),
+            Some("u1".into()),
+        );
+    }
+
+    #[test]
+    fn test_previous_user_message_id_none_when_no_prior_user() {
+        let db = setup_db_with_workspace();
+        let sid = session_id_for(&db, "w1");
+        db.insert_chat_message(&make_chat_msg(&db, "u1", "w1", ChatRole::User, "first"))
+            .unwrap();
+        // No user message exists strictly before u1.
+        assert_eq!(db.previous_user_message_id(&sid, "u1").unwrap(), None);
     }
 
     // --- Attachment tests ---

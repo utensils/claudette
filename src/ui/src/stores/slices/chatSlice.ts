@@ -1,5 +1,5 @@
 import type { StateCreator } from "zustand";
-import type { ChatMessage, ChatAttachment } from "../../types";
+import type { ChatMessage, ChatAttachment, ChatPaginationState } from "../../types";
 import { debugChat } from "../../utils/chatDebug";
 import type { CompactionEvent } from "../../utils/compactionSentinel";
 import type { AppState } from "../useAppStore";
@@ -99,8 +99,27 @@ export interface ChatSlice {
   compactionEvents: Record<string, CompactionEvent[]>;
   setCompactionEvents: (sessionId: string, events: CompactionEvent[]) => void;
   addCompactionEvent: (sessionId: string, event: CompactionEvent) => void;
+  chatPagination: Record<string, ChatPaginationState>;
+  setChatPagination: (sessionId: string, state: ChatPaginationState) => void;
+  prependChatMessages: (sessionId: string, messages: ChatMessage[]) => void;
+  prependChatAttachments: (sessionId: string, attachments: ChatAttachment[]) => void;
   setChatMessages: (sessionId: string, messages: ChatMessage[]) => void;
-  addChatMessage: (sessionId: string, message: ChatMessage) => void;
+  /**
+   * Append a chat message to the session's list.
+   *
+   * Pass `{ persisted: false }` for client-only messages that have no
+   * matching DB row (e.g. the System messages produced by local slash
+   * commands like `/help`, `/plan`, `/status`). Persisted messages bump
+   * `chatPagination[sessionId].totalCount` so `globalOffset` stays correct
+   * during streaming; client-only ones must NOT, or the next paginated
+   * load returns a smaller total than the in-memory list and turn
+   * placement drifts.
+   */
+  addChatMessage: (
+    sessionId: string,
+    message: ChatMessage,
+    options?: { persisted?: boolean },
+  ) => void;
   setStreamingContent: (sessionId: string, content: string) => void;
   appendStreamingContent: (sessionId: string, text: string) => void;
   setPendingTypewriter: (sessionId: string, messageId: string, text: string) => void;
@@ -161,6 +180,35 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
         [sessionId]: [...(s.chatAttachments[sessionId] ?? []), ...attachments],
       },
     })),
+  chatPagination: {},
+  setChatPagination: (sessionId, state) =>
+    set((s) => ({
+      chatPagination: { ...s.chatPagination, [sessionId]: state },
+    })),
+  prependChatMessages: (sessionId, messages) =>
+    set((s) => ({
+      chatMessages: {
+        ...s.chatMessages,
+        [sessionId]: [...messages, ...(s.chatMessages[sessionId] ?? [])],
+      },
+    })),
+  prependChatAttachments: (sessionId, attachments) =>
+    set((s) => {
+      // Dedupe by id: when a page begins mid-turn, the page loader includes
+      // the previous user message's anchor id so its attachments come back
+      // again. Without this guard the same row would render twice once the
+      // older page is loaded.
+      const existing = s.chatAttachments[sessionId] ?? [];
+      const seen = new Set(existing.map((a) => a.id));
+      const fresh = attachments.filter((a) => !seen.has(a.id));
+      if (fresh.length === 0) return {};
+      return {
+        chatAttachments: {
+          ...s.chatAttachments,
+          [sessionId]: [...fresh, ...existing],
+        },
+      };
+    }),
   streamingContent: {},
   streamingThinking: {},
   pendingTypewriter: {},
@@ -207,14 +255,32 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
     set((s) => ({
       chatMessages: { ...s.chatMessages, [sessionId]: messages },
     })),
-  addChatMessage: (sessionId, message) =>
-    set((s) => ({
-      chatMessages: {
-        ...s.chatMessages,
-        [sessionId]: [...(s.chatMessages[sessionId] || []), message],
-      },
-      lastMessages: { ...s.lastMessages, [sessionId]: message },
-    })),
+  addChatMessage: (sessionId, message, options) =>
+    set((s) => {
+      const pagination = s.chatPagination[sessionId];
+      const persisted = options?.persisted ?? true;
+      return {
+        chatMessages: {
+          ...s.chatMessages,
+          [sessionId]: [...(s.chatMessages[sessionId] || []), message],
+        },
+        lastMessages: { ...s.lastMessages, [sessionId]: message },
+        // Keep totalCount in sync so globalOffset stays correct during streaming.
+        // Client-only messages (no DB row) opt out so the count doesn't drift
+        // ahead of the persisted set.
+        ...(pagination && persisted
+          ? {
+              chatPagination: {
+                ...s.chatPagination,
+                [sessionId]: {
+                  ...pagination,
+                  totalCount: pagination.totalCount + 1,
+                },
+              },
+            }
+          : {}),
+      };
+    }),
   setStreamingContent: (sessionId, content) =>
     set((s) => ({
       streamingContent: { ...s.streamingContent, [sessionId]: content },
@@ -322,6 +388,14 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
         });
         return {};
       }
+      const loadedCount = (s.chatMessages[sessionId] || []).length;
+      const pagination = s.chatPagination[sessionId];
+      // For paginated sessions, afterMessageIndex must be the GLOBAL position
+      // (i.e. totalCount) so the turn summary renders at the right spot even
+      // when only a window of the message history is loaded.
+      const afterMessageIndex = pagination
+        ? pagination.totalCount
+        : loadedCount;
       const turn: CompletedTurn = {
         id: turnId ?? crypto.randomUUID(),
         activities: activities.map((a) => ({
@@ -334,7 +408,7 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
         })),
         messageCount,
         collapsed: true,
-        afterMessageIndex: (s.chatMessages[sessionId] || []).length,
+        afterMessageIndex,
         durationMs,
         inputTokens,
         outputTokens,

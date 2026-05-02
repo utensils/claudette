@@ -243,6 +243,68 @@ describe("reconstructCompletedTurns", () => {
     expect(result[0].commitHash).toBe("abc123");
   });
 
+  it("offsets afterMessageIndex by globalOffset so values are global session positions", () => {
+    // Paginated session: only the newest 2 of 52 total messages are loaded.
+    // The persisted turn anchored on m51 should resolve to a global
+    // afterMessageIndex of 52 (local index 1 + 1 + globalOffset 50), not 2.
+    const messages = [makeMsg("m50", "User"), makeMsg("m51", "Assistant")];
+    const turnData = [makeTurnData("cp1", "m51")];
+
+    const result = reconstructCompletedTurns(messages, turnData, /* globalOffset */ 50);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].afterMessageIndex).toBe(52);
+  });
+
+  it("defaults globalOffset to 0 when omitted (fully-loaded session)", () => {
+    const messages = [makeMsg("m1", "User"), makeMsg("m2", "Assistant")];
+    const turnData = [makeTurnData("cp1", "m2")];
+
+    const result = reconstructCompletedTurns(messages, turnData);
+
+    expect(result[0].afterMessageIndex).toBe(2);
+  });
+
+  it("computes durationMs using local indices regardless of globalOffset", () => {
+    // The durationMs slice reaches back to the prior turn's local boundary
+    // (or 0). globalOffset must NOT shift that slice — assistant messages in
+    // the loaded window are the only source of truth for per-turn metrics.
+    const m1: ChatMessage = { ...makeMsg("m1", "User"), duration_ms: 99_999 };
+    const m2: ChatMessage = { ...makeMsg("m2", "Assistant"), duration_ms: 1_500 };
+    const messages = [m1, m2];
+    const turnData = [makeTurnData("cp1", "m2")];
+
+    const result = reconstructCompletedTurns(messages, turnData, 100);
+
+    // Only m2 (Assistant) contributes — 1_500ms.
+    expect(result[0].durationMs).toBe(1_500);
+    // afterMessageIndex is global: local 1 + 1 + offset 100 = 102.
+    expect(result[0].afterMessageIndex).toBe(102);
+  });
+
+  it("does not bleed assistant metrics across turns when globalOffset > 0", () => {
+    // Multi-turn paginated session: each turn's metrics must be bounded by
+    // the LOCAL slice [priorBoundary, localAfter), not the global one — a
+    // global-end slice would clamp to messages.length and pull in later
+    // turns' assistant messages.
+    const m1: ChatMessage = { ...makeMsg("m1", "User"), duration_ms: 99_999 };
+    const m2: ChatMessage = { ...makeMsg("m2", "Assistant"), duration_ms: 1_000 };
+    const m3: ChatMessage = { ...makeMsg("m3", "User"), duration_ms: 99_999 };
+    const m4: ChatMessage = { ...makeMsg("m4", "Assistant"), duration_ms: 4_000 };
+    const messages = [m1, m2, m3, m4];
+    const turnData = [makeTurnData("cp1", "m2"), makeTurnData("cp2", "m4")];
+
+    const result = reconstructCompletedTurns(messages, turnData, 50);
+
+    expect(result).toHaveLength(2);
+    // Turn 1 (anchored m2): slice(0, 2) → only m2 → 1_000ms.
+    expect(result[0].durationMs).toBe(1_000);
+    expect(result[0].afterMessageIndex).toBe(52);
+    // Turn 2 (anchored m4): slice(2, 4) → only m4 → 4_000ms.
+    expect(result[1].durationMs).toBe(4_000);
+    expect(result[1].afterMessageIndex).toBe(54);
+  });
+
   it("maps activity fields correctly", () => {
     const messages = [makeMsg("m1")];
     const turnData: CompletedTurnData[] = [

@@ -62,6 +62,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   onAttachmentContextMenu,
   onAttachmentClick,
   searchQuery,
+  globalOffset = 0,
 }: {
   messages: ChatMessage[];
   /** The enclosing workspace id — forwarded into rollback data so the modal
@@ -92,6 +93,11 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   /** Active chat-search query (Cmd/Ctrl+F). Empty string when the bar is
    *  closed; non-empty values trigger highlight wrappers on each message. */
   searchQuery: string;
+  /** 0-based index of the first loaded message in the full session message
+   *  sequence. Zero for fully-loaded sessions; positive when older messages
+   *  have not been fetched yet (pagination). Used to match CompletedTurn
+   *  positions (which are global) against the local message array. */
+  globalOffset?: number;
 }) {
   const { t } = useTranslation("chat");
   const completedTurns = useAppStore(
@@ -129,21 +135,50 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
     // Single reverse pass: each User message maps to the most recent
     // Assistant message that follows it. O(n) instead of O(n²).
     const userToNextAssistant = new Map<string, string>();
+    const loadedMessageIds = new Set<string>();
     let nextAssistantId: string | null = null;
+    let firstAssistantInWindow: string | null = null;
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i];
+      loadedMessageIds.add(m.id);
       if (m.role === "Assistant") {
         nextAssistantId = m.id;
+        firstAssistantInWindow = m.id;
       } else if (m.role === "User" && nextAssistantId) {
         userToNextAssistant.set(m.id, nextAssistantId);
       }
     }
+    // Detect a mid-turn page start: the first non-System row at the top of
+    // the window is an Assistant. Pages can begin with a System sentinel
+    // (e.g. compaction marker) before the carry-over assistant, so we can't
+    // just check messages[0].role.
+    const firstNonSystem = messages.find((m) => m.role !== "System");
+    const startsMidTurn = firstNonSystem?.role === "Assistant";
     const map = new Map<string, ChatAttachment[]>();
     for (const att of chatAttachments) {
-      const targetId =
-        att.origin === "agent"
-          ? (userToNextAssistant.get(att.message_id) ?? att.message_id)
-          : att.message_id;
+      let targetId: string;
+      if (att.origin === "agent") {
+        // Anchor user is in the loaded window: route to the assistant of
+        // that turn. Anchor user is NOT loaded but the page begins mid-turn:
+        // the orphan agent rows belong to the carry-over assistant — i.e.
+        // the first Assistant message at the top of the loaded window.
+        // Otherwise fall back to the raw anchor (which won't render — that's
+        // intentional for stale attachments whose turn is fully out-of-view).
+        const routed = userToNextAssistant.get(att.message_id);
+        if (routed) {
+          targetId = routed;
+        } else if (
+          !loadedMessageIds.has(att.message_id) &&
+          firstAssistantInWindow !== null &&
+          startsMidTurn
+        ) {
+          targetId = firstAssistantInWindow;
+        } else {
+          targetId = att.message_id;
+        }
+      } else {
+        targetId = att.message_id;
+      }
       const list = map.get(targetId);
       if (list) list.push(att);
       else map.set(targetId, [att]);
@@ -167,19 +202,42 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
     [completedTurns],
   );
 
+  // Local version of completedTurnPositions with global indices shifted to
+  // local array indices. Used by buildPlainTurnFooters, which works in local
+  // index space, so it correctly suppresses plain footers at positions that
+  // already have a TurnSummary even when older messages are paginated out.
+  const localCompletedTurnPositions = useMemo(
+    () =>
+      new Set(
+        [...completedTurnPositions]
+          .map((p) => p - globalOffset)
+          .filter((p) => p >= 0 && p <= messages.length),
+      ),
+    [completedTurnPositions, globalOffset, messages.length],
+  );
+
+  // CompletedTurn.afterMessageIndex is GLOBAL (counts from message 0 of the
+  // session, not from the loaded window). Shift to local before indexing into
+  // the `messages` array; otherwise older summaries' "Copy output", rollback,
+  // and fork actions would target the wrong message once the loaded window
+  // contains more than one user message.
   const findTriggeringUserIdx = useCallback(
     (afterMessageIndex: number) => {
-      return findTriggeringUserIndex(messages, afterMessageIndex);
+      const localAfter = afterMessageIndex - globalOffset;
+      if (localAfter <= 0) return -1;
+      return findTriggeringUserIndex(messages, localAfter);
     },
-    [messages],
+    [messages, globalOffset],
   );
 
   // Map user message index → checkpoint for rollback buttons.
-  // Each user message maps to the latest preceding checkpoint, with the first
-  // user message mapping to null so it can clear the whole conversation.
+  // Each user message maps to the latest preceding checkpoint. The first user
+  // message in the FULL conversation gets `null` (clear-all) — but on a
+  // paginated window the first row might not be the conversation root, so
+  // pass `globalOffset` through to suppress the clear-all sentinel.
   const rollbackCheckpointByIdx = useMemo(
-    () => buildRollbackMap(messages, checkpoints),
-    [messages, checkpoints],
+    () => buildRollbackMap(messages, checkpoints, globalOffset),
+    [messages, checkpoints, globalOffset],
   );
 
   const buildRollbackData = useCallback(
@@ -215,13 +273,19 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
         map.set(turn.id, "");
         continue;
       }
+      // assistantTextForTurn slices the messages array — pass the LOCAL turn
+      // boundary (afterMessageIndex - globalOffset), not the global value.
       map.set(
         turn.id,
-        assistantTextForTurn(messages, userIdx, turn.afterMessageIndex),
+        assistantTextForTurn(
+          messages,
+          userIdx,
+          turn.afterMessageIndex - globalOffset,
+        ),
       );
     }
     return map;
-  }, [completedTurns, findTriggeringUserIdx, messages]);
+  }, [completedTurns, findTriggeringUserIdx, messages, globalOffset]);
 
   // Per-turn rollback data, keyed by turn.id. Completed turns are only
   // persisted for tool-using turns, so the triggering user is the nearest
@@ -248,10 +312,10 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
     return buildPlainTurnFooters(
       messages,
       rollbackCheckpointByIdx,
-      completedTurnPositions,
+      localCompletedTurnPositions,
       checkpoints,
     );
-  }, [checkpoints, completedTurnPositions, messages, rollbackCheckpointByIdx]);
+  }, [checkpoints, localCompletedTurnPositions, messages, rollbackCheckpointByIdx]);
 
   const renderPlainTurnFooter = (position: number) => {
     const data = plainTurnFootersByPosition.get(position);
@@ -324,7 +388,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
       turnLayout: completedTurns.map((turn) => ({
         id: turn.id,
         afterMessageIndex: turn.afterMessageIndex,
-        postLastMessage: turn.afterMessageIndex >= messages.length,
+        postLastMessage: turn.afterMessageIndex >= globalOffset + messages.length,
         toolCount: turn.activities.length,
       })),
     });
@@ -360,12 +424,12 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
           if (compaction) {
             return (
               <React.Fragment key={msg.id}>
-                {renderTurns(idx)}
+                {renderTurns(globalOffset + idx)}
                 <CompactionDivider
                   event={{
                     ...compaction,
                     timestamp: msg.created_at,
-                    afterMessageIndex: idx,
+                    afterMessageIndex: globalOffset + idx,
                   }}
                 />
               </React.Fragment>
@@ -375,7 +439,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
           if (syntheticBody !== null) {
             return (
               <React.Fragment key={msg.id}>
-                {renderTurns(idx)}
+                {renderTurns(globalOffset + idx)}
                 <SyntheticContinuationMessage body={syntheticBody} />
               </React.Fragment>
             );
@@ -384,7 +448,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
         // Default rendering for User, Assistant, and non-sentinel System messages.
         return (
           <React.Fragment key={msg.id}>
-            {renderTurns(idx)}
+            {renderTurns(globalOffset + idx)}
             {msg.id === pendingMessageId ? null : (
               <div className={`${styles.message} ${styles[roleClassKey(msg.role, msg.content)]}`}>
                 {msg.role === "User" && (
@@ -508,10 +572,10 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
           </React.Fragment>
         );
       })}
-      {/* Turns that finalized after or at the last message index */}
+      {/* Turns that finalized at or after the end of the loaded message window */}
       {completedTurns
         .map((turn, globalIdx) => ({ turn, globalIdx }))
-        .filter(({ turn }) => turn.afterMessageIndex >= messages.length)
+        .filter(({ turn }) => turn.afterMessageIndex >= globalOffset + messages.length)
         .map(({ turn, globalIdx }) => (
           <TurnSummary
             key={turn.id}

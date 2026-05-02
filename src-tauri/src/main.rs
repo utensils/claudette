@@ -479,6 +479,7 @@ fn main() {
             commands::files::open_attachment_with_default_app,
             // Chat
             commands::chat::send::load_chat_history,
+            commands::chat::send::load_chat_history_page,
             commands::chat::send::send_chat_message,
             commands::chat::attachments::load_attachments_for_session,
             commands::chat::attachments::load_attachment_data,

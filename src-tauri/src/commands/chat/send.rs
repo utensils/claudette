@@ -24,8 +24,8 @@ use crate::state::{AgentSessionState, AppState, PendingPermission};
 use super::interaction::{deny_drained_permissions, drain_pending_permissions};
 use super::naming::{try_auto_rename, try_generate_session_name};
 use super::{
-    ATTENTION_NOTIFY_DELAY_MS, AgentStreamPayload, AttachmentInput, fire_completion_notification,
-    now_iso, start_bridge_and_inject_mcp,
+    ATTENTION_NOTIFY_DELAY_MS, AgentStreamPayload, AttachmentInput, AttachmentResponse,
+    ChatHistoryPage, fire_completion_notification, now_iso, start_bridge_and_inject_mcp,
 };
 
 #[tauri::command]
@@ -36,6 +36,120 @@ pub async fn load_chat_history(
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     db.list_chat_messages_for_session(&session_id)
         .map_err(|e| e.to_string())
+}
+
+/// Load a page of chat history starting from the newest messages.
+///
+/// Pass `before_message_id` to page backwards: set it to the `id` of the
+/// oldest message already held by the client and the next `limit` older
+/// messages are returned, together with their attachments.
+///
+/// The response also carries `total_count` so the frontend can compute the
+/// global index offset of the returned page without a separate round-trip
+/// (`global_offset = total_count - already_loaded_count`).
+#[tauri::command]
+pub async fn load_chat_history_page(
+    session_id: String,
+    limit: i64,
+    before_message_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<ChatHistoryPage, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+
+    let total_count = db
+        .count_chat_messages_for_session(&session_id)
+        .map_err(|e| e.to_string())?;
+
+    let messages = db
+        .list_chat_messages_page(&session_id, limit, before_message_id.as_deref())
+        .map_err(|e| e.to_string())?;
+
+    // `has_more` reflects whether older rows exist beyond the cursor — never
+    // just `messages.len() == limit`, which over-reports on sessions whose
+    // total is an exact multiple of the page size and triggers a wasted fetch.
+    let has_more = match before_message_id.as_deref() {
+        // First page: the page covers the newest `messages.len()` rows; older
+        // rows exist iff the total exceeds what we returned.
+        None => total_count > messages.len() as i64,
+        // Subsequent page: assume more if we filled the page. Hitting an exact
+        // boundary still wastes one fetch, but avoiding it would require a
+        // second count keyed to the cursor — not worth the round-trip.
+        Some(_) => messages.len() as i64 == limit,
+    };
+
+    // Build the attachment lookup set. Start with the page's own message ids,
+    // then — when the page begins mid-turn (first row isn't a User) — also
+    // include the most recent User message before the cursor. Agent-origin
+    // attachments are FK-anchored to the triggering User message, so a turn
+    // that straddles a page boundary would otherwise drop its attachments
+    // until older history is loaded.
+    //
+    // We track the carry-over user id separately so we can filter its
+    // attachments to `origin = "agent"` only — fetching its user-origin
+    // rows would re-inline large image/text bytes that the page never needs
+    // to render (the user message itself is on the previous page).
+    let mut message_ids: Vec<String> = messages.iter().map(|m| m.id.clone()).collect();
+    let mut carry_over_user_id: Option<String> = None;
+    if let Some(first) = messages.first()
+        && first.role != ChatRole::User
+        && let Some(prev_user) = db
+            .previous_user_message_id(&session_id, &first.id)
+            .map_err(|e| e.to_string())?
+    {
+        message_ids.push(prev_user.clone());
+        carry_over_user_id = Some(prev_user);
+    }
+    let att_map = db
+        .list_attachments_for_messages(&message_ids)
+        .map_err(|e| e.to_string())?;
+
+    let mut attachments = Vec::new();
+    for (msg_id, atts) in att_map {
+        let is_carry_over = carry_over_user_id.as_deref() == Some(msg_id.as_str());
+        for a in atts {
+            // For the carry-over user, skip non-agent attachments — the user
+            // message itself is on the previous page, so its own attachments
+            // (potentially large images / text files) shouldn't be inlined
+            // into this response.
+            if is_carry_over && !matches!(a.origin, claudette::model::AttachmentOrigin::Agent) {
+                continue;
+            }
+            let is_text = matches!(
+                a.media_type.as_str(),
+                "text/plain" | "text/csv" | "text/markdown" | "application/json"
+            );
+            let data_base64 = if a.media_type.starts_with("image/") || is_text {
+                claudette::base64_encode(&a.data)
+            } else {
+                String::new()
+            };
+            let text_content = if is_text {
+                std::str::from_utf8(&a.data).ok().map(str::to_owned)
+            } else {
+                None
+            };
+            attachments.push(AttachmentResponse {
+                id: a.id,
+                message_id: a.message_id,
+                filename: a.filename,
+                media_type: a.media_type,
+                data_base64,
+                text_content,
+                width: a.width,
+                height: a.height,
+                size_bytes: a.size_bytes,
+                origin: a.origin,
+                tool_use_id: a.tool_use_id,
+            });
+        }
+    }
+
+    Ok(ChatHistoryPage {
+        messages,
+        attachments,
+        has_more,
+        total_count,
+    })
 }
 
 #[tauri::command]

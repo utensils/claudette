@@ -527,6 +527,65 @@ describe("finalizeTurn afterMessageIndex", () => {
   });
 });
 
+// When a session is paginated, `afterMessageIndex` must be the GLOBAL turn
+// position so MessagesWithTurns renders the summary at the right slot even
+// when only a window of history is loaded. The slice computes this from
+// `chatPagination[sessionId].totalCount`, falling back to the local
+// `chatMessages` length when no pagination state exists.
+describe("finalizeTurn afterMessageIndex (paginated branch)", () => {
+  beforeEach(() => {
+    useAppStore.setState({
+      toolActivities: {},
+      completedTurns: {},
+      chatMessages: {},
+      chatPagination: {},
+    });
+  });
+
+  it("uses pagination.totalCount when the session is paginated", () => {
+    useAppStore.setState({
+      chatMessages: {
+        [WS_ID]: [
+          { id: "m99", workspace_id: WS_ID, chat_session_id: WS_ID, role: "User", content: "hi", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null },
+          { id: "m100", workspace_id: WS_ID, chat_session_id: WS_ID, role: "Assistant", content: "ok", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null },
+        ],
+      },
+      chatPagination: {
+        [WS_ID]: {
+          hasMore: true,
+          isLoadingMore: false,
+          totalCount: 100,
+          oldestMessageId: "m99",
+        },
+      },
+    });
+    addToolActivities();
+
+    useAppStore.getState().finalizeTurn(WS_ID, 1);
+
+    const turns = useAppStore.getState().completedTurns[WS_ID];
+    expect(turns).toHaveLength(1);
+    expect(turns[0].afterMessageIndex).toBe(100);
+  });
+
+  it("falls back to chatMessages length when no pagination entry exists", () => {
+    useAppStore.setState({
+      chatMessages: {
+        [WS_ID]: [
+          { id: "m1", workspace_id: WS_ID, chat_session_id: WS_ID, role: "User", content: "hi", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null },
+          { id: "m2", workspace_id: WS_ID, chat_session_id: WS_ID, role: "Assistant", content: "ok", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null },
+        ],
+      },
+    });
+    addToolActivities();
+
+    useAppStore.getState().finalizeTurn(WS_ID, 1);
+
+    const turns = useAppStore.getState().completedTurns[WS_ID];
+    expect(turns[0].afterMessageIndex).toBe(2);
+  });
+});
+
 // Regression coverage for issue 463: clicking a completed turn's chevron
 // must flip `collapsed`, and the toggle's key must match the key the
 // readers use (sessionId, not workspaceId — these diverged after the
@@ -880,6 +939,99 @@ describe("rollbackConversation", () => {
 
     expect(useAppStore.getState().chatMessages[OTHER_WS]).toHaveLength(1);
     expect(useAppStore.getState().checkpoints[OTHER_WS]).toHaveLength(1);
+  });
+});
+
+// rollbackConversation must reset chatPagination so the cursor and total
+// count match the truncated message list — leaving the prior entry would
+// race the scroll-to-top loader against a conversation that has already
+// shrunk.
+describe("rollbackConversation resets chatPagination", () => {
+  beforeEach(() => {
+    useAppStore.setState({ chatPagination: {}, checkpoints: {} });
+  });
+
+  it("rewrites pagination to match the truncated message list", () => {
+    const truncated: ChatMessage[] = [
+      { id: "m1", workspace_id: WS_ID, chat_session_id: WS_ID, role: "User", content: "q1", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null },
+      { id: "m2", workspace_id: WS_ID, chat_session_id: WS_ID, role: "Assistant", content: "a1", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null },
+    ];
+    useAppStore.setState({
+      chatPagination: {
+        [WS_ID]: {
+          hasMore: true,
+          isLoadingMore: false,
+          totalCount: 100,
+          oldestMessageId: "m50",
+        },
+      },
+      checkpoints: { [WS_ID]: [makeCheckpoint("cp1", WS_ID, "m2", 0)] },
+    });
+
+    useAppStore.getState().rollbackConversation(WS_ID, WS_ID, "cp1", truncated);
+
+    const pag = useAppStore.getState().chatPagination[WS_ID];
+    expect(pag).toEqual({
+      hasMore: false,
+      isLoadingMore: false,
+      totalCount: 2,
+      oldestMessageId: "m1",
+    });
+  });
+
+  it("leaves chatPagination untouched for sessions that never had pagination", () => {
+    useAppStore.setState({
+      checkpoints: { [WS_ID]: [makeCheckpoint("cp1", WS_ID, "m1", 0)] },
+    });
+
+    useAppStore.getState().rollbackConversation(WS_ID, WS_ID, "cp1", []);
+
+    expect(useAppStore.getState().chatPagination[WS_ID]).toBeUndefined();
+  });
+});
+
+// addChatMessage must NOT bump pagination.totalCount for client-only
+// system messages (e.g. slash command echo). Only persisted messages —
+// the default — should advance the global count.
+describe("addChatMessage pagination totalCount", () => {
+  beforeEach(() => {
+    useAppStore.setState({ chatMessages: {}, chatPagination: {} });
+  });
+
+  function seedPagination() {
+    useAppStore.setState({
+      chatPagination: {
+        [WS_ID]: {
+          hasMore: false,
+          isLoadingMore: false,
+          totalCount: 10,
+          oldestMessageId: "m1",
+        },
+      },
+    });
+  }
+
+  function makeMsg(id: string, role: "User" | "System" = "User"): ChatMessage {
+    return { id, workspace_id: WS_ID, chat_session_id: WS_ID, role, content: "x", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null };
+  }
+
+  it("bumps totalCount by default (persisted message)", () => {
+    seedPagination();
+    useAppStore.getState().addChatMessage(WS_ID, makeMsg("m11"));
+    expect(useAppStore.getState().chatPagination[WS_ID].totalCount).toBe(11);
+  });
+
+  it("does NOT bump totalCount when persisted: false", () => {
+    seedPagination();
+    useAppStore
+      .getState()
+      .addChatMessage(WS_ID, makeMsg("m-local", "System"), { persisted: false });
+    expect(useAppStore.getState().chatPagination[WS_ID].totalCount).toBe(10);
+  });
+
+  it("no-ops on pagination state when no pagination entry exists", () => {
+    useAppStore.getState().addChatMessage(WS_ID, makeMsg("m1"));
+    expect(useAppStore.getState().chatPagination[WS_ID]).toBeUndefined();
   });
 });
 
