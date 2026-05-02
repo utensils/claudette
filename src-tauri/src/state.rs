@@ -387,6 +387,11 @@ pub struct AppState {
     #[cfg(feature = "server")]
     pub share_server_config:
         tokio::sync::RwLock<Option<Arc<tokio::sync::Mutex<claudette_server::auth::ServerConfig>>>>,
+    /// Set of chat-session ids for which a host-side `Room` event subscriber
+    /// (and consensus vote resolver) has already been spawned. Each room
+    /// only needs one host subscriber for its lifetime; this dedup set
+    /// prevents the bridge from spawning duplicates on every turn.
+    pub host_room_subscribers: tokio::sync::RwLock<std::collections::HashSet<String>>,
 }
 
 impl AppState {
@@ -418,6 +423,7 @@ impl AppState {
             collab_server_running: tokio::sync::RwLock::new(false),
             #[cfg(feature = "server")]
             share_server_config: tokio::sync::RwLock::new(None),
+            host_room_subscribers: tokio::sync::RwLock::new(std::collections::HashSet::new()),
         }
     }
 

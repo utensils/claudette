@@ -424,6 +424,24 @@ export function ChatPanel() {
           .catch((e) => console.error("Failed to load chat history:", e));
       }
     } else {
+      // For collaborative shares the server lazily creates a `Room` on
+      // `join_session` — and that's also what registers our per-connection
+      // event forwarder, so without this call we'd never receive live
+      // agent-stream / participants-changed / plan-vote-* events. Fire it
+      // before history loads so any in-flight broadcast we miss is
+      // re-deliverable on the join_session response (the server returns
+      // a snapshot of current state). For 1:1 shares the server returns an
+      // error ("Session is not collaborative") which we swallow silently.
+      sendRemoteCommand(currentWs!.remote_connection_id!, "join_session", {
+        chat_session_id: sessionId,
+      })
+        .catch((e) => {
+          // Non-fatal: 1:1 shares don't have rooms.
+          const msg = String(e);
+          if (!msg.includes("not collaborative")) {
+            console.warn("join_session failed:", e);
+          }
+        });
       sendRemoteCommand(currentWs!.remote_connection_id!, "load_chat_history", {
         chat_session_id: sessionId,
       })

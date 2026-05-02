@@ -16,7 +16,6 @@ import {
   removeRemoteConnection,
   sendRemoteCommand,
   pairWithServer,
-  startLocalServer,
 } from "../../services/tauri";
 import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, CircleStop, GitPullRequestArrow, GitPullRequestDraft, GitMerge, GitPullRequestClosed, ChevronRight, ChevronDown } from "lucide-react";
 import { RepoIcon } from "../shared/RepoIcon";
@@ -1257,38 +1256,19 @@ function RemoteConnectionGroup({
 }
 
 function ShareButton({ openModal }: { openModal: (name: string) => void }) {
+  // The button now just *opens* the share UI. Starting/stopping the
+  // server is the modal's job — the canonical place where the user mints
+  // workspace-scoped shares and sees their connection strings. Auto-
+  // starting the legacy unscoped server here was a footgun: the new
+  // server's startup banner no longer prints `claudette://...` (every
+  // share mints its own), so the old auto-start path would time out.
   const { t } = useTranslation("sidebar");
   const running = useAppStore((s) => s.localServerRunning);
-  const setRunning = useAppStore((s) => s.setLocalServerRunning);
-  const setConnectionString = useAppStore((s) => s.setLocalServerConnectionString);
-  const [loading, setLoading] = useState(false);
-
-  const handleClick = async () => {
-    if (running) {
-      openModal("share");
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const info = await startLocalServer();
-      setRunning(true);
-      setConnectionString(info.connection_string);
-      openModal("share");
-    } catch (e) {
-      console.error("Failed to start server:", e);
-      alert(`Failed to start server: ${e}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   return (
     <button
       className={`${styles.footerBtn}${running ? ` ${styles.shareBtnActive}` : ""}`}
-      onClick={handleClick}
+      onClick={() => openModal("share")}
       title={running ? t("share_active_title") : t("share_inactive_title")}
-      disabled={loading}
     >
       <Share2 size={16} />
     </button>

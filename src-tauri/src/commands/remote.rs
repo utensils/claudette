@@ -322,7 +322,13 @@ pub async fn start_local_server(state: State<'_, AppState>) -> Result<LocalServe
         let stderr_handle = child.stderr.take();
         let mut reader = BufReader::new(stdout).lines();
 
-        let mut connection_string = String::new();
+        // The server's startup banner used to include `claudette://...` —
+        // a global pairing token that the watcher used as the ready signal.
+        // With the share-scoped auth model that string is gone (every share
+        // mints its own); we now wait for the new banner's terminal line
+        // ("Ready for connections.") instead. There is no global connection
+        // string to display; the share modal mints one per share.
+        let mut ready = false;
         let timeout = tokio::time::Duration::from_secs(10);
         let deadline = tokio::time::Instant::now() + timeout;
 
@@ -334,8 +340,8 @@ pub async fn start_local_server(state: State<'_, AppState>) -> Result<LocalServe
 
             if let Some(line) = line {
                 let trimmed = line.trim();
-                if trimmed.starts_with("claudette://") {
-                    connection_string = trimmed.to_string();
+                if trimmed.starts_with("Ready for connections") {
+                    ready = true;
                     break;
                 }
             } else {
@@ -364,9 +370,9 @@ pub async fn start_local_server(state: State<'_, AppState>) -> Result<LocalServe
             }
         }
 
-        if connection_string.is_empty() {
+        if !ready {
             let _ = child.kill().await;
-            return Err("Server started but did not print a connection string".to_string());
+            return Err("Server started but did not signal readiness in time".to_string());
         }
 
         // Spawn tasks to continuously drain stdout and stderr to prevent broken
@@ -380,15 +386,20 @@ pub async fn start_local_server(state: State<'_, AppState>) -> Result<LocalServe
             });
         }
 
+        // Connection strings are minted per-share by `start_share`, not by
+        // the legacy subprocess server. The `LocalServerState.connection_string`
+        // field is retained for ABI compatibility with the existing
+        // `LocalServerInfo` shape and the `local_server` AppState slot,
+        // but it is now always empty in the share-scoped world.
         let info = LocalServerInfo {
             running: true,
-            connection_string: Some(connection_string.clone()),
+            connection_string: None,
         };
 
         *server = Some(LocalServerState {
             child,
             pid,
-            connection_string,
+            connection_string: String::new(),
         });
 
         Ok(info)
@@ -509,8 +520,26 @@ pub async fn mute_participant(
 // unused; they'll be re-wired when the registry gains a "subscribe to
 // every room" hook (see TODO in `commands/share.rs::ensure_share_server`).
 
+/// Ensure both host-side subscribers (event mirror + vote resolver) are
+/// spawned for `room`, idempotently. Safe to call from the bridge on
+/// every turn — `state.host_room_subscribers` dedups on `chat_session_id`
+/// so we end up with at most one subscriber pair per room.
 #[cfg(feature = "server")]
-#[allow(dead_code)] // Wired back in once RoomRegistry has a creation hook (follow-up).
+pub async fn ensure_host_room_subscribers(
+    app: &AppHandle,
+    state: &AppState,
+    chat_session_id: &str,
+    room: std::sync::Arc<claudette::room::Room>,
+) {
+    let mut subs = state.host_room_subscribers.write().await;
+    if !subs.insert(chat_session_id.to_string()) {
+        return;
+    }
+    spawn_host_event_subscriber(app.clone(), room.clone());
+    spawn_host_vote_resolver(app.clone(), room, chat_session_id.to_string());
+}
+
+#[cfg(feature = "server")]
 fn spawn_host_event_subscriber(app: AppHandle, room: std::sync::Arc<claudette::room::Room>) {
     use tauri::Emitter;
     let mut rx = room.subscribe();
@@ -538,7 +567,6 @@ fn spawn_host_event_subscriber(app: AppHandle, room: std::sync::Arc<claudette::r
 }
 
 #[cfg(feature = "server")]
-#[allow(dead_code)] // Wired back in once RoomRegistry has a creation hook (follow-up).
 fn spawn_host_vote_resolver(
     app: AppHandle,
     room: std::sync::Arc<claudette::room::Room>,
