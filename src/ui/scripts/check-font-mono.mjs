@@ -37,15 +37,21 @@ function readFile(path) {
 }
 
 function extractTsConstant(source, name) {
-  // Match `export const NAME = '...'` or `export const NAME = "..."`,
-  // possibly broken across lines. Captures the inner string contents.
+  // Match `export const NAME = '...'`, `"..."`, or backtick form, possibly
+  // broken across lines. The inner pattern `(?:\\.|(?!\1).)*` consumes
+  // either an escaped character (so `\"` inside `"..."` doesn't terminate
+  // the match) or any character that isn't the chosen delimiter. Avoids
+  // pulling in a full TS parser for one constant while staying robust to
+  // someone switching the literal's quote style.
   const re = new RegExp(
-    `export\\s+const\\s+${name}\\s*=\\s*(['"\`])([\\s\\S]*?)\\1`,
+    `export\\s+const\\s+${name}\\s*=\\s*(['"\`])((?:\\\\.|(?!\\1)[\\s\\S])*)\\1`,
     "m",
   );
   const m = source.match(re);
   if (!m) return null;
-  return m[2];
+  // Unescape the captured value so the comparison sees the actual string
+  // contents (e.g. `\"` → `"`).
+  return m[2].replace(/\\(.)/g, "$1");
 }
 
 function extractCssVar(source, name) {
