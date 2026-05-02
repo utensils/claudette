@@ -4,6 +4,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -26,6 +27,7 @@ import { SegmentedControl } from "../shared/SegmentedControl";
 import { IconButton } from "../shared/IconButton";
 import { SessionTabs } from "../chat/SessionTabs";
 import { MessageMarkdown } from "../chat/MessageMarkdown";
+import { MarkdownImageBaseProvider } from "../chat/MarkdownImage";
 import { imageMediaType, isImagePath } from "../../utils/fileIcons";
 import styles from "./FileViewer.module.css";
 
@@ -297,6 +299,15 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
     typeof navigator !== "undefined" && navigator.platform.startsWith("Mac");
   const previewShortcutHint = isMacPlatform ? "⌘⇧V" : "Ctrl+Shift+V";
 
+  // Resolution context for relative `<img>` references inside the rendered
+  // markdown. Workspace-relative paths in a README — e.g. `./assets/logo.png`
+  // — get joined onto the directory of this file so `MarkdownImage` can
+  // load them through the existing `read_workspace_file_bytes` command.
+  const markdownImageBase = useMemo(() => {
+    const slash = path.lastIndexOf("/");
+    return { workspaceId, dir: slash === -1 ? "" : path.slice(0, slash) };
+  }, [workspaceId, path]);
+
   return (
     <div className={styles.viewer}>
       <WorkspacePanelHeader />
@@ -378,7 +389,9 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
           <div className={styles.center}>{t("file_preview_not_available")}</div>
         ) : showMarkdownPreview ? (
           <div className={styles.markdownBody}>
-            <MessageMarkdown content={bufferState.buffer} />
+            <MarkdownImageBaseProvider value={markdownImageBase}>
+              <MessageMarkdown content={bufferState.buffer} />
+            </MarkdownImageBaseProvider>
           </div>
         ) : showSourceEditor ? (
           <Suspense fallback={<div className={styles.center}>{t("file_loading")}</div>}>
