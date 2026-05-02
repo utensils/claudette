@@ -53,11 +53,13 @@ export function makeUnloadedBuffer(): FileBufferState {
 }
 
 export interface FileTreeSlice {
-  /** Folder paths (with trailing "/") that are expanded in the All-Files
-   *  tree. Persists across tab switches; not across sessions. */
-  allFilesExpandedDirs: Record<string, boolean>;
-  /** Path of the row focused in the tree (file or folder). */
-  allFilesSelectedPath: string | null;
+  /** Per-workspace map of folder paths (with trailing "/") that are
+   *  expanded in the All-Files tree. Scoped per workspace so two repos
+   *  with overlapping folder names (`src/`, `test/`, …) don't share
+   *  expansion state. Persists across tab switches; not across sessions. */
+  allFilesExpandedDirsByWorkspace: Record<string, Record<string, boolean>>;
+  /** Per-workspace path of the row focused in the tree (file or folder). */
+  allFilesSelectedPathByWorkspace: Record<string, string | null>;
 
   /** Per-workspace ordered list of open file-tab paths. Tabs are rendered
    *  in this order in the tab strip. */
@@ -70,10 +72,17 @@ export interface FileTreeSlice {
   /** Per-`${wsId}:${path}` buffer + UI state for every open file tab. */
   fileBuffers: Record<string, FileBufferState>;
 
-  // Tree
-  toggleAllFilesDir: (path: string) => void;
-  setAllFilesDirExpanded: (path: string, expanded: boolean) => void;
-  setAllFilesSelectedPath: (path: string | null) => void;
+  // Tree (scoped per workspace)
+  toggleAllFilesDir: (workspaceId: string, path: string) => void;
+  setAllFilesDirExpanded: (
+    workspaceId: string,
+    path: string,
+    expanded: boolean,
+  ) => void;
+  setAllFilesSelectedPath: (
+    workspaceId: string,
+    path: string | null,
+  ) => void;
 
   // Tab management
   /** Open a file tab and make it active. If already open, just selects it. */
@@ -134,27 +143,45 @@ export interface FileTreeSlice {
 export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> = (
   set,
 ) => ({
-  allFilesExpandedDirs: {},
-  allFilesSelectedPath: null,
+  allFilesExpandedDirsByWorkspace: {},
+  allFilesSelectedPathByWorkspace: {},
   fileTabsByWorkspace: {},
   activeFileTabByWorkspace: {},
   fileBuffers: {},
 
-  toggleAllFilesDir: (path) =>
+  toggleAllFilesDir: (workspaceId, path) =>
     set((s) => {
-      const next = { ...s.allFilesExpandedDirs };
+      const wsDirs = s.allFilesExpandedDirsByWorkspace[workspaceId] ?? {};
+      const next = { ...wsDirs };
       if (next[path]) delete next[path];
       else next[path] = true;
-      return { allFilesExpandedDirs: next };
+      return {
+        allFilesExpandedDirsByWorkspace: {
+          ...s.allFilesExpandedDirsByWorkspace,
+          [workspaceId]: next,
+        },
+      };
     }),
-  setAllFilesDirExpanded: (path, expanded) =>
+  setAllFilesDirExpanded: (workspaceId, path, expanded) =>
     set((s) => {
-      const next = { ...s.allFilesExpandedDirs };
+      const wsDirs = s.allFilesExpandedDirsByWorkspace[workspaceId] ?? {};
+      const next = { ...wsDirs };
       if (expanded) next[path] = true;
       else delete next[path];
-      return { allFilesExpandedDirs: next };
+      return {
+        allFilesExpandedDirsByWorkspace: {
+          ...s.allFilesExpandedDirsByWorkspace,
+          [workspaceId]: next,
+        },
+      };
     }),
-  setAllFilesSelectedPath: (path) => set({ allFilesSelectedPath: path }),
+  setAllFilesSelectedPath: (workspaceId, path) =>
+    set((s) => ({
+      allFilesSelectedPathByWorkspace: {
+        ...s.allFilesSelectedPathByWorkspace,
+        [workspaceId]: path,
+      },
+    })),
 
   openFileTab: (workspaceId, path) =>
     set((s) => {

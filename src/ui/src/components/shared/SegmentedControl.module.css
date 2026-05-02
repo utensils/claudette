@@ -25,12 +25,14 @@
   border-left: 1px solid var(--divider);
 }
 
-.button:hover:not(.buttonActive):not(:disabled) {
+.button:hover:not(.buttonActive):not(.buttonDisabled) {
   background: var(--hover-bg-subtle);
   color: var(--text-primary);
 }
 
-.button:disabled {
+/* `aria-disabled` (not native `disabled`) so the browser still fires
+   hover/focus events and the explanatory `title` tooltip can appear. */
+.buttonDisabled {
   opacity: 0.5;
   cursor: not-allowed;
 }

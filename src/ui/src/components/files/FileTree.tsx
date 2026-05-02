@@ -18,6 +18,10 @@ import type { FileEntry } from "../../services/tauri";
 import styles from "./FileTree.module.css";
 
 interface FileTreeProps {
+  /** Workspace this tree belongs to. Drives per-workspace expansion +
+   *  selection state so switching workspaces doesn't smear tree UI state
+   *  from one repo onto another. */
+  workspaceId: string;
   entries: FileEntry[];
   /** Called when the user activates a file row (click / Enter / Space).
    *  The parent decides whether to actually open it (e.g. it may show a
@@ -25,15 +29,38 @@ interface FileTreeProps {
   onActivateFile: (path: string) => void;
 }
 
+const EMPTY_EXPANDED: Record<string, boolean> = {};
+
 export const FileTree = memo(function FileTree({
+  workspaceId,
   entries,
   onActivateFile,
 }: FileTreeProps) {
-  const expanded = useAppStore((s) => s.allFilesExpandedDirs);
-  const selected = useAppStore((s) => s.allFilesSelectedPath);
-  const toggleDir = useAppStore((s) => s.toggleAllFilesDir);
-  const setExpanded = useAppStore((s) => s.setAllFilesDirExpanded);
-  const setSelected = useAppStore((s) => s.setAllFilesSelectedPath);
+  const expanded = useAppStore(
+    (s) => s.allFilesExpandedDirsByWorkspace[workspaceId] ?? EMPTY_EXPANDED,
+  );
+  const selected = useAppStore(
+    (s) => s.allFilesSelectedPathByWorkspace[workspaceId] ?? null,
+  );
+  const toggleDirAction = useAppStore((s) => s.toggleAllFilesDir);
+  const setExpandedAction = useAppStore((s) => s.setAllFilesDirExpanded);
+  const setSelectedAction = useAppStore((s) => s.setAllFilesSelectedPath);
+  // Pre-bind the workspace into the action callables so the existing
+  // call sites read like the previous (workspace-implicit) API. Stable
+  // identities across renders keep the keyboard-handler useCallback
+  // memoization meaningful.
+  const toggleDir = useCallback(
+    (path: string) => toggleDirAction(workspaceId, path),
+    [toggleDirAction, workspaceId],
+  );
+  const setExpanded = useCallback(
+    (path: string, exp: boolean) => setExpandedAction(workspaceId, path, exp),
+    [setExpandedAction, workspaceId],
+  );
+  const setSelected = useCallback(
+    (path: string | null) => setSelectedAction(workspaceId, path),
+    [setSelectedAction, workspaceId],
+  );
 
   const tree = useMemo(() => buildFileTree(entries), [entries]);
   const visible = useMemo(

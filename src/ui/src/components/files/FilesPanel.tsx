@@ -60,7 +60,11 @@ export function FilesPanel() {
       ) : error ? (
         <div className={styles.empty}>Failed to load: {error}</div>
       ) : (
-        <FileTree entries={entries} onActivateFile={handleActivateFile} />
+        <FileTree
+          workspaceId={selectedWorkspaceId}
+          entries={entries}
+          onActivateFile={handleActivateFile}
+        />
       )}
     </div>
   );

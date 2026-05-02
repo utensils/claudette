@@ -102,6 +102,10 @@ export function CommandPalette() {
   const [fileEntries, setFileEntries] = useState<FileEntry[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
   const [filesLoadError, setFilesLoadError] = useState<string | null>(null);
+  // Monotonic token bumped on each `enterFileMode` invocation so a late
+  // `listWorkspaceFiles` response from a previous workspace can detect it's
+  // stale and skip overwriting `fileEntries` with the wrong list.
+  const filesLoadVersionRef = useRef(0);
   const originalThemeIdRef = useRef(currentThemeId);
   const resultsRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -244,12 +248,15 @@ export function CommandPalette() {
     setSelectedIndex(0);
     setFilesLoading(true);
     setFilesLoadError(null);
+    const version = ++filesLoadVersionRef.current;
     listWorkspaceFiles(selectedWorkspaceId)
       .then((entries) => {
+        if (version !== filesLoadVersionRef.current) return;
         setFileEntries(entries);
         setFilesLoading(false);
       })
       .catch((err) => {
+        if (version !== filesLoadVersionRef.current) return;
         console.error("[CommandPalette] Failed to load workspace files:", err);
         setFileEntries([]);
         setFilesLoadError(String(err));

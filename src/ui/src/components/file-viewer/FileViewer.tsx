@@ -236,8 +236,17 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
       }
     } catch (e) {
       console.error("Save failed:", e);
-      addToast(t("file_save_failed", { error: String(e) }));
-      // Buffer stays dirty so the user doesn't lose work.
+      // Mirror the success guard: only surface the failure toast in the
+      // workspace+tab the user actually triggered the save from. The buffer
+      // stays dirty regardless so the user doesn't lose work, and the
+      // console.error above gives an unconditional record of the failure.
+      const state = useAppStore.getState();
+      if (
+        state.selectedWorkspaceId === requestedWorkspaceId &&
+        selectActiveFileTabPath(state) === requestedPath
+      ) {
+        addToast(t("file_save_failed", { error: String(e) }));
+      }
     } finally {
       setSaving(false);
     }

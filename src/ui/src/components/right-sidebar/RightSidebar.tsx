@@ -32,6 +32,7 @@ export const RightSidebar = memo(function RightSidebar() {
   const diffSelectedLayer = useAppStore((s) => s.diffSelectedLayer);
   const diffLoading = useAppStore((s) => s.diffLoading);
   const setDiffFiles = useAppStore((s) => s.setDiffFiles);
+  const clearDiff = useAppStore((s) => s.clearDiff);
   const openDiffTab = useAppStore((s) => s.openDiffTab);
   const setDiffLoading = useAppStore((s) => s.setDiffLoading);
   const activeTab = useAppStore((s) => s.rightSidebarTab);
@@ -42,6 +43,14 @@ export const RightSidebar = memo(function RightSidebar() {
   const remoteConnectionId = ws?.remote_connection_id ?? null;
   const worktreePath = ws?.worktree_path ?? null;
   const prevIsRunning = useRef<boolean | undefined>(undefined);
+  // Monotonic load token bumped each time a workspace-scoped diff fetch is
+  // dispatched. A late response from a previous workspace compares against
+  // the current value and bails out so it can't overwrite the new
+  // workspace's diff list. Without this, the post-rebase change to keep
+  // the file list mounted while reloading (so FileGroup collapse state is
+  // preserved) means stale data from workspace A would render until B's
+  // fetch resolves.
+  const diffLoadVersion = useRef(0);
 
   const activeSessionId = useAppStore(selectActiveSessionId);
   const { totalCount: taskCount } = useTaskTracker(activeSessionId);
@@ -101,22 +110,36 @@ export const RightSidebar = memo(function RightSidebar() {
 
   useEffect(() => {
     if (!selectedWorkspaceId) return;
+    // Clear before fetching so the file list, badge, and selection from the
+    // previous workspace don't leak into the new one while the fetch is in
+    // flight. The empty-list fallback `diffFiles.length === 0 && diffLoading`
+    // then renders "Loading..." instead of stale rows.
+    clearDiff();
     setDiffLoading(true);
+    const version = ++diffLoadVersion.current;
     loadDiff(selectedWorkspaceId)
       .then((result) => {
+        if (version !== diffLoadVersion.current) return;
         applyDiffResult(result);
         setDiffLoading(false);
       })
-      .catch(() => setDiffLoading(false));
-  }, [selectedWorkspaceId, loadDiff, applyDiffResult, setDiffLoading]);
+      .catch(() => {
+        if (version !== diffLoadVersion.current) return;
+        setDiffLoading(false);
+      });
+  }, [selectedWorkspaceId, loadDiff, applyDiffResult, setDiffLoading, clearDiff]);
 
   // Live-refresh diff files while agent is running (every 3s).
   useEffect(() => {
     if (!selectedWorkspaceId || !isRunning) return;
 
     const interval = setInterval(() => {
+      const version = ++diffLoadVersion.current;
       loadDiff(selectedWorkspaceId)
-        .then((result) => applyDiffResult(result))
+        .then((result) => {
+          if (version !== diffLoadVersion.current) return;
+          applyDiffResult(result);
+        })
         .catch(() => {});
     }, 3000);
 
@@ -132,12 +155,15 @@ export const RightSidebar = memo(function RightSidebar() {
 
     const timer = setTimeout(() => {
       setDiffLoading(true);
+      const version = ++diffLoadVersion.current;
       loadDiff(selectedWorkspaceId)
         .then((result) => {
+          if (version !== diffLoadVersion.current) return;
           applyDiffResult(result);
           setDiffLoading(false);
         })
         .catch((e) => {
+          if (version !== diffLoadVersion.current) return;
           console.error("Failed to refresh diff files:", e);
           setDiffLoading(false);
         });

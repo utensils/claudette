@@ -104,10 +104,14 @@ export function SessionTabs({ workspaceId }: Props) {
     [clearActiveFileTab, selectDiffTab, workspaceId],
   );
 
-  // Per-instance dirty-close prompt: when the user clicks X on a file tab
-  // with unsaved edits, we route through this state instead of dispatching
-  // closeFileTab directly. Confirming closes; cancelling leaves the tab.
-  const [pendingClosePath, setPendingClosePath] = useState<string | null>(null);
+  // Per-instance dirty-close prompt: when the user closes one or more file
+  // tabs with unsaved edits, we route through this state instead of
+  // dispatching closeFileTab directly. A list (rather than a single path)
+  // is required so bulk-close paths ("Close all", "Close others",
+  // "Close to the right") can confirm every dirty tab in one prompt
+  // instead of overwriting the slot per iteration. Confirming closes the
+  // whole batch; cancelling leaves the tabs intact.
+  const [pendingClosePaths, setPendingClosePaths] = useState<string[]>([]);
 
   // Monotonic version token: each local mutation (create/archive) bumps this so
   // an in-flight `listChatSessions` response can detect it's stale and skip the
@@ -227,10 +231,35 @@ export function SessionTabs({ workspaceId }: Props) {
     (path: string) => {
       const dirty = isFileTabDirty(useAppStore.getState(), workspaceId, path);
       if (dirty) {
-        setPendingClosePath(path);
+        setPendingClosePaths([path]);
       } else {
         closeFileTab(workspaceId, path);
       }
+    },
+    [workspaceId, closeFileTab],
+  );
+
+  // Bulk variant: separate clean from dirty file paths, close clean ones
+  // immediately, and queue the dirty ones into a single confirmation
+  // prompt. Returns true if the caller can keep going with the rest of the
+  // batch (no dirty files), false if the prompt is now blocking and the
+  // caller should stop scheduling further closes for this iteration.
+  const requestCloseFileTabsBatch = useCallback(
+    (paths: string[]): boolean => {
+      if (paths.length === 0) return true;
+      const state = useAppStore.getState();
+      const dirty: string[] = [];
+      const clean: string[] = [];
+      for (const p of paths) {
+        if (isFileTabDirty(state, workspaceId, p)) dirty.push(p);
+        else clean.push(p);
+      }
+      for (const p of clean) closeFileTab(workspaceId, p);
+      if (dirty.length > 0) {
+        setPendingClosePaths(dirty);
+        return false;
+      }
+      return true;
     },
     [workspaceId, closeFileTab],
   );
@@ -256,6 +285,10 @@ export function SessionTabs({ workspaceId }: Props) {
             : t("session_running_confirm_close_multi", { count: runningSessions.length });
         if (!window.confirm(message)) return;
       }
+      // File tabs: collect first, close clean ones immediately, route
+      // dirty ones through a single batched confirm. Sessions and diffs
+      // close inline as before.
+      const filePaths: string[] = [];
       for (const entry of entries) {
         if (entry.kind === "session") {
           const session = activeSessions.find((s) => s.id === entry.sessionId);
@@ -263,11 +296,12 @@ export function SessionTabs({ workspaceId }: Props) {
         } else if (entry.kind === "diff") {
           closeDiffTab(workspaceId, entry.path, entry.layer);
         } else {
-          requestCloseFileTab(entry.path);
+          filePaths.push(entry.path);
         }
       }
+      requestCloseFileTabsBatch(filePaths);
     },
-    [activeSessions, archiveSessionImmediate, closeDiffTab, requestCloseFileTab, t, workspaceId],
+    [activeSessions, archiveSessionImmediate, closeDiffTab, requestCloseFileTabsBatch, t, workspaceId],
   );
 
   const navigateTabs = useCallback(
@@ -444,13 +478,16 @@ export function SessionTabs({ workspaceId }: Props) {
           onClose={() => setContextMenu(null)}
         />
       )}
-      {pendingClosePath && (
+      {pendingClosePaths.length > 0 && (
         <DiscardUnsavedChangesConfirm
+          count={pendingClosePaths.length}
           onConfirm={() => {
-            closeFileTab(workspaceId, pendingClosePath);
-            setPendingClosePath(null);
+            for (const p of pendingClosePaths) {
+              closeFileTab(workspaceId, p);
+            }
+            setPendingClosePaths([]);
           }}
-          onClose={() => setPendingClosePath(null)}
+          onClose={() => setPendingClosePaths([])}
         />
       )}
     </div>
