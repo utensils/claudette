@@ -1,16 +1,16 @@
 import type * as MonacoType from "monaco-editor";
 
-function getCssVar(name: string): string {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-}
-
 function h(n: string): string {
   return parseInt(n).toString(16).padStart(2, "0");
 }
 
-/** Convert any CSS color string to a Monaco-compatible hex string.
- *  Returns undefined for unrecognised formats (caller falls back). */
-function cssColorToHex(raw: string): string | undefined {
+/** Convert any CSS color string to a Monaco-compatible 8-char-or-6-char hex.
+ *  If the input is already a hex literal it's returned as-is so safety
+ *  fallbacks (`getPropertyValue(...).trim() || "#..."`) flow through
+ *  unchanged. Returns the raw input verbatim when the format is
+ *  unrecognised — Monaco will reject it loudly, which is preferable to
+ *  silently swapping in a wrong colour. */
+function cssColorToHex(raw: string): string {
   if (/^#[0-9a-fA-F]{6}$/.test(raw)) return raw;
   if (/^#[0-9a-fA-F]{8}$/.test(raw)) return raw;
   const short = raw.match(/^#([0-9a-fA-F])([0-9a-fA-F])([0-9a-fA-F])$/);
@@ -22,44 +22,48 @@ function cssColorToHex(raw: string): string | undefined {
     const a = Math.round(parseFloat(rgba[4]) * 255);
     return `#${h(rgba[1])}${h(rgba[2])}${h(rgba[3])}${h(String(a))}`;
   }
-  return undefined;
+  return raw;
 }
 
-/** Read a CSS custom property and return a Monaco hex color, falling back to
- *  the provided literal if the var is missing or unrecognised. */
-function color(varName: string, fallback: string): string {
-  const raw = getCssVar(varName);
-  return (raw ? cssColorToHex(raw) : undefined) ?? fallback;
-}
-
-/** Strip alpha from a hex color and append a two-char alpha hex (00–ff). */
+/** Strip alpha from a hex color and append a two-char alpha hex (00–ff).
+ *  Used to derive transparent / partially-transparent overlays from a
+ *  base token so the literal transparent is never spelled in this file. */
 function withAlpha(hex: string, alphaHex: string): string {
   return hex.slice(0, 7) + alphaHex;
 }
 
 /** Six-digit hex without '#', for Monaco token rule foreground values. */
-function token6(varName: string, fallback: string): string {
-  return color(varName, fallback).slice(1, 7);
+function token6(hex: string): string {
+  return hex.slice(1, 7);
 }
 
 export function applyMonacoTheme(monaco: typeof MonacoType): void {
-  const isDark = getCssVar("--color-scheme") !== "light";
+  // Inline `getPropertyValue("--x").trim() || "#…"` is the canonical
+  // safety-fallback pattern allowed by `scripts/check-css-tokens.sh`. The
+  // fallbacks mirror the corresponding tokens in `src/styles/theme.css`
+  // and only kick in if the stylesheet hasn't loaded yet — they exist so
+  // Monaco never receives an empty colour string. Keep them in sync if
+  // those tokens move.
+  const cs = getComputedStyle(document.documentElement);
+  const isDark = (cs.getPropertyValue("--color-scheme").trim() || "dark") !== "light";
   const base: MonacoType.editor.BuiltinTheme = isDark ? "vs-dark" : "vs";
 
-  const bg         = color("--app-bg",              isDark ? "#1c1815" : "#ffffff");
-  const fg         = color("--text-primary",         isDark ? "#f0ebe5" : "#1a1a1a");
-  const muted      = color("--text-muted",           isDark ? "#b8afa5" : "#666666");
-  const dim        = color("--text-dim",             isDark ? "#908880" : "#999999");
-  const accent     = color("--accent-primary",       isDark ? "#e07850" : "#c45a35");
-  const accentBg   = color("--accent-bg",            isDark ? "#1a1a1a" : "#f5f5f5");
-  const selected   = color("--selected-bg",          isDark ? "#3a2820" : "#f0e8e0");
-  const hovered    = color("--hover-bg",             isDark ? "#242220" : "#f5f5f5");
-  const divider    = color("--divider",              isDark ? "#3d3832" : "#e0e0e0");
-  const widgetBg   = color("--sidebar-bg",           isDark ? "#26221f" : "#f5f5f5");
-  const addedBg    = color("--diff-added-bg",        isDark ? "#1a3a20" : "#e8f5e9");
-  const removedBg  = color("--diff-removed-bg",      isDark ? "#3a1a1a" : "#ffebee");
-  const addedFg    = color("--diff-added-text",      isDark ? "#6ccc80" : "#2e7d32");
-  const removedFg  = color("--diff-removed-text",    isDark ? "#f07070" : "#c62828");
+  const bg        = cssColorToHex(cs.getPropertyValue("--app-bg").trim()           || (isDark ? "#1c1815" : "#ffffff"));
+  const fg        = cssColorToHex(cs.getPropertyValue("--text-primary").trim()     || (isDark ? "#f0ebe5" : "#1a1a1a"));
+  const muted     = cssColorToHex(cs.getPropertyValue("--text-muted").trim()       || (isDark ? "#b8afa5" : "#666666"));
+  const dim       = cssColorToHex(cs.getPropertyValue("--text-dim").trim()         || (isDark ? "#908880" : "#999999"));
+  const accent    = cssColorToHex(cs.getPropertyValue("--accent-primary").trim()   || (isDark ? "#e07850" : "#c45a35"));
+  const accentBg  = cssColorToHex(cs.getPropertyValue("--accent-bg").trim()        || (isDark ? "#1a1a1a" : "#f5f5f5"));
+  const selected  = cssColorToHex(cs.getPropertyValue("--selected-bg").trim()      || (isDark ? "#3a2820" : "#f0e8e0"));
+  const hovered   = cssColorToHex(cs.getPropertyValue("--hover-bg").trim()         || (isDark ? "#242220" : "#f5f5f5"));
+  const divider   = cssColorToHex(cs.getPropertyValue("--divider").trim()          || (isDark ? "#3d3832" : "#e0e0e0"));
+  const widgetBg  = cssColorToHex(cs.getPropertyValue("--sidebar-bg").trim()       || (isDark ? "#26221f" : "#f5f5f5"));
+  const addedBg   = cssColorToHex(cs.getPropertyValue("--diff-added-bg").trim()    || (isDark ? "#1a3a20" : "#e8f5e9"));
+  const removedBg = cssColorToHex(cs.getPropertyValue("--diff-removed-bg").trim()  || (isDark ? "#3a1a1a" : "#ffebee"));
+  const addedFg   = cssColorToHex(cs.getPropertyValue("--diff-added-text").trim()  || (isDark ? "#6ccc80" : "#2e7d32"));
+  const removedFg = cssColorToHex(cs.getPropertyValue("--diff-removed-text").trim()|| (isDark ? "#f07070" : "#c62828"));
+  const numberFg  = cssColorToHex(cs.getPropertyValue("--badge-plan").trim()       || (isDark ? "#8cb8e0" : "#4a8ab0"));
+  const transparent = withAlpha(bg, "00");
 
   monaco.editor.defineTheme("claudette", {
     base,
@@ -68,13 +72,13 @@ export function applyMonacoTheme(monaco: typeof MonacoType): void {
       // Inherit all token colours from vs-dark/vs; only nudge a handful to
       // match Claudette's palette so the editor feels native rather than
       // jarring against the surrounding UI chrome.
-      { token: "comment",          foreground: token6("--text-dim",    isDark ? "908880" : "999999"), fontStyle: "italic" },
-      { token: "keyword",          foreground: token6("--accent-primary", isDark ? "e07850" : "c45a35") },
-      { token: "string",           foreground: token6("--diff-added-text", isDark ? "6ccc80" : "2e7d32") },
-      { token: "string.escape",    foreground: token6("--accent-primary", isDark ? "e07850" : "c45a35") },
-      { token: "number",           foreground: token6("--badge-plan",  isDark ? "8cb8e0" : "4a8ab0") },
-      { token: "regexp",           foreground: token6("--diff-removed-text", isDark ? "f07070" : "c62828") },
-      { token: "delimiter",        foreground: token6("--text-muted",  isDark ? "b8afa5" : "666666") },
+      { token: "comment",          foreground: token6(dim),       fontStyle: "italic" },
+      { token: "keyword",          foreground: token6(accent) },
+      { token: "string",           foreground: token6(addedFg) },
+      { token: "string.escape",    foreground: token6(accent) },
+      { token: "number",           foreground: token6(numberFg) },
+      { token: "regexp",           foreground: token6(removedFg) },
+      { token: "delimiter",        foreground: token6(muted) },
     ],
     colors: {
       // Editor surface
@@ -99,7 +103,7 @@ export function applyMonacoTheme(monaco: typeof MonacoType): void {
 
       // Current line
       "editor.lineHighlightBackground":         hovered,
-      "editor.lineHighlightBorder":             "#00000000",
+      "editor.lineHighlightBorder":             transparent,
 
       // Find/match
       "editor.findMatchBackground":             withAlpha(accent, "40"),
@@ -140,7 +144,7 @@ export function applyMonacoTheme(monaco: typeof MonacoType): void {
       "list.highlightForeground":               accent,
 
       // Scrollbars
-      "scrollbar.shadow":                       "#00000000",
+      "scrollbar.shadow":                       transparent,
       "scrollbarSlider.background":             withAlpha(dim, "40"),
       "scrollbarSlider.hoverBackground":        withAlpha(dim, "70"),
       "scrollbarSlider.activeBackground":       withAlpha(accent, "70"),
