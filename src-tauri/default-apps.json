@@ -37,7 +37,7 @@
       "name": "Neovim",
       "category": "editor",
       "bin_names": ["nvim"],
-      "open_args": ["{}"],
+      "open_args": [],
       "needs_terminal": true
     },
     {
@@ -45,7 +45,7 @@
       "name": "Vim",
       "category": "editor",
       "bin_names": ["vim"],
-      "open_args": ["{}"],
+      "open_args": [],
       "needs_terminal": true
     },
     {
