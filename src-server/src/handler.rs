@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use claudette::agent::{self, AgentEvent, AgentSettings, InnerStreamEvent, StreamEvent};
 use claudette::chat::{
-    BuildAssistantArgs, build_assistant_chat_message, extract_assistant_text,
-    extract_event_thinking,
+    BuildAssistantArgs, CheckpointArgs, build_assistant_chat_message, create_turn_checkpoint,
+    extract_assistant_text, extract_event_thinking,
 };
 use claudette::db::Database;
 use claudette::model::{ChatMessage, ChatRole, Workspace, WorkspaceStatus};
@@ -614,6 +614,8 @@ async fn handle_send_chat_message(
     let ws_id = workspace_id.clone();
     let chat_session_id_for_stream = chat_session_id.clone();
     let db_path = state.db_path.clone();
+    let wt_path = worktree_path.clone();
+    let user_msg_id = user_msg.id.clone();
     let state = Arc::clone(state);
     let writer = Arc::clone(writer);
     tokio::spawn(async move {
@@ -625,6 +627,11 @@ async fn handle_send_chat_message(
         // reset to None after each persistence so per-message counts stay
         // distinct across multi-message turns. Mirrors the Tauri bridge.
         let mut latest_usage: Option<claudette::agent::TokenUsage> = None;
+        // Tracks the most recently persisted assistant message id so the
+        // Result-event arm can update its cost/duration and use it as the
+        // checkpoint anchor without re-querying the DB. Mirrors the Tauri
+        // bridge.
+        let mut last_assistant_msg_id: Option<String> = None;
         while let Some(event) = rx.recv().await {
             if let AgentEvent::Stream(StreamEvent::System { ref subtype, .. }) = event
                 && subtype == "init"
@@ -677,22 +684,48 @@ async fn handle_send_chat_message(
                         usage: latest_usage.take(),
                         created_at: now_iso(),
                     });
-                    let _ = db.insert_chat_message(&msg);
+                    let msg_id = msg.id.clone();
+                    if db.insert_chat_message(&msg).is_ok() {
+                        last_assistant_msg_id = Some(msg_id);
+                    }
                 }
             }
 
-            // Update cost/duration.
+            // Update cost/duration on result events, then create a checkpoint.
             if let AgentEvent::Stream(StreamEvent::Result {
                 ref total_cost_usd,
                 ref duration_ms,
                 ..
             }) = event
-                && let (Some(cost), Some(dur)) = (total_cost_usd, duration_ms)
-                && let Ok(db) = Database::open(&db_path)
-                && let Ok(msgs) = db.list_chat_messages_for_session(&chat_session_id_for_stream)
-                && let Some(last) = msgs.iter().rfind(|m| m.role == ChatRole::Assistant)
             {
-                let _ = db.update_chat_message_cost(&last.id, *cost, *dur);
+                if let (Some(cost), Some(dur)) = (total_cost_usd, duration_ms)
+                    && let Some(ref msg_id) = last_assistant_msg_id
+                    && let Ok(db) = Database::open(&db_path)
+                {
+                    let _ = db.update_chat_message_cost(msg_id, *cost, *dur);
+                }
+
+                let anchor_msg_id = last_assistant_msg_id.as_deref().unwrap_or(&user_msg_id);
+                if let Some(cp) = create_turn_checkpoint(CheckpointArgs {
+                    db_path: &db_path,
+                    workspace_id: &ws_id,
+                    chat_session_id: &chat_session_id_for_stream,
+                    anchor_msg_id,
+                    worktree_path: &wt_path,
+                    created_at: now_iso(),
+                })
+                .await
+                {
+                    let event_msg = json!({
+                        "event": "checkpoint-created",
+                        "payload": {
+                            "workspace_id": &ws_id,
+                            "chat_session_id": &chat_session_id_for_stream,
+                            "checkpoint": &cp,
+                        }
+                    });
+                    send_message(&writer, &event_msg).await;
+                }
             }
 
             // Emit event over WebSocket.
