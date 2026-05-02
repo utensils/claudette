@@ -114,6 +114,70 @@ impl Database {
         rows.collect()
     }
 
+    /// Count all messages for a session. Used to compute pagination metadata
+    /// (`total_count`) so callers can derive the global index offset of any
+    /// loaded page without a separate round-trip.
+    pub fn count_chat_messages_for_session(
+        &self,
+        chat_session_id: &str,
+    ) -> Result<i64, rusqlite::Error> {
+        self.conn.query_row(
+            "SELECT COUNT(*) FROM chat_messages WHERE chat_session_id = ?1",
+            params![chat_session_id],
+            |row| row.get(0),
+        )
+    }
+
+    /// Return up to `limit` messages for a session in ascending chronological
+    /// order. When `before_message_id` is `None` the newest `limit` messages
+    /// are returned; when it is `Some(id)` only messages whose `rowid` is
+    /// strictly less than the row identified by that id are considered, so the
+    /// caller can page backwards through history by passing the id of the
+    /// oldest already-loaded message as the cursor.
+    pub fn list_chat_messages_page(
+        &self,
+        chat_session_id: &str,
+        limit: i64,
+        before_message_id: Option<&str>,
+    ) -> Result<Vec<ChatMessage>, rusqlite::Error> {
+        let mut rows: Vec<ChatMessage> = match before_message_id {
+            None => {
+                let sql = format!(
+                    "SELECT {cols} FROM chat_messages
+                     WHERE chat_session_id = ?1
+                     ORDER BY created_at DESC, rowid DESC
+                     LIMIT ?2",
+                    cols = Self::CHAT_MESSAGE_COLS
+                );
+                let mut stmt = self.conn.prepare(&sql)?;
+                stmt.query_map(
+                    params![chat_session_id, limit],
+                    Self::parse_chat_message_row,
+                )?
+                .collect::<Result<Vec<_>, _>>()?
+            }
+            Some(cursor_id) => {
+                let sql = format!(
+                    "SELECT {cols} FROM chat_messages
+                     WHERE chat_session_id = ?1
+                       AND rowid < (SELECT rowid FROM chat_messages WHERE id = ?3)
+                     ORDER BY created_at DESC, rowid DESC
+                     LIMIT ?2",
+                    cols = Self::CHAT_MESSAGE_COLS
+                );
+                let mut stmt = self.conn.prepare(&sql)?;
+                stmt.query_map(
+                    params![chat_session_id, limit, cursor_id],
+                    Self::parse_chat_message_row,
+                )?
+                .collect::<Result<Vec<_>, _>>()?
+            }
+        };
+        // Reverse so callers receive messages in ascending chronological order.
+        rows.reverse();
+        Ok(rows)
+    }
+
     #[allow(dead_code)]
     pub fn update_chat_message_content(
         &self,

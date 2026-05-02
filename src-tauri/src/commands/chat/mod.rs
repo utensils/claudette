@@ -49,6 +49,17 @@ pub struct AttachmentResponse {
     pub tool_use_id: Option<String>,
 }
 
+/// Paginated response returned by [`super::send::load_chat_history_page`].
+/// Bundles the message page with its attachments so the frontend needs only
+/// one IPC round-trip per page instead of two.
+#[derive(Serialize)]
+pub struct ChatHistoryPage {
+    pub messages: Vec<claudette::model::ChatMessage>,
+    pub attachments: Vec<AttachmentResponse>,
+    pub has_more: bool,
+    pub total_count: i64,
+}
+
 #[derive(Clone, Serialize)]
 pub(crate) struct AgentStreamPayload {
     pub workspace_id: String,

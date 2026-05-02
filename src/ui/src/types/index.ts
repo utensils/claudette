@@ -8,6 +8,8 @@ export type {
   ChatMessage,
   ChatRole,
   ChatAttachment,
+  ChatHistoryPage,
+  ChatPaginationState,
   AttachmentInput,
   PendingAttachment,
   ChatSession,

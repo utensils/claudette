@@ -4,7 +4,7 @@ import { ChatSearchBar } from "./ChatSearchBar";
 import { useAppStore } from "../../stores/useAppStore";
 import {
   loadAttachmentData,
-  loadChatHistory,
+  loadChatHistoryPage,
   loadAttachmentsForSession,
   listCheckpoints,
   listSlashCommands,
@@ -81,6 +81,10 @@ export function ChatPanel() {
   const setChatMessages = useAppStore((s) => s.setChatMessages);
   const hydrateCompletedTurns = useAppStore((s) => s.hydrateCompletedTurns);
   const addChatMessage = useAppStore((s) => s.addChatMessage);
+  const setChatPagination = useAppStore((s) => s.setChatPagination);
+  const chatPaginationState = useAppStore((s) =>
+    activeSessionId ? s.chatPagination[activeSessionId] : undefined,
+  );
   const updateWorkspace = useAppStore((s) => s.updateWorkspace);
   const openPluginSettings = useAppStore((s) => s.openPluginSettings);
   const pluginManagementEnabled = useAppStore((s) => s.pluginManagementEnabled);
@@ -175,6 +179,15 @@ export function ChatPanel() {
   const messages = activeSessionId
     ? chatMessages[activeSessionId] || []
     : [];
+  const hasMore = chatPaginationState?.hasMore ?? false;
+  const isLoadingMore = chatPaginationState?.isLoadingMore ?? false;
+  const paginationTotalCount = chatPaginationState?.totalCount ?? messages.length;
+  const oldestMessageId = chatPaginationState?.oldestMessageId ?? null;
+  // Global 0-based index of the first loaded message in the full message sequence.
+  // Zero for new/fully-loaded sessions; positive for paginated sessions where
+  // older messages have not been fetched yet.
+  const globalOffset = paginationTotalCount - messages.length;
+
   // Subscribe only to boolean — avoids re-render on every streaming character
   const hasStreaming = useAppStore(
     (s) => !!(activeSessionId && s.streamingContent[activeSessionId])
@@ -301,12 +314,6 @@ export function ChatPanel() {
       .getState()
       .workspaces.find((w) => w.id === selectedWorkspaceId);
     const sessionId = activeSessionId;
-    const loadHistory = currentWs?.remote_connection_id
-      ? sendRemoteCommand(currentWs.remote_connection_id, "load_chat_history", {
-          chat_session_id: sessionId,
-        }).then((data) => (data as { messages?: ChatMessage[] })?.messages ?? data as ChatMessage[])
-      : loadChatHistory(sessionId);
-
     const isLocal = !currentWs?.remote_connection_id;
 
     debugChat("ChatPanel", "load-history:start", {
@@ -315,75 +322,92 @@ export function ChatPanel() {
       agentStatus: currentWs?.agent_status ?? null,
     });
 
-    loadHistory
-      .then((msgs: ChatMessage[]) => {
-        if (cancelled) return;
-        // Filter out empty assistant messages (legacy data), but keep
-        // those that carry thinking content.
-        const filtered = msgs.filter(
-          (m) => m.role !== "Assistant" || m.content.trim() !== "" || !!m.thinking
-        );
-        debugChat("ChatPanel", "load-history:success", {
+    const onMessages = (msgs: ChatMessage[], attachments?: import("../../types").ChatAttachment[], pageState?: import("../../types").ChatPaginationState) => {
+      if (cancelled) return;
+      // Filter out empty assistant messages (legacy data), but keep
+      // those that carry thinking content.
+      const filtered = msgs.filter(
+        (m) => m.role !== "Assistant" || m.content.trim() !== "" || !!m.thinking
+      );
+      debugChat("ChatPanel", "load-history:success", {
+        sessionId,
+        rawMessageCount: msgs.length,
+        filteredMessageCount: filtered.length,
+        messageIds: filtered.map((msg) => msg.id),
+      });
+      setChatMessages(sessionId, filtered);
+      if (attachments) {
+        useAppStore.getState().setChatAttachments(sessionId, attachments);
+      }
+      if (pageState) {
+        setChatPagination(sessionId, pageState);
+      }
+      historyRef.current[sessionId] = filtered
+        .filter((m) => m.role === "User")
+        .map((m) => m.content);
+      // Seed the ContextMeter from the last assistant message's per-call
+      // token data. If none is available (fresh / pre-migration workspace),
+      // clear any stale value so the meter hides.
+      const callUsage = extractLatestCallUsage(filtered);
+      const store = useAppStore.getState();
+      if (callUsage) store.setLatestTurnUsage(sessionId, callUsage);
+      else store.clearLatestTurnUsage(sessionId);
+      // Phase 3: seed compactionEvents by scanning for COMPACTION: sentinels.
+      store.setCompactionEvents(sessionId, extractCompactionEvents(filtered));
+
+      // Load persisted completed turns and reconstruct with correct positions.
+      // Skip if the agent is currently running — the in-memory state from
+      // finalizeTurn() is more current than the DB and must not be overwritten.
+      if (isLocal) {
+        const sessions = useAppStore.getState().sessionsByWorkspace[selectedWorkspaceId] ?? [];
+        const thisSession = sessions.find((s) => s.id === sessionId);
+        const isRunning = thisSession?.agent_status === "Running";
+        debugChat("ChatPanel", "load-completed-turns:gate", {
           sessionId,
-          rawMessageCount: msgs.length,
-          filteredMessageCount: filtered.length,
-          messageIds: filtered.map((msg) => msg.id),
+          isRunning,
+          currentCompletedTurnIds: (useAppStore.getState().completedTurns[sessionId] || []).map(
+            (turn) => turn.id
+          ),
         });
-        setChatMessages(sessionId, filtered);
-        historyRef.current[sessionId] = filtered
-          .filter((m) => m.role === "User")
-          .map((m) => m.content);
-        // Seed the ContextMeter from the last assistant message's per-call
-        // token data. If none is available (fresh / pre-migration workspace),
-        // clear any stale value so the meter hides.
-        const callUsage = extractLatestCallUsage(filtered);
-        const store = useAppStore.getState();
-        if (callUsage) store.setLatestTurnUsage(sessionId, callUsage);
-        else store.clearLatestTurnUsage(sessionId);
-        // Phase 3: seed compactionEvents by scanning for COMPACTION: sentinels.
-        store.setCompactionEvents(sessionId, extractCompactionEvents(filtered));
-
-        // Load attachments for this session's messages.
-        if (isLocal) {
-          loadAttachmentsForSession(sessionId)
-            .then((atts) => {
+        if (!isRunning) {
+          loadCompletedTurns(sessionId)
+            .then((turnData) => {
               if (cancelled) return;
-              useAppStore.getState().setChatAttachments(sessionId, atts);
+              const turns = reconstructCompletedTurns(filtered, turnData);
+              debugChat("ChatPanel", "load-completed-turns:success", {
+                sessionId,
+                dbTurnIds: turnData.map((turn) => turn.checkpoint_id),
+                reconstructedTurnIds: turns.map((turn) => turn.id),
+              });
+              hydrateCompletedTurns(sessionId, turns);
             })
-            .catch((e) => console.error("Failed to load attachments:", e));
+            .catch((e) => console.error("Failed to load completed turns:", e));
         }
+      }
+    };
 
-        // Load persisted completed turns and reconstruct with correct positions.
-        // Skip if the agent is currently running — the in-memory state from
-        // finalizeTurn() is more current than the DB and must not be overwritten.
-        if (isLocal) {
-          const sessions = useAppStore.getState().sessionsByWorkspace[selectedWorkspaceId] ?? [];
-          const thisSession = sessions.find((s) => s.id === sessionId);
-          const isRunning = thisSession?.agent_status === "Running";
-          debugChat("ChatPanel", "load-completed-turns:gate", {
-            sessionId,
-            isRunning,
-            currentCompletedTurnIds: (useAppStore.getState().completedTurns[sessionId] || []).map(
-              (turn) => turn.id
-            ),
+    if (isLocal) {
+      // Load newest page of messages and their attachments in one round-trip.
+      loadChatHistoryPage(sessionId, 50)
+        .then((page) => {
+          onMessages(page.messages, page.attachments, {
+            hasMore: page.has_more,
+            isLoadingMore: false,
+            totalCount: page.total_count,
+            oldestMessageId: page.messages[0]?.id ?? null,
           });
-          if (!isRunning) {
-            loadCompletedTurns(sessionId)
-              .then((turnData) => {
-                if (cancelled) return;
-                const turns = reconstructCompletedTurns(filtered, turnData);
-                debugChat("ChatPanel", "load-completed-turns:success", {
-                  sessionId,
-                  dbTurnIds: turnData.map((turn) => turn.checkpoint_id),
-                  reconstructedTurnIds: turns.map((turn) => turn.id),
-                });
-                hydrateCompletedTurns(sessionId, turns);
-              })
-              .catch((e) => console.error("Failed to load completed turns:", e));
-          }
-        }
+        })
+        .catch((e) => console.error("Failed to load chat history:", e));
+    } else {
+      sendRemoteCommand(currentWs!.remote_connection_id!, "load_chat_history", {
+        chat_session_id: sessionId,
       })
-      .catch((e) => console.error("Failed to load chat history:", e));
+        .then((data) => {
+          const msgs = (data as { messages?: ChatMessage[] })?.messages ?? (data as ChatMessage[]);
+          onMessages(msgs);
+        })
+        .catch((e) => console.error("Failed to load chat history:", e));
+    }
 
     // Load checkpoints for rollback support.
     if (isLocal) {
@@ -399,12 +423,71 @@ export function ChatPanel() {
     return () => {
       cancelled = true;
     };
-  }, [activeSessionId, selectedWorkspaceId, setChatMessages, hydrateCompletedTurns]);
+  }, [activeSessionId, selectedWorkspaceId, setChatMessages, setChatPagination, hydrateCompletedTurns]);
 
   // Scroll to bottom unconditionally on session switch.
   useEffect(() => {
     if (activeSessionId) scrollToBottom();
   }, [activeSessionId, scrollToBottom]);
+
+  // Load older messages when the user scrolls to the top of the message list.
+  const hasMoreRef = useRef(false);
+  hasMoreRef.current = hasMore;
+  const isLoadingMoreRef = useRef(false);
+  isLoadingMoreRef.current = isLoadingMore;
+  const oldestMessageIdRef = useRef<string | null>(null);
+  oldestMessageIdRef.current = oldestMessageId;
+  const activeSessionIdRef = useRef<string | null>(null);
+  activeSessionIdRef.current = activeSessionId;
+
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
+    const onScroll = () => {
+      if (
+        container.scrollTop < 200 &&
+        hasMoreRef.current &&
+        !isLoadingMoreRef.current &&
+        activeSessionIdRef.current &&
+        oldestMessageIdRef.current
+      ) {
+        const sessionId = activeSessionIdRef.current;
+        const cursorId = oldestMessageIdRef.current;
+        const store = useAppStore.getState();
+        const pagination = store.chatPagination[sessionId];
+        if (!pagination) return;
+
+        store.setChatPagination(sessionId, { ...pagination, isLoadingMore: true });
+        const prevScrollHeight = container.scrollHeight;
+
+        loadChatHistoryPage(sessionId, 50, cursorId)
+          .then((page) => {
+            store.prependChatMessages(sessionId, page.messages);
+            store.prependChatAttachments(sessionId, page.attachments);
+            store.setChatPagination(sessionId, {
+              hasMore: page.has_more,
+              isLoadingMore: false,
+              totalCount: page.total_count,
+              oldestMessageId: page.messages[0]?.id ?? cursorId,
+            });
+            // Restore scroll position so prepended messages don't push the
+            // view upward.
+            requestAnimationFrame(() => {
+              container.scrollTop += container.scrollHeight - prevScrollHeight;
+            });
+          })
+          .catch((e) => {
+            console.error("Failed to load older messages:", e);
+            store.setChatPagination(sessionId, { ...pagination, isLoadingMore: false });
+          });
+      }
+    };
+
+    container.addEventListener("scroll", onScroll, { passive: true });
+    return () => container.removeEventListener("scroll", onScroll);
+    // Re-attach on session switch so the sessionId ref stays in sync.
+  }, [activeSessionId]);
 
   // Auto-scroll when new content arrives — respects user intent via useStickyScroll.
   // Only scrolls if the user is already at/near the bottom.
@@ -873,6 +956,12 @@ export function ChatPanel() {
             </div>
           ) : (
             <>
+              {isLoadingMore && (
+                <div className={styles.loadingOlder}>
+                  <LoaderCircle size={14} className={styles.loadingOlderSpinner} />
+                  Loading older messages…
+                </div>
+              )}
               {activeSessionId && selectedWorkspaceId && (
                 <MessagesWithTurns
                   messages={messages}
@@ -883,6 +972,7 @@ export function ChatPanel() {
                   onAttachmentContextMenu={openAttachmentMenu}
                   onAttachmentClick={openLightbox}
                   searchQuery={searchQuery}
+                  globalOffset={globalOffset}
                 />
               )}
 

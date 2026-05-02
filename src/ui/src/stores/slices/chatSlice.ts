@@ -1,5 +1,5 @@
 import type { StateCreator } from "zustand";
-import type { ChatMessage, ChatAttachment } from "../../types";
+import type { ChatMessage, ChatAttachment, ChatPaginationState } from "../../types";
 import { debugChat } from "../../utils/chatDebug";
 import type { CompactionEvent } from "../../utils/compactionSentinel";
 import type { AppState } from "../useAppStore";
@@ -99,6 +99,10 @@ export interface ChatSlice {
   compactionEvents: Record<string, CompactionEvent[]>;
   setCompactionEvents: (sessionId: string, events: CompactionEvent[]) => void;
   addCompactionEvent: (sessionId: string, event: CompactionEvent) => void;
+  chatPagination: Record<string, ChatPaginationState>;
+  setChatPagination: (sessionId: string, state: ChatPaginationState) => void;
+  prependChatMessages: (sessionId: string, messages: ChatMessage[]) => void;
+  prependChatAttachments: (sessionId: string, attachments: ChatAttachment[]) => void;
   setChatMessages: (sessionId: string, messages: ChatMessage[]) => void;
   addChatMessage: (sessionId: string, message: ChatMessage) => void;
   setStreamingContent: (sessionId: string, content: string) => void;
@@ -161,6 +165,25 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
         [sessionId]: [...(s.chatAttachments[sessionId] ?? []), ...attachments],
       },
     })),
+  chatPagination: {},
+  setChatPagination: (sessionId, state) =>
+    set((s) => ({
+      chatPagination: { ...s.chatPagination, [sessionId]: state },
+    })),
+  prependChatMessages: (sessionId, messages) =>
+    set((s) => ({
+      chatMessages: {
+        ...s.chatMessages,
+        [sessionId]: [...messages, ...(s.chatMessages[sessionId] ?? [])],
+      },
+    })),
+  prependChatAttachments: (sessionId, attachments) =>
+    set((s) => ({
+      chatAttachments: {
+        ...s.chatAttachments,
+        [sessionId]: [...attachments, ...(s.chatAttachments[sessionId] ?? [])],
+      },
+    })),
   streamingContent: {},
   streamingThinking: {},
   pendingTypewriter: {},
@@ -208,13 +231,28 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
       chatMessages: { ...s.chatMessages, [sessionId]: messages },
     })),
   addChatMessage: (sessionId, message) =>
-    set((s) => ({
-      chatMessages: {
-        ...s.chatMessages,
-        [sessionId]: [...(s.chatMessages[sessionId] || []), message],
-      },
-      lastMessages: { ...s.lastMessages, [sessionId]: message },
-    })),
+    set((s) => {
+      const pagination = s.chatPagination[sessionId];
+      return {
+        chatMessages: {
+          ...s.chatMessages,
+          [sessionId]: [...(s.chatMessages[sessionId] || []), message],
+        },
+        lastMessages: { ...s.lastMessages, [sessionId]: message },
+        // Keep totalCount in sync so globalOffset stays correct during streaming.
+        ...(pagination
+          ? {
+              chatPagination: {
+                ...s.chatPagination,
+                [sessionId]: {
+                  ...pagination,
+                  totalCount: pagination.totalCount + 1,
+                },
+              },
+            }
+          : {}),
+      };
+    }),
   setStreamingContent: (sessionId, content) =>
     set((s) => ({
       streamingContent: { ...s.streamingContent, [sessionId]: content },
@@ -322,6 +360,14 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
         });
         return {};
       }
+      const loadedCount = (s.chatMessages[sessionId] || []).length;
+      const pagination = s.chatPagination[sessionId];
+      // For paginated sessions, afterMessageIndex must be the GLOBAL position
+      // (i.e. totalCount) so the turn summary renders at the right spot even
+      // when only a window of the message history is loaded.
+      const afterMessageIndex = pagination
+        ? pagination.totalCount
+        : loadedCount;
       const turn: CompletedTurn = {
         id: turnId ?? crypto.randomUUID(),
         activities: activities.map((a) => ({
@@ -334,7 +380,7 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
         })),
         messageCount,
         collapsed: true,
-        afterMessageIndex: (s.chatMessages[sessionId] || []).length,
+        afterMessageIndex,
         durationMs,
         inputTokens,
         outputTokens,

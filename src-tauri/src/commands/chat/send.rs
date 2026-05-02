@@ -24,8 +24,8 @@ use crate::state::{AgentSessionState, AppState, PendingPermission};
 use super::interaction::{deny_drained_permissions, drain_pending_permissions};
 use super::naming::{try_auto_rename, try_generate_session_name};
 use super::{
-    ATTENTION_NOTIFY_DELAY_MS, AgentStreamPayload, AttachmentInput, fire_completion_notification,
-    now_iso, start_bridge_and_inject_mcp,
+    ATTENTION_NOTIFY_DELAY_MS, AgentStreamPayload, AttachmentInput, AttachmentResponse,
+    ChatHistoryPage, fire_completion_notification, now_iso, start_bridge_and_inject_mcp,
 };
 
 #[tauri::command]
@@ -36,6 +36,80 @@ pub async fn load_chat_history(
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     db.list_chat_messages_for_session(&session_id)
         .map_err(|e| e.to_string())
+}
+
+/// Load a page of chat history starting from the newest messages.
+///
+/// Pass `before_message_id` to page backwards: set it to the `id` of the
+/// oldest message already held by the client and the next `limit` older
+/// messages are returned, together with their attachments.
+///
+/// The response also carries `total_count` so the frontend can compute the
+/// global index offset of the returned page without a separate round-trip
+/// (`global_offset = total_count - already_loaded_count`).
+#[tauri::command]
+pub async fn load_chat_history_page(
+    session_id: String,
+    limit: i64,
+    before_message_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<ChatHistoryPage, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+
+    let total_count = db
+        .count_chat_messages_for_session(&session_id)
+        .map_err(|e| e.to_string())?;
+
+    let messages = db
+        .list_chat_messages_page(&session_id, limit, before_message_id.as_deref())
+        .map_err(|e| e.to_string())?;
+
+    let has_more = messages.len() as i64 == limit;
+
+    let message_ids: Vec<String> = messages.iter().map(|m| m.id.clone()).collect();
+    let att_map = db
+        .list_attachments_for_messages(&message_ids)
+        .map_err(|e| e.to_string())?;
+
+    let mut attachments = Vec::new();
+    for (_, atts) in att_map {
+        for a in atts {
+            let is_text = matches!(
+                a.media_type.as_str(),
+                "text/plain" | "text/csv" | "text/markdown" | "application/json"
+            );
+            let data_base64 = if a.media_type.starts_with("image/") || is_text {
+                claudette::base64_encode(&a.data)
+            } else {
+                String::new()
+            };
+            let text_content = if is_text {
+                std::str::from_utf8(&a.data).ok().map(str::to_owned)
+            } else {
+                None
+            };
+            attachments.push(AttachmentResponse {
+                id: a.id,
+                message_id: a.message_id,
+                filename: a.filename,
+                media_type: a.media_type,
+                data_base64,
+                text_content,
+                width: a.width,
+                height: a.height,
+                size_bytes: a.size_bytes,
+                origin: a.origin,
+                tool_use_id: a.tool_use_id,
+            });
+        }
+    }
+
+    Ok(ChatHistoryPage {
+        messages,
+        attachments,
+        has_more,
+        total_count,
+    })
 }
 
 #[tauri::command]

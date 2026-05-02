@@ -79,6 +79,26 @@ export interface AttachmentInput {
   text_content?: string;
 }
 
+/** Paginated history response from `load_chat_history_page`. */
+export interface ChatHistoryPage {
+  messages: ChatMessage[];
+  attachments: ChatAttachment[];
+  has_more: boolean;
+  total_count: number;
+}
+
+/** Pagination state tracked per chat session in the store. */
+export interface ChatPaginationState {
+  /** Whether there are older messages not yet loaded. */
+  hasMore: boolean;
+  /** True while a "load older" request is in flight. */
+  isLoadingMore: boolean;
+  /** Total message count in the DB (used to compute `globalOffset`). */
+  totalCount: number;
+  /** The `id` of the oldest loaded message — cursor for the next page request. */
+  oldestMessageId: string | null;
+}
+
 /** A staged attachment in the frontend before the message is sent. */
 export interface PendingAttachment {
   id: string;
