@@ -8,9 +8,9 @@ use claudette::agent::{
 };
 use claudette::base64_decode;
 use claudette::chat::{
-    BuildAssistantArgs, RequestedFlags, SessionFlags, build_assistant_chat_message,
-    build_compaction_sentinel, build_permission_response, extract_assistant_text,
-    extract_event_thinking, persistent_session_flags_drifted,
+    BuildAssistantArgs, CheckpointArgs, RequestedFlags, SessionFlags, build_assistant_chat_message,
+    build_compaction_sentinel, build_permission_response, create_turn_checkpoint,
+    extract_assistant_text, extract_event_thinking, persistent_session_flags_drifted,
 };
 use claudette::db::Database;
 use claudette::env::WorkspaceEnv;
@@ -1418,16 +1418,15 @@ pub async fn send_chat_message(
                 }
 
                 let anchor_msg_id = last_assistant_msg_id.as_deref().unwrap_or(&user_msg_id);
-                if let Some(cp) =
-                    claudette::chat::create_turn_checkpoint(claudette::chat::CheckpointArgs {
-                        db_path: &db_path,
-                        workspace_id: &ws_id,
-                        chat_session_id: &chat_session_id_for_stream,
-                        anchor_msg_id,
-                        worktree_path: &wt_path,
-                        created_at: now_iso(),
-                    })
-                    .await
+                if let Some(cp) = create_turn_checkpoint(CheckpointArgs {
+                    db_path: &db_path,
+                    workspace_id: &ws_id,
+                    chat_session_id: &chat_session_id_for_stream,
+                    anchor_msg_id,
+                    worktree_path: &wt_path,
+                    created_at: now_iso(),
+                })
+                .await
                 {
                     let payload = serde_json::json!({
                         "workspace_id": &ws_id,
