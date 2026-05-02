@@ -6,23 +6,35 @@ describe("getAppSections", () => {
   it("always shows the Plugins (Claudette) section", () => {
     // Claudette's own plugin list is always visible — it's just
     // diagnostic info plus toggles, no marketplace dependency.
-    expect(getAppSections(false).map((section) => section.id)).toContain(
+    expect(getAppSections(false, false).map((section) => section.id)).toContain(
       "plugins",
     );
-    expect(getAppSections(true).map((section) => section.id)).toContain(
+    expect(getAppSections(true, true).map((section) => section.id)).toContain(
       "plugins",
     );
   });
 
   it("hides the Claude Code Plugins section when plugin management is disabled", () => {
-    expect(getAppSections(false).map((section) => section.id)).not.toContain(
+    expect(
+      getAppSections(false, false).map((section) => section.id),
+    ).not.toContain("claude-code-plugins");
+  });
+
+  it("shows the Claude Code Plugins section when plugin management is enabled", () => {
+    expect(getAppSections(true, false).map((section) => section.id)).toContain(
       "claude-code-plugins",
     );
   });
 
-  it("shows the Claude Code Plugins section when plugin management is enabled", () => {
-    expect(getAppSections(true).map((section) => section.id)).toContain(
-      "claude-code-plugins",
+  it("hides the Community section when the registry is disabled", () => {
+    expect(
+      getAppSections(false, false).map((section) => section.id),
+    ).not.toContain("community");
+  });
+
+  it("shows the Community section when the registry is enabled", () => {
+    expect(getAppSections(false, true).map((section) => section.id)).toContain(
+      "community",
     );
   });
 });

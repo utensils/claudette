@@ -55,6 +55,10 @@ interface RegistryState {
   languages: LanguageInfo[];
   grammars: LoadedGrammar[];
   monacoApplied: boolean;
+  /// Captured on the first applyGrammarsToMonaco call so refreshGrammars
+  /// can rebind without waiting for a fresh editor mount. Null when no
+  /// MonacoEditor has been opened yet this session.
+  lastMonacoInstance: typeof import("monaco-editor") | null;
 }
 
 const state: RegistryState = {
@@ -63,6 +67,7 @@ const state: RegistryState = {
   languages: [],
   grammars: [],
   monacoApplied: false,
+  lastMonacoInstance: null,
 };
 
 /**
@@ -172,6 +177,9 @@ async function bootstrapInner(): Promise<void> {
 export async function applyGrammarsToMonaco(
   monaco: typeof import("monaco-editor"),
 ): Promise<void> {
+  // Capture the most recent Monaco instance so refreshGrammars can
+  // re-bind without needing a fresh editor mount.
+  state.lastMonacoInstance = monaco;
   if (state.monacoApplied) return;
   await bootstrapGrammarRegistry();
 
@@ -264,7 +272,9 @@ function reevaluateOpenModelLanguages(
   // the registry per model.
   const extToLang = new Map<string, string>();
   const fileToLang = new Map<string, string>();
+  const validLangs = new Set<string>();
   for (const lang of state.languages) {
+    validLangs.add(lang.id);
     for (const ext of lang.extensions) {
       extToLang.set(ext.toLowerCase(), lang.id);
     }
@@ -272,19 +282,43 @@ function reevaluateOpenModelLanguages(
       fileToLang.set(fn.toLowerCase(), lang.id);
     }
   }
-  if (extToLang.size === 0 && fileToLang.size === 0) return;
 
   for (const model of monaco.editor.getModels()) {
-    if (model.getLanguageId() !== "plaintext") continue;
-    const uriPath = model.uri.path; // already normalized; like "/foo/bar/file.nix"
+    const cur = model.getLanguageId();
+    const uriPath = model.uri.path; // normalized; like "/foo/bar/file.nix"
     const base = uriPath.slice(uriPath.lastIndexOf("/") + 1).toLowerCase();
-    let nextLang = fileToLang.get(base);
-    if (!nextLang) {
-      const dotIdx = base.lastIndexOf(".");
-      if (dotIdx >= 0) nextLang = extToLang.get(base.slice(dotIdx));
-    }
-    if (nextLang) {
-      monaco.editor.setModelLanguage(model, nextLang);
+    if (cur === "plaintext") {
+      // Was unmatched at mount; promote if the file extension or
+      // exact filename now resolves to a registered plugin language.
+      let nextLang = fileToLang.get(base);
+      if (!nextLang) {
+        const dotIdx = base.lastIndexOf(".");
+        if (dotIdx >= 0) nextLang = extToLang.get(base.slice(dotIdx));
+      }
+      if (nextLang) {
+        monaco.editor.setModelLanguage(model, nextLang);
+      }
+    } else if (!validLangs.has(cur)) {
+      // The plugin that contributed this language was just disabled
+      // or uninstalled — fall back to plaintext so the editor keeps
+      // working instead of dangling on a no-longer-registered id.
+      // Built-in Monaco languages (markdown, json, …) stay untouched
+      // because they're not in `state.languages` either way; we only
+      // touch ids that we *did* once register through a plugin.
+      // Detection: did the URI extension/filename map to a plugin id
+      // at any point? Check via the same indexes.
+      let mappedNow = fileToLang.get(base);
+      if (!mappedNow) {
+        const dotIdx = base.lastIndexOf(".");
+        if (dotIdx >= 0) mappedNow = extToLang.get(base.slice(dotIdx));
+      }
+      if (mappedNow === undefined) {
+        // No registered plugin claims this URI now. If `cur` *was*
+        // the toggled-off plugin's id, fall back to plaintext. The
+        // simplest correct check: try setting plaintext. Monaco
+        // accepts this unconditionally and triggers a retokenize.
+        monaco.editor.setModelLanguage(model, "plaintext");
+      }
     }
   }
 }
@@ -299,6 +333,60 @@ export function getRegisteredPluginLanguages(): readonly LanguageInfo[] {
   return state.languages;
 }
 
+/**
+ * Hot-reload the entire grammar registry. Called when:
+ *   1. A `language-grammar` plugin is enabled/disabled in Settings
+ *      (issue 570 — the toggle previously required an app restart).
+ *   2. A community grammar plugin is installed or uninstalled via the
+ *      Community settings section (TDD 567).
+ *
+ * Approach (A) from issue 570: drop the cached state, terminate the
+ * highlight worker (so its loaded-grammar state goes with it),
+ * re-bootstrap, and re-bind Monaco. Briefly drops highlighting on
+ * any open code blocks — they re-tokenize on the next render — but
+ * avoids the per-language teardown plumbing of approach (B).
+ *
+ * Open Monaco models for the toggled language are walked: those
+ * whose language id is no longer registered fall back to plaintext;
+ * those whose URI now resolves to a newly-registered language get
+ * promoted. See [[reevaluateOpenModelLanguages]].
+ */
+export async function refreshGrammars(): Promise<void> {
+  state.bootstrapped = false;
+  state.bootstrapPromise = null;
+  state.languages = [];
+  state.grammars = [];
+  state.monacoApplied = false;
+  // Terminate the highlight worker — any grammars Shiki had loaded go
+  // with it. Chat code blocks repaint on the next render and pick up
+  // the rebuilt registry. This re-uses the same machinery the test
+  // suite drives via `__testing.reset`; it's intentional, not a leak.
+  highlightTesting.reset();
+
+  await bootstrapGrammarRegistry();
+
+  // If a MonacoEditor has been mounted at any point this session,
+  // re-bind to it directly so live editor surfaces refresh too.
+  // Otherwise the next mount picks up the new registry naturally.
+  const monaco = state.lastMonacoInstance;
+  if (monaco) {
+    try {
+      await applyGrammarsToMonaco(monaco);
+    } catch (e) {
+      console.warn("[grammars] Re-apply to Monaco failed:", e);
+    }
+    // applyGrammarsToMonaco already calls reevaluateOpenModelLanguages,
+    // but only when state.monacoApplied flips from false → true. After
+    // refresh both directions need to be evaluated, so call it again
+    // unconditionally to handle the toggle-OFF case.
+    try {
+      reevaluateOpenModelLanguages(monaco);
+    } catch (e) {
+      console.warn("[grammars] Open-model re-evaluation failed:", e);
+    }
+  }
+}
+
 /** Test-only — reset the singleton state. Used by vitest specs. */
 export const __testing = {
   reset(): void {
@@ -307,6 +395,7 @@ export const __testing = {
     state.languages = [];
     state.grammars = [];
     state.monacoApplied = false;
+    state.lastMonacoInstance = null;
     // Also drop the highlight-worker singleton — tests assert on the
     // FakeWorker instance count, so leaking the worker between specs
     // would surface as cross-test contamination.

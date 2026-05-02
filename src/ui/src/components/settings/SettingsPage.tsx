@@ -38,6 +38,11 @@ const ClaudeCodePluginsSettings = lazy(() =>
     default: m.ClaudeCodePluginsSettings,
   })),
 );
+const CommunitySettings = lazy(() =>
+  import("./sections/CommunitySettings").then((m) => ({
+    default: m.CommunitySettings,
+  })),
+);
 const PinnedPromptsSettings = lazy(() =>
   import("./sections/PinnedPromptsSettings").then((m) => ({
     default: m.PinnedPromptsSettings,
@@ -46,6 +51,9 @@ const PinnedPromptsSettings = lazy(() =>
 
 function SectionContent({ section }: { section: string | null }) {
   const pluginManagementEnabled = useAppStore((s) => s.pluginManagementEnabled);
+  const communityRegistryEnabled = useAppStore(
+    (s) => s.communityRegistryEnabled,
+  );
   if (!section || section === "general") return <GeneralSettings />;
   if (section === "models") return <ModelSettings />;
   if (section === "usage") return <UsageSettings />;
@@ -57,6 +65,13 @@ function SectionContent({ section }: { section: string | null }) {
   if (section === "claude-code-plugins") {
     return pluginManagementEnabled ? (
       <ClaudeCodePluginsSettings />
+    ) : (
+      <ExperimentalSettings />
+    );
+  }
+  if (section === "community") {
+    return communityRegistryEnabled ? (
+      <CommunitySettings />
     ) : (
       <ExperimentalSettings />
     );

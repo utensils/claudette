@@ -1,0 +1,257 @@
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 18px 20px 24px;
+  max-width: 920px;
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-bottom: 1px solid var(--divider);
+  padding-bottom: 12px;
+}
+
+.title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.subtle {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.link {
+  color: var(--accent-primary);
+  text-decoration: none;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+.tabRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-bottom: 1px solid var(--divider);
+  padding-bottom: 8px;
+}
+
+.tab {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tab:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.tabActive {
+  composes: tab;
+  background: var(--accent-bg);
+  color: var(--accent-primary);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.refreshButton {
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--divider);
+  color: var(--text-muted);
+  padding: 5px 10px;
+  font-size: 11px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.refreshButton:hover:not(:disabled) {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+.refreshButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.badge {
+  background: var(--accent-bg-strong);
+  color: var(--accent-primary);
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-weight: 600;
+}
+
+.filterRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.filter {
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--divider);
+  color: var(--text-muted);
+  padding: 4px 10px;
+  font-size: 11px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.filter:hover {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+.filterActive {
+  composes: filter;
+  background: var(--accent-bg);
+  color: var(--accent-primary);
+  border-color: color-mix(in srgb, var(--accent-primary) 50%, var(--divider));
+}
+
+.regSha {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.row {
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--sidebar-bg) 78%, transparent);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rowHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, var(--text-primary) 12%, transparent);
+}
+
+.meta {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.description {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.cli {
+  font-family: var(--font-family-mono);
+  background: var(--hover-bg);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.installedBadge {
+  font-size: 11px;
+  color: var(--accent-primary);
+  background: var(--accent-bg);
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-weight: 500;
+}
+
+.primaryButton {
+  appearance: none;
+  background: var(--accent-primary);
+  color: var(--on-accent);
+  border: none;
+  padding: 5px 12px;
+  font-size: 11px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.primaryButton:hover:not(:disabled) {
+  background: var(--accent-dim);
+}
+
+.primaryButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.dangerButton {
+  appearance: none;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--divider);
+  padding: 5px 10px;
+  font-size: 11px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.dangerButton:hover:not(:disabled) {
+  border-color: var(--status-stopped);
+  color: var(--status-stopped);
+}
+
+.dangerButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
