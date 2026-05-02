@@ -174,6 +174,8 @@
   "plugins_reseeded_warnings": "重新种入时出现 {{count}} 条警告：{{warnings}}",
   "plugins_kind_scm": "源代码控制",
   "plugins_kind_env_provider": "环境提供方",
+  "plugins_kind_language_grammar": "语言文法",
+  "plugins_grammar_extensions": "文件扩展名",
   "plugins_details": "详情",
   "plugins_hide_details": "隐藏详情",
   "plugins_voice_use": "使用",

@@ -174,6 +174,8 @@
   "plugins_reseeded_warnings": "{{count}} 件の警告とともに再シードしました: {{warnings}}",
   "plugins_kind_scm": "ソース管理",
   "plugins_kind_env_provider": "環境プロバイダー",
+  "plugins_kind_language_grammar": "言語文法",
+  "plugins_grammar_extensions": "ファイル拡張子",
   "plugins_details": "詳細",
   "plugins_hide_details": "詳細を隠す",
   "plugins_voice_use": "使用",

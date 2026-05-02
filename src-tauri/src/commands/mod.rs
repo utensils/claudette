@@ -8,6 +8,7 @@ pub mod debug;
 pub mod diff;
 pub mod env;
 pub mod files;
+pub mod grammars;
 pub mod mcp;
 pub mod metrics;
 pub mod pinned_prompts;

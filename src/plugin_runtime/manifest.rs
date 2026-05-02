@@ -13,6 +13,11 @@ pub enum PluginKind {
     #[default]
     Scm,
     EnvProvider,
+    /// Language grammar plugins ship TextMate grammars + language
+    /// metadata to power syntax highlighting in chat code blocks, the
+    /// diff viewer, and the file editor. Purely declarative — no
+    /// `init.lua` is required and no Lua VM is spawned for this kind.
+    LanguageGrammar,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +41,65 @@ pub struct PluginManifest {
     /// scripts read them via `host.config("auto_allow")`.
     #[serde(default)]
     pub settings: Vec<PluginSettingField>,
+    /// Language metadata contributed by a `language-grammar` plugin.
+    /// Mirrors VS Code's `contributes.languages` shape so users can
+    /// copy directly from existing extensions.
+    #[serde(default)]
+    pub languages: Vec<LanguageContribution>,
+    /// TextMate grammars contributed by a `language-grammar` plugin.
+    /// Each entry binds a grammar file to a previously-declared
+    /// language id. Mirrors VS Code's `contributes.grammars` shape.
+    #[serde(default)]
+    pub grammars: Vec<GrammarContribution>,
+}
+
+/// A language contributed by a `language-grammar` plugin. Parallels
+/// VS Code's `contributes.languages` entry — `id`, `extensions`,
+/// `filenames`, and `aliases` carry the same semantics, letting users
+/// lift entries directly from a `package.json` shipped in a `.vsix`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LanguageContribution {
+    /// Stable identifier (e.g. `"nix"`, `"toml"`). Used to bind a
+    /// grammar (via `GrammarContribution::language`) and to register
+    /// the language with Monaco / Shiki on the frontend.
+    pub id: String,
+    /// File extensions including the leading dot (e.g. `".nix"`).
+    #[serde(default)]
+    pub extensions: Vec<String>,
+    /// Exact filenames that should be associated with this language
+    /// regardless of extension (e.g. `"Dockerfile"`, `"Makefile"`).
+    #[serde(default)]
+    pub filenames: Vec<String>,
+    /// Display aliases — the first entry is typically used as the
+    /// human-readable name in UI surfaces.
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    /// Optional regex matched against the first line of a file when
+    /// neither extension nor filename rules apply (e.g. a shebang
+    /// detector). Pattern semantics follow JavaScript regex on the
+    /// frontend — keep them simple and well-anchored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_line_pattern: Option<String>,
+}
+
+/// A TextMate grammar contributed by a `language-grammar` plugin.
+/// `path` is resolved relative to the plugin's directory, with
+/// path-traversal protection enforced by [`crate::grammar_provider`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GrammarContribution {
+    /// The id of a [`LanguageContribution`] declared in the same
+    /// manifest. Frontend registers this grammar against the matching
+    /// language id.
+    pub language: String,
+    /// Top-level scope name used by the grammar (e.g. `"source.nix"`).
+    /// Required because injection grammars and theme rules key off
+    /// scope names rather than language ids.
+    pub scope_name: String,
+    /// Plugin-relative path to the `.tmLanguage.json` file
+    /// (e.g. `"grammars/nix.tmLanguage.json"`). Must resolve inside
+    /// the plugin directory; the loader rejects paths that escape via
+    /// `..` or symlinks pointing elsewhere.
+    pub path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -245,6 +309,8 @@ mod tests {
             config_schema: HashMap::new(),
             kind: PluginKind::EnvProvider,
             settings: vec![],
+            languages: vec![],
+            grammars: vec![],
         };
         let json = serde_json::to_string(&manifest).unwrap();
         assert!(
@@ -381,6 +447,76 @@ mod tests {
             placeholder: None,
         };
         assert_eq!(t_no_default.default_value(), serde_json::Value::Null);
+    }
+
+    #[test]
+    fn manifest_parses_language_grammar_kind() {
+        let json = r#"{
+            "name": "lang-nix",
+            "display_name": "Nix",
+            "version": "1.0.0",
+            "description": "Nix language",
+            "kind": "language-grammar",
+            "operations": [],
+            "languages": [
+                { "id": "nix", "extensions": [".nix"], "aliases": ["Nix"] }
+            ],
+            "grammars": [
+                { "language": "nix", "scope_name": "source.nix", "path": "grammars/nix.tmLanguage.json" }
+            ]
+        }"#;
+        let manifest: PluginManifest = serde_json::from_str(json).unwrap();
+        assert_eq!(manifest.kind, PluginKind::LanguageGrammar);
+        assert_eq!(manifest.languages.len(), 1);
+        assert_eq!(manifest.languages[0].id, "nix");
+        assert_eq!(manifest.languages[0].extensions, vec![".nix".to_string()]);
+        assert_eq!(manifest.grammars.len(), 1);
+        assert_eq!(manifest.grammars[0].language, "nix");
+        assert_eq!(manifest.grammars[0].scope_name, "source.nix");
+        assert_eq!(manifest.grammars[0].path, "grammars/nix.tmLanguage.json");
+    }
+
+    #[test]
+    fn language_contribution_optional_fields_default_to_empty() {
+        let json = r#"{ "id": "nix" }"#;
+        let lang: LanguageContribution = serde_json::from_str(json).unwrap();
+        assert_eq!(lang.id, "nix");
+        assert!(lang.extensions.is_empty());
+        assert!(lang.filenames.is_empty());
+        assert!(lang.aliases.is_empty());
+        assert!(lang.first_line_pattern.is_none());
+    }
+
+    #[test]
+    fn language_contribution_first_line_pattern_roundtrips() {
+        let value = LanguageContribution {
+            id: "shell".into(),
+            extensions: vec![],
+            filenames: vec![],
+            aliases: vec![],
+            first_line_pattern: Some("^#!.*\\bsh\\b".into()),
+        };
+        let json = serde_json::to_string(&value).unwrap();
+        assert!(
+            json.contains("first_line_pattern"),
+            "expected first_line_pattern in: {json}"
+        );
+        let back: LanguageContribution = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, value);
+    }
+
+    #[test]
+    fn manifest_languages_and_grammars_default_to_empty() {
+        let json = r#"{
+            "name": "legacy",
+            "display_name": "Legacy",
+            "version": "1.0.0",
+            "description": "no contributions",
+            "operations": []
+        }"#;
+        let manifest: PluginManifest = serde_json::from_str(json).unwrap();
+        assert!(manifest.languages.is_empty());
+        assert!(manifest.grammars.is_empty());
     }
 
     #[test]

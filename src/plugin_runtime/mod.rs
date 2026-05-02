@@ -9,7 +9,7 @@ use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
 use host_api::{HostContext, WorkspaceInfo};
-use manifest::PluginManifest;
+use manifest::{PluginKind, PluginManifest};
 use mlua::{LuaSerdeExt, VmState};
 
 /// Overall operation timeout. A plugin can make multiple serial
@@ -133,16 +133,23 @@ impl PluginRegistry {
             }
 
             let manifest_path = path.join("plugin.json");
-            let init_path = path.join("init.lua");
-
-            if !manifest_path.exists() || !init_path.exists() {
+            if !manifest_path.exists() {
                 let name = path.file_name().unwrap_or_default().to_string_lossy();
-                eprintln!("[plugin] Skipping '{name}': missing plugin.json or init.lua");
+                eprintln!("[plugin] Skipping '{name}': missing plugin.json");
                 continue;
             }
 
+            // Parse the manifest before checking for `init.lua` so that
+            // declarative-only kinds (currently `language-grammar`) can
+            // opt out of the script requirement. Operation-driven kinds
+            // (`scm`, `env-provider`) still need `init.lua` to dispatch.
             match manifest::parse_manifest(&manifest_path) {
                 Ok(manifest) => {
+                    let init_path = path.join("init.lua");
+                    if requires_init_lua(manifest.kind) && !init_path.exists() {
+                        eprintln!("[plugin] Skipping '{}': missing init.lua", manifest.name);
+                        continue;
+                    }
                     let cli_available = check_clis_available(&manifest.required_clis);
                     let name = manifest.name.clone();
                     plugins.insert(
@@ -424,6 +431,17 @@ fn check_clis_available(clis: &[String]) -> bool {
         .all(|cli| crate::env::which_in_enriched_path(cli).is_ok())
 }
 
+/// Whether discovery should require an `init.lua` for a plugin of this
+/// kind. Operation-driven kinds (`scm`, `env-provider`) load Lua to
+/// dispatch operations; declarative-only kinds (`language-grammar`)
+/// expose static metadata + asset files instead.
+fn requires_init_lua(kind: PluginKind) -> bool {
+    match kind {
+        PluginKind::Scm | PluginKind::EnvProvider => true,
+        PluginKind::LanguageGrammar => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -460,6 +478,61 @@ mod tests {
         assert_eq!(registry.plugins.len(), 1);
         assert!(registry.plugins.contains_key("test"));
         assert!(registry.plugins["test"].cli_available); // no CLIs required
+    }
+
+    #[test]
+    fn test_discover_grammar_plugin_without_init_lua() {
+        // language-grammar plugins are declarative; init.lua is not
+        // required and must not be a discovery prerequisite.
+        let dir = tempfile::tempdir().unwrap();
+        let plugin_dir = dir.path().join("lang-test");
+        std::fs::create_dir(&plugin_dir).unwrap();
+
+        std::fs::write(
+            plugin_dir.join("plugin.json"),
+            r#"{
+                "name": "lang-test",
+                "display_name": "Test Lang",
+                "version": "1.0.0",
+                "description": "Grammar plugin without init.lua",
+                "kind": "language-grammar",
+                "operations": [],
+                "languages": [{ "id": "test", "extensions": [".test"] }],
+                "grammars": [{ "language": "test", "scope_name": "source.test", "path": "grammars/test.tmLanguage.json" }]
+            }"#,
+        )
+        .unwrap();
+
+        let registry = PluginRegistry::discover(dir.path());
+        assert!(registry.plugins.contains_key("lang-test"));
+        assert_eq!(
+            registry.plugins["lang-test"].manifest.kind,
+            PluginKind::LanguageGrammar
+        );
+    }
+
+    #[test]
+    fn test_discover_scm_plugin_still_requires_init_lua() {
+        // Regression guard: relaxing init.lua for grammar plugins
+        // must NOT relax it for kinds that dispatch Lua operations.
+        let dir = tempfile::tempdir().unwrap();
+        let plugin_dir = dir.path().join("bad-scm");
+        std::fs::create_dir(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("plugin.json"),
+            r#"{
+                "name": "bad-scm",
+                "display_name": "Bad SCM",
+                "version": "1.0.0",
+                "description": "missing init.lua",
+                "kind": "scm",
+                "operations": ["list_pull_requests"]
+            }"#,
+        )
+        .unwrap();
+
+        let registry = PluginRegistry::discover(dir.path());
+        assert!(registry.plugins.is_empty());
     }
 
     #[test]

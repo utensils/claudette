@@ -216,15 +216,6 @@
   padding-left: 4px;
 }
 
-/* When the diff language is active, highlight.js emits .hljs-addition /
-   .hljs-deletion spans with their own backgrounds. Neutralize them so
-   our per-row diff colours (lineAdded / lineRemoved) show through. */
-.lineContent :global(.hljs-addition),
-.lineContent :global(.hljs-deletion) {
-  background: transparent !important;
-  padding: 0;
-}
-
 .sbsCell .lineContent {
   overflow-x: auto;
   overflow-y: hidden;

@@ -18,6 +18,8 @@ import {
   setSelectedVoiceProvider,
   setVoiceProviderEnabled,
 } from "../../../services/voice";
+import { listLanguageGrammars } from "../../../services/grammars";
+import type { LanguageInfo } from "../../../types/grammars";
 import type {
   ClaudettePluginInfo,
   ClaudettePluginKind,
@@ -26,7 +28,22 @@ import type {
 import type { VoiceDownloadProgress, VoiceProviderInfo } from "../../../types/voice";
 import styles from "../Settings.module.css";
 
-const KIND_ORDER: ClaudettePluginKind[] = ["scm", "env-provider"];
+const KIND_ORDER: ClaudettePluginKind[] = ["scm", "env-provider", "language-grammar"];
+
+// Returns a literal union (not bare `string`) so the i18next `t()`
+// surface still type-checks the key against the locales file.
+function kindLabelKey(
+  kind: ClaudettePluginKind,
+): "plugins_kind_scm" | "plugins_kind_env_provider" | "plugins_kind_language_grammar" {
+  switch (kind) {
+    case "scm":
+      return "plugins_kind_scm";
+    case "env-provider":
+      return "plugins_kind_env_provider";
+    case "language-grammar":
+      return "plugins_kind_language_grammar";
+  }
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
@@ -39,6 +56,12 @@ export function PluginsSettings() {
   const [plugins, setPlugins] = useState<ClaudettePluginInfo[] | null>(null);
   const [builtins, setBuiltins] = useState<BuiltinPluginInfo[] | null>(null);
   const [voiceProviders, setVoiceProviders] = useState<VoiceProviderInfo[] | null>(null);
+  // Map plugin name → languages it contributes. Only populated for
+  // language-grammar plugins; other kinds resolve to undefined and the
+  // PluginRow falls back to the default (no extension chips).
+  const [grammarLanguages, setGrammarLanguages] = useState<
+    Map<string, LanguageInfo[]>
+  >(() => new Map());
   const [preparingVoiceProvider, setPreparingVoiceProvider] = useState<string | null>(null);
   const [voiceProgress, setVoiceProgress] = useState<Record<string, VoiceDownloadProgress>>({});
   const [loading, setLoading] = useState(false);
@@ -50,14 +73,27 @@ export function PluginsSettings() {
     setLoading(true);
     setError(null);
     try {
-      const [luaResult, builtinResult, voiceResult] = await Promise.all([
-        listClaudettePlugins(),
-        listBuiltinClaudettePlugins(),
-        listVoiceProviders(),
-      ]);
+      const [luaResult, builtinResult, voiceResult, grammarResult] =
+        await Promise.all([
+          listClaudettePlugins(),
+          listBuiltinClaudettePlugins(),
+          listVoiceProviders(),
+          // Grammar registry returns only enabled plugins, so a
+          // disabled language-grammar plugin shows up in `luaResult`
+          // (no chips) but not in `grammarResult` — that's the
+          // intended UX cue (chips appear only when active).
+          listLanguageGrammars().catch(() => ({ languages: [], grammars: [] })),
+        ]);
       setPlugins(luaResult);
       setBuiltins(builtinResult);
       setVoiceProviders(voiceResult);
+      const byPlugin = new Map<string, LanguageInfo[]>();
+      for (const lang of grammarResult.languages) {
+        const existing = byPlugin.get(lang.plugin_name) ?? [];
+        existing.push(lang);
+        byPlugin.set(lang.plugin_name, existing);
+      }
+      setGrammarLanguages(byPlugin);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -71,6 +107,25 @@ export function PluginsSettings() {
       setPlugins(await listClaudettePlugins());
     } catch (e) {
       setError(String(e));
+    }
+  }, []);
+
+  const refreshGrammarLanguages = useCallback(async () => {
+    // The grammar registry filters disabled plugins on the backend,
+    // so toggling a language-grammar plugin must refresh this list
+    // for the per-plugin "File extensions" chips to reflect reality.
+    try {
+      const result = await listLanguageGrammars();
+      const byPlugin = new Map<string, LanguageInfo[]>();
+      for (const lang of result.languages) {
+        const existing = byPlugin.get(lang.plugin_name) ?? [];
+        existing.push(lang);
+        byPlugin.set(lang.plugin_name, existing);
+      }
+      setGrammarLanguages(byPlugin);
+    } catch {
+      // Soft-fail: a transient backend hiccup shouldn't reset the
+      // chips to empty for every plugin. Keep the previous snapshot.
     }
   }, []);
 
@@ -204,12 +259,16 @@ export function PluginsSettings() {
     async (pluginName: string, nextEnabled: boolean) => {
       try {
         await setClaudettePluginEnabled(pluginName, nextEnabled);
-        await refreshPlugins();
+        // Refresh both: `refreshPlugins` updates the enabled badge
+        // for every plugin kind; `refreshGrammarLanguages` keeps the
+        // language-grammar chips in sync with the backend's
+        // enabled-only registry.
+        await Promise.all([refreshPlugins(), refreshGrammarLanguages()]);
       } catch (e) {
         setError(String(e));
       }
     },
-    [refreshPlugins],
+    [refreshPlugins, refreshGrammarLanguages],
   );
 
   const handleSettingChange = useCallback(
@@ -328,14 +387,13 @@ export function PluginsSettings() {
 
       {grouped.map(({ kind, items }) => (
         <div key={kind} className={styles.fieldGroup}>
-          <div className={styles.mcpGroupLabel}>
-            {kind === "scm" ? t("plugins_kind_scm") : t("plugins_kind_env_provider")}
-          </div>
+          <div className={styles.mcpGroupLabel}>{t(kindLabelKey(kind))}</div>
           <div className={styles.mcpList}>
             {items.map((plugin) => (
               <PluginRow
                 key={plugin.name}
                 plugin={plugin}
+                languages={grammarLanguages.get(plugin.name)}
                 expanded={expanded.has(plugin.name)}
                 onToggleExpand={() => toggleExpanded(plugin.name)}
                 onToggleEnabled={(next) => handleToggle(plugin.name, next)}
@@ -366,6 +424,8 @@ export function PluginsSettings() {
 
 interface PluginRowProps {
   plugin: ClaudettePluginInfo;
+  /** Languages contributed by this plugin (only set for `language-grammar` kind). */
+  languages?: LanguageInfo[];
   expanded: boolean;
   onToggleExpand: () => void;
   onToggleEnabled: (enabled: boolean) => void;
@@ -548,6 +608,7 @@ function VoiceProviderRow({
 
 function PluginRow({
   plugin,
+  languages,
   expanded,
   onToggleExpand,
   onToggleEnabled,
@@ -555,7 +616,22 @@ function PluginRow({
 }: PluginRowProps) {
   const { t } = useTranslation("settings");
   const hasSettings = plugin.settings_schema.length > 0;
-  const hasCliIssue = !plugin.cli_available;
+  // Grammar plugins ship no `required_clis`; surface their extension
+  // contributions instead so the row carries useful detail when
+  // expanded.
+  const isGrammar = plugin.kind === "language-grammar";
+  // Multiple LanguageInfo entries from the same plugin may contribute
+  // overlapping extensions (e.g. two language ids both claiming
+  // `.json`). Deduplicate so the UI shows each extension once and so
+  // React keys stay unique. Set preserves insertion order, which keeps
+  // the chip layout stable across renders.
+  const grammarExtensions = isGrammar
+    ? Array.from(new Set((languages ?? []).flatMap((l) => l.extensions)))
+    : [];
+  const hasGrammarExtensions = grammarExtensions.length > 0;
+  // CLI checks are meaningless for grammar plugins (no executables to
+  // detect), so collapse the issue logic into "false" for that kind.
+  const hasCliIssue = isGrammar ? false : !plugin.cli_available;
   const dotColor = !plugin.enabled
     ? "var(--text-faint)"
     : hasCliIssue
@@ -587,7 +663,7 @@ function PluginRow({
           </span>
         </div>
         <div className={styles.mcpActions}>
-          {(hasSettings || hasCliIssue) && (
+          {(hasSettings || hasCliIssue || hasGrammarExtensions) && (
             <button
               type="button"
               className={styles.envDetailsBtn}
@@ -631,6 +707,17 @@ function PluginRow({
                   </strong>
                 </>
               )}
+            </div>
+          )}
+          {hasGrammarExtensions && (
+            <div className={styles.envErrorHint}>
+              {t("plugins_grammar_extensions")}{" "}
+              {grammarExtensions.map((ext, i) => (
+                <span key={ext}>
+                  {i > 0 && ", "}
+                  <code>{ext}</code>
+                </span>
+              ))}
             </div>
           )}
           {hasSettings && (

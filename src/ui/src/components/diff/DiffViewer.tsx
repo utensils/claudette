@@ -10,7 +10,9 @@ import { SegmentedControl } from "../shared/SegmentedControl";
 import { IconButton } from "../shared/IconButton";
 import { SessionTabs } from "../chat/SessionTabs";
 import { MessageMarkdown } from "../chat/MessageMarkdown";
-import { highlightLine, languageForFile } from "../../utils/syntaxHighlight";
+import { getCachedHighlight, highlightCode } from "../../utils/highlight";
+import { languageForFile } from "../../utils/languageForFile";
+import { bootstrapGrammarRegistry } from "../../utils/grammarRegistry";
 import type { DiffLine } from "../../types/diff";
 import styles from "./DiffViewer.module.css";
 
@@ -30,11 +32,18 @@ interface SideBySideRow {
 const LineContent = memo(function LineContent({
   content,
   language,
+  // Cache version: bumped when DiffViewer's prewarm completes so
+  // memoized line renderings re-evaluate `getCachedHighlight` and
+  // pick up the now-cached HTML. Without this, `memo` would skip the
+  // re-render and lines would stay plain even though the cache is
+  // hot.
+  cacheVersion: _cacheVersion,
 }: {
   content: string;
   language: string | null;
+  cacheVersion: number;
 }) {
-  const html = useMemo(() => highlightLine(content, language), [content, language]);
+  const html = language ? getCachedHighlight(content, language) : null;
   if (html !== null) {
     return (
       <span
@@ -226,10 +235,68 @@ export function DiffViewer() {
     }));
   }, [diffContent]);
 
+  // Bumps once per diff after the per-line Shiki cache is warmed.
+  // LineContent reads `getCachedHighlight` (sync); the bump
+  // invalidates its `memo` so it re-evaluates the cache lookup.
+  const [cacheVersion, setCacheVersion] = useState(0);
+
+  // Plugin grammars register at startup but the `languageForFile`
+  // result depends on the plugin registry being loaded. Re-evaluate
+  // when `grammarsReady` flips so a `.foo` diff that opens during
+  // boot gets the right language id once registration completes.
+  const [grammarsReady, setGrammarsReady] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void bootstrapGrammarRegistry().then(() => {
+      if (!cancelled) setGrammarsReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const language = useMemo(
     () => languageForFile(diffSelectedFile),
-    [diffSelectedFile],
+    // grammarsReady is read at call time but not in deps for `useMemo`;
+    // including it forces re-resolution once plugin grammars finish
+    // registering.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [diffSelectedFile, grammarsReady],
   );
+
+  // Prewarm the Shiki line cache for every distinct line in the diff.
+  // Each `highlightCode` call is async but populates the LRU in
+  // `utils/highlight.ts`; once all promises resolve we bump
+  // `cacheVersion` so memoized `LineContent` instances re-render and
+  // hit the cache synchronously.
+  //
+  // Per-line highlighting is structurally the same trade-off the diff
+  // viewer made under highlight.js: multi-line constructs (block
+  // comments, template literals) tokenize per-line and may render
+  // imperfectly inside a hunk. Acceptable cost for a sync per-line
+  // render path.
+  useEffect(() => {
+    // No reset of `cacheVersion` here — when the file switches before
+    // the new file's prewarm completes, LineContent reads its cache
+    // synchronously and gets a miss for the new lines, falling back
+    // to plain text. The next bump (when prewarm resolves) re-tokenizes.
+    // Also avoids the `react-hooks/refs` lint warning about synchronous
+    // setState in effects.
+    if (!diffContent || !language) return;
+    let cancelled = false;
+    const distinct = new Set<string>();
+    for (const hunk of diffContent.hunks) {
+      for (const line of hunk.lines) distinct.add(line.content);
+    }
+    void Promise.all(
+      Array.from(distinct).map((line) => highlightCode(line, language)),
+    ).then(() => {
+      if (!cancelled) setCacheVersion((v) => v + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [diffContent, language]);
 
   return (
     <div className={styles.viewer}>
@@ -354,7 +421,11 @@ export function DiffViewer() {
                           ? "-"
                           : " "}
                     </span>
-                    <LineContent content={line.content} language={language} />
+                    <LineContent
+                      content={line.content}
+                      language={language}
+                      cacheVersion={cacheVersion}
+                    />
                   </div>
                 ))}
               </div>
@@ -385,6 +456,7 @@ export function DiffViewer() {
                       <LineContent
                         content={row.left?.content ?? ""}
                         language={language}
+                        cacheVersion={cacheVersion}
                       />
                     </div>
                     <div
@@ -405,6 +477,7 @@ export function DiffViewer() {
                       <LineContent
                         content={row.right?.content ?? ""}
                         language={language}
+                        cacheVersion={cacheVersion}
                       />
                     </div>
                   </div>

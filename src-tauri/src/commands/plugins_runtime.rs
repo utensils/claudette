@@ -96,6 +96,7 @@ fn kind_sort_key(kind: PluginKind) -> u8 {
     match kind {
         PluginKind::Scm => 0,
         PluginKind::EnvProvider => 1,
+        PluginKind::LanguageGrammar => 2,
     }
 }
 

@@ -233,6 +233,8 @@ mod tests {
                 config_schema: std::collections::HashMap::new(),
                 kind: crate::plugin_runtime::manifest::PluginKind::Scm,
                 settings: vec![],
+                languages: vec![],
+                grammars: vec![],
             },
             dir: std::path::PathBuf::new(),
             config: std::collections::HashMap::new(),
