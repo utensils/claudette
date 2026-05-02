@@ -4,7 +4,7 @@
  * `src/ui/src/types/plugins.ts`.
  */
 
-export type ClaudettePluginKind = "scm" | "env-provider";
+export type ClaudettePluginKind = "scm" | "env-provider" | "language-grammar";
 
 /**
  * Mirrors the Rust `PluginSettingField` enum. The `type` discriminant

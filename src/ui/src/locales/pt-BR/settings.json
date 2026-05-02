@@ -174,6 +174,8 @@
   "plugins_reseeded_warnings": "Reinstalado com {{count}} aviso(s): {{warnings}}",
   "plugins_kind_scm": "Controle de versão",
   "plugins_kind_env_provider": "Provedores de ambiente",
+  "plugins_kind_language_grammar": "Gramáticas de linguagem",
+  "plugins_grammar_extensions": "Extensões de arquivo",
   "plugins_details": "Detalhes",
   "plugins_hide_details": "Ocultar detalhes",
   "plugins_voice_use": "Usar",

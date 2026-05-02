@@ -4,17 +4,26 @@
  * Holds a single Shiki highlighter loaded with `github-light` + `github-dark`
  * themes. Grammars are loaded on demand via the fine-grained `@shikijs/langs/*`
  * dynamic imports below — only languages actually requested at runtime are
- * fetched, and Vite splits each into its own chunk.
+ * fetched, and Vite splits each into its own chunk. Plugin-contributed
+ * grammars are registered ahead of time via `register-grammar` messages
+ * (see [[IncomingMessage]] below), making them indistinguishable from the
+ * built-in loaders to the rest of the pipeline.
  *
  * Wire protocol:
- *   in:  { id: number, code: string, lang: string }
- *   out: { id: number, html: string | null }
+ *   in (highlight):  { id: number, code: string, lang: string }
+ *   in (register):   { type: "register-grammar", lang: string, grammar: unknown }
+ *   out:             { id: number, html: string | null }
  *
  * `html` is the inner-HTML of Shiki's `<code>` element (no `<pre>` wrapper).
  * `null` indicates a hard failure; the main thread should fall back to plain
  * rendering. Output is structurally validated before serialization (only
  * `span` elements with `class`/`style` attributes plus text nodes are
  * permitted) — defense in depth for `dangerouslySetInnerHTML` on the consumer.
+ *
+ * `register-grammar` is fire-and-forget — the main thread is expected to
+ * issue all registrations during bootstrap before any highlight requests
+ * for the registered languages, so there's no need for a confirmation
+ * response.
  */
 
 import { createHighlighterCore, type HighlighterCore } from "shiki/core";
@@ -124,6 +133,30 @@ async function ensureLang(
 }
 
 /**
+ * Load a plugin-contributed TextMate grammar into the highlighter.
+ * Idempotent — re-registering the same `lang` is harmless (Shiki's
+ * `loadLanguage` overwrites the existing grammar). On success the
+ * lang id is added to `loadedLangs` so subsequent `ensureLang` calls
+ * short-circuit without consulting the built-in `LANG_LOADERS` map.
+ *
+ * Errors are caught and logged but never re-thrown: a malformed
+ * grammar must not poison the worker for unrelated languages. A
+ * follow-up highlight request for the failed lang falls through to
+ * the regular `ensureLang` path which will mark it failed and render
+ * as plain text.
+ */
+async function registerGrammar(lang: string, grammar: unknown): Promise<void> {
+  try {
+    const hl = await getHighlighter();
+    await hl.loadLanguage(grammar as never);
+    loadedLangs.add(lang);
+    failedLangs.delete(lang);
+  } catch (e) {
+    console.warn(`[shiki worker] failed to register grammar for "${lang}":`, e);
+  }
+}
+
+/**
  * Validate that an element subtree contains only what Shiki is supposed to
  * emit: `span` elements with at most `class`/`className`/`style`
  * properties, plus text nodes. Anything else (including raw HTML embedded
@@ -177,12 +210,29 @@ async function highlight(code: string, lang: string): Promise<string | null> {
   }
 }
 
+/**
+ * Tagged-union message protocol. `register-grammar` is the only
+ * tagged variant; highlight requests stay untagged for backwards
+ * compatibility with existing callers that send `{ id, code, lang }`
+ * directly. The "in" type guard below distinguishes them at runtime.
+ */
+type IncomingMessage =
+  | { type: "register-grammar"; lang: string; grammar: unknown }
+  | { id: number; code: string; lang: string };
+
 self.addEventListener(
   "message",
-  (e: MessageEvent<{ id: number; code: string; lang: string }>) => {
-    const { id, code, lang } = e.data;
-    void highlight(code, lang).then((html) => {
-      (self as unknown as Worker).postMessage({ id, html });
-    });
+  (e: MessageEvent<IncomingMessage>) => {
+    const data = e.data;
+    if ("type" in data && data.type === "register-grammar") {
+      void registerGrammar(data.lang, data.grammar);
+      return;
+    }
+    if ("id" in data) {
+      const { id, code, lang } = data;
+      void highlight(code, lang).then((html) => {
+        (self as unknown as Worker).postMessage({ id, html });
+      });
+    }
   },
 );

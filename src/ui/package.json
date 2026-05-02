@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
+    "@shikijs/monaco": "^4.0.2",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
     "@tauri-apps/plugin-dialog": "^2.7.0",
@@ -25,7 +26,6 @@
     "@xterm/xterm": "^6.0.0",
     "ansi_up": "^6.0.6",
     "hast-util-to-html": "^9.0.5",
-    "highlight.js": "^11.11.1",
     "i18next": "^26.0.8",
     "lucide-react": "^1.7.0",
     "mermaid": "^11.14.0",

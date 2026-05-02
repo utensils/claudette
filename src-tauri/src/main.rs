@@ -609,6 +609,9 @@ fn main() {
             // Built-in Claudette plugins (Rust-implemented agent surfaces)
             commands::plugins_runtime::list_builtin_claudette_plugins,
             commands::plugins_runtime::set_builtin_claudette_plugin_enabled,
+            // Language-grammar plugins (TextMate grammars for chat/diff/editor)
+            commands::grammars::list_language_grammars,
+            commands::grammars::read_language_grammar,
             // Voice providers
             commands::voice::voice_list_providers,
             commands::voice::voice_set_selected_provider,

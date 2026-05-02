@@ -2,38 +2,68 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-/// Embedded plugin files. Each tuple is (name, plugin_json, init_lua).
-const BUNDLED_PLUGINS: &[(&str, &str, &str)] = &[
-    (
-        "github",
-        include_str!("../../plugins/scm-github/plugin.json"),
-        include_str!("../../plugins/scm-github/init.lua"),
-    ),
-    (
-        "gitlab",
-        include_str!("../../plugins/scm-gitlab/plugin.json"),
-        include_str!("../../plugins/scm-gitlab/init.lua"),
-    ),
-    (
-        "env-direnv",
-        include_str!("../../plugins/env-direnv/plugin.json"),
-        include_str!("../../plugins/env-direnv/init.lua"),
-    ),
-    (
-        "env-mise",
-        include_str!("../../plugins/env-mise/plugin.json"),
-        include_str!("../../plugins/env-mise/init.lua"),
-    ),
-    (
-        "env-dotenv",
-        include_str!("../../plugins/env-dotenv/plugin.json"),
-        include_str!("../../plugins/env-dotenv/init.lua"),
-    ),
-    (
-        "env-nix-devshell",
-        include_str!("../../plugins/env-nix-devshell/plugin.json"),
-        include_str!("../../plugins/env-nix-devshell/init.lua"),
-    ),
+/// Embedded plugin definition. Operation-driven plugins (`scm`,
+/// `env-provider`) ship `plugin.json` + `init.lua`; declarative plugins
+/// (`language-grammar`) ship `plugin.json` + arbitrary `extra_files`
+/// and have no `init.lua`. The shape is the same on either side of the
+/// install boundary so the seeding logic can handle both uniformly.
+pub struct BundledPlugin {
+    pub name: &'static str,
+    pub plugin_json: &'static str,
+    pub init_lua: Option<&'static str>,
+    /// Additional files written under the plugin directory. Each tuple
+    /// is `(plugin-relative-path, contents)`. Paths must be relative
+    /// (no leading `/` or `..`) and use forward slashes — they are
+    /// joined onto the plugin directory at write time.
+    pub extra_files: &'static [(&'static str, &'static str)],
+}
+
+const BUNDLED_PLUGINS: &[BundledPlugin] = &[
+    BundledPlugin {
+        name: "github",
+        plugin_json: include_str!("../../plugins/scm-github/plugin.json"),
+        init_lua: Some(include_str!("../../plugins/scm-github/init.lua")),
+        extra_files: &[],
+    },
+    BundledPlugin {
+        name: "gitlab",
+        plugin_json: include_str!("../../plugins/scm-gitlab/plugin.json"),
+        init_lua: Some(include_str!("../../plugins/scm-gitlab/init.lua")),
+        extra_files: &[],
+    },
+    BundledPlugin {
+        name: "env-direnv",
+        plugin_json: include_str!("../../plugins/env-direnv/plugin.json"),
+        init_lua: Some(include_str!("../../plugins/env-direnv/init.lua")),
+        extra_files: &[],
+    },
+    BundledPlugin {
+        name: "env-mise",
+        plugin_json: include_str!("../../plugins/env-mise/plugin.json"),
+        init_lua: Some(include_str!("../../plugins/env-mise/init.lua")),
+        extra_files: &[],
+    },
+    BundledPlugin {
+        name: "env-dotenv",
+        plugin_json: include_str!("../../plugins/env-dotenv/plugin.json"),
+        init_lua: Some(include_str!("../../plugins/env-dotenv/init.lua")),
+        extra_files: &[],
+    },
+    BundledPlugin {
+        name: "env-nix-devshell",
+        plugin_json: include_str!("../../plugins/env-nix-devshell/plugin.json"),
+        init_lua: Some(include_str!("../../plugins/env-nix-devshell/init.lua")),
+        extra_files: &[],
+    },
+    BundledPlugin {
+        name: "lang-nix",
+        plugin_json: include_str!("../../plugins/lang-nix/plugin.json"),
+        init_lua: None,
+        extra_files: &[(
+            "grammars/nix.tmLanguage.json",
+            include_str!("../../plugins/lang-nix/grammars/nix.tmLanguage.json"),
+        )],
+    },
 ];
 
 /// The current app version, used for the .version sentinel file.
@@ -51,7 +81,7 @@ const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 ///
 /// The decision tree is now content-based:
 ///
-/// 1. No `init.lua` on disk (fresh install) → write everything.
+/// 1. No primary artifact on disk (fresh install) → write everything.
 /// 2. On-disk hash == bundled hash → nothing to do.
 /// 3. On-disk hash != bundled hash AND `.content_hash` stamp matches
 ///    the on-disk content → we own this file, the bundle moved;
@@ -68,10 +98,9 @@ const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub fn seed_bundled_plugins(plugin_dir: &Path) -> Vec<String> {
     let mut warnings = Vec::new();
 
-    for (name, plugin_json, init_lua) in BUNDLED_PLUGINS {
-        let dir = plugin_dir.join(name);
+    for plugin in BUNDLED_PLUGINS {
+        let dir = plugin_dir.join(plugin.name);
         let version_file = dir.join(".version");
-        let init_file = dir.join("init.lua");
         let manifest_file = dir.join("plugin.json");
         let hash_file = dir.join(".content_hash");
 
@@ -83,30 +112,38 @@ pub fn seed_bundled_plugins(plugin_dir: &Path) -> Vec<String> {
             continue;
         }
 
-        // First-run path: nothing to preserve, write it all.
-        if !init_file.exists() {
-            if let Err(e) = write_plugin_files(
-                &manifest_file,
-                plugin_json,
-                &init_file,
-                init_lua,
-                &version_file,
-            ) {
-                warnings.push(format!("Failed to seed plugin '{name}': {e}"));
+        // First-run path: nothing to preserve, write it all. The
+        // primary artifact is `init.lua` for operation-driven kinds;
+        // for declarative-only kinds, presence of `plugin.json` (or
+        // any owned extra file) signals we've seeded before.
+        if is_first_run(plugin, &dir) {
+            if let Err(e) = write_plugin_files(&dir, plugin, &version_file) {
+                warnings.push(format!("Failed to seed plugin '{}': {e}", plugin.name));
             }
             continue;
         }
 
-        let on_disk = std::fs::read_to_string(&init_file).unwrap_or_default();
-        let on_disk_hash = sha256_hex(&on_disk);
-        let bundled_hash = sha256_hex(init_lua);
+        let on_disk_hash = match on_disk_content_hash(plugin, &dir) {
+            Some(h) => h,
+            None => {
+                // One of our owned files vanished after a prior seed;
+                // treat as drift and rewrite. This matches the
+                // existing first-run path's net effect for plugins
+                // that lost a file post-seed (e.g. a partial cleanup).
+                if let Err(e) = write_plugin_files(&dir, plugin, &version_file) {
+                    warnings.push(format!("Failed to repair plugin '{}': {e}", plugin.name));
+                }
+                continue;
+            }
+        };
+        let bundled_hash = bundled_content_hash(plugin);
 
-        // Init.lua matches bundle → no code change needed. But the
-        // manifest (`plugin.json`) can drift independently of the
-        // Lua body — new `operations`, an updated settings schema,
-        // a renamed `display_name`. Refresh the manifest (and the
-        // `.version` stamp) so `PluginRegistry::discover` always
-        // sees current metadata even when the code body is stable.
+        // Content matches bundle → no body change needed. But the
+        // manifest (`plugin.json`) can drift independently — new
+        // `operations`, an updated settings schema, a renamed
+        // `display_name`. Refresh the manifest (and the `.version`
+        // stamp) so `PluginRegistry::discover` always sees current
+        // metadata even when the body is stable.
         //
         // Also top up `.content_hash` for legacy installs that
         // predate hash stamping, so future drift detection works.
@@ -115,11 +152,15 @@ pub fn seed_bundled_plugins(plugin_dir: &Path) -> Vec<String> {
                 && let Err(e) = std::fs::write(&hash_file, &bundled_hash)
             {
                 warnings.push(format!(
-                    "Plugin '{name}': failed to write content hash stamp: {e}"
+                    "Plugin '{}': failed to write content hash stamp: {e}",
+                    plugin.name
                 ));
             }
-            if let Err(e) = refresh_manifest_if_changed(&manifest_file, plugin_json) {
-                warnings.push(format!("Plugin '{name}': manifest refresh failed: {e}"));
+            if let Err(e) = refresh_manifest_if_changed(&manifest_file, plugin.plugin_json) {
+                warnings.push(format!(
+                    "Plugin '{}': manifest refresh failed: {e}",
+                    plugin.name
+                ));
             }
             let current_version = std::fs::read_to_string(&version_file)
                 .unwrap_or_default()
@@ -128,7 +169,10 @@ pub fn seed_bundled_plugins(plugin_dir: &Path) -> Vec<String> {
             if current_version != APP_VERSION
                 && let Err(e) = std::fs::write(&version_file, APP_VERSION)
             {
-                warnings.push(format!("Plugin '{name}': .version refresh failed: {e}"));
+                warnings.push(format!(
+                    "Plugin '{}': .version refresh failed: {e}",
+                    plugin.name
+                ));
             }
             continue;
         }
@@ -156,20 +200,15 @@ pub fn seed_bundled_plugins(plugin_dir: &Path) -> Vec<String> {
 
         if user_modified {
             warnings.push(format!(
-                "Plugin '{name}' has user modifications — skipping update. \
-                 Use 'Reload bundled plugins' in Settings to force."
+                "Plugin '{}' has user modifications — skipping update. \
+                 Use 'Reload bundled plugins' in Settings to force.",
+                plugin.name
             ));
             continue;
         }
 
-        if let Err(e) = write_plugin_files(
-            &manifest_file,
-            plugin_json,
-            &init_file,
-            init_lua,
-            &version_file,
-        ) {
-            warnings.push(format!("Failed to update plugin '{name}': {e}"));
+        if let Err(e) = write_plugin_files(&dir, plugin, &version_file) {
+            warnings.push(format!("Failed to update plugin '{}': {e}", plugin.name));
         }
     }
 
@@ -182,17 +221,15 @@ pub fn seed_bundled_plugins(plugin_dir: &Path) -> Vec<String> {
 /// version-gated path in [`seed_bundled_plugins`] only runs on
 /// APP_VERSION bumps).
 ///
-/// Preserves user-modified `init.lua` files by comparing SHA-256
-/// hashes — if the on-disk content doesn't match *any* content the
-/// bundled seed function has ever written, we skip that plugin and
-/// return a warning so the user sees why it wasn't updated.
+/// Preserves user-modified files by comparing SHA-256 hashes — if the
+/// on-disk content doesn't match *any* content the bundled seed
+/// function has ever written, we skip that plugin and return a
+/// warning so the user sees why it wasn't updated.
 pub fn reseed_bundled_plugins_force(plugin_dir: &Path) -> Vec<String> {
     let mut warnings = Vec::new();
 
-    for (name, plugin_json, init_lua) in BUNDLED_PLUGINS {
-        let dir = plugin_dir.join(name);
-        let init_file = dir.join("init.lua");
-        let manifest_file = dir.join("plugin.json");
+    for plugin in BUNDLED_PLUGINS {
+        let dir = plugin_dir.join(plugin.name);
         let version_file = dir.join(".version");
         let content_hash_file = dir.join(".content_hash");
 
@@ -206,32 +243,36 @@ pub fn reseed_bundled_plugins_force(plugin_dir: &Path) -> Vec<String> {
 
         // Layered ownership check:
         //
-        // 1. No `.version` at all + `init.lua` exists → user created
-        //    this plugin directory; never touch.
-        // 2. `.content_hash` exists + matches the on-disk init.lua →
+        // 1. No `.version` at all + any owned content already on
+        //    disk → user created this plugin directory; never touch.
+        // 2. `.content_hash` exists + matches the on-disk content →
         //    this is the content we last wrote; safe to overwrite
         //    (the current embed may differ from the stored hash,
         //    which is exactly the stale-seeded case reseed is for).
         // 3. `.content_hash` exists + differs from the on-disk
-        //    init.lua → user customized it after we seeded; preserve.
+        //    content → user customized it after we seeded; preserve.
         // 4. `.content_hash` missing + `.version` present (legacy
         //    install predating hash-stamping): fall back to hashing
         //    against the current embed. This restores the pre-hash
         //    behavior for existing installs without clobbering
         //    customizations.
         let has_version_stamp = version_file.exists();
-        if init_file.exists() && !has_version_stamp {
+        let has_owned_content = on_disk_content_hash(plugin, &dir).is_some();
+        if has_owned_content && !has_version_stamp {
             warnings.push(format!(
-                "Plugin '{name}': no .version file — directory appears user-created, skipping. \
+                "Plugin '{}': no .version file — directory appears user-created, skipping. \
                  Delete {} to force a reseed.",
+                plugin.name,
                 dir.display()
             ));
             continue;
         }
 
-        if init_file.exists() {
-            let on_disk = std::fs::read_to_string(&init_file).unwrap_or_default();
-            let on_disk_hash = sha256_hex(&on_disk);
+        if has_owned_content {
+            let on_disk_hash = match on_disk_content_hash(plugin, &dir) {
+                Some(h) => h,
+                None => continue,
+            };
             let preserved_as_user_edit = if content_hash_file.exists() {
                 let stamped = std::fs::read_to_string(&content_hash_file)
                     .unwrap_or_default()
@@ -245,30 +286,101 @@ pub fn reseed_bundled_plugins_force(plugin_dir: &Path) -> Vec<String> {
                 // before this code existed. Stale-seeded-but-unmodified
                 // copies (identical to the current embed) pass through
                 // and get restamped with a proper hash below.
-                sha256_hex(init_lua) != on_disk_hash && !on_disk.is_empty()
+                bundled_content_hash(plugin) != on_disk_hash
             };
             if preserved_as_user_edit {
                 warnings.push(format!(
-                    "Plugin '{name}': init.lua has user modifications — skipping update. \
+                    "Plugin '{}': content has user modifications — skipping update. \
                      Delete {} to force a reseed.",
+                    plugin.name,
                     dir.display()
                 ));
                 continue;
             }
         }
 
-        if let Err(e) = write_plugin_files(
-            &manifest_file,
-            plugin_json,
-            &init_file,
-            init_lua,
-            &version_file,
-        ) {
-            warnings.push(format!("Failed to reseed plugin '{name}': {e}"));
+        if let Err(e) = write_plugin_files(&dir, plugin, &version_file) {
+            warnings.push(format!("Failed to reseed plugin '{}': {e}", plugin.name));
         }
     }
 
     warnings
+}
+
+/// `true` when no owned content from `plugin` exists on disk yet —
+/// either a fresh install or a previously-uninstalled plugin coming
+/// back. For operation-driven plugins this is "init.lua missing"; for
+/// declarative plugins it is "no extra files and no manifest yet".
+fn is_first_run(plugin: &BundledPlugin, dir: &Path) -> bool {
+    if plugin.init_lua.is_some() {
+        return !dir.join("init.lua").exists();
+    }
+    // Declarative plugin: any owned file present means we (or a user)
+    // already wrote something here. Use that as the inverse signal.
+    let any_extra_present = plugin
+        .extra_files
+        .iter()
+        .any(|(rel, _)| dir.join(rel).exists());
+    !any_extra_present && !dir.join("plugin.json").exists()
+}
+
+/// Combined SHA-256 hash of the plugin's owned content as bundled in
+/// the binary. Used to compare against the on-disk hash to detect
+/// drift.
+///
+/// Backwards-compat: when a plugin ships only `init.lua` (no
+/// `extra_files`), the hash is exactly `sha256(init_lua)` — matching
+/// the format pre-multi-file installs stamped, so existing
+/// `.content_hash` files continue to verify without migration.
+fn bundled_content_hash(plugin: &BundledPlugin) -> String {
+    if plugin.extra_files.is_empty()
+        && let Some(init) = plugin.init_lua
+    {
+        return sha256_hex(init);
+    }
+    let mut hasher = Sha256::new();
+    if let Some(init) = plugin.init_lua {
+        hasher.update(b"init.lua\0");
+        hasher.update(init.as_bytes());
+        hasher.update(b"\n");
+    }
+    let mut sorted: Vec<_> = plugin.extra_files.iter().collect();
+    sorted.sort_by_key(|(path, _)| *path);
+    for (path, content) in sorted {
+        hasher.update(path.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(content.as_bytes());
+        hasher.update(b"\n");
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+/// Combined SHA-256 hash of the plugin's owned content currently on
+/// disk. Returns `None` when any expected file is missing — a partial
+/// install that the seeding logic should treat as drift and rewrite.
+fn on_disk_content_hash(plugin: &BundledPlugin, dir: &Path) -> Option<String> {
+    if plugin.extra_files.is_empty() && plugin.init_lua.is_some() {
+        return std::fs::read_to_string(dir.join("init.lua"))
+            .ok()
+            .map(|s| sha256_hex(&s));
+    }
+    let mut hasher = Sha256::new();
+    if plugin.init_lua.is_some() {
+        let content = std::fs::read_to_string(dir.join("init.lua")).ok()?;
+        hasher.update(b"init.lua\0");
+        hasher.update(content.as_bytes());
+        hasher.update(b"\n");
+    }
+    let mut sorted: Vec<_> = plugin.extra_files.iter().collect();
+    sorted.sort_by_key(|(path, _)| *path);
+    for (path, _) in sorted {
+        let content = std::fs::read_to_string(dir.join(path)).ok()?;
+        hasher.update(path.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(content.as_bytes());
+        hasher.update(b"\n");
+    }
+    Some(format!("{:x}", hasher.finalize()))
 }
 
 /// Rewrite `manifest_path` only when its on-disk bytes don't already
@@ -284,23 +396,32 @@ fn refresh_manifest_if_changed(manifest_path: &Path, bundled_content: &str) -> s
     std::fs::write(manifest_path, bundled_content)
 }
 
+/// Write all owned files for a plugin (manifest, optional init.lua,
+/// extra files) and refresh the version + content-hash stamps.
+///
+/// Ensures `dir` exists before any writes so callers can rely on this
+/// function as a self-contained "materialize this plugin to disk"
+/// primitive without pre-creating the directory tree.
 fn write_plugin_files(
-    manifest_path: &Path,
-    manifest_content: &str,
-    init_path: &Path,
-    init_content: &str,
+    dir: &Path,
+    plugin: &BundledPlugin,
     version_path: &Path,
 ) -> std::io::Result<()> {
-    std::fs::write(manifest_path, manifest_content)?;
-    std::fs::write(init_path, init_content)?;
+    std::fs::create_dir_all(dir)?;
+    std::fs::write(dir.join("plugin.json"), plugin.plugin_json)?;
+    if let Some(init) = plugin.init_lua {
+        std::fs::write(dir.join("init.lua"), init)?;
+    }
+    for (rel, content) in plugin.extra_files {
+        let target = dir.join(rel);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(target, content)?;
+    }
     std::fs::write(version_path, APP_VERSION)?;
-    // Stamp the content hash alongside .version so reseed can later
-    // detect whether the on-disk `init.lua` is still what we wrote
-    // (regardless of which Claudette version wrote it). Mismatch
-    // between this stamp and the on-disk hash means the user has
-    // customized the file, so force-reseed preserves it.
-    let hash_path = version_path.with_file_name(".content_hash");
-    std::fs::write(hash_path, sha256_hex(init_content))?;
+    let hash_path = dir.join(".content_hash");
+    std::fs::write(hash_path, bundled_content_hash(plugin))?;
     Ok(())
 }
 
@@ -351,14 +472,10 @@ mod tests {
         // distinguish "we wrote this" from "user customized".
         let hash_path = plugin_dir.join("github/.content_hash");
         assert!(hash_path.exists(), "first-run must stamp content hash");
-        let bundled_github_init = BUNDLED_PLUGINS
-            .iter()
-            .find(|(n, _, _)| *n == "github")
-            .map(|(_, _, lua)| *lua)
-            .unwrap();
+        let bundled_github = BUNDLED_PLUGINS.iter().find(|p| p.name == "github").unwrap();
         assert_eq!(
             std::fs::read_to_string(&hash_path).unwrap().trim(),
-            sha256_hex(bundled_github_init),
+            bundled_content_hash(bundled_github),
             "content hash stamp must match bundled content"
         );
     }
@@ -414,8 +531,8 @@ mod tests {
         // Should match the bundled manifest content.
         let bundled = BUNDLED_PLUGINS
             .iter()
-            .find(|(n, _, _)| *n == "github")
-            .map(|(_, pjson, _)| *pjson)
+            .find(|p| p.name == "github")
+            .map(|p| p.plugin_json)
             .unwrap();
         assert_eq!(on_disk, bundled);
     }
@@ -517,13 +634,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let plugin_subdir = dir.path().join("github");
         std::fs::create_dir_all(&plugin_subdir).unwrap();
-        let bundled_github_init = BUNDLED_PLUGINS
-            .iter()
-            .find(|(n, _, _)| *n == "github")
-            .map(|(_, _, lua)| *lua)
-            .unwrap();
+        let bundled_github = BUNDLED_PLUGINS.iter().find(|p| p.name == "github").unwrap();
+        let bundled_init = bundled_github.init_lua.unwrap();
         std::fs::write(plugin_subdir.join(".version"), "0.0.1").unwrap();
-        std::fs::write(plugin_subdir.join("init.lua"), bundled_github_init).unwrap();
+        std::fs::write(plugin_subdir.join("init.lua"), bundled_init).unwrap();
         std::fs::write(plugin_subdir.join("plugin.json"), "{}").unwrap();
 
         let warnings = seed_bundled_plugins(dir.path());
@@ -536,7 +650,7 @@ mod tests {
         let hash_path = plugin_subdir.join(".content_hash");
         assert!(hash_path.exists(), "content hash stamp must be written");
         let stamped = std::fs::read_to_string(&hash_path).unwrap();
-        assert_eq!(stamped.trim(), sha256_hex(bundled_github_init));
+        assert_eq!(stamped.trim(), bundled_content_hash(bundled_github));
     }
 
     #[test]
@@ -639,5 +753,163 @@ mod tests {
             "unmodified reseed should have no warnings: {warnings:?}"
         );
         assert!(init_path.exists(), "init.lua must be restored");
+    }
+
+    /// Build a synthetic multi-file plugin and exercise it through
+    /// the public seeding API. Static lifetimes make this slightly
+    /// awkward — we lean on `Box::leak` so the test harness can
+    /// embed runtime values into the `&'static` slots
+    /// `BundledPlugin` uses.
+    fn synth_grammar_plugin(name: &str, manifest: &str, grammar: &str) -> &'static BundledPlugin {
+        let extras: &'static [(&'static str, &'static str)] = Box::leak(Box::new([(
+            "grammars/test.tmLanguage.json",
+            Box::leak(grammar.to_string().into_boxed_str()) as &'static str,
+        )]));
+        let plugin = BundledPlugin {
+            name: Box::leak(name.to_string().into_boxed_str()),
+            plugin_json: Box::leak(manifest.to_string().into_boxed_str()),
+            init_lua: None,
+            extra_files: extras,
+        };
+        Box::leak(Box::new(plugin))
+    }
+
+    #[test]
+    fn multi_file_first_run_writes_all_files_and_stamps_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugin = synth_grammar_plugin(
+            "lang-test-write",
+            r#"{"name":"lang-test-write","display_name":"Test","version":"1.0.0","description":"d","kind":"language-grammar","operations":[]}"#,
+            r#"{"scopeName":"source.test","patterns":[]}"#,
+        );
+
+        let plugin_dir = dir.path().join(plugin.name);
+        write_plugin_files(&plugin_dir, plugin, &plugin_dir.join(".version")).unwrap();
+
+        assert!(plugin_dir.join("plugin.json").exists());
+        assert!(!plugin_dir.join("init.lua").exists());
+        assert!(plugin_dir.join("grammars/test.tmLanguage.json").exists());
+        assert!(plugin_dir.join(".version").exists());
+        assert!(plugin_dir.join(".content_hash").exists());
+
+        let stamped = std::fs::read_to_string(plugin_dir.join(".content_hash"))
+            .unwrap()
+            .trim()
+            .to_string();
+        assert_eq!(stamped, bundled_content_hash(plugin));
+    }
+
+    #[test]
+    fn multi_file_drift_in_extra_file_detected() {
+        // Drift detection must include extra files, not just init.lua.
+        let dir = tempfile::tempdir().unwrap();
+        let plugin = synth_grammar_plugin(
+            "lang-test-drift",
+            r#"{"name":"lang-test-drift","display_name":"Test","version":"1.0.0","description":"d","kind":"language-grammar","operations":[]}"#,
+            r#"{"scopeName":"source.test","patterns":[]}"#,
+        );
+
+        let plugin_dir = dir.path().join(plugin.name);
+        write_plugin_files(&plugin_dir, plugin, &plugin_dir.join(".version")).unwrap();
+
+        let bundled = bundled_content_hash(plugin);
+        let on_disk = on_disk_content_hash(plugin, &plugin_dir).unwrap();
+        assert_eq!(bundled, on_disk, "fresh write must match");
+
+        // Tweak the grammar — drift in any owned file must change
+        // the combined hash.
+        std::fs::write(
+            plugin_dir.join("grammars/test.tmLanguage.json"),
+            r##"{"scopeName":"source.test","patterns":[{"name":"comment","match":"#"}]}"##,
+        )
+        .unwrap();
+        let after = on_disk_content_hash(plugin, &plugin_dir).unwrap();
+        assert_ne!(after, bundled, "edited grammar must change combined hash");
+    }
+
+    #[test]
+    fn multi_file_partial_install_treated_as_first_run() {
+        // If one of our extra files vanishes between seedings, the
+        // hash function returns None and the seed re-emits the
+        // missing file rather than warning about drift.
+        let dir = tempfile::tempdir().unwrap();
+        let plugin = synth_grammar_plugin(
+            "lang-test-partial",
+            r#"{"name":"lang-test-partial","display_name":"Test","version":"1.0.0","description":"d","kind":"language-grammar","operations":[]}"#,
+            r#"{"scopeName":"source.test","patterns":[]}"#,
+        );
+
+        let plugin_dir = dir.path().join(plugin.name);
+        write_plugin_files(&plugin_dir, plugin, &plugin_dir.join(".version")).unwrap();
+        std::fs::remove_file(plugin_dir.join("grammars/test.tmLanguage.json")).unwrap();
+
+        assert!(on_disk_content_hash(plugin, &plugin_dir).is_none());
+    }
+
+    #[test]
+    fn first_run_detection_for_declarative_plugin() {
+        // is_first_run for declarative plugins should be true when
+        // none of the owned extras exist and false once any do.
+        let dir = tempfile::tempdir().unwrap();
+        let plugin = synth_grammar_plugin(
+            "lang-test-fresh",
+            r#"{"name":"lang-test-fresh","display_name":"Test","version":"1.0.0","description":"d","kind":"language-grammar","operations":[]}"#,
+            r#"{"scopeName":"source.test","patterns":[]}"#,
+        );
+
+        let plugin_dir = dir.path().join(plugin.name);
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        assert!(is_first_run(plugin, &plugin_dir));
+
+        // Once a grammar file exists on disk, it's no longer a
+        // first run.
+        std::fs::create_dir_all(plugin_dir.join("grammars")).unwrap();
+        std::fs::write(plugin_dir.join("grammars/test.tmLanguage.json"), "{}").unwrap();
+        assert!(!is_first_run(plugin, &plugin_dir));
+    }
+
+    #[test]
+    fn bundled_lang_nix_seeds_grammar_file() {
+        // Regression guard for the bundled language-grammar plugin.
+        // The seeding path must materialize both `plugin.json` and
+        // the grammar file, with the content hash covering all of
+        // it so future drift detection works.
+        let dir = tempfile::tempdir().unwrap();
+        let warnings = seed_bundled_plugins(dir.path());
+        let lang_warnings: Vec<_> = warnings.iter().filter(|w| w.contains("lang-nix")).collect();
+        assert!(
+            lang_warnings.is_empty(),
+            "lang-nix must seed cleanly: {lang_warnings:?}"
+        );
+
+        let plugin_dir = dir.path().join("lang-nix");
+        assert!(plugin_dir.join("plugin.json").exists());
+        assert!(plugin_dir.join("grammars/nix.tmLanguage.json").exists());
+        assert!(
+            !plugin_dir.join("init.lua").exists(),
+            "grammar plugins must not write init.lua"
+        );
+        assert!(plugin_dir.join(".content_hash").exists());
+
+        let bundled = BUNDLED_PLUGINS
+            .iter()
+            .find(|p| p.name == "lang-nix")
+            .unwrap();
+        let stamped = std::fs::read_to_string(plugin_dir.join(".content_hash"))
+            .unwrap()
+            .trim()
+            .to_string();
+        assert_eq!(stamped, bundled_content_hash(bundled));
+    }
+
+    #[test]
+    fn single_file_plugin_hash_equals_legacy_format() {
+        // Backwards-compatibility guarantee: single-init.lua
+        // plugins MUST produce a hash matching the pre-multi-file
+        // format (sha256 of init.lua bytes). Otherwise existing
+        // installs would all show as "drifted" on first run.
+        let plugin = BUNDLED_PLUGINS.iter().find(|p| p.name == "github").unwrap();
+        let init = plugin.init_lua.unwrap();
+        assert_eq!(bundled_content_hash(plugin), sha256_hex(init));
     }
 }
