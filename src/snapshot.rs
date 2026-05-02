@@ -121,14 +121,17 @@ pub async fn collect_worktree_files(
     Ok(files)
 }
 
-/// Snapshot all worktree files into the `checkpoint_files` table.
-/// Opens its own DB connection so it can be called from async contexts
-/// without holding a non-Send `Database` across await points.
+/// Snapshot all worktree files into the `checkpoint_files` table. Returns
+/// the number of rows inserted — callers use a zero count as a signal that
+/// the checkpoint has no restorable file state, matching the SQL EXISTS
+/// derivation used when reading checkpoints back. Opens its own DB
+/// connection so it can be called from async contexts without holding a
+/// non-Send `Database` across await points.
 pub async fn save_snapshot(
     db_path: &Path,
     checkpoint_id: &str,
     worktree_path: &str,
-) -> Result<(), SnapshotError> {
+) -> Result<usize, SnapshotError> {
     let collected = collect_worktree_files(worktree_path).await?;
 
     let files: Vec<CheckpointFile> = collected
@@ -142,9 +145,10 @@ pub async fn save_snapshot(
         })
         .collect();
 
+    let count = files.len();
     let db = crate::db::Database::open(db_path).map_err(|e| SnapshotError::Db(e.to_string()))?;
     db.insert_checkpoint_files(&files)?;
-    Ok(())
+    Ok(count)
 }
 
 /// Restore a worktree to the exact state captured in a checkpoint snapshot.
