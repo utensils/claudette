@@ -266,6 +266,35 @@ pub fn read_install_meta(install_dir: &Path) -> Result<Option<InstalledMeta>, In
     Ok(Some(meta))
 }
 
+/// Rewrite `.install_meta.json` in `install_dir` so its
+/// `granted_capabilities` field becomes `new_grants`. Every other
+/// field is preserved byte-for-byte. Used by the re-consent flow:
+/// when a plugin update declares new `required_clis` we deny at
+/// runtime until the user explicitly approves and we call this.
+///
+/// Returns `Err(InstallError::Io)` when the meta file is missing —
+/// callers must validate that the plugin was community-installed
+/// before invoking this. Bundled plugins have no meta file and
+/// shouldn't reach this path.
+pub fn update_granted_capabilities(
+    install_dir: &Path,
+    new_grants: &[String],
+) -> Result<(), InstallError> {
+    let meta_path = install_dir.join(".install_meta.json");
+    let bytes = std::fs::read(&meta_path).map_err(|e| InstallError::Io {
+        path: meta_path.display().to_string(),
+        source: e,
+    })?;
+    let mut meta: InstalledMeta = serde_json::from_slice(&bytes)?;
+    meta.granted_capabilities = new_grants.to_vec();
+    let new_bytes = serde_json::to_vec_pretty(&meta)?;
+    std::fs::write(&meta_path, new_bytes).map_err(|e| InstallError::Io {
+        path: meta_path.display().to_string(),
+        source: e,
+    })?;
+    Ok(())
+}
+
 fn write_install_meta(staging_dir: &Path, plan: &InstallPlan) -> Result<(), InstallError> {
     let meta = InstalledMeta {
         source: InstallSource::Community,
@@ -921,5 +950,51 @@ mod tests {
         assert_eq!(s.len(), 20);
         assert!(s.ends_with('Z'));
         assert_eq!(&s[10..11], "T");
+    }
+
+    #[test]
+    fn update_granted_capabilities_round_trips_and_preserves_other_fields() {
+        let payload: &[(&[u8], &[u8])] = &[];
+        let _ = payload;
+        let payload: &[(&str, &[u8])] = &[(
+            "plugins/language-grammars/lang-foo/plugin.json",
+            b"{\"name\":\"lang-foo\"}",
+        )];
+        let tarball = make_tarball("root/", payload);
+        let probe = tempdir().unwrap();
+        extract_subtree(&tarball, "plugins/language-grammars/lang-foo", probe.path()).unwrap();
+        let h = verify::content_hash(probe.path()).unwrap();
+
+        let mut plan = make_plan("lang-foo", &h);
+        plan.granted_capabilities = vec!["git".into()];
+        let (_tmp_root, roots) = make_roots();
+        let path = install(&plan, &tarball, &roots).unwrap();
+
+        let before = read_install_meta(&path).unwrap().unwrap();
+        assert_eq!(before.granted_capabilities, vec!["git".to_string()]);
+
+        let new_grants = vec!["git".to_string(), "curl".to_string(), "sh".to_string()];
+        update_granted_capabilities(&path, &new_grants).unwrap();
+
+        let after = read_install_meta(&path).unwrap().unwrap();
+        assert_eq!(after.granted_capabilities, new_grants);
+        // Every other field must be byte-identical.
+        assert_eq!(after.source, before.source);
+        assert_eq!(after.kind, before.kind);
+        assert_eq!(after.registry_sha, before.registry_sha);
+        assert_eq!(after.contribution_sha, before.contribution_sha);
+        assert_eq!(after.sha256, before.sha256);
+        assert_eq!(after.installed_at, before.installed_at);
+        assert_eq!(after.version, before.version);
+    }
+
+    #[test]
+    fn update_granted_capabilities_errors_when_meta_missing() {
+        let dir = tempdir().unwrap();
+        let result = update_granted_capabilities(dir.path(), &["git".to_string()]);
+        match result {
+            Err(InstallError::Io { .. }) => {}
+            other => panic!("expected Io error for missing meta, got {other:?}"),
+        }
     }
 }

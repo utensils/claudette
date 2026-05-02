@@ -372,6 +372,110 @@ pub async fn community_list_installed(
     Ok(out)
 }
 
+/// Capability re-consent request surfaced to the UI. Built from the
+/// diff of `manifest.required_clis` (live) vs `granted_capabilities`
+/// (recorded in `.install_meta.json` at install time).
+///
+/// Any plugin with non-empty `missing` cannot run — `call_operation`
+/// returns `PluginError::NeedsReconsent` until the user approves
+/// (which calls `community_grant_capabilities`).
+#[derive(Debug, Clone, Serialize)]
+pub struct PendingReconsent {
+    pub kind: String,
+    pub ident: String,
+    pub display_name: String,
+    /// Currently granted capability list (`granted_capabilities`).
+    pub granted: Vec<String>,
+    /// Capabilities the new manifest declares but the user hasn't
+    /// approved. `granted ∪ missing` is what would be granted on
+    /// approval.
+    pub missing: Vec<String>,
+}
+
+/// Walk every community-installed plugin and surface those whose live
+/// `required_clis` exceeds stored grants. Empty result = nothing to
+/// re-consent. Used by the Community settings UI to render a banner
+/// per affected plugin.
+#[tauri::command]
+pub async fn community_pending_reconsent(
+    state: State<'_, AppState>,
+) -> Result<Vec<PendingReconsent>, String> {
+    let registry = state.plugins.read().await;
+    let mut out = Vec::new();
+    for (name, plugin) in registry.plugins.iter() {
+        if let claudette::plugin_runtime::PluginTrust::Community { granted } = &plugin.trust {
+            let missing: Vec<String> = plugin
+                .manifest
+                .required_clis
+                .iter()
+                .filter(|c| !granted.iter().any(|g| g == *c))
+                .cloned()
+                .collect();
+            if missing.is_empty() {
+                continue;
+            }
+            // Derive kind from the manifest. The `.install_meta.json`
+            // also carries this — but the manifest is what discovery
+            // already parsed, so use it.
+            let kind_wire = ContributionKind::Plugin(plugin_kind_to_wire(plugin.manifest.kind));
+            out.push(PendingReconsent {
+                kind: kind_wire.wire(),
+                ident: name.clone(),
+                display_name: plugin.manifest.display_name.clone(),
+                granted: granted.clone(),
+                missing,
+            });
+        }
+    }
+    out.sort_by(|a, b| a.ident.cmp(&b.ident));
+    Ok(out)
+}
+
+/// Approve the live manifest's `required_clis` as the new grant set
+/// for a community-installed plugin. Rewrites `.install_meta.json`
+/// in place (preserving every other field) and rehydrates the
+/// runtime so the next `call_operation` sees the new trust.
+///
+/// Errors on:
+///   - unknown plugin name
+///   - non-community plugin (bundled / unknown — shouldn't reach this
+///     path; UI only offers re-consent when `pending_reconsent`
+///     surfaces the plugin)
+#[tauri::command]
+pub async fn community_grant_capabilities(
+    ident: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let install_dir = {
+        let registry = state.plugins.read().await;
+        let plugin = registry
+            .plugins
+            .get(&ident)
+            .ok_or_else(|| format!("unknown plugin: {ident}"))?;
+        if !matches!(
+            plugin.trust,
+            claudette::plugin_runtime::PluginTrust::Community { .. }
+        ) {
+            return Err(format!(
+                "plugin '{ident}' is not a community install — refusing to mutate grants"
+            ));
+        }
+        plugin.dir.clone()
+    };
+
+    // Read manifest off disk through the existing parser so we get the
+    // same `required_clis` view that discovery + call_operation see.
+    let manifest_path = install_dir.join("plugin.json");
+    let manifest = claudette::plugin_runtime::manifest::parse_manifest(&manifest_path)
+        .map_err(|e| format!("read plugin.json: {e}"))?;
+
+    community::update_granted_capabilities(&install_dir, &manifest.required_clis)
+        .map_err(|e| format!("write grants: {e}"))?;
+
+    rehydrate_plugin_registry(&state).await?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

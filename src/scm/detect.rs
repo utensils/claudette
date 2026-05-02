@@ -239,6 +239,7 @@ mod tests {
             dir: std::path::PathBuf::new(),
             config: std::collections::HashMap::new(),
             cli_available,
+            trust: crate::plugin_runtime::PluginTrust::Unknown,
         }
     }
 }

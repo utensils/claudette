@@ -14,7 +14,10 @@ pub mod install;
 pub mod types;
 pub mod verify;
 
-pub use install::{InstallError, InstallPlan, InstallRoots, install, read_install_meta, uninstall};
+pub use install::{
+    InstallError, InstallPlan, InstallRoots, install, read_install_meta, uninstall,
+    update_granted_capabilities,
+};
 pub use types::{
     ColorScheme, ContributionKind, ContributionRef, ContributionSource, InstallSource,
     InstalledMeta, PluginEntry, PluginKindWire, PluginsByKind, Registry, RegistrySource,
