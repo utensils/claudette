@@ -10,6 +10,12 @@ export function ExperimentalSettings() {
   const setUsageInsightsEnabled = useAppStore((s) => s.setUsageInsightsEnabled);
   const pluginManagementEnabled = useAppStore((s) => s.pluginManagementEnabled);
   const setPluginManagementEnabled = useAppStore((s) => s.setPluginManagementEnabled);
+  const communityRegistryEnabled = useAppStore(
+    (s) => s.communityRegistryEnabled,
+  );
+  const setCommunityRegistryEnabled = useAppStore(
+    (s) => s.setCommunityRegistryEnabled,
+  );
   const [error, setError] = useState<string | null>(null);
 
   const handleUsageToggle = async () => {
@@ -36,6 +42,21 @@ export function ExperimentalSettings() {
     }
   };
 
+  const handleCommunityRegistryToggle = async () => {
+    const next = !communityRegistryEnabled;
+    setCommunityRegistryEnabled(next);
+    try {
+      setError(null);
+      await setAppSetting(
+        "community_registry_enabled",
+        next ? "true" : "false",
+      );
+    } catch (e) {
+      setCommunityRegistryEnabled(!next);
+      setError(String(e));
+    }
+  };
+
   return (
     <div>
       <h2 className={styles.sectionTitle}>{t("experimental_title")}</h2>
@@ -57,6 +78,29 @@ export function ExperimentalSettings() {
             aria-label={t("experimental_plugin_mgmt_aria")}
             data-checked={pluginManagementEnabled}
             onClick={handlePluginManagementToggle}
+          >
+            <div className={styles.toggleKnob} />
+          </button>
+        </div>
+      </div>
+
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>
+            {t("experimental_community_registry")}
+          </div>
+          <div className={styles.settingDescription}>
+            {t("experimental_community_registry_desc")}
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          <button
+            className={styles.toggle}
+            role="switch"
+            aria-checked={communityRegistryEnabled}
+            aria-label={t("experimental_community_registry_aria")}
+            data-checked={communityRegistryEnabled}
+            onClick={handleCommunityRegistryToggle}
           >
             <div className={styles.toggleKnob} />
           </button>

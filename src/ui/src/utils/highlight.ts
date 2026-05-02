@@ -130,15 +130,30 @@ if (import.meta.hot) {
   });
 }
 
+/**
+ * Tear down the highlight worker singleton, drop its caches, and
+ * reset bookkeeping. Production callers use this to hot-reload
+ * registered grammars: terminating the worker drops every grammar
+ * Shiki had loaded, and the next `highlightCode` call lazily spins
+ * up a fresh worker that re-receives only currently-registered
+ * grammars.
+ *
+ * Used by `grammarRegistry.refreshGrammars` (issue 570) and by the
+ * test suite via `__testing.reset` below.
+ */
+export function resetHighlighterWorker(): void {
+  failAllPending();
+  cache.clear();
+  worker?.terminate();
+  worker = null;
+  nextId = 0;
+}
+
 // Test-only: expose the cache so unit tests can inspect/reset it.
 export const __testing = {
   cache,
   pending,
   reset(): void {
-    failAllPending();
-    cache.clear();
-    worker?.terminate();
-    worker = null;
-    nextId = 0;
+    resetHighlighterWorker();
   },
 };

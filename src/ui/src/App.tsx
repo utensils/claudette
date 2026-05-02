@@ -37,6 +37,9 @@ function App() {
   const setUsageInsightsEnabled = useAppStore((s) => s.setUsageInsightsEnabled);
   const setShowSidebarRunningCommands = useAppStore((s) => s.setShowSidebarRunningCommands);
   const setPluginManagementEnabled = useAppStore((s) => s.setPluginManagementEnabled);
+  const setCommunityRegistryEnabled = useAppStore(
+    (s) => s.setCommunityRegistryEnabled,
+  );
   const setDisable1mContext = useAppStore((s) => s.setDisable1mContext);
   const setAppVersion = useAppStore((s) => s.setAppVersion);
 
@@ -195,6 +198,9 @@ function App() {
       .catch(() => {});
     getAppSetting("plugin_management_enabled")
       .then((val) => { if (val === "true") setPluginManagementEnabled(true); })
+      .catch(() => {});
+    getAppSetting("community_registry_enabled")
+      .then((val) => { if (val === "true") setCommunityRegistryEnabled(true); })
       .catch(() => {});
     getAppSetting("language")
       .then((lang) => {
@@ -395,7 +401,7 @@ function App() {
       unlistenAutoArchived.then((fn) => fn());
       unlistenMissingCli.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setShowSidebarRunningCommands, setPluginManagementEnabled, setDisable1mContext, setAppVersion]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setShowSidebarRunningCommands, setPluginManagementEnabled, setCommunityRegistryEnabled, setDisable1mContext, setAppVersion]);
 
   // Listen for OS light/dark changes and switch theme when mode is "system".
   useEffect(() => {

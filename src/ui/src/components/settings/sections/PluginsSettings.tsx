@@ -19,6 +19,7 @@ import {
   setVoiceProviderEnabled,
 } from "../../../services/voice";
 import { listLanguageGrammars } from "../../../services/grammars";
+import { refreshGrammars } from "../../../utils/grammarRegistry";
 import type { LanguageInfo } from "../../../types/grammars";
 import type {
   ClaudettePluginInfo,
@@ -264,11 +265,20 @@ export function PluginsSettings() {
         // language-grammar chips in sync with the backend's
         // enabled-only registry.
         await Promise.all([refreshPlugins(), refreshGrammarLanguages()]);
+        // Hot-reload the grammar registry if the toggled plugin
+        // contributes grammars (issue 570). Without this the
+        // toggle would only take effect after an app restart —
+        // grammars are cached at boot and consumed by the chat
+        // worker, main-thread Shiki, and Monaco.
+        const toggled = plugins?.find((p) => p.name === pluginName);
+        if (toggled?.kind === "language-grammar") {
+          await refreshGrammars();
+        }
       } catch (e) {
         setError(String(e));
       }
     },
-    [refreshPlugins, refreshGrammarLanguages],
+    [refreshPlugins, refreshGrammarLanguages, plugins],
   );
 
   const handleSettingChange = useCallback(

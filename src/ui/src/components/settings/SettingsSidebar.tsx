@@ -1,10 +1,24 @@
-import { SlidersHorizontal, Cpu, Palette, Bell, GitBranch, FlaskConical, BarChart3, Puzzle, Bookmark } from "lucide-react";
+import {
+  SlidersHorizontal,
+  Cpu,
+  Palette,
+  Bell,
+  GitBranch,
+  FlaskConical,
+  BarChart3,
+  Puzzle,
+  Bookmark,
+  Globe,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { RepoIcon } from "../shared/RepoIcon";
 import styles from "./Settings.module.css";
 
-export function getAppSections(pluginManagementEnabled: boolean) {
+export function getAppSections(
+  pluginManagementEnabled: boolean,
+  communityRegistryEnabled: boolean,
+) {
   return [
     { id: "general", icon: SlidersHorizontal },
     { id: "models", icon: Cpu },
@@ -13,6 +27,9 @@ export function getAppSections(pluginManagementEnabled: boolean) {
     { id: "git", icon: GitBranch },
     { id: "pinned-prompts", icon: Bookmark },
     { id: "plugins", icon: Puzzle },
+    ...(communityRegistryEnabled
+      ? [{ id: "community", icon: Globe }]
+      : []),
     ...(pluginManagementEnabled
       ? [{ id: "claude-code-plugins", icon: Puzzle }]
       : []),
@@ -27,6 +44,9 @@ export function SettingsSidebar() {
   const repositories = useAppStore((s) => s.repositories);
   const usageInsightsEnabled = useAppStore((s) => s.usageInsightsEnabled);
   const pluginManagementEnabled = useAppStore((s) => s.pluginManagementEnabled);
+  const communityRegistryEnabled = useAppStore(
+    (s) => s.communityRegistryEnabled,
+  );
 
   const sectionLabel = (id: string) => {
     if (id === "general") return t("settings:nav_general");
@@ -36,6 +56,7 @@ export function SettingsSidebar() {
     if (id === "git") return t("settings:nav_git");
     if (id === "plugins") return t("settings:nav_plugins");
     if (id === "claude-code-plugins") return t("settings:nav_claude_code_plugins");
+    if (id === "community") return t("settings:nav_community");
     if (id === "pinned-prompts") return t("settings:nav_pinned_prompts");
     return id;
   };
@@ -46,7 +67,7 @@ export function SettingsSidebar() {
         {t("common:back_to_app")}
       </button>
 
-      {getAppSections(pluginManagementEnabled).map((s) => (
+      {getAppSections(pluginManagementEnabled, communityRegistryEnabled).map((s) => (
         <button
           key={s.id}
           className={

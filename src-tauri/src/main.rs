@@ -612,6 +612,12 @@ fn main() {
             // Language-grammar plugins (TextMate grammars for chat/diff/editor)
             commands::grammars::list_language_grammars,
             commands::grammars::read_language_grammar,
+            // Community registry — discover/install/uninstall third-party
+            // themes/plugins/grammars from utensils/claudette-community.
+            commands::community::community_registry_fetch,
+            commands::community::community_install,
+            commands::community::community_uninstall,
+            commands::community::community_list_installed,
             // Voice providers
             commands::voice::voice_list_providers,
             commands::voice::voice_set_selected_provider,
