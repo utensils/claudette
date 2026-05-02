@@ -149,9 +149,15 @@ fn walk_into(root: &Path, dir: &Path, entries: &mut Vec<Entry>) -> Result<(), Ve
         if !ft.is_file() {
             continue;
         }
-        // Skip the generator's noise list.
+        // Skip the generator's noise list AND our own post-install
+        // sidecar — `.install_meta.json` is written *after* the
+        // verify step, so the registry-published `sha256` was
+        // computed without it. Including it here means a recompute
+        // over an installed-but-untouched contribution would always
+        // mismatch. Skipping keeps `verify(installed_dir, expected)`
+        // honest as a tamper check.
         if let Some(name) = path.file_name().and_then(|n| n.to_str())
-            && name == ".DS_Store"
+            && (name == ".DS_Store" || name == ".install_meta.json")
         {
             continue;
         }
@@ -268,6 +274,29 @@ mod tests {
         fs::write(tmp.path().join(".DS_Store"), b"junk").unwrap();
         let h_after = content_hash(tmp.path()).unwrap();
         assert_eq!(h_before, h_after, ".DS_Store should not affect hash");
+    }
+
+    /// `.install_meta.json` is written by the installer AFTER the
+    /// verify step that uses the registry-published sha256, which
+    /// was computed without the sidecar. If `content_hash` later
+    /// recomputes over the installed directory (e.g. update-check
+    /// recompute), it must agree with the original — the sidecar
+    /// has to be skipped, not folded into the hash.
+    #[test]
+    fn install_meta_sidecar_is_skipped() {
+        let tmp = tempdir().unwrap();
+        fs::write(tmp.path().join("plugin.json"), b"{}").unwrap();
+        let h_before = content_hash(tmp.path()).unwrap();
+        fs::write(
+            tmp.path().join(".install_meta.json"),
+            br#"{"source":"community"}"#,
+        )
+        .unwrap();
+        let h_after = content_hash(tmp.path()).unwrap();
+        assert_eq!(
+            h_before, h_after,
+            ".install_meta.json must not affect content hash",
+        );
     }
 
     #[cfg(unix)]
