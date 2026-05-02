@@ -19,6 +19,7 @@ import {
 } from "./AttachmentContextMenu";
 import { DiscardUnsavedChangesConfirm } from "../files/DiscardUnsavedChangesConfirm";
 import { getFileIcon } from "../../utils/fileIcons";
+import { createSerialGate } from "../../utils/serialGate";
 import type { ChatSession, DiffFileTab, DiffLayer } from "../../types";
 import styles from "./SessionTabs.module.css";
 
@@ -119,6 +120,20 @@ export function SessionTabs({ workspaceId }: Props) {
   // can get stomped by the older snapshot.
   const loadVersionRef = useRef(0);
 
+  // Defang rapid clicks on the "+ new session" button. Without the gate, a
+  // user mashing the button while `createChatSession` is in flight would
+  // queue every click as a separate tab once the backend caught up.
+  // Issue 574 made this trivial to repro because the streaming task
+  // could starve the create command for the duration of an entire turn.
+  // We keep both pieces of state because each is load-bearing:
+  //  - `gateRef` is the synchronous source of truth (a `useState` setter
+  //    only takes effect after the next render, so two clicks in the same
+  //    tick would both observe `false`).
+  //  - `creating` drives the disabled prop / aria-busy on the button so
+  //    the user gets immediate visual feedback.
+  const gateRef = useRef(createSerialGate());
+  const [creating, setCreating] = useState(false);
+
   // Load sessions for this workspace on mount / workspace change.
   useEffect(() => {
     const version = ++loadVersionRef.current;
@@ -142,12 +157,27 @@ export function SessionTabs({ workspaceId }: Props) {
   );
 
   const handleCreate = async () => {
+    // Drive `setCreating` from inside the gated callback so it only fires
+    // for the call that actually acquires the gate. If a second click
+    // somehow slipped past the synchronous `isPending()` check, gate.run
+    // would return `null` immediately for it and that caller wouldn't
+    // touch the visual state — leaving the in-flight call's `creating=true`
+    // intact for the duration of the real request.
     try {
-      const session = await createChatSession(workspaceId);
-      // Invalidate any in-flight load — our local addChatSession is authoritative.
-      loadVersionRef.current += 1;
-      addChatSession(session);
-      switchToSession(session.id);
+      const session = await gateRef.current.run(async () => {
+        setCreating(true);
+        try {
+          return await createChatSession(workspaceId);
+        } finally {
+          setCreating(false);
+        }
+      });
+      if (session !== null) {
+        // Invalidate any in-flight load — our local addChatSession is authoritative.
+        loadVersionRef.current += 1;
+        addChatSession(session);
+        switchToSession(session.id);
+      }
     } catch (err) {
       console.error("[SessionTabs] Failed to create session:", err);
     }
@@ -467,6 +497,8 @@ export function SessionTabs({ workspaceId }: Props) {
         onClick={handleCreate}
         title={t("session_new")}
         aria-label={t("session_new")}
+        aria-busy={creating}
+        disabled={creating}
       >
         <Plus size={14} />
       </button>

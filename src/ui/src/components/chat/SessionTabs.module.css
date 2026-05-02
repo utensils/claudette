@@ -171,7 +171,12 @@
   flex-shrink: 0;
 }
 
-.addBtn:hover {
+.addBtn:hover:not(:disabled) {
   color: var(--text-primary);
+}
+
+.addBtn:disabled {
+  cursor: default;
+  opacity: 0.5;
 }
 
