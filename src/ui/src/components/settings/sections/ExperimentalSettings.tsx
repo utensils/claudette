@@ -88,17 +88,8 @@ export function ExperimentalSettings() {
         <div className={styles.settingInfo}>
           <div className={styles.settingLabel}>Community registry</div>
           <div className={styles.settingDescription}>
-            Enable Settings → Community to browse and install third-party
-            themes, plugins, and language grammars from
-            utensils/claudette-community. Verified by content hash. See{" "}
-            <a
-              href="https://github.com/utensils/Claudette/issues/567"
-              target="_blank"
-              rel="noreferrer"
-            >
-              TDD 567
-            </a>
-            .
+            Browse and install community-contributed themes, plugins, and
+            language grammars.
           </div>
         </div>
         <div className={styles.settingControl}>
