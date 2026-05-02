@@ -6,6 +6,11 @@ tableOfContents: false
 pagefind: false
 ---
 
+{/*
+  Page-scoped imports — CSS listed below ships only with this route.
+  `customCss` in astro.config.mjs would ship these on every docs page.
+*/}
+
 import Hero from '../../components/Hero.astro';
 import Pillars from '../../components/Pillars.astro';
 import FeatureCards from '../../components/FeatureCards.astro';
@@ -15,6 +20,9 @@ import Anatomy from '../../components/Anatomy.astro';
 import HowItWorks from '../../components/HowItWorks.astro';
 import CTASection from '../../components/CTASection.astro';
 import SiteFooter from '../../components/SiteFooter.astro';
+import '@fontsource/silkscreen/400.css';
+import '@fontsource/silkscreen/700.css';
+import '../../styles/homepage.css';
 
 <Hero />
 <Pillars />

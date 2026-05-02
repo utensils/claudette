@@ -32,16 +32,17 @@ export default defineConfig({
         },
       ],
       customCss: [
+        // Inter is the body font on every route — keep global.
         '@fontsource/inter/400.css',
         '@fontsource/inter/500.css',
         '@fontsource/inter/600.css',
-        // Silkscreen powers the pixel-art brand lockup in the footer.
-        // Bundled (not Google Fonts CDN) so no third-party request fires
-        // and we honor the site's "no telemetry" promise.
-        '@fontsource/silkscreen/400.css',
-        '@fontsource/silkscreen/700.css',
+        // Header chrome (nav links, social icons, search-centering grid)
+        // applies site-wide — also global.
         './src/styles/custom.css',
-        './src/styles/homepage.css',
+        // Note: `homepage.css` and `@fontsource/silkscreen/{400,700}.css`
+        // are intentionally NOT here. They're imported in
+        // `src/content/docs/index.mdx` so they only load on the splash
+        // homepage, not on every docs page.
       ],
       components: {
         // Renders the default site title plus our primary nav (Features /
