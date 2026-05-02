@@ -431,7 +431,15 @@ pub async fn create_worktree(
 
     run_git(
         repo_path,
-        &["worktree", "add", "-b", branch_name, worktree_path, &base],
+        &[
+            "worktree",
+            "add",
+            "--no-track",
+            "-b",
+            branch_name,
+            worktree_path,
+            &base,
+        ],
     )
     .await?;
 
@@ -454,6 +462,7 @@ pub async fn create_worktree_from_ref(
         &[
             "worktree",
             "add",
+            "--no-track",
             "-b",
             branch_name,
             worktree_path,
