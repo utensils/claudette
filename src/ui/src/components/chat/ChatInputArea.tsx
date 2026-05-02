@@ -356,11 +356,9 @@ export function ChatInputArea({
       return;
     }
     try {
-      // Mention picker only matches against entries; truncation is silent
-      // here — the user will see the banner in the Files browser.
-      const result = await listWorkspaceFiles(selectedWorkspaceId);
-      filesCache.current[selectedWorkspaceId] = result.entries;
-      setWorkspaceFiles(result.entries);
+      const files = await listWorkspaceFiles(selectedWorkspaceId);
+      filesCache.current[selectedWorkspaceId] = files;
+      setWorkspaceFiles(files);
       setFilesLoaded(true);
     } catch (e) {
       console.error("Failed to load workspace files:", e);

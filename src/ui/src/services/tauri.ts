@@ -474,23 +474,9 @@ export interface FileEntry {
   is_directory: boolean;
 }
 
-/** Result of a workspace file listing.
- *
- *  `truncated` is true when the worktree contained more *files* than
- *  `max_entries` and the file list was truncated. The cap is applied
- *  to file count, not merged entry count — `entries` may exceed
- *  `max_entries` because ancestor directory rows are added on top of
- *  the capped file set. The Files browser surfaces a banner that uses
- *  `max_entries` so the message stays in sync with the backend cap. */
-export interface FileListing {
-  entries: FileEntry[];
-  truncated: boolean;
-  max_entries: number;
-}
-
 export function listWorkspaceFiles(
   workspaceId: string,
-): Promise<FileListing> {
+): Promise<FileEntry[]> {
   return invoke("list_workspace_files", { workspaceId });
 }
 

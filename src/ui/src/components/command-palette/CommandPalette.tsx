@@ -250,11 +250,9 @@ export function CommandPalette() {
     setFilesLoadError(null);
     const version = ++filesLoadVersionRef.current;
     listWorkspaceFiles(selectedWorkspaceId)
-      .then((result) => {
+      .then((entries) => {
         if (version !== filesLoadVersionRef.current) return;
-        // Truncation is silent in the file palette — the user will
-        // see the banner in the Files browser if it matters.
-        setFileEntries(result.entries);
+        setFileEntries(entries);
         setFilesLoading(false);
       })
       .catch((err) => {

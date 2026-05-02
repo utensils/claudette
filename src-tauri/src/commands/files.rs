@@ -10,38 +10,10 @@ use claudette::file_expand;
 use crate::state::AppState;
 use claudette::process::CommandWindowExt as _;
 
-/// Hard cap on the number of *files* returned by
-/// [`list_workspace_files`]. Ancestor directory entries are derived from
-/// whichever files survive the cap, so the returned listing is "the
-/// capped file set plus all of their ancestor directories" — depth and
-/// branching shape determine the additional dir count, so there is no
-/// constant-factor upper bound on the merged size. In practice the dir
-/// count stays a small multiple of the file count even on deep
-/// monorepos. Bounds IPC payload size and gives the Files browser a
-/// known cap on file rows. When hit, the frontend surfaces a "results
-/// truncated" banner so the user knows some files are not listed.
-const MAX_ENTRIES: usize = 10_000;
-
 #[derive(Clone, Serialize)]
 pub struct FileEntry {
     pub path: String,
     pub is_directory: bool,
-}
-
-#[derive(Clone, Serialize)]
-pub struct FileListing {
-    pub entries: Vec<FileEntry>,
-    /// True when the worktree contained more files than `max_entries`
-    /// and the file list was truncated. Drives the truncation banner in
-    /// the Files browser. Note: this is set on the file count, not the
-    /// merged entry count — `entries.len()` may exceed `max_entries`
-    /// because ancestor directory rows are added on top of the capped
-    /// file set.
-    pub truncated: bool,
-    /// The cap that was applied to the file count. Surfaced so the
-    /// frontend's truncation banner stays in sync with the backend
-    /// without a duplicated literal.
-    pub max_entries: usize,
 }
 
 #[derive(Clone, Serialize)]
@@ -76,13 +48,18 @@ const MAX_VIEWER_FILE_SIZE: usize = 10 * 1024 * 1024;
 
 /// List files in a workspace's worktree using `git ls-files`.
 ///
-/// Returns tracked files plus untracked-but-not-ignored files, capped at 10,000
-/// entries. Paths are relative to the worktree root.
+/// Returns tracked files plus untracked-but-not-ignored files. Paths are
+/// relative to the worktree root. There is no row cap — the FileTree is
+/// virtualized, so DOM size stays bounded regardless of repo size, and
+/// IPC payloads even for deep monorepos (50k+ files) are well under
+/// Tauri's practical limits. Capping the listing previously hid files
+/// from the user on monorepos with no usable signal back about which
+/// files were dropped.
 #[tauri::command]
 pub async fn list_workspace_files(
     workspace_id: String,
     state: State<'_, AppState>,
-) -> Result<FileListing, String> {
+) -> Result<Vec<FileEntry>, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
     let ws = workspaces
@@ -108,42 +85,21 @@ pub async fn list_workspace_files(
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(cap_merged_entries(&stdout, MAX_ENTRIES))
+    Ok(build_listing(&stdout))
 }
 
-/// Build a [`FileListing`] from the raw stdout of `git ls-files`.
+/// Build the workspace listing from raw `git ls-files` stdout.
 ///
-/// Each non-empty line is a tracked-or-untracked file path. Files are
-/// capped at `max`; ancestor directories are derived from whichever files
-/// survive the cap (git doesn't track empty directories anyway). The
-/// returned listing has directories first (alphabetical) followed by
-/// files (in git's order). `truncated` is true when stdout had more
-/// non-empty lines than `max`.
-///
-/// Bug history: the pre-#583 implementation applied the cap to files
-/// inside a `.map().take(MAX)` chain, then prepended *all* derived
-/// directory entries afterwards — so the returned vector exceeded the
-/// cap by the number of dirs, and the caller had no way to know
-/// truncation happened. This helper centralizes the order (cap files,
-/// derive dirs from capped files, surface a truncated flag) so the
-/// invariant is enforced in one place and unit-testable.
-///
-/// Why we cap files (not the merged total): on a deeply-nested monorepo
-/// the directory enumeration alone can exceed 10k, so a "merged" cap
-/// would prefer dirs over files and yield an empty tree. With the file
-/// cap, the user always sees real files; derived dirs come along
-/// bounded by the file count and remain useful for navigation.
-fn cap_merged_entries(stdout: &str, max: usize) -> FileListing {
-    // Count non-empty lines once so we can set `truncated` honestly even
-    // after we short-circuit the file iteration with `.take(max)`.
-    let total_files = stdout.lines().filter(|line| !line.is_empty()).count();
-    let truncated = total_files > max;
-
+/// Each non-empty line is a tracked-or-untracked file path; ancestor
+/// directories are derived from those paths (git doesn't track empty
+/// directories). The returned vector has directories first
+/// (alphabetical) then files (in git's order). Pure function — no I/O,
+/// no async — so it's trivially unit-testable.
+fn build_listing(stdout: &str) -> Vec<FileEntry> {
     let mut dirs = std::collections::BTreeSet::new();
     let file_entries: Vec<FileEntry> = stdout
         .lines()
         .filter(|line| !line.is_empty())
-        .take(max)
         .map(|line| {
             // Extract all parent directories from the file path.
             let mut pos = 0;
@@ -170,12 +126,7 @@ fn cap_merged_entries(stdout: &str, max: usize) -> FileListing {
     let mut entries: Vec<FileEntry> = Vec::with_capacity(dir_entries.len() + file_entries.len());
     entries.extend(dir_entries);
     entries.extend(file_entries);
-
-    FileListing {
-        entries,
-        truncated,
-        max_entries: max,
-    }
+    entries
 }
 
 /// Read a file from a workspace's worktree.
@@ -643,88 +594,47 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn cap_merged_entries_under_cap_is_not_truncated() {
+    fn build_listing_orders_dirs_before_files() {
         let stdout = "src/lib.rs\nsrc/main.rs\nREADME.md\n";
-        let listing = cap_merged_entries(stdout, 100);
-        assert!(!listing.truncated);
-        assert_eq!(listing.max_entries, 100);
-        // 1 dir ("src/") + 3 files = 4 entries.
-        assert_eq!(listing.entries.len(), 4);
-        // Dirs first, then files in stdout order.
-        assert!(listing.entries[0].is_directory);
-        assert_eq!(listing.entries[0].path, "src/");
-        assert!(!listing.entries[1].is_directory);
-        assert_eq!(listing.entries[1].path, "src/lib.rs");
+        let entries = build_listing(stdout);
+        // 1 derived dir ("src/") + 3 files = 4 entries; dirs first.
+        assert_eq!(entries.len(), 4);
+        assert!(entries[0].is_directory);
+        assert_eq!(entries[0].path, "src/");
+        assert!(!entries[1].is_directory);
+        assert_eq!(entries[1].path, "src/lib.rs");
     }
 
     #[test]
-    fn cap_merged_entries_caps_files_then_derives_dirs() {
-        // 16 files in 16 distinct dirs. Cap = 10. We expect the cap to
-        // apply to *files* (10 kept), and dirs come along as ancestors of
-        // those 10 files (10 dirs kept). Total entries = 20, but
-        // truncated must still be true because we dropped 6 input files.
+    fn build_listing_returns_every_input_file() {
+        // Regression for issue 583: the previous implementation capped
+        // the file list at 10,000 and dropped the rest with no signal
+        // to the caller. With the FileTree virtualized there is no
+        // reason to cap — the UI handles arbitrary listings.
         let mut buf = String::new();
-        for i in 0..16 {
-            buf.push_str(&format!("d{i}/file{i}.txt\n"));
+        for i in 0..15_000 {
+            buf.push_str(&format!("d{}/file{i}.txt\n", i % 100));
         }
-        let listing = cap_merged_entries(&buf, 10);
-        assert!(listing.truncated, "10 of 16 input files were dropped");
-        let files_kept = listing.entries.iter().filter(|e| !e.is_directory).count();
-        assert_eq!(files_kept, 10, "file count must be capped at 10");
-        // Dirs are ancestors of the 10 surviving files — should not
-        // exceed the file count for this fixture.
-        let dirs_kept = listing.entries.iter().filter(|e| e.is_directory).count();
-        assert_eq!(dirs_kept, 10);
-    }
-
-    #[test]
-    fn cap_merged_entries_preserves_files_for_dir_heavy_repos() {
-        // Regression for the nixpkgs UAT: a deeply-nested repo can have
-        // a directory enumeration that, by itself, exceeds the cap. A
-        // naive "merged total" cap would prefer dirs over files
-        // (alphabetical order puts dirs first) and yield zero files —
-        // an unusable Files panel. Verify files always survive the cap.
-        let mut buf = String::new();
-        for i in 0..3 {
-            for j in 0..3 {
-                for k in 0..3 {
-                    // Each file at depth 3 contributes 3 ancestor dirs.
-                    buf.push_str(&format!("a{i}/b{j}/c{k}/file.txt\n"));
-                }
-            }
-        }
-        // 27 files + 39 derived dirs = 66 total entries. Cap files at 5.
-        let listing = cap_merged_entries(&buf, 5);
-        assert!(listing.truncated);
-        let files_kept = listing.entries.iter().filter(|e| !e.is_directory).count();
+        let entries = build_listing(&buf);
+        let files_kept = entries.iter().filter(|e| !e.is_directory).count();
         assert_eq!(
-            files_kept, 5,
-            "files must always be present in the listing, not crowded out by dirs"
+            files_kept, 15_000,
+            "every input file must be present in the listing"
         );
     }
 
     #[test]
-    fn cap_merged_entries_at_exact_cap_is_not_truncated() {
-        let stdout = "src/a.rs\nsrc/b.rs\n";
-        let listing = cap_merged_entries(stdout, 2);
-        assert!(!listing.truncated);
-        // 1 derived dir ("src/") + 2 files = 3 entries.
-        assert_eq!(listing.entries.len(), 3);
+    fn build_listing_skips_blank_lines() {
+        let entries = build_listing("\n\nfile.rs\n\n");
+        assert_eq!(entries.len(), 1);
+        assert!(!entries[0].is_directory);
     }
 
     #[test]
-    fn cap_merged_entries_skips_blank_lines() {
-        let listing = cap_merged_entries("\n\nfile.rs\n\n", 100);
-        assert_eq!(listing.entries.len(), 1);
-        assert!(!listing.entries[0].is_directory);
-    }
-
-    #[test]
-    fn cap_merged_entries_extracts_all_parent_dirs() {
-        let listing = cap_merged_entries("a/b/c/file.rs\n", 100);
+    fn build_listing_extracts_all_parent_dirs() {
+        let entries = build_listing("a/b/c/file.rs\n");
         // 3 dirs (a/, a/b/, a/b/c/) + 1 file = 4 entries.
-        let dirs: Vec<_> = listing
-            .entries
+        let dirs: Vec<_> = entries
             .iter()
             .filter(|e| e.is_directory)
             .map(|e| e.path.as_str())
