@@ -183,6 +183,48 @@ export async function applyGrammarsToMonaco(
   } catch (e) {
     console.warn("[grammars] Failed to bind Shiki tokenization to Monaco:", e);
   }
+
+  // Race fix: any editor model that was created before the
+  // registration completed has `getLanguageId() === "plaintext"`
+  // because at the moment Monaco resolved the URI, the plugin
+  // languages hadn't been registered yet. Walk the open models and
+  // re-set the language for any whose URI now matches one of our
+  // newly-registered languages — Monaco re-tokenizes synchronously
+  // and Shiki's just-bound provider supplies colors.
+  reevaluateOpenModelLanguages(monaco);
+}
+
+function reevaluateOpenModelLanguages(
+  monaco: typeof import("monaco-editor"),
+): void {
+  // Build a quick extension/filename → language-id index from the
+  // registered plugin languages so we can match without re-walking
+  // the registry per model.
+  const extToLang = new Map<string, string>();
+  const fileToLang = new Map<string, string>();
+  for (const lang of state.languages) {
+    for (const ext of lang.extensions) {
+      extToLang.set(ext.toLowerCase(), lang.id);
+    }
+    for (const fn of lang.filenames) {
+      fileToLang.set(fn.toLowerCase(), lang.id);
+    }
+  }
+  if (extToLang.size === 0 && fileToLang.size === 0) return;
+
+  for (const model of monaco.editor.getModels()) {
+    if (model.getLanguageId() !== "plaintext") continue;
+    const uriPath = model.uri.path; // already normalized; like "/foo/bar/file.nix"
+    const base = uriPath.slice(uriPath.lastIndexOf("/") + 1).toLowerCase();
+    let nextLang = fileToLang.get(base);
+    if (!nextLang) {
+      const dotIdx = base.lastIndexOf(".");
+      if (dotIdx >= 0) nextLang = extToLang.get(base.slice(dotIdx));
+    }
+    if (nextLang) {
+      monaco.editor.setModelLanguage(model, nextLang);
+    }
+  }
 }
 
 /**
