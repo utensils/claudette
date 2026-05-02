@@ -4,6 +4,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -26,6 +27,7 @@ import { SegmentedControl } from "../shared/SegmentedControl";
 import { IconButton } from "../shared/IconButton";
 import { SessionTabs } from "../chat/SessionTabs";
 import { MessageMarkdown } from "../chat/MessageMarkdown";
+import { MarkdownImageBaseProvider } from "../chat/MarkdownImage";
 import { imageMediaType, isImagePath } from "../../utils/fileIcons";
 import styles from "./FileViewer.module.css";
 
@@ -252,6 +254,71 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
   const showSaveButton =
     dirty && !editDisabled && !isImage && !bufferState?.isBinary && !showMarkdownPreview;
 
+  const previewMode = bufferState?.preview ?? "source";
+  const togglePreview = useCallback(() => {
+    setFileTabPreview(
+      workspaceId,
+      path,
+      previewMode === "preview" ? "source" : "preview",
+    );
+  }, [workspaceId, path, previewMode, setFileTabPreview]);
+
+  // Cmd/Ctrl+Shift+V — toggle source/preview for the active markdown file
+  // tab, mirroring the VS Code shortcut. The handler bows out when:
+  //   * an overlay owns focus (settings, command palette, fuzzy finder,
+  //     modal),
+  //   * focus is in a typing target outside Monaco — chat composer textarea,
+  //     terminal xterm textarea, contenteditable. On those Ctrl+Shift+V is
+  //     commonly the "paste without formatting" shortcut and we don't want
+  //     to hijack it. Monaco is exempt because that's the source view this
+  //     shortcut is meant to flip out of — its hidden <textarea> would
+  //     otherwise swallow the keystroke.
+  //   * the event is a key-repeat. Holding the keys would otherwise toggle
+  //     repeatedly, which is useless and disorienting.
+  useEffect(() => {
+    if (!showMarkdownToggle) return;
+    const handler = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      // Match on `e.key` rather than `e.code` so Cmd/Ctrl+Shift+V fires on
+      // whichever physical key the user's layout assigns to "V" — `e.code`
+      // is "KeyV" only on QWERTY-style layouts.
+      if (!mod || !e.shiftKey || e.key.toLowerCase() !== "v") return;
+      if (e.repeat) return;
+      const state = useAppStore.getState();
+      if (
+        state.settingsOpen ||
+        state.activeModal ||
+        state.commandPaletteOpen ||
+        state.fuzzyFinderOpen
+      ) {
+        return;
+      }
+      const el = document.activeElement as HTMLElement | null;
+      const tag = el?.tagName?.toLowerCase();
+      const editable =
+        tag === "input" || tag === "textarea" || el?.isContentEditable;
+      const inMonaco = !!el?.closest(".monaco-editor");
+      if (editable && !inMonaco) return;
+      e.preventDefault();
+      togglePreview();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [showMarkdownToggle, togglePreview]);
+
+  const isMacPlatform =
+    typeof navigator !== "undefined" && navigator.platform.startsWith("Mac");
+  const previewShortcutHint = isMacPlatform ? "⌘⇧V" : "Ctrl+Shift+V";
+
+  // Resolution context for relative `<img>` references inside the rendered
+  // markdown. Workspace-relative paths in a README — e.g. `./assets/logo.png`
+  // — get joined onto the directory of this file so `MarkdownImage` can
+  // load them through the existing `read_workspace_file_bytes` command.
+  const markdownImageBase = useMemo(() => {
+    const slash = path.lastIndexOf("/");
+    return { workspaceId, dir: slash === -1 ? "" : path.slice(0, slash) };
+  }, [workspaceId, path]);
+
   return (
     <div className={styles.viewer}>
       <WorkspacePanelHeader />
@@ -288,12 +355,12 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
                   {
                     value: "source",
                     icon: <Code size={14} aria-hidden="true" />,
-                    tooltip: t("file_tooltip_source"),
+                    tooltip: `${t("file_tooltip_source")} (${previewShortcutHint})`,
                   },
                   {
                     value: "preview",
                     icon: <BookOpen size={14} aria-hidden="true" />,
-                    tooltip: t("file_tooltip_markdown_preview"),
+                    tooltip: `${t("file_tooltip_markdown_preview")} (${previewShortcutHint})`,
                   },
                 ]}
               />
@@ -333,7 +400,9 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
           <div className={styles.center}>{t("file_preview_not_available")}</div>
         ) : showMarkdownPreview ? (
           <div className={styles.markdownBody}>
-            <MessageMarkdown content={bufferState.buffer} />
+            <MarkdownImageBaseProvider value={markdownImageBase}>
+              <MessageMarkdown content={bufferState.buffer} />
+            </MarkdownImageBaseProvider>
           </div>
         ) : showSourceEditor ? (
           <Suspense fallback={<div className={styles.center}>{t("file_loading")}</div>}>

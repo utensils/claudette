@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const css = readFileSync(
-  resolve(dirname(fileURLToPath(import.meta.url)), "ChatPanel.module.css"),
+  resolve(dirname(fileURLToPath(import.meta.url)), "MessageMarkdown.module.css"),
   "utf-8",
 );
 
@@ -36,8 +36,8 @@ function extractBlock(selector: string): string {
 }
 
 describe("code-block selection CSS (regression for stair-step bug)", () => {
-  const preBlock = extractBlock(".content pre");
-  const codeBlock = extractBlock(".content pre code");
+  const preBlock = extractBlock(".body :where(pre)");
+  const codeBlock = extractBlock(".body :where(pre code)");
 
   it("disables user-select on pre to prevent padding-area selections", () => {
     expect(preBlock).toMatch(/user-select:\s*none/);
