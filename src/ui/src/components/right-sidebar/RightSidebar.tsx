@@ -301,7 +301,7 @@ export const RightSidebar = memo(function RightSidebar() {
       {activeTab === "changes" && (
         <>
           <div className={styles.list}>
-            {diffLoading ? (
+            {diffFiles.length === 0 && diffLoading ? (
               <div className={styles.empty}>Loading...</div>
             ) : diffFiles.length === 0 ? (
               <div className={styles.empty}>No changes</div>
