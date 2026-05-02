@@ -59,6 +59,15 @@ interface RegistryState {
   /// can rebind without waiting for a fresh editor mount. Null when no
   /// MonacoEditor has been opened yet this session.
   lastMonacoInstance: typeof import("monaco-editor") | null;
+  /// Every language id we've contributed to Monaco at any point in
+  /// this session. Used in reevaluateOpenModelLanguages: when a
+  /// previously-contributed language no longer appears in `languages`
+  /// (the plugin was toggled off or uninstalled), models tagged with
+  /// that id fall back to plaintext. Built-in Monaco languages
+  /// (typescript, json, markdown, …) are NOT in this set so they
+  /// stay highlighted across grammar refreshes. Grows monotonically
+  /// for the session — we never have to forget a contribution.
+  pluginOwnedLangIds: Set<string>;
 }
 
 const state: RegistryState = {
@@ -68,6 +77,7 @@ const state: RegistryState = {
   grammars: [],
   monacoApplied: false,
   lastMonacoInstance: null,
+  pluginOwnedLangIds: new Set<string>(),
 };
 
 /**
@@ -122,6 +132,13 @@ async function bootstrapInner(): Promise<void> {
   const registry = await listLanguageGrammars();
 
   state.languages = registry.languages;
+  // Remember every id we've ever contributed in this session so
+  // reevaluateOpenModelLanguages knows which models are ours to
+  // downgrade vs which are built-in Monaco languages we mustn't
+  // touch.
+  for (const lang of registry.languages) {
+    state.pluginOwnedLangIds.add(lang.id);
+  }
 
   // Load each grammar in parallel; errors are isolated per-grammar.
   // Promise.allSettled lets one bad grammar coexist with good ones.
@@ -298,27 +315,18 @@ function reevaluateOpenModelLanguages(
       if (nextLang) {
         monaco.editor.setModelLanguage(model, nextLang);
       }
-    } else if (!validLangs.has(cur)) {
-      // The plugin that contributed this language was just disabled
-      // or uninstalled — fall back to plaintext so the editor keeps
-      // working instead of dangling on a no-longer-registered id.
-      // Built-in Monaco languages (markdown, json, …) stay untouched
-      // because they're not in `state.languages` either way; we only
-      // touch ids that we *did* once register through a plugin.
-      // Detection: did the URI extension/filename map to a plugin id
-      // at any point? Check via the same indexes.
-      let mappedNow = fileToLang.get(base);
-      if (!mappedNow) {
-        const dotIdx = base.lastIndexOf(".");
-        if (dotIdx >= 0) mappedNow = extToLang.get(base.slice(dotIdx));
-      }
-      if (mappedNow === undefined) {
-        // No registered plugin claims this URI now. If `cur` *was*
-        // the toggled-off plugin's id, fall back to plaintext. The
-        // simplest correct check: try setting plaintext. Monaco
-        // accepts this unconditionally and triggers a retokenize.
-        monaco.editor.setModelLanguage(model, "plaintext");
-      }
+    } else if (state.pluginOwnedLangIds.has(cur) && !validLangs.has(cur)) {
+      // We previously contributed this language id (some plugin
+      // declared it earlier in the session) but it's no longer in
+      // the active set — the plugin was toggled off or uninstalled.
+      // Fall back to plaintext so the editor keeps working instead
+      // of dangling on a no-longer-registered id.
+      //
+      // Built-in Monaco languages (typescript, json, markdown, …)
+      // are deliberately NOT in `pluginOwnedLangIds`, so this branch
+      // never strips highlighting from them when a grammar plugin
+      // toggles. That was a real regression Codex caught in review.
+      monaco.editor.setModelLanguage(model, "plaintext");
     }
   }
 }
@@ -396,6 +404,7 @@ export const __testing = {
     state.grammars = [];
     state.monacoApplied = false;
     state.lastMonacoInstance = null;
+    state.pluginOwnedLangIds = new Set<string>();
     // Also drop the highlight-worker singleton — tests assert on the
     // FakeWorker instance count, so leaking the worker between specs
     // would surface as cross-test contamination.

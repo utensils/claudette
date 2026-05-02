@@ -125,14 +125,18 @@ fn walk_into(root: &Path, dir: &Path, entries: &mut Vec<Entry>) -> Result<(), Ve
         // Reject symlinks unconditionally — content hashing must
         // reflect the bytes that will be loaded by the runtime, and
         // following a symlink could read content outside `root`.
-        let meta = ent.metadata().map_err(|e| VerifyError::Io {
+        // We use `DirEntry::file_type` rather than `metadata` — both
+        // use `lstat` on Unix (per stdlib docs, `DirEntry::metadata`
+        // is also non-traversing), but `file_type` is more direct and
+        // saves a syscall when we only care about the kind.
+        let ft = ent.file_type().map_err(|e| VerifyError::Io {
             path: path.display().to_string(),
             source: e,
         })?;
-        if meta.file_type().is_symlink() {
+        if ft.is_symlink() {
             return Err(VerifyError::Symlink(path.display().to_string()));
         }
-        if meta.is_dir() {
+        if ft.is_dir() {
             // Skip well-known noise that the generator skips too.
             if let Some(name) = path.file_name().and_then(|n| n.to_str())
                 && name == ".git"
@@ -142,7 +146,7 @@ fn walk_into(root: &Path, dir: &Path, entries: &mut Vec<Entry>) -> Result<(), Ve
             walk_into(root, &path, entries)?;
             continue;
         }
-        if !meta.is_file() {
+        if !ft.is_file() {
             continue;
         }
         // Skip the generator's noise list.
@@ -275,6 +279,24 @@ mod tests {
         symlink("/etc/passwd", tmp.path().join("link")).unwrap();
         let err = content_hash(tmp.path()).unwrap_err();
         assert!(matches!(err, VerifyError::Symlink(_)), "got {err:?}");
+    }
+
+    /// Regression: ent.metadata() follows symlinks, so a symlink to a
+    /// real file inside the install dir would have hashed as a normal
+    /// file under the broken implementation. Switching to
+    /// ent.file_type() rejects the link before we ever read it.
+    #[cfg(unix)]
+    #[test]
+    fn symlink_to_real_file_is_rejected_not_followed() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempdir().unwrap();
+        fs::write(tmp.path().join("real.txt"), b"contents-of-real").unwrap();
+        symlink("real.txt", tmp.path().join("alias.txt")).unwrap();
+        let err = content_hash(tmp.path()).unwrap_err();
+        assert!(
+            matches!(err, VerifyError::Symlink(_)),
+            "expected Symlink error, got {err:?}"
+        );
     }
 
     #[test]

@@ -45,6 +45,14 @@ pub enum InstallError {
         prefix: String,
         found: usize,
     },
+    /// A directory already exists at the target install path and was
+    /// not installed by the community registry (no `.install_meta.json`
+    /// with `source = "community"`). Refusing to overwrite avoids
+    /// silently destroying a user's hand-installed plugin or a
+    /// bundled-then-customized one.
+    TargetExists {
+        path: String,
+    },
     Verify(VerifyError),
     MetaJson(serde_json::Error),
 }
@@ -63,6 +71,11 @@ impl std::fmt::Display for InstallError {
             } => write!(
                 f,
                 "contribution path {expected} not found in tarball — found {found} entries with prefix {prefix}"
+            ),
+            Self::TargetExists { path } => write!(
+                f,
+                "{path} already exists and was not installed via the community registry — \
+                 remove it manually first if you want to replace it"
             ),
             Self::Verify(e) => write!(f, "content verification failed: {e}"),
             Self::MetaJson(e) => write!(f, "could not serialize install metadata: {e}"),
@@ -188,11 +201,19 @@ pub fn install(
     // Write the install metadata sidecar.
     write_install_meta(&staging_dir, plan)?;
 
-    // If a previous install exists, remove it. We could rename it
-    // aside first to make this rollback-able, but the failure mode
-    // (verification + meta write happen *before* this point) means
-    // by the time we reach here the staging dir is fully valid.
+    // If a previous install exists, only replace it when we know we
+    // installed it ourselves. A user could have a hand-installed or
+    // bundled plugin at the same path; silently removing it would be
+    // destructive. The metadata sidecar is the marker — if it's
+    // missing, or its source is anything other than Community, refuse.
     if target.exists() {
+        let existing_meta = read_install_meta(&target).ok().flatten();
+        let is_ours = matches!(existing_meta, Some(ref m) if m.source == InstallSource::Community);
+        if !is_ours {
+            return Err(InstallError::TargetExists {
+                path: target.display().to_string(),
+            });
+        }
         std::fs::remove_dir_all(&target).map_err(|e| InstallError::Io {
             path: target.display().to_string(),
             source: e,
@@ -597,7 +618,46 @@ mod tests {
     }
 
     #[test]
-    fn install_replaces_previous_atomically() {
+    fn install_refuses_to_overwrite_non_community_target() {
+        // Pre-existing hand-installed (or bundled-then-customized)
+        // plugin with no .install_meta.json — community install must
+        // refuse rather than silently destroy the user's work.
+        let payload: &[(&str, &[u8])] =
+            &[("plugins/language-grammars/lang-foo/plugin.json", b"{}")];
+        let tarball = make_tarball("repo-x/", payload);
+        let probe = tempdir().unwrap();
+        extract_subtree(&tarball, "plugins/language-grammars/lang-foo", probe.path()).unwrap();
+        let h = verify::content_hash(probe.path()).unwrap();
+
+        let plan = make_plan("lang-foo", &h);
+        let (_tmp_root, roots) = make_roots();
+
+        // Place a pre-existing directory at the target — no install meta.
+        std::fs::create_dir_all(roots.plugins_dir.join("lang-foo")).unwrap();
+        std::fs::write(
+            roots.plugins_dir.join("lang-foo/handcrafted.lua"),
+            b"-- user's own plugin",
+        )
+        .unwrap();
+
+        let err = install(&plan, &tarball, &roots).unwrap_err();
+        assert!(
+            matches!(err, InstallError::TargetExists { .. }),
+            "expected TargetExists, got {err:?}"
+        );
+
+        // The user's file must be untouched.
+        let preserved = std::fs::read(roots.plugins_dir.join("lang-foo/handcrafted.lua")).unwrap();
+        assert_eq!(preserved, b"-- user's own plugin");
+    }
+
+    #[test]
+    fn install_replaces_previous_community_install_atomically() {
+        // The replace path still works when the existing install
+        // *was* placed by the community registry — i.e. has a valid
+        // .install_meta.json with source: community. (Renamed from
+        // install_replaces_previous_atomically; the old name implied
+        // we'd replace anything at the path which is no longer true.)
         // Install once, verify the file. Install again with different
         // content, verify the new file replaced it.
         let v1 = make_tarball(
@@ -703,7 +763,12 @@ mod tests {
         }
 
         let probe = tempdir().unwrap();
-        extract_subtree(&tar_bytes, "plugins/language-grammars/lang-foo", probe.path()).unwrap();
+        extract_subtree(
+            &tar_bytes,
+            "plugins/language-grammars/lang-foo",
+            probe.path(),
+        )
+        .unwrap();
         let h = verify::content_hash(probe.path()).unwrap();
 
         let plan = make_plan("lang-foo", &h);
@@ -752,12 +817,8 @@ mod tests {
             builder.finish().unwrap();
         }
         let tmp = tempdir().unwrap();
-        let err = extract_subtree(
-            &tar_bytes,
-            "plugins/language-grammars/lang-foo",
-            tmp.path(),
-        )
-        .unwrap_err();
+        let err = extract_subtree(&tar_bytes, "plugins/language-grammars/lang-foo", tmp.path())
+            .unwrap_err();
         assert!(matches!(err, InstallError::Symlink(_)), "got {err:?}");
     }
 

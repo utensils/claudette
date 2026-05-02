@@ -76,6 +76,7 @@ import {
   bootstrapGrammarRegistry,
   applyGrammarsToMonaco,
   getRegisteredPluginLanguages,
+  refreshGrammars,
   __testing,
 } from "./grammarRegistry";
 
@@ -486,5 +487,107 @@ describe("applyGrammarsToMonaco", () => {
     // First call ran register/shikiToMonaco; second short-circuits.
     expect(monaco.languages.register).toHaveBeenCalledTimes(1);
     expect(shikiToMonacoMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("refreshGrammars (issue 570 hot-reload)", () => {
+  function makeMonacoStub() {
+    const registered: Array<{ id: string }> = [];
+    return {
+      languages: {
+        registered,
+        register: vi.fn((info: { id: string }) => {
+          registered.push(info);
+        }),
+      },
+      editor: {
+        getModels: vi.fn().mockReturnValue([]),
+        setModelLanguage: vi.fn(),
+        setTheme: vi.fn(),
+      },
+    };
+  }
+
+  it("does not strip highlighting from built-in Monaco languages on refresh", async () => {
+    // Regression for the Codex P1 finding: refreshGrammars must not
+    // touch models tagged with built-in Monaco language ids
+    // (typescript, json, markdown, …) just because they're not in
+    // the plugin registry. Only languages we previously contributed
+    // are eligible for the plaintext fallback.
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "list_language_grammars") {
+        return {
+          languages: [langInfo("nix", [".nix"])],
+          grammars: [grammarInfo("lang-nix", "nix", "grammars/nix.tmLanguage.json")],
+        };
+      }
+      if (cmd === "read_language_grammar") return "{}";
+      throw new Error(`unexpected: ${cmd}`);
+    });
+
+    const monaco = makeMonacoStub();
+    // A model whose language id is a built-in Monaco language NEVER
+    // contributed by any plugin. Refresh must leave it alone.
+    const tsModel = {
+      uri: { path: "/repo/src/index.ts" },
+      getLanguageId: () => "typescript",
+    };
+    const jsonModel = {
+      uri: { path: "/repo/package.json" },
+      getLanguageId: () => "json",
+    };
+    monaco.editor.getModels.mockReturnValue([tsModel, jsonModel]);
+
+    await applyGrammarsToMonaco(monaco as unknown as typeof import("monaco-editor"));
+    monaco.editor.setModelLanguage.mockClear();
+
+    // Now refresh — the registry stays the same, so plugin state is
+    // unchanged, but the refresh path *does* run reevaluateOpenModels.
+    // Built-in Monaco models must not be touched.
+    await refreshGrammars();
+
+    expect(monaco.editor.setModelLanguage).not.toHaveBeenCalled();
+  });
+
+  it("falls plugin-owned languages back to plaintext when their plugin is uninstalled", async () => {
+    // First bootstrap: lang-nix is active, contributing the `nix` id.
+    invokeMock.mockImplementationOnce(async (cmd: string) => {
+      if (cmd === "list_language_grammars") {
+        return {
+          languages: [langInfo("nix", [".nix"])],
+          grammars: [grammarInfo("lang-nix", "nix", "grammars/nix.tmLanguage.json")],
+        };
+      }
+      if (cmd === "read_language_grammar") return "{}";
+      throw new Error(`unexpected: ${cmd}`);
+    });
+
+    const monaco = makeMonacoStub();
+    const nixModel = {
+      uri: { path: "/repo/flake.nix" },
+      getLanguageId: () => "nix",
+    };
+    monaco.editor.getModels.mockReturnValue([nixModel]);
+
+    await applyGrammarsToMonaco(monaco as unknown as typeof import("monaco-editor"));
+    monaco.editor.setModelLanguage.mockClear();
+
+    // Now the plugin is uninstalled — backend returns an empty list.
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "list_language_grammars") {
+        return { languages: [], grammars: [] };
+      }
+      throw new Error(`unexpected: ${cmd}`);
+    });
+
+    await refreshGrammars();
+
+    // The previously-typed nix model should have been downgraded to
+    // plaintext because `nix` was previously plugin-owned and is now
+    // gone from the active set.
+    expect(monaco.editor.setModelLanguage).toHaveBeenCalledWith(
+      nixModel,
+      "plaintext",
+    );
   });
 });
