@@ -76,3 +76,11 @@ if [ "$violations" -gt 0 ]; then
 fi
 
 echo "Design-system token check passed."
+
+# --- Rule 3: Monaco font stack must mirror --font-mono ---
+# Monaco computes glyph widths via canvas.measureText, which does not resolve
+# CSS variables, so the editor is configured with a literal stack imported
+# from src/styles/fonts.ts. If that literal drifts away from --font-mono in
+# styles/theme.css, cursor/selection positioning silently breaks. Run a
+# Node-based parser to assert equality after whitespace normalization.
+node scripts/check-font-mono.mjs

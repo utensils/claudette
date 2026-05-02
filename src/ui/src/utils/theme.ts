@@ -6,7 +6,12 @@ import {
   DEFAULT_THEME_ID,
   DEFAULT_LIGHT_THEME_ID,
 } from "../styles/themes";
+import { DEFAULT_SANS_STACK, DEFAULT_MONO_STACK } from "../styles/fonts";
 import { listUserThemes } from "../services/tauri";
+
+// Re-export so existing call sites (tests, components) keep working while
+// the canonical definitions live in src/styles/fonts.ts.
+export { DEFAULT_SANS_STACK, DEFAULT_MONO_STACK };
 
 // localStorage key used by index.html's pre-hydration script to set
 // data-theme before React mounts. Keep in sync with that script.
@@ -72,11 +77,6 @@ const THEMEABLE_VARS = [
   "font-mono",
   "font-display",
 ];
-
-export const DEFAULT_SANS_STACK =
-  '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-export const DEFAULT_MONO_STACK =
-  '"JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code", monospace';
 
 /**
  * Apply user font overrides on top of the current theme.
