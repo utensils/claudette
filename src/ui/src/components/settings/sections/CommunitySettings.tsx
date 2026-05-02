@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
 import {
   fetchRegistry,
   flattenRegistry,
@@ -11,8 +11,22 @@ import {
   type Registry,
 } from "../../../services/community";
 import { refreshGrammars } from "../../../utils/grammarRegistry";
+import { openUrl } from "../../../services/tauri";
 import styles from "../Settings.module.css";
 import own from "./CommunitySettings.module.css";
+
+/// Tauri's webview blocks raw <a href> navigation to external origins.
+/// Intercept the click and round-trip through the `open_url` Tauri
+/// command, which opens the link in the user's default browser. Same
+/// pattern other settings sections (ClaudeCodePluginsSettings) use.
+function handleExternalLink(href: string) {
+  return (e: MouseEvent<HTMLAnchorElement>) => {
+    e.preventDefault();
+    void openUrl(href).catch((err) =>
+      console.warn("openUrl failed:", err),
+    );
+  };
+}
 
 type Tab = "browse" | "installed";
 
@@ -118,6 +132,9 @@ export function CommunitySettings() {
           target="_blank"
           rel="noreferrer"
           className={own.link}
+          onClick={handleExternalLink(
+            "https://github.com/utensils/claudette-community",
+          )}
         >
           utensils/claudette-community
         </a>
