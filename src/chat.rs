@@ -15,11 +15,15 @@
 //! See `docs/architecture` and the call sites for how these pieces are
 //! composed during a turn.
 
+use std::path::Path;
+
 use serde_json::Value;
 
 use crate::agent::{AssistantMessage, CompactMetadata, ContentBlock, TokenUsage};
-use crate::model::{ChatMessage, ChatRole};
+use crate::db::Database;
+use crate::model::{ChatMessage, ChatRole, ConversationCheckpoint};
 use crate::permissions::is_bypass_tools;
+use crate::snapshot;
 
 // ---------------------------------------------------------------------------
 // Session-flag drift detection
@@ -247,13 +251,127 @@ pub fn build_compaction_sentinel(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Turn checkpoint creation
+// ---------------------------------------------------------------------------
+
+/// Inputs for [`create_turn_checkpoint`]. `anchor_msg_id` is the assistant
+/// message id from this turn, or the user message id for tool-only turns
+/// where no assistant text was emitted.
+pub struct CheckpointArgs<'a> {
+    pub db_path: &'a Path,
+    pub workspace_id: &'a str,
+    pub chat_session_id: &'a str,
+    pub anchor_msg_id: &'a str,
+    pub worktree_path: &'a str,
+    pub created_at: String,
+}
+
+/// Create the conversation checkpoint for a just-completed turn and snapshot
+/// the worktree files into SQLite.
+///
+/// Returns the inserted checkpoint with `has_file_state` reflecting whether
+/// `save_snapshot` succeeded — callers should use it as the payload for any
+/// `checkpoint-created` event they emit.
+///
+/// Returns `None` only when the DB connection or the checkpoint insert itself
+/// fails. Snapshot failures are logged to stderr (mirroring the prior Tauri
+/// behavior) but do not prevent the checkpoint row from existing — restoring
+/// to that turn just won't be possible.
+///
+/// Note: `has_file_state` is **derived** by SQL on read (EXISTS over
+/// `checkpoint_files`), so we don't persist the bool — we only set it on the
+/// returned struct to keep the emitted payload consistent with subsequent DB
+/// reads.
+pub async fn create_turn_checkpoint(args: CheckpointArgs<'_>) -> Option<ConversationCheckpoint> {
+    let CheckpointArgs {
+        db_path,
+        workspace_id,
+        chat_session_id,
+        anchor_msg_id,
+        worktree_path,
+        created_at,
+    } = args;
+
+    let db = Database::open(db_path).ok()?;
+
+    let turn_index = db
+        .latest_checkpoint(workspace_id)
+        .ok()
+        .flatten()
+        .map(|cp| cp.turn_index + 1)
+        .unwrap_or(0);
+
+    let mut checkpoint = ConversationCheckpoint {
+        id: uuid::Uuid::new_v4().to_string(),
+        workspace_id: workspace_id.to_string(),
+        chat_session_id: chat_session_id.to_string(),
+        message_id: anchor_msg_id.to_string(),
+        commit_hash: None,
+        has_file_state: false,
+        turn_index,
+        message_count: 0,
+        created_at,
+    };
+
+    db.insert_checkpoint(&checkpoint).ok()?;
+    drop(db); // release the non-Send connection before awaiting save_snapshot
+
+    let has_files = match snapshot::save_snapshot(db_path, &checkpoint.id, worktree_path).await {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!(
+                "[chat] Snapshot failed for {workspace_id}: {e} \
+                 — checkpoint recorded without file restore capability"
+            );
+            false
+        }
+    };
+
+    checkpoint.has_file_state = has_files;
+    Some(checkpoint)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
 
+    use std::path::PathBuf;
+    use tempfile::tempdir;
+
     fn s(values: &[&str]) -> Vec<String> {
         values.iter().map(|v| (*v).to_string()).collect()
+    }
+
+    async fn make_test_db() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempdir().expect("tempdir");
+        let db_path = dir.path().join("test.db");
+        let db = crate::db::Database::open(&db_path).expect("open db");
+        // Seed the FK-required rows so insert_checkpoint doesn't reject ws-1 / cs-1.
+        db.execute_batch(
+            "INSERT INTO repositories (id, name, path) VALUES ('r-1', 'testrepo', '/tmp/r1'); \
+             INSERT INTO workspaces (id, repository_id, name, branch_name, status, status_line) \
+               VALUES ('ws-1', 'r-1', 'test', 'main', 'active', ''); \
+             INSERT INTO chat_sessions (id, workspace_id, name, sort_order, status) \
+               VALUES ('cs-1', 'ws-1', 'Main', 0, 'active');",
+        )
+        .expect("seed rows");
+        drop(db);
+        (dir, db_path)
+    }
+
+    async fn make_test_worktree(parent: &std::path::Path) -> PathBuf {
+        let wt = parent.join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(wt.join("hello.txt"), "hi").unwrap();
+        // Initialise a real git repo so git ls-files works during save_snapshot.
+        tokio::process::Command::new(crate::git::resolve_git_path_blocking())
+            .args(["init", wt.to_str().unwrap()])
+            .output()
+            .await
+            .unwrap();
+        wt
     }
 
     // -- Session-flag drift -------------------------------------------------
@@ -635,5 +753,100 @@ mod tests {
         assert!(m.cache_creation_tokens.is_none());
         assert!(m.input_tokens.is_none());
         assert!(m.output_tokens.is_none());
+    }
+
+    // -- Turn checkpoint creation -----------------
+
+    #[tokio::test]
+    async fn checkpoint_turn_index_is_zero_on_empty_workspace() {
+        let (dir, db_path) = make_test_db().await;
+        let wt = make_test_worktree(dir.path()).await;
+
+        let cp = create_turn_checkpoint(CheckpointArgs {
+            db_path: &db_path,
+            workspace_id: "ws-1",
+            chat_session_id: "cs-1",
+            anchor_msg_id: "msg-1",
+            worktree_path: wt.to_str().unwrap(),
+            created_at: "now".into(),
+        })
+        .await
+        .expect("checkpoint");
+
+        assert_eq!(cp.turn_index, 0);
+        assert!(
+            cp.has_file_state,
+            "snapshot of fixture worktree should succeed"
+        );
+        assert_eq!(cp.message_id, "msg-1");
+        assert_eq!(cp.workspace_id, "ws-1");
+        assert_eq!(cp.chat_session_id, "cs-1");
+
+        let db = crate::db::Database::open(&db_path).unwrap();
+        let row = db.latest_checkpoint("ws-1").unwrap().expect("row inserted");
+        assert_eq!(row.id, cp.id);
+        assert!(row.has_file_state, "DB-derived has_file_state agrees");
+    }
+
+    #[tokio::test]
+    async fn checkpoint_turn_index_increments_from_latest() {
+        let (dir, db_path) = make_test_db().await;
+        let wt = make_test_worktree(dir.path()).await;
+
+        {
+            let db = crate::db::Database::open(&db_path).unwrap();
+            let prior = crate::model::ConversationCheckpoint {
+                id: "prior".into(),
+                workspace_id: "ws-1".into(),
+                chat_session_id: "cs-1".into(),
+                message_id: "older".into(),
+                commit_hash: None,
+                has_file_state: false,
+                turn_index: 4,
+                message_count: 0,
+                created_at: "earlier".into(),
+            };
+            db.insert_checkpoint(&prior).unwrap();
+        }
+
+        let cp = create_turn_checkpoint(CheckpointArgs {
+            db_path: &db_path,
+            workspace_id: "ws-1",
+            chat_session_id: "cs-1",
+            anchor_msg_id: "msg-2",
+            worktree_path: wt.to_str().unwrap(),
+            created_at: "now".into(),
+        })
+        .await
+        .expect("checkpoint");
+
+        assert_eq!(cp.turn_index, 5);
+    }
+
+    #[tokio::test]
+    async fn checkpoint_records_row_with_has_file_state_false_on_snapshot_failure() {
+        let (_dir, db_path) = make_test_db().await;
+        let bogus = "/definitely/does/not/exist/anywhere";
+
+        let cp = create_turn_checkpoint(CheckpointArgs {
+            db_path: &db_path,
+            workspace_id: "ws-1",
+            chat_session_id: "cs-1",
+            anchor_msg_id: "msg-1",
+            worktree_path: bogus,
+            created_at: "now".into(),
+        })
+        .await
+        .expect("checkpoint inserted even if snapshot fails");
+
+        assert!(!cp.has_file_state);
+
+        let db = crate::db::Database::open(&db_path).unwrap();
+        let row = db.latest_checkpoint("ws-1").unwrap().expect("row present");
+        assert_eq!(row.id, cp.id);
+        assert!(
+            !row.has_file_state,
+            "no checkpoint_files rows ⇒ derived false"
+        );
     }
 }
