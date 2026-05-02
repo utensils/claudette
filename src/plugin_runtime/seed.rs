@@ -60,6 +60,14 @@ const BUNDLED_PLUGINS: &[BundledPlugin] = &[
 /// The current app version, used for the .version sentinel file.
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// True iff `name` matches one of the bundled plugin names. Derived
+/// directly from `BUNDLED_PLUGINS` so adding or renaming a bundled
+/// plugin can never silently desync from trust resolution
+/// (`PluginTrust::Bundled` consults this).
+pub fn is_bundled_plugin_name(name: &str) -> bool {
+    BUNDLED_PLUGINS.iter().any(|p| p.name == name)
+}
+
 /// Seed bundled plugins into the plugin directory on app startup.
 ///
 /// Content-hash driven: the `.version` file used to gate this path,

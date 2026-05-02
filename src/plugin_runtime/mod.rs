@@ -532,40 +532,65 @@ fn check_clis_available(clis: &[String]) -> bool {
 /// Resolve a plugin directory's trust source at discovery time.
 ///
 /// Decision order:
-///   1. `.install_meta.json` with `source = "community"` → community
-///      install. Use the recorded `granted_capabilities` as the
-///      authoritative allowlist.
-///   2. Plugin name matches a bundled name AND a `.version` sentinel
-///      is present (written by `seed_bundled_plugins`) → bundled
-///      and trusted.
-///   3. Anything else (no meta, no bundled match) → unknown
-///      hand-installed plugin; trusted for backward compat.
+/// 1. `.install_meta.json` is present on disk and parses with
+///    `source = "community"` → community install. Use recorded
+///    `granted_capabilities`. If it parses with a non-community
+///    source, fall through. If it fails to parse (corrupt /
+///    truncated / partial write), fail closed: treat as community
+///    with empty grants so the runtime returns `NeedsReconsent`,
+///    rather than silently falling through to Unknown
+///    (allow-everything).
+/// 2. Plugin name matches a bundled name AND a `.version` sentinel
+///    is present (written by `seed_bundled_plugins`) → bundled
+///    and trusted.
+/// 3. Anything else (no meta file, no bundled match) → unknown
+///    hand-installed plugin; trusted for backward compat.
 ///
 /// The check is one disk read per plugin at startup, never on hot
 /// paths — `call_operation` consults the cached `LoadedPlugin.trust`.
 fn resolve_trust(name: &str, dir: &Path) -> PluginTrust {
-    if let Ok(Some(meta)) = crate::community::read_install_meta(dir)
-        && meta.source == crate::community::InstallSource::Community
-    {
-        return PluginTrust::Community {
-            granted: meta.granted_capabilities,
-        };
+    let meta_path = dir.join(".install_meta.json");
+    if meta_path.exists() {
+        match crate::community::read_install_meta(dir) {
+            Ok(Some(meta)) if meta.source == crate::community::InstallSource::Community => {
+                return PluginTrust::Community {
+                    granted: meta.granted_capabilities,
+                };
+            }
+            Ok(Some(_)) => {
+                // Meta file present but not community-sourced
+                // (`direct` / `bundled`). No grant model applies —
+                // fall through to bundled / unknown resolution.
+            }
+            Ok(None) => {
+                // The exists() check passed but the read returned
+                // None — narrow race window where the file
+                // disappeared between checks. Fail closed: treat as
+                // community with empty grants.
+                eprintln!(
+                    "[plugin] {name}: .install_meta.json vanished during discovery — failing closed"
+                );
+                return PluginTrust::Community {
+                    granted: Vec::new(),
+                };
+            }
+            Err(e) => {
+                // Corrupt / truncated / partially-written meta file.
+                // Fail closed rather than silently allowing the
+                // manifest's full required_clis through.
+                eprintln!(
+                    "[plugin] {name}: failed to read .install_meta.json ({e}) — failing closed"
+                );
+                return PluginTrust::Community {
+                    granted: Vec::new(),
+                };
+            }
+        }
     }
-    if is_bundled_plugin(name) && dir.join(".version").exists() {
+    if seed::is_bundled_plugin_name(name) && dir.join(".version").exists() {
         return PluginTrust::Bundled;
     }
     PluginTrust::Unknown
-}
-
-/// Names of plugins shipped inside the binary. Kept in sync with
-/// `seed::BUNDLED_PLUGINS`; we duplicate the list here to avoid
-/// exposing the seeder's `BundledPlugin` struct in the public API
-/// for what's effectively a name-membership check.
-fn is_bundled_plugin(name: &str) -> bool {
-    matches!(
-        name,
-        "github" | "gitlab" | "env-direnv" | "env-mise" | "env-dotenv" | "env-nix-devshell"
-    )
 }
 
 /// Whether discovery should require an `init.lua` for a plugin of this
@@ -1416,9 +1441,50 @@ mod tests {
 
     #[test]
     fn is_bundled_plugin_recognizes_seeded_names() {
-        assert!(is_bundled_plugin("github"));
-        assert!(is_bundled_plugin("env-direnv"));
-        assert!(!is_bundled_plugin("user-installed"));
+        assert!(seed::is_bundled_plugin_name("github"));
+        assert!(seed::is_bundled_plugin_name("env-direnv"));
+        assert!(!seed::is_bundled_plugin_name("user-installed"));
+    }
+
+    #[test]
+    fn corrupt_install_meta_fails_closed_to_empty_grants() {
+        // Defense in depth: a malformed `.install_meta.json`
+        // (corrupt JSON, partial write, manual tampering) must NOT
+        // fall through to PluginTrust::Unknown — that would let the
+        // plugin run with full manifest-required_clis, defeating the
+        // grant model. Resolve to Community { granted: [] } so
+        // `call_operation` returns NeedsReconsent for any non-empty
+        // required_clis.
+        let dir = tempfile::tempdir().unwrap();
+        let plugin_dir = dir.path().join("corrupt-meta");
+        std::fs::create_dir(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("plugin.json"),
+            r#"{
+                "name": "corrupt-meta",
+                "display_name": "Corrupt",
+                "version": "1.0.0",
+                "description": "meta is broken",
+                "operations": []
+            }"#,
+        )
+        .unwrap();
+        std::fs::write(plugin_dir.join("init.lua"), "return {}").unwrap();
+        // Garbage bytes — not valid JSON.
+        std::fs::write(
+            plugin_dir.join(".install_meta.json"),
+            "this is not json\x00",
+        )
+        .unwrap();
+
+        let registry = PluginRegistry::discover(dir.path());
+        match &registry.plugins["corrupt-meta"].trust {
+            PluginTrust::Community { granted } => assert!(
+                granted.is_empty(),
+                "corrupt meta must fail closed with empty grants"
+            ),
+            other => panic!("expected Community trust (fail-closed), got {other:?}"),
+        }
     }
 
     #[test]

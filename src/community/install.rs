@@ -268,9 +268,16 @@ pub fn read_install_meta(install_dir: &Path) -> Result<Option<InstalledMeta>, In
 
 /// Rewrite `.install_meta.json` in `install_dir` so its
 /// `granted_capabilities` field becomes `new_grants`. Every other
-/// field is preserved byte-for-byte. Used by the re-consent flow:
-/// when a plugin update declares new `required_clis` we deny at
-/// runtime until the user explicitly approves and we call this.
+/// field's *value* is preserved (the function deserializes into
+/// `InstalledMeta`, mutates `granted_capabilities`, and serializes
+/// back via `to_vec_pretty`). The exact JSON byte layout — key
+/// ordering, whitespace — may change because the writer is the same
+/// one the installer uses; nothing downstream of this file depends
+/// on the original byte form.
+///
+/// Used by the re-consent flow: when a plugin update declares new
+/// `required_clis` we deny at runtime until the user explicitly
+/// approves and we call this.
 ///
 /// Returns `Err(InstallError::Io)` when the meta file is missing —
 /// callers must validate that the plugin was community-installed
@@ -954,8 +961,6 @@ mod tests {
 
     #[test]
     fn update_granted_capabilities_round_trips_and_preserves_other_fields() {
-        let payload: &[(&[u8], &[u8])] = &[];
-        let _ = payload;
         let payload: &[(&str, &[u8])] = &[(
             "plugins/language-grammars/lang-foo/plugin.json",
             b"{\"name\":\"lang-foo\"}",

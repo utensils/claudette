@@ -163,17 +163,18 @@ async fn community_plugin_capability_lifecycle() {
     assert_eq!(result["ok"], true);
 
     // ---- Step 4: simulate manifest drift -----------------------------------
-    // A registry update bumps required_clis to include `git`. Edit
-    // the on-disk manifest in place. Re-discover so the runtime
-    // sees the new manifest but the grant set in
-    // `.install_meta.json` is still empty.
+    // A registry update bumps required_clis. We use `cargo` because
+    // it is guaranteed to be on PATH whenever this test runs (the
+    // test harness needs it to compile in the first place) — that
+    // keeps step 7 hermetic, since `cli_available` is probed against
+    // PATH at re-discovery.
     let manifest_path = install_path.join("plugin.json");
     let manifest_v2 = serde_json::json!({
         "name": PLUGIN_NAME,
         "display_name": "Fake SCM",
         "version": "1.0.0",
         "description": "Test plugin for grant enforcement",
-        "required_clis": ["git", "curl"],
+        "required_clis": ["cargo"],
         "operations": ["run"]
     });
     std::fs::write(&manifest_path, manifest_v2.to_string()).unwrap();
@@ -198,21 +199,18 @@ async fn community_plugin_capability_lifecycle() {
     match result {
         Err(PluginError::NeedsReconsent { plugin, missing }) => {
             assert_eq!(plugin, PLUGIN_NAME);
-            assert_eq!(missing, vec!["git".to_string(), "curl".to_string()]);
+            assert_eq!(missing, vec!["cargo".to_string()]);
         }
         other => panic!("expected NeedsReconsent, got {other:?}"),
     }
 
     // ---- Step 6: user approves the new grants ------------------------------
-    community::update_granted_capabilities(&install_path, &["git".to_string(), "curl".to_string()])
+    community::update_granted_capabilities(&install_path, &["cargo".to_string()])
         .expect("update grants");
     let after_grant = community::read_install_meta(&install_path)
         .unwrap()
         .unwrap();
-    assert_eq!(
-        after_grant.granted_capabilities,
-        vec!["git".to_string(), "curl".to_string()]
-    );
+    assert_eq!(after_grant.granted_capabilities, vec!["cargo".to_string()]);
 
     // Re-discover to pick up the new grants. (The Tauri command
     // `community_grant_capabilities` does this via
@@ -220,7 +218,7 @@ async fn community_plugin_capability_lifecycle() {
     let registry = PluginRegistry::discover(&roots.plugins_dir);
     match &registry.plugins[PLUGIN_NAME].trust {
         PluginTrust::Community { granted } => {
-            assert_eq!(granted, &vec!["git".to_string(), "curl".to_string()]);
+            assert_eq!(granted, &vec!["cargo".to_string()]);
         }
         other => panic!("expected Community trust, got {other:?}"),
     }
