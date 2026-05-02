@@ -493,12 +493,41 @@ export function ChatPanel() {
 
         loadChatHistoryPage(sessionId, 50, cursorId)
           .then((page) => {
-            store.prependChatMessages(sessionId, page.messages);
-            store.prependChatAttachments(sessionId, page.attachments);
-            store.setChatPagination(sessionId, {
+            // Staleness guard: if the user switched sessions, cleared the
+            // conversation, or scrolled further while this fetch was in
+            // flight, the response is no longer applicable. Bail before
+            // mutating any state — applying it would prepend old rows back
+            // into a session that has moved on. We still reset the source
+            // session's `isLoadingMore` flag if it's safe (pagination state
+            // unchanged for that session), so the user can retry on return.
+            const liveStore = useAppStore.getState();
+            const livePagination = liveStore.chatPagination[sessionId];
+            const stillCurrent =
+              activeSessionIdRef.current === sessionId &&
+              livePagination &&
+              livePagination.oldestMessageId === cursorId;
+            if (!stillCurrent) {
+              if (livePagination && livePagination.isLoadingMore) {
+                liveStore.setChatPagination(sessionId, {
+                  ...livePagination,
+                  isLoadingMore: false,
+                });
+              }
+              return;
+            }
+            liveStore.prependChatMessages(sessionId, page.messages);
+            liveStore.prependChatAttachments(sessionId, page.attachments);
+            // Merge live `totalCount` (which may have grown via streaming
+            // `addChatMessage` while the request was in flight) with the
+            // server snapshot. `totalCount` must stay monotonic per session
+            // — moving it backwards would shift `globalOffset` and corrupt
+            // CompletedTurn placement until the next full reload.
+            const liveTotal =
+              useAppStore.getState().chatPagination[sessionId]?.totalCount ?? 0;
+            liveStore.setChatPagination(sessionId, {
               hasMore: page.has_more,
               isLoadingMore: false,
-              totalCount: page.total_count,
+              totalCount: Math.max(page.total_count, liveTotal),
               oldestMessageId: page.messages[0]?.id ?? cursorId,
             });
             // Backfill prompt history: Shift+Up walks `historyRef`, which was
@@ -526,9 +555,13 @@ export function ChatPanel() {
             // against the now-larger message window resolves them.
             const merged =
               useAppStore.getState().chatMessages[sessionId] ?? [];
-            const mergedOffset = page.total_count - merged.length;
+            const mergedTotal =
+              useAppStore.getState().chatPagination[sessionId]?.totalCount ??
+              page.total_count;
+            const mergedOffset = mergedTotal - merged.length;
             loadCompletedTurns(sessionId)
               .then((turnData) => {
+                if (activeSessionIdRef.current !== sessionId) return;
                 const turns = reconstructCompletedTurns(
                   merged,
                   turnData,
@@ -547,7 +580,19 @@ export function ChatPanel() {
           })
           .catch((e) => {
             console.error("Failed to load older messages:", e);
-            store.setChatPagination(sessionId, { ...pagination, isLoadingMore: false });
+            // Read fresh pagination state — `addChatMessage` may have
+            // incremented `totalCount` while the fetch was in flight, and
+            // writing back the captured snapshot here would clobber it.
+            const live = useAppStore.getState().chatPagination[sessionId];
+            if (!live) return; // session was cleared
+            useAppStore
+              .getState()
+              .setChatPagination(sessionId, { ...live, isLoadingMore: false });
+          })
+          .finally(() => {
+            // Clear the synchronous gate regardless of outcome so the next
+            // top-of-scroll event can fetch again.
+            isLoadingMoreRef.current = false;
           });
       }
     };

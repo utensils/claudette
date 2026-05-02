@@ -40,8 +40,10 @@ export function reconstructCompletedTurns(
     const afterMessageIndex = localAfter + globalOffset;
     const priorBoundary =
       i > 0 ? msgIdToIndex.get(valid[i - 1].message_id)! + 1 : 0;
+    // Slice bounds are LOCAL — `afterMessageIndex` is global and would over-
+    // run into the next turn's range when the slice clamps.
     const turnAssistantMessages = messages
-      .slice(priorBoundary, afterMessageIndex)
+      .slice(priorBoundary, localAfter)
       .filter((m) => m.role === "Assistant");
     const durationMs =
       turnAssistantMessages.reduce(

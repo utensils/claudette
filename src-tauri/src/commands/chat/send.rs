@@ -83,22 +83,37 @@ pub async fn load_chat_history_page(
     // attachments are FK-anchored to the triggering User message, so a turn
     // that straddles a page boundary would otherwise drop its attachments
     // until older history is loaded.
+    //
+    // We track the carry-over user id separately so we can filter its
+    // attachments to `origin = "agent"` only — fetching its user-origin
+    // rows would re-inline large image/text bytes that the page never needs
+    // to render (the user message itself is on the previous page).
     let mut message_ids: Vec<String> = messages.iter().map(|m| m.id.clone()).collect();
+    let mut carry_over_user_id: Option<String> = None;
     if let Some(first) = messages.first()
         && first.role != ChatRole::User
         && let Some(prev_user) = db
             .previous_user_message_id(&session_id, &first.id)
             .map_err(|e| e.to_string())?
     {
-        message_ids.push(prev_user);
+        message_ids.push(prev_user.clone());
+        carry_over_user_id = Some(prev_user);
     }
     let att_map = db
         .list_attachments_for_messages(&message_ids)
         .map_err(|e| e.to_string())?;
 
     let mut attachments = Vec::new();
-    for (_, atts) in att_map {
+    for (msg_id, atts) in att_map {
+        let is_carry_over = carry_over_user_id.as_deref() == Some(msg_id.as_str());
         for a in atts {
+            // For the carry-over user, skip non-agent attachments — the user
+            // message itself is on the previous page, so its own attachments
+            // (potentially large images / text files) shouldn't be inlined
+            // into this response.
+            if is_carry_over && !matches!(a.origin, claudette::model::AttachmentOrigin::Agent) {
+                continue;
+            }
             let is_text = matches!(
                 a.media_type.as_str(),
                 "text/plain" | "text/csv" | "text/markdown" | "application/json"

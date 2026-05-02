@@ -148,6 +148,12 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
         userToNextAssistant.set(m.id, nextAssistantId);
       }
     }
+    // Detect a mid-turn page start: the first non-System row at the top of
+    // the window is an Assistant. Pages can begin with a System sentinel
+    // (e.g. compaction marker) before the carry-over assistant, so we can't
+    // just check messages[0].role.
+    const firstNonSystem = messages.find((m) => m.role !== "System");
+    const startsMidTurn = firstNonSystem?.role === "Assistant";
     const map = new Map<string, ChatAttachment[]>();
     for (const att of chatAttachments) {
       let targetId: string;
@@ -164,7 +170,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
         } else if (
           !loadedMessageIds.has(att.message_id) &&
           firstAssistantInWindow !== null &&
-          messages[0]?.role === "Assistant"
+          startsMidTurn
         ) {
           targetId = firstAssistantInWindow;
         } else {
