@@ -68,7 +68,7 @@ pub async fn get_chat_session(
 /// can't get queued behind a streaming task that holds the agents lock
 /// for writes per-event. The DB defaults (`Idle`, no attention) are
 /// already the right values for a freshly-created session. See issue #574.
-pub async fn create_chat_session_inner(
+async fn create_chat_session_inner(
     state: &AppState,
     workspace_id: &str,
 ) -> Result<ChatSession, String> {

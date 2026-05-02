@@ -157,12 +157,21 @@ export function SessionTabs({ workspaceId }: Props) {
   );
 
   const handleCreate = async () => {
-    if (gateRef.current.isPending()) return;
-    setCreating(true);
+    // Drive `setCreating` from inside the gated callback so it only fires
+    // for the call that actually acquires the gate. If a second click
+    // somehow slipped past the synchronous `isPending()` check, gate.run
+    // would return `null` immediately for it and that caller wouldn't
+    // touch the visual state — leaving the in-flight call's `creating=true`
+    // intact for the duration of the real request.
     try {
-      const session = await gateRef.current.run(() =>
-        createChatSession(workspaceId),
-      );
+      const session = await gateRef.current.run(async () => {
+        setCreating(true);
+        try {
+          return await createChatSession(workspaceId);
+        } finally {
+          setCreating(false);
+        }
+      });
       if (session !== null) {
         // Invalidate any in-flight load — our local addChatSession is authoritative.
         loadVersionRef.current += 1;
@@ -171,8 +180,6 @@ export function SessionTabs({ workspaceId }: Props) {
       }
     } catch (err) {
       console.error("[SessionTabs] Failed to create session:", err);
-    } finally {
-      setCreating(false);
     }
   };
 
