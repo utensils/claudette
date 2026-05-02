@@ -11,6 +11,7 @@ import {
   createWorkspace as createWorkspaceService,
   getRepoConfig,
   runWorkspaceSetup,
+  listWorkspaceFiles,
 } from "../../services/tauri";
 import { applySelectedModel } from "../chat/applySelectedModel";
 import type { ThemeDefinition } from "../../types/theme";
@@ -20,10 +21,12 @@ import {
   buildThemeCommands,
   buildModelCommands,
   buildEffortCommands,
+  buildFileCommands,
   CATEGORY_ORDER,
   CATEGORY_LABELS,
   type Command,
   type CommandCategory,
+  type FileEntry,
 } from "./commands";
 import styles from "./CommandPalette.module.css";
 
@@ -88,11 +91,16 @@ export function CommandPalette() {
   const setEffortLevel = useAppStore((s) => s.setEffortLevel);
   const clearAgentQuestion = useAppStore((s) => s.clearAgentQuestion);
   const clearPlanApproval = useAppStore((s) => s.clearPlanApproval);
+  const openFileTab = useAppStore((s) => s.openFileTab);
+  const commandPaletteInitialMode = useAppStore((s) => s.commandPaletteInitialMode);
+  const clearCommandPaletteInitialMode = useAppStore((s) => s.clearCommandPaletteInitialMode);
 
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [themes, setThemes] = useState<ThemeDefinition[]>([]);
-  const [mode, setMode] = useState<"main" | "theme" | "model" | "effort">("main");
+  const [mode, setMode] = useState<"main" | "theme" | "model" | "effort" | "file">("main");
+  const [fileEntries, setFileEntries] = useState<FileEntry[]>([]);
+  const [filesLoading, setFilesLoading] = useState(false);
   const originalThemeIdRef = useRef(currentThemeId);
   const resultsRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -228,6 +236,28 @@ export function CommandPalette() {
     setSelectedIndex(0);
   }, []);
 
+  const enterFileMode = useCallback(() => {
+    if (!selectedWorkspaceId) return;
+    setMode("file");
+    setQuery("");
+    setSelectedIndex(0);
+    setFilesLoading(true);
+    listWorkspaceFiles(selectedWorkspaceId)
+      .then((entries) => {
+        setFileEntries(entries);
+        setFilesLoading(false);
+      })
+      .catch(() => setFilesLoading(false));
+  }, [selectedWorkspaceId]);
+
+  // If the palette was opened with an initial file mode (e.g. via Cmd+O), enter it.
+  useEffect(() => {
+    if (commandPaletteInitialMode === "file") {
+      clearCommandPaletteInitialMode();
+      enterFileMode();
+    }
+  }, [commandPaletteInitialMode, clearCommandPaletteInitialMode, enterFileMode]);
+
   const exitSubMenu = useCallback(() => {
     setMode("main");
     setQuery("");
@@ -257,6 +287,7 @@ export function CommandPalette() {
         enterThemeMode,
         enterModelMode,
         enterEffortMode,
+        enterFileMode,
         selectedWorkspaceId,
         selectedSessionId,
         currentRepoId,
@@ -278,7 +309,7 @@ export function CommandPalette() {
         updateWorkspace: (id: string, updates: Record<string, unknown>) => updateWorkspace(id, updates),
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [themes, selectedWorkspaceId, selectedSessionId, currentRepoId, thinkingEnabled, planMode, fastMode, effortLevel, selectedModel, enterThemeMode, applyThemeById, handleCreateWorkspace],
+    [themes, selectedWorkspaceId, selectedSessionId, currentRepoId, thinkingEnabled, planMode, fastMode, effortLevel, selectedModel, enterThemeMode, enterFileMode, applyThemeById, handleCreateWorkspace],
   );
 
   // Build sub-menu command lists
@@ -316,11 +347,25 @@ export function CommandPalette() {
     [selectedModel, effortLevel, selectedSessionId],
   );
 
+  const fileCommands = useMemo(
+    () =>
+      buildFileCommands(
+        fileEntries,
+        (path) => {
+          if (selectedWorkspaceId) openFileTab(selectedWorkspaceId, path);
+        },
+        close,
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [fileEntries, selectedWorkspaceId],
+  );
+
   // Active command list based on mode
   const activeCommands =
     mode === "theme" ? themeCommands
     : mode === "model" ? modelCommands
     : mode === "effort" ? effortCommands
+    : mode === "file" ? fileCommands
     : mainCommands;
 
   const filteredCommands = useMemo(() => {
@@ -341,6 +386,11 @@ export function CommandPalette() {
     if (mode === "theme") {
       return filteredCommands.length > 0
         ? [{ category: "theme", label: "Select a Theme", commands: filteredCommands }]
+        : [];
+    }
+    if (mode === "file") {
+      return filteredCommands.length > 0
+        ? [{ category: "navigation", label: "Files", commands: filteredCommands }]
         : [];
     }
     // When searching, show a flat ranked list (no category grouping)
@@ -460,13 +510,17 @@ export function CommandPalette() {
               mode === "theme" ? "Search themes..."
               : mode === "model" ? "Select model..."
               : mode === "effort" ? "Select effort level..."
+              : mode === "file" ? "Search files..."
               : "Type a command..."
             }
             autoFocus
           />
           {mode !== "main" && (
             <span className={styles.modeBadge}>
-              {mode === "theme" ? "Theme" : mode === "model" ? "Model" : "Effort"}
+              {mode === "theme" ? "Theme"
+                : mode === "model" ? "Model"
+                : mode === "effort" ? "Effort"
+                : "Files"}
             </span>
           )}
         </div>
@@ -477,6 +531,7 @@ export function CommandPalette() {
               {mode === "theme" ? "No matching themes"
                 : mode === "model" ? "No matching models"
                 : mode === "effort" ? "No matching levels"
+                : mode === "file" ? (filesLoading ? "Loading files..." : "No matching files")
                 : "No matching commands"}
             </div>
           ) : (

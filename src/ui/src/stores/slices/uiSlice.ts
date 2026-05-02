@@ -22,6 +22,7 @@ export interface UiSlice {
   statusGroupCollapsed: Record<string, boolean>;
   fuzzyFinderOpen: boolean;
   commandPaletteOpen: boolean;
+  commandPaletteInitialMode: "file" | null;
   toggleSidebar: () => void;
   toggleRightSidebar: () => void;
   setRightSidebarTab: (tab: "files" | "changes" | "tasks") => void;
@@ -35,6 +36,8 @@ export interface UiSlice {
   toggleStatusGroupCollapsed: (id: string) => void;
   toggleFuzzyFinder: () => void;
   toggleCommandPalette: () => void;
+  openCommandPaletteFileMode: () => void;
+  clearCommandPaletteInitialMode: () => void;
 
   // Settings page
   settingsOpen: boolean;
@@ -116,8 +119,13 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
   toggleFuzzyFinder: () =>
     set((s) => ({ fuzzyFinderOpen: !s.fuzzyFinderOpen })),
   commandPaletteOpen: false,
+  commandPaletteInitialMode: null,
   toggleCommandPalette: () =>
     set((s) => ({ commandPaletteOpen: !s.commandPaletteOpen })),
+  openCommandPaletteFileMode: () =>
+    set({ commandPaletteOpen: true, commandPaletteInitialMode: "file" }),
+  clearCommandPaletteInitialMode: () =>
+    set({ commandPaletteInitialMode: null }),
 
   // Settings page
   settingsOpen: false,
