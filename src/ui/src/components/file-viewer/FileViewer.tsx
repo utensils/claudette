@@ -252,6 +252,54 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
   const showSaveButton =
     dirty && !editDisabled && !isImage && !bufferState?.isBinary && !showMarkdownPreview;
 
+  const previewMode = bufferState?.preview ?? "source";
+  const togglePreview = useCallback(() => {
+    setFileTabPreview(
+      workspaceId,
+      path,
+      previewMode === "preview" ? "source" : "preview",
+    );
+  }, [workspaceId, path, previewMode, setFileTabPreview]);
+
+  // Cmd/Ctrl+Shift+V — toggle source/preview for markdown files. Mirrors the
+  // VS Code shortcut. The handler bows out when:
+  //   * the active file isn't markdown or its toggle is otherwise unavailable
+  //     (binary/image/oversize/truncated → editDisabled),
+  //   * an overlay owns focus (settings, command palette, fuzzy finder, modal),
+  //   * a typing target is focused — Monaco's hidden <textarea>, the chat
+  //     composer, and the terminal all show as input/textarea/contenteditable,
+  //     and the user almost always means "paste as plain text" there. Buttons
+  //     and other non-typing focus targets still let the shortcut through.
+  useEffect(() => {
+    if (!showMarkdownToggle) return;
+    const handler = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod || !e.shiftKey || e.code !== "KeyV") return;
+      const state = useAppStore.getState();
+      if (
+        state.settingsOpen ||
+        state.activeModal ||
+        state.commandPaletteOpen ||
+        state.fuzzyFinderOpen
+      ) {
+        return;
+      }
+      const el = document.activeElement as HTMLElement | null;
+      const tag = el?.tagName?.toLowerCase();
+      if (tag === "input" || tag === "textarea" || el?.isContentEditable) {
+        return;
+      }
+      e.preventDefault();
+      togglePreview();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [showMarkdownToggle, togglePreview]);
+
+  const isMacPlatform =
+    typeof navigator !== "undefined" && navigator.platform.startsWith("Mac");
+  const previewShortcutHint = isMacPlatform ? "⌘⇧V" : "Ctrl+Shift+V";
+
   return (
     <div className={styles.viewer}>
       <WorkspacePanelHeader />
@@ -288,12 +336,12 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
                   {
                     value: "source",
                     icon: <Code size={14} aria-hidden="true" />,
-                    tooltip: t("file_tooltip_source"),
+                    tooltip: `${t("file_tooltip_source")} (${previewShortcutHint})`,
                   },
                   {
                     value: "preview",
                     icon: <BookOpen size={14} aria-hidden="true" />,
-                    tooltip: t("file_tooltip_markdown_preview"),
+                    tooltip: `${t("file_tooltip_markdown_preview")} (${previewShortcutHint})`,
                   },
                 ]}
               />
