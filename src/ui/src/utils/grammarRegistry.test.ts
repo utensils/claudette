@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type { Mock } from "vitest";
 
 // Mock the worker import so register-grammar messages are observable
 // without spinning a real Web Worker. vi.hoisted shares state with the
@@ -359,7 +360,7 @@ describe("applyGrammarsToMonaco", () => {
     editor: {
       getModels: ReturnType<typeof vi.fn>;
       setModelLanguage: ReturnType<typeof vi.fn>;
-      setTheme: ReturnType<typeof vi.fn>;
+      setTheme: Mock<(theme: string) => void>;
     };
   } {
     const registered: Array<{ id: string }> = [];
@@ -373,7 +374,7 @@ describe("applyGrammarsToMonaco", () => {
       editor: {
         getModels: vi.fn().mockReturnValue([]),
         setModelLanguage: vi.fn(),
-        setTheme: vi.fn(),
+        setTheme: vi.fn<(theme: string) => void>(),
       },
     };
   }
@@ -432,6 +433,183 @@ describe("applyGrammarsToMonaco", () => {
     // applyMonacoTheme is re-invoked so our claudette theme wins on
     // first paint.
     expect(applyMonacoThemeMock).toHaveBeenCalledTimes(1);
+  });
+
+  // The next four tests pin the *mechanism* of the theme-wrap dance —
+  // not just the net outcome. The existing test above asserts that
+  // monaco.editor.setTheme equals the original after the bind, but it
+  // doesn't pin the order of capture-vs-wrap, doesn't prove the wrapper
+  // is unreachable, doesn't observe the final theme name applied, and
+  // doesn't survive an alternate wrap mechanism. If @shikijs/monaco
+  // changes how it installs its wrapper in a future version, the
+  // outcome-only test could still pass while users see a flash of
+  // themeIds[0] on first paint.
+  function nixGrammarBackend(): void {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "list_language_grammars") {
+        return {
+          languages: [langInfo("nix", [".nix"])],
+          grammars: [grammarInfo("lang-nix", "nix", "grammars/nix.tmLanguage.json")],
+        };
+      }
+      if (cmd === "read_language_grammar") return "{}";
+      throw new Error(`unexpected: ${cmd}`);
+    });
+  }
+
+  it("captures originalSetTheme BEFORE invoking shikiToMonaco", async () => {
+    // Order matters: if production captured AFTER shikiToMonaco ran,
+    // the captured reference would be the wrapper, restore would be a
+    // no-op, and `applyMonacoTheme` would route through the wrapper to
+    // `highlighter.setTheme("claudette")` — which crashes because
+    // "claudette" isn't a Shiki theme.
+    nixGrammarBackend();
+
+    const monaco = makeMonacoStub();
+    const initialSetTheme = monaco.editor.setTheme;
+    let setThemeAtShikiInvocation: unknown = "not-called";
+
+    shikiToMonacoMock.mockImplementation((_hl: unknown, m: typeof monaco) => {
+      // Snapshot what production handed us at the moment shikiToMonaco
+      // was invoked — i.e. immediately AFTER the production capture.
+      setThemeAtShikiInvocation = m.editor.setTheme;
+      // Then wrap, exactly like the real library does.
+      m.editor.setTheme = vi.fn();
+    });
+
+    await applyGrammarsToMonaco(monaco as unknown as typeof import("monaco-editor"));
+
+    // The reference visible inside shikiToMonaco was the un-wrapped
+    // original — proving production captured it before this call.
+    expect(setThemeAtShikiInvocation).toBe(initialSetTheme);
+  });
+
+  it("the shikiToMonaco wrapper is unreachable via monaco.editor.setTheme after restore", async () => {
+    // Net-outcome assertions don't catch a "restore that looks right
+    // but secretly leaves the wrapper reachable" (e.g. via Object.assign
+    // of stale state). Explicitly poke setTheme post-restore and assert
+    // the wrapper's call counter doesn't move.
+    nixGrammarBackend();
+
+    const monaco = makeMonacoStub();
+    let wrapperCalls = 0;
+
+    shikiToMonacoMock.mockImplementation((_hl: unknown, m: typeof monaco) => {
+      const wrapped = vi.fn(() => {
+        wrapperCalls += 1;
+      });
+      m.editor.setTheme = wrapped;
+      // Mirror the real library's auto-fire of setTheme(themeIds[0])
+      // that happens synchronously inside the bind.
+      m.editor.setTheme("github-dark");
+    });
+
+    await applyGrammarsToMonaco(monaco as unknown as typeof import("monaco-editor"));
+
+    const wrapperCallsAfterApply = wrapperCalls;
+    // The auto-fire happened, but only that.
+    expect(wrapperCallsAfterApply).toBe(1);
+
+    // Now simulate MonacoEditor's beforeMount calling setTheme later in
+    // the session (this is the real-world path that crashes if the
+    // wrapper is still installed).
+    monaco.editor.setTheme("any-theme");
+
+    // Wrapper count must NOT have advanced — the call landed on the
+    // original spy, which is what restore guarantees.
+    expect(wrapperCalls).toBe(wrapperCallsAfterApply);
+    expect(monaco.editor.setTheme).toHaveBeenCalledWith("any-theme");
+  });
+
+  it("applies 'claudette' as the final theme even when the wrapper would crash on it", async () => {
+    // Realistic shikiToMonaco mock: the wrapper throws for any theme
+    // name not pre-loaded into the highlighter — exactly what the real
+    // library does (highlighter.setTheme(name) propagates the missing-
+    // theme error). Without restore, applyMonacoTheme's call to
+    // setTheme("claudette") goes through the wrapper, throws, gets
+    // swallowed by applyGrammarsToMonaco's outer try/catch, and the
+    // user sees a flash of github-dark with no error surfaced.
+    nixGrammarBackend();
+
+    const monaco = makeMonacoStub();
+    // Capture the original spy now — we read its call log at the end
+    // rather than monaco.editor.setTheme's, because if production
+    // forgot to restore, the wrapper would still be at
+    // monaco.editor.setTheme and "claudette" would show up in the
+    // wrapper's log even though it never reached the real setTheme.
+    const originalSetTheme = monaco.editor.setTheme;
+    const SHIKI_THEMES = new Set(["github-dark", "github-light"]);
+
+    shikiToMonacoMock.mockImplementation((_hl: unknown, m: typeof monaco) => {
+      const original = m.editor.setTheme;
+      m.editor.setTheme = vi.fn<(theme: string) => void>((name) => {
+        if (!SHIKI_THEMES.has(name)) {
+          throw new Error(`Theme \`${name}\` is not loaded in highlighter`);
+        }
+        original(name);
+      });
+      // Auto-fire themeIds[0], mirroring the real library.
+      m.editor.setTheme("github-dark");
+    });
+
+    // Realistic applyMonacoTheme: defines + selects "claudette" via
+    // monaco.editor.setTheme — the call that would crash if production
+    // forgot to restore.
+    applyMonacoThemeMock.mockImplementation((m: typeof monaco) => {
+      m.editor.setTheme("claudette");
+    });
+
+    await applyGrammarsToMonaco(monaco as unknown as typeof import("monaco-editor"));
+
+    // The ORIGINAL spy received both calls — the wrapper delegated
+    // "github-dark" through to it, then production's restore put it
+    // back so applyMonacoTheme's "claudette" call landed on it directly.
+    // If restore was missing, "claudette" would have hit the throwing
+    // wrapper, the throw would have been swallowed by the outer
+    // try/catch, and the original spy would only see "github-dark".
+    const calls = originalSetTheme.mock.calls.map(
+      (c: unknown[]) => c[0],
+    );
+    expect(calls).toEqual(["github-dark", "claudette"]);
+    // Most importantly: the LAST theme set on monaco is "claudette" —
+    // not themeIds[0]. This is what guarantees no flash on first paint.
+    expect(calls[calls.length - 1]).toBe("claudette");
+  });
+
+  it("restore tolerates an alternate wrap mechanism (Object.defineProperty)", async () => {
+    // Suppose @shikijs/monaco changes its wrap from plain assignment
+    // to Object.defineProperty. Production restores via plain
+    // assignment; that must still take effect as long as the descriptor
+    // is writable+configurable. This pins the contract from the other
+    // side: the restore mechanism doesn't depend on the wrap mechanism.
+    nixGrammarBackend();
+
+    const monaco = makeMonacoStub();
+    const initialSetTheme = monaco.editor.setTheme;
+
+    shikiToMonacoMock.mockImplementation((_hl: unknown, m: typeof monaco) => {
+      const original = m.editor.setTheme;
+      const wrapped = vi.fn((n: string) => original(n));
+      Object.defineProperty(m.editor, "setTheme", {
+        value: wrapped,
+        writable: true,
+        configurable: true,
+      });
+      m.editor.setTheme("github-dark");
+    });
+
+    applyMonacoThemeMock.mockImplementation((m: typeof monaco) => {
+      m.editor.setTheme("claudette");
+    });
+
+    await applyGrammarsToMonaco(monaco as unknown as typeof import("monaco-editor"));
+
+    // Restore took effect despite the descriptor-based wrap.
+    expect(monaco.editor.setTheme).toBe(initialSetTheme);
+    const calls = monaco.editor.setTheme.mock.calls.map(
+      (c: unknown[]) => c[0],
+    );
+    expect(calls[calls.length - 1]).toBe("claudette");
   });
 
   it("re-evaluates open Monaco models so plaintext-fallback files pick up plugin languages", async () => {
