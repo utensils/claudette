@@ -269,6 +269,7 @@ pub fn read_install_meta(install_dir: &Path) -> Result<Option<InstalledMeta>, In
 fn write_install_meta(staging_dir: &Path, plan: &InstallPlan) -> Result<(), InstallError> {
     let meta = InstalledMeta {
         source: InstallSource::Community,
+        kind: plan.kind.wire(),
         registry_sha: plan.registry_sha.clone(),
         contribution_sha: plan.source.sha().to_string(),
         sha256: plan.source.sha256().to_string(),
@@ -342,7 +343,12 @@ fn extract_subtree(
     // We don't know the prefix ahead of time; sniff it from the
     // first non-pax-header entry.
     let mut prefix: Option<String> = None;
-    let mut wrote_any = false;
+    // Set when any entry inside `contribution_path` is staged — file
+    // OR directory. Distinct from "did we write file bytes?" because a
+    // contribution may legitimately be a directory tree of all-empty
+    // sub-directories or only contain files via nested dirs whose
+    // first hit is the dir entry itself.
+    let mut matched_any = false;
     let mut prefix_match_count = 0usize;
 
     let mut all_entries: Vec<(String, Vec<u8>, bool)> = Vec::new();
@@ -408,7 +414,10 @@ fn extract_subtree(
             stripped.to_string()
         };
         if rel.is_empty() {
-            // The path itself; nothing to write.
+            // The contribution directory itself — nothing to write,
+            // but the subtree exists so flag it for the
+            // PathNotInTarball check below.
+            matched_any = true;
             continue;
         }
 
@@ -434,6 +443,7 @@ fn extract_subtree(
 
         if entry_type.is_dir() {
             all_entries.push((rel, Vec::new(), true));
+            matched_any = true;
             continue;
         }
         if !entry_type.is_file() {
@@ -446,10 +456,10 @@ fn extract_subtree(
             .read_to_end(&mut bytes)
             .map_err(|e| InstallError::BadTarball(e.to_string()))?;
         all_entries.push((rel, bytes, false));
-        wrote_any = true;
+        matched_any = true;
     }
 
-    if !wrote_any && !contribution_path.is_empty() {
+    if !matched_any && !contribution_path.is_empty() {
         return Err(InstallError::PathNotInTarball {
             expected: contribution_path.into(),
             prefix: prefix.unwrap_or_default(),
@@ -571,6 +581,40 @@ mod tests {
     }
 
     #[test]
+    fn extract_accepts_directory_only_subtree() {
+        // A contribution whose tarball entries are only directories
+        // (no file bytes) is still a valid match — `matched_any`
+        // tracks any in-subtree entry, not just files. Using only
+        // file-presence would falsely report PathNotInTarball for an
+        // empty-but-existing dir.
+        let mut tar_bytes = Vec::new();
+        {
+            let gz = GzEncoder::new(&mut tar_bytes, Compression::fast());
+            let mut builder = tar::Builder::new(gz);
+            // Just a directory entry — no files.
+            let mut header = tar::Header::new_gnu();
+            header.set_size(0);
+            header.set_mode(0o755);
+            header.set_entry_type(tar::EntryType::Directory);
+            header.set_cksum();
+            builder
+                .append_data(
+                    &mut header,
+                    "repo/plugins/language-grammars/lang-foo/",
+                    &[][..],
+                )
+                .unwrap();
+            builder.finish().unwrap();
+        }
+        let tmp = tempdir().unwrap();
+        let result = extract_subtree(&tar_bytes, "plugins/language-grammars/lang-foo", tmp.path());
+        assert!(
+            result.is_ok(),
+            "directory-only subtree must not error: {result:?}"
+        );
+    }
+
+    #[test]
     fn install_writes_meta_and_verifies_hash() {
         let payload: &[(&str, &[u8])] = &[
             ("plugins/language-grammars/lang-foo/plugin.json", b"{}"),
@@ -597,6 +641,10 @@ mod tests {
         assert_eq!(meta.source, InstallSource::Community);
         assert_eq!(meta.sha256, expected);
         assert_eq!(meta.version, "1.0.0");
+        // Wire kind round-trips through .install_meta.json so
+        // community_list_installed never has to fall back to the
+        // manifest at read time.
+        assert_eq!(meta.kind, "plugin:language-grammar");
     }
 
     #[test]

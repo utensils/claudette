@@ -236,10 +236,10 @@ function BrowseTab({
             return (
               <li key={key} className={own.row}>
                 <div className={own.rowHeader}>
-                  {e.kind === "theme" && e.accent_preview ? (
+                  {e.kind === "theme" && isSafeHexColor(e.accent_preview) ? (
                     <span
                       className={own.swatch}
-                      style={{ background: e.accent_preview }}
+                      style={{ backgroundColor: e.accent_preview }}
                       aria-hidden
                     />
                   ) : null}
@@ -354,4 +354,15 @@ function formatDate(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+/// Defense in depth on registry-supplied color values: `accent_preview`
+/// is plumbed into an inline style, and CSS color properties accept
+/// far more than a `#rrggbb` literal (`url(...)`, `var(...)`, …). We
+/// validate the registry value against a strict 6/8-char hex pattern
+/// before letting it influence rendering. The registry's own JSON
+/// schema also enforces this on input, but a malformed entry from a
+/// future registry must fail closed in the UI.
+function isSafeHexColor(value: string | undefined): value is string {
+  return !!value && /^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/.test(value);
 }

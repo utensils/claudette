@@ -56,7 +56,7 @@ export function SettingsSidebar() {
     if (id === "git") return t("settings:nav_git");
     if (id === "plugins") return t("settings:nav_plugins");
     if (id === "claude-code-plugins") return t("settings:nav_claude_code_plugins");
-    if (id === "community") return "Community";
+    if (id === "community") return t("settings:nav_community");
     if (id === "pinned-prompts") return t("settings:nav_pinned_prompts");
     return id;
   };

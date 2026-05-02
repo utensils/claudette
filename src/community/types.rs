@@ -188,6 +188,14 @@ pub struct InstalledMeta {
     /// hand-edited user plugin. (`"direct"` and `"bundled"` are
     /// reserved for future use.)
     pub source: InstallSource,
+    /// Wire-format kind at install time
+    /// (`theme` / `plugin:scm` / `plugin:env-provider` / `plugin:language-grammar`).
+    /// Recorded so the lister never has to derive kind from a possibly-
+    /// malformed manifest at read time — drift between this field and
+    /// the on-disk manifest still resolves to a valid wire kind that
+    /// the uninstall path can accept.
+    #[serde(default)]
+    pub kind: String,
     /// `Registry.source.sha` at install time — used by the regen
     /// flow to know which registry generation we resolved against.
     pub registry_sha: String,
@@ -200,7 +208,7 @@ pub struct InstalledMeta {
     /// ISO-8601 install timestamp.
     pub installed_at: String,
     /// `required_clis` at install time — diffed against the manifest
-    /// at update time. Reserved for capability re-consent (PR #4).
+    /// at update time. Reserved for capability re-consent.
     #[serde(default)]
     pub granted_capabilities: Vec<String>,
     /// Manifest `version` at install time.

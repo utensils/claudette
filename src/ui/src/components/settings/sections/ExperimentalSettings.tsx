@@ -86,10 +86,11 @@ export function ExperimentalSettings() {
 
       <div className={styles.settingRow}>
         <div className={styles.settingInfo}>
-          <div className={styles.settingLabel}>Community registry</div>
+          <div className={styles.settingLabel}>
+            {t("experimental_community_registry")}
+          </div>
           <div className={styles.settingDescription}>
-            Browse and install community-contributed themes, plugins, and
-            language grammars.
+            {t("experimental_community_registry_desc")}
           </div>
         </div>
         <div className={styles.settingControl}>
@@ -97,7 +98,7 @@ export function ExperimentalSettings() {
             className={styles.toggle}
             role="switch"
             aria-checked={communityRegistryEnabled}
-            aria-label="Toggle community registry"
+            aria-label={t("experimental_community_registry_aria")}
             data-checked={communityRegistryEnabled}
             onClick={handleCommunityRegistryToggle}
           >

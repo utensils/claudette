@@ -39,6 +39,7 @@ import type { LanguageInfo } from "../types/grammars";
 import { getMainShikiHighlighter } from "./mainShiki";
 import {
   registerGrammar as registerGrammarOnWorker,
+  resetHighlighterWorker,
   __testing as highlightTesting,
 } from "./highlight";
 
@@ -367,9 +368,8 @@ export async function refreshGrammars(): Promise<void> {
   state.monacoApplied = false;
   // Terminate the highlight worker — any grammars Shiki had loaded go
   // with it. Chat code blocks repaint on the next render and pick up
-  // the rebuilt registry. This re-uses the same machinery the test
-  // suite drives via `__testing.reset`; it's intentional, not a leak.
-  highlightTesting.reset();
+  // the rebuilt registry.
+  resetHighlighterWorker();
 
   await bootstrapGrammarRegistry();
 

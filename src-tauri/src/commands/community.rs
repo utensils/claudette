@@ -248,7 +248,12 @@ pub async fn community_list_installed(
     let roots = resolve_install_roots(&state).await?;
     let mut out = Vec::new();
 
-    // Plugins.
+    // Plugins. The wire `kind` lives in `.install_meta.json` so the
+    // listing always returns a valid wire form (theme | plugin:scm |
+    // plugin:env-provider | plugin:language-grammar) even when the
+    // on-disk plugin.json is missing or unparseable. Display fields
+    // (name/author/license) still come from the manifest when readable
+    // and fall back to the directory name otherwise.
     if roots.plugins_dir.exists() {
         let entries =
             std::fs::read_dir(&roots.plugins_dir).map_err(|e| format!("read plugins dir: {e}"))?;
@@ -258,33 +263,35 @@ pub async fn community_list_installed(
                 continue;
             }
             if let Ok(Some(meta)) = community::read_install_meta(&path) {
-                let manifest = read_plugin_manifest(&path).ok();
-                let (display_name, author, license, kind_wire) = manifest
-                    .as_ref()
-                    .map(|m| {
-                        (
-                            m.display_name.clone(),
-                            m.author.clone(),
-                            m.license.clone(),
-                            ContributionKind::Plugin(plugin_kind_to_wire(m.kind)).wire(),
-                        )
-                    })
-                    .unwrap_or_else(|| {
-                        // Fallback: display the directory name; no
-                        // kind discrimination available.
-                        let ident = path
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or("?")
-                            .to_string();
-                        (ident.clone(), String::new(), String::new(), "plugin".into())
-                    });
-
                 let ident = path
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("?")
                     .to_string();
+                let manifest = read_plugin_manifest(&path).ok();
+                let display_name = manifest
+                    .as_ref()
+                    .map(|m| m.display_name.clone())
+                    .unwrap_or_else(|| ident.clone());
+                let author = manifest
+                    .as_ref()
+                    .map(|m| m.author.clone())
+                    .unwrap_or_default();
+                let license = manifest
+                    .as_ref()
+                    .map(|m| m.license.clone())
+                    .unwrap_or_default();
+                // Trust the kind we recorded at install time; fall
+                // back to the manifest only if `meta.kind` was missing
+                // (only possible for installs that predate the field
+                // — none in the wild today, but the default is safe).
+                let kind_wire = if !meta.kind.is_empty() {
+                    meta.kind.clone()
+                } else if let Some(m) = manifest.as_ref() {
+                    ContributionKind::Plugin(plugin_kind_to_wire(m.kind)).wire()
+                } else {
+                    ContributionKind::Plugin(PluginKindWire::Scm).wire()
+                };
 
                 out.push(InstalledContribution {
                     kind: kind_wire,
@@ -337,8 +344,14 @@ pub async fn community_list_installed(
                     .unwrap_or("?")
                     .to_string();
 
+                let kind_wire = if !meta.kind.is_empty() {
+                    meta.kind.clone()
+                } else {
+                    ContributionKind::Theme.wire()
+                };
+
                 out.push(InstalledContribution {
-                    kind: "theme".into(),
+                    kind: kind_wire,
                     ident,
                     display_name,
                     version: meta.version,
