@@ -22,6 +22,8 @@ cd src/ui && bun run build                       # Build frontend (runs tsc -b &
 cd src/ui && bunx tsc -b                         # TypeScript type check (same as CI)
 cd src/ui && bun run test                        # Run frontend tests (vitest)
 cd src/ui && bun run test:watch                  # Run tests in watch mode
+cd src/ui && bun run lint                        # ESLint check
+cd src/ui && bun run lint:css                    # CSS design-token enforcement (also runs in CI)
 
 # Full app
 cargo tauri dev                                  # Dev mode with hot-reload
@@ -32,7 +34,7 @@ IMPORTANT: CI sets `RUSTFLAGS="-Dwarnings"` — all compiler warnings are errors
 
 IMPORTANT: Always run `cd src/ui && bunx tsc -b` after modifying TypeScript files (including tests). CI runs `tsc -b` via `bun run build` — `vitest` does **not** type-check (it uses esbuild), so tests can pass locally while types are broken. Run `tsc -b` as the final check before committing any frontend change.
 
-CI also enforces `bun install --frozen-lockfile` — do not modify `bun.lock` without intention. CI runs `cargo llvm-cov` for Rust test coverage (uploaded to Codecov). CI lints only the `claudette` and `claudette-server` crates (not `claudette-tauri`, which requires system libs).
+CI also enforces `bun install --frozen-lockfile` — do not modify `bun.lock` without intention. CI runs `cargo llvm-cov` for Rust test coverage (uploaded to Codecov, informational/non-blocking). CI lints only the `claudette` and `claudette-server` crates (not `claudette-tauri`, which requires system libs).
 
 ## Code style
 
@@ -148,17 +150,24 @@ A single sandboxed Lua runtime (`src/plugin_runtime/`) serves multiple plugin ki
 - **React components** go in `src/ui/src/components/` — organized by feature area
 - **State** lives in the Zustand store (`useAppStore`) — UI state in React, agent sessions in Rust-side `AppState`
 - **Streaming data** (agent events, PTY output) flows via Tauri events, consumed by React hooks
-- **Colors and styling** use CSS custom properties defined in `styles/theme.css`
+- **Colors and styling** use CSS custom properties defined in `styles/theme.css` — all colors must be `var(--token-name)` references; raw hex/rgba literals anywhere outside `theme.css` fail `bun run lint:css` (CI-blocking). Allowed exceptions: `rgba(var(--*-rgb), <alpha>)` for alpha layering, `getPropertyValue(...) || "#..."` safety fallbacks in `theme.ts`, and `accentPreview` swatches in CommandPalette that mirror existing theme hex values.
 
 ### Testing patterns
 
 - **Rust**: tests use `tempfile::tempdir()` to create ephemeral git repos — no fixtures or test databases. Async tests use `#[tokio::test]`. Test modules live at the bottom of each file (`#[cfg(test)] mod tests`).
 - **TypeScript**: vitest with `describe`/`it`/`expect`. Zustand tests reset state via `useAppStore.setState()` in `beforeEach`. No test database — frontend tests are pure state/logic tests. When constructing fixtures for store state, always read the actual type definition (e.g., `TerminalTab` in `types/terminal.ts`) — do not guess field names. Look for existing `make*` helpers in adjacent test files before creating new fixtures.
 
+### macOS specifics
+
+- `scripts/macos-dev-app-runner.sh` wraps the dev binary in a signed `.app` bundle (using `src-tauri/Entitlements.plist`) so TCC attributes mic/speech permissions to the app rather than the terminal. `cargo tauri dev` calls this automatically — required for voice input features.
+
 ### Windows specifics
 
 - `AGENTS.md` is a symlink to `CLAUDE.md` for Codex/other agent-tool compatibility — edit `CLAUDE.md`, never `AGENTS.md`.
 - Windows builds use MSVC toolchain; `[target.'cfg(windows)'.dependencies]` in `Cargo.toml` pulls in Windows-only crates. Gate Windows-specific code with `#[cfg(windows)]` / `#[cfg(not(windows))]` rather than Unix-only paths.
+- **Cross-compilation** (Nix devshell): `build-win-arm64` / `build-win-x64` via `cargo xwin` (requires `XWIN_ACCEPT_LICENSE=1`); `deploy-win-arm64` / `deploy-win-x64` build and push to the test VM.
+- **Ephemeral Windows EC2** (Nix devshell): `aws-win-spinup` launches a Windows Server 2022 instance (state in `.claudette/aws-win/`, gitignored); `aws-win-rdp` opens RDP; `aws-win-destroy` terminates. Defaults: `AWS_PROFILE=dev.urandom.io`, `AWS_REGION=us-west-2`.
+- CI/nightly/release builds Windows as bare `.exe` (no installer), zipped for distribution — `cargo xwin build --release --features tauri/custom-protocol`.
 
 ### Notification architecture
 
@@ -180,6 +189,13 @@ A single sandboxed Lua runtime (`src/plugin_runtime/`) serves multiple plugin ki
 - **Merging branches:** each new migration is a distinct `.sql` file and a distinct `MIGRATIONS` entry, so parallel-branch migrations no longer collide on an integer version — both apply when merged. If two branches happen to choose the same timestamp (e.g. from `date -u +%Y%m%d%H%M%S` run at the same second), git will surface the clash as a merge conflict in `mod.rs`; bump one timestamp by a second and rename its file to resolve.
 - `PRAGMA user_version` is retained only to seed `schema_migrations` once on pre-redesign databases during the first run of the new runner. Do not read or write it in new code.
 - **"Already exists" leniency:** the runner treats `SQLITE_ERROR` failures whose message contains `"already exists"` or `"duplicate column name"` as benign — it logs `[migrations] <id> skipped: ...` to stderr, marks the migration applied, and continues. This makes hand-applied or out-of-order migrations on dev DBs survivable. It does **not** license writing migrations that depend on this: keep them strictly forward-only and additive, and prefer `IF NOT EXISTS` on new `CREATE TABLE` / `CREATE INDEX` statements.
+
+## CI/CD pipeline
+
+- **PR CI** (`.github/workflows/ci.yml`): Rust fmt + clippy + tests (coverage → Codecov), TypeScript type-check + ESLint + `lint:css` + build + vitest.
+- **Nightly** (`.github/workflows/nightly.yml`): Every push to `main` (excluding docs/README). Computes version as `<next-minor>-dev.<commit-count>.g<short-sha>`, stamps all three Cargo.toml files, builds macOS (arm64 + x86_64), Linux (x86_64 + aarch64), Windows (x86_64 + arm64), promotes atomically from `nightly-staging` to `nightly` tag.
+- **Release** (`.github/workflows/release-please.yml`): Triggered by Conventional Commits via release-please. Auto-generates CHANGELOG, bumps workspace `Cargo.toml` (source of truth) + syncs `src-tauri/Cargo.toml` + `src-server/Cargo.toml`, builds all platforms, uploads assets, posts to Discord (`DISCORD_WEBHOOK_URL` secret).
+- Windows builds in CI skip app bundling (bare `.exe`, zipped). macOS builds produce `.dmg`; Linux produces `.AppImage` + `.deb`.
 
 ## Project context
 
