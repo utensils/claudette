@@ -85,7 +85,7 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
   sidebarWidth: 260,
   rightSidebarWidth: 250,
   terminalHeight: 300,
-  rightSidebarTab: "changes",
+  rightSidebarTab: "files",
   sidebarGroupBy: "repo",
   sidebarRepoFilter: "all",
   sidebarShowArchived: false,

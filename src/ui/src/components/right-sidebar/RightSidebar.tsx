@@ -334,20 +334,6 @@ export const RightSidebar = memo(function RightSidebar() {
             ) : hasGrouped ? (
               <>
                 <FileGroup
-                  label="Committed"
-                  files={diffStagedFiles!.committed}
-                  layer="committed"
-                  accentColor="var(--diff-added-text)"
-                  renderFileRow={renderFileRow}
-                />
-                <FileGroup
-                  label="Staged"
-                  files={diffStagedFiles!.staged}
-                  layer="staged"
-                  accentColor="var(--accent-dim)"
-                  renderFileRow={renderFileRow}
-                />
-                <FileGroup
                   label="Unstaged"
                   files={diffStagedFiles!.unstaged}
                   layer="unstaged"
@@ -359,6 +345,20 @@ export const RightSidebar = memo(function RightSidebar() {
                   files={diffStagedFiles!.untracked}
                   layer="untracked"
                   accentColor="var(--text-dim)"
+                  renderFileRow={renderFileRow}
+                />
+                <FileGroup
+                  label="Staged"
+                  files={diffStagedFiles!.staged}
+                  layer="staged"
+                  accentColor="var(--accent-dim)"
+                  renderFileRow={renderFileRow}
+                />
+                <FileGroup
+                  label="Committed"
+                  files={diffStagedFiles!.committed}
+                  layer="committed"
+                  accentColor="var(--diff-added-text)"
                   renderFileRow={renderFileRow}
                 />
               </>
@@ -426,12 +426,15 @@ function FileGroup({
   accentColor: string;
   renderFileRow: (file: DiffFile, layer?: DiffLayer) => React.ReactElement;
 }) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(layer === "committed");
 
   if (files.length === 0) return null;
 
   return (
-    <div className={styles.fileGroup} style={{ borderLeftColor: accentColor }}>
+    <div
+      className={styles.fileGroup}
+      style={{ borderLeftColor: accentColor }}
+    >
       <button
         className={styles.groupHeader}
         onClick={() => setCollapsed(!collapsed)}

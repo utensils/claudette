@@ -107,7 +107,7 @@ export const createWorkspacesSlice: StateCreator<
 
       const updates: Partial<AppState> = {
         selectedWorkspaceId: id,
-        rightSidebarTab: "changes",
+        rightSidebarTab: "files",
         diffSelectionByWorkspace: selectionMap,
         diffSelectedFile: tabExists ? restored!.path : null,
         diffSelectedLayer: tabExists ? restored!.layer : null,
