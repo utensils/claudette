@@ -276,10 +276,13 @@ export function DiffViewer() {
   // imperfectly inside a hunk. Acceptable cost for a sync per-line
   // render path.
   useEffect(() => {
-    if (!diffContent || !language) {
-      setCacheVersion(0);
-      return;
-    }
+    // No reset of `cacheVersion` here — when the file switches before
+    // the new file's prewarm completes, LineContent reads its cache
+    // synchronously and gets a miss for the new lines, falling back
+    // to plain text. The next bump (when prewarm resolves) re-tokenizes.
+    // Also avoids the `react-hooks/refs` lint warning about synchronous
+    // setState in effects.
+    if (!diffContent || !language) return;
     let cancelled = false;
     const distinct = new Set<string>();
     for (const hunk of diffContent.hunks) {

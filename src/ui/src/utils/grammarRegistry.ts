@@ -176,10 +176,35 @@ export async function applyGrammarsToMonaco(
   // that's also loaded in the highlighter. Re-runs are safe; later
   // `loadLanguage` calls on the highlighter take effect through the
   // bound provider without rebinding.
+  //
+  // shikiToMonaco also wraps `monaco.editor.setTheme` to drive a
+  // matching Shiki theme on every theme switch (and auto-calls
+  // `setTheme(themeIds[0])` to initialize). We undo both:
+  //
+  // 1. Restore the original `setTheme`. Our app's custom Monaco theme
+  //    "claudette" is defined locally in `monacoTheme.ts` and is NOT
+  //    a Shiki theme — leaving the wrapper in place would crash
+  //    inside `highlighter.setTheme("claudette")` when MonacoEditor's
+  //    `beforeMount` calls it. The per-language tokens providers
+  //    shikiToMonaco installed remain bound and continue to drive
+  //    syntax colors regardless.
+  // 2. Re-apply `applyMonacoTheme` after shikiToMonaco's auto-call
+  //    flipped the active theme to themeIds[0] (e.g. github-light).
+  //    Imported lazily here to avoid a static cycle between
+  //    grammarRegistry and the file-viewer module.
   try {
     const { shikiToMonaco } = await import("@shikijs/monaco");
     const highlighter = await getMainShikiHighlighter();
+    // Capture the unbound method reference. Restoring later as a
+    // property assignment preserves the natural `this = monaco.editor`
+    // binding any caller gets via `monaco.editor.setTheme(...)`.
+    const originalSetTheme = monaco.editor.setTheme;
     shikiToMonaco(highlighter, monaco);
+    monaco.editor.setTheme = originalSetTheme;
+    const { applyMonacoTheme } = await import(
+      "../components/file-viewer/monacoTheme"
+    );
+    applyMonacoTheme(monaco);
   } catch (e) {
     console.warn("[grammars] Failed to bind Shiki tokenization to Monaco:", e);
   }
