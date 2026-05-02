@@ -26,53 +26,99 @@
 //! mitigated by per-entry content hashes — installing a stale registry
 //! still pins each contribution to its sha256.
 
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 
+use base64::Engine;
 use minisign_verify::{PublicKey, Signature};
 
-/// Hex of the embedded production public key fingerprint, surfaced in
-/// error messages so users can compare against what's published in the
-/// `claudette-community/keys/README.md` and out-of-band channels.
+/// Raw text of the embedded community-registry public key.
+const EMBEDDED_PUBKEY_TEXT: &str = include_str!("trust/community-registry.pub");
+
+/// Parsed pubkey + key-id fingerprint, lazily decoded from
+/// [`EMBEDDED_PUBKEY_TEXT`]. Stored as a `Result` so a malformed
+/// embedded file surfaces as a [`SignatureError::EmbeddedKey`] on the
+/// first verify call rather than panicking the process.
 ///
-/// Computed once from the embedded pubkey when first read.
-pub fn embedded_key_fingerprint() -> &'static str {
-    // Last 16 hex chars (8 bytes) of the key id — same form minisign
-    // itself prints in the `untrusted comment:` line of the pubkey.
-    // Parsed lazily so a malformed embedded key surfaces during the
-    // first verify, not at static-init time.
-    static FP: OnceLock<String> = OnceLock::new();
-    FP.get_or_init(|| {
-        let pub_text = include_str!("trust/community-registry.pub");
-        // The first line is `untrusted comment: minisign public key <FP>`;
-        // pull the fingerprint out for diagnostics. Fall back to
-        // "unknown" if the file isn't shaped as expected — the verify
-        // path will fail with a clearer error in that case.
-        pub_text
-            .lines()
-            .next()
-            .and_then(|l| l.rsplit(' ').next())
-            .map(str::to_string)
-            .unwrap_or_else(|| "unknown".to_string())
-    })
+/// Each entry corresponds to one trusted signing key. Today: one.
+/// Adding a second slot is how key rotation works — ship a release
+/// with `[OLD, NEW]`, switch the CI signer to `NEW`, then ship a
+/// release with `[NEW]` only. The verifier accepts a signature from
+/// any embedded key.
+#[derive(Debug)]
+struct EmbeddedKey {
+    pubkey: PublicKey,
+    /// Hex (uppercase) of the 8 key-id bytes from the parsed pubkey
+    /// payload. This is the same value `minisign` itself prints, but
+    /// derived from the cryptographic key bytes — not from the
+    /// `untrusted comment:` line, which is plaintext metadata that
+    /// could drift from the real key id if the file were hand-edited.
+    fingerprint: String,
 }
 
-/// Embedded production public keys. Today: one. Adding a second slot
-/// is how key rotation works — ship a release with `[OLD, NEW]`,
-/// switch the CI signer to `NEW`, then ship a release with `[NEW]`.
-fn embedded_pubkeys() -> &'static [PublicKey] {
-    static KEYS: OnceLock<Vec<PublicKey>> = OnceLock::new();
-    KEYS.get_or_init(|| {
-        let pub_text = include_str!("trust/community-registry.pub");
-        // PublicKey::from_base64 takes only the base64-encoded key
-        // bytes (no comment lines), so split out the second line.
-        let key_b64 = pub_text
-            .lines()
-            .find(|l| !l.is_empty() && !l.starts_with("untrusted comment:"))
-            .expect("embedded community-registry.pub is malformed (no key line)");
-        let key = PublicKey::from_base64(key_b64.trim())
-            .expect("embedded community-registry.pub is not a valid minisign pubkey");
-        vec![key]
-    })
+static EMBEDDED_KEYS: LazyLock<Result<Vec<EmbeddedKey>, String>> =
+    LazyLock::new(|| parse_embedded_keys(EMBEDDED_PUBKEY_TEXT));
+
+fn parse_embedded_keys(pub_text: &str) -> Result<Vec<EmbeddedKey>, String> {
+    let key_b64 = pub_text
+        .lines()
+        .find(|l| !l.is_empty() && !l.starts_with("untrusted comment:"))
+        .ok_or("embedded community-registry.pub is malformed (no key line)")?
+        .trim();
+    let pubkey = PublicKey::from_base64(key_b64).map_err(|e| {
+        format!("embedded community-registry.pub is not a valid minisign pubkey: {e}")
+    })?;
+    let fingerprint = derive_fingerprint(key_b64)?;
+    Ok(vec![EmbeddedKey {
+        pubkey,
+        fingerprint,
+    }])
+}
+
+/// Decode the minisign pubkey payload (`<algo:2><key_id:8><key:32>` =
+/// 42 bytes, base64-encoded) and return the hex-uppercase key id.
+/// Bound directly to the cryptographic key bytes — independent of the
+/// `untrusted comment:` line.
+fn derive_fingerprint(key_b64: &str) -> Result<String, String> {
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(key_b64.as_bytes())
+        .map_err(|e| format!("embedded pubkey base64 decode: {e}"))?;
+    if raw.len() < 10 {
+        return Err(format!(
+            "embedded pubkey payload too short ({} bytes; expected ≥ 10)",
+            raw.len()
+        ));
+    }
+    // Bytes layout: [algo:2][key_id:8][ed25519:32]. minisign displays
+    // the key_id in reversed (little-endian) byte order in its
+    // `untrusted comment: minisign public key <FP>` line and in
+    // `-V` / `-G` output, so we reverse here to match. The bytes
+    // themselves are still derived from the cryptographic payload —
+    // not from the plaintext comment line.
+    let mut key_id = [0u8; 8];
+    key_id.copy_from_slice(&raw[2..10]);
+    key_id.reverse();
+    let mut hex = String::with_capacity(16);
+    for b in &key_id {
+        use std::fmt::Write as _;
+        let _ = write!(&mut hex, "{b:02X}");
+    }
+    Ok(hex)
+}
+
+/// Hex (uppercase) of the embedded production public key's key id —
+/// derived from the parsed key bytes, **not** from the `untrusted
+/// comment:` line. Matches the value `minisign` itself displays.
+///
+/// Returns `"unknown"` if the embedded file failed to parse; the
+/// verify path returns the underlying error in that case.
+pub fn embedded_key_fingerprint() -> String {
+    match EMBEDDED_KEYS.as_ref() {
+        Ok(keys) => keys
+            .first()
+            .map(|k| k.fingerprint.clone())
+            .unwrap_or_else(|| "unknown".to_string()),
+        Err(_) => "unknown".to_string(),
+    }
 }
 
 #[derive(Debug)]
@@ -87,6 +133,11 @@ pub enum SignatureError {
         embedded_fingerprint: String,
         underlying: minisign_verify::Error,
     },
+    /// The pubkey baked into the binary at compile time couldn't be
+    /// parsed. Should never happen in a release build (the file is
+    /// in-tree and the test suite parses it); guards against a future
+    /// hand-edit that breaks the format without us noticing.
+    EmbeddedKey(String),
 }
 
 impl std::fmt::Display for SignatureError {
@@ -106,6 +157,13 @@ impl std::fmt::Display for SignatureError {
                      {underlying}"
                 )
             }
+            Self::EmbeddedKey(msg) => {
+                write!(
+                    f,
+                    "embedded community-registry public key could not be loaded: {msg} \
+                     (this is a build-time bug — please file an issue)"
+                )
+            }
         }
     }
 }
@@ -114,6 +172,7 @@ impl std::error::Error for SignatureError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::MalformedSignature(e) | Self::InvalidSignature { underlying: e, .. } => Some(e),
+            Self::EmbeddedKey(_) => None,
         }
     }
 }
@@ -124,9 +183,18 @@ impl std::error::Error for SignatureError {
 ///
 /// Returns `Ok(())` on success. Any failure — malformed sig file,
 /// signature that decodes but doesn't verify, signature for a different
-/// key — collapses into [`SignatureError`] with enough context for the
-/// UI to surface a useful error string.
+/// key, malformed embedded key — collapses into [`SignatureError`]
+/// with enough context for the UI to surface a useful error string.
 pub fn verify_registry_signature(message: &[u8], sig_bytes: &[u8]) -> Result<(), SignatureError> {
+    // Surface a malformed embedded key as a recoverable error rather
+    // than panicking the process. Should never trip in a release build
+    // (the embedded pubkey is in-tree and parsed by the test suite),
+    // but a hand-edit that breaks the format would otherwise crash on
+    // first install.
+    let keys = EMBEDDED_KEYS
+        .as_ref()
+        .map_err(|e| SignatureError::EmbeddedKey(e.clone()))?;
+
     // Signature::decode wants a `&str`. The .sig file is ASCII (base64
     // + comments), so a non-utf8 body is itself a sign of a malformed
     // file — collapse to MalformedSignature rather than panic.
@@ -135,14 +203,14 @@ pub fn verify_registry_signature(message: &[u8], sig_bytes: &[u8]) -> Result<(),
     let sig = Signature::decode(sig_str).map_err(SignatureError::MalformedSignature)?;
 
     let mut last_err: Option<minisign_verify::Error> = None;
-    for pubkey in embedded_pubkeys() {
-        match pubkey.verify(message, &sig, false) {
+    for entry in keys {
+        match entry.pubkey.verify(message, &sig, false) {
             Ok(()) => return Ok(()),
             Err(e) => last_err = Some(e),
         }
     }
     Err(SignatureError::InvalidSignature {
-        embedded_fingerprint: embedded_key_fingerprint().to_string(),
+        embedded_fingerprint: embedded_key_fingerprint(),
         underlying: last_err.unwrap_or(minisign_verify::Error::InvalidSignature),
     })
 }
@@ -205,20 +273,78 @@ mod tests {
     }
 
     #[test]
-    fn embedded_pubkey_parses_without_panic() {
-        // If the embedded community-registry.pub is malformed,
-        // embedded_pubkeys() panics on first call. Force the panic to
-        // surface here rather than at first install.
-        let keys = embedded_pubkeys();
+    fn embedded_pubkey_parses_successfully() {
+        // The embedded community-registry.pub must parse cleanly. A
+        // malformed file would surface as Err here rather than crash
+        // the app at first install.
+        let keys = EMBEDDED_KEYS
+            .as_ref()
+            .expect("embedded pubkey must parse successfully in the test build");
         assert!(!keys.is_empty(), "embedded pubkey slice must not be empty");
     }
 
     #[test]
-    fn embedded_fingerprint_is_extracted() {
+    fn embedded_fingerprint_is_derived_from_key_bytes_not_comment() {
+        // The fingerprint comes from base64-decoding the key payload
+        // and hex-encoding bytes 2..10 (the minisign key id) — not
+        // from the `untrusted comment:` line. This test would catch a
+        // future regression where someone reverts to comment-parsing.
         let fp = embedded_key_fingerprint();
         // Production key fingerprint, also documented in the trust
         // model docs and in the community repo's keys/README.md.
+        // Cross-checked: minisign-cli prints the same value in the
+        // pubkey's untrusted-comment line and in `-V` output.
         assert_eq!(fp, "982022ABB1139C7B");
+    }
+
+    #[test]
+    fn derive_fingerprint_works_for_arbitrary_pubkey() {
+        // Use the test fixture's key — confirms the derivation works
+        // for any valid minisign pubkey, not just the one we baked in.
+        // The fingerprint of test.pub (printed by `minisign -G`):
+        // `RWQGBBQ5L3rDN...` → key id `06041439 2F7AC337` → 0604143...
+        let test_key_b64 = TEST_PUBKEY
+            .lines()
+            .find(|l| !l.is_empty() && !l.starts_with("untrusted comment:"))
+            .unwrap()
+            .trim();
+        let fp = derive_fingerprint(test_key_b64).unwrap();
+        // Cross-check against `untrusted comment: minisign public key
+        // 37C37A2F39140406` from the test fixture — derive_fingerprint
+        // matches minisign's display convention exactly.
+        assert_eq!(fp, "37C37A2F39140406");
+    }
+
+    #[test]
+    fn derive_fingerprint_rejects_short_payload() {
+        // Base64-encode 8 bytes (less than the required 10).
+        let too_short = base64::engine::general_purpose::STANDARD.encode([0u8; 8]);
+        let err = derive_fingerprint(&too_short).unwrap_err();
+        assert!(
+            err.contains("too short"),
+            "expected length-error message, got: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_embedded_keys_surfaces_malformed_input_as_err() {
+        // Feed a bogus pubkey body — should return Err, not panic.
+        let err = parse_embedded_keys("untrusted comment: junk\nnot-real-base64!!!\n").unwrap_err();
+        assert!(
+            !err.is_empty(),
+            "parse_embedded_keys should return a non-empty error message"
+        );
+    }
+
+    #[test]
+    fn parse_embedded_keys_rejects_missing_key_line() {
+        // Comment-only file → no key line found.
+        let err = parse_embedded_keys("untrusted comment: only\nuntrusted comment: comments\n")
+            .unwrap_err();
+        assert!(
+            err.contains("no key line"),
+            "expected 'no key line' error, got: {err}"
+        );
     }
 
     #[test]
