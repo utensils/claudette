@@ -484,6 +484,23 @@ pub async fn send_chat_message(
     } else {
         session.custom_instructions.clone()
     };
+
+    // Prepend the developer-bundled global system prompt to every fresh
+    // session. The global prompt is compiled into the binary via include_str!
+    // and sits outermost so it frames all per-repo and MCP instructions.
+    let custom_instructions = {
+        let global = claudette::global_prompt::GLOBAL_SYSTEM_PROMPT;
+        if global.trim().is_empty() {
+            custom_instructions
+        } else {
+            match custom_instructions.as_deref() {
+                Some(existing) if !existing.trim().is_empty() => {
+                    Some(format!("{global}\n\n{existing}"))
+                }
+                _ => Some(global.to_string()),
+            }
+        }
+    };
     session.turn_count += 1;
     session.needs_attention = false;
     session.attention_kind = None;
