@@ -2,6 +2,7 @@ pub mod apps;
 pub mod auth;
 pub mod cesp;
 pub mod chat;
+pub mod community;
 pub mod data;
 #[cfg(debug_assertions)]
 pub mod debug;
