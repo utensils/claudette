@@ -104,6 +104,10 @@ pub async fn submit_agent_answer(
 /// `approved=true` → allow with the model's original input (the CLI's
 /// `call()` will save the plan and emit the real tool_result).
 /// `approved=false` → deny with the given reason (or a sensible default).
+///
+/// In collaborative + consensus mode, this records the host's vote and may
+/// finalize the outcome immediately (host veto: an approve forces approval,
+/// a deny forces denial), or wait for remaining required voters.
 #[tauri::command]
 pub async fn submit_plan_approval(
     session_id: String,
@@ -112,16 +116,62 @@ pub async fn submit_plan_approval(
     reason: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    // Same validate-before-remove pattern as submit_agent_answer — see that
-    // function for the rationale.
-    let (pending, ps) = {
+    record_plan_vote(
+        &state,
+        &session_id,
+        &tool_use_id,
+        &claudette::room::ParticipantId::host(),
+        true, // is_host
+        if approved {
+            claudette::room::Vote::Approve
+        } else {
+            claudette::room::Vote::Deny {
+                reason: reason.unwrap_or_else(|| "Plan denied. Please revise the approach.".into()),
+            }
+        },
+        true, // broadcast cast — fresh host-originated vote
+    )
+    .await
+}
+
+/// Record one participant's vote on an open plan-consensus and finalize the
+/// outcome if the unanimous-with-host-veto rule is now satisfied. Shared
+/// between the local Tauri command and the host-side resolver task that
+/// consumes `plan-vote-cast` events forwarded from remote participants.
+///
+/// `broadcast_cast` controls whether this call broadcasts the
+/// `plan-vote-cast` event itself. `true` for fresh host-originated votes;
+/// `false` when called from the resolver task on an event that the remote
+/// server already broadcast (preventing double-emission).
+pub async fn record_plan_vote(
+    state: &AppState,
+    session_id: &str,
+    tool_use_id: &str,
+    participant: &claudette::room::ParticipantId,
+    is_host: bool,
+    vote: claudette::room::Vote,
+    broadcast_cast: bool,
+) -> Result<(), String> {
+    use std::sync::Arc;
+    enum VoteOutcome {
+        WaitingForMore,
+        Finalized {
+            request_id: String,
+            response: serde_json::Value,
+            ps: Arc<claudette::agent::PersistentSession>,
+            outcome_kind: &'static str,
+            outcome_reason: Option<String>,
+        },
+    }
+
+    let outcome = {
         let mut agents = state.agents.write().await;
-        let session = agents.get_mut(&session_id).ok_or("Session not found")?;
+        let session = agents.get_mut(session_id).ok_or("Session not found")?;
         let ps = session
             .persistent_session
             .clone()
             .ok_or("Agent session is not active")?;
-        match session.pending_permissions.get(&tool_use_id) {
+        match session.pending_permissions.get(tool_use_id) {
             None => {
                 let pending_ids: Vec<String> =
                     session.pending_permissions.keys().cloned().collect();
@@ -137,33 +187,136 @@ pub async fn submit_plan_approval(
             }
             _ => {}
         }
-        let pending = session
+
+        let pending_mut = session
             .pending_permissions
-            .remove(&tool_use_id)
+            .get_mut(tool_use_id)
             .expect("checked above");
-        session.needs_attention = false;
-        session.attention_kind = None;
-        session.attention_notification_sent = false;
-        (pending, ps)
+        pending_mut.votes.insert(participant.clone(), vote.clone());
+
+        let resolution = resolve_consensus(pending_mut, participant, is_host, &vote);
+
+        match resolution {
+            None => VoteOutcome::WaitingForMore,
+            Some(final_vote) => {
+                let pending = session
+                    .pending_permissions
+                    .remove(tool_use_id)
+                    .expect("checked above");
+                session.needs_attention = false;
+                session.attention_kind = None;
+                session.attention_notification_sent = false;
+                let (response, kind, reason) = match &final_vote {
+                    claudette::room::Vote::Approve => (
+                        serde_json::json!({
+                            "behavior": "allow",
+                            "updatedInput": &pending.original_input,
+                        }),
+                        "approve",
+                        None,
+                    ),
+                    claudette::room::Vote::Deny { reason } => {
+                        let message = format!(
+                            "{reason}\n\nRevise the plan to address this feedback, then call ExitPlanMode again to present the updated plan for approval. Do not begin implementation until the user approves the revised plan."
+                        );
+                        (
+                            serde_json::json!({
+                                "behavior": "deny",
+                                "message": message,
+                            }),
+                            "deny",
+                            Some(reason.clone()),
+                        )
+                    }
+                };
+                VoteOutcome::Finalized {
+                    request_id: pending.request_id,
+                    response,
+                    ps,
+                    outcome_kind: kind,
+                    outcome_reason: reason,
+                }
+            }
+        }
     };
 
-    let response = if approved {
-        serde_json::json!({
-            "behavior": "allow",
-            "updatedInput": pending.original_input,
-        })
+    if broadcast_cast && let Some(room) = state.rooms.get(session_id).await {
+        room.publish(serde_json::json!({
+            "event": "plan-vote-cast",
+            "payload": {
+                "chat_session_id": session_id,
+                "tool_use_id": tool_use_id,
+                "participant_id": participant.as_str(),
+                "vote": &vote,
+            },
+        }));
+    }
+
+    match outcome {
+        VoteOutcome::WaitingForMore => Ok(()),
+        VoteOutcome::Finalized {
+            request_id,
+            response,
+            ps,
+            outcome_kind,
+            outcome_reason,
+        } => {
+            if let Some(room) = state.rooms.get(session_id).await {
+                room.publish(serde_json::json!({
+                    "event": "plan-vote-resolved",
+                    "payload": {
+                        "chat_session_id": session_id,
+                        "tool_use_id": tool_use_id,
+                        "outcome": outcome_kind,
+                        "reason": outcome_reason,
+                    },
+                }));
+            }
+            ps.send_control_response(&request_id, response).await
+        }
+    }
+}
+
+/// Pure resolution rule: given the current pending state and the just-cast
+/// vote, return `Some(final_vote)` if the round resolves now, or `None` if
+/// it still needs more input. Extracted as a free function for unit tests.
+///
+/// Rules: host vote is decisive (host veto). Non-host: any deny short-circuits
+/// to deny with that user's critique; approve resolves only when every required
+/// voter has voted approve. Empty `required_voters` (non-consensus path)
+/// always resolves to the submitted vote.
+fn resolve_consensus(
+    pending: &crate::state::PendingPermission,
+    voter: &claudette::room::ParticipantId,
+    voter_is_host: bool,
+    just_cast: &claudette::room::Vote,
+) -> Option<claudette::room::Vote> {
+    if pending.required_voters.is_empty() {
+        return Some(just_cast.clone());
+    }
+    if voter_is_host {
+        return Some(just_cast.clone());
+    }
+    if let Some((_, vote)) = pending
+        .votes
+        .iter()
+        .find(|(pid, v)| !pid.is_host() && v.is_deny())
+    {
+        return Some(vote.clone());
+    }
+    let _ = voter;
+    let all_approved = pending.required_voters.iter().all(|pid| {
+        pending
+            .votes
+            .get(pid)
+            .map(|v| matches!(v, claudette::room::Vote::Approve))
+            .unwrap_or(false)
+    });
+    if all_approved {
+        Some(claudette::room::Vote::Approve)
     } else {
-        let feedback = reason.unwrap_or_else(|| "Plan denied. Please revise the approach.".into());
-        let message = format!(
-            "{feedback}\n\nRevise the plan to address this feedback, then call ExitPlanMode again to present the updated plan for approval. Do not begin implementation until the user approves the revised plan."
-        );
-        serde_json::json!({
-            "behavior": "deny",
-            "message": message,
-        })
-    };
-    ps.send_control_response(&pending.request_id, response)
-        .await
+        None
+    }
 }
 
 /// Synchronously drain any pending permission requests from `session` and

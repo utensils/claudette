@@ -103,6 +103,19 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   const completedTurns = useAppStore(
     (s) => s.completedTurns[sessionId] ?? EMPTY_COMPLETED_TURNS,
   );
+  // Resolve "which participant id is *me* for this workspace's chats". For
+  // local workspaces it's the host sentinel; for workspaces served by a
+  // paired remote it's the remote-issued id stored on the connection. Used
+  // to render "You" instead of the user's display name when we recognize
+  // ourselves as the message author in a collaborative session.
+  const selfParticipantId = useAppStore((s) => {
+    const ws = s.workspaces.find((w) => w.id === workspaceId);
+    if (!ws?.remote_connection_id) return "host";
+    const conn = s.remoteConnections.find(
+      (c) => c.id === ws.remote_connection_id,
+    );
+    return conn?.participant_id ?? null;
+  });
   const toggleCompletedTurn = useAppStore((s) => s.toggleCompletedTurn);
   const checkpoints = useAppStore(
     (s) => s.checkpoints[sessionId] ?? EMPTY_CHECKPOINTS,
@@ -452,7 +465,19 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
             {msg.id === pendingMessageId ? null : (
               <div className={`${styles.message} ${styles[roleClassKey(msg.role, msg.content)]}`}>
                 {msg.role === "User" && (
-                  <div className={styles.roleLabel}>{t("you_label")}</div>
+                  <div className={styles.roleLabel}>
+                    {/* In collaborative sessions the backend stamps each user
+                        message with the author's id + display name. We render
+                        "You" when the author matches the local user (host on
+                        local workspaces; the connection's stored participant
+                        id on remote workspaces) and the display name otherwise.
+                        Pre-collab and solo messages have no author stamp and
+                        fall through to the localized "You" label. */}
+                    {msg.author_participant_id != null &&
+                    msg.author_participant_id !== selfParticipantId
+                      ? (msg.author_display_name ?? "User")
+                      : t("you_label")}
+                  </div>
                 )}
                 {msg.role === "User" && msg.content.length > 0 && (
                   <MessageCopyButton

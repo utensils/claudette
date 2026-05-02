@@ -6,6 +6,11 @@ mod naming;
 pub mod send;
 pub mod session;
 
+// Re-export the consensus resolver so the host-side resolver task in
+// `commands::remote` can call into it through the canonical
+// `crate::commands::chat` path.
+pub use interaction::record_plan_vote;
+
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};

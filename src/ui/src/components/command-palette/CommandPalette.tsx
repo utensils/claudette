@@ -164,7 +164,7 @@ export function CommandPalette() {
           duration_ms: null,
           created_at: new Date().toISOString(),
           thinking: null,
-          input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null,
+          input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, author_participant_id: null, author_display_name: null,
         });
       }
       // Check for setup script and prompt for confirmation.
@@ -189,7 +189,7 @@ export function CommandPalette() {
                   cost_usd: null, duration_ms: null,
                   created_at: new Date().toISOString(),
                   thinking: null,
-                  input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null,
+                  input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, author_participant_id: null, author_display_name: null,
                 });
               }
             }).catch((err) => {
@@ -202,7 +202,7 @@ export function CommandPalette() {
                 cost_usd: null, duration_ms: null,
                 created_at: new Date().toISOString(),
                 thinking: null,
-                input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null,
+                input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, author_participant_id: null, author_display_name: null,
               });
             });
           } else {

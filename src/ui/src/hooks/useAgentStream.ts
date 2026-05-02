@@ -181,7 +181,7 @@ export function useAgentStream() {
                 input_tokens: null,
                 output_tokens: null,
                 cache_read_tokens: m.post_tokens,
-                cache_creation_tokens: null,
+                cache_creation_tokens: null, author_participant_id: null, author_display_name: null,
               };
               store.addChatMessage(sessionId, liveSentinel);
 
@@ -404,7 +404,7 @@ export function useAgentStream() {
                 input_tokens: null,
                 output_tokens: null,
                 cache_read_tokens: null,
-                cache_creation_tokens: null,
+                cache_creation_tokens: null, author_participant_id: null, author_display_name: null,
               });
               // streamingThinking is NOT cleared here — StreamingThinkingBlock
               // needs to keep rendering through the typewriter drain so the
@@ -770,4 +770,90 @@ export function useAgentStream() {
       unlisten.then((fn) => fn());
     };
   }, [addChatAttachments]);
+
+  // -- Collaborative-session events --
+  //
+  // The host process re-emits broadcast room events to the local webview;
+  // remote clients receive the same events directly over the WebSocket and
+  // through the existing remote-event forwarder.
+  //
+  // Five events funnel into store mutations:
+  //   - participants-changed: refresh the per-session roster
+  //   - turn-started / turn-ended: drive composer enable/disable
+  //   - plan-vote-opened: open a consensus card
+  //   - plan-vote-cast: record a vote
+  //   - plan-vote-resolved: clear the consensus card
+  const setParticipants = useAppStore((s) => s.setParticipants);
+  const setTurnHolder = useAppStore((s) => s.setTurnHolder);
+  const openConsensusVote = useAppStore((s) => s.openConsensusVote);
+  const recordConsensusVote = useAppStore((s) => s.recordConsensusVote);
+  const clearConsensusVote = useAppStore((s) => s.clearConsensusVote);
+  useEffect(() => {
+    let active = true;
+    const unlistenParticipants = listen<{
+      chat_session_id: string;
+      participants: import("../stores/slices/collabSlice").Participant[];
+    }>("participants-changed", (event) => {
+      if (!active) return;
+      setParticipants(event.payload.chat_session_id, event.payload.participants);
+    });
+    const unlistenStarted = listen<{
+      chat_session_id: string;
+      participant_id: string;
+      display_name: string;
+    }>("turn-started", (event) => {
+      if (!active) return;
+      const { chat_session_id, participant_id, display_name } = event.payload;
+      setTurnHolder(chat_session_id, { participant_id, display_name });
+    });
+    const unlistenEnded = listen<{ chat_session_id: string }>(
+      "turn-ended",
+      (event) => {
+        if (!active) return;
+        setTurnHolder(event.payload.chat_session_id, null);
+      },
+    );
+    const unlistenOpened = listen<{
+      chat_session_id: string;
+      tool_use_id: string;
+      required_voters: import("../stores/slices/collabSlice").Participant[];
+    }>("plan-vote-opened", (event) => {
+      if (!active) return;
+      const { chat_session_id, tool_use_id, required_voters } = event.payload;
+      openConsensusVote(chat_session_id, tool_use_id, required_voters);
+    });
+    const unlistenCast = listen<{
+      chat_session_id: string;
+      tool_use_id: string;
+      participant_id: string;
+      vote: import("../stores/slices/collabSlice").ParticipantVote;
+    }>("plan-vote-cast", (event) => {
+      if (!active) return;
+      const { chat_session_id, tool_use_id, participant_id, vote } =
+        event.payload;
+      recordConsensusVote(chat_session_id, tool_use_id, participant_id, vote);
+    });
+    const unlistenResolved = listen<{ chat_session_id: string }>(
+      "plan-vote-resolved",
+      (event) => {
+        if (!active) return;
+        clearConsensusVote(event.payload.chat_session_id);
+      },
+    );
+    return () => {
+      active = false;
+      unlistenParticipants.then((fn) => fn());
+      unlistenStarted.then((fn) => fn());
+      unlistenEnded.then((fn) => fn());
+      unlistenOpened.then((fn) => fn());
+      unlistenCast.then((fn) => fn());
+      unlistenResolved.then((fn) => fn());
+    };
+  }, [
+    setParticipants,
+    setTurnHolder,
+    openConsensusVote,
+    recordConsensusVote,
+    clearConsensusVote,
+  ]);
 }

@@ -18,6 +18,25 @@ pub struct RemoteConnectionInfo {
     pub cert_fingerprint: Option<String>,
     pub auto_connect: bool,
     pub created_at: String,
+    /// Stable id for the local user as seen by the remote server. Derived
+    /// (not persisted) — recomputed from `session_token` at every construction
+    /// site so we don't need a DB migration. The frontend uses this to detect
+    /// "this message is mine" in collaborative sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub participant_id: Option<String>,
+}
+
+/// Derive a frontend-visible participant id from a stored session token.
+/// Calls into `claudette-server` so the algorithm matches the server side
+/// (which is what the room/collab protocol uses to key participants).
+#[cfg(feature = "server")]
+pub fn participant_id_for(session_token: Option<&str>) -> Option<String> {
+    session_token.map(claudette_server::auth::participant_id_for_token)
+}
+
+#[cfg(not(feature = "server"))]
+pub fn participant_id_for(_session_token: Option<&str>) -> Option<String> {
+    None
 }
 
 /// An active connection to a remote claudette-server.

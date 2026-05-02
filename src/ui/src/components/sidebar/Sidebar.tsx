@@ -143,6 +143,7 @@ export const Sidebar = memo(function Sidebar() {
           created_at: new Date().toISOString(),
           thinking: null,
           input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null,
+          author_participant_id: null, author_display_name: null,
         });
       }
       // Check if a setup script exists and prompt user to review it.
@@ -168,6 +169,7 @@ export const Sidebar = memo(function Sidebar() {
                   created_at: new Date().toISOString(),
                   thinking: null,
                   input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null,
+          author_participant_id: null, author_display_name: null,
                 });
               }
             }).catch((err) => {
@@ -181,6 +183,7 @@ export const Sidebar = memo(function Sidebar() {
                 created_at: new Date().toISOString(),
                 thinking: null,
                 input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null,
+          author_participant_id: null, author_display_name: null,
               });
             });
           } else {

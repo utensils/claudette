@@ -2,8 +2,13 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MessageMarkdown } from "./MessageMarkdown";
 import type { PlanApproval } from "../../stores/useAppStore";
+import { useAppStore } from "../../stores/useAppStore";
 import { readPlanFile, sendRemoteCommand } from "../../services/tauri";
 import styles from "./PlanApprovalCard.module.css";
+
+// `"host"` matches the Rust `ParticipantId::HOST` constant. Used to
+// distinguish the local host's own vote in the consensus progress UI.
+const HOST_PARTICIPANT_ID = "host";
 
 interface PlanApprovalCardProps {
   approval: PlanApproval;
@@ -98,6 +103,8 @@ export function PlanApprovalCard({
         </div>
       )}
 
+      <ConsensusProgress approval={approval} />
+
       <button
         className={styles.approveBtn}
         onClick={() => onRespond(true)}
@@ -133,6 +140,49 @@ export function PlanApprovalCard({
           {t("plan_approval_send")}
         </button>
       </div>
+    </div>
+  );
+}
+
+
+/**
+ * Render the per-voter vote state for an open consensus round. No-op when
+ * the session has no open vote (solo or non-consensus collab) — the card
+ * then behaves identically to its pre-collab single-shot form.
+ *
+ * The local host's voting status is derived from the `votes` map keyed by
+ * `"host"`, matching what the Rust resolver records.
+ */
+function ConsensusProgress({ approval }: { approval: PlanApproval }) {
+  const vote = useAppStore((s) => s.consensusVotes[approval.sessionId]);
+  if (!vote || vote.toolUseId !== approval.toolUseId) {
+    return null;
+  }
+  const totalRequired = vote.requiredVoters.length;
+  const totalVoted = Object.keys(vote.votes).length;
+  return (
+    <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
+      <div>
+        <strong>Consensus required:</strong> {totalVoted}/{totalRequired} voted
+      </div>
+      {vote.requiredVoters.map((voter) => {
+        const cast = vote.votes[voter.id];
+        const status = cast
+          ? cast.kind === "approve"
+            ? "approved"
+            : `denied: ${cast.reason}`
+          : "waiting";
+        const isSelf = voter.id === HOST_PARTICIPANT_ID;
+        return (
+          <div key={voter.id}>
+            <span>{voter.display_name}</span>
+            {isSelf ? " (you)" : ""}
+            {voter.is_host ? " · host" : ""}
+            {": "}
+            <em>{status}</em>
+          </div>
+        );
+      })}
     </div>
   );
 }

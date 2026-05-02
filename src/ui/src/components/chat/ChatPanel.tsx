@@ -765,7 +765,7 @@ export function ChatPanel() {
               input_tokens: null,
               output_tokens: null,
               cache_read_tokens: null,
-              cache_creation_tokens: null,
+              cache_creation_tokens: null, author_participant_id: null, author_display_name: null,
             },
             { persisted: false },
           );
@@ -942,7 +942,7 @@ export function ChatPanel() {
       input_tokens: null,
       output_tokens: null,
       cache_read_tokens: null,
-      cache_creation_tokens: null,
+      cache_creation_tokens: null, author_participant_id: null, author_display_name: null,
     });
     // Add optimistic attachment data so images display immediately.
     if (attachments?.length) {

@@ -202,6 +202,18 @@ function App() {
     getAppSetting("community_registry_enabled")
       .then((val) => { if (val === "true") setCommunityRegistryEnabled(true); })
       .catch(() => {});
+    // Hydrate collaboration preferences. Both default to "off / blank" so a
+    // failed read leaves the rest of the app working unchanged.
+    getAppSetting("collab:display_name")
+      .then((val) => { if (val) useAppStore.getState().setCollabDisplayName(val); })
+      .catch(() => {});
+    getAppSetting("collab:default_consensus_required")
+      .then((val) => {
+        if (val === "true") {
+          useAppStore.getState().setCollabDefaultConsensusRequired(true);
+        }
+      })
+      .catch(() => {});
     getAppSetting("language")
       .then((lang) => {
         if (lang && isSupportedLanguage(lang) && lang !== i18n.language) {

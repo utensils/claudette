@@ -634,6 +634,13 @@ fn main() {
             commands::remote::start_local_server,
             commands::remote::stop_local_server,
             commands::remote::get_local_server_status,
+            // Workspace-scoped share management — replaces the
+            // unscoped `start_collaborative_share` flow.
+            commands::share::start_share,
+            commands::share::stop_share,
+            commands::share::list_shares,
+            commands::remote::kick_participant,
+            commands::remote::mute_participant,
             // Debug (dev builds only — cfg-gated in commands/debug.rs)
             #[cfg(debug_assertions)]
             commands::debug::debug_eval_js,

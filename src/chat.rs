@@ -211,6 +211,8 @@ pub fn build_assistant_chat_message(args: BuildAssistantArgs<'_>) -> ChatMessage
         cache_creation_tokens: usage
             .as_ref()
             .and_then(|u| u.cache_creation_input_tokens.map(|n| n as i64)),
+        author_participant_id: None,
+        author_display_name: None,
     }
 }
 
@@ -244,6 +246,8 @@ pub fn build_compaction_sentinel(
         output_tokens: None,
         cache_read_tokens: Some(meta.post_tokens as i64),
         cache_creation_tokens: None,
+        author_participant_id: None,
+        author_display_name: None,
     }
 }
 

@@ -48,6 +48,11 @@ const PinnedPromptsSettings = lazy(() =>
     default: m.PinnedPromptsSettings,
   })),
 );
+const CollaborationSettings = lazy(() =>
+  import("./sections/CollaborationSettings").then((m) => ({
+    default: m.CollaborationSettings,
+  })),
+);
 
 function SectionContent({ section }: { section: string | null }) {
   const pluginManagementEnabled = useAppStore((s) => s.pluginManagementEnabled);
@@ -60,6 +65,7 @@ function SectionContent({ section }: { section: string | null }) {
   if (section === "appearance") return <AppearanceSettings />;
   if (section === "notifications") return <NotificationsSettings />;
   if (section === "git") return <GitSettings />;
+  if (section === "collaboration") return <CollaborationSettings />;
   if (section === "pinned-prompts") return <PinnedPromptsSettings />;
   if (section === "plugins") return <PluginsSettings />;
   if (section === "claude-code-plugins") {

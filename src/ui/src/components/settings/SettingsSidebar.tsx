@@ -9,6 +9,7 @@ import {
   Puzzle,
   Bookmark,
   Globe,
+  Users,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
@@ -25,6 +26,7 @@ export function getAppSections(
     { id: "appearance", icon: Palette },
     { id: "notifications", icon: Bell },
     { id: "git", icon: GitBranch },
+    { id: "collaboration", icon: Users },
     { id: "pinned-prompts", icon: Bookmark },
     { id: "plugins", icon: Puzzle },
     ...(communityRegistryEnabled

@@ -462,8 +462,8 @@ describe("finalizeTurn afterMessageIndex", () => {
     useAppStore.setState({
       chatMessages: {
         [WS_ID]: [
-          { id: "m1", workspace_id: WS_ID, chat_session_id: WS_ID, role: "User", content: "hi", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null },
-          { id: "m2", workspace_id: WS_ID, chat_session_id: WS_ID, role: "Assistant", content: "hello", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null },
+          { id: "m1", workspace_id: WS_ID, chat_session_id: WS_ID, role: "User", content: "hi", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, author_participant_id: null, author_display_name: null },
+          { id: "m2", workspace_id: WS_ID, chat_session_id: WS_ID, role: "Assistant", content: "hello", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, author_participant_id: null, author_display_name: null },
         ],
       },
     });
@@ -503,7 +503,7 @@ describe("finalizeTurn afterMessageIndex", () => {
 
   it("successive turns get increasing afterMessageIndex", () => {
     useAppStore.setState({
-      chatMessages: { [WS_ID]: [{ id: "m1", workspace_id: WS_ID, chat_session_id: WS_ID, role: "Assistant", content: "a", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null }] },
+      chatMessages: { [WS_ID]: [{ id: "m1", workspace_id: WS_ID, chat_session_id: WS_ID, role: "Assistant", content: "a", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, author_participant_id: null, author_display_name: null }] },
     });
     addToolActivities();
     useAppStore.getState().finalizeTurn(WS_ID, 1);
@@ -511,9 +511,9 @@ describe("finalizeTurn afterMessageIndex", () => {
     useAppStore.setState({
       chatMessages: {
         [WS_ID]: [
-          { id: "m1", workspace_id: WS_ID, chat_session_id: WS_ID, role: "Assistant", content: "a", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null },
-          { id: "m2", workspace_id: WS_ID, chat_session_id: WS_ID, role: "User", content: "b", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null },
-          { id: "m3", workspace_id: WS_ID, chat_session_id: WS_ID, role: "Assistant", content: "c", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null },
+          { id: "m1", workspace_id: WS_ID, chat_session_id: WS_ID, role: "Assistant", content: "a", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, author_participant_id: null, author_display_name: null },
+          { id: "m2", workspace_id: WS_ID, chat_session_id: WS_ID, role: "User", content: "b", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, author_participant_id: null, author_display_name: null },
+          { id: "m3", workspace_id: WS_ID, chat_session_id: WS_ID, role: "Assistant", content: "c", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, author_participant_id: null, author_display_name: null },
         ],
       },
     });
@@ -546,8 +546,8 @@ describe("finalizeTurn afterMessageIndex (paginated branch)", () => {
     useAppStore.setState({
       chatMessages: {
         [WS_ID]: [
-          { id: "m99", workspace_id: WS_ID, chat_session_id: WS_ID, role: "User", content: "hi", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null },
-          { id: "m100", workspace_id: WS_ID, chat_session_id: WS_ID, role: "Assistant", content: "ok", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null },
+          { id: "m99", workspace_id: WS_ID, chat_session_id: WS_ID, role: "User", content: "hi", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, author_participant_id: null, author_display_name: null },
+          { id: "m100", workspace_id: WS_ID, chat_session_id: WS_ID, role: "Assistant", content: "ok", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, author_participant_id: null, author_display_name: null },
         ],
       },
       chatPagination: {
@@ -572,8 +572,8 @@ describe("finalizeTurn afterMessageIndex (paginated branch)", () => {
     useAppStore.setState({
       chatMessages: {
         [WS_ID]: [
-          { id: "m1", workspace_id: WS_ID, chat_session_id: WS_ID, role: "User", content: "hi", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null },
-          { id: "m2", workspace_id: WS_ID, chat_session_id: WS_ID, role: "Assistant", content: "ok", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null },
+          { id: "m1", workspace_id: WS_ID, chat_session_id: WS_ID, role: "User", content: "hi", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, author_participant_id: null, author_display_name: null },
+          { id: "m2", workspace_id: WS_ID, chat_session_id: WS_ID, role: "Assistant", content: "ok", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, author_participant_id: null, author_display_name: null },
         ],
       },
     });
@@ -768,8 +768,8 @@ describe("finalizeTurn double-call guard", () => {
     useAppStore.setState({
       chatMessages: {
         [WS_ID]: [
-          { id: "m1", workspace_id: WS_ID, chat_session_id: WS_ID, role: "User", content: "hi", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null },
-          { id: "m2", workspace_id: WS_ID, chat_session_id: WS_ID, role: "Assistant", content: "hello", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null },
+          { id: "m1", workspace_id: WS_ID, chat_session_id: WS_ID, role: "User", content: "hi", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, author_participant_id: null, author_display_name: null },
+          { id: "m2", workspace_id: WS_ID, chat_session_id: WS_ID, role: "Assistant", content: "hello", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, author_participant_id: null, author_display_name: null },
         ],
       },
     });
@@ -856,10 +856,10 @@ describe("rollbackConversation", () => {
     useAppStore.setState({
       chatMessages: {
         [WS_ID]: [
-          { id: "m1", workspace_id: WS_ID, chat_session_id: WS_ID, role: "User", content: "q1", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null },
-          { id: "m2", workspace_id: WS_ID, chat_session_id: WS_ID, role: "Assistant", content: "a1", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null },
-          { id: "m3", workspace_id: WS_ID, chat_session_id: WS_ID, role: "User", content: "q2", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null },
-          { id: "m4", workspace_id: WS_ID, chat_session_id: WS_ID, role: "Assistant", content: "a2", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null },
+          { id: "m1", workspace_id: WS_ID, chat_session_id: WS_ID, role: "User", content: "q1", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, author_participant_id: null, author_display_name: null },
+          { id: "m2", workspace_id: WS_ID, chat_session_id: WS_ID, role: "Assistant", content: "a1", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, author_participant_id: null, author_display_name: null },
+          { id: "m3", workspace_id: WS_ID, chat_session_id: WS_ID, role: "User", content: "q2", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, author_participant_id: null, author_display_name: null },
+          { id: "m4", workspace_id: WS_ID, chat_session_id: WS_ID, role: "Assistant", content: "a2", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, author_participant_id: null, author_display_name: null },
         ],
       },
       checkpoints: {
@@ -872,8 +872,8 @@ describe("rollbackConversation", () => {
 
     // Simulate backend returning truncated messages.
     const truncated = [
-      { id: "m1", workspace_id: WS_ID, chat_session_id: WS_ID, role: "User" as const, content: "q1", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null },
-      { id: "m2", workspace_id: WS_ID, chat_session_id: WS_ID, role: "Assistant" as const, content: "a1", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null },
+      { id: "m1", workspace_id: WS_ID, chat_session_id: WS_ID, role: "User" as const, content: "q1", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, author_participant_id: null, author_display_name: null },
+      { id: "m2", workspace_id: WS_ID, chat_session_id: WS_ID, role: "Assistant" as const, content: "a1", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, author_participant_id: null, author_display_name: null },
     ];
     useAppStore.getState().rollbackConversation(WS_ID, WS_ID, "cp1", truncated);
 
@@ -926,8 +926,8 @@ describe("rollbackConversation", () => {
     const OTHER_WS = "other-ws";
     useAppStore.setState({
       chatMessages: {
-        [WS_ID]: [{ id: "m1", workspace_id: WS_ID, chat_session_id: WS_ID, role: "User", content: "q1", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null }],
-        [OTHER_WS]: [{ id: "m2", workspace_id: OTHER_WS, chat_session_id: OTHER_WS, role: "User", content: "q2", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null }],
+        [WS_ID]: [{ id: "m1", workspace_id: WS_ID, chat_session_id: WS_ID, role: "User", content: "q1", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, author_participant_id: null, author_display_name: null }],
+        [OTHER_WS]: [{ id: "m2", workspace_id: OTHER_WS, chat_session_id: OTHER_WS, role: "User", content: "q2", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, author_participant_id: null, author_display_name: null }],
       },
       checkpoints: {
         [WS_ID]: [makeCheckpoint("cp1", WS_ID, "m1", 0)],
@@ -953,8 +953,8 @@ describe("rollbackConversation resets chatPagination", () => {
 
   it("rewrites pagination to match the truncated message list", () => {
     const truncated: ChatMessage[] = [
-      { id: "m1", workspace_id: WS_ID, chat_session_id: WS_ID, role: "User", content: "q1", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null },
-      { id: "m2", workspace_id: WS_ID, chat_session_id: WS_ID, role: "Assistant", content: "a1", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null },
+      { id: "m1", workspace_id: WS_ID, chat_session_id: WS_ID, role: "User", content: "q1", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, author_participant_id: null, author_display_name: null },
+      { id: "m2", workspace_id: WS_ID, chat_session_id: WS_ID, role: "Assistant", content: "a1", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, author_participant_id: null, author_display_name: null },
     ];
     useAppStore.setState({
       chatPagination: {
@@ -1012,7 +1012,7 @@ describe("addChatMessage pagination totalCount", () => {
   }
 
   function makeMsg(id: string, role: "User" | "System" = "User"): ChatMessage {
-    return { id, workspace_id: WS_ID, chat_session_id: WS_ID, role, content: "x", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null };
+    return { id, workspace_id: WS_ID, chat_session_id: WS_ID, role, content: "x", cost_usd: null, duration_ms: null, created_at: "", thinking: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null, author_participant_id: null, author_display_name: null };
   }
 
   it("bumps totalCount by default (persisted message)", () => {
@@ -1517,7 +1517,7 @@ describe("rollbackConversation re-derives compactionEvents", () => {
         input_tokens: null,
         output_tokens: null,
         cache_read_tokens: null,
-        cache_creation_tokens: null,
+        cache_creation_tokens: null, author_participant_id: null, author_display_name: null,
       },
       {
         id: "m2",
@@ -1532,7 +1532,7 @@ describe("rollbackConversation re-derives compactionEvents", () => {
         input_tokens: null,
         output_tokens: null,
         cache_read_tokens: null,
-        cache_creation_tokens: null,
+        cache_creation_tokens: null, author_participant_id: null, author_display_name: null,
       },
     ];
     useAppStore.getState().rollbackConversation("ws1", "ws1", "cp1", msgs);
@@ -1581,7 +1581,7 @@ describe("rollbackConversation updates latestTurnUsage", () => {
         input_tokens: null,
         output_tokens: null,
         cache_read_tokens: null,
-        cache_creation_tokens: null,
+        cache_creation_tokens: null, author_participant_id: null, author_display_name: null,
       },
       {
         id: "m2",
@@ -1597,6 +1597,8 @@ describe("rollbackConversation updates latestTurnUsage", () => {
         output_tokens: 80,
         cache_read_tokens: 5_000,
         cache_creation_tokens: 200,
+        author_participant_id: null,
+        author_display_name: null,
       },
     ];
     useAppStore.getState().rollbackConversation("ws1", "ws1", "cp1", msgs);
@@ -1628,7 +1630,7 @@ describe("rollbackConversation updates latestTurnUsage", () => {
         input_tokens: null,
         output_tokens: null,
         cache_read_tokens: null,
-        cache_creation_tokens: null,
+        cache_creation_tokens: null, author_participant_id: null, author_display_name: null,
       },
     ];
     useAppStore.getState().rollbackConversation("ws1", "ws1", "cp1", msgs);

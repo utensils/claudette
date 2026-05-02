@@ -194,6 +194,19 @@ pub async fn send_chat_message(
         .ok_or("Workspace has no worktree")?
         .clone();
 
+    // In a collaborative session, stamp the host's user messages with
+    // identity so remote participants see "Sean asked: …" rather than a
+    // bare "User". Solo / 1:1 legacy sessions leave both fields null —
+    // the existing UI then renders "You" as before, no behavior change.
+    let (host_author_id, host_author_name) = if state.rooms.get(&chat_session_id).await.is_some() {
+        (
+            Some(claudette::room::ParticipantId::HOST.to_string()),
+            Some(state.resolve_host_display_name()),
+        )
+    } else {
+        (None, None)
+    };
+
     // Save user message to DB. Use the frontend-provided ID so optimistic
     // UI state (attachments keyed by message ID) stays consistent.
     let user_msg = ChatMessage {
@@ -210,6 +223,8 @@ pub async fn send_chat_message(
         output_tokens: None,
         cache_read_tokens: None,
         cache_creation_tokens: None,
+        author_participant_id: host_author_id,
+        author_display_name: host_author_name,
     };
     // Decode, validate, and persist attachments alongside the user message.
     // Both inserts share a transaction so the message and its attachments are
@@ -705,6 +720,8 @@ pub async fn send_chat_message(
             output_tokens: None,
             cache_read_tokens: None,
             cache_creation_tokens: None,
+            author_participant_id: None,
+            author_display_name: None,
         };
         if let Err(err) = db.insert_chat_message(&warning) {
             // Logging-only: a missing warning shouldn't block the turn.
@@ -989,6 +1006,32 @@ pub async fn send_chat_message(
     let wt_path = worktree_path.clone();
     let user_msg_id = user_msg.id.clone();
     let repo_id_for_mcp = ws.repository_id.clone();
+    // Captured once: in collaborative mode, every event is published to this
+    // room (where the host's own UI subscribes via `start_share`,
+    // alongside any joined remote clients). In solo mode this is `None` and
+    // the bridge keeps emitting directly via `app.emit("agent-stream", ...)`.
+    let room_for_stream = state.rooms.get(&chat_session_id).await;
+    // Acquire the turn lock just before spawning the bridge so we never
+    // leak the lock across an early `?` propagation. Hard reject — the
+    // composer in other clients greys out on `turn-started`, so by the
+    // time a competing send arrives we expect this almost always to fail
+    // only on genuine races (composer flicker, stale UI).
+    let host_participant = claudette::room::ParticipantId::host();
+    if let Some(room) = &room_for_stream
+        && let Err(holder) = room.try_acquire_turn(&host_participant).await
+    {
+        return Err(format!("turn-locked-by:{}", holder.as_str()));
+    }
+    if let Some(room) = &room_for_stream {
+        room.publish(serde_json::json!({
+            "event": "turn-started",
+            "payload": {
+                "chat_session_id": &chat_session_id,
+                "participant_id": host_participant.as_str(),
+                "display_name": "Host",
+            },
+        }));
+    }
     drop(ws_env); // consumed by rename_ws_env; notification path rebuilds from DB
     tokio::spawn(async move {
         if claimed_rename {
@@ -1106,6 +1149,31 @@ pub async fn send_chat_message(
             {
                 if matches!(tool_name.as_str(), "AskUserQuestion" | "ExitPlanMode") {
                     let app_state = app.state::<AppState>();
+
+                    // Collab consensus snapshot: only ExitPlanMode in a
+                    // session whose room has `consensus_required = true`
+                    // gates on multi-voter approval. Muted participants are
+                    // excluded — they can't act on a vote, so they can't
+                    // hold one up. Late joiners are observers only.
+                    let (required_voters, vote_voters_payload) = if tool_name == "ExitPlanMode"
+                        && let Some(room) = app_state.rooms.get(&chat_session_id_for_stream).await
+                        && *room.consensus_required.read().await
+                    {
+                        let participants = room.participants.read().await;
+                        let voters: std::collections::HashSet<claudette::room::ParticipantId> =
+                            participants
+                                .values()
+                                .filter(|p| !p.muted)
+                                .map(|p| p.id.clone())
+                                .collect();
+                        let payload: Vec<&claudette::room::ParticipantInfo> =
+                            participants.values().filter(|p| !p.muted).collect();
+                        let json_voters = serde_json::to_value(&payload).unwrap_or_default();
+                        (voters, Some(json_voters))
+                    } else {
+                        (std::collections::HashSet::new(), None)
+                    };
+
                     let mut agents = app_state.agents.write().await;
                     if let Some(session) = agents.get_mut(&chat_session_id_for_stream) {
                         session.pending_permissions.insert(
@@ -1114,10 +1182,28 @@ pub async fn send_chat_message(
                                 request_id: request_id.clone(),
                                 tool_name: tool_name.clone(),
                                 original_input: input.clone(),
+                                required_voters,
+                                votes: std::collections::HashMap::new(),
                             },
                         );
                     }
                     drop(agents);
+
+                    // Broadcast the consensus vote opening so all subscribers
+                    // (host UI + remote participants) render the consensus
+                    // card simultaneously. Non-consensus prompts skip this.
+                    if let Some(voters) = vote_voters_payload
+                        && let Some(room) = app_state.rooms.get(&chat_session_id_for_stream).await
+                    {
+                        room.publish(serde_json::json!({
+                            "event": "plan-vote-opened",
+                            "payload": {
+                                "chat_session_id": &chat_session_id_for_stream,
+                                "tool_use_id": &tool_use_id,
+                                "required_voters": voters,
+                            },
+                        }));
+                    }
                     let payload = serde_json::json!({
                         "workspace_id": &ws_id,
                         "chat_session_id": &chat_session_id_for_stream,
@@ -1295,6 +1381,8 @@ pub async fn send_chat_message(
                     output_tokens: None,
                     cache_read_tokens: None,
                     cache_creation_tokens: None,
+                    author_participant_id: None,
+                    author_display_name: None,
                 };
                 let _ = db.insert_chat_message(&msg);
             }
@@ -1586,7 +1674,29 @@ pub async fn send_chat_message(
                 chat_session_id: chat_session_id_for_stream.clone(),
                 event,
             };
-            let _ = app.emit("agent-stream", &payload);
+            // Collab path (room exists) → publish to the room as a JSON-RPC
+            // envelope. The host's own UI subscribes via `start_share` and
+            // translates each envelope back to `app.emit(event, payload)`;
+            // remote forwarders write the envelope to the WebSocket wire
+            // as-is. Single source of truth across host + remote subscribers.
+            match &room_for_stream {
+                Some(room) => room.publish(serde_json::json!({
+                    "event": "agent-stream",
+                    "payload": &payload,
+                })),
+                None => {
+                    let _ = app.emit("agent-stream", &payload);
+                }
+            }
+        }
+        // Stream is done — release the turn lock and tell other participants
+        // their composers can re-enable. Solo sessions (`None`) skip this.
+        if let Some(room) = &room_for_stream {
+            room.release_turn().await;
+            room.publish(serde_json::json!({
+                "event": "turn-ended",
+                "payload": { "chat_session_id": &chat_session_id_for_stream },
+            }));
         }
     });
 

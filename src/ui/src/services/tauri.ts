@@ -1025,6 +1025,65 @@ export function getLocalServerStatus(): Promise<LocalServerInfo> {
   return invoke("get_local_server_status");
 }
 
+// -- Workspace-scoped shares --
+
+/** Snapshot of one active share — the host's workspace-scoped grant. */
+export interface ShareSummary {
+  id: string;
+  label: string | null;
+  allowed_workspace_ids: string[];
+  collaborative: boolean;
+  consensus_required: boolean;
+  created_at: string;
+  /** How many remote clients have paired against this share. */
+  session_count: number;
+  /** `claudette://host:port/<pairing_token>` to hand out. */
+  connection_string: string;
+}
+
+export interface StartShareResult {
+  share: ShareSummary;
+  /** `true` if this call booted the in-process server (first share). */
+  server_started: boolean;
+}
+
+export function startShare(args: {
+  label: string | null;
+  workspaceIds: string[];
+  collaborative: boolean;
+  consensusRequired: boolean;
+}): Promise<StartShareResult> {
+  return invoke("start_share", {
+    label: args.label,
+    workspaceIds: args.workspaceIds,
+    collaborative: args.collaborative,
+    consensusRequired: args.consensusRequired,
+  });
+}
+
+export function stopShare(shareId: string): Promise<void> {
+  return invoke("stop_share", { shareId });
+}
+
+export function listShares(): Promise<ShareSummary[]> {
+  return invoke("list_shares");
+}
+
+export function kickParticipant(
+  chatSessionId: string,
+  participantId: string,
+): Promise<void> {
+  return invoke("kick_participant", { chatSessionId, participantId });
+}
+
+export function muteParticipant(
+  chatSessionId: string,
+  participantId: string,
+  muted: boolean,
+): Promise<void> {
+  return invoke("mute_participant", { chatSessionId, participantId, muted });
+}
+
 // -- Apps --
 
 export function detectInstalledApps(): Promise<DetectedApp[]> {

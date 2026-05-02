@@ -127,6 +127,16 @@ export function ChatInputArea({
   const [chatInput, setChatInput] = useState(
     () => useAppStore.getState().chatDrafts[sessionId] ?? "",
   );
+  // In a collaborative session, another participant may currently hold the
+  // agent's turn lock. `null` when no turn is in flight, or when the turn
+  // belongs to the host themselves. When set, we disable the composer so
+  // the local user can't even attempt to send (the backend would hard-reject
+  // anyway, but greying out is the canonical UX).
+  const turnHolder = useAppStore((s) => s.currentTurnHolder[sessionId]);
+  const lockedByOther =
+    turnHolder !== undefined &&
+    turnHolder !== null &&
+    turnHolder.participant_id !== "host";
   const [cursorPos, setCursorPos] = useState(0);
   const [inputScrollTop, setInputScrollTop] = useState(0);
   const [slashPickerIndex, setSlashPickerIndex] = useState(0);
@@ -959,7 +969,14 @@ export function ChatInputArea({
           }}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          placeholder={isRunning ? t("composer_placeholder_queued") : t("composer_placeholder_idle")}
+          disabled={lockedByOther}
+          placeholder={
+            lockedByOther
+              ? `${turnHolder?.display_name ?? "Another user"} is asking…`
+              : isRunning
+                ? t("composer_placeholder_queued")
+                : t("composer_placeholder_idle")
+          }
         />
       </div>
       <div className={styles.inputControls}>
@@ -1094,8 +1111,17 @@ export function ChatInputArea({
           <button
             className={`${styles.sendBtn} ${isRunning ? styles.sendBtnStop : ""}`}
             onClick={isRunning ? onStop : handleSend}
-            disabled={!isRunning && !chatInput.trim() && pendingAttachments.length === 0}
-            title={isRunning ? t("stop_agent") : t("send_message")}
+            disabled={
+              lockedByOther ||
+              (!isRunning && !chatInput.trim() && pendingAttachments.length === 0)
+            }
+            title={
+              lockedByOther
+                ? `Waiting for ${turnHolder?.display_name ?? "another user"} to finish their turn`
+                : isRunning
+                  ? t("stop_agent")
+                  : t("send_message")
+            }
             aria-label={isRunning ? t("stop_agent") : t("send_message")}
           >
             {isRunning ? <Square size={16} /> : <Send size={16} />}

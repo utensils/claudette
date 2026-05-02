@@ -3,12 +3,13 @@ use tauri::{AppHandle, State};
 
 use claudette::db::Database;
 
-use crate::remote::{DiscoveredServer, RemoteConnectionInfo, RemoteConnectionManager};
+use crate::remote::{
+    DiscoveredServer, RemoteConnectionInfo, RemoteConnectionManager, participant_id_for,
+};
 use crate::state::AppState;
 #[cfg(feature = "server")]
 use crate::state::LocalServerState;
 use crate::transport::ws::WebSocketTransport;
-#[cfg(feature = "server")]
 use claudette::process::CommandWindowExt as _;
 #[cfg(feature = "server")]
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -18,6 +19,10 @@ pub struct PairResult {
     pub connection: RemoteConnectionInfo,
     pub server_name: String,
     pub initial_data: Option<serde_json::Value>,
+    /// Participant id this connection has on the remote server.
+    /// Frontend stores it and uses it to detect "this message is mine"
+    /// in collaborative sessions.
+    pub participant_id: Option<String>,
 }
 
 #[tauri::command]
@@ -28,15 +33,19 @@ pub async fn list_remote_connections(
     let connections = db.list_remote_connections().map_err(|e| e.to_string())?;
     Ok(connections
         .into_iter()
-        .map(|c| RemoteConnectionInfo {
-            id: c.id,
-            name: c.name,
-            host: c.host,
-            port: c.port,
-            session_token: c.session_token,
-            cert_fingerprint: c.cert_fingerprint,
-            auto_connect: c.auto_connect,
-            created_at: c.created_at,
+        .map(|c| {
+            let participant_id = participant_id_for(c.session_token.as_deref());
+            RemoteConnectionInfo {
+                id: c.id,
+                name: c.name,
+                host: c.host,
+                port: c.port,
+                session_token: c.session_token,
+                cert_fingerprint: c.cert_fingerprint,
+                auto_connect: c.auto_connect,
+                created_at: c.created_at,
+                participant_id,
+            }
         })
         .collect())
 }
@@ -89,6 +98,12 @@ pub async fn pair_with_server(
         name: saved.name,
         host: saved.host,
         port: saved.port,
+        // Prefer the auth-returned id when present; fall back to deriving
+        // from the (just-issued) session token. They should always match.
+        participant_id: auth
+            .participant_id
+            .clone()
+            .or_else(|| participant_id_for(saved.session_token.as_deref())),
         session_token: saved.session_token,
         cert_fingerprint: saved.cert_fingerprint,
         auto_connect: saved.auto_connect,
@@ -113,6 +128,7 @@ pub async fn pair_with_server(
         connection: info,
         server_name: auth.server_name,
         initial_data: remote_data,
+        participant_id: auth.participant_id,
     })
 }
 
@@ -148,6 +164,10 @@ pub async fn connect_remote(
         name: auth.server_name.clone(),
         host: conn.host.clone(),
         port: conn.port,
+        participant_id: auth
+            .participant_id
+            .clone()
+            .or_else(|| participant_id_for(conn.session_token.as_deref())),
         session_token: conn.session_token.clone(),
         cert_fingerprint: conn.cert_fingerprint.clone(),
         auto_connect: conn.auto_connect,
@@ -400,4 +420,191 @@ pub async fn get_local_server_status(
             connection_string: None,
         }),
     }
+}
+
+// `CollaborativeShareResult` and the `start_collaborative_share` /
+// `stop_collaborative_share` Tauri commands were removed when sharing
+// switched to the workspace-scoped `Share` model. See
+// `crate::commands::share` for the replacement: `start_share`,
+// `stop_share`, `list_shares`. The host subscriber + vote resolver
+// helpers used by the old flow still live below as utilities.
+
+/// Host-only: forcibly remove a participant from a collaborative session.
+/// The participant's pending votes are dropped; the room rebroadcasts the
+/// new participant list. The kicked client's WebSocket connection is left
+/// open (they can re-join via UI), but the agent will never see their
+/// future prompts/votes since they've been removed from the room.
+#[tauri::command]
+pub async fn kick_participant(
+    chat_session_id: String,
+    participant_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let room = state
+        .rooms
+        .get(&chat_session_id)
+        .await
+        .ok_or("Session is not collaborative")?;
+    let pid = claudette::room::ParticipantId(participant_id);
+    if pid.is_host() {
+        return Err("Cannot kick the host".into());
+    }
+    room.remove_participant(&pid).await;
+    room.publish(serde_json::json!({
+        "event": "participants-changed",
+        "payload": {
+            "chat_session_id": &chat_session_id,
+            "participants": room.participant_list().await,
+        },
+    }));
+    room.publish(serde_json::json!({
+        "event": "participant-kicked",
+        "payload": {
+            "chat_session_id": &chat_session_id,
+            "participant_id": pid.as_str(),
+        },
+    }));
+    Ok(())
+}
+
+/// Host-only: mute (or un-mute) a participant. Muted participants' RPCs
+/// for `send_chat_message` and `vote_plan_approval` are rejected at the
+/// server boundary, but they still receive room broadcasts so they can
+/// observe what's happening.
+#[tauri::command]
+pub async fn mute_participant(
+    chat_session_id: String,
+    participant_id: String,
+    muted: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let room = state
+        .rooms
+        .get(&chat_session_id)
+        .await
+        .ok_or("Session is not collaborative")?;
+    let pid = claudette::room::ParticipantId(participant_id);
+    if pid.is_host() {
+        return Err("Cannot mute the host".into());
+    }
+    if !room.set_muted(&pid, muted).await {
+        return Err("Participant not found in session".into());
+    }
+    room.publish(serde_json::json!({
+        "event": "participants-changed",
+        "payload": {
+            "chat_session_id": &chat_session_id,
+            "participants": room.participant_list().await,
+        },
+    }));
+    Ok(())
+}
+
+// Removed: `start_collaborative_share`, `stop_collaborative_share`, and
+// `build_collab_connection_string`. These were the per-chat-session
+// collab-share entry points from the previous design. The new model
+// (workspace-scoped `Share`s) supersedes them — see
+// `crate::commands::share`. The `spawn_host_event_subscriber` and
+// `spawn_host_vote_resolver` helpers below are still useful but currently
+// unused; they'll be re-wired when the registry gains a "subscribe to
+// every room" hook (see TODO in `commands/share.rs::ensure_share_server`).
+
+#[cfg(feature = "server")]
+#[allow(dead_code)] // Wired back in once RoomRegistry has a creation hook (follow-up).
+fn spawn_host_event_subscriber(app: AppHandle, room: std::sync::Arc<claudette::room::Room>) {
+    use tauri::Emitter;
+    let mut rx = room.subscribe();
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(evt) => {
+                    let Some(name) = evt.0.get("event").and_then(|v| v.as_str()) else {
+                        continue;
+                    };
+                    let payload = evt
+                        .0
+                        .get("payload")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
+                    let _ = app.emit(name, payload);
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    let _ = app.emit("resync-required", serde_json::Value::Null);
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+}
+
+#[cfg(feature = "server")]
+#[allow(dead_code)] // Wired back in once RoomRegistry has a creation hook (follow-up).
+fn spawn_host_vote_resolver(
+    app: AppHandle,
+    room: std::sync::Arc<claudette::room::Room>,
+    chat_session_id: String,
+) {
+    let mut rx = room.subscribe();
+    tokio::spawn(async move {
+        loop {
+            let evt = match rx.recv().await {
+                Ok(e) => e,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
+            // We only care about non-host plan-vote-cast events. Host
+            // votes flow through `submit_plan_approval` directly and run
+            // resolution inline; remote votes arrive here and need to be
+            // applied locally so resolution finalizes on the host side.
+            let Some(name) = evt.0.get("event").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            if name != "plan-vote-cast" {
+                continue;
+            }
+            let payload = match evt.0.get("payload") {
+                Some(p) => p,
+                None => continue,
+            };
+            let participant_id = payload
+                .get("participant_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if participant_id == claudette::room::ParticipantId::HOST {
+                continue;
+            }
+            let tool_use_id = payload
+                .get("tool_use_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let session_id = payload
+                .get("chat_session_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&chat_session_id)
+                .to_string();
+            let vote: claudette::room::Vote = match payload
+                .get("vote")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+            {
+                Some(v) => v,
+                None => continue,
+            };
+            let participant = claudette::room::ParticipantId(participant_id.to_string());
+            let app_state = tauri::Manager::state::<AppState>(&app);
+            if let Err(e) = crate::commands::chat::record_plan_vote(
+                &app_state,
+                &session_id,
+                &tool_use_id,
+                &participant,
+                false, // is_host
+                vote,
+                false, // already broadcast by remote side
+            )
+            .await
+            {
+                eprintln!("[collab] resolver: record_plan_vote failed: {e}");
+            }
+        }
+    });
 }

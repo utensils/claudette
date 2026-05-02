@@ -22,6 +22,7 @@ import {
   createCheckpointsSlice,
   type CheckpointsSlice,
 } from "./slices/checkpointsSlice";
+import { createCollabSlice, type CollabSlice } from "./slices/collabSlice";
 import { createDiffSlice, type DiffSlice } from "./slices/diffSlice";
 import {
   createFileTreeSlice,
@@ -79,6 +80,7 @@ export type AppState = RepositoriesSlice &
   ChatSlice &
   AgentInteractionSlice &
   CheckpointsSlice &
+  CollabSlice &
   NotificationsSlice &
   ToolbarSlice &
   PermissionsSlice &
@@ -99,6 +101,7 @@ export const useAppStore = create<AppState>()((...a) => ({
   ...createChatSlice(...a),
   ...createAgentInteractionSlice(...a),
   ...createCheckpointsSlice(...a),
+  ...createCollabSlice(...a),
   ...createNotificationsSlice(...a),
   ...createToolbarSlice(...a),
   ...createPermissionsSlice(...a),

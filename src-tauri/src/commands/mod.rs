@@ -20,6 +20,7 @@ pub mod remote;
 pub mod repository;
 pub mod scm;
 pub mod settings;
+pub mod share;
 pub mod shell;
 pub mod slash_commands;
 pub mod terminal;

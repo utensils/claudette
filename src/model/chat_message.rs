@@ -67,4 +67,11 @@ pub struct ChatMessage {
     /// Per-message cache-creation input tokens (maps to
     /// `cache_creation_input_tokens` in the Anthropic API). NULL for historical rows.
     pub cache_creation_tokens: Option<i64>,
+    /// Identifies the connected participant who authored this message in a
+    /// collaborative session. NULL for the host's own messages and for all
+    /// non-collaborative (solo / 1:1 legacy) and historical rows.
+    pub author_participant_id: Option<String>,
+    /// Display name captured at submit time so the UI can render an author
+    /// chip without resolving the participant id at read time.
+    pub author_display_name: Option<String>,
 }

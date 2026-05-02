@@ -15,8 +15,25 @@ use std::sync::Arc;
 
 use claudette::model::{AgentStatus, Repository, Workspace, WorkspaceStatus};
 use claudette::plugin_runtime::PluginRegistry;
+use claudette_server::auth::{ServerConfig, ServerSection};
 use claudette_server::handler::resolve_workspace_env;
 use claudette_server::ws::ServerState;
+
+/// Build a minimal `ServerConfig` for tests. The constructors now require
+/// a config (so the runtime revocation check has something to consult);
+/// these tests don't exercise auth, so an empty-shares config suffices.
+fn test_config() -> ServerConfig {
+    ServerConfig {
+        server: ServerSection {
+            name: "test".into(),
+            port: 0,
+            bind: "127.0.0.1".into(),
+        },
+        auth: None,
+        shares: Vec::new(),
+        sessions: Vec::new(),
+    }
+}
 
 /// Build a synthetic env-provider plugin in `plugin_dir/env-fixture` that
 /// detects whenever `.envrc` exists in the worktree and exports
@@ -116,6 +133,7 @@ async fn setup_state_with_envrc() -> (
         db_path,
         PathBuf::from(worktree.path()),
         plugins,
+        test_config(),
     ));
 
     let repo = make_repo(&worktree.path().to_string_lossy());
@@ -191,7 +209,11 @@ async fn server_without_plugin_registry_returns_empty_env() {
     let _ = claudette::db::Database::open(&db_path).unwrap();
 
     let worktree = tempfile::tempdir().unwrap();
-    let state = Arc::new(ServerState::new(db_path, PathBuf::from(worktree.path())));
+    let state = Arc::new(ServerState::new(
+        db_path,
+        PathBuf::from(worktree.path()),
+        test_config(),
+    ));
 
     let repo = make_repo(&worktree.path().to_string_lossy());
     let ws = make_workspace(&repo.id, &worktree.path().to_string_lossy());
@@ -237,6 +259,7 @@ async fn server_skips_disabled_provider_per_repo() {
         db_path,
         PathBuf::from(worktree.path()),
         plugins,
+        test_config(),
     ));
 
     let repo = make_repo(&worktree.path().to_string_lossy());

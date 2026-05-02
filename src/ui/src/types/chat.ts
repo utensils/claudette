@@ -14,6 +14,13 @@ export interface ChatMessage {
   output_tokens: number | null;
   cache_read_tokens: number | null;
   cache_creation_tokens: number | null;
+  /** Stable id for the connected user who authored a User message in a
+   *  collaborative session. NULL for the host's own messages, all
+   *  Assistant/System rows, and all pre-collab history. */
+  author_participant_id: string | null;
+  /** Display name captured at submit time so the UI can render an author
+   *  chip without resolving the participant id at read time. */
+  author_display_name: string | null;
 }
 
 export type SessionStatus = "Active" | "Archived";
