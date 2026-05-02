@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef } from "react";
-import Editor, { type OnMount } from "@monaco-editor/react";
+import Editor, { type BeforeMount, type OnMount } from "@monaco-editor/react";
 import "./monacoSetup";
+import { applyMonacoTheme, initMonacoThemeSync } from "./monacoTheme";
 import styles from "./MonacoEditor.module.css";
 
 interface MonacoEditorProps {
@@ -44,6 +45,7 @@ export const MonacoEditor = memo(function MonacoEditor({
   }, [onSave]);
 
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
+  const cleanupThemeSyncRef = useRef<(() => void) | null>(null);
 
   // Reflect readOnly changes into the editor without remounting. Monaco's
   // `updateOptions` is the explicit runtime API for this; with CodeMirror
@@ -52,8 +54,20 @@ export const MonacoEditor = memo(function MonacoEditor({
     editorRef.current?.updateOptions({ readOnly });
   }, [readOnly]);
 
+  // Disconnect the theme observer when the editor unmounts.
+  useEffect(() => () => { cleanupThemeSyncRef.current?.(); }, []);
+
+  // Define the 'claudette' theme before the editor instance is created so
+  // the theme prop resolves immediately and there's no flash of vs-dark.
+  const handleBeforeMount: BeforeMount = (monacoInstance) => {
+    applyMonacoTheme(monacoInstance);
+  };
+
   const handleMount: OnMount = (editor, monacoInstance) => {
     editorRef.current = editor;
+    // Start live theme sync: re-derives the Monaco theme whenever the
+    // Claudette theme changes (data-theme attribute or inline CSS vars).
+    cleanupThemeSyncRef.current = initMonacoThemeSync(monacoInstance);
     // Bind Cmd/Ctrl+S as an editor command. Monaco scopes these to the
     // editor's focus, so the shortcut won't fire from outside the editor —
     // matches the spec and avoids stomping the platform-native save.
@@ -69,7 +83,8 @@ export const MonacoEditor = memo(function MonacoEditor({
         height="100%"
         path={filename}
         defaultValue={initialValue}
-        theme="vs-dark"
+        theme="claudette"
+        beforeMount={handleBeforeMount}
         onMount={handleMount}
         onChange={(value) => onChangeRef.current(value ?? "")}
         options={{
