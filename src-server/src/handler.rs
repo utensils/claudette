@@ -14,6 +14,8 @@ use crate::ws::{AgentSessionState, PtyHandle, ServerState, Writer, send_message}
 
 use claudette::permissions::tools_for_level;
 
+const CREATE_WORKTREE_ALLOCATION_ATTEMPTS: usize = 5;
+
 /// Dispatch a JSON-RPC request and return a JSON-RPC response.
 pub async fn handle_request(
     state: &Arc<ServerState>,
@@ -800,27 +802,48 @@ async fn handle_create_workspace(
 
     let worktree_base_dir = state.worktree_base_dir.read().await.clone();
     let branch_prefix = format!("{}/", repo.path_slug);
-    let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
-    let allocation = claudette::workspace_alloc::allocate_workspace_name(
-        &repo,
-        &workspaces,
-        name,
-        &branch_prefix,
-        worktree_base_dir.as_path(),
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    let (allocation, actual_path) = {
+        let mut last_collision: Option<claudette::git::GitError> = None;
+        let mut created = None;
 
-    // Create git worktree.
-    let actual_path = claudette::git::create_worktree(
-        &repo.path,
-        &allocation.branch_name,
-        &allocation.worktree_path.to_string_lossy(),
-        repo.base_branch.as_deref(),
-        repo.default_remote.as_deref(),
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+        for _ in 0..CREATE_WORKTREE_ALLOCATION_ATTEMPTS {
+            let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
+            let allocation = claudette::workspace_alloc::allocate_workspace_name(
+                &repo,
+                &workspaces,
+                name,
+                &branch_prefix,
+                worktree_base_dir.as_path(),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+
+            match claudette::git::create_worktree(
+                &repo.path,
+                &allocation.branch_name,
+                &allocation.worktree_path.to_string_lossy(),
+                repo.base_branch.as_deref(),
+                repo.default_remote.as_deref(),
+            )
+            .await
+            {
+                Ok(actual_path) => {
+                    created = Some((allocation, actual_path));
+                    break;
+                }
+                Err(err) if claudette::git::is_worktree_create_collision_error(&err) => {
+                    last_collision = Some(err);
+                }
+                Err(err) => return Err(err.to_string()),
+            }
+        }
+
+        created.ok_or_else(|| {
+            last_collision
+                .map(|err| err.to_string())
+                .unwrap_or_else(|| "Could not allocate a unique workspace name".to_string())
+        })?
+    };
 
     let workspace = Workspace {
         id: uuid::Uuid::new_v4().to_string(),

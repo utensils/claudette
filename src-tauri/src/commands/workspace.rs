@@ -19,6 +19,8 @@ use claudette::names::NameGenerator;
 use crate::state::AppState;
 use claudette::process::CommandWindowExt as _;
 
+const CREATE_WORKTREE_ALLOCATION_ATTEMPTS: usize = 5;
+
 #[derive(Serialize, Clone)]
 pub struct SetupResult {
     pub source: String,
@@ -121,27 +123,49 @@ pub async fn create_workspace(
     let (prefix_mode, prefix_custom) = read_branch_prefix_settings(&db);
     let prefix = resolve_branch_prefix(&prefix_mode, &prefix_custom).await;
     let worktree_base = state.worktree_base_dir.read().await.clone();
-    let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
-    let allocation = claudette::workspace_alloc::allocate_workspace_name(
-        repo,
-        &workspaces,
-        &name,
-        &prefix,
-        worktree_base.as_path(),
-    )
-    .await
-    .map_err(|e| e.to_string())?;
-    let worktree_path_str = allocation.worktree_path.to_string_lossy().to_string();
+    let (allocation, actual_path) = {
+        let mut last_collision: Option<git::GitError> = None;
+        let mut created = None;
 
-    let actual_path = git::create_worktree(
-        &repo_path,
-        &allocation.branch_name,
-        &worktree_path_str,
-        repo.base_branch.as_deref(),
-        repo.default_remote.as_deref(),
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+        for _ in 0..CREATE_WORKTREE_ALLOCATION_ATTEMPTS {
+            let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
+            let allocation = claudette::workspace_alloc::allocate_workspace_name(
+                repo,
+                &workspaces,
+                &name,
+                &prefix,
+                worktree_base.as_path(),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+            let worktree_path_str = allocation.worktree_path.to_string_lossy().to_string();
+
+            match git::create_worktree(
+                &repo_path,
+                &allocation.branch_name,
+                &worktree_path_str,
+                repo.base_branch.as_deref(),
+                repo.default_remote.as_deref(),
+            )
+            .await
+            {
+                Ok(actual_path) => {
+                    created = Some((allocation, actual_path));
+                    break;
+                }
+                Err(err) if git::is_worktree_create_collision_error(&err) => {
+                    last_collision = Some(err);
+                }
+                Err(err) => return Err(err.to_string()),
+            }
+        }
+
+        created.ok_or_else(|| {
+            last_collision
+                .map(|err| err.to_string())
+                .unwrap_or_else(|| "Could not allocate a unique workspace name".to_string())
+        })?
+    };
 
     let ws = Workspace {
         id: uuid::Uuid::new_v4().to_string(),
