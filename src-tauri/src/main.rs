@@ -510,6 +510,7 @@ fn main() {
             commands::diff::load_file_diff,
             commands::diff::revert_file,
             commands::diff::discard_file,
+            commands::diff::load_commit_file_diff,
             // Terminal
             commands::terminal::create_terminal_tab,
             commands::terminal::delete_terminal_tab,

@@ -5,7 +5,7 @@ use crate::process::CommandWindowExt as _;
 use tokio::process::Command;
 
 use crate::model::diff::{
-    DiffFile, DiffHunk, DiffLine, DiffLineType, FileDiff, FileStatus, StagedDiffFiles,
+    CommitEntry, DiffFile, DiffHunk, DiffLine, DiffLineType, FileDiff, FileStatus, StagedDiffFiles,
 };
 
 #[derive(Debug, Clone)]
@@ -409,6 +409,87 @@ pub async fn discard_file(
         run_git(worktree_path, &["restore", "--", file_path]).await?;
     }
     Ok(())
+}
+
+pub async fn commit_file_diff(
+    worktree_path: &str,
+    commit_hash: &str,
+    file_path: &str,
+) -> Result<String, DiffError> {
+    validate_file_path(file_path)?;
+    if commit_hash.is_empty()
+        || commit_hash.len() > 40
+        || !commit_hash.chars().all(|c| c.is_ascii_hexdigit())
+    {
+        return Err(DiffError::CommandFailed("Invalid commit hash".into()));
+    }
+    // --format= suppresses the commit header so only the patch is returned.
+    run_git(
+        worktree_path,
+        &["show", "--format=", "--no-color", commit_hash, "--", file_path],
+    )
+    .await
+}
+
+pub async fn commits_in_range(
+    worktree_path: &str,
+    merge_base: &str,
+) -> Result<Vec<CommitEntry>, DiffError> {
+    let range = format!("{merge_base}..HEAD");
+    // \x01 (SOH) as field separator; extremely unlikely in commit messages.
+    // "|||COMMIT|||" as commit separator within the log stream.
+    let commit_marker = "|||COMMIT|||";
+    let pretty_arg = format!(
+        "--pretty=format:{commit_marker}%H\x01%h\x01%s\x01%an\x01%cI",
+    );
+
+    let output = run_git(
+        worktree_path,
+        &["log", &pretty_arg, "--name-status", &range],
+    )
+    .await?;
+
+    if output.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut commits = Vec::new();
+    for chunk in output.split(commit_marker) {
+        let chunk = chunk.trim_start_matches('\n');
+        if chunk.is_empty() {
+            continue;
+        }
+
+        let newline_pos = chunk.find('\n').unwrap_or(chunk.len());
+        let header = &chunk[..newline_pos];
+        let rest = if newline_pos < chunk.len() {
+            &chunk[newline_pos + 1..]
+        } else {
+            ""
+        };
+
+        let parts: Vec<&str> = header.splitn(5, '\x01').collect();
+        if parts.len() < 5 {
+            continue;
+        }
+
+        let files = rest
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .filter_map(parse_name_status_line)
+            .collect();
+
+        commits.push(CommitEntry {
+            hash: parts[0].to_string(),
+            short_hash: parts[1].to_string(),
+            subject: parts[2].to_string(),
+            author: parts[3].to_string(),
+            date: parts[4].to_string(),
+            files,
+        });
+    }
+
+    Ok(commits)
 }
 
 /// Parse unified diff output into structured data.

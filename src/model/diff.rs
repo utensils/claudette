@@ -67,3 +67,13 @@ pub struct DiffLine {
     pub old_line_number: Option<u32>,
     pub new_line_number: Option<u32>,
 }
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CommitEntry {
+    pub hash: String,
+    pub short_hash: String,
+    pub subject: String,
+    pub author: String,
+    pub date: String,
+    pub files: Vec<DiffFile>,
+}
