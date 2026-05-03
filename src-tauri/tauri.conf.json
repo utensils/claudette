@@ -1,5 +1,6 @@
 {
   "productName": "Claudette",
+  "mainBinaryName": "claudette-app",
   "identifier": "com.claudette.app",
   "build": {
     "beforeDevCommand": { "script": "bun install && bun run dev", "cwd": "../src/ui" },

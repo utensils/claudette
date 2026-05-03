@@ -85,9 +85,9 @@ else
   fi
 
   if [ -n "$target_triple" ]; then
-    binary="$target_dir/$target_triple/$profile/claudette"
+    binary="$target_dir/$target_triple/$profile/claudette-app"
   else
-    binary="$target_dir/$profile/claudette"
+    binary="$target_dir/$profile/claudette-app"
   fi
 fi
 
@@ -101,7 +101,7 @@ bundle_dir="${CLAUDETTE_DEV_APP_BUNDLE:-$binary_dir/Claudette Dev.app}"
 contents_dir="$bundle_dir/Contents"
 macos_dir="$contents_dir/MacOS"
 resources_dir="$contents_dir/Resources"
-bundle_executable="$macos_dir/claudette"
+bundle_executable="$macos_dir/claudette-app"
 
 mkdir -p "$macos_dir" "$resources_dir"
 rm -f "$bundle_executable"
@@ -116,7 +116,7 @@ cat >"$contents_dir/Info.plist" <<'PLIST'
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleExecutable</key>
-  <string>claudette</string>
+  <string>claudette-app</string>
   <key>CFBundleIdentifier</key>
   <string>com.claudette.app.dev</string>
   <key>CFBundleInfoDictionaryVersion</key>

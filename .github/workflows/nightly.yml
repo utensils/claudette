@@ -247,10 +247,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          BIN="target/${{ matrix.rust-target }}/release/claudette.exe"
+          BIN="target/${{ matrix.rust-target }}/release/claudette-app.exe"
           ASSET="claudette-${{ matrix.label }}.zip"
-          cp "$BIN" claudette.exe
-          powershell -NoProfile -Command "Compress-Archive -Path 'claudette.exe' -DestinationPath '$ASSET' -Force"
+          cp "$BIN" claudette-app.exe
+          powershell -NoProfile -Command "Compress-Archive -Path 'claudette-app.exe' -DestinationPath '$ASSET' -Force"
           gh release upload nightly-staging "$ASSET" --clobber
 
       - name: Build headless server

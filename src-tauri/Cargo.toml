@@ -5,7 +5,11 @@ edition = "2024"
 license = "MIT"
 
 [[bin]]
-name = "claudette"
+# Renamed from "claudette" to "claudette-app" so the new `claudette-cli`
+# crate can claim the user-facing `claudette` binary name. The .app
+# bundle is still called Claudette.app via tauri.conf.json's
+# productName + mainBinaryName.
+name = "claudette-app"
 path = "src/main.rs"
 
 [dependencies]

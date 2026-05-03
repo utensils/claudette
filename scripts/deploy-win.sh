@@ -53,9 +53,9 @@ echo "Stopping running claudette on $HOST (if any)..."
 # -ErrorAction SilentlyContinue in some edge cases, and the remote
 # Stop-Process failing shouldn't abort the scp step below.
 ssh -o StrictHostKeyChecking=accept-new "$HOST" \
-  'Stop-Process -Name claudette -Force -ErrorAction SilentlyContinue' || true
+  'Stop-Process -Name claudette-app -Force -ErrorAction SilentlyContinue' || true
 echo "Copying to $HOST:$REMOTE_PATH ..."
 scp -o StrictHostKeyChecking=accept-new \
-  "target/$TRIPLE/release/claudette.exe" "$HOST:$REMOTE_PATH"
+  "target/$TRIPLE/release/claudette-app.exe" "$HOST:$REMOTE_PATH"
 echo
-echo "Deployed. Double-click claudette.exe on the remote Desktop to run."
+echo "Deployed. Double-click claudette-app.exe on the remote Desktop to run."

@@ -6,10 +6,10 @@ license = "MIT"
 description = "Command-line client for the Claudette desktop app"
 
 [[bin]]
-# Renamed to `claudette` in Phase 6 once the `claudette-tauri` GUI bin is
-# migrated to `claudette-app`. Until then, dev callers use `cargo run -p
-# claudette-cli -- <args>` or the cmux dev wrapper.
-name = "claudette-cli"
+# `cargo build` produces `target/release/claudette` — the user-facing
+# binary name. The Tauri GUI's main binary was renamed to
+# `claudette-app` in the same change to clear the way.
+name = "claudette"
 path = "src/main.rs"
 
 [dependencies]

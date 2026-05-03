@@ -30,4 +30,4 @@ cargo xwin build --release \
   --features tauri/custom-protocol \
   --target "$TRIPLE" -p claudette-tauri
 echo
-echo "Built: $REPO_ROOT/target/$TRIPLE/release/claudette.exe"
+echo "Built: $REPO_ROOT/target/$TRIPLE/release/claudette-app.exe"
