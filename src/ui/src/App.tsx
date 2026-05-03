@@ -313,15 +313,23 @@ function App() {
     // Listen for tray workspace selection events.
     const unlistenTray = listen<string>("tray-select-workspace", (event) => {
       const wsId = event.payload;
-      useAppStore.getState().selectWorkspace(wsId);
-      // Tray attention is a workspace-level aggregate — clear attention on
-      // every session in the workspace that currently needs it, since we
-      // don't know from the event which session triggered the badge.
-      const sessions = useAppStore.getState().sessionsByWorkspace[wsId] ?? [];
+      const store = useAppStore.getState();
+      store.selectWorkspace(wsId);
+      // Tray attention is a workspace-level aggregate. The Rust tray click
+      // handler already cleared backend `needs_attention` for every session
+      // in this workspace; mirror the clear into per-session state on the
+      // frontend so any cached entry whose flag drifted out of sync (the
+      // bug this fixes) also gets cleared. Don't gate on the cached
+      // `s.needs_attention` — the whole point is that the cache might be
+      // wrong in either direction.
+      const sessions = store.sessionsByWorkspace[wsId] ?? [];
       for (const s of sessions) {
-        if (s.status === "Active" && s.needs_attention) {
-          clearAttention(s.id).catch(() => {});
-        }
+        if (s.status !== "Active") continue;
+        store.updateChatSession(s.id, {
+          needs_attention: false,
+          attention_kind: null,
+        });
+        clearAttention(s.id).catch(() => {});
       }
     });
 
