@@ -1,11 +1,17 @@
-import { memo, useEffect, useRef } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import Editor, { type BeforeMount, type OnMount } from "@monaco-editor/react";
 import "./monacoSetup";
 import { applyMonacoTheme, initMonacoThemeSync } from "./monacoTheme";
 import { DEFAULT_MONO_STACK } from "../../styles/fonts";
+import {
+  useGitGutter,
+  type DecorationsCollection,
+} from "./useGitGutter";
 import styles from "./MonacoEditor.module.css";
 
 interface MonacoEditorProps {
+  /** Workspace id used to scope HEAD-blob lookups for the git gutter. */
+  workspaceId: string;
   /** Initial document text. The parent uses `key={path}` so that switching
    *  files remounts the editor with a fresh undo history; mode toggles
    *  (view↔edit) reuse the same instance via `updateOptions`. */
@@ -26,6 +32,7 @@ interface MonacoEditorProps {
 }
 
 export const MonacoEditor = memo(function MonacoEditor({
+  workspaceId,
   initialValue,
   filename,
   readOnly,
@@ -46,7 +53,19 @@ export const MonacoEditor = memo(function MonacoEditor({
   }, [onSave]);
 
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
+  const monacoRef = useRef<Parameters<OnMount>[1] | null>(null);
   const cleanupThemeSyncRef = useRef<(() => void) | null>(null);
+  // Owned by this component so the git-gutter hook can read it on mount.
+  // Created in `handleMount` once Monaco has resolved — that's the only
+  // point where `editor.createDecorationsCollection()` is callable. A
+  // `[]`-deps effect inside the hook would run *before* the lazy-loaded
+  // editor mounts, so the collection has to be initialized here.
+  const gutterCollectionRef = useRef<DecorationsCollection | null>(null);
+
+  // Mirror the editor's text into React state so the git-gutter hook can
+  // recompute on every change. Seeded from `initialValue`; the parent
+  // remounts via `key={path}` on file switches so the seed stays correct.
+  const [currentBuffer, setCurrentBuffer] = useState(initialValue);
 
   // Reflect readOnly changes into the editor without remounting. Monaco's
   // `updateOptions` is the explicit runtime API for this; with CodeMirror
@@ -55,8 +74,18 @@ export const MonacoEditor = memo(function MonacoEditor({
     editorRef.current?.updateOptions({ readOnly });
   }, [readOnly]);
 
-  // Disconnect the theme observer when the editor unmounts.
-  useEffect(() => () => { cleanupThemeSyncRef.current?.(); }, []);
+  // Disconnect the theme observer and clear the gutter collection when
+  // the editor unmounts. The collection is owned by Monaco's editor
+  // instance, which is itself disposed by the `<Editor>` component, but
+  // null-ing the ref is cheap insurance against stale reads.
+  useEffect(
+    () => () => {
+      cleanupThemeSyncRef.current?.();
+      gutterCollectionRef.current?.clear();
+      gutterCollectionRef.current = null;
+    },
+    [],
+  );
 
   // Define the 'claudette' theme before the editor instance is created so
   // the theme prop resolves immediately and there's no flash of vs-dark.
@@ -66,6 +95,13 @@ export const MonacoEditor = memo(function MonacoEditor({
 
   const handleMount: OnMount = (editor, monacoInstance) => {
     editorRef.current = editor;
+    monacoRef.current = monacoInstance;
+    // Initialize the gutter decoration collection now that Monaco has
+    // handed us a live editor. The collection survives buffer/file
+    // changes within the same mount; the parent remounts on file
+    // switches via `key={path}`, so a fresh collection is created per
+    // file.
+    gutterCollectionRef.current = editor.createDecorationsCollection();
     // Start live theme sync: re-derives the Monaco theme whenever the
     // Claudette theme changes (data-theme attribute or inline CSS vars).
     cleanupThemeSyncRef.current = initMonacoThemeSync(monacoInstance);
@@ -78,6 +114,14 @@ export const MonacoEditor = memo(function MonacoEditor({
     );
   };
 
+  const handleEditorChange = useCallback((value: string | undefined) => {
+    const next = value ?? "";
+    setCurrentBuffer(next);
+    onChangeRef.current(next);
+  }, []);
+
+  useGitGutter(monacoRef, gutterCollectionRef, workspaceId, filename, currentBuffer);
+
   return (
     <div className={styles.host}>
       <Editor
@@ -87,7 +131,7 @@ export const MonacoEditor = memo(function MonacoEditor({
         theme="claudette"
         beforeMount={handleBeforeMount}
         onMount={handleMount}
-        onChange={(value) => onChangeRef.current(value ?? "")}
+        onChange={handleEditorChange}
         options={{
           readOnly,
           minimap: { enabled: false },

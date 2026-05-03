@@ -253,6 +253,119 @@ pub async fn validate_repo(path: &str) -> Result<(), GitError> {
     Ok(())
 }
 
+/// Result of reading a file's blob at HEAD via [`read_blob_at_head`].
+#[derive(Debug, Clone, Serialize)]
+pub struct HeadBlobResult {
+    /// UTF-8 text of the blob, or `None` when the blob is binary, oversized,
+    /// or absent.
+    pub content: Option<String>,
+    /// Whether the file path resolves to a blob in the current `HEAD` tree.
+    pub exists_at_head: bool,
+}
+
+/// Maximum blob size we materialize via `read_blob_at_head`. Mirrors the
+/// frontend's `GUTTER_MAX_BYTES` cap — beyond this the file viewer's git
+/// gutter is disabled anyway, so reading the bytes only wastes IPC.
+pub const MAX_BLOB_AT_HEAD_BYTES: u64 = 1024 * 1024;
+
+/// Read a file's contents as they exist at the current `HEAD` commit.
+///
+/// Four return shapes:
+/// 1. **Tracked text:** `exists_at_head = true`, `content = Some(text)`. The
+///    blob exists at `HEAD` and decodes as UTF-8 (lossy — invalid bytes are
+///    replaced with `U+FFFD`).
+/// 2. **Tracked binary or oversized:** `exists_at_head = true`,
+///    `content = None`. Either the blob contains a NUL byte in its first
+///    8 KiB (treated as binary) or its size exceeds [`MAX_BLOB_AT_HEAD_BYTES`]
+///    (the frontend gutter is disabled at that scale anyway, so we skip the
+///    IPC cost of materializing it).
+/// 3. **Not at HEAD:** `exists_at_head = false`, `content = None`. The path is
+///    untracked, staged-only, or otherwise absent from the `HEAD` tree.
+///
+/// Returns [`GitError::NotAGitRepo`] / [`GitError::CommandFailed`] when the
+/// directory is not a git worktree, and propagates other git failures verbatim.
+pub async fn read_blob_at_head(
+    worktree_path: &str,
+    file_path: &str,
+) -> Result<HeadBlobResult, GitError> {
+    validate_repo(worktree_path).await?;
+
+    let spec = format!("HEAD:{file_path}");
+    let exists = Command::new(crate::git::resolve_git_path_blocking())
+        .no_console_window()
+        .args(["-C", worktree_path])
+        .args(["cat-file", "-e", &spec])
+        .output()
+        .await
+        .map_err(GitError::from_spawn_io)?;
+
+    if !exists.status.success() {
+        return Ok(HeadBlobResult {
+            content: None,
+            exists_at_head: false,
+        });
+    }
+
+    // Size probe before materializing: `git cat-file -s` prints a single
+    // decimal byte count followed by a newline. For oversized blobs the
+    // frontend disables the gutter regardless, so we short-circuit here to
+    // skip a wasteful IPC roundtrip.
+    let size_out = Command::new(crate::git::resolve_git_path_blocking())
+        .no_console_window()
+        .args(["-C", worktree_path])
+        .args(["cat-file", "-s", &spec])
+        .output()
+        .await
+        .map_err(GitError::from_spawn_io)?;
+
+    if !size_out.status.success() {
+        let stderr = String::from_utf8_lossy(&size_out.stderr).into_owned();
+        return Err(GitError::CommandFailed(stderr));
+    }
+
+    let size: u64 = String::from_utf8_lossy(&size_out.stdout)
+        .trim()
+        .parse()
+        .map_err(|e| GitError::CommandFailed(format!("could not parse cat-file -s output: {e}")))?;
+
+    if size > MAX_BLOB_AT_HEAD_BYTES {
+        return Ok(HeadBlobResult {
+            content: None,
+            exists_at_head: true,
+        });
+    }
+
+    let bytes_out = Command::new(crate::git::resolve_git_path_blocking())
+        .no_console_window()
+        .args(["-C", worktree_path])
+        .args(["cat-file", "blob", &spec])
+        .output()
+        .await
+        .map_err(GitError::from_spawn_io)?;
+
+    if !bytes_out.status.success() {
+        let stderr = String::from_utf8_lossy(&bytes_out.stderr).into_owned();
+        return Err(GitError::CommandFailed(stderr));
+    }
+
+    let raw = bytes_out.stdout;
+    let check_len = raw.len().min(8192);
+    let is_binary = raw[..check_len].contains(&0);
+
+    if is_binary {
+        return Ok(HeadBlobResult {
+            content: None,
+            exists_at_head: true,
+        });
+    }
+
+    let text = String::from_utf8_lossy(&raw).into_owned();
+    Ok(HeadBlobResult {
+        content: Some(text),
+        exists_at_head: true,
+    })
+}
+
 /// Resolve the default branch for a repository.
 ///
 /// Tries, in order: remote HEAD symbolic-ref, remote-tracking `main`/`master`,
@@ -1562,5 +1675,126 @@ mod tests {
             real.into_os_string(),
             "resolver must skip the non-exec placeholder and pick the real binary",
         );
+    }
+}
+
+#[cfg(test)]
+mod head_blob_tests {
+    use super::*;
+    use std::process::Command as StdCommand;
+    use tempfile::tempdir;
+
+    fn git_cmd(dir: &Path, args: &[&str]) -> String {
+        let out = StdCommand::new("git")
+            .current_dir(dir)
+            .args(args)
+            .output()
+            .expect("run git");
+        assert!(
+            out.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap()
+    }
+
+    fn init_repo(dir: &Path) {
+        git_cmd(dir, &["init", "-q", "-b", "main"]);
+        git_cmd(dir, &["config", "user.email", "t@t"]);
+        git_cmd(dir, &["config", "user.name", "t"]);
+    }
+
+    #[tokio::test]
+    async fn returns_committed_text_for_tracked_file() {
+        let tmp = tempdir().unwrap();
+        init_repo(tmp.path());
+        std::fs::write(tmp.path().join("a.txt"), "hello\nworld\n").unwrap();
+        git_cmd(tmp.path(), &["add", "a.txt"]);
+        git_cmd(tmp.path(), &["commit", "-q", "-m", "init"]);
+
+        let result = read_blob_at_head(tmp.path().to_str().unwrap(), "a.txt")
+            .await
+            .expect("read");
+        assert!(result.exists_at_head);
+        assert_eq!(result.content.as_deref(), Some("hello\nworld\n"));
+    }
+
+    #[tokio::test]
+    async fn returns_not_at_head_for_untracked_file() {
+        let tmp = tempdir().unwrap();
+        init_repo(tmp.path());
+        std::fs::write(tmp.path().join("seed.txt"), "x").unwrap();
+        git_cmd(tmp.path(), &["add", "seed.txt"]);
+        git_cmd(tmp.path(), &["commit", "-q", "-m", "init"]);
+
+        std::fs::write(tmp.path().join("new.txt"), "fresh\n").unwrap();
+        let result = read_blob_at_head(tmp.path().to_str().unwrap(), "new.txt")
+            .await
+            .expect("read");
+        assert!(!result.exists_at_head);
+        assert!(result.content.is_none());
+    }
+
+    #[tokio::test]
+    async fn returns_not_at_head_for_staged_only_file() {
+        let tmp = tempdir().unwrap();
+        init_repo(tmp.path());
+        std::fs::write(tmp.path().join("seed.txt"), "x").unwrap();
+        git_cmd(tmp.path(), &["add", "seed.txt"]);
+        git_cmd(tmp.path(), &["commit", "-q", "-m", "init"]);
+
+        std::fs::write(tmp.path().join("staged.txt"), "staged\n").unwrap();
+        git_cmd(tmp.path(), &["add", "staged.txt"]);
+
+        let result = read_blob_at_head(tmp.path().to_str().unwrap(), "staged.txt")
+            .await
+            .expect("read");
+        assert!(!result.exists_at_head);
+        assert!(result.content.is_none());
+    }
+
+    #[tokio::test]
+    async fn returns_none_content_for_binary_blob() {
+        let tmp = tempdir().unwrap();
+        init_repo(tmp.path());
+        let bytes: Vec<u8> = vec![
+            0xFF, 0x00, 0x01, 0x02, b'h', b'i', 0x00, 0xEE, 0, 1, 2, 3, 4, 5, 6, 7,
+        ];
+        std::fs::write(tmp.path().join("blob.bin"), &bytes).unwrap();
+        git_cmd(tmp.path(), &["add", "blob.bin"]);
+        git_cmd(tmp.path(), &["commit", "-q", "-m", "init"]);
+
+        let result = read_blob_at_head(tmp.path().to_str().unwrap(), "blob.bin")
+            .await
+            .expect("read");
+        assert!(result.exists_at_head);
+        assert!(result.content.is_none());
+    }
+
+    #[tokio::test]
+    async fn errors_in_non_git_directory() {
+        let tmp = tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "hi").unwrap();
+        let result = read_blob_at_head(tmp.path().to_str().unwrap(), "a.txt").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn skips_materializing_oversized_blob() {
+        let tmp = tempdir().unwrap();
+        init_repo(tmp.path());
+        // One byte over the cap — size check fires before binary detection,
+        // so any bytes work.
+        let bytes = vec![b'a'; (MAX_BLOB_AT_HEAD_BYTES + 1) as usize];
+        std::fs::write(tmp.path().join("big.txt"), &bytes).unwrap();
+        git_cmd(tmp.path(), &["add", "big.txt"]);
+        git_cmd(tmp.path(), &["commit", "-q", "-m", "init"]);
+
+        let result = read_blob_at_head(tmp.path().to_str().unwrap(), "big.txt")
+            .await
+            .expect("read");
+        assert!(result.exists_at_head);
+        assert!(result.content.is_none());
     }
 }
