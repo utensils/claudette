@@ -29,6 +29,7 @@ pub mod process;
 pub mod scm;
 pub mod slash_commands;
 pub mod snapshot;
+pub mod workspace_alloc;
 pub mod workspace_sync;
 
 use base64::Engine;

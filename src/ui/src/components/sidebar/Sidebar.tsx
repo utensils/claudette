@@ -1083,10 +1083,10 @@ function RemoteConnectionGroup({
     if (creatingRef.current.has(repoId)) return;
     creatingRef.current.add(repoId);
     try {
-      const name = await generateWorkspaceName();
+      const generated = await generateWorkspaceName();
       const result = await sendRemoteCommand(conn.id, "create_workspace", {
         repository_id: repoId,
-        name,
+        name: generated.slug,
       });
       if (result === null || typeof result !== "object" || !("id" in result)) {
         throw new Error("Remote server returned an invalid workspace");
