@@ -212,6 +212,41 @@ pub async fn read_workspace_file_bytes(
     })
 }
 
+#[derive(Clone, Serialize)]
+pub struct HeadBlobContent {
+    pub path: String,
+    /// Some(text) for tracked text blobs; None for binary blobs at HEAD or
+    /// when the file doesn't exist at HEAD.
+    pub content: Option<String>,
+    /// false when the path is not tracked at HEAD (untracked / staged-only /
+    /// not on the branch).
+    pub exists_at_head: bool,
+}
+
+/// Read a file's HEAD-blob contents. Used by the file viewer's git gutter
+/// to compute per-line decorations against the last committed version.
+///
+/// On any error (workspace missing, no worktree, not a git repo, etc.) we
+/// return an `Err` string. The frontend treats errors as "gutter unavailable
+/// for this file" and silently disables markers — they are not surfaced as
+/// toasts.
+#[tauri::command]
+pub async fn read_workspace_file_at_head(
+    workspace_id: String,
+    relative_path: String,
+    state: State<'_, AppState>,
+) -> Result<HeadBlobContent, String> {
+    let worktree_path = resolve_worktree_path(&workspace_id, &state)?;
+    let result = claudette::git::read_blob_at_head(&worktree_path, &relative_path)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(HeadBlobContent {
+        path: relative_path,
+        content: result.content,
+        exists_at_head: result.exists_at_head,
+    })
+}
+
 /// Write UTF-8 text to a file in a workspace's worktree. Path-traversal
 /// protected. Creates the file if missing; truncates if it exists.
 ///
