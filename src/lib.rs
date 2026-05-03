@@ -27,6 +27,7 @@ pub mod permissions;
 pub mod plugin;
 pub mod plugin_runtime;
 pub mod process;
+pub mod rpc;
 pub mod scm;
 pub mod slash_commands;
 pub mod snapshot;

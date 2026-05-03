@@ -2,7 +2,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agent_mcp_sink;
+mod app_info;
 mod commands;
+mod ipc;
 mod mdns;
 mod missing_cli;
 mod ops_hooks;
@@ -21,6 +23,27 @@ mod voice;
 mod webview2_check;
 
 use std::path::PathBuf;
+
+/// RAII holder for the running IPC server + its discovery file. Tauri's
+/// managed-state container drops both on shutdown, ensuring the socket
+/// file is unlinked and `app.json` is removed.
+struct IpcGuard {
+    _server: ipc::IpcServer,
+    _file: app_info::AppInfoFile,
+}
+
+/// Cheap ISO 8601 timestamp builder for the discovery file's
+/// `started_at`. Avoids a `chrono` dep just for this one string —
+/// formats UTC seconds as a Z-suffixed instant.
+fn chrono_iso_now() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // 1970-01-01T00:00:00Z + offset; good enough for triage. Real
+    // calendar formatting can be added when something needs it.
+    format!("@{secs}")
+}
 
 #[cfg(target_os = "macos")]
 use tauri::Emitter;
@@ -438,6 +461,45 @@ fn main() {
             // hit, headless CI with no kernel support, etc.) we fall
             // back to pure lazy mtime invalidation.
             commands::env::setup_env_watcher(app.handle().clone());
+
+            // Start the local IPC server the `claudette` CLI talks to.
+            // Spawned async on the Tauri runtime; the resulting
+            // `IpcServer` + discovery file are managed so they live for
+            // the app's lifetime and `Drop` cleans up the socket on
+            // shutdown.
+            let ipc_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                match ipc::IpcServer::start(ipc_app.clone()).await {
+                    Ok(server) => {
+                        let info = app_info::AppInfo {
+                            pid: std::process::id(),
+                            socket: server.socket.clone(),
+                            token: server.token.clone(),
+                            app_version: env!("CARGO_PKG_VERSION").to_string(),
+                            started_at: chrono_iso_now(),
+                        };
+                        match app_info::AppInfoFile::write(&info) {
+                            Ok(file) => {
+                                eprintln!(
+                                    "[ipc] listening on {} (discovery: {})",
+                                    server.socket,
+                                    app_info::app_info_path().display(),
+                                );
+                                ipc_app.manage(IpcGuard {
+                                    _server: server,
+                                    _file: file,
+                                });
+                            }
+                            Err(e) => {
+                                eprintln!("[ipc] failed to write app.json: {e}");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("[ipc] failed to start: {e}");
+                    }
+                }
+            });
 
             Ok(())
         })
