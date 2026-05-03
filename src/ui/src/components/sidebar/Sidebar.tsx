@@ -17,9 +17,10 @@ import {
   sendRemoteCommand,
   pairWithServer,
 } from "../../services/tauri";
-import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, CircleStop, GitPullRequestArrow, GitPullRequestDraft, GitMerge, GitPullRequestClosed, ChevronRight, ChevronDown } from "lucide-react";
+import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, Cog, Filter, LayoutDashboard, ChevronRight, ChevronDown } from "lucide-react";
 import { RepoIcon } from "../shared/RepoIcon";
 import { UpdateBanner } from "../layout/UpdateBanner";
+import { WorkspaceStatusIcon } from "./WorkspaceStatusIcon";
 import { getScmSortPriority } from "../../utils/scmSortPriority";
 import styles from "./Sidebar.module.css";
 
@@ -295,81 +296,27 @@ export const Sidebar = memo(function Sidebar() {
   }, [renameValue, workspaces, updateWorkspace]);
 
   const renderWorkspace = (ws: typeof workspaces[number]) => {
+    // Compute the unread/attention badge here only because the row's
+    // `wsUnread` className depends on it. The actual icon rendering lives
+    // in `WorkspaceStatusIcon`, which re-derives the same state — keeping
+    // the duplication in sync isn't a concern because the inputs are the
+    // same store slices and a divergence would surface immediately.
     const wsSessions = sessionsByWorkspace[ws.id] ?? [];
     const hasQuestion = wsSessions.some((s) => agentQuestions[s.id]);
     const hasPlan = wsSessions.some((s) => planApprovals[s.id]);
-    const badge: "ask" | "plan" | "done" | null =
-      hasQuestion ? "ask" :
-      hasPlan ? "plan" :
-      unreadCompletions.has(ws.id) && !isAgentBusy(ws.agent_status) ? "done" :
-      null;
+    const hasUnreadBadge =
+      hasQuestion
+      || hasPlan
+      || (unreadCompletions.has(ws.id) && !isAgentBusy(ws.agent_status));
     return (
       <div
         key={ws.id}
-        className={`${styles.wsItem} ${selectedWorkspaceId === ws.id ? styles.wsSelected : ""} ${badge ? styles.wsUnread : ""}`}
+        className={`${styles.wsItem} ${selectedWorkspaceId === ws.id ? styles.wsSelected : ""} ${hasUnreadBadge ? styles.wsUnread : ""}`}
         onClick={() => {
           selectWorkspace(ws.id);
         }}
       >
-        {badge === "done" ? (
-          <span className={styles.badgeDone} title={t("status_badge_completed_title")} aria-label={t("status_badge_completed_aria")} role="img">
-            <CircleCheck size={14} />
-          </span>
-        ) : badge === "plan" ? (
-          <span className={styles.badgePlan} title={t("status_badge_plan_title")} aria-label={t("status_badge_plan_aria")} role="img">
-            <CircleAlert size={14} />
-          </span>
-        ) : badge === "ask" ? (
-          <span className={styles.badgeAsk} title={t("status_badge_ask_title")} aria-label={t("status_badge_ask_aria")} role="img">
-            <CircleQuestionMark size={14} />
-          </span>
-        ) : ws.agent_status === "Running" || ws.agent_status === "Compacting" ? (
-          <span
-            className={styles.statusSpinner}
-            aria-hidden="true"
-            title={ws.agent_status === "Compacting" ? t("status_compacting") : t("status_running")}
-          >
-            <span className={styles.statusSpinnerRing} />
-          </span>
-        ) : (() => {
-          if (ws.status === "Archived") {
-            return (
-              <span className={styles.statusIcon} title={t("status_archived_title")}>
-                <Archive size={14} style={{ color: "var(--text-dim)" }} />
-              </span>
-            );
-          }
-          const summary = scmSummary[ws.id];
-          if (summary?.hasPr) {
-            const prState = summary.prState;
-            const ciState = summary.ciState;
-            const Icon = prState === "merged" ? GitMerge
-              : prState === "closed" ? GitPullRequestClosed
-              : prState === "draft" ? GitPullRequestDraft
-              : GitPullRequestArrow;
-            const color = prState === "merged" ? "var(--badge-plan)"
-              : prState === "closed" ? "var(--status-stopped)"
-              : prState === "draft" ? "var(--text-dim)"
-              : ciState === "failure" ? "var(--status-stopped)"
-              : ciState === "pending" ? "var(--badge-ask)"
-              : "var(--badge-done)";
-            const titleText = `PR: ${prState}${ciState ? `, CI: ${ciState}` : ""}`;
-            return (
-              <span className={styles.statusIcon} title={titleText}>
-                <Icon size={14} style={{ color }} />
-              </span>
-            );
-          }
-          return ws.agent_status === "Stopped" ? (
-            <span className={styles.statusIcon} title={t("status_stopped")}>
-              <CircleStop size={14} style={{ color: "var(--status-stopped)" }} />
-            </span>
-          ) : (
-            <span className={styles.statusIcon} title={t("status_idle")}>
-              <CircleDashed size={14} style={{ color: "var(--text-dim)" }} />
-            </span>
-          );
-        })()}
+        <WorkspaceStatusIcon workspace={ws} />
         <div className={styles.wsInfo}>
           {renamingWsId === ws.id ? (
             <input
@@ -1208,19 +1155,7 @@ function RemoteConnectionGroup({
                     className={`${styles.wsItem} ${selectedWorkspaceId === ws.id ? styles.wsSelected : ""}`}
                     onClick={() => selectWorkspace(ws.id)}
                   >
-                    {isAgentBusy(ws.agent_status) ? (
-                      <span className={styles.statusSpinner} aria-hidden="true">
-                        <span className={styles.statusSpinnerRing} />
-                      </span>
-                    ) : (
-                      <span
-                        className={`${styles.statusDot} ${
-                          ws.agent_status === "Stopped"
-                            ? styles.remoteStatusStopped
-                            : styles.remoteStatusIdle
-                        }`}
-                      />
-                    )}
+                    <WorkspaceStatusIcon workspace={ws} />
                     <div className={styles.wsInfo}>
                       <span className={styles.wsName}>{ws.name}</span>
                       <span className={styles.wsBranch}>{ws.branch_name}</span>
