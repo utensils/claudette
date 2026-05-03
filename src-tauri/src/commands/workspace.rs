@@ -120,14 +120,22 @@ pub async fn create_workspace(
 
     let (prefix_mode, prefix_custom) = read_branch_prefix_settings(&db);
     let prefix = resolve_branch_prefix(&prefix_mode, &prefix_custom).await;
-    let branch_name = format!("{prefix}{name}");
-    let worktree_base = state.worktree_base_dir.read().await;
-    let worktree_path: PathBuf = worktree_base.join(&repo.path_slug).join(&name);
-    let worktree_path_str = worktree_path.to_string_lossy().to_string();
+    let worktree_base = state.worktree_base_dir.read().await.clone();
+    let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
+    let allocation = claudette::workspace_alloc::allocate_workspace_name(
+        repo,
+        &workspaces,
+        &name,
+        &prefix,
+        worktree_base.as_path(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    let worktree_path_str = allocation.worktree_path.to_string_lossy().to_string();
 
     let actual_path = git::create_worktree(
         &repo_path,
-        &branch_name,
+        &allocation.branch_name,
         &worktree_path_str,
         repo.base_branch.as_deref(),
         repo.default_remote.as_deref(),
@@ -138,8 +146,8 @@ pub async fn create_workspace(
     let ws = Workspace {
         id: uuid::Uuid::new_v4().to_string(),
         repository_id: repo_id,
-        name,
-        branch_name: branch_name.clone(),
+        name: allocation.name,
+        branch_name: allocation.branch_name.clone(),
         worktree_path: Some(actual_path.clone()),
         status: WorkspaceStatus::Active,
         agent_status: AgentStatus::Idle,
@@ -151,7 +159,7 @@ pub async fn create_workspace(
     // so we don't leave orphan git state pointing to nothing.
     if let Err(e) = db.insert_workspace(&ws) {
         let _ = git::remove_worktree(&repo_path, &actual_path, true).await;
-        let _ = git::branch_delete(&repo_path, &branch_name).await;
+        let _ = git::branch_delete(&repo_path, &ws.branch_name).await;
         return Err(e.to_string());
     }
 
@@ -808,10 +816,7 @@ pub struct DiscoveredWorktree {
 
 /// Validate a workspace name: ASCII alphanumeric + hyphens, no leading/trailing hyphens.
 fn is_valid_workspace_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-        && !name.starts_with('-')
-        && !name.ends_with('-')
+    claudette::workspace_alloc::is_valid_workspace_name(name)
 }
 
 /// Discover existing git worktrees for a repository that are not yet tracked in Claudette.
