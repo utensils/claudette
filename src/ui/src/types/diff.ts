@@ -53,3 +53,12 @@ export interface DiffLine {
   old_line_number: number | null;
   new_line_number: number | null;
 }
+
+export interface CommitEntry {
+  hash: string;
+  short_hash: string;
+  subject: string;
+  author: string;
+  date: string;
+  files: DiffFile[];
+}

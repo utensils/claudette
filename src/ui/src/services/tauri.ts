@@ -689,12 +689,13 @@ export function readPlanFile(path: string): Promise<string> {
 
 // -- Diff --
 
-import type { DiffLayer, StagedDiffFiles } from "../types/diff";
+import type { CommitEntry, DiffLayer, StagedDiffFiles } from "../types/diff";
 
 export interface DiffFilesResult {
   files: DiffFile[];
   merge_base: string;
   staged_files?: StagedDiffFiles | null;
+  commits?: CommitEntry[];
 }
 
 export function loadDiffFiles(workspaceId: string): Promise<DiffFilesResult> {
@@ -713,6 +714,14 @@ export function loadFileDiff(
     filePath,
     diffLayer: diffLayer ?? null,
   });
+}
+
+export function loadCommitFileDiff(
+  worktreePath: string,
+  commitHash: string,
+  filePath: string,
+): Promise<FileDiff> {
+  return invoke("load_commit_file_diff", { worktreePath, commitHash, filePath });
 }
 
 export function revertFile(
