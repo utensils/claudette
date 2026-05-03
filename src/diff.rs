@@ -505,7 +505,14 @@ pub async fn commit_file_diff(
     // --format= suppresses the commit header so only the patch is returned.
     run_git(
         worktree_path,
-        &["show", "--format=", "--no-color", commit_hash, "--", file_path],
+        &[
+            "show",
+            "--format=",
+            "--no-color",
+            commit_hash,
+            "--",
+            file_path,
+        ],
     )
     .await
 }
@@ -518,9 +525,7 @@ pub async fn commits_in_range(
     // \x01 (SOH) as field separator; extremely unlikely in commit messages.
     // "|||COMMIT|||" as commit separator within the log stream.
     let commit_marker = "|||COMMIT|||";
-    let pretty_arg = format!(
-        "--pretty=format:{commit_marker}%H\x01%h\x01%s\x01%an\x01%cI",
-    );
+    let pretty_arg = format!("--pretty=format:{commit_marker}%H\x01%h\x01%s\x01%an\x01%cI",);
 
     let output = run_git(
         worktree_path,
