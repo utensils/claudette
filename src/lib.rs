@@ -21,6 +21,7 @@ pub mod migrations;
 pub mod missing_cli;
 pub mod model;
 pub mod names;
+pub mod ops;
 pub mod path;
 pub mod permissions;
 pub mod plugin;

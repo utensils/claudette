@@ -5,6 +5,7 @@ mod agent_mcp_sink;
 mod commands;
 mod mdns;
 mod missing_cli;
+mod ops_hooks;
 #[cfg(feature = "voice")]
 mod platform_speech;
 mod pty;

@@ -1,35 +1,20 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, State};
-use tokio::process::Command as TokioCommand;
+use tauri::{AppHandle, Emitter, State};
 
-use claudette::agent;
-use claudette::config;
 use claudette::db::Database;
-use claudette::env::WorkspaceEnv;
 use claudette::fork::{self, ForkInputs};
 use claudette::git;
 use claudette::mcp_supervisor::McpSupervisor;
 use claudette::model::{AgentStatus, Workspace, WorkspaceStatus};
 use claudette::names::NameGenerator;
-
-use crate::state::AppState;
+use claudette::ops::workspace::{self as ops_workspace, CreateParams, SetupResult};
 use claudette::process::CommandWindowExt as _;
 
-const CREATE_WORKTREE_ALLOCATION_ATTEMPTS: usize = 5;
-
-#[derive(Serialize, Clone)]
-pub struct SetupResult {
-    pub source: String,
-    pub script: String,
-    pub output: String,
-    pub exit_code: Option<i32>,
-    pub success: bool,
-    pub timed_out: bool,
-}
+use crate::ops_hooks::TauriHooks;
+use crate::state::AppState;
 
 #[derive(Serialize)]
 pub struct CreateWorkspaceResult {
@@ -43,59 +28,6 @@ pub struct CreateWorkspaceResult {
     pub setup_result: Option<SetupResult>,
 }
 
-/// Read branch prefix settings from DB (sync).
-pub(crate) fn read_branch_prefix_settings(db: &Database) -> (String, String) {
-    let mode = db
-        .get_app_setting("git_branch_prefix_mode")
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "username".to_string());
-    let custom = db
-        .get_app_setting("git_branch_prefix_custom")
-        .ok()
-        .flatten()
-        .unwrap_or_default();
-    (mode, custom)
-}
-
-/// Resolve the branch prefix from pre-read settings (async, no DB borrow).
-pub(crate) async fn resolve_branch_prefix(mode: &str, custom: &str) -> String {
-    match mode {
-        "custom" => {
-            let sanitized = custom
-                .trim()
-                .trim_matches('/')
-                .split('/')
-                .filter_map(|segment| {
-                    let s = agent::sanitize_branch_name(segment.trim(), 30);
-                    if s.is_empty() { None } else { Some(s) }
-                })
-                .collect::<Vec<_>>()
-                .join("/");
-            if sanitized.is_empty() {
-                String::new()
-            } else {
-                format!("{sanitized}/")
-            }
-        }
-        "none" => String::new(),
-        _ => {
-            // "username" mode — read git config user.name
-            match git::get_git_username().await {
-                Ok(Some(name)) => {
-                    let slug = agent::sanitize_branch_name(&name, 30);
-                    if slug.is_empty() {
-                        "claudette/".to_string()
-                    } else {
-                        format!("{slug}/")
-                    }
-                }
-                _ => "claudette/".to_string(),
-            }
-        }
-    }
-}
-
 #[tauri::command]
 pub async fn create_workspace(
     repo_id: String,
@@ -104,135 +36,53 @@ pub async fn create_workspace(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<CreateWorkspaceResult, String> {
-    if !is_valid_workspace_name(&name) {
-        return Err(format!("Invalid workspace name: '{name}'"));
-    }
-
-    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    let repos = db.list_repositories().map_err(|e| e.to_string())?;
-    let repo = repos
-        .iter()
-        .find(|r| r.id == repo_id)
-        .ok_or("Repository not found")?;
-
-    let repo_path = repo.path.clone();
-    let settings_setup_script = repo.setup_script.clone();
-    let repo_base_branch = repo.base_branch.clone();
-    let repo_default_remote = repo.default_remote.clone();
-
-    let (prefix_mode, prefix_custom) = read_branch_prefix_settings(&db);
-    let prefix = resolve_branch_prefix(&prefix_mode, &prefix_custom).await;
+    let mut db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let (prefix_mode, prefix_custom) = ops_workspace::read_branch_prefix_settings(&db);
+    let prefix = ops_workspace::resolve_branch_prefix(&prefix_mode, &prefix_custom).await;
     let worktree_base = state.worktree_base_dir.read().await.clone();
-    let (allocation, actual_path) = {
-        let mut last_collision: Option<git::GitError> = None;
-        let mut created = None;
 
-        for _ in 0..CREATE_WORKTREE_ALLOCATION_ATTEMPTS {
-            let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
-            let allocation = claudette::workspace_alloc::allocate_workspace_name(
-                repo,
-                &workspaces,
-                &name,
-                &prefix,
-                worktree_base.as_path(),
-            )
-            .await
-            .map_err(|e| e.to_string())?;
-            let worktree_path_str = allocation.worktree_path.to_string_lossy().to_string();
+    let out = ops_workspace::create(
+        &mut db,
+        TauriHooks::new(app.clone()).as_ref(),
+        worktree_base.as_path(),
+        CreateParams {
+            repo_id: &repo_id,
+            name: &name,
+            branch_prefix: &prefix,
+        },
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
-            match git::create_worktree(
-                &repo_path,
-                &allocation.branch_name,
-                &worktree_path_str,
-                repo.base_branch.as_deref(),
-                repo.default_remote.as_deref(),
-            )
-            .await
-            {
-                Ok(actual_path) => {
-                    created = Some((allocation, actual_path));
-                    break;
-                }
-                Err(err) if git::is_worktree_create_collision_error(&err) => {
-                    last_collision = Some(err);
-                }
-                Err(err) => return Err(err.to_string()),
-            }
-        }
-
-        created.ok_or_else(|| {
-            last_collision
-                .map(|err| err.to_string())
-                .unwrap_or_else(|| "Could not allocate a unique workspace name".to_string())
-        })?
-    };
-
-    let mut ws = Workspace {
-        id: uuid::Uuid::new_v4().to_string(),
-        repository_id: repo_id,
-        name: allocation.name,
-        branch_name: allocation.branch_name.clone(),
-        worktree_path: Some(actual_path.clone()),
-        status: WorkspaceStatus::Active,
-        agent_status: AgentStatus::Idle,
-        status_line: String::new(),
-        created_at: now_iso(),
-        sort_order: 0,
-    };
-
-    // If the DB insert fails, roll back the worktree + branch we just created
-    // so we don't leave orphan git state pointing to nothing.
-    if let Err(e) = db.insert_workspace(&ws) {
-        let _ = git::remove_worktree(&repo_path, &actual_path, true).await;
-        let _ = git::branch_delete(&repo_path, &ws.branch_name).await;
-        return Err(e.to_string());
-    }
-    // Patch sort_order to the value the DB assigned so the workspace this
-    // command returns to the UI lands at the bottom of its repo group
-    // immediately, instead of rendering at sort_order=0 until reload.
-    if let Ok(Some(o)) = db.lookup_workspace_sort_order(&ws.id) {
-        ws.sort_order = o;
-    }
-
-    // Resolve and execute setup script (unless caller requested skip).
+    // Setup script runs after the workspace exists so we can resolve the
+    // env-provider stack against the worktree path, then thread the
+    // resulting env into the script's process. The op intentionally
+    // stays out of env resolution because the plugin registry lives in
+    // AppState — only the GUI has it today.
     let setup_result = if skip_setup.unwrap_or(false) {
         None
     } else {
-        let resolved_env = resolve_env_for_workspace(&state, &ws, &repo_path).await;
-        resolve_and_run_setup(
-            &ws,
-            Path::new(&repo_path),
-            Path::new(&actual_path),
-            settings_setup_script.as_deref(),
-            repo_base_branch.as_deref(),
-            repo_default_remote.as_deref(),
+        let repos = db.list_repositories().map_err(|e| e.to_string())?;
+        let repo = repos
+            .iter()
+            .find(|r| r.id == repo_id)
+            .ok_or("Repository not found")?;
+        let resolved_env = resolve_env_for_workspace(&state, &out.workspace, &repo.path).await;
+        ops_workspace::resolve_and_run_setup(
+            &out.workspace,
+            Path::new(&repo.path),
+            Path::new(&out.worktree_path),
+            repo.setup_script.as_deref(),
+            repo.base_branch.as_deref(),
+            repo.default_remote.as_deref(),
             resolved_env.as_ref(),
         )
         .await
     };
 
-    crate::tray::rebuild_tray(&app);
-
-    let app_state = app.state::<crate::state::AppState>();
-    let resolved = crate::tray::resolve_notification(
-        &db,
-        &app_state.cesp_playback,
-        crate::tray::NotificationEvent::SessionStart,
-    );
-    if resolved.sound != "None" {
-        crate::commands::settings::play_notification_sound(resolved.sound, Some(resolved.volume));
-    }
-
-    // `insert_workspace` auto-creates one active chat session; fetch its id
-    // so the caller can post initial system messages to the new chat.
-    let default_session_id = db
-        .default_session_id_for_workspace(&ws.id)
-        .map_err(|e| e.to_string())?
-        .ok_or("Workspace insert did not create a default chat session")?;
-
     Ok(CreateWorkspaceResult {
-        workspace: ws,
-        default_session_id,
+        workspace: out.workspace,
+        default_session_id: out.default_session_id,
         setup_result,
     })
 }
@@ -254,8 +104,8 @@ pub async fn fork_workspace_at_checkpoint(
 ) -> Result<ForkWorkspaceResult, String> {
     let mut db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
 
-    let (prefix_mode, prefix_custom) = read_branch_prefix_settings(&db);
-    let prefix = resolve_branch_prefix(&prefix_mode, &prefix_custom).await;
+    let (prefix_mode, prefix_custom) = ops_workspace::read_branch_prefix_settings(&db);
+    let prefix = ops_workspace::resolve_branch_prefix(&prefix_mode, &prefix_custom).await;
 
     let worktree_base = state.worktree_base_dir.read().await.clone();
 
@@ -279,186 +129,6 @@ pub async fn fork_workspace_at_checkpoint(
         workspace: outcome.workspace,
         session_resumed: outcome.session_resumed,
     })
-}
-
-/// Resolve the setup script from .claudette.json or settings fallback, then execute it.
-///
-/// `WorkspaceEnv` is built lazily — `git::default_branch()` is only called
-/// when a script is actually found, avoiding an unnecessary git subprocess
-/// in the common no-script case.
-async fn resolve_and_run_setup(
-    ws: &Workspace,
-    repo_path: &Path,
-    worktree_path: &Path,
-    settings_script: Option<&str>,
-    base_branch: Option<&str>,
-    default_remote: Option<&str>,
-    resolved_env: Option<&claudette::env_provider::ResolvedEnv>,
-) -> Option<SetupResult> {
-    // 1. Check .claudette.json
-    let (script, source) = match config::load_config(repo_path) {
-        Ok(Some(cfg)) => {
-            if let Some(setup) = cfg.scripts.and_then(|s| s.setup) {
-                (setup, "repo")
-            } else if let Some(fallback) = settings_script {
-                (fallback.to_string(), "settings")
-            } else {
-                return None;
-            }
-        }
-        Ok(None) => {
-            if let Some(fallback) = settings_script {
-                (fallback.to_string(), "settings")
-            } else {
-                return None;
-            }
-        }
-        Err(parse_err) => {
-            // Malformed .claudette.json — warn but fall back to settings script.
-            eprintln!("[setup] {parse_err}");
-            if let Some(fallback) = settings_script {
-                (fallback.to_string(), "settings")
-            } else {
-                return Some(SetupResult {
-                    source: "repo".to_string(),
-                    script: String::new(),
-                    output: parse_err,
-                    exit_code: None,
-                    success: false,
-                    timed_out: false,
-                });
-            }
-        }
-    };
-
-    // 2. Build workspace env vars now that we know a script will run.
-    let repo_path_str = repo_path.to_string_lossy();
-    let default_branch = match base_branch {
-        Some(b) => b.to_string(),
-        None => git::default_branch(&repo_path_str, default_remote)
-            .await
-            .unwrap_or_else(|_| "main".to_string()),
-    };
-    let ws_env = WorkspaceEnv::from_workspace(ws, &repo_path_str, default_branch);
-
-    // 3. Execute the script in its own process group so we can kill the
-    //    entire tree on timeout (prevents orphan grandchild processes).
-    //    `process_group` is a Unix-only extension; on Windows the timeout
-    //    path falls back to `child.kill().await` which only terminates the
-    //    immediate child. Windows also lacks a built-in `sh`, so setup
-    //    scripts won't spawn there without a user-installed shell — the
-    //    grandchild-leak on timeout is moot until that is addressed.
-    let mut cmd = TokioCommand::new("sh");
-    cmd.no_console_window();
-    cmd.arg("-c")
-        .arg(&script)
-        .current_dir(worktree_path)
-        .env("PATH", claudette::env::enriched_path())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    #[cfg(unix)]
-    cmd.process_group(0);
-    // Env-provider layer (direnv/mise/dotenv/nix-devshell) first so the
-    // user's setup commands can rely on tools/vars from those sources
-    // (e.g. `bun install` finding `node` from a mise-managed toolchain),
-    // then WorkspaceEnv on top so CLAUDETTE_* markers always win.
-    if let Some(env) = resolved_env {
-        env.apply(&mut cmd);
-    }
-    ws_env.apply(&mut cmd);
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => {
-            return Some(SetupResult {
-                source: source.to_string(),
-                script,
-                output: format!("Failed to spawn script: {e}"),
-                exit_code: None,
-                success: false,
-                timed_out: false,
-            });
-        }
-    };
-
-    // Only used on Unix to send SIGKILL to the process group on timeout.
-    #[cfg(unix)]
-    let pid = child.id();
-
-    // 3. Read stdout/stderr concurrently with waiting to avoid pipe buffer
-    //    deadlocks (OS pipe buffers are ~64KB — scripts like `npm install`
-    //    easily exceed that).
-    let stdout_handle = child.stdout.take();
-    let stderr_handle = child.stderr.take();
-
-    let stdout_task = tokio::spawn(async move {
-        let mut buf = Vec::new();
-        if let Some(mut out) = stdout_handle {
-            let _ = tokio::io::AsyncReadExt::read_to_end(&mut out, &mut buf).await;
-        }
-        buf
-    });
-    let stderr_task = tokio::spawn(async move {
-        let mut buf = Vec::new();
-        if let Some(mut err) = stderr_handle {
-            let _ = tokio::io::AsyncReadExt::read_to_end(&mut err, &mut buf).await;
-        }
-        buf
-    });
-
-    match tokio::time::timeout(Duration::from_secs(300), child.wait()).await {
-        Ok(Ok(status)) => {
-            let stdout_buf = stdout_task.await.unwrap_or_default();
-            let stderr_buf = stderr_task.await.unwrap_or_default();
-            let stdout = String::from_utf8_lossy(&stdout_buf);
-            let stderr = String::from_utf8_lossy(&stderr_buf);
-            let combined = if stderr.is_empty() {
-                stdout.to_string()
-            } else if stdout.is_empty() {
-                stderr.to_string()
-            } else {
-                format!("{stdout}\n{stderr}")
-            };
-            let code = status.code();
-            Some(SetupResult {
-                source: source.to_string(),
-                script,
-                output: combined,
-                exit_code: code,
-                success: code == Some(0),
-                timed_out: false,
-            })
-        }
-        Ok(Err(e)) => Some(SetupResult {
-            source: source.to_string(),
-            script,
-            output: format!("Script execution error: {e}"),
-            exit_code: None,
-            success: false,
-            timed_out: false,
-        }),
-        Err(_) => {
-            // Timeout — kill the entire process group on Unix (SIGKILL to
-            // -pgid hits every descendant). Windows has no process-group
-            // signal; `child.kill()` below calls `TerminateProcess` on
-            // the immediate child only.
-            #[cfg(unix)]
-            if let Some(pgid) = pid {
-                unsafe {
-                    libc::kill(-(pgid as i32), libc::SIGKILL);
-                }
-            }
-            let _ = child.kill().await;
-            let _ = child.wait().await; // reap to avoid zombie
-            Some(SetupResult {
-                source: source.to_string(),
-                script,
-                output: "Setup script timed out after 5 minutes".to_string(),
-                exit_code: None,
-                success: false,
-                timed_out: true,
-            })
-        }
-    }
 }
 
 #[tauri::command]
@@ -485,7 +155,7 @@ pub async fn run_workspace_setup(
         .ok_or("Repository not found")?;
 
     let resolved_env = resolve_env_for_workspace(&state, ws, &repo.path).await;
-    let result = resolve_and_run_setup(
+    let result = ops_workspace::resolve_and_run_setup(
         ws,
         Path::new(&repo.path),
         Path::new(worktree_path),
