@@ -446,6 +446,15 @@ pub async fn create_worktree(
     canonicalize_worktree_path(worktree_path)
 }
 
+pub fn is_worktree_create_collision_error(err: &GitError) -> bool {
+    match err {
+        GitError::CommandFailed(msg) => {
+            msg.contains("already exists") || msg.contains("is already checked out")
+        }
+        GitError::NotAGitRepo | GitError::CliNotFound => false,
+    }
+}
+
 /// Create a worktree + new branch rooted at an explicit git ref (commit hash,
 /// tag, or branch name). Unlike [`create_worktree`], this does NOT fetch or
 /// resolve the default branch — the caller supplies the exact base ref.
@@ -1029,6 +1038,22 @@ mod tests {
             err.to_string().contains("no commits"),
             "expected 'no commits' error, got: {err}"
         );
+    }
+
+    #[test]
+    fn test_worktree_create_collision_classifier() {
+        assert!(is_worktree_create_collision_error(
+            &GitError::CommandFailed(
+                "fatal: a branch named 'user/dusty-dandelion' already exists".into(),
+            ),
+        ));
+        assert!(is_worktree_create_collision_error(
+            &GitError::CommandFailed("fatal: 'main' is already checked out at '/tmp/repo'".into(),),
+        ));
+        assert!(!is_worktree_create_collision_error(
+            &GitError::CommandFailed("fatal: not a valid object name: origin/main".into()),
+        ));
+        assert!(!is_worktree_create_collision_error(&GitError::NotAGitRepo));
     }
 
     #[tokio::test]
