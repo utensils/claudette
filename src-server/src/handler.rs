@@ -1053,11 +1053,20 @@ async fn handle_send_chat_message(
             // Emit event. Collab path (room exists) → publish so the room's
             // subscribers fan it out. Legacy path (no room) → direct write
             // to the prompter's writer, matching today's 1:1 behavior.
+            //
+            // Payload key MUST be `chat_session_id` (not `session_id`) so the
+            // shape matches the typed `AgentStreamPayload` the Tauri-side
+            // bridge serializes (`src-tauri/src/commands/chat/mod.rs:69`).
+            // The frontend's `useAgentStream` listener destructures
+            // `chat_session_id` from `event.payload`; if the key is
+            // `session_id` the destructure silently produces `undefined`
+            // and every agent-stream event is dropped on the floor —
+            // remote clients see a stuck spinner with no visible error.
             let event_msg = json!({
                 "event": "agent-stream",
                 "payload": {
                     "workspace_id": ws_id,
-                    "session_id": chat_session_id_for_stream,
+                    "chat_session_id": chat_session_id_for_stream,
                     "event": event,
                 }
             });
