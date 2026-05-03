@@ -147,6 +147,14 @@ pub async fn handle_request(
         .cloned()
         .unwrap_or(serde_json::Value::Null);
     let method = request.get("method").and_then(|m| m.as_str()).unwrap_or("");
+    // TEMP-DIAG: per-RPC trace so we can see what the remote is sending.
+    // Remove once the collab share end-to-end is verified.
+    eprintln!(
+        "[collab-trace] rpc method={method} pid={} share={} id={:?}",
+        ctx.participant_id.as_str(),
+        ctx.share_id,
+        id
+    );
     let params = request.get("params").cloned().unwrap_or_default();
 
     let result = match method {

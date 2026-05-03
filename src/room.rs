@@ -269,10 +269,16 @@ impl RoomRegistry {
         // here — synchronously, while we still hold the only `Arc<Room>`
         // outside the function — we guarantee any subscribers it spawns
         // see every subsequent event from turn one.
-        if let Ok(hook) = self.on_create.lock()
-            && let Some(cb) = hook.as_ref()
-        {
-            cb(room.clone());
+        eprintln!("[collab-trace] RoomRegistry creating new room session={chat_session_id}");
+        if let Ok(hook) = self.on_create.lock() {
+            if let Some(cb) = hook.as_ref() {
+                eprintln!("[collab-trace] firing on_create hook session={chat_session_id}");
+                cb(room.clone());
+            } else {
+                eprintln!("[collab-trace] WARN on_create hook is None session={chat_session_id}");
+            }
+        } else {
+            eprintln!("[collab-trace] WARN on_create mutex poisoned session={chat_session_id}");
         }
         guard.insert(chat_session_id.to_string(), room.clone());
         room

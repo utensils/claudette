@@ -532,6 +532,7 @@ pub fn attach_host_room_subscribers(app: AppHandle, room: std::sync::Arc<claudet
     // internally today, so we just call them in order — they capture
     // their receivers synchronously as their first statement.
     let chat_session_id = room.chat_session_id.clone();
+    eprintln!("[collab-trace] attach_host_room_subscribers session={chat_session_id}");
     spawn_host_event_subscriber(app.clone(), room.clone());
     spawn_host_vote_resolver(app, room, chat_session_id);
 }
@@ -540,6 +541,8 @@ pub fn attach_host_room_subscribers(app: AppHandle, room: std::sync::Arc<claudet
 fn spawn_host_event_subscriber(app: AppHandle, room: std::sync::Arc<claudette::room::Room>) {
     use tauri::Emitter;
     let mut rx = room.subscribe();
+    let session = room.chat_session_id.clone();
+    eprintln!("[collab-trace] spawn_host_event_subscriber session={session}");
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
@@ -552,12 +555,19 @@ fn spawn_host_event_subscriber(app: AppHandle, room: std::sync::Arc<claudette::r
                         .get("payload")
                         .cloned()
                         .unwrap_or(serde_json::Value::Null);
+                    eprintln!(
+                        "[collab-trace] host subscriber forwarding event={name} session={session}"
+                    );
                     let _ = app.emit(name, payload);
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    eprintln!("[collab-trace] host subscriber lagged session={session}");
                     let _ = app.emit("resync-required", serde_json::Value::Null);
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    eprintln!("[collab-trace] host subscriber closed session={session}");
+                    break;
+                }
             }
         }
     });

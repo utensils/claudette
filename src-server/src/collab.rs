@@ -32,6 +32,12 @@ pub async fn handle_join_session(
     // step — once they share a workspace in collab mode, every chat
     // session in scope automatically gets a multi-user room when the
     // first remote arrives.
+    eprintln!(
+        "[collab-trace] handle_join_session enter session={} pid={} collaborative={}",
+        chat_session_id,
+        ctx.participant_id.as_str(),
+        ctx.collaborative
+    );
     let room = if ctx.collaborative {
         state
             .rooms
@@ -40,9 +46,15 @@ pub async fn handle_join_session(
     } else {
         match state.rooms.get(chat_session_id).await {
             Some(r) => r,
-            None => return Err("Session is not collaborative".into()),
+            None => {
+                eprintln!(
+                    "[collab-trace] handle_join_session reject (non-collab, no room) session={chat_session_id}"
+                );
+                return Err("Session is not collaborative".into());
+            }
         }
     };
+    eprintln!("[collab-trace] handle_join_session got room session={chat_session_id}");
 
     // Mark this connection as joined first; idempotency below depends on it.
     let already_joined = {
@@ -59,13 +71,23 @@ pub async fn handle_join_session(
             muted: false,
         };
         room.add_participant(info.clone()).await;
+        eprintln!(
+            "[collab-trace] handle_join_session added participant pid={}",
+            ctx.participant_id.as_str()
+        );
 
         // Broadcast the join so existing participants update their roster.
+        let snapshot = room.participant_list().await;
+        eprintln!(
+            "[collab-trace] handle_join_session publish participants-changed n={} subscribers={}",
+            snapshot.len(),
+            room.tx.receiver_count()
+        );
         room.publish(json!({
             "event": "participants-changed",
             "payload": {
                 "chat_session_id": chat_session_id,
-                "participants": room.participant_list().await,
+                "participants": snapshot,
             },
         }));
 
