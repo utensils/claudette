@@ -404,10 +404,7 @@ pub async fn unstage_file(worktree_path: &str, file_path: &str) -> Result<(), Di
 /// Stage many files in a single `git add` invocation. Issuing one command
 /// with N pathspecs avoids `.git/index.lock` contention that parallel
 /// per-file `git add`s race on, and is also faster than serializing them.
-pub async fn stage_files(
-    worktree_path: &str,
-    file_paths: &[String],
-) -> Result<(), DiffError> {
+pub async fn stage_files(worktree_path: &str, file_paths: &[String]) -> Result<(), DiffError> {
     if file_paths.is_empty() {
         return Ok(());
     }
@@ -422,10 +419,7 @@ pub async fn stage_files(
 
 /// Unstage many files in a single `git restore --staged` invocation.
 /// See [`stage_files`] for why this batches.
-pub async fn unstage_files(
-    worktree_path: &str,
-    file_paths: &[String],
-) -> Result<(), DiffError> {
+pub async fn unstage_files(worktree_path: &str, file_paths: &[String]) -> Result<(), DiffError> {
     if file_paths.is_empty() {
         return Ok(());
     }

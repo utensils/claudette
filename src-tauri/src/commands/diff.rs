@@ -116,20 +116,14 @@ pub async fn unstage_file(worktree_path: String, file_path: String) -> Result<()
 }
 
 #[tauri::command]
-pub async fn stage_files(
-    worktree_path: String,
-    file_paths: Vec<String>,
-) -> Result<(), String> {
+pub async fn stage_files(worktree_path: String, file_paths: Vec<String>) -> Result<(), String> {
     diff::stage_files(&worktree_path, &file_paths)
         .await
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn unstage_files(
-    worktree_path: String,
-    file_paths: Vec<String>,
-) -> Result<(), String> {
+pub async fn unstage_files(worktree_path: String, file_paths: Vec<String>) -> Result<(), String> {
     diff::unstage_files(&worktree_path, &file_paths)
         .await
         .map_err(|e| e.to_string())
