@@ -117,6 +117,7 @@
   --diff-added-bg:       rgba(60, 180, 90, 0.12);
   --diff-removed-bg:     rgba(220, 60, 60, 0.12);
   --diff-added-text:     #6ccc80;
+  --git-gutter-modified: #5ba3d0;
   --diff-removed-text:   #f07070;
   --diff-hunk-header:    #8cb8e0;
   --diff-line-number:    #686058;
@@ -268,6 +269,7 @@
   --diff-added-bg:   rgba(26, 127, 55, 0.10);
   --diff-removed-bg: rgba(196, 32, 32, 0.10);
   --diff-added-text: #1a7f37;
+  --git-gutter-modified: #1d6fa5;
   --diff-removed-text: #c42020;
   --diff-hunk-header: #3d6da0;
   --diff-line-number: #b8afa5;
@@ -331,6 +333,7 @@
   --diff-added-bg: rgba(67, 112, 25, 0.25);
   --diff-removed-bg: rgba(112, 0, 9, 0.25);
   --diff-added-text: #d2ebbe;
+  --git-gutter-modified: #a3c8e0;
   --diff-removed-text: #cf6a4c;
   --diff-hunk-header: #8fbfdc;
 }
@@ -407,6 +410,7 @@
   --diff-added-bg:   rgba(49, 116, 143, 0.22);
   --diff-removed-bg: rgba(235, 111, 146, 0.18);
   --diff-added-text:   #9ccfd8;
+  --git-gutter-modified: #3e8fb0;
   --diff-removed-text: #eb6f92;
   --diff-hunk-header:  #c4a7e7;
 }
@@ -455,6 +459,7 @@
   --diff-added-bg:   rgba(62, 143, 176, 0.22);
   --diff-removed-bg: rgba(235, 111, 146, 0.18);
   --diff-added-text:   #9ccfd8;
+  --git-gutter-modified: #3e8fb0;
   --diff-removed-text: #eb6f92;
   --diff-hunk-header:  #c4a7e7;
 }
@@ -506,6 +511,7 @@
   --diff-added-bg:   rgba(40, 105, 131, 0.12);
   --diff-removed-bg: rgba(180, 99, 122, 0.12);
   --diff-added-text:   #286983;
+  --git-gutter-modified: #56949f;
   --diff-removed-text: #b4637a;
   --diff-hunk-header:  #907aa9;
 }
@@ -556,6 +562,7 @@
   --diff-added-bg:   rgba(133, 153, 0, 0.18);
   --diff-removed-bg: rgba(220, 50, 47, 0.18);
   --diff-added-text:   #859900;
+  --git-gutter-modified: #268bd2;
   --diff-removed-text: #dc322f;
   --diff-hunk-header:  #2aa198;
 }
@@ -607,6 +614,7 @@
   --diff-added-bg:   rgba(133, 153, 0, 0.14);
   --diff-removed-bg: rgba(220, 50, 47, 0.14);
   --diff-added-text:   #657b83;
+  --git-gutter-modified: #268bd2;
   --diff-removed-text: #dc322f;
   --diff-hunk-header:  #2aa198;
 }
@@ -655,6 +663,7 @@
   --diff-added-bg:   rgba(173, 218, 120, 0.14);
   --diff-removed-bg: rgba(253, 104, 131, 0.14);
   --diff-added-text:   #adda78;
+  --git-gutter-modified: #82aaff;
   --diff-removed-text: #fd6883;
   --diff-hunk-header:  #85dacc;
 }
@@ -703,6 +712,7 @@
   --diff-added-bg:   rgba(60, 95, 25, 0.20);
   --diff-removed-bg: rgba(95, 10, 15, 0.20);
   --diff-added-text:   #b8cca0;
+  --git-gutter-modified: #9bb8d8;
   --diff-removed-text: #b56a53;
   --diff-hunk-header:  #7aa8c0;
 }
@@ -751,6 +761,7 @@
   --diff-added-bg:   rgba(0, 180, 80, 0.12);
   --diff-removed-bg: rgba(220, 40, 40, 0.12);
   --diff-added-text:   rgb(80, 220, 120);
+  --git-gutter-modified: rgb(120, 170, 230);
   --diff-removed-text: rgb(240, 100, 100);
   --diff-hunk-header:  rgb(100, 160, 240);
 }
@@ -799,6 +810,7 @@
   --diff-added-bg:   rgba(0, 180, 80, 0.12);
   --diff-removed-bg: rgba(220, 40, 40, 0.12);
   --diff-added-text:   rgb(80, 210, 110);
+  --git-gutter-modified: rgb(120, 170, 220);
   --diff-removed-text: rgb(235, 100, 100);
   --diff-hunk-header:  rgb(120, 170, 230);
 }
@@ -848,6 +860,7 @@
   --diff-added-bg:   rgba(8, 163, 99, 0.18);
   --diff-removed-bg: rgba(217, 40, 40, 0.18);
   --diff-added-text:   #90ed87;
+  --git-gutter-modified: #87b8ed;
   --diff-removed-text: #ff8a8a;
   --diff-hunk-header:  #8adcff;
 }

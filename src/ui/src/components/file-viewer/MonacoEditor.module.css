@@ -16,3 +16,33 @@
 .host :global(.monaco-editor) {
   width: 100%;
 }
+
+/* Git gutter — colored bars in Monaco's line-numbers gutter. Decorations
+   are applied via `linesDecorationsClassName`; Monaco renders the class
+   on a thin strip immediately right of the line numbers. */
+.gitGutterAdd {
+  background: var(--diff-added-text);
+  width: 3px !important;
+  margin-left: 3px;
+}
+
+.gitGutterModify {
+  background: var(--git-gutter-modified);
+  width: 3px !important;
+  margin-left: 3px;
+}
+
+/* delete-above: a small downward-pointing red triangle in the gutter on
+   the line where the deletion landed. We render it via ::before so the
+   line itself stays clean. */
+.gitGutterDeleteAbove::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 0;
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--diff-removed-text);
+}
