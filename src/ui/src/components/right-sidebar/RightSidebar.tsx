@@ -213,10 +213,9 @@ export const RightSidebar = memo(function RightSidebar() {
     const canDiscard = discardEnabled && isDiscardableLayer(layer);
     const canStage = discardEnabled && (layer === "unstaged" || layer === "untracked");
     const canUnstage = discardEnabled && layer === "staged";
-    // Source file no longer exists on disk for an unstaged deletion, so the
-    // "open file" button would just produce a load error.
-    const canOpenSource = selectedWorkspaceId != null
-      && !(layer === "unstaged" && file.status === "Deleted");
+    // Deleted files don't exist on disk regardless of layer (staged deletions
+    // are already removed by `git rm`; committed deletions are gone from HEAD).
+    const canOpenSource = selectedWorkspaceId != null && file.status !== "Deleted";
 
     const handleContextMenu = (e: React.MouseEvent) => {
       if (!canDiscard) return;
@@ -336,7 +335,9 @@ export const RightSidebar = memo(function RightSidebar() {
       if (!worktreePath || !selectedWorkspaceId) return;
       await stageFile(worktreePath, filePath);
       const result = await loadDiff(selectedWorkspaceId);
-      applyDiffResult(result);
+      if (useAppStore.getState().selectedWorkspaceId === selectedWorkspaceId) {
+        applyDiffResult(result);
+      }
     },
     [worktreePath, selectedWorkspaceId, loadDiff, applyDiffResult],
   );
@@ -346,7 +347,9 @@ export const RightSidebar = memo(function RightSidebar() {
       if (!worktreePath || !selectedWorkspaceId) return;
       await unstageFile(worktreePath, filePath);
       const result = await loadDiff(selectedWorkspaceId);
-      applyDiffResult(result);
+      if (useAppStore.getState().selectedWorkspaceId === selectedWorkspaceId) {
+        applyDiffResult(result);
+      }
     },
     [worktreePath, selectedWorkspaceId, loadDiff, applyDiffResult],
   );
@@ -358,7 +361,9 @@ export const RightSidebar = memo(function RightSidebar() {
       // `.git/index.lock` and would fail.
       await stageFiles(worktreePath, files.map((f) => f.path));
       const result = await loadDiff(selectedWorkspaceId);
-      applyDiffResult(result);
+      if (useAppStore.getState().selectedWorkspaceId === selectedWorkspaceId) {
+        applyDiffResult(result);
+      }
     },
     [worktreePath, selectedWorkspaceId, loadDiff, applyDiffResult],
   );
@@ -368,7 +373,9 @@ export const RightSidebar = memo(function RightSidebar() {
       if (!worktreePath || !selectedWorkspaceId || files.length === 0) return;
       await unstageFiles(worktreePath, files.map((f) => f.path));
       const result = await loadDiff(selectedWorkspaceId);
-      applyDiffResult(result);
+      if (useAppStore.getState().selectedWorkspaceId === selectedWorkspaceId) {
+        applyDiffResult(result);
+      }
     },
     [worktreePath, selectedWorkspaceId, loadDiff, applyDiffResult],
   );
@@ -389,7 +396,9 @@ export const RightSidebar = memo(function RightSidebar() {
         state.setDiffSelectedFile(null);
       }
       const result = await loadDiff(selectedWorkspaceId);
-      applyDiffResult(result);
+      if (useAppStore.getState().selectedWorkspaceId === selectedWorkspaceId) {
+        applyDiffResult(result);
+      }
     },
     [worktreePath, selectedWorkspaceId, loadDiff, applyDiffResult],
   );
@@ -407,7 +416,9 @@ export const RightSidebar = memo(function RightSidebar() {
       }
 
       const result = await loadDiff(selectedWorkspaceId);
-      applyDiffResult(result);
+      if (useAppStore.getState().selectedWorkspaceId === selectedWorkspaceId) {
+        applyDiffResult(result);
+      }
     },
     [worktreePath, selectedWorkspaceId, loadDiff, applyDiffResult]
   );

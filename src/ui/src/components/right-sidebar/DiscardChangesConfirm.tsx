@@ -5,16 +5,14 @@ import type { DiffLayer } from "../../types/diff";
 
 export type DiscardableLayer = Extract<DiffLayer, "unstaged" | "untracked">;
 
-interface DiscardChangesConfirmProps {
-  /** Single-file confirm — shows the path inline. */
-  filePath?: string;
-  /** Bulk-discard confirm — shows "N files" instead of the path. Mutually
-   *  exclusive with `filePath`; takes precedence when both are set. */
-  bulkCount?: number;
+type DiscardChangesConfirmProps = {
   layer: DiscardableLayer;
   onConfirm: () => Promise<void>;
   onClose: () => void;
-}
+} & (
+  | { filePath: string; bulkCount?: never }
+  | { bulkCount: number; filePath?: never }
+);
 
 export function DiscardChangesConfirm({
   filePath,
