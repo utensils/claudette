@@ -1,0 +1,62 @@
+---
+title: File Editor
+description: Edit files in your workspace with a full Monaco-powered editor — the same editor that ships in VS Code.
+---
+
+Claudette ships a full **Monaco** editor — the same code editor that powers VS Code — for opening and editing files in your workspace. It runs entirely offline alongside the agent chat, the diff viewer, and the integrated terminal.
+
+## Opening a File
+
+Click any file in the changed-files sidebar (or use the file picker) to open it. The file opens as a tab next to your chat and diff tabs, so you can hop between agent output, the diff, and the editor without losing context.
+
+Each file gets its own tab, and switching files inside that tab gives you a fresh undo history per file.
+
+{/* TODO: Screenshot of Monaco editor open on a TypeScript file */}
+:::note[Screenshot coming soon]
+A screenshot showing Monaco open on a source file, alongside the chat panel, will be added here.
+:::
+
+## Read vs Edit Mode
+
+Files open in read-only mode by default. Toggling into edit mode does **not** remount the editor — your cursor position, scroll offset, and undo stack are preserved as you switch in and out of edit mode.
+
+Save with `⌘S` on macOS or `Ctrl+S` on Linux/Windows. The shortcut is scoped to the editor — it only fires when the editor has focus, so it won't collide with other panels.
+
+## Theme Sync
+
+Monaco's theme follows Claudette's app theme automatically. Pick a theme in `Settings > Appearance` and the editor restyles immediately, with no reload required. The same is true for dynamic colour changes — the editor observes the active theme and updates in real time.
+
+See [Theming](/claudette/features/theming/) for the full list of bundled themes.
+
+## Syntax Highlighting & Language Services
+
+Language detection is automatic — Monaco picks the language from the file extension, so opening `app.tsx` gives you TypeScript, `styles.css` gives you CSS, and so on.
+
+Dedicated language services run for:
+
+- **TypeScript / JavaScript** — full type-aware highlighting and diagnostics
+- **JSON** — schema-aware validation and formatting
+- **CSS / SCSS / LESS** — property and value validation
+- **HTML / Handlebars / Razor** — tag and attribute completion
+
+Each language service runs in its own web worker, so typing latency stays snappy on larger files. Everything is bundled with the app — no CDN fetches, no network required.
+
+## Not the Diff Viewer
+
+The Monaco editor is for **opening and editing files**. The [diff viewer](/claudette/features/diff-viewer/) is a separate component that uses Shiki for syntax highlighting and is optimised for reviewing hunks of changed code rather than free-form editing. Both can be open at the same time as separate tabs.
+
+## Defaults
+
+The editor ships with these defaults:
+
+| Setting | Value |
+|---------|-------|
+| Font | Default mono stack (matches the rest of the app) |
+| Font size | 13px |
+| Line numbers | On |
+| Word wrap | On |
+| Minimap | Off |
+| Sticky scroll | Off |
+| Whitespace rendering | On selection only |
+
+These are not yet user-configurable — open an issue on GitHub if you'd like one of them surfaced as a setting.

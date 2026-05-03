@@ -5,13 +5,21 @@ description: Help bring Claudette to your language. No Rust or TypeScript requir
 
 Claudette is built by a small team and a growing community. One of the most impactful contributions you can make — especially if you're not a developer — is **translating the app into your language**.
 
+:::tip[Just want to switch your language?]
+If you're looking to *use* Claudette in another language rather than contribute a translation, see [Internationalization](/claudette/features/internationalization/) for where to find the language picker and what's translated today.
+:::
+
 ## What's localized today
 
-The app ships with English, Spanish, and Brazilian Portuguese:
+The app ships with five complete translations:
 
-- **English** is the complete baseline: the full UI (buttons, tooltips, settings, modals, chat, sidebar) plus the system tray menu, native notifications, and the quit-confirm dialog.
-- **Spanish** is a complete translation: the full UI (buttons, tooltips, settings, modals, chat, sidebar) plus the system tray menu, native notifications, and the quit-confirm dialog.
-- **Brazilian Portuguese (pt-BR)** is a complete translation: the full UI plus the system tray menu, native notifications, and the quit-confirm dialog.
+- **English (`en`)** is the baseline: the full UI (buttons, tooltips, settings, modals, chat, sidebar) plus the system tray menu, native notifications, and the quit-confirm dialog.
+- **Spanish (`es`)** — complete.
+- **Brazilian Portuguese (`pt-BR`)** — complete.
+- **Japanese (`ja`)** — complete.
+- **Simplified Chinese (`zh-CN`)** — complete.
+
+Each translation covers the full UI plus the system tray menu, native notifications, and the quit-confirm dialog.
 
 Missing translation keys fall back to English at runtime, so a partially translated language is safe to ship — anything not yet translated simply shows in English until someone fills it in.
 
