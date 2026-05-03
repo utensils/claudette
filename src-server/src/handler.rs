@@ -817,11 +817,12 @@ async fn handle_create_workspace(
             )
             .await
             .map_err(|e| e.to_string())?;
+            let worktree_path_str = allocation.worktree_path.to_string_lossy().to_string();
 
             match claudette::git::create_worktree(
                 &repo.path,
                 &allocation.branch_name,
-                &allocation.worktree_path.to_string_lossy(),
+                &worktree_path_str,
                 repo.base_branch.as_deref(),
                 repo.default_remote.as_deref(),
             )
