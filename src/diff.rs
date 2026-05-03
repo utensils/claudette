@@ -385,6 +385,85 @@ pub async fn revert_file(
     Ok(())
 }
 
+/// Stage a single file (`git add -A -- <file>`). `-A` ensures additions,
+/// modifications, and removals are all reflected — without it, staging an
+/// unstaged deletion (the file is gone from the worktree) errors with
+/// "pathspec did not match any files". Pathspec literal mode (`--`) prevents
+/// glob expansion.
+pub async fn stage_file(worktree_path: &str, file_path: &str) -> Result<(), DiffError> {
+    validate_file_path(file_path)?;
+    run_git(worktree_path, &["add", "-A", "--", file_path]).await?;
+    Ok(())
+}
+
+/// Unstage a single file (`git restore --staged -- <file>`). Leaves the
+/// worktree copy untouched.
+pub async fn unstage_file(worktree_path: &str, file_path: &str) -> Result<(), DiffError> {
+    validate_file_path(file_path)?;
+    run_git(worktree_path, &["restore", "--staged", "--", file_path]).await?;
+    Ok(())
+}
+
+/// Stage many files in a single `git add -A` invocation. Issuing one command
+/// with N pathspecs avoids `.git/index.lock` contention that parallel
+/// per-file `git add`s race on, and is also faster than serializing them.
+/// `-A` is required so deleted paths in the batch stage as removals rather
+/// than failing with "pathspec did not match any files".
+pub async fn stage_files(worktree_path: &str, file_paths: &[String]) -> Result<(), DiffError> {
+    if file_paths.is_empty() {
+        return Ok(());
+    }
+    for p in file_paths {
+        validate_file_path(p)?;
+    }
+    let mut args: Vec<&str> = vec!["add", "-A", "--"];
+    args.extend(file_paths.iter().map(String::as_str));
+    run_git(worktree_path, &args).await?;
+    Ok(())
+}
+
+/// Unstage many files in a single `git restore --staged` invocation.
+/// See [`stage_files`] for why this batches.
+pub async fn unstage_files(worktree_path: &str, file_paths: &[String]) -> Result<(), DiffError> {
+    if file_paths.is_empty() {
+        return Ok(());
+    }
+    for p in file_paths {
+        validate_file_path(p)?;
+    }
+    let mut args: Vec<&str> = vec!["restore", "--staged", "--"];
+    args.extend(file_paths.iter().map(String::as_str));
+    run_git(worktree_path, &args).await?;
+    Ok(())
+}
+
+/// Discard worktree changes for many files in one go. Tracked paths are
+/// passed to a single `git restore --` invocation; untracked paths are
+/// removed from disk via `fs::remove_file` in series. Splitting by
+/// `is_untracked` mirrors [`discard_file`]'s per-file branching, but
+/// folds the tracked branch into one git call to avoid index-lock races.
+pub async fn discard_files(
+    worktree_path: &str,
+    tracked: &[String],
+    untracked: &[String],
+) -> Result<(), DiffError> {
+    for p in tracked.iter().chain(untracked.iter()) {
+        validate_file_path(p)?;
+    }
+    if !tracked.is_empty() {
+        let mut args: Vec<&str> = vec!["restore", "--"];
+        args.extend(tracked.iter().map(String::as_str));
+        run_git(worktree_path, &args).await?;
+    }
+    for p in untracked {
+        let full_path = Path::new(worktree_path).join(p);
+        tokio::fs::remove_file(&full_path)
+            .await
+            .map_err(|e| DiffError::CommandFailed(e.to_string()))?;
+    }
+    Ok(())
+}
+
 /// Discard worktree changes for a single file from the Changes sidebar.
 ///
 /// - `is_untracked = false`: runs `git restore -- <file>`, which restores the

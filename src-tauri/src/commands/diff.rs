@@ -102,6 +102,45 @@ pub async fn revert_file(
 }
 
 #[tauri::command]
+pub async fn stage_file(worktree_path: String, file_path: String) -> Result<(), String> {
+    diff::stage_file(&worktree_path, &file_path)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn unstage_file(worktree_path: String, file_path: String) -> Result<(), String> {
+    diff::unstage_file(&worktree_path, &file_path)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn stage_files(worktree_path: String, file_paths: Vec<String>) -> Result<(), String> {
+    diff::stage_files(&worktree_path, &file_paths)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn unstage_files(worktree_path: String, file_paths: Vec<String>) -> Result<(), String> {
+    diff::unstage_files(&worktree_path, &file_paths)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn discard_files(
+    worktree_path: String,
+    tracked: Vec<String>,
+    untracked: Vec<String>,
+) -> Result<(), String> {
+    diff::discard_files(&worktree_path, &tracked, &untracked)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn discard_file(
     worktree_path: String,
     file_path: String,

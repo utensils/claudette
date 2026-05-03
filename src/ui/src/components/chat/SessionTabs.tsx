@@ -484,6 +484,7 @@ export function SessionTabs({ workspaceId }: Props) {
             onSelect={() => selectFileTab(workspaceId, path)}
             onClose={() => requestCloseFileTab(path)}
             onNavigate={(direction) => navigateTabs(navKey, direction)}
+            onContextMenu={(x, y) => openContextMenu(navKey, x, y)}
             tabRef={(el) => {
               if (el) tabRefs.current.set(navKey, el);
               else tabRefs.current.delete(navKey);
@@ -675,6 +676,7 @@ interface FileTabProps {
   onSelect: () => void;
   onClose: () => void;
   onNavigate: (direction: NavDirection) => void;
+  onContextMenu: (x: number, y: number) => void;
   tabRef: (el: HTMLDivElement | null) => void;
 }
 
@@ -685,6 +687,7 @@ function FileTab({
   onSelect,
   onClose,
   onNavigate,
+  onContextMenu,
   tabRef,
 }: FileTabProps) {
   const { t } = useTranslation("chat");
@@ -707,6 +710,10 @@ function FileTab({
       tabIndex={isActive ? 0 : -1}
       className={`${styles.tab} ${isActive ? styles.active : ""}`}
       onClick={onSelect}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onContextMenu(e.clientX, e.clientY);
+      }}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
