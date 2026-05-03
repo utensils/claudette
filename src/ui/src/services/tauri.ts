@@ -792,6 +792,42 @@ export function discardFile(
   return invoke("discard_file", { worktreePath, filePath, isUntracked });
 }
 
+export function stageFile(
+  worktreePath: string,
+  filePath: string,
+): Promise<void> {
+  return invoke("stage_file", { worktreePath, filePath });
+}
+
+export function unstageFile(
+  worktreePath: string,
+  filePath: string,
+): Promise<void> {
+  return invoke("unstage_file", { worktreePath, filePath });
+}
+
+export function stageFiles(
+  worktreePath: string,
+  filePaths: string[],
+): Promise<void> {
+  return invoke("stage_files", { worktreePath, filePaths });
+}
+
+export function unstageFiles(
+  worktreePath: string,
+  filePaths: string[],
+): Promise<void> {
+  return invoke("unstage_files", { worktreePath, filePaths });
+}
+
+export function discardFiles(
+  worktreePath: string,
+  tracked: string[],
+  untracked: string[],
+): Promise<void> {
+  return invoke("discard_files", { worktreePath, tracked, untracked });
+}
+
 // -- Terminal --
 
 export function createTerminalTab(

@@ -93,7 +93,7 @@
   width: 18px;
   height: 18px;
   padding: 0;
-  margin-left: 4px;
+  margin-left: 0;
   border: none;
   background: transparent;
   color: var(--text-dim);
@@ -116,7 +116,21 @@
 
 .rowAction:hover {
   background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.rowActionDanger:hover {
+  background: var(--hover-bg);
   color: var(--diff-removed-text);
+}
+
+/* Cluster of per-row action buttons. Tighter than the row's 8px gap so
+ * the icons read as one control group rather than scattered siblings. */
+.rowActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  flex-shrink: 0;
 }
 
 .status {
@@ -163,19 +177,74 @@
   gap: 4px;
   width: 100%;
   padding: 4px 8px;
-  background: none;
-  border: none;
   color: var(--text-dim);
   font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  cursor: pointer;
   transition: color var(--transition-fast);
 }
 
 .groupHeader:hover {
   color: var(--text-muted);
+}
+
+/* The expand/collapse toggle owns most of the header (chevron + label +
+ * count). Splitting this from the bulk-action buttons keeps the header
+ * out of the "button inside button" trap and lets toggle-clicks miss the
+ * bulk actions. */
+.groupToggle {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.groupActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+
+.groupAction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color var(--transition-fast),
+    background var(--transition-fast);
+}
+
+.fileGroup:hover .groupAction {
+  color: var(--text-dim);
+}
+
+.groupAction:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.groupActionDanger:hover {
+  background: var(--hover-bg);
+  color: var(--diff-removed-text);
 }
 
 .groupChevron {

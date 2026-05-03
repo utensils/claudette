@@ -1059,17 +1059,21 @@ select:disabled {
  * inline `color-scheme: light|dark` on `<html>` (set in theme.ts:applyTheme).
  *
  * Selector targets only the Shiki-emitted token spans (those carrying the
- * `--shiki-light` custom property inline). The line-wrapper spans Shiki
- * also emits don't carry that property, so they harmlessly miss this rule
- * and inherit `currentColor`. Using the inline-style attribute selector
- * keeps the rule independent of CSS-module class hashing.
+ * `--shiki-light` custom property inline) regardless of ancestor. The
+ * diff viewer mounts Shiki HTML directly inside a `<span>` (no
+ * `<pre><code>` wrapper), so an ancestor-constrained selector misses
+ * those tokens and they render with no token color. The line-wrapper
+ * spans Shiki also emits don't carry the inline property and so
+ * harmlessly miss this rule and inherit `currentColor`. Using the
+ * inline-style attribute selector keeps the rule independent of
+ * CSS-module class hashing.
  */
-pre code [style*="--shiki-light"] {
+[style*="--shiki-light"] {
   color: var(--shiki-dark);
 }
-[data-theme="default-light"] pre code [style*="--shiki-light"],
-[data-theme="rose-pine-dawn"] pre code [style*="--shiki-light"],
-[data-theme="solarized-light"] pre code [style*="--shiki-light"],
-html[style*="color-scheme: light"] pre code [style*="--shiki-light"] {
+[data-theme="default-light"] [style*="--shiki-light"],
+[data-theme="rose-pine-dawn"] [style*="--shiki-light"],
+[data-theme="solarized-light"] [style*="--shiki-light"],
+html[style*="color-scheme: light"] [style*="--shiki-light"] {
   color: var(--shiki-light);
 }
