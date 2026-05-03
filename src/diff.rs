@@ -385,11 +385,14 @@ pub async fn revert_file(
     Ok(())
 }
 
-/// Stage a single file (`git add -- <file>`). Works for tracked and untracked
-/// paths; pathspec literal mode (`--`) prevents glob expansion.
+/// Stage a single file (`git add -A -- <file>`). `-A` ensures additions,
+/// modifications, and removals are all reflected — without it, staging an
+/// unstaged deletion (the file is gone from the worktree) errors with
+/// "pathspec did not match any files". Pathspec literal mode (`--`) prevents
+/// glob expansion.
 pub async fn stage_file(worktree_path: &str, file_path: &str) -> Result<(), DiffError> {
     validate_file_path(file_path)?;
-    run_git(worktree_path, &["add", "--", file_path]).await?;
+    run_git(worktree_path, &["add", "-A", "--", file_path]).await?;
     Ok(())
 }
 
@@ -401,9 +404,11 @@ pub async fn unstage_file(worktree_path: &str, file_path: &str) -> Result<(), Di
     Ok(())
 }
 
-/// Stage many files in a single `git add` invocation. Issuing one command
+/// Stage many files in a single `git add -A` invocation. Issuing one command
 /// with N pathspecs avoids `.git/index.lock` contention that parallel
 /// per-file `git add`s race on, and is also faster than serializing them.
+/// `-A` is required so deleted paths in the batch stage as removals rather
+/// than failing with "pathspec did not match any files".
 pub async fn stage_files(worktree_path: &str, file_paths: &[String]) -> Result<(), DiffError> {
     if file_paths.is_empty() {
         return Ok(());
@@ -411,7 +416,7 @@ pub async fn stage_files(worktree_path: &str, file_paths: &[String]) -> Result<(
     for p in file_paths {
         validate_file_path(p)?;
     }
-    let mut args: Vec<&str> = vec!["add", "--"];
+    let mut args: Vec<&str> = vec!["add", "-A", "--"];
     args.extend(file_paths.iter().map(String::as_str));
     run_git(worktree_path, &args).await?;
     Ok(())

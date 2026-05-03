@@ -65,9 +65,9 @@ export const RightSidebar = memo(function RightSidebar() {
   const activeSessionId = useAppStore(selectActiveSessionId);
   const { totalCount: taskCount } = useTaskTracker(activeSessionId);
 
-  // Discard-changes UI state. Local-only — discard isn't bridged through the
-  // remote server (matches revert_file), so the action is hidden when the
-  // workspace is connected to a remote.
+  // Local-only stage/unstage/discard UI state. None of these git index
+  // operations are bridged through the remote server (matches revert_file),
+  // so the actions are hidden when the workspace is connected to a remote.
   const [discardTarget, setDiscardTarget] = useState<
     { file: DiffFile; layer: DiscardableLayer } | null
   >(null);
@@ -77,7 +77,14 @@ export const RightSidebar = memo(function RightSidebar() {
   const [contextMenu, setContextMenu] = useState<
     { x: number; y: number; file: DiffFile; layer: DiscardableLayer } | null
   >(null);
-  const discardEnabled = !remoteConnectionId && worktreePath != null;
+  // Gates stage/unstage/discard (single + bulk). Hidden when connected to a
+  // remote (the server doesn't bridge index ops) or when there's no local
+  // worktree to operate against.
+  const localGitOpsEnabled = !remoteConnectionId && worktreePath != null;
+  // True while a stage/unstage/discard git invocation is awaiting. Disables
+  // every action button so rapid clicks can't fire overlapping `git add` /
+  // `git restore` calls that would race on `.git/index.lock`.
+  const [gitOpInFlight, setGitOpInFlight] = useState(false);
 
   // Load diff files for either local or remote workspace
   const loadDiff = useCallback(
@@ -210,9 +217,9 @@ export const RightSidebar = memo(function RightSidebar() {
   const renderFileRow = (file: DiffFile, layer?: DiffLayer) => {
     const isSelected = diffSelectedFile === file.path
       && (diffSelectedLayer ?? "flat") === (layer ?? "flat");
-    const canDiscard = discardEnabled && isDiscardableLayer(layer);
-    const canStage = discardEnabled && (layer === "unstaged" || layer === "untracked");
-    const canUnstage = discardEnabled && layer === "staged";
+    const canDiscard = localGitOpsEnabled && isDiscardableLayer(layer);
+    const canStage = localGitOpsEnabled && (layer === "unstaged" || layer === "untracked");
+    const canUnstage = localGitOpsEnabled && layer === "staged";
     // Deleted files don't exist on disk regardless of layer (staged deletions
     // are already removed by `git rm`; committed deletions are gone from HEAD).
     const canOpenSource = selectedWorkspaceId != null && file.status !== "Deleted";
@@ -232,14 +239,18 @@ export const RightSidebar = memo(function RightSidebar() {
 
     const handleStageClick = (e: React.MouseEvent) => {
       e.stopPropagation();
-      if (!canStage) return;
-      void performStage(file.path);
+      if (!canStage || gitOpInFlight) return;
+      performStage(file.path).catch((err) => {
+        console.error("Failed to stage file:", err);
+      });
     };
 
     const handleUnstageClick = (e: React.MouseEvent) => {
       e.stopPropagation();
-      if (!canUnstage) return;
-      void performUnstage(file.path);
+      if (!canUnstage || gitOpInFlight) return;
+      performUnstage(file.path).catch((err) => {
+        console.error("Failed to unstage file:", err);
+      });
     };
 
     const handleOpenClick = (e: React.MouseEvent) => {
@@ -293,6 +304,7 @@ export const RightSidebar = memo(function RightSidebar() {
             type="button"
             className={styles.rowAction}
             onClick={handleStageClick}
+            disabled={gitOpInFlight}
             title="Stage"
             aria-label="Stage"
           >
@@ -304,6 +316,7 @@ export const RightSidebar = memo(function RightSidebar() {
             type="button"
             className={styles.rowAction}
             onClick={handleUnstageClick}
+            disabled={gitOpInFlight}
             title="Unstage"
             aria-label="Unstage"
           >
@@ -315,6 +328,7 @@ export const RightSidebar = memo(function RightSidebar() {
             type="button"
             className={`${styles.rowAction} ${styles.rowActionDanger}`}
             onClick={handleDiscardClick}
+            disabled={gitOpInFlight}
             title={layer === "untracked" ? "Delete" : "Discard changes"}
             aria-label={layer === "untracked" ? "Delete" : "Discard changes"}
           >
@@ -330,97 +344,108 @@ export const RightSidebar = memo(function RightSidebar() {
     );
   };
 
-  const performStage = useCallback(
-    async (filePath: string) => {
+  // Wraps a stage/unstage/discard body so concurrent invocations are blocked
+  // (the in-flight flag also dims every action button) and the resulting
+  // diff reload is dropped if the user switched workspaces while git was
+  // running. Errors propagate so callers can surface them — discard hands
+  // them to the confirm modal; fire-and-forget click handlers log them.
+  const runIndexOp = useCallback(
+    async (op: () => Promise<void>) => {
       if (!worktreePath || !selectedWorkspaceId) return;
-      await stageFile(worktreePath, filePath);
-      const result = await loadDiff(selectedWorkspaceId);
-      if (useAppStore.getState().selectedWorkspaceId === selectedWorkspaceId) {
-        applyDiffResult(result);
+      if (gitOpInFlight) return;
+      setGitOpInFlight(true);
+      try {
+        await op();
+        const result = await loadDiff(selectedWorkspaceId);
+        if (useAppStore.getState().selectedWorkspaceId === selectedWorkspaceId) {
+          applyDiffResult(result);
+        }
+      } finally {
+        setGitOpInFlight(false);
       }
     },
-    [worktreePath, selectedWorkspaceId, loadDiff, applyDiffResult],
+    [worktreePath, selectedWorkspaceId, loadDiff, applyDiffResult, gitOpInFlight],
+  );
+
+  // Clear the diff selection when the currently-selected row is about to
+  // move between layers (stage/unstage) or disappear (discard). Without
+  // this, `diffSelectedLayer` keeps pointing at the now-empty old layer,
+  // which leaves the sidebar with no highlighted row and the diff viewer
+  // showing stale content.
+  const clearSelectionIfAffected = useCallback((paths: string[]) => {
+    if (paths.length === 0) return;
+    const state = useAppStore.getState();
+    const selected = state.diffSelectedFile;
+    if (selected && paths.includes(selected)) {
+      state.setDiffSelectedFile(null);
+    }
+  }, []);
+
+  const performStage = useCallback(
+    (filePath: string) =>
+      runIndexOp(async () => {
+        clearSelectionIfAffected([filePath]);
+        await stageFile(worktreePath!, filePath);
+      }),
+    [runIndexOp, clearSelectionIfAffected, worktreePath],
   );
 
   const performUnstage = useCallback(
-    async (filePath: string) => {
-      if (!worktreePath || !selectedWorkspaceId) return;
-      await unstageFile(worktreePath, filePath);
-      const result = await loadDiff(selectedWorkspaceId);
-      if (useAppStore.getState().selectedWorkspaceId === selectedWorkspaceId) {
-        applyDiffResult(result);
-      }
-    },
-    [worktreePath, selectedWorkspaceId, loadDiff, applyDiffResult],
+    (filePath: string) =>
+      runIndexOp(async () => {
+        clearSelectionIfAffected([filePath]);
+        await unstageFile(worktreePath!, filePath);
+      }),
+    [runIndexOp, clearSelectionIfAffected, worktreePath],
   );
 
   const performStageAll = useCallback(
-    async (files: DiffFile[]) => {
-      if (!worktreePath || !selectedWorkspaceId || files.length === 0) return;
-      // One git invocation with all paths — parallel `git add`s race on
-      // `.git/index.lock` and would fail.
-      await stageFiles(worktreePath, files.map((f) => f.path));
-      const result = await loadDiff(selectedWorkspaceId);
-      if (useAppStore.getState().selectedWorkspaceId === selectedWorkspaceId) {
-        applyDiffResult(result);
-      }
-    },
-    [worktreePath, selectedWorkspaceId, loadDiff, applyDiffResult],
+    (files: DiffFile[]) =>
+      runIndexOp(async () => {
+        if (files.length === 0) return;
+        const paths = files.map((f) => f.path);
+        clearSelectionIfAffected(paths);
+        // One git invocation with all paths — parallel `git add`s race on
+        // `.git/index.lock` and would fail.
+        await stageFiles(worktreePath!, paths);
+      }),
+    [runIndexOp, clearSelectionIfAffected, worktreePath],
   );
 
   const performUnstageAll = useCallback(
-    async (files: DiffFile[]) => {
-      if (!worktreePath || !selectedWorkspaceId || files.length === 0) return;
-      await unstageFiles(worktreePath, files.map((f) => f.path));
-      const result = await loadDiff(selectedWorkspaceId);
-      if (useAppStore.getState().selectedWorkspaceId === selectedWorkspaceId) {
-        applyDiffResult(result);
-      }
-    },
-    [worktreePath, selectedWorkspaceId, loadDiff, applyDiffResult],
+    (files: DiffFile[]) =>
+      runIndexOp(async () => {
+        if (files.length === 0) return;
+        const paths = files.map((f) => f.path);
+        clearSelectionIfAffected(paths);
+        await unstageFiles(worktreePath!, paths);
+      }),
+    [runIndexOp, clearSelectionIfAffected, worktreePath],
   );
 
   const performBulkDiscard = useCallback(
-    async (files: DiffFile[], layer: DiscardableLayer) => {
-      if (!worktreePath || !selectedWorkspaceId || files.length === 0) return;
-      const isUntracked = layer === "untracked";
-      const paths = files.map((f) => f.path);
-      await discardFiles(
-        worktreePath,
-        isUntracked ? [] : paths,
-        isUntracked ? paths : [],
-      );
-      const state = useAppStore.getState();
-      const selectedPath = state.diffSelectedFile;
-      if (selectedPath && files.some((f) => f.path === selectedPath)) {
-        state.setDiffSelectedFile(null);
-      }
-      const result = await loadDiff(selectedWorkspaceId);
-      if (useAppStore.getState().selectedWorkspaceId === selectedWorkspaceId) {
-        applyDiffResult(result);
-      }
-    },
-    [worktreePath, selectedWorkspaceId, loadDiff, applyDiffResult],
+    (files: DiffFile[], layer: DiscardableLayer) =>
+      runIndexOp(async () => {
+        if (files.length === 0) return;
+        const isUntracked = layer === "untracked";
+        const paths = files.map((f) => f.path);
+        clearSelectionIfAffected(paths);
+        await discardFiles(
+          worktreePath!,
+          isUntracked ? [] : paths,
+          isUntracked ? paths : [],
+        );
+      }),
+    [runIndexOp, clearSelectionIfAffected, worktreePath],
   );
 
   const performDiscard = useCallback(
-    async (filePath: string, layer: DiscardableLayer) => {
-      if (!worktreePath || !selectedWorkspaceId) return;
-      await discardFile(worktreePath, filePath, layer === "untracked");
-
-      // Clear selection if the discarded file was selected so the diff
-      // viewer doesn't keep displaying a stale entry.
-      const state = useAppStore.getState();
-      if (state.diffSelectedFile === filePath) {
-        state.setDiffSelectedFile(null);
-      }
-
-      const result = await loadDiff(selectedWorkspaceId);
-      if (useAppStore.getState().selectedWorkspaceId === selectedWorkspaceId) {
-        applyDiffResult(result);
-      }
-    },
-    [worktreePath, selectedWorkspaceId, loadDiff, applyDiffResult]
+    (filePath: string, layer: DiscardableLayer) =>
+      runIndexOp(async () => {
+        clearSelectionIfAffected([filePath]);
+        await discardFile(worktreePath!, filePath, layer === "untracked");
+      }),
+    [runIndexOp, clearSelectionIfAffected, worktreePath],
   );
 
   // Determine if we have grouped data to show
@@ -482,12 +507,15 @@ export const RightSidebar = memo(function RightSidebar() {
                   accentColor="var(--accent-dim)"
                   renderFileRow={renderFileRow}
                   onUnstageAll={
-                    discardEnabled
+                    localGitOpsEnabled
                       ? () => {
-                          void performUnstageAll(diffStagedFiles!.staged);
+                          performUnstageAll(diffStagedFiles!.staged).catch((err) => {
+                            console.error("Failed to unstage all files:", err);
+                          });
                         }
                       : undefined
                   }
+                  disabled={gitOpInFlight}
                 />
                 <FileGroup
                   label="Unstaged"
@@ -496,14 +524,16 @@ export const RightSidebar = memo(function RightSidebar() {
                   accentColor="var(--tool-task)"
                   renderFileRow={renderFileRow}
                   onStageAll={
-                    discardEnabled
+                    localGitOpsEnabled
                       ? () => {
-                          void performStageAll(diffStagedFiles!.unstaged);
+                          performStageAll(diffStagedFiles!.unstaged).catch((err) => {
+                            console.error("Failed to stage all files:", err);
+                          });
                         }
                       : undefined
                   }
                   onDiscardAll={
-                    discardEnabled
+                    localGitOpsEnabled
                       ? () =>
                           setBulkDiscardTarget({
                             files: diffStagedFiles!.unstaged,
@@ -511,6 +541,7 @@ export const RightSidebar = memo(function RightSidebar() {
                           })
                       : undefined
                   }
+                  disabled={gitOpInFlight}
                 />
                 <FileGroup
                   label="Untracked"
@@ -598,6 +629,7 @@ function FileGroup({
   onStageAll,
   onUnstageAll,
   onDiscardAll,
+  disabled,
 }: {
   label: string;
   files: DiffFile[];
@@ -607,6 +639,7 @@ function FileGroup({
   onStageAll?: () => void;
   onUnstageAll?: () => void;
   onDiscardAll?: () => void;
+  disabled?: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(layer === "committed");
 
@@ -639,6 +672,7 @@ function FileGroup({
                 type="button"
                 className={styles.groupAction}
                 onClick={onStageAll}
+                disabled={disabled}
                 title="Stage all"
                 aria-label="Stage all"
               >
@@ -650,6 +684,7 @@ function FileGroup({
                 type="button"
                 className={styles.groupAction}
                 onClick={onUnstageAll}
+                disabled={disabled}
                 title="Unstage all"
                 aria-label="Unstage all"
               >
@@ -661,6 +696,7 @@ function FileGroup({
                 type="button"
                 className={`${styles.groupAction} ${styles.groupActionDanger}`}
                 onClick={onDiscardAll}
+                disabled={disabled}
                 title="Discard all"
                 aria-label="Discard all"
               >
