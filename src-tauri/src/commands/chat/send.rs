@@ -341,6 +341,20 @@ pub async fn send_chat_message(
     }
     let image_attachments = cli_atts;
 
+    // In collaborative mode, broadcast the user message so other participants
+    // render it live. Without this, only the agent's responses propagate
+    // (via agent-stream) — user prompts persist to DB but never reach
+    // other participants. Frontend dedupes via
+    // `author_participant_id === selfParticipantId` so the sender's own
+    // optimistic message isn't duplicated. Solo / 1:1 sessions skip this:
+    // the local UI already rendered the message optimistically.
+    if let Some(room) = state.rooms.get(&chat_session_id).await {
+        room.publish(serde_json::json!({
+            "event": "chat-message-added",
+            "payload": &user_msg,
+        }));
+    }
+
     // Resolve allowed tools from permission level.
     let level = permission_level.as_deref().unwrap_or("full");
     if !matches!(level, "readonly" | "standard" | "full") {

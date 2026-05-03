@@ -778,6 +778,19 @@ async fn handle_send_chat_message(
     db.insert_chat_message(&user_msg)
         .map_err(|e| e.to_string())?;
 
+    // In collaborative mode, broadcast the user message so other participants
+    // render it live. Without this, only the *agent's* responses propagate
+    // (via agent-stream); user prompts only persist to DB and would never
+    // show up in another participant's UI in real time. Frontend dedupe
+    // skips when `author_participant_id === selfParticipantId` so the
+    // sender's own optimistic message isn't duplicated.
+    if let Some(room) = state.rooms.get(&chat_session_id).await {
+        room.publish(json!({
+            "event": "chat-message-added",
+            "payload": &user_msg,
+        }));
+    }
+
     let level = permission_level.unwrap_or("full");
     let allowed_tools = tools_for_level(level);
 

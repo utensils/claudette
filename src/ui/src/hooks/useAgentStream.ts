@@ -719,6 +719,41 @@ export function useAgentStream() {
     };
   }, [addChatMessage]);
 
+  // Listen for collaborative user-message broadcasts. The bridge (both
+  // server-side handler.rs and Tauri-side chat/send.rs) publishes
+  // `chat-message-added` to the room when a user message is persisted in
+  // a collaborative session, so other participants render it live.
+  // Sender-side dedupe: skip when the message's author_participant_id
+  // matches the local user's selfParticipantId for that workspace —
+  // the sender already rendered it optimistically and broadcasting back
+  // would otherwise produce a duplicate row.
+  useEffect(() => {
+    let active = true;
+    const unlisten = listen<ChatMessage>("chat-message-added", (event) => {
+      if (!active) return;
+      const msg = event.payload;
+      const store = useAppStore.getState();
+      const ws = store.workspaces.find((w) => w.id === msg.workspace_id);
+      // Compute selfParticipantId for the workspace inline (mirrors the
+      // logic in WorkspacePanelHeader.tsx). Local workspaces use the
+      // host sentinel; remote workspaces use the connection's stored pid.
+      const selfPid = ws
+        ? !ws.remote_connection_id
+          ? "host"
+          : (store.remoteConnections.find((c) => c.id === ws.remote_connection_id)
+              ?.participant_id ?? null)
+        : null;
+      if (msg.author_participant_id && selfPid && msg.author_participant_id === selfPid) {
+        return;
+      }
+      addChatMessage(msg.chat_session_id, msg);
+    });
+    return () => {
+      active = false;
+      unlisten.then((fn) => fn());
+    };
+  }, [addChatMessage]);
+
   // Listen for agent-authored attachments delivered via the
   // `mcp__claudette__send_to_user` tool. The Rust bridge has already
   // persisted them; we just need to mirror into the in-memory store so the
