@@ -1,4 +1,6 @@
 import { diffLines } from "diff";
+import type * as monacoNs from "monaco-editor";
+import styles from "./MonacoEditor.module.css";
 
 export type LineChangeKind = "add" | "modify" | "delete-above";
 
@@ -81,4 +83,37 @@ function countLines(s: string): number {
   if (s === "") return 0;
   const parts = s.split("\n");
   return parts[parts.length - 1] === "" ? parts.length - 1 : parts.length;
+}
+
+/**
+ * Convert structured line-change data into Monaco decoration deltas. Each
+ * change becomes a 0-column, 1-line range with a `linesDecorationsClassName`
+ * pointing at our CSS-module class for the appropriate kind.
+ *
+ * `stickiness: 1` (NeverGrowsWhenTypingAtEdges) keeps a marker pinned to
+ * its line — without it, an insertion at the start of the line would pull
+ * the marker onto the next line.
+ */
+export function lineChangesToDecorations(
+  changes: LineChange[],
+  monacoInstance: typeof monacoNs,
+): monacoNs.editor.IModelDeltaDecoration[] {
+  return changes.map((change) => ({
+    range: new monacoInstance.Range(change.line, 1, change.line, 1),
+    options: {
+      linesDecorationsClassName: classFor(change.kind),
+      stickiness: 1,
+    },
+  }));
+}
+
+function classFor(kind: LineChangeKind): string {
+  switch (kind) {
+    case "add":
+      return styles.gitGutterAdd;
+    case "modify":
+      return styles.gitGutterModify;
+    case "delete-above":
+      return styles.gitGutterDeleteAbove;
+  }
 }

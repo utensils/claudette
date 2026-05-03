@@ -1,5 +1,6 @@
+import type * as monacoNs from "monaco-editor";
 import { describe, expect, it } from "vitest";
-import { computeLineChanges } from "./gitGutter";
+import { computeLineChanges, lineChangesToDecorations } from "./gitGutter";
 
 describe("computeLineChanges", () => {
   it("returns [] for identical strings", () => {
@@ -61,5 +62,72 @@ describe("computeLineChanges", () => {
   it("emits a single delete-above at line 1 when the buffer is empty", () => {
     const changes = computeLineChanges("a\nb\n", "");
     expect(changes).toEqual([{ line: 1, kind: "delete-above" }]);
+  });
+});
+
+// Minimal Monaco stub for the Range constructor — `lineChangesToDecorations`
+// only needs `monacoInstance.Range`, nothing else.
+const monacoStub = {
+  Range: class {
+    startLineNumber: number;
+    startColumn: number;
+    endLineNumber: number;
+    endColumn: number;
+    constructor(
+      startLineNumber: number,
+      startColumn: number,
+      endLineNumber: number,
+      endColumn: number,
+    ) {
+      this.startLineNumber = startLineNumber;
+      this.startColumn = startColumn;
+      this.endLineNumber = endLineNumber;
+      this.endColumn = endColumn;
+    }
+  },
+} as unknown as typeof monacoNs;
+
+describe("lineChangesToDecorations", () => {
+  it("maps add to gitGutterAdd class on the line's full range", () => {
+    const decos = lineChangesToDecorations(
+      [{ line: 3, kind: "add" }],
+      monacoStub,
+    );
+    expect(decos).toHaveLength(1);
+    expect(decos[0].options.linesDecorationsClassName).toMatch(/gitGutterAdd/);
+    expect(decos[0].range.startLineNumber).toBe(3);
+    expect(decos[0].range.endLineNumber).toBe(3);
+  });
+
+  it("maps modify to gitGutterModify class", () => {
+    const decos = lineChangesToDecorations(
+      [{ line: 5, kind: "modify" }],
+      monacoStub,
+    );
+    expect(decos[0].options.linesDecorationsClassName).toMatch(/gitGutterModify/);
+    expect(decos[0].range.startLineNumber).toBe(5);
+  });
+
+  it("maps delete-above to gitGutterDeleteAbove class on the line", () => {
+    const decos = lineChangesToDecorations(
+      [{ line: 7, kind: "delete-above" }],
+      monacoStub,
+    );
+    expect(decos[0].options.linesDecorationsClassName).toMatch(/gitGutterDeleteAbove/);
+    expect(decos[0].range.startLineNumber).toBe(7);
+    expect(decos[0].range.endLineNumber).toBe(7);
+  });
+
+  it("returns one decoration per change, preserving order", () => {
+    const decos = lineChangesToDecorations(
+      [
+        { line: 1, kind: "add" },
+        { line: 2, kind: "modify" },
+        { line: 3, kind: "delete-above" },
+      ],
+      monacoStub,
+    );
+    expect(decos).toHaveLength(3);
+    expect(decos.map((d) => d.range.startLineNumber)).toEqual([1, 2, 3]);
   });
 });
