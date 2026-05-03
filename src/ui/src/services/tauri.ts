@@ -772,6 +772,22 @@ export function readWorkspaceFileBytes(
   return invoke("read_workspace_file_bytes", { workspaceId, relativePath });
 }
 
+export interface HeadBlobContent {
+  path: string;
+  content: string | null;
+  exists_at_head: boolean;
+}
+
+export function readWorkspaceFileAtHead(
+  workspaceId: string,
+  relativePath: string,
+): Promise<HeadBlobContent> {
+  return invoke("read_workspace_file_at_head", {
+    workspaceId,
+    relativePath,
+  });
+}
+
 export function writeWorkspaceFile(
   workspaceId: string,
   relativePath: string,
