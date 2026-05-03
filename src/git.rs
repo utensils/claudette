@@ -256,21 +256,29 @@ pub async fn validate_repo(path: &str) -> Result<(), GitError> {
 /// Result of reading a file's blob at HEAD via [`read_blob_at_head`].
 #[derive(Debug, Clone, Serialize)]
 pub struct HeadBlobResult {
-    /// UTF-8 text of the blob, or `None` when the blob is binary or absent.
+    /// UTF-8 text of the blob, or `None` when the blob is binary, oversized,
+    /// or absent.
     pub content: Option<String>,
     /// Whether the file path resolves to a blob in the current `HEAD` tree.
     pub exists_at_head: bool,
 }
 
+/// Maximum blob size we materialize via `read_blob_at_head`. Mirrors the
+/// frontend's `GUTTER_MAX_BYTES` cap — beyond this the file viewer's git
+/// gutter is disabled anyway, so reading the bytes only wastes IPC.
+pub const MAX_BLOB_AT_HEAD_BYTES: u64 = 1024 * 1024;
+
 /// Read a file's contents as they exist at the current `HEAD` commit.
 ///
-/// Three return shapes:
+/// Four return shapes:
 /// 1. **Tracked text:** `exists_at_head = true`, `content = Some(text)`. The
 ///    blob exists at `HEAD` and decodes as UTF-8 (lossy — invalid bytes are
 ///    replaced with `U+FFFD`).
-/// 2. **Tracked binary:** `exists_at_head = true`, `content = None`. The blob
-///    exists at `HEAD` but contains a NUL byte in its first 8 KiB, so we treat
-///    it as binary and decline to materialize it as a `String`.
+/// 2. **Tracked binary or oversized:** `exists_at_head = true`,
+///    `content = None`. Either the blob contains a NUL byte in its first
+///    8 KiB (treated as binary) or its size exceeds [`MAX_BLOB_AT_HEAD_BYTES`]
+///    (the frontend gutter is disabled at that scale anyway, so we skip the
+///    IPC cost of materializing it).
 /// 3. **Not at HEAD:** `exists_at_head = false`, `content = None`. The path is
 ///    untracked, staged-only, or otherwise absent from the `HEAD` tree.
 ///
@@ -295,6 +303,35 @@ pub async fn read_blob_at_head(
         return Ok(HeadBlobResult {
             content: None,
             exists_at_head: false,
+        });
+    }
+
+    // Size probe before materializing: `git cat-file -s` prints a single
+    // decimal byte count followed by a newline. For oversized blobs the
+    // frontend disables the gutter regardless, so we short-circuit here to
+    // skip a wasteful IPC roundtrip.
+    let size_out = Command::new(crate::git::resolve_git_path_blocking())
+        .no_console_window()
+        .args(["-C", worktree_path])
+        .args(["cat-file", "-s", &spec])
+        .output()
+        .await
+        .map_err(GitError::from_spawn_io)?;
+
+    if !size_out.status.success() {
+        let stderr = String::from_utf8_lossy(&size_out.stderr).into_owned();
+        return Err(GitError::CommandFailed(stderr));
+    }
+
+    let size: u64 = String::from_utf8_lossy(&size_out.stdout)
+        .trim()
+        .parse()
+        .map_err(|e| GitError::CommandFailed(format!("could not parse cat-file -s output: {e}")))?;
+
+    if size > MAX_BLOB_AT_HEAD_BYTES {
+        return Ok(HeadBlobResult {
+            content: None,
+            exists_at_head: true,
         });
     }
 
@@ -1741,5 +1778,23 @@ mod head_blob_tests {
         std::fs::write(tmp.path().join("a.txt"), "hi").unwrap();
         let result = read_blob_at_head(tmp.path().to_str().unwrap(), "a.txt").await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn skips_materializing_oversized_blob() {
+        let tmp = tempdir().unwrap();
+        init_repo(tmp.path());
+        // One byte over the cap — size check fires before binary detection,
+        // so any bytes work.
+        let bytes = vec![b'a'; (MAX_BLOB_AT_HEAD_BYTES + 1) as usize];
+        std::fs::write(tmp.path().join("big.txt"), &bytes).unwrap();
+        git_cmd(tmp.path(), &["add", "big.txt"]);
+        git_cmd(tmp.path(), &["commit", "-q", "-m", "init"]);
+
+        let result = read_blob_at_head(tmp.path().to_str().unwrap(), "big.txt")
+            .await
+            .expect("read");
+        assert!(result.exists_at_head);
+        assert!(result.content.is_none());
     }
 }

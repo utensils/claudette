@@ -51,10 +51,20 @@ export function useGitGutter(
   // already started.
   useEffect(() => {
     const version = ++fetchVersionRef.current;
+    // Skip the fetch entirely when the buffer is already past the cap —
+    // the gutter would be disabled regardless. Read `buffer.length` once
+    // at effect-run time; we don't depend on `buffer` (would fire per
+    // keystroke), so we just snapshot the value as it stands when this
+    // fires (file open, merge-base change).
+    if (buffer.length > GUTTER_MAX_BYTES) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setHead(null);
+      collectionRef.current?.clear();
+      return;
+    }
     // Reset to "loading" synchronously so the buffer-effect bails out
     // until the new fetch resolves — the cascade is intentional and
     // bounded (one extra render per file/merge-base change).
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setHead(null);
     collectionRef.current?.clear();
 
@@ -71,6 +81,9 @@ export function useGitGutter(
         if (version !== fetchVersionRef.current) return;
         setHead(null);
       });
+    // We intentionally do NOT depend on `buffer` — that would refire the
+    // fetch on every keystroke. We snapshot `buffer.length` at run time.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId, filename, diffMergeBase, collectionRef]);
 
   // Debounced recompute on every buffer or head change. Skips work when
@@ -81,16 +94,11 @@ export function useGitGutter(
     const monacoInstance = monacoRef.current;
     if (head === null || !collection || !monacoInstance) return;
 
-    if (buffer.length > GUTTER_MAX_BYTES) {
-      collection.clear();
-      return;
-    }
-    if (buffer.split("\n").length > GUTTER_MAX_LINES) {
-      collection.clear();
-      return;
-    }
-
     const timer = window.setTimeout(() => {
+      if (buffer.length > GUTTER_MAX_BYTES || exceedsLineCap(buffer)) {
+        collection.clear();
+        return;
+      }
       const changes = computeLineChanges(head, buffer);
       const decos = lineChangesToDecorations(changes, monacoInstance);
       collection.set(decos);
@@ -98,4 +106,23 @@ export function useGitGutter(
 
     return () => window.clearTimeout(timer);
   }, [head, buffer, monacoRef, collectionRef]);
+}
+
+/**
+ * Cheap line-count check that bails out as soon as the cap is exceeded.
+ * Counts '\n' (charCode 10) without allocating; saves per-keystroke array
+ * allocation that `buffer.split("\n").length` would do.
+ */
+function exceedsLineCap(buffer: string): boolean {
+  let nlCount = 0;
+  for (let i = 0; i < buffer.length; i++) {
+    if (buffer.charCodeAt(i) === 10) {
+      nlCount++;
+      // The cap counts lines, not newlines. A buffer with N newlines has
+      // either N or N+1 lines (depending on trailing newline). Bail when
+      // we've definitely exceeded the cap.
+      if (nlCount >= GUTTER_MAX_LINES) return true;
+    }
+  }
+  return false;
 }

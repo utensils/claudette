@@ -65,8 +65,8 @@ describe("computeLineChanges", () => {
   });
 });
 
-// Minimal Monaco stub for the Range constructor — `lineChangesToDecorations`
-// only needs `monacoInstance.Range`, nothing else.
+// Minimal Monaco stub for the Range constructor and the
+// TrackedRangeStickiness enum that `lineChangesToDecorations` reads.
 const monacoStub = {
   Range: class {
     startLineNumber: number;
@@ -84,6 +84,11 @@ const monacoStub = {
       this.endLineNumber = endLineNumber;
       this.endColumn = endColumn;
     }
+  },
+  editor: {
+    TrackedRangeStickiness: {
+      NeverGrowsWhenTypingAtEdges: 1,
+    },
   },
 } as unknown as typeof monacoNs;
 

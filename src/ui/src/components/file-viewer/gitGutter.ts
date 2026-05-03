@@ -90,9 +90,9 @@ function countLines(s: string): number {
  * change becomes a 0-column, 1-line range with a `linesDecorationsClassName`
  * pointing at our CSS-module class for the appropriate kind.
  *
- * `stickiness: 1` (NeverGrowsWhenTypingAtEdges) keeps a marker pinned to
- * its line — without it, an insertion at the start of the line would pull
- * the marker onto the next line.
+ * `NeverGrowsWhenTypingAtEdges` stickiness keeps a marker pinned to its
+ * line — without it, an insertion at the start of the line would pull the
+ * marker onto the next line.
  */
 export function lineChangesToDecorations(
   changes: LineChange[],
@@ -102,7 +102,7 @@ export function lineChangesToDecorations(
     range: new monacoInstance.Range(change.line, 1, change.line, 1),
     options: {
       linesDecorationsClassName: classFor(change.kind),
-      stickiness: 1,
+      stickiness: monacoInstance.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
     },
   }));
 }
