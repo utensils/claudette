@@ -14,9 +14,9 @@ mod discovery;
 mod ipc;
 mod output;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
-use crate::commands::{capabilities, rpc, version, workspace};
+use crate::commands::{capabilities, chat, repo, rpc, version, workspace};
 
 #[derive(Parser)]
 #[command(
@@ -67,6 +67,26 @@ enum Command {
         #[command(subcommand)]
         action: workspace::Action,
     },
+
+    /// Chat session operations.
+    Chat {
+        #[command(subcommand)]
+        action: chat::Action,
+    },
+
+    /// Repository registry operations.
+    Repo {
+        #[command(subcommand)]
+        action: repo::Action,
+    },
+
+    /// Generate shell completion script for the named shell.
+    /// Pipe to your shell's completion file:
+    ///   `claudette completion zsh > ~/.zsh/completions/_claudette`
+    Completion {
+        /// Target shell.
+        shell: clap_complete::Shell,
+    },
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -77,6 +97,14 @@ async fn main() {
         Command::Capabilities => capabilities::run(cli.json).await,
         Command::Rpc { method, params } => rpc::run(&method, &params, cli.json).await,
         Command::Workspace { action } => workspace::run(action, cli.json).await,
+        Command::Chat { action } => chat::run(action, cli.json).await,
+        Command::Repo { action } => repo::run(action, cli.json).await,
+        Command::Completion { shell } => {
+            let mut cmd = Cli::command();
+            let bin_name = cmd.get_name().to_string();
+            clap_complete::generate(shell, &mut cmd, bin_name, &mut std::io::stdout());
+            Ok(())
+        }
     };
     if let Err(e) = result {
         eprintln!("error: {e}");

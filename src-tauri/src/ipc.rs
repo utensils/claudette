@@ -54,8 +54,10 @@ const METHODS: &[&str] = &[
     "version",
     "list_repositories",
     "list_workspaces",
+    "list_chat_sessions",
     "create_workspace",
     "archive_workspace",
+    "send_chat_message",
 ];
 
 /// Live IPC server. Drop to tear down the listener and remove the socket
@@ -259,8 +261,10 @@ async fn dispatch(app: &AppHandle, req: RpcRequest) -> RpcResponse {
                 .map(|v| serde_json::to_value(v).unwrap_or_default())
                 .map_err(|e| e.to_string())
         }),
+        "list_chat_sessions" => handle_list_chat_sessions(app, &req.params),
         "create_workspace" => handle_create_workspace(app, &req.params).await,
         "archive_workspace" => handle_archive_workspace(app, &req.params).await,
+        "send_chat_message" => handle_send_chat_message(app, &req.params).await,
         other => Err(format!("Unknown method: {other}")),
     };
     match result {
@@ -322,6 +326,85 @@ async fn handle_create_workspace(
         "default_session_id": out.default_session_id,
         "worktree_path": out.worktree_path,
     }))
+}
+
+/// `list_chat_sessions` IPC method — read-only DB query for a single
+/// workspace's sessions. CLI callers always have a workspace context
+/// (CLI is workspace-scoped by convention), so we require `workspace_id`.
+fn handle_list_chat_sessions(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let workspace_id = params
+        .get("workspace_id")
+        .and_then(|v| v.as_str())
+        .ok_or("missing workspace_id")?
+        .to_string();
+    let include_archived = params
+        .get("include_archived")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    with_db(app, |db| {
+        db.list_chat_sessions_for_workspace(&workspace_id, include_archived)
+            .map(|v| serde_json::to_value(v).unwrap_or_default())
+            .map_err(|e| e.to_string())
+    })
+}
+
+/// `send_chat_message` IPC method — delegates to the existing Tauri
+/// command so CLI-driven prompts trigger the same agent-spawn flow,
+/// streaming, and event emission as a GUI-driven send. Tauri commands
+/// are callable from Rust as plain async fns; we construct the
+/// `State` extractor from the `AppHandle` to satisfy the signature.
+///
+/// Only the most common params are surfaced today (`session_id`,
+/// `content`, `model`, `plan_mode`). Adding more is just a matter of
+/// pulling them off `params` and threading them through.
+async fn handle_send_chat_message(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let session_id = params
+        .get("session_id")
+        .or_else(|| params.get("chat_session_id"))
+        .and_then(|v| v.as_str())
+        .ok_or("missing session_id")?
+        .to_string();
+    let content = params
+        .get("content")
+        .and_then(|v| v.as_str())
+        .ok_or("missing content")?
+        .to_string();
+    let model = params
+        .get("model")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let plan_mode = params.get("plan_mode").and_then(|v| v.as_bool());
+    let permission_level = params
+        .get("permission_level")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    let state: tauri::State<'_, AppState> = app.state::<AppState>();
+    crate::commands::chat::send::send_chat_message(
+        session_id,
+        None,
+        content,
+        None,
+        permission_level,
+        model,
+        None,
+        None,
+        plan_mode,
+        None,
+        None,
+        None,
+        None,
+        app.clone(),
+        state,
+    )
+    .await?;
+    Ok(json!({ "ok": true }))
 }
 
 async fn handle_archive_workspace(
