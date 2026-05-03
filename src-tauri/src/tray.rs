@@ -109,34 +109,18 @@ pub fn resolve_notification(
     ResolvedSound { sound, volume }
 }
 
-// Baseline tray icons (the ones shipped for the Auto style).
+// Tray icons. We deliberately render the same critter silhouette for every
+// agent state — Running and NeedsAttention used to layer accent dots/halos
+// over the shape, but the badging produced visible rendering glitches under
+// macOS template mode (alpha-only) and never added much signal anyway: the
+// menu text, tooltip, and native notification already convey state.
 //
-// - `idle` is a black-on-transparent critter silhouette.
-// - `active` layers a green accent badge over a subtle translucent-white
-//   glow of the critter shape.
-// - `attention` uses the same layout with an orange accent and an
-//   alpha-distinct alert dot below the badge; the alpha difference is
-//   what lets macOS template rendering distinguish Running from
-//   NeedsAttention (template mode collapses color to white but honors
-//   alpha).
-//
-// On macOS the builder passes these with `is_template=true` so the OS
-// tints to the menu-bar color. Linux and Windows render them as-is.
+// On macOS the builder passes the Auto icon with `is_template=true` so the
+// OS tints to the menu-bar color. Linux and Windows render as-is.
 static ICON_IDLE: &[u8] = include_bytes!("../../assets/tray-idle.png");
-static ICON_ACTIVE: &[u8] = include_bytes!("../../assets/tray-active.png");
-static ICON_ATTENTION: &[u8] = include_bytes!("../../assets/tray-attention.png");
-
-// Explicit light / dark / color variants (three states each). These are
-// recolored from the baseline shapes with alpha preserved.
 static ICON_IDLE_LIGHT: &[u8] = include_bytes!("../../assets/tray-idle-light.png");
-static ICON_ACTIVE_LIGHT: &[u8] = include_bytes!("../../assets/tray-active-light.png");
-static ICON_ATTENTION_LIGHT: &[u8] = include_bytes!("../../assets/tray-attention-light.png");
 static ICON_IDLE_DARK: &[u8] = include_bytes!("../../assets/tray-idle-dark.png");
-static ICON_ACTIVE_DARK: &[u8] = include_bytes!("../../assets/tray-active-dark.png");
-static ICON_ATTENTION_DARK: &[u8] = include_bytes!("../../assets/tray-attention-dark.png");
 static ICON_IDLE_COLOR: &[u8] = include_bytes!("../../assets/tray-idle-color.png");
-static ICON_ACTIVE_COLOR: &[u8] = include_bytes!("../../assets/tray-active-color.png");
-static ICON_ATTENTION_COLOR: &[u8] = include_bytes!("../../assets/tray-attention-color.png");
 
 /// Tray icon state — determines which icon variant and tooltip to show.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -176,10 +160,15 @@ impl TrayIconStyle {
         }
     }
 
-    /// Return (icon_bytes, is_template) for a given state. `is_template`
-    /// is only true for Auto on macOS — for the explicit variants the
-    /// user has picked a concrete color and macOS must NOT tint it.
-    fn icon_for(self, state: TrayState) -> (&'static [u8], bool) {
+    /// Return (icon_bytes, is_template) for the current style. `is_template`
+    /// is only true for Auto on macOS — for the explicit variants the user
+    /// has picked a concrete color and macOS must NOT tint it.
+    ///
+    /// State (Idle/Running/NeedsAttention) is intentionally ignored at the
+    /// icon level — see the module-level comment on the ICON_* statics.
+    /// `_state` is kept in the signature so the rebuild path can pass the
+    /// computed state without callers having to special-case the unused arg.
+    fn icon_for(self, _state: TrayState) -> (&'static [u8], bool) {
         match self {
             Self::Auto => {
                 // Linux's baseline black shape is unreadable on dark panels,
@@ -187,39 +176,13 @@ impl TrayIconStyle {
                 // and Windows keep the original black-on-transparent shape;
                 // macOS additionally flags it as a template for OS tinting.
                 if cfg!(target_os = "linux") {
-                    return Self::Color.icon_for(state);
+                    return Self::Color.icon_for(_state);
                 }
-                let bytes = match state {
-                    TrayState::Idle => ICON_IDLE,
-                    TrayState::Running(_) => ICON_ACTIVE,
-                    TrayState::NeedsAttention(_) => ICON_ATTENTION,
-                };
-                (bytes, cfg!(target_os = "macos"))
+                (ICON_IDLE, cfg!(target_os = "macos"))
             }
-            Self::Light => {
-                let bytes = match state {
-                    TrayState::Idle => ICON_IDLE_LIGHT,
-                    TrayState::Running(_) => ICON_ACTIVE_LIGHT,
-                    TrayState::NeedsAttention(_) => ICON_ATTENTION_LIGHT,
-                };
-                (bytes, false)
-            }
-            Self::Dark => {
-                let bytes = match state {
-                    TrayState::Idle => ICON_IDLE_DARK,
-                    TrayState::Running(_) => ICON_ACTIVE_DARK,
-                    TrayState::NeedsAttention(_) => ICON_ATTENTION_DARK,
-                };
-                (bytes, false)
-            }
-            Self::Color => {
-                let bytes = match state {
-                    TrayState::Idle => ICON_IDLE_COLOR,
-                    TrayState::Running(_) => ICON_ACTIVE_COLOR,
-                    TrayState::NeedsAttention(_) => ICON_ATTENTION_COLOR,
-                };
-                (bytes, false)
-            }
+            Self::Light => (ICON_IDLE_LIGHT, false),
+            Self::Dark => (ICON_IDLE_DARK, false),
+            Self::Color => (ICON_IDLE_COLOR, false),
         }
     }
 }
@@ -322,6 +285,25 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), String> {
                 // Bring window to front and select the workspace.
                 show_and_focus(app);
                 let _ = app.emit("tray-select-workspace", ws_id.to_string());
+                // Authoritatively clear attention for this workspace's sessions
+                // — the user clicked the badge, so the badge should go away
+                // regardless of any frontend cache state. Spawn so we wait
+                // out any in-flight stream task holding the agents write lock
+                // (try_write under contention would silently no-op, leaving
+                // the badge stuck). The rebuild runs only when something
+                // actually changed so we don't churn the icon on benign clicks.
+                let handle = app.clone();
+                let ws_id = ws_id.to_string();
+                tauri::async_runtime::spawn(async move {
+                    let cleared = {
+                        let app_state = handle.state::<AppState>();
+                        let mut agents = app_state.agents.write().await;
+                        clear_workspace_attention_in(&mut agents, &ws_id)
+                    };
+                    if cleared > 0 {
+                        rebuild_tray(&handle);
+                    }
+                });
             } else if id == "open-settings" {
                 show_and_focus(app);
                 let _ = app.emit("open-settings", ());
@@ -557,6 +539,28 @@ pub fn has_running_agents(
     agents.values().any(|s| s.active_pid.is_some())
 }
 
+/// Authoritatively clear `needs_attention` / `attention_kind` for every
+/// session in `agents` belonging to `workspace_id`. Returns the number of
+/// sessions whose flags actually changed.
+///
+/// This is the "click on the tray badge → make it go away" primitive. It
+/// runs server-side, so the badge clears even when the frontend cache has
+/// drifted out of sync with the backend (which is the failure mode users
+/// hit when the menu shows "Needs Input" but no question card is on screen).
+pub(crate) fn clear_workspace_attention_in(
+    agents: &mut std::collections::HashMap<String, crate::state::AgentSessionState>,
+    workspace_id: &str,
+) -> usize {
+    let mut cleared = 0;
+    for session in agents.values_mut() {
+        if session.workspace_id == workspace_id && session.needs_attention {
+            session.reset_attention();
+            cleared += 1;
+        }
+    }
+    cleared
+}
+
 /// Pure logic for tray state — testable without AppState.
 fn compute_tray_state_from_agents(
     agents: &std::collections::HashMap<String, crate::state::AgentSessionState>,
@@ -779,8 +783,12 @@ mod tests {
     use std::collections::HashMap;
 
     fn session(pid: Option<u32>, attention: bool) -> AgentSessionState {
+        session_in("ws1", pid, attention)
+    }
+
+    fn session_in(workspace_id: &str, pid: Option<u32>, attention: bool) -> AgentSessionState {
         AgentSessionState {
-            workspace_id: "ws1".to_string(),
+            workspace_id: workspace_id.to_string(),
             session_id: "test".to_string(),
             turn_count: 1,
             active_pid: pid,
@@ -791,7 +799,7 @@ mod tests {
             } else {
                 None
             },
-            attention_notification_sent: false,
+            attention_notification_sent: attention,
             persistent_session: None,
             mcp_config_dirty: false,
             session_plan_mode: false,
@@ -881,6 +889,65 @@ mod tests {
             compute_tray_state_from_agents(&agents),
             TrayState::NeedsAttention(3)
         ));
+    }
+
+    // --- clear_workspace_attention_in tests ---
+    // Regression guard: when the user clicks the tray's "Needs Input" item
+    // for a workspace, the badge must clear server-side regardless of any
+    // frontend cache state. Earlier the click only cleared sessions whose
+    // *frontend* cache showed `needs_attention=true`, which let the menu
+    // get stuck on "Needs Input" whenever the cache and the Rust agents
+    // map drifted apart (e.g. after an answer was submitted via a path
+    // that didn't refresh `sessionsByWorkspace`).
+
+    #[test]
+    fn clear_workspace_attention_clears_all_matching_sessions() {
+        let mut agents = HashMap::new();
+        agents.insert("s1".to_string(), session_in("ws1", Some(1), true));
+        agents.insert("s2".to_string(), session_in("ws1", None, true));
+        agents.insert("s3".to_string(), session_in("ws2", Some(2), true));
+
+        let cleared = clear_workspace_attention_in(&mut agents, "ws1");
+
+        assert_eq!(cleared, 2, "both ws1 sessions should be cleared");
+        assert!(!agents["s1"].needs_attention);
+        assert!(agents["s1"].attention_kind.is_none());
+        assert!(!agents["s1"].attention_notification_sent);
+        assert!(!agents["s2"].needs_attention);
+        assert!(agents["s2"].attention_kind.is_none());
+        // The other workspace's session must be untouched — clearing one
+        // workspace's badge can't reach across into another.
+        assert!(agents["s3"].needs_attention);
+        assert!(agents["s3"].attention_kind.is_some());
+        assert!(agents["s3"].attention_notification_sent);
+    }
+
+    #[test]
+    fn clear_workspace_attention_returns_zero_when_nothing_to_clear() {
+        let mut agents = HashMap::new();
+        agents.insert("s1".to_string(), session_in("ws1", Some(1), false));
+        agents.insert("s2".to_string(), session_in("ws2", None, true));
+
+        // No ws1 session has needs_attention=true; no-op.
+        let cleared = clear_workspace_attention_in(&mut agents, "ws1");
+        assert_eq!(cleared, 0);
+        assert!(agents["s2"].needs_attention, "ws2 must remain untouched");
+    }
+
+    #[test]
+    fn clear_workspace_attention_handles_missing_workspace() {
+        // Clicking a tray entry whose workspace has no live agent sessions
+        // (e.g. just spawned, never produced an attention) must not panic
+        // or wrongly mutate other workspaces.
+        let mut agents = HashMap::new();
+        agents.insert("s1".to_string(), session_in("ws1", Some(1), true));
+
+        let cleared = clear_workspace_attention_in(&mut agents, "ws-missing");
+        assert_eq!(cleared, 0);
+        assert!(
+            agents["s1"].needs_attention,
+            "untouched workspace stays set"
+        );
     }
 
     // --- Quit guard tests (has_running_agents) ---
@@ -1081,52 +1148,41 @@ mod tests {
     }
 
     #[test]
-    fn active_and_attention_bytes_differ_within_each_style() {
-        // Regression guard: the `Running` and `NeedsAttention` tray states
-        // must resolve to PNGs with different content, otherwise the tray
-        // stops being an at-a-glance signal that user input is required.
-        // Earlier versions of this patch color-flattened the baseline's
-        // green/orange accents and collapsed the two states into identical
-        // artwork on Light/Dark/Color — and the baseline itself had the
-        // same problem for macOS template rendering. We now ship an
-        // alpha-distinct alert dot on attention; this test ensures it
-        // survives.
+    fn icon_is_state_independent_within_each_style() {
+        // The badge overlay produced rendering glitches under macOS template
+        // mode (alpha halos around the accent dot), so all three states now
+        // share the idle PNG within a given style. State signal lives in the
+        // menu text + tooltip + native notification — re-introducing the
+        // badge here without first solving the template-mode rendering
+        // would regress the look users complained about.
         for style in [
             TrayIconStyle::Auto,
             TrayIconStyle::Light,
             TrayIconStyle::Dark,
             TrayIconStyle::Color,
         ] {
-            let (active, _) = style.icon_for(TrayState::Running(1));
+            let (idle, _) = style.icon_for(TrayState::Idle);
+            let (running, _) = style.icon_for(TrayState::Running(1));
             let (attention, _) = style.icon_for(TrayState::NeedsAttention(1));
-            assert_ne!(
-                active, attention,
-                "style {style:?}: Running and NeedsAttention PNGs must have distinct content"
+            assert_eq!(idle, running, "{style:?}: Running must reuse the idle PNG");
+            assert_eq!(
+                idle, attention,
+                "{style:?}: NeedsAttention must reuse the idle PNG"
             );
         }
     }
 
     #[test]
     fn dark_variant_is_actually_dark() {
-        // Regression guard for a pre-ship bug where tray-active-dark.png and
-        // tray-attention-dark.png were byte-copies of the baseline colored
-        // (green/orange) PNGs. A user picking "Dark" explicitly expects a
-        // black monochrome tray, not a colored one — otherwise the setting
-        // is a lie. The fix regenerates all Dark variants via `-colorize
-        // black`, so they must differ from the baseline PNGs.
-        for state in [
-            TrayState::Idle,
-            TrayState::Running(1),
-            TrayState::NeedsAttention(1),
-        ] {
-            let (dark, _) = TrayIconStyle::Dark.icon_for(state);
-            let (auto, _) = TrayIconStyle::Auto.icon_for(state);
-            // On Linux, Auto delegates to Color — still different from Dark.
-            assert_ne!(
-                dark, auto,
-                "Dark {state:?} must not be byte-identical to the baseline/Auto payload"
-            );
-        }
+        // A user picking "Dark" explicitly expects a black monochrome tray,
+        // not the baseline / Color shape — otherwise the setting is a lie.
+        // On Linux, Auto delegates to Color; still must differ from Dark.
+        let (dark, _) = TrayIconStyle::Dark.icon_for(TrayState::Idle);
+        let (auto, _) = TrayIconStyle::Auto.icon_for(TrayState::Idle);
+        assert_ne!(
+            dark, auto,
+            "Dark must not be byte-identical to the baseline/Auto payload"
+        );
     }
 
     #[test]
