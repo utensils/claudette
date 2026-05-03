@@ -408,6 +408,7 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
           <Suspense fallback={<div className={styles.center}>{t("file_loading")}</div>}>
             <MonacoEditor
               key={path}
+              workspaceId={workspaceId}
               initialValue={bufferState.buffer}
               filename={path}
               readOnly={editDisabled}
