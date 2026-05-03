@@ -244,20 +244,33 @@ export const Sidebar = memo(function Sidebar() {
   const handleArchive = useCallback(async (wsId: string) => {
     if (archivingRef.current.has(wsId)) return;
     archivingRef.current.add(wsId);
+
+    const initialState = useAppStore.getState();
+    const snapshot = initialState.workspaces.find((w) => w.id === wsId);
+    const wasSelected = initialState.selectedWorkspaceId === wsId;
+
+    updateWorkspace(wsId, {
+      status: "Archived",
+      worktree_path: null,
+      agent_status: "Stopped",
+    });
+    if (wasSelected) selectWorkspace(null);
+
     try {
       const deleted = await archiveWorkspace(wsId);
       if (deleted) {
         removeWorkspace(wsId);
-      } else {
-        updateWorkspace(wsId, {
-          status: "Archived",
-          worktree_path: null,
-          agent_status: "Stopped",
-        });
       }
-      if (useAppStore.getState().selectedWorkspaceId === wsId) selectWorkspace(null);
     } catch (e) {
       console.error("Failed to archive workspace:", e);
+      if (snapshot) {
+        updateWorkspace(wsId, snapshot);
+        // Only restore selection if the user hasn't navigated elsewhere
+        // while the archive command was in flight.
+        if (wasSelected && useAppStore.getState().selectedWorkspaceId === null) {
+          selectWorkspace(wsId);
+        }
+      }
     } finally {
       archivingRef.current.delete(wsId);
     }
