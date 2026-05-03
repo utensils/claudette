@@ -34,8 +34,10 @@ fn take_stop_snapshot(session: &mut AgentSessionState) -> StopSnapshot {
     let drained = drain_pending_permissions(session);
     let ended_sid = Some(session.session_id.clone());
     let pid = session.active_pid.take();
-    session.needs_attention = false;
-    session.attention_kind = None;
+    // Stop interrupts the cycle outright — make sure a future prompt on the
+    // same session can still fire its notification (full reset, not just
+    // `needs_attention=false`).
+    session.reset_attention();
     (drained, pid, ended_sid)
 }
 
@@ -218,10 +220,14 @@ mod tests {
         let mut session = fresh_session("sess-abc", 3, Some(999));
         session.needs_attention = true;
         session.attention_kind = Some(AttentionKind::Ask);
+        // Stop must also reset the notification dedup flag so a future
+        // prompt on this session can re-trigger its tray notification.
+        session.attention_notification_sent = true;
 
         take_stop_snapshot(&mut session);
 
         assert!(!session.needs_attention);
         assert!(session.attention_kind.is_none());
+        assert!(!session.attention_notification_sent);
     }
 }

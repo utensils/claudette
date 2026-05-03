@@ -125,6 +125,25 @@ pub struct AgentSessionState {
     pub posted_env_trust_warning: bool,
 }
 
+impl AgentSessionState {
+    /// Reset every attention-related field to its quiescent default.
+    ///
+    /// All four "the user no longer needs to engage" paths (per-session
+    /// `clear_attention`, workspace-wide tray clear, AskUserQuestion answer,
+    /// plan approval) must clear the same trio: `needs_attention` for tray
+    /// state, `attention_kind` for tab/sidebar icons, and
+    /// `attention_notification_sent` so the next attention cycle in the
+    /// session isn't deduped against a stale "already notified" flag.
+    /// Routing every clear path through this helper prevents the kind of
+    /// "first prompt notifies, second prompt silently doesn't" bug that
+    /// follows from any path forgetting one of the three.
+    pub fn reset_attention(&mut self) {
+        self.needs_attention = false;
+        self.attention_kind = None;
+        self.attention_notification_sent = false;
+    }
+}
+
 /// Handle to an active PTY process.
 /// The inner fields are `Send` but not `Sync`, so we wrap them in `Mutex`
 /// to satisfy Tauri's `State<AppState>: Send + Sync` requirement.

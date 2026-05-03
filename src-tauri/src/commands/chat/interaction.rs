@@ -18,7 +18,10 @@ pub async fn clear_attention(
     if let Some(session) = agents.get_mut(&chat_session_id)
         && session.needs_attention
     {
-        session.needs_attention = false;
+        // Full reset (not just `needs_attention = false`) so the next
+        // attention cycle on this session can fire its notification —
+        // see AgentSessionState::reset_attention.
+        session.reset_attention();
         drop(agents);
         crate::tray::rebuild_tray(&app);
     }
@@ -72,9 +75,7 @@ pub async fn submit_agent_answer(
             .pending_permissions
             .remove(&tool_use_id)
             .expect("checked above");
-        session.needs_attention = false;
-        session.attention_kind = None;
-        session.attention_notification_sent = false;
+        session.reset_attention();
         (pending, ps)
     };
 
@@ -141,9 +142,7 @@ pub async fn submit_plan_approval(
             .pending_permissions
             .remove(&tool_use_id)
             .expect("checked above");
-        session.needs_attention = false;
-        session.attention_kind = None;
-        session.attention_notification_sent = false;
+        session.reset_attention();
         (pending, ps)
     };
 
