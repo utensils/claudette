@@ -554,9 +554,7 @@ pub(crate) fn clear_workspace_attention_in(
     let mut cleared = 0;
     for session in agents.values_mut() {
         if session.workspace_id == workspace_id && session.needs_attention {
-            session.needs_attention = false;
-            session.attention_kind = None;
-            session.attention_notification_sent = false;
+            session.reset_attention();
             cleared += 1;
         }
     }

@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { useAppStore } from "./stores/useAppStore";
-import { loadInitialData, getAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, clearAttention, detectInstalledApps, listSystemFonts, deleteTerminalTab } from "./services/tauri";
+import { loadInitialData, getAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab } from "./services/tauri";
 import { applyTheme, applyUserFonts, loadAllThemes, findTheme, cacheThemePreference, getThemeDataAttr } from "./utils/theme";
 import { DEFAULT_THEME_ID, DEFAULT_LIGHT_THEME_ID } from "./styles/themes";
 import type { ThemeDefinition } from "./types/theme";
@@ -315,21 +315,22 @@ function App() {
       const wsId = event.payload;
       const store = useAppStore.getState();
       store.selectWorkspace(wsId);
-      // Tray attention is a workspace-level aggregate. The Rust tray click
-      // handler already cleared backend `needs_attention` for every session
-      // in this workspace; mirror the clear into per-session state on the
-      // frontend so any cached entry whose flag drifted out of sync (the
-      // bug this fixes) also gets cleared. Don't gate on the cached
-      // `s.needs_attention` — the whole point is that the cache might be
-      // wrong in either direction.
+      // The Rust tray click handler already cleared backend
+      // `needs_attention` for every session in this workspace under a
+      // single agents-write-lock. Only mirror that into the local cache —
+      // do NOT fan out per-session `clearAttention` IPC calls. Those would
+      // (a) duplicate the backend work O(session_count) times and (b) race
+      // with any AskUserQuestion / ExitPlanMode that sets a fresh
+      // `needs_attention=true` between the menu click and the loop, which
+      // would silently swallow the new prompt.
       const sessions = store.sessionsByWorkspace[wsId] ?? [];
       for (const s of sessions) {
         if (s.status !== "Active") continue;
+        if (!s.needs_attention && s.attention_kind === null) continue;
         store.updateChatSession(s.id, {
           needs_attention: false,
           attention_kind: null,
         });
-        clearAttention(s.id).catch(() => {});
       }
     });
 
