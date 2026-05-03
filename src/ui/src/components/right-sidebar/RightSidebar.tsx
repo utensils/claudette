@@ -1,9 +1,18 @@
 import { Fragment, memo, useCallback, useEffect, useRef, useState } from "react";
 import { isAgentBusy } from "../../utils/agentStatus";
-import { ChevronRight, Undo2, Trash2 } from "lucide-react";
+import { ChevronRight, Undo2, Trash2, Plus, Minus, FileText } from "lucide-react";
 import { useAppStore, selectActiveSessionId } from "../../stores/useAppStore";
 import { useTaskTracker } from "../../hooks/useTaskTracker";
-import { discardFile, loadDiffFiles, sendRemoteCommand } from "../../services/tauri";
+import {
+  discardFile,
+  discardFiles,
+  loadDiffFiles,
+  sendRemoteCommand,
+  stageFile,
+  stageFiles,
+  unstageFile,
+  unstageFiles,
+} from "../../services/tauri";
 import type { DiffFilesResult } from "../../services/tauri";
 import type { DiffFile, DiffLayer } from "../../types/diff";
 import {
@@ -34,6 +43,7 @@ export const RightSidebar = memo(function RightSidebar() {
   const setDiffFiles = useAppStore((s) => s.setDiffFiles);
   const clearDiff = useAppStore((s) => s.clearDiff);
   const openDiffTab = useAppStore((s) => s.openDiffTab);
+  const openFileTab = useAppStore((s) => s.openFileTab);
   const setDiffLoading = useAppStore((s) => s.setDiffLoading);
   const activeTab = useAppStore((s) => s.rightSidebarTab);
   const setActiveTab = useAppStore((s) => s.setRightSidebarTab);
@@ -60,6 +70,9 @@ export const RightSidebar = memo(function RightSidebar() {
   // workspace is connected to a remote.
   const [discardTarget, setDiscardTarget] = useState<
     { file: DiffFile; layer: DiscardableLayer } | null
+  >(null);
+  const [bulkDiscardTarget, setBulkDiscardTarget] = useState<
+    { files: DiffFile[]; layer: DiscardableLayer } | null
   >(null);
   const [contextMenu, setContextMenu] = useState<
     { x: number; y: number; file: DiffFile; layer: DiscardableLayer } | null
@@ -198,6 +211,12 @@ export const RightSidebar = memo(function RightSidebar() {
     const isSelected = diffSelectedFile === file.path
       && (diffSelectedLayer ?? "flat") === (layer ?? "flat");
     const canDiscard = discardEnabled && isDiscardableLayer(layer);
+    const canStage = discardEnabled && (layer === "unstaged" || layer === "untracked");
+    const canUnstage = discardEnabled && layer === "staged";
+    // Source file no longer exists on disk for an unstaged deletion, so the
+    // "open file" button would just produce a load error.
+    const canOpenSource = selectedWorkspaceId != null
+      && !(layer === "unstaged" && file.status === "Deleted");
 
     const handleContextMenu = (e: React.MouseEvent) => {
       if (!canDiscard) return;
@@ -210,6 +229,24 @@ export const RightSidebar = memo(function RightSidebar() {
       e.stopPropagation();
       if (!canDiscard) return;
       setDiscardTarget({ file, layer });
+    };
+
+    const handleStageClick = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (!canStage) return;
+      void performStage(file.path);
+    };
+
+    const handleUnstageClick = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (!canUnstage) return;
+      void performUnstage(file.path);
+    };
+
+    const handleOpenClick = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (!canOpenSource || !selectedWorkspaceId) return;
+      openFileTab(selectedWorkspaceId, file.path);
     };
 
     return (
@@ -240,32 +277,122 @@ export const RightSidebar = memo(function RightSidebar() {
           )}
         </span>
       )}
-      {canDiscard && (
-        <button
-          type="button"
-          className={styles.rowAction}
-          onClick={handleDiscardClick}
-          title={
-            layer === "untracked"
-              ? `Delete ${file.path}`
-              : `Discard changes to ${file.path}`
-          }
-          aria-label={
-            layer === "untracked"
-              ? `Delete ${file.path}`
-              : `Discard changes to ${file.path}`
-          }
-        >
-          {layer === "untracked" ? (
-            <Trash2 size={12} />
-          ) : (
-            <Undo2 size={12} />
-          )}
-        </button>
-      )}
+      <span className={styles.rowActions}>
+        {canOpenSource && (
+          <button
+            type="button"
+            className={styles.rowAction}
+            onClick={handleOpenClick}
+            title="Open in editor"
+            aria-label="Open in editor"
+          >
+            <FileText size={12} />
+          </button>
+        )}
+        {canStage && (
+          <button
+            type="button"
+            className={styles.rowAction}
+            onClick={handleStageClick}
+            title="Stage"
+            aria-label="Stage"
+          >
+            <Plus size={12} />
+          </button>
+        )}
+        {canUnstage && (
+          <button
+            type="button"
+            className={styles.rowAction}
+            onClick={handleUnstageClick}
+            title="Unstage"
+            aria-label="Unstage"
+          >
+            <Minus size={12} />
+          </button>
+        )}
+        {canDiscard && (
+          <button
+            type="button"
+            className={`${styles.rowAction} ${styles.rowActionDanger}`}
+            onClick={handleDiscardClick}
+            title={layer === "untracked" ? "Delete" : "Discard changes"}
+            aria-label={layer === "untracked" ? "Delete" : "Discard changes"}
+          >
+            {layer === "untracked" ? (
+              <Trash2 size={12} />
+            ) : (
+              <Undo2 size={12} />
+            )}
+          </button>
+        )}
+      </span>
     </div>
     );
   };
+
+  const performStage = useCallback(
+    async (filePath: string) => {
+      if (!worktreePath || !selectedWorkspaceId) return;
+      await stageFile(worktreePath, filePath);
+      const result = await loadDiff(selectedWorkspaceId);
+      applyDiffResult(result);
+    },
+    [worktreePath, selectedWorkspaceId, loadDiff, applyDiffResult],
+  );
+
+  const performUnstage = useCallback(
+    async (filePath: string) => {
+      if (!worktreePath || !selectedWorkspaceId) return;
+      await unstageFile(worktreePath, filePath);
+      const result = await loadDiff(selectedWorkspaceId);
+      applyDiffResult(result);
+    },
+    [worktreePath, selectedWorkspaceId, loadDiff, applyDiffResult],
+  );
+
+  const performStageAll = useCallback(
+    async (files: DiffFile[]) => {
+      if (!worktreePath || !selectedWorkspaceId || files.length === 0) return;
+      // One git invocation with all paths — parallel `git add`s race on
+      // `.git/index.lock` and would fail.
+      await stageFiles(worktreePath, files.map((f) => f.path));
+      const result = await loadDiff(selectedWorkspaceId);
+      applyDiffResult(result);
+    },
+    [worktreePath, selectedWorkspaceId, loadDiff, applyDiffResult],
+  );
+
+  const performUnstageAll = useCallback(
+    async (files: DiffFile[]) => {
+      if (!worktreePath || !selectedWorkspaceId || files.length === 0) return;
+      await unstageFiles(worktreePath, files.map((f) => f.path));
+      const result = await loadDiff(selectedWorkspaceId);
+      applyDiffResult(result);
+    },
+    [worktreePath, selectedWorkspaceId, loadDiff, applyDiffResult],
+  );
+
+  const performBulkDiscard = useCallback(
+    async (files: DiffFile[], layer: DiscardableLayer) => {
+      if (!worktreePath || !selectedWorkspaceId || files.length === 0) return;
+      const isUntracked = layer === "untracked";
+      const paths = files.map((f) => f.path);
+      await discardFiles(
+        worktreePath,
+        isUntracked ? [] : paths,
+        isUntracked ? paths : [],
+      );
+      const state = useAppStore.getState();
+      const selectedPath = state.diffSelectedFile;
+      if (selectedPath && files.some((f) => f.path === selectedPath)) {
+        state.setDiffSelectedFile(null);
+      }
+      const result = await loadDiff(selectedWorkspaceId);
+      applyDiffResult(result);
+    },
+    [worktreePath, selectedWorkspaceId, loadDiff, applyDiffResult],
+  );
 
   const performDiscard = useCallback(
     async (filePath: string, layer: DiscardableLayer) => {
@@ -338,24 +465,47 @@ export const RightSidebar = memo(function RightSidebar() {
               // "Committed" in workspace A would carry into workspace B.
               <Fragment key={selectedWorkspaceId ?? ""}>
                 <FileGroup
+                  label="Staged"
+                  files={diffStagedFiles!.staged}
+                  layer="staged"
+                  accentColor="var(--accent-dim)"
+                  renderFileRow={renderFileRow}
+                  onUnstageAll={
+                    discardEnabled
+                      ? () => {
+                          void performUnstageAll(diffStagedFiles!.staged);
+                        }
+                      : undefined
+                  }
+                />
+                <FileGroup
                   label="Unstaged"
                   files={diffStagedFiles!.unstaged}
                   layer="unstaged"
                   accentColor="var(--tool-task)"
                   renderFileRow={renderFileRow}
+                  onStageAll={
+                    discardEnabled
+                      ? () => {
+                          void performStageAll(diffStagedFiles!.unstaged);
+                        }
+                      : undefined
+                  }
+                  onDiscardAll={
+                    discardEnabled
+                      ? () =>
+                          setBulkDiscardTarget({
+                            files: diffStagedFiles!.unstaged,
+                            layer: "unstaged",
+                          })
+                      : undefined
+                  }
                 />
                 <FileGroup
                   label="Untracked"
                   files={diffStagedFiles!.untracked}
                   layer="untracked"
                   accentColor="var(--text-dim)"
-                  renderFileRow={renderFileRow}
-                />
-                <FileGroup
-                  label="Staged"
-                  files={diffStagedFiles!.staged}
-                  layer="staged"
-                  accentColor="var(--accent-dim)"
                   renderFileRow={renderFileRow}
                 />
                 <FileGroup
@@ -399,6 +549,17 @@ export const RightSidebar = memo(function RightSidebar() {
           onClose={() => setDiscardTarget(null)}
         />
       )}
+
+      {bulkDiscardTarget && (
+        <DiscardChangesConfirm
+          bulkCount={bulkDiscardTarget.files.length}
+          layer={bulkDiscardTarget.layer}
+          onConfirm={() =>
+            performBulkDiscard(bulkDiscardTarget.files, bulkDiscardTarget.layer)
+          }
+          onClose={() => setBulkDiscardTarget(null)}
+        />
+      )}
     </div>
   );
 });
@@ -423,33 +584,81 @@ function FileGroup({
   layer,
   accentColor,
   renderFileRow,
+  onStageAll,
+  onUnstageAll,
+  onDiscardAll,
 }: {
   label: string;
   files: DiffFile[];
   layer: DiffLayer;
   accentColor: string;
   renderFileRow: (file: DiffFile, layer?: DiffLayer) => React.ReactElement;
+  onStageAll?: () => void;
+  onUnstageAll?: () => void;
+  onDiscardAll?: () => void;
 }) {
   const [collapsed, setCollapsed] = useState(layer === "committed");
 
   if (files.length === 0) return null;
+
+  const hasActions = onStageAll != null || onUnstageAll != null || onDiscardAll != null;
 
   return (
     <div
       className={styles.fileGroup}
       style={{ borderLeftColor: accentColor }}
     >
-      <button
-        className={styles.groupHeader}
-        onClick={() => setCollapsed(!collapsed)}
-      >
-        <ChevronRight
-          size={12}
-          className={`${styles.groupChevron} ${!collapsed ? styles.groupChevronOpen : ""}`}
-        />
-        <span className={styles.groupLabel}>{label}</span>
-        <span className={styles.groupCount}>{files.length}</span>
-      </button>
+      <div className={styles.groupHeader}>
+        <button
+          type="button"
+          className={styles.groupToggle}
+          onClick={() => setCollapsed(!collapsed)}
+        >
+          <ChevronRight
+            size={12}
+            className={`${styles.groupChevron} ${!collapsed ? styles.groupChevronOpen : ""}`}
+          />
+          <span className={styles.groupLabel}>{label}</span>
+          <span className={styles.groupCount}>{files.length}</span>
+        </button>
+        {hasActions && (
+          <span className={styles.groupActions}>
+            {onStageAll && (
+              <button
+                type="button"
+                className={styles.groupAction}
+                onClick={onStageAll}
+                title="Stage all"
+                aria-label="Stage all"
+              >
+                <Plus size={12} />
+              </button>
+            )}
+            {onUnstageAll && (
+              <button
+                type="button"
+                className={styles.groupAction}
+                onClick={onUnstageAll}
+                title="Unstage all"
+                aria-label="Unstage all"
+              >
+                <Minus size={12} />
+              </button>
+            )}
+            {onDiscardAll && (
+              <button
+                type="button"
+                className={`${styles.groupAction} ${styles.groupActionDanger}`}
+                onClick={onDiscardAll}
+                title="Discard all"
+                aria-label="Discard all"
+              >
+                <Undo2 size={12} />
+              </button>
+            )}
+          </span>
+        )}
+      </div>
       {!collapsed && files.map((file) => renderFileRow(file, layer))}
     </div>
   );

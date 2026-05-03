@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { Modal } from "../modals/Modal";
 import shared from "../modals/shared.module.css";
 import type { DiffLayer } from "../../types/diff";
@@ -6,7 +6,11 @@ import type { DiffLayer } from "../../types/diff";
 export type DiscardableLayer = Extract<DiffLayer, "unstaged" | "untracked">;
 
 interface DiscardChangesConfirmProps {
-  filePath: string;
+  /** Single-file confirm — shows the path inline. */
+  filePath?: string;
+  /** Bulk-discard confirm — shows "N files" instead of the path. Mutually
+   *  exclusive with `filePath`; takes precedence when both are set. */
+  bulkCount?: number;
   layer: DiscardableLayer;
   onConfirm: () => Promise<void>;
   onClose: () => void;
@@ -14,6 +18,7 @@ interface DiscardChangesConfirmProps {
 
 export function DiscardChangesConfirm({
   filePath,
+  bulkCount,
   layer,
   onConfirm,
   onClose,
@@ -41,17 +46,45 @@ export function DiscardChangesConfirm({
   };
 
   const isUntracked = layer === "untracked";
-  const title = isUntracked ? "Delete untracked file?" : "Discard changes?";
+  const isBulk = bulkCount != null && bulkCount > 0;
+  const title = isBulk
+    ? isUntracked
+      ? "Delete all untracked files?"
+      : "Discard all unstaged changes?"
+    : isUntracked
+      ? "Delete untracked file?"
+      : "Discard changes?";
   const action = isUntracked ? "Delete" : "Discard";
+  const target: ReactNode = isBulk ? (
+    <strong>
+      {bulkCount} file{bulkCount === 1 ? "" : "s"}
+    </strong>
+  ) : (
+    <strong>{filePath}</strong>
+  );
   const description = isUntracked ? (
+    isBulk ? (
+      <>
+        Delete {target} that {bulkCount === 1 ? "is" : "are"} not tracked by
+        git. They will be removed from disk.{" "}
+        <strong>This cannot be undone.</strong>
+      </>
+    ) : (
+      <>
+        The file {target} is not tracked by git. Deleting it will remove it
+        from disk. <strong>This cannot be undone.</strong>
+      </>
+    )
+  ) : isBulk ? (
     <>
-      The file <strong>{filePath}</strong> is not tracked by git. Deleting it
-      will remove it from disk. <strong>This cannot be undone.</strong>
+      Discard unstaged changes across {target}. Files will be restored from
+      the index. Any staged changes are kept.{" "}
+      <strong>This cannot be undone.</strong>
     </>
   ) : (
     <>
-      Discard unstaged changes to <strong>{filePath}</strong>. The file will be
-      restored from the index. Any staged changes are kept.{" "}
+      Discard unstaged changes to {target}. The file will be restored from the
+      index. Any staged changes are kept.{" "}
       <strong>This cannot be undone.</strong>
     </>
   );
