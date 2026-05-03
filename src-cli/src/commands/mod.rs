@@ -1,3 +1,4 @@
+pub mod batch;
 pub mod capabilities;
 pub mod chat;
 pub mod repo;

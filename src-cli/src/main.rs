@@ -9,6 +9,7 @@
 //! isn't running the CLI exits with a clear "open the desktop app
 //! first" message rather than silently degrading.
 
+mod batch;
 mod commands;
 mod discovery;
 mod ipc;
@@ -16,7 +17,7 @@ mod output;
 
 use clap::{CommandFactory, Parser, Subcommand};
 
-use crate::commands::{capabilities, chat, repo, rpc, version, workspace};
+use crate::commands::{batch as batch_cmd, capabilities, chat, repo, rpc, version, workspace};
 
 #[derive(Parser)]
 #[command(
@@ -80,6 +81,13 @@ enum Command {
         action: repo::Action,
     },
 
+    /// Batch manifest operations — declarative fan-out for
+    /// multi-workspace workflows.
+    Batch {
+        #[command(subcommand)]
+        action: batch_cmd::Action,
+    },
+
     /// Generate shell completion script for the named shell.
     /// Pipe to your shell's completion file:
     ///   `claudette completion zsh > ~/.zsh/completions/_claudette`
@@ -99,6 +107,7 @@ async fn main() {
         Command::Workspace { action } => workspace::run(action, cli.json).await,
         Command::Chat { action } => chat::run(action, cli.json).await,
         Command::Repo { action } => repo::run(action, cli.json).await,
+        Command::Batch { action } => batch_cmd::run(action).await,
         Command::Completion { shell } => {
             let mut cmd = Cli::command();
             let bin_name = cmd.get_name().to_string();
