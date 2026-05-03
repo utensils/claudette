@@ -217,46 +217,22 @@ pub async fn archive_workspace(
     state: State<'_, AppState>,
     supervisor: State<'_, Arc<McpSupervisor>>,
 ) -> Result<bool, String> {
-    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let mut db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
 
-    let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
-    let ws = workspaces
-        .iter()
-        .find(|w| w.id == id)
-        .ok_or("Workspace not found")?;
-
-    let repos = db.list_repositories().map_err(|e| e.to_string())?;
-    let repo = repos
-        .iter()
-        .find(|r| r.id == ws.repository_id)
-        .ok_or("Repository not found")?;
-
-    let repo_id = ws.repository_id.clone();
-
-    if let Some(ref wt_path) = ws.worktree_path {
-        let _ = git::remove_worktree(&repo.path, wt_path, false).await;
-        // The worktree is gone — drop env-provider watches + cache
-        // for it so we don't hold stale OS watch slots or emit
-        // invalidation events for a path that no longer exists.
-        if let Some(watcher) = state.env_watcher.read().await.as_ref() {
-            watcher.unregister(Path::new(wt_path), None);
-        }
-        state.env_cache.invalidate(Path::new(wt_path), None);
-    }
-
-    // Optionally delete the branch if the user has enabled this setting.
+    // The user-visible "delete branch on archive" setting lives in app
+    // settings; we read it sync before the op so we can pass the boolean
+    // through cleanly without the op needing DB access for settings.
     let delete_branch = db
         .get_app_setting("git_delete_branch_on_archive")
         .ok()
         .flatten()
         .as_deref()
         == Some("true");
-    if delete_branch {
-        let _ = git::branch_delete(&repo.path, &ws.branch_name).await;
-    }
 
-    // Stop any running agents and clear sessions so tray state stays consistent.
-    // Collect PIDs and session IDs under the lock, then stop processes outside it.
+    // Stop any in-flight agent processes before mutating DB state. Agent
+    // tracking lives in AppState (not the shared ops layer), so this part
+    // stays here. Collect PIDs + session IDs under the lock, then stop
+    // outside it to avoid blocking unrelated requests.
     let (ended_sids, pids_to_stop): (Vec<String>, Vec<u32>) = {
         let mut agents = state.agents.write().await;
         let to_remove: Vec<String> = agents
@@ -285,32 +261,37 @@ pub async fn archive_workspace(
         let _ = db.end_agent_session(sid, true);
     }
 
-    if delete_branch {
-        // Branch is gone — nothing left to restore. Fully delete the record while
-        // preserving lifetime stats in `deleted_workspace_summaries`.
-        db.delete_workspace_with_summary(&id)
-            .map_err(|e| e.to_string())?;
+    let out = ops_workspace::archive(
+        &mut db,
+        TauriHooks::new(app.clone()).as_ref(),
+        ops_workspace::ArchiveParams {
+            workspace_id: &id,
+            delete_branch,
+        },
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
-        // If this was the last workspace for the repo, clean up MCP supervisor state.
-        let remaining = db.list_workspaces().unwrap_or_default();
-        if !remaining.iter().any(|w| w.repository_id == repo_id) {
-            supervisor.remove_repo(&repo_id).await;
-            let _ = app.emit("mcp-status-cleared", &repo_id);
+    // Drop env-provider watches + cache entries rooted at the now-defunct
+    // worktree. Lives outside the op because the watcher is `AppState`-
+    // scoped — the op can't reach it without taking a dep on Tauri state.
+    if let Some(ref wt_path) = out.worktree_path {
+        if let Some(watcher) = state.env_watcher.read().await.as_ref() {
+            watcher.unregister(Path::new(wt_path), None);
         }
-
-        crate::tray::rebuild_tray(&app);
-        return Ok(true);
+        state.env_cache.invalidate(Path::new(wt_path), None);
     }
 
-    db.delete_terminal_tabs_for_workspace(&id)
-        .map_err(|e| e.to_string())?;
-    db.delete_scm_status_cache(&id).map_err(|e| e.to_string())?;
-    db.update_workspace_status(&id, &WorkspaceStatus::Archived, None)
-        .map_err(|e| e.to_string())?;
+    // Repo-scoped MCP supervisor cleanup when the last workspace for the
+    // repo is gone. Only relevant when the workspace row was hard-deleted
+    // (delete_branch path) — Archived rows keep the repo "alive" for
+    // potential restore.
+    if delete_branch && out.was_last_workspace {
+        supervisor.remove_repo(&out.repository_id).await;
+        let _ = app.emit("mcp-status-cleared", &out.repository_id);
+    }
 
-    crate::tray::rebuild_tray(&app);
-
-    Ok(false)
+    Ok(delete_branch)
 }
 
 #[tauri::command]

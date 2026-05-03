@@ -405,6 +405,107 @@ pub async fn resolve_branch_prefix(mode: &str, custom_value: &str) -> String {
     }
 }
 
+/// Inputs to [`archive`].
+pub struct ArchiveParams<'a> {
+    pub workspace_id: &'a str,
+    /// Whether to delete the workspace's branch as well as the worktree.
+    /// Reflects the `git_delete_branch_on_archive` app setting — the GUI
+    /// reads it from the DB; other callers (CLI, scripts) typically pass
+    /// `false` unless the user explicitly opts in.
+    pub delete_branch: bool,
+}
+
+/// Result of a successful [`archive`]. `branch_deleted` reflects whether
+/// the branch was actually removed (depends on `delete_branch` and whether
+/// the branch existed); `was_last_workspace` lets callers know they should
+/// also tear down repository-scoped state (MCP supervisor, status caches).
+#[derive(Debug, Serialize)]
+pub struct ArchiveOutput {
+    pub branch_deleted: bool,
+    pub was_last_workspace: bool,
+    /// The workspace's prior worktree path, if any. Callers use this to
+    /// invalidate env-provider watchers and terminal sessions that pointed
+    /// at the now-defunct worktree.
+    pub worktree_path: Option<String>,
+    /// `repository_id` of the archived workspace, surfaced so callers can
+    /// run repo-scoped cleanup without re-querying the DB.
+    pub repository_id: String,
+}
+
+/// Archive a workspace: remove its worktree, optionally delete its branch,
+/// clear its terminal-tab and SCM-status cache rows, mark it
+/// [`WorkspaceStatus::Archived`], and fire hooks.
+///
+/// Caller responsibilities (not handled here because they're per-process
+/// state, not shared DB/git state):
+/// - Stop any running agents whose `workspace_id` matches before invoking
+///   this op (the GUI keeps agent process state in `AppState.agents`).
+/// - Invalidate env-provider watcher entries rooted at the worktree path
+///   returned in [`ArchiveOutput::worktree_path`] (the watcher lives in
+///   `AppState.env_watcher`).
+///
+/// When `delete_branch` is true and the workspace was the last one in its
+/// repository, the row is hard-deleted via
+/// `delete_workspace_with_summary` (lifetime stats survive in
+/// `deleted_workspace_summaries`); otherwise the row is left as Archived
+/// so the user can restore it later.
+pub async fn archive(
+    db: &mut Database,
+    hooks: &dyn OpsHooks,
+    params: ArchiveParams<'_>,
+) -> Result<ArchiveOutput, OpsError> {
+    let workspaces = db.list_workspaces()?;
+    let ws = workspaces
+        .iter()
+        .find(|w| w.id == params.workspace_id)
+        .ok_or_else(|| OpsError::NotFound("Workspace not found".to_string()))?;
+
+    let repos = db.list_repositories()?;
+    let repo = repos
+        .iter()
+        .find(|r| r.id == ws.repository_id)
+        .ok_or_else(|| OpsError::NotFound("Repository not found".to_string()))?;
+
+    let repository_id = ws.repository_id.clone();
+    let worktree_path = ws.worktree_path.clone();
+    let branch_name = ws.branch_name.clone();
+    let workspace_id = ws.id.clone();
+    let repo_path = repo.path.clone();
+
+    if let Some(ref wt_path) = worktree_path {
+        let _ = git::remove_worktree(&repo_path, wt_path, false).await;
+    }
+
+    let branch_deleted = if params.delete_branch {
+        git::branch_delete(&repo_path, &branch_name).await.is_ok()
+    } else {
+        false
+    };
+
+    if params.delete_branch {
+        // Branch is gone — nothing left to restore. Hard-delete via
+        // `delete_workspace_with_summary` so lifetime stats survive
+        // in `deleted_workspace_summaries`.
+        db.delete_workspace_with_summary(&workspace_id)?;
+    } else {
+        db.delete_terminal_tabs_for_workspace(&workspace_id)?;
+        db.delete_scm_status_cache(&workspace_id)?;
+        db.update_workspace_status(&workspace_id, &WorkspaceStatus::Archived, None)?;
+    }
+
+    let remaining = db.list_workspaces()?;
+    let was_last_workspace = !remaining.iter().any(|w| w.repository_id == repository_id);
+
+    hooks.workspace_changed(&workspace_id, WorkspaceChangeKind::Archived);
+
+    Ok(ArchiveOutput {
+        branch_deleted,
+        was_last_workspace,
+        worktree_path,
+        repository_id,
+    })
+}
+
 /// Read the two app-settings keys that drive the branch prefix. Synchronous
 /// so callers can read while the `Database` (`rusqlite::Connection` —
 /// `!Send`) is in scope, then drop the handle before awaiting

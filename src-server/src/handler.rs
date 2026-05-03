@@ -6,7 +6,7 @@ use claudette::chat::{
     extract_assistant_text, extract_event_thinking,
 };
 use claudette::db::Database;
-use claudette::model::{ChatMessage, ChatRole, WorkspaceStatus};
+use claudette::model::{ChatMessage, ChatRole};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde_json::json;
 
@@ -844,9 +844,12 @@ async fn handle_archive_workspace(
     state: &ServerState,
     workspace_id: &str,
 ) -> Result<serde_json::Value, String> {
+    use claudette::ops::{NoopHooks, workspace as ops_workspace};
+
     // Stop any running agents for sessions in this workspace. Collect the
     // PIDs to stop under the lock, then drop the lock before awaiting any
-    // process teardowns to avoid blocking unrelated requests.
+    // process teardowns to avoid blocking unrelated requests. Agent state
+    // is per-process; this part can't move into the shared op.
     let pids_to_stop: Vec<u32> = {
         let mut agents = state.agents.write().await;
         let to_remove: Vec<String> = agents
@@ -863,22 +866,20 @@ async fn handle_archive_workspace(
         let _ = agent::stop_agent(pid).await;
     }
 
-    let db = open_db(state)?;
-    db.update_workspace_status(workspace_id, &WorkspaceStatus::Archived, None)
-        .map_err(|e| e.to_string())?;
-
-    // Remove worktree.
-    let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
-    if let Some(ws) = workspaces.iter().find(|w| w.id == workspace_id)
-        && let Some(ref path) = ws.worktree_path
-    {
-        let repo = db
-            .get_repository(&ws.repository_id)
-            .map_err(|e| e.to_string())?;
-        if let Some(repo) = repo {
-            let _ = claudette::git::remove_worktree(&repo.path, path, false).await;
-        }
-    }
+    let mut db = open_db(state)?;
+    let _ = ops_workspace::archive(
+        &mut db,
+        &NoopHooks,
+        ops_workspace::ArchiveParams {
+            workspace_id,
+            // The server doesn't surface a delete-branch toggle today;
+            // archive without branch deletion mirrors prior behavior so
+            // remote clients can still restore archived workspaces.
+            delete_branch: false,
+        },
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
     Ok(json!(null))
 }
