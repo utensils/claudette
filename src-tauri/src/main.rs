@@ -515,6 +515,7 @@ fn main() {
             commands::diff::stage_files,
             commands::diff::unstage_files,
             commands::diff::discard_files,
+            commands::diff::load_commit_file_diff,
             // Terminal
             commands::terminal::create_terminal_tab,
             commands::terminal::delete_terminal_tab,

@@ -3,7 +3,7 @@ use tauri::State;
 use claudette::db::Database;
 use claudette::diff;
 use claudette::git;
-use claudette::model::diff::{DiffFile, FileDiff, StagedDiffFiles};
+use claudette::model::diff::{CommitEntry, DiffFile, FileDiff, StagedDiffFiles};
 
 use crate::state::AppState;
 
@@ -12,6 +12,7 @@ pub struct DiffFilesResult {
     pub files: Vec<DiffFile>,
     pub merge_base: String,
     pub staged_files: Option<StagedDiffFiles>,
+    pub commits: Vec<CommitEntry>,
 }
 
 #[tauri::command]
@@ -49,18 +50,21 @@ pub async fn load_diff_files(
         .map_err(|e| e.to_string())?;
 
     // Get both the flat file list (backward compat) and staged groups
-    let (files, staged_files) = tokio::join!(
+    let (files, staged_files, commits) = tokio::join!(
         diff::changed_files(worktree_path, &merge_base),
         diff::staged_changed_files(worktree_path, &merge_base),
+        diff::commits_in_range(worktree_path, &merge_base),
     );
 
     let files = files.map_err(|e| e.to_string())?;
     let staged_files = staged_files.ok();
+    let commits = commits.unwrap_or_default();
 
     Ok(DiffFilesResult {
         files,
         merge_base,
         staged_files,
+        commits,
     })
 }
 
@@ -149,4 +153,16 @@ pub async fn discard_file(
     diff::discard_file(&worktree_path, &file_path, is_untracked)
         .await
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn load_commit_file_diff(
+    worktree_path: String,
+    commit_hash: String,
+    file_path: String,
+) -> Result<FileDiff, String> {
+    let raw = diff::commit_file_diff(&worktree_path, &commit_hash, &file_path)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(diff::parse_unified_diff(&raw, &file_path))
 }

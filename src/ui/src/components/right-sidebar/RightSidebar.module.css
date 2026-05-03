@@ -270,3 +270,74 @@
   border-radius: 8px;
   line-height: 16px;
 }
+
+/* Commit history rows */
+.commitItem {
+  margin-bottom: 1px;
+}
+
+.commitRow {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  padding: 4px 8px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: 4px;
+  text-align: left;
+  transition: background var(--transition-fast);
+}
+
+.commitRow:hover {
+  background: var(--hover-bg);
+}
+
+.commitRowActive {
+  background: var(--selected-bg);
+}
+
+.commitChevron {
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+  color: var(--text-dim);
+}
+
+.commitHash {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--diff-added-text);
+  flex-shrink: 0;
+}
+
+.commitSubject {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.commitDate {
+  font-size: 10px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.commitFiles {
+  padding-left: 12px;
+}
+
+.commitFileRow {
+  padding-left: 12px;
+}
+
+.commitNoFiles {
+  padding: 4px 12px 4px 20px;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-style: italic;
+}

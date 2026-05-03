@@ -14,7 +14,7 @@ import {
   unstageFiles,
 } from "../../services/tauri";
 import type { DiffFilesResult } from "../../services/tauri";
-import type { DiffFile, DiffLayer } from "../../types/diff";
+import type { CommitEntry, DiffFile, DiffLayer } from "../../types/diff";
 import {
   AttachmentContextMenu,
   type AttachmentContextMenuItem,
@@ -45,6 +45,9 @@ export const RightSidebar = memo(function RightSidebar() {
   const openDiffTab = useAppStore((s) => s.openDiffTab);
   const openFileTab = useAppStore((s) => s.openFileTab);
   const setDiffLoading = useAppStore((s) => s.setDiffLoading);
+  const commitHistory = useAppStore((s) => s.commitHistory);
+  const diffSelectedCommitHash = useAppStore((s) => s.diffSelectedCommitHash);
+  const setDiffSelectedCommitHash = useAppStore((s) => s.setDiffSelectedCommitHash);
   const activeTab = useAppStore((s) => s.rightSidebarTab);
   const setActiveTab = useAppStore((s) => s.setRightSidebarTab);
 
@@ -122,7 +125,7 @@ export const RightSidebar = memo(function RightSidebar() {
   const applyDiffResult = useCallback(
     (result: DiffFilesResult | undefined) => {
       if (result) {
-        setDiffFiles(result.files, result.merge_base, result.staged_files);
+        setDiffFiles(result.files, result.merge_base, result.staged_files, result.commits);
       }
     },
     [setDiffFiles]
@@ -266,6 +269,7 @@ export const RightSidebar = memo(function RightSidebar() {
       onClick={() => {
         if (selectedWorkspaceId) {
           openDiffTab(selectedWorkspaceId, file.path, layer);
+          setDiffSelectedCommitHash(null);
         }
       }}
       onContextMenu={handleContextMenu}
@@ -551,12 +555,25 @@ export const RightSidebar = memo(function RightSidebar() {
                   renderFileRow={renderFileRow}
                 />
                 <FileGroup
-                  label="Committed"
-                  files={diffStagedFiles!.committed}
-                  layer="committed"
-                  accentColor="var(--diff-added-text)"
+                  label="Staged"
+                  files={diffStagedFiles!.staged}
+                  layer="staged"
+                  accentColor="var(--accent-dim)"
                   renderFileRow={renderFileRow}
                 />
+                {commitHistory && commitHistory.length > 0 && (
+                  <CommitGroup
+                    commits={commitHistory}
+                    selectedFile={diffSelectedFile}
+                    selectedCommitHash={diffSelectedCommitHash}
+                    onFileClick={(file, commitHash) => {
+                      if (selectedWorkspaceId) {
+                        openDiffTab(selectedWorkspaceId, file.path, "committed");
+                        setDiffSelectedCommitHash(commitHash);
+                      }
+                    }}
+                  />
+                )}
               </Fragment>
             ) : (
               // Fallback: flat list (remote server without staged_files)
@@ -707,6 +724,117 @@ function FileGroup({
         )}
       </div>
       {!collapsed && files.map((file) => renderFileRow(file, layer))}
+    </div>
+  );
+}
+
+function formatRelativeDate(isoDate: string): string {
+  const date = new Date(isoDate);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  if (diffDays === 0) return "today";
+  if (diffDays === 1) return "yesterday";
+  if (diffDays < 7) return `${diffDays}d`;
+  if (diffDays < 30) return `${Math.floor(diffDays / 7)}w`;
+  if (diffDays < 365) return `${Math.floor(diffDays / 30)}mo`;
+  return `${Math.floor(diffDays / 365)}y`;
+}
+
+function CommitGroup({
+  commits,
+  selectedFile,
+  selectedCommitHash,
+  onFileClick,
+}: {
+  commits: CommitEntry[];
+  selectedFile: string | null;
+  selectedCommitHash: string | null;
+  onFileClick: (file: DiffFile, commitHash: string) => void;
+}) {
+  const [collapsed, setCollapsed] = useState(true);
+  const [expandedHashes, setExpandedHashes] = useState<Record<string, boolean>>({});
+
+  const toggleCommit = (hash: string) => {
+    setExpandedHashes((prev) => ({ ...prev, [hash]: !prev[hash] }));
+  };
+
+  return (
+    <div
+      className={styles.fileGroup}
+      style={{ borderLeftColor: "var(--diff-added-text)" }}
+    >
+      <button
+        className={styles.groupHeader}
+        onClick={() => setCollapsed(!collapsed)}
+      >
+        <ChevronRight
+          size={12}
+          className={`${styles.groupChevron} ${!collapsed ? styles.groupChevronOpen : ""}`}
+        />
+        <span className={styles.groupLabel}>Commits</span>
+        <span className={styles.groupCount}>{commits.length}</span>
+      </button>
+      {!collapsed &&
+        commits.map((commit) => (
+          <div key={commit.hash} className={styles.commitItem}>
+            <button
+              className={`${styles.commitRow} ${selectedCommitHash === commit.hash && expandedHashes[commit.hash] ? styles.commitRowActive : ""}`}
+              onClick={() => toggleCommit(commit.hash)}
+            >
+              <ChevronRight
+                size={10}
+                className={`${styles.commitChevron} ${expandedHashes[commit.hash] ? styles.groupChevronOpen : ""}`}
+              />
+              <span className={styles.commitHash}>{commit.short_hash}</span>
+              <span className={styles.commitSubject}>{commit.subject}</span>
+              <span className={styles.commitDate}>{formatRelativeDate(commit.date)}</span>
+            </button>
+            {expandedHashes[commit.hash] && (
+              <div className={styles.commitFiles}>
+                {commit.files.length === 0 ? (
+                  <div className={styles.commitNoFiles}>no file changes</div>
+                ) : (
+                  commit.files.map((file) => {
+                    const isSelected =
+                      selectedFile === file.path &&
+                      selectedCommitHash === commit.hash;
+                    return (
+                      <div
+                        key={file.path}
+                        className={`${styles.file} ${styles.commitFileRow} ${isSelected ? styles.fileSelected : ""}`}
+                        onClick={() => onFileClick(file, commit.hash)}
+                      >
+                        <span
+                          className={styles.status}
+                          style={{
+                            color:
+                              typeof file.status === "string"
+                                ? file.status === "Added"
+                                  ? "var(--diff-added-text)"
+                                  : file.status === "Modified"
+                                    ? "var(--tool-task)"
+                                    : "var(--diff-removed-text)"
+                                : "var(--diff-hunk-header)",
+                          }}
+                        >
+                          {typeof file.status === "string"
+                            ? file.status === "Added"
+                              ? "A"
+                              : file.status === "Modified"
+                                ? "M"
+                                : "D"
+                            : "R"}
+                        </span>
+                        <span className={styles.path}>{file.path}</span>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            )}
+          </div>
+        ))}
     </div>
   );
 }

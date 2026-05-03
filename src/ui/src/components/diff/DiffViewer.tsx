@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { AlignJustify, Check, Columns2, Copy, Eye, GitCompare } from "lucide-react";
 import { writeText as clipboardWriteText } from "@tauri-apps/plugin-clipboard-manager";
 import { useAppStore } from "../../stores/useAppStore";
-import { loadFileDiff, readWorkspaceFile } from "../../services/tauri";
+import { loadCommitFileDiff, loadFileDiff, readWorkspaceFile } from "../../services/tauri";
 import { WorkspacePanelHeader } from "../shared/WorkspacePanelHeader";
 import { PaneToolbar } from "../shared/PaneToolbar";
 import { SegmentedControl } from "../shared/SegmentedControl";
@@ -111,6 +111,7 @@ export function DiffViewer() {
   const setDiffPreviewError = useAppStore((s) => s.setDiffPreviewError);
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const diffSelectedCommitHash = useAppStore((s) => s.diffSelectedCommitHash);
 
   const ws = workspaces.find((w) => w.id === selectedWorkspaceId);
   const isMarkdown = !!diffSelectedFile && MARKDOWN_EXT.test(diffSelectedFile);
@@ -167,10 +168,14 @@ export function DiffViewer() {
   const previewVersionRef = useRef(0);
 
   useEffect(() => {
-    if (!diffSelectedFile || !ws?.worktree_path || !diffMergeBase) return;
+    if (!diffSelectedFile || !ws?.worktree_path) return;
+    if (!diffSelectedCommitHash && !diffMergeBase) return;
     const version = ++loadVersionRef.current;
     setDiffLoading(true);
-    loadFileDiff(ws.worktree_path, diffMergeBase, diffSelectedFile, diffSelectedLayer ?? undefined)
+    const load = diffSelectedCommitHash
+      ? loadCommitFileDiff(ws.worktree_path, diffSelectedCommitHash, diffSelectedFile)
+      : loadFileDiff(ws.worktree_path, diffMergeBase!, diffSelectedFile, diffSelectedLayer ?? undefined);
+    load
       .then((content) => {
         if (version !== loadVersionRef.current) return;
         setDiffContent(content);
@@ -184,6 +189,7 @@ export function DiffViewer() {
   }, [
     diffSelectedFile,
     diffSelectedLayer,
+    diffSelectedCommitHash,
     ws?.worktree_path,
     diffMergeBase,
     setDiffContent,

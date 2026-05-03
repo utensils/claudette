@@ -6,6 +6,7 @@ import type {
   DiffViewMode,
 } from "../../types";
 import type {
+  CommitEntry,
   DiffLayer,
   DiffSelection,
   StagedDiffFiles,
@@ -40,16 +41,21 @@ export interface DiffSlice {
   // Which diff tab was active per workspace. Saved on workspace switch,
   // restored (with tab-existence validation) when switching back.
   diffSelectionByWorkspace: Record<string, DiffSelection>;
+  commitHistory: CommitEntry[] | null;
+  diffSelectedCommitHash: string | null;
   setDiffFiles: (
     files: DiffFile[],
     mergeBase: string,
     stagedFiles?: StagedDiffFiles | null,
+    commits?: CommitEntry[] | null,
   ) => void;
   setDiffSelectedFile: (path: string | null, layer?: DiffLayer | null) => void;
   setDiffContent: (content: FileDiff | null) => void;
   setDiffViewMode: (mode: DiffViewMode) => void;
   setDiffLoading: (loading: boolean) => void;
   setDiffError: (error: string | null) => void;
+  setCommitHistory: (commits: CommitEntry[] | null) => void;
+  setDiffSelectedCommitHash: (hash: string | null) => void;
   setDiffPreviewMode: (mode: "diff" | "rendered") => void;
   setDiffPreviewContent: (content: FileContent | null) => void;
   setDiffPreviewLoading: (loading: boolean) => void;
@@ -92,11 +98,14 @@ export const createDiffSlice: StateCreator<AppState, [], [], DiffSlice> = (
   diffPreviewError: null,
   diffTabsByWorkspace: {},
   diffSelectionByWorkspace: {},
-  setDiffFiles: (files, mergeBase, stagedFiles) =>
+  commitHistory: null,
+  diffSelectedCommitHash: null,
+  setDiffFiles: (files, mergeBase, stagedFiles, commits) =>
     set({
       diffFiles: files,
       diffMergeBase: mergeBase,
       diffStagedFiles: stagedFiles ?? null,
+      commitHistory: commits ?? null,
     }),
   setDiffSelectedFile: (path, layer) =>
     set({ diffSelectedFile: path, diffSelectedLayer: layer ?? null }),
@@ -104,6 +113,8 @@ export const createDiffSlice: StateCreator<AppState, [], [], DiffSlice> = (
   setDiffViewMode: (mode) => set({ diffViewMode: mode }),
   setDiffLoading: (loading) => set({ diffLoading: loading }),
   setDiffError: (error) => set({ diffError: error }),
+  setCommitHistory: (commits) => set({ commitHistory: commits }),
+  setDiffSelectedCommitHash: (hash) => set({ diffSelectedCommitHash: hash }),
   setDiffPreviewMode: (mode) => set({ diffPreviewMode: mode }),
   setDiffPreviewContent: (content) => set({ diffPreviewContent: content }),
   setDiffPreviewLoading: (loading) => set({ diffPreviewLoading: loading }),
@@ -123,6 +134,8 @@ export const createDiffSlice: StateCreator<AppState, [], [], DiffSlice> = (
       diffPreviewError: null,
       diffTabsByWorkspace: {},
       diffSelectionByWorkspace: {},
+      commitHistory: null,
+      diffSelectedCommitHash: null,
     }),
   openDiffTab: (workspaceId, path, layer) =>
     set((s) => {
