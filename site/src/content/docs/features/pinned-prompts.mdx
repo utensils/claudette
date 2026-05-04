@@ -37,7 +37,7 @@ Global pinned prompts appear in every repository. Manage them at **Settings → 
 To create a global prompt:
 1. Open **Settings → Pinned Prompts**
 2. Click **Add prompt**
-3. Enter a **Name** (shown on the pill) and the **Prompt** text
+3. Enter a **Display name** (shown on the pill) and the **Prompt body**
 4. Toggle **Auto-send** on or off
 5. Click **Save**
 
@@ -51,8 +51,8 @@ Repo prompts appear **before** global prompts in the pill bar. See [Per-Repo Set
 
 ## Inheritance and Overrides
 
-Repositories inherit all global pinned prompts automatically. If a repo defines a prompt with the **same name** as a global prompt, the repo's version takes precedence and the global one is hidden.
+Repositories inherit all global pinned prompts automatically. If a repo defines a prompt with the **same display name** as a global prompt, the repo's version takes precedence and the global one is hidden.
 
-In repo settings, inherited global prompts are listed below the repo-specific prompts. Any global prompt that is being overridden by a repo prompt of the same name shows an **Overridden** badge.
+In repo settings, inherited global prompts are listed below the repo-specific prompts. Any global prompt that is being overridden by a repo prompt of the same display name shows an **Overridden** badge.
 
 This lets you define a common baseline globally while tailoring specific prompts per project — for example, a global "Run tests" prompt that a repo overrides with its specific test command.
