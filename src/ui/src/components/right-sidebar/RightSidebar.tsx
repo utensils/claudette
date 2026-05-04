@@ -1,6 +1,6 @@
 import { Fragment, memo, useCallback, useEffect, useRef, useState } from "react";
 import { isAgentBusy } from "../../utils/agentStatus";
-import { ChevronRight, Undo2, Trash2, Plus, Minus, FileText } from "lucide-react";
+import { ChevronRight, Undo2, Trash2, Plus, Minus, FilePenLine } from "lucide-react";
 import { useAppStore, selectActiveSessionId } from "../../stores/useAppStore";
 import { useTaskTracker } from "../../hooks/useTaskTracker";
 import {
@@ -281,12 +281,12 @@ export const RightSidebar = memo(function RightSidebar() {
         {statusLabel(file.status)}
       </span>
       <span className={styles.path}>{file.path}</span>
-      {(file.additions !== undefined || file.deletions !== undefined) && (
+      {(file.additions != null || file.deletions != null) && (
         <span className={styles.stats}>
-          {file.additions !== undefined && (
+          {file.additions != null && (
             <span className={styles.additions}>+{file.additions}</span>
           )}
-          {file.deletions !== undefined && (
+          {file.deletions != null && (
             <span className={styles.deletions}>-{file.deletions}</span>
           )}
         </span>
@@ -300,7 +300,7 @@ export const RightSidebar = memo(function RightSidebar() {
             title="Open in editor"
             aria-label="Open in editor"
           >
-            <FileText size={12} />
+            <FilePenLine size={12} />
           </button>
         )}
         {canStage && (
@@ -555,10 +555,10 @@ export const RightSidebar = memo(function RightSidebar() {
                   renderFileRow={renderFileRow}
                 />
                 <FileGroup
-                  label="Staged"
-                  files={diffStagedFiles!.staged}
-                  layer="staged"
-                  accentColor="var(--accent-dim)"
+                  label="Committed"
+                  files={diffStagedFiles!.committed}
+                  layer="committed"
+                  accentColor="var(--diff-added-text)"
                   renderFileRow={renderFileRow}
                 />
                 {commitHistory && commitHistory.length > 0 && (
@@ -566,6 +566,8 @@ export const RightSidebar = memo(function RightSidebar() {
                     commits={commitHistory}
                     selectedFile={diffSelectedFile}
                     selectedCommitHash={diffSelectedCommitHash}
+                    selectedWorkspaceId={selectedWorkspaceId}
+                    openFileTab={openFileTab}
                     onFileClick={(file, commitHash) => {
                       if (selectedWorkspaceId) {
                         openDiffTab(selectedWorkspaceId, file.path, "committed");
@@ -745,11 +747,15 @@ function CommitGroup({
   commits,
   selectedFile,
   selectedCommitHash,
+  selectedWorkspaceId,
+  openFileTab,
   onFileClick,
 }: {
   commits: CommitEntry[];
   selectedFile: string | null;
   selectedCommitHash: string | null;
+  selectedWorkspaceId: string | null;
+  openFileTab: (workspaceId: string, path: string) => void;
   onFileClick: (file: DiffFile, commitHash: string) => void;
 }) {
   const [collapsed, setCollapsed] = useState(true);
@@ -799,6 +805,7 @@ function CommitGroup({
                     const isSelected =
                       selectedFile === file.path &&
                       selectedCommitHash === commit.hash;
+                    const canOpen = selectedWorkspaceId != null && file.status !== "Deleted";
                     return (
                       <div
                         key={file.path}
@@ -827,6 +834,32 @@ function CommitGroup({
                             : "R"}
                         </span>
                         <span className={styles.path}>{file.path}</span>
+                        {(file.additions != null || file.deletions != null) && (
+                          <span className={styles.stats}>
+                            {file.additions != null && (
+                              <span className={styles.additions}>+{file.additions}</span>
+                            )}
+                            {file.deletions != null && (
+                              <span className={styles.deletions}>-{file.deletions}</span>
+                            )}
+                          </span>
+                        )}
+                        <span className={styles.rowActions}>
+                          {canOpen && (
+                            <button
+                              type="button"
+                              className={styles.rowAction}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openFileTab(selectedWorkspaceId, file.path);
+                              }}
+                              title="Open in editor"
+                              aria-label="Open in editor"
+                            >
+                              <FilePenLine size={12} />
+                            </button>
+                          )}
+                        </span>
                       </div>
                     );
                   })
