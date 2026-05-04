@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { AlignJustify, Check, Columns2, Copy, Eye, GitCompare } from "lucide-react";
+import { AlignJustify, Check, Columns2, Copy, Eye, FilePenLine, GitCompare } from "lucide-react";
 import { writeText as clipboardWriteText } from "@tauri-apps/plugin-clipboard-manager";
 import { useAppStore } from "../../stores/useAppStore";
 import { loadCommitFileDiff, loadFileDiff, readWorkspaceFile } from "../../services/tauri";
@@ -111,6 +111,7 @@ export function DiffViewer() {
   const setDiffPreviewError = useAppStore((s) => s.setDiffPreviewError);
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const openFileTab = useAppStore((s) => s.openFileTab);
   const diffSelectedCommitHash = useAppStore((s) => s.diffSelectedCommitHash);
 
   const ws = workspaces.find((w) => w.id === selectedWorkspaceId);
@@ -330,6 +331,14 @@ export function DiffViewer() {
                   <Copy size={14} aria-hidden="true" />
                 )}
               </IconButton>
+              {selectedWorkspaceId && diffSelectedFile && (
+                <IconButton
+                  onClick={() => openFileTab(selectedWorkspaceId, diffSelectedFile)}
+                  tooltip="Open in editor"
+                >
+                  <FilePenLine size={14} aria-hidden="true" />
+                </IconButton>
+              )}
               {isMarkdown && (
                 <SegmentedControl
                   ariaLabel={t("diff_markdown_view_mode_aria")}
