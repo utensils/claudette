@@ -12,6 +12,7 @@ Claudette is built entirely on open source technologies. Here's what powers it a
 | [Tauri 2](https://tauri.app) | Desktop app framework | Native performance with a tiny footprint — no Electron, no bundled Chromium. The result is a \<30MB binary with \<2s cold start. |
 | [Rust](https://www.rust-lang.org) | Backend language | Memory safety without a garbage collector, excellent async support via Tokio, and the ability to ship a single static binary. |
 | [Tokio](https://tokio.rs) | Async runtime | Powers all our concurrent operations — process management, git operations, WebSocket connections, and PTY I/O. |
+| [Serde](https://serde.rs) | Serialization | Ubiquitous serialization framework used throughout the codebase for IPC, JSON streaming, and database models. |
 
 ## Frontend
 
@@ -22,6 +23,12 @@ Claudette is built entirely on open source technologies. Here's what powers it a
 | [Zustand](https://zustand.docs.pmnd.rs) | State management | Minimal, fast, and flexible. A single store with domain slices keeps state predictable without boilerplate. |
 | [Vite](https://vite.dev) | Build tool | Instant HMR in dev, optimized production builds. Tauri's default frontend toolchain. |
 | [Lucide](https://lucide.dev) | Icons | Clean, consistent icon set with tree-shaking — only the icons we use end up in the bundle. |
+| [react-markdown](https://github.com/remarkjs/react-markdown) + [remark-gfm](https://github.com/remarkjs/remark-gfm) | Markdown rendering | Renders agent chat messages with full GitHub Flavored Markdown support — tables, strikethrough, task lists. |
+| [Mermaid](https://mermaid.js.org) | Diagram rendering | Renders sequence diagrams, flowcharts, and other diagrams embedded in agent output. |
+| [pdf.js](https://mozilla.github.io/pdf.js/) | PDF rendering | In-app PDF viewing without leaving Claudette — useful for reviewing generated documents. |
+| [i18next](https://www.i18next.com) | Internationalization | Framework for UI string translation, keeping user-visible text out of component logic. |
+| [react-resizable-panels](https://github.com/bvaughn/react-resizable-panels) | Panel layout | Drag-to-resize panels throughout the UI — sidebar, diff viewer, terminal split. |
+| [ansi_up](https://github.com/drudru/ansi_up) | ANSI rendering | Converts ANSI escape codes in agent output to styled HTML for display in chat. |
 
 ## Terminal & Editor
 
@@ -29,21 +36,49 @@ Claudette is built entirely on open source technologies. Here's what powers it a
 |---|---|---|
 | [xterm.js](https://xtermjs.org) | Terminal emulator | Full-featured terminal rendering in the browser, with addons for link detection and responsive sizing. |
 | [portable-pty](https://docs.rs/portable-pty) | PTY management | Cross-platform pseudo-terminal creation from Rust — connects real shell sessions to xterm.js. |
-| [highlight.js](https://highlightjs.org) | Syntax highlighting | Language-aware code highlighting in chat messages and diffs. |
+| [Monaco Editor](https://microsoft.github.io/monaco-editor/) | Code editor | The editor that powers VS Code, embedded directly in Claudette for the diff viewer and plan editor. |
+| [Shiki](https://shiki.style) | Syntax highlighting | TextMate grammar-based highlighting running in a Web Worker — never blocks the main thread. Integrated into Monaco via `@shikijs/monaco`. |
 
 ## Data & Networking
 
 | Technology | Role | Why we chose it |
 |---|---|---|
 | [SQLite](https://sqlite.org) (via [rusqlite](https://docs.rs/rusqlite)) | Database | Embedded, zero-config, local-first. All data stays on your machine in a single file. |
-| [Tungstenite](https://docs.rs/tokio-tungstenite) | WebSocket | Async WebSocket client for remote workspace connections, with rustls for TLS. |
+| [Tungstenite](https://docs.rs/tokio-tungstenite) | WebSocket | Async WebSocket client for remote workspace connections. |
+| [rustls](https://docs.rs/rustls) | TLS | Pure-Rust TLS backed by AWS Libcrypto (`aws-lc-rs`) — no OpenSSL dependency, easier cross-compilation. |
+| [reqwest](https://docs.rs/reqwest) | HTTP client | Async HTTP client used for plugin marketplace requests and plugin downloads. |
+| [rcgen](https://docs.rs/rcgen) | Certificate generation | Generates self-signed TLS certificates for the embedded remote server — zero-config secure LAN access. |
 | [mDNS-SD](https://docs.rs/mdns-sd) | Service discovery | Automatic LAN discovery of remote Claudette servers — no manual IP configuration needed. |
+
+## Plugin System
+
+| Technology | Role | Why we chose it |
+|---|---|---|
+| [mlua](https://docs.rs/mlua) / [Luau](https://luau.org) | Lua runtime | Sandboxed Lua runtime (using Roblox's typed Luau dialect) that powers SCM and env-provider plugins. Luau adds type annotations and safety guarantees over standard Lua. |
+
+## Voice & AI
+
+| Technology | Role | Why we chose it |
+|---|---|---|
+| [Candle](https://github.com/huggingface/candle) | ML inference | Hugging Face's minimalist ML framework in Rust — runs local voice transcription models with Metal GPU acceleration on macOS. No Python, no server, no data leaves your machine. |
+| [cpal](https://docs.rs/cpal) | Audio I/O | Cross-platform microphone capture — abstracts Core Audio, WASAPI, and ALSA behind a single API. |
+| [tokenizers](https://docs.rs/tokenizers) | NLP tokenization | Hugging Face tokenization library for preprocessing audio transcripts before inference. |
+| [rubato](https://docs.rs/rubato) | Audio resampling | High-quality sample-rate conversion to normalize microphone input before sending to the model. |
+| [hound](https://docs.rs/hound) | WAV I/O | Lightweight WAV file reader/writer for audio capture and playback. |
+
+## Documentation Site
+
+| Technology | Role | Why we chose it |
+|---|---|---|
+| [Astro](https://astro.build) | Static site generator | Fast builds, zero client-side JS by default, excellent MDX support. |
+| [Starlight](https://starlight.astro.build) | Docs framework | Astro's official documentation theme — search, navigation, and dark mode out of the box. |
 
 ## Why These Choices Matter
 
 Every technology choice reflects Claudette's values:
 
 - **Lightweight** — Tauri + Rust means a tiny binary. No Electron, no 200MB runtime.
-- **Local-first** — SQLite keeps your data on your machine. No cloud database, no account required.
+- **Local-first** — SQLite keeps your data on your machine. Voice transcription runs entirely on-device via Candle. No cloud database, no account required.
 - **Native performance** — Rust backend handles concurrent agents, git operations, and terminal I/O without breaking a sweat.
+- **Extensible** — The Luau plugin system lets the community add SCM providers and env integrations without touching core Claudette code.
 - **Open source all the way down** — every dependency listed here is open source. You can audit the entire stack.
