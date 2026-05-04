@@ -41,6 +41,7 @@
 /* Header brand title — Silkscreen pixel font to match the footer brand mark */
 .site-title span {
   font-family: var(--font-display);
+  font-weight: 400;
   letter-spacing: 0.02em;
   text-transform: uppercase;
 }
