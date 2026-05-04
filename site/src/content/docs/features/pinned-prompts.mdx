@@ -3,15 +3,18 @@ title: Pinned Prompts
 description: Named prompt shortcuts that appear above the chat composer for fast, repeatable workflows.
 ---
 
+import { Image } from 'astro:assets';
+import composerPins from '../../../assets/screenshots/composer-pins.png';
+import globalPins from '../../../assets/screenshots/global-pins.png';
+import repoSpecificPins from '../../../assets/screenshots/repo-specific-pins.png';
+
 Pinned prompts are named shortcuts that appear as clickable pills above the chat composer. Use them to send recurring instructions, slash commands, or multi-line prompts in a single click — without retyping or scrolling through history.
 
 ## The Prompt Bar
 
 When at least one pinned prompt is configured, a row of pills appears above the chat input. Each pill shows the prompt's **display name**. Clicking a pill either sends the prompt immediately or inserts it into the composer, depending on whether **Auto-send** is enabled.
 
-:::note[Screenshot coming soon]
-A screenshot showing the pinned prompts bar above the chat composer will be added here.
-:::
+<Image src={composerPins} alt="Chat composer with a row of pinned prompt pills above the message input" loading="lazy" />
 
 ## Auto-send vs Insert
 
@@ -34,6 +37,8 @@ This lets you build prompts that combine slash commands with custom context — 
 
 Global pinned prompts appear in every repository. Manage them at **Settings → Pinned Prompts**.
 
+<Image src={globalPins} alt="Global Pinned Prompts settings page showing several saved prompts with edit, reorder, and add controls" loading="lazy" />
+
 To create a global prompt:
 1. Open **Settings → Pinned Prompts**
 2. Click **Add prompt**
@@ -46,6 +51,8 @@ Use the **↑** and **↓** buttons to reorder prompts within the list. Order is
 ## Repo-Specific Prompts
 
 Each repository can have its own pinned prompts that appear only when working in that repo. Manage them at **Settings → [Repository Name] → Pinned Prompts**.
+
+<Image src={repoSpecificPins} alt="Repository settings page with a Pinned Prompts section and an Inherited from Global list below it" loading="lazy" />
 
 Repo prompts appear **before** global prompts in the pill bar. See [Per-Repo Settings](/claudette/features/per-repo-settings/) for other repository-level configuration.
 
