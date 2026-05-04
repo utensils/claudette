@@ -3,6 +3,9 @@ title: Your First Workspace
 description: Add a repository and create your first workspace in Claudette.
 ---
 
+import { Image } from 'astro:assets';
+import unifiedDiff from '../../../assets/screenshots/unified-diff.png';
+
 Get up and running with Claudette in a few simple steps.
 
 ## 1. Add a Repository
@@ -22,11 +25,6 @@ Click the **+** button next to your repository name in the sidebar to create a n
 - Start a fresh **Claude Code agent session** in that worktree
 - Run your **setup script** if one is configured (e.g., `bun install`, `pip install -r requirements.txt`)
 
-{/* TODO: Screenshot of workspace creation */}
-:::note[Screenshot coming soon]
-A screenshot showing workspace creation in the sidebar will be added here.
-:::
-
 ## 3. Send Your First Prompt
 
 Type a message in the chat panel and press **Enter** to send it to the agent. Claude Code will start working in the workspace's isolated worktree.
@@ -45,10 +43,7 @@ Once the agent finishes, click on a workspace to view the **diff panel** showing
 - See the list of changed files in the right sidebar
 - Open the integrated terminal to test the changes
 
-{/* TODO: Screenshot of diff viewer */}
-:::note[Screenshot coming soon]
-A screenshot showing the diff viewer with code changes will be added here.
-:::
+<Image src={unifiedDiff} alt="Claudette diff viewer in unified mode showing added and removed lines with syntax highlighting" loading="lazy" />
 
 ## 5. Iterate or Merge
 

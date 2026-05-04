@@ -1,4 +1,5 @@
 ---
+const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : import.meta.env.BASE_URL + '/';
 const pillars = [
   {
     num: '01 / Parallel sessions',
@@ -9,7 +10,7 @@ const pillars = [
       'Multi-session tabs per workspace',
       'Auto-named branches from your first prompt',
     ],
-    media: { caption: 'sidebar showing 3 agents on 3 branches', filename: 'parallel-sessions.webm', meta: '.webm · ~8s loop' },
+    media: { caption: 'sidebar showing 3 agents on 3 branches', filename: 'parallel-agents.webm', meta: '.webm · ~8s loop', src: 'videos/parallel-agents.webm' },
     flip: false,
   },
   {
@@ -21,7 +22,7 @@ const pillars = [
       'Compaction divider in the timeline so nothing gets lost',
       'Per-workspace analytics — tokens, sessions, hot files',
     ],
-    media: { caption: 'composer w/ segmented meter + /compact', filename: 'context-meter.webm', meta: '.webm · ~10s loop' },
+    media: { caption: 'composer w/ segmented meter + /compact', filename: 'context.webm', meta: '.webm · ~10s loop', src: 'videos/context.webm' },
     flip: true,
   },
   {
@@ -67,19 +68,25 @@ const pillars = [
               ))}
             </ul>
           </div>
-          <div class="pillar-media">
-            <div class="demo-tab">
-              <span class="traffic r"></span><span class="traffic y"></span><span class="traffic g"></span>
-              <span class="tt-title">{p.media.filename}</span>
-            </div>
-            <div class="demo-body">
-              <span class="play-pill">
-                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                demo loop
-              </span>
-              <div class="demo-caption">{p.media.caption}</div>
-              <div class="demo-meta">{p.media.meta}</div>
-            </div>
+          <div class={p.media.src ? 'pillar-media bare' : 'pillar-media'}>
+            {p.media.src ? (
+              <video src={base + p.media.src} autoplay loop muted playsinline class="demo-video" />
+            ) : (
+              <Fragment>
+                <div class="demo-tab">
+                  <span class="traffic r"></span><span class="traffic y"></span><span class="traffic g"></span>
+                  <span class="tt-title">{p.media.filename}</span>
+                </div>
+                <div class="demo-body">
+                  <span class="play-pill">
+                    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                    demo loop
+                  </span>
+                  <div class="demo-caption">{p.media.caption}</div>
+                  <div class="demo-meta">{p.media.meta}</div>
+                </div>
+              </Fragment>
+            )}
           </div>
         </article>
       ))}

@@ -3,6 +3,9 @@ title: Parallel Agents
 description: Run multiple Claude Code agents simultaneously, each in its own isolated workspace.
 ---
 
+import { Image } from 'astro:assets';
+import agent from '../../../assets/screenshots/agent.png';
+
 Claudette's core feature is the ability to run multiple Claude Code agents at the same time, each working in complete isolation.
 
 ## How It Works
@@ -24,10 +27,7 @@ Click the **+** button next to any repository in the sidebar to create a new wor
 - Diff view
 - Branch name
 
-{/* TODO: Screenshot of sidebar with multiple workspaces */}
-:::note[Screenshot coming soon]
-A screenshot showing the sidebar with multiple active workspaces will be added here.
-:::
+<Image src={agent} alt="Claudette agent view showing the workspace sidebar with multiple parallel sessions and an active agent chat" loading="lazy" />
 
 ## Switching Between Workspaces
 
