@@ -1,6 +1,5 @@
 ---
-import { Image } from 'astro:assets';
-import agent from '../assets/screenshots/agent.png';
+const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : import.meta.env.BASE_URL + '/';
 
 /*
  * Icons + colors here mirror the desktop app 1:1:
@@ -125,7 +124,7 @@ const prStates = [
     </div>
 
     <figure class="app-preview" aria-label="A real Claudette agent session">
-      <Image src={agent} alt="Claudette agent view with an active Claude Code session, sidebar, and chat history" loading="lazy" />
+      <video src={base + 'videos/anatomy.webm'} autoplay loop muted playsinline class="demo-video" />
     </figure>
   </div>
 </section>
