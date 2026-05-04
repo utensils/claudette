@@ -312,10 +312,9 @@
 }
 
 /* ---------- Hero screenshot frame ---------- */
-/* The dashboard screenshot has its own window chrome (traffic lights, title
-   bar, rounded edges) baked in, so .hero-shot is just a positioning wrapper —
-   no border/background/radius that would compete with the image. .traffic
-   stays because .app-titlebar in Anatomy.astro reuses the swatches. */
+/* Screenshots with window chrome baked in (dashboard, agent) use bare wrappers
+   with no border/background/radius — competing chrome would look wrong.
+   .traffic is used by Pillars.astro's demo-tab component. */
 .hero-shot {
   margin: var(--space-12) auto 0;
   max-width: 1180px;
@@ -740,32 +739,10 @@
   50%      { opacity: 0.4; }
 }
 
-/* The Anatomy preview frames a real screenshot in titlebar chrome so it
-   reads as a Claudette window. The body is just the captured PNG; we
-   don't try to recreate the app's chrome in HTML. */
+/* The agent screenshot has window chrome baked in — no extra border or
+   background applied, same approach as .hero-shot. */
 .app-preview {
   margin: 0;
-  border-radius: var(--radius-xl);
-  background: var(--app-bg);
-  border: 1px solid var(--sidebar-border);
-  box-shadow: var(--shadow-lg);
-  overflow: hidden;
-}
-.app-titlebar {
-  height: 32px;
-  background: var(--sidebar-bg);
-  border-bottom: 1px solid var(--sidebar-border);
-  display: flex;
-  align-items: center;
-  padding: 0 12px;
-  gap: 6px;
-}
-.app-titlebar .title {
-  margin: 0 auto;
-  transform: translateX(-18px);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-dim);
 }
 .app-preview img {
   width: 100%;
