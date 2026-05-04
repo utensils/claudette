@@ -313,46 +313,23 @@
 }
 
 /* ---------- Hero screenshot frame ---------- */
+/* The dashboard screenshot has its own window chrome (traffic lights, title
+   bar, rounded edges) baked in, so .hero-shot is just a positioning wrapper —
+   no border/background/radius that would compete with the image. .traffic
+   stays because .app-titlebar in Anatomy.astro reuses the swatches. */
 .hero-shot {
   margin: var(--space-12) auto 0;
   max-width: 1180px;
-  border-radius: var(--radius-xl);
-  background: var(--sidebar-bg);
-  border: 1px solid var(--sidebar-border);
-  box-shadow: var(--shadow-lg), 0 0 0 1px rgba(var(--accent-primary-rgb), 0.08);
-  overflow: hidden;
-  position: relative;
 }
-.shot-titlebar {
-  height: 36px;
-  background: var(--sidebar-bg);
-  border-bottom: 1px solid var(--sidebar-border);
-  display: flex;
-  align-items: center;
-  padding: 0 14px;
-  gap: 6px;
+.hero-shot img {
+  width: 100%;
+  height: auto;
+  display: block;
 }
 .traffic { width: 11px; height: 11px; border-radius: 50%; }
 .traffic.r { background: #ff5f56; }
 .traffic.y { background: #ffbd2e; }
 .traffic.g { background: #27c93f; }
-.shot-titlebar .title {
-  margin: 0 auto;
-  transform: translateX(-20px);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-dim);
-}
-.shot-body {
-  background: var(--app-bg);
-  display: block;
-  position: relative;
-}
-.shot-body img {
-  width: 100%;
-  height: auto;
-  display: block;
-}
 
 /* ---------- Pillars ---------- */
 .pillars-section {

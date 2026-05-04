@@ -3,6 +3,9 @@ title: File Editor
 description: Edit files in your workspace with a full Monaco-powered editor — the same editor that ships in VS Code.
 ---
 
+import { Image } from 'astro:assets';
+import fileEditor from '../../../assets/screenshots/file-editor.png';
+
 Claudette ships a full **Monaco** editor — the same code editor that powers VS Code — for opening and editing files in your workspace. It runs entirely offline alongside the agent chat, the diff viewer, and the integrated terminal.
 
 ## Opening a File
@@ -14,10 +17,7 @@ There are two main ways to open a file in the editor:
 
 Files open as tabs next to your chat and diff tabs, so you can hop between agent output, a diff, and the editor without losing context. Each file gets its own tab, and switching files inside that tab gives you a fresh undo history per file.
 
-{/* TODO: Screenshot of Monaco editor open on a TypeScript file */}
-:::note[Screenshot coming soon]
-A screenshot showing Monaco open on a source file, alongside the chat panel, will be added here.
-:::
+<Image src={fileEditor} alt="Monaco editor open on a Rust source file with the workspace sidebar on the left and the file tree on the right" loading="lazy" />
 
 ## Read vs Edit Mode
 
