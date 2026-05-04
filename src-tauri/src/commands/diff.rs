@@ -21,21 +21,9 @@ pub async fn load_diff_files(
 ) -> Result<DiffFilesResult, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
 
-    let merge_base = diff::resolve_workspace_merge_base(&db, &workspace_id).await?;
-
-    // Re-open the workspace list to get the worktree_path for the file queries.
-    // Two list_workspaces() calls on the same connection is acceptable — both
-    // are cheap reads and keeping resolve_workspace_merge_base's contract simple
-    // (returns only the SHA) is worth the duplication.
-    let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
-    let ws = workspaces
-        .iter()
-        .find(|w| w.id == workspace_id)
-        .ok_or("Workspace not found")?;
-    let worktree_path = ws
-        .worktree_path
-        .as_ref()
-        .ok_or("Workspace has no worktree")?;
+    let (merge_base, worktree_path) =
+        diff::resolve_workspace_merge_base(&db, &workspace_id).await?;
+    let worktree_path = &worktree_path;
 
     // Get both the flat file list (backward compat) and staged groups
     let (files, staged_files, commits) = tokio::join!(
@@ -67,7 +55,9 @@ pub async fn compute_workspace_merge_base(
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    diff::resolve_workspace_merge_base(&db, &workspace_id).await
+    diff::resolve_workspace_merge_base(&db, &workspace_id)
+        .await
+        .map(|(sha, _)| sha)
 }
 
 #[tauri::command]

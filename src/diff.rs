@@ -73,7 +73,23 @@ pub async fn merge_base(repo_path: &str, branch: &str, base: &str) -> Result<Str
     run_git(repo_path, &["merge-base", "--", base, branch]).await
 }
 
+/// Owned inputs extracted from the DB for [`resolve_workspace_merge_base`].
+///
+/// Returned by the synchronous extraction step so the `&Database` reference is
+/// fully dropped before any `.await` — necessary because
+/// `rusqlite::Connection` is not `Sync`, so `&Database` is not `Send`, and
+/// Tauri requires command futures to be `Send`.
+struct WorkspaceMergeBaseInputs {
+    worktree_path: String,
+    repo_path: String,
+    base_branch: Option<String>,
+    default_remote: Option<String>,
+}
+
 /// Resolve the workspace's merge-base SHA against its repository's base branch.
+///
+/// Returns `(merge_base_sha, worktree_path)` so callers that need the worktree
+/// path (e.g. `load_diff_files`) don't need a second `list_workspaces` call.
 ///
 /// Encapsulates the workspace + repository lookups and the base-branch
 /// resolution (preferring `repo.base_branch`, falling back to
@@ -81,36 +97,64 @@ pub async fn merge_base(repo_path: &str, branch: &str, base: &str) -> Result<Str
 /// command and the file viewer's lightweight `compute_workspace_merge_base`
 /// command — keeping a single source of truth means the gutter and diff
 /// viewer can never disagree about which SHA "the merge base" is.
-pub async fn resolve_workspace_merge_base(
+///
+/// # Send-safety
+///
+/// This function is intentionally **not** `async`. It performs the
+/// synchronous DB extraction first, then returns a `Future` that owns only the
+/// extracted data — so `&Database` is never held across an `.await` point.
+/// This is required because `rusqlite::Connection` is not `Sync` (it contains
+/// `RefCell`), which means `&Database` is not `Send`, and Tauri command futures
+/// must be `Send`.
+pub fn resolve_workspace_merge_base(
     db: &crate::db::Database,
     workspace_id: &str,
-) -> Result<String, String> {
-    let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
-    let ws = workspaces
-        .iter()
-        .find(|w| w.id == workspace_id)
-        .ok_or_else(|| "Workspace not found".to_string())?;
-    let worktree_path = ws
-        .worktree_path
-        .as_ref()
-        .ok_or_else(|| "Workspace has no worktree".to_string())?;
+) -> impl std::future::Future<Output = Result<(String, String), String>> + Send {
+    // Perform all synchronous DB work here, before the async block.
+    // After this point the &Database reference is no longer needed.
+    let inputs_result: Result<WorkspaceMergeBaseInputs, String> = (|| {
+        let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
+        let ws = workspaces
+            .iter()
+            .find(|w| w.id == workspace_id)
+            .ok_or_else(|| "Workspace not found".to_string())?;
+        let worktree_path = ws
+            .worktree_path
+            .as_ref()
+            .ok_or_else(|| "Workspace has no worktree".to_string())?
+            .clone();
 
-    let repos = db.list_repositories().map_err(|e| e.to_string())?;
-    let repo = repos
-        .iter()
-        .find(|r| r.id == ws.repository_id)
-        .ok_or_else(|| "Repository not found".to_string())?;
+        let repos = db.list_repositories().map_err(|e| e.to_string())?;
+        let repo = repos
+            .iter()
+            .find(|r| r.id == ws.repository_id)
+            .ok_or_else(|| "Repository not found".to_string())?;
 
-    let base_branch = match repo.base_branch.as_deref() {
-        Some(b) => b.to_string(),
-        None => crate::git::default_branch(&repo.path, repo.default_remote.as_deref())
+        Ok(WorkspaceMergeBaseInputs {
+            worktree_path,
+            repo_path: repo.path.clone(),
+            base_branch: repo.base_branch.clone(),
+            default_remote: repo.default_remote.clone(),
+        })
+    })();
+
+    // The returned async block owns only `inputs_result` (no &Database).
+    async move {
+        let inputs = inputs_result?;
+
+        let base_branch = match inputs.base_branch {
+            Some(b) => b,
+            None => crate::git::default_branch(&inputs.repo_path, inputs.default_remote.as_deref())
+                .await
+                .map_err(|e| e.to_string())?,
+        };
+
+        let sha = merge_base(&inputs.worktree_path, "HEAD", &base_branch)
             .await
-            .map_err(|e| e.to_string())?,
-    };
+            .map_err(|e| e.to_string())?;
 
-    merge_base(worktree_path, "HEAD", &base_branch)
-        .await
-        .map_err(|e| e.to_string())
+        Ok((sha, inputs.worktree_path))
+    }
 }
 
 /// List all changed files between merge base and current working tree.
@@ -1692,10 +1736,10 @@ mod integration_tests {
         ws.worktree_path = Some(tmp.path().to_str().unwrap().into());
         db.insert_workspace(&ws).unwrap();
 
-        let got = resolve_workspace_merge_base(&db, "w1")
+        let (got_sha, _worktree_path) = resolve_workspace_merge_base(&db, "w1")
             .await
             .expect("resolve_workspace_merge_base should succeed");
 
-        assert_eq!(got, expected);
+        assert_eq!(got_sha, expected);
     }
 }
