@@ -3,16 +3,25 @@ title: Theming
 description: 14 built-in themes plus custom theme support for Claudette.
 ---
 
+import { Image } from 'astro:assets';
+import themes from '../../../assets/screenshots/themes.png';
+import followSystem from '../../../assets/screenshots/follow-system.png';
+
 Claudette ships with 14 built-in themes — built on the Claude Design token system — and supports custom themes you can create and share.
 
 ## Switching Themes
 
 Open `Settings > Appearance` (or press `⌘/Ctrl + ,`) and select a theme from the dropdown.
 
-{/* TODO: Screenshot of theme picker */}
-:::note[Screenshot coming soon]
-A screenshot of the theme picker dropdown will be added here.
-:::
+<Image src={themes} alt="Claudette Appearance settings showing the theme picker dropdown with built-in theme options" loading="lazy" />
+
+### Follow System
+
+Enable **Follow system** to let Claudette automatically switch themes based on your OS light/dark preference. When active, two independent theme selectors appear — one for dark mode and one for light mode — so you can pair any built-in or custom theme with either OS state.
+
+<Image src={followSystem} alt="Claudette Appearance settings with Follow system enabled, showing separate dark and light theme selectors" loading="lazy" />
+
+The switch takes effect immediately whenever your OS preference changes, with no restart required.
 
 ## Built-in Themes
 
