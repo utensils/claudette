@@ -22,7 +22,9 @@ use std::sync::Arc;
 
 use claudette::db::Database;
 use claudette::ops::workspace as ops_workspace;
+use claudette::plugin_runtime::host_api::WorkspaceInfo;
 use claudette::rpc::{Capabilities, RpcRequest, RpcResponse};
+use claudette::scm::detect;
 use interprocess::local_socket::tokio::{Stream, prelude::*};
 #[cfg(unix)]
 use interprocess::local_socket::{GenericFilePath, ToFsName};
@@ -58,6 +60,9 @@ const METHODS: &[&str] = &[
     "create_workspace",
     "archive_workspace",
     "send_chat_message",
+    "plugin.list",
+    "plugin.invoke",
+    "scm.detect_provider",
 ];
 
 /// Live IPC server. Drop to tear down the listener and remove the socket
@@ -265,6 +270,9 @@ async fn dispatch(app: &AppHandle, req: RpcRequest) -> RpcResponse {
         "create_workspace" => handle_create_workspace(app, &req.params).await,
         "archive_workspace" => handle_archive_workspace(app, &req.params).await,
         "send_chat_message" => handle_send_chat_message(app, &req.params).await,
+        "plugin.list" => handle_plugin_list(app).await,
+        "plugin.invoke" => handle_plugin_invoke(app, &req.params).await,
+        "scm.detect_provider" => handle_scm_detect_provider(app, &req.params).await,
         other => Err(format!("Unknown method: {other}")),
     };
     match result {
@@ -443,4 +451,165 @@ async fn handle_archive_workspace(
         "worktree_path": out.worktree_path,
         "repository_id": out.repository_id,
     }))
+}
+
+/// `plugin.list` IPC method — snapshot of every discovered Lua plugin
+/// the running GUI knows about. The CLI uses this to populate generic
+/// `plugin invoke` tab-completion hints and to surface friendly per-kind
+/// shortcuts (`claudette pr …`) only when a matching provider is loaded.
+async fn handle_plugin_list(app: &AppHandle) -> Result<serde_json::Value, String> {
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "AppState not initialised".to_string())?;
+    let registry = state.plugins.read().await;
+    let mut out: Vec<serde_json::Value> = registry
+        .plugins
+        .values()
+        .map(|p| {
+            json!({
+                "name": p.manifest.name,
+                "display_name": p.manifest.display_name,
+                "version": p.manifest.version,
+                "description": p.manifest.description,
+                "kind": p.manifest.kind,
+                "operations": p.manifest.operations,
+                "remote_patterns": p.manifest.remote_patterns,
+                "required_clis": p.manifest.required_clis,
+                "cli_available": p.cli_available,
+                "enabled": !registry.is_disabled(&p.manifest.name),
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        a.get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .cmp(b.get("name").and_then(|v| v.as_str()).unwrap_or(""))
+    });
+    Ok(serde_json::Value::Array(out))
+}
+
+/// `plugin.invoke` IPC method — calls a plugin operation in the running
+/// GUI's `PluginRegistry`. The workspace context is required: plugins
+/// resolve paths and arguments relative to a worktree, and the host_api
+/// surface (`workspace.path`, `workspace.branch`, …) reads from
+/// [`WorkspaceInfo`].
+///
+/// Errors propagate verbatim from [`claudette::plugin_runtime::PluginError`]
+/// — `CliNotFound`, `NeedsReconsent`, `OperationNotSupported`, etc. are
+/// already serialized via `Display`, so the CLI surfaces them unchanged.
+async fn handle_plugin_invoke(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let plugin_name = params
+        .get("plugin")
+        .and_then(|v| v.as_str())
+        .ok_or("missing plugin")?
+        .to_string();
+    let operation = params
+        .get("operation")
+        .and_then(|v| v.as_str())
+        .ok_or("missing operation")?
+        .to_string();
+    let workspace_id = params
+        .get("workspace_id")
+        .and_then(|v| v.as_str())
+        .ok_or("missing workspace_id")?
+        .to_string();
+    let args = params.get("args").cloned().unwrap_or(json!({}));
+
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "AppState not initialised".to_string())?;
+
+    let ws_info = build_workspace_info(&state.db_path, &workspace_id)?;
+    let registry = state.plugins.read().await;
+    registry
+        .call_operation(&plugin_name, &operation, args, ws_info)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// `scm.detect_provider` IPC method — returns the active SCM provider
+/// name for a repo, honoring any manual override the user set in
+/// settings before falling back to remote-URL hostname matching.
+///
+/// Mirrors the resolution path in [`crate::commands::scm::get_scm_provider`]
+/// so CLI and GUI agree on which plugin handles a given repo. Returns
+/// `null` when no provider matches (e.g. plugin disabled, CLI missing,
+/// remote unreachable).
+async fn handle_scm_detect_provider(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let repo_id = params
+        .get("repo_id")
+        .and_then(|v| v.as_str())
+        .ok_or("missing repo_id")?
+        .to_string();
+
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "AppState not initialised".to_string())?;
+
+    let (manual_override, repo_path, default_remote) = {
+        let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+        let key = format!("repo:{repo_id}:scm_provider");
+        let manual = db.get_app_setting(&key).map_err(|e| e.to_string())?;
+        let repo = db
+            .get_repository(&repo_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("repository not found")?;
+        (manual, repo.path, repo.default_remote)
+    };
+
+    if let Some(provider) = manual_override
+        && !provider.is_empty()
+    {
+        return Ok(json!({ "provider": provider, "source": "manual" }));
+    }
+
+    let remote_url = claudette::git::get_remote_url(&repo_path, default_remote.as_deref())
+        .await
+        .ok();
+    let detected = if let Some(url) = remote_url {
+        let registry = state.plugins.read().await;
+        detect::detect_provider(&url, &registry.plugins)
+    } else {
+        None
+    };
+    Ok(json!({ "provider": detected, "source": "auto" }))
+}
+
+/// Look up a workspace + its repository synchronously and assemble the
+/// [`WorkspaceInfo`] that plugin operations expect. Mirrors
+/// `commands::scm::make_workspace_info` minus the branch reconciliation
+/// step (CLI-driven calls are short-lived; if a branch was renamed
+/// out-of-band the next GUI poll will fix it).
+fn build_workspace_info(
+    db_path: &std::path::Path,
+    workspace_id: &str,
+) -> Result<WorkspaceInfo, String> {
+    let db = Database::open(db_path).map_err(|e| e.to_string())?;
+    let workspace = db
+        .list_workspaces()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|w| w.id == workspace_id)
+        .ok_or_else(|| format!("workspace not found: {workspace_id}"))?;
+    let repo = db
+        .get_repository(&workspace.repository_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("repository not found")?;
+    Ok(WorkspaceInfo {
+        id: workspace.id.clone(),
+        name: workspace.name.clone(),
+        branch: workspace.branch_name.clone(),
+        worktree_path: workspace
+            .worktree_path
+            .clone()
+            .unwrap_or_else(|| repo.path.clone()),
+        repo_path: repo.path,
+    })
 }
