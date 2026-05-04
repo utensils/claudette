@@ -63,3 +63,7 @@
   color: var(--text-dim);
   white-space: nowrap;
 }
+
+[data-platform="mac"] .noSidebar {
+  padding-left: 80px;
+}
