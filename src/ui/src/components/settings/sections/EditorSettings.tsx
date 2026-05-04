@@ -11,16 +11,26 @@ export function EditorSettings() {
   const editorGitGutterBase = useAppStore((s) => s.editorGitGutterBase);
   const setEditorGitGutterBase = useAppStore((s) => s.setEditorGitGutterBase);
   const [error, setError] = useState<string | null>(null);
+  // Lock the radios while a persistence write is in flight. Without this,
+  // a rapid head→merge_base→head sequence whose first two writes both
+  // reject would have the second catch roll the store back to merge_base,
+  // even though the persisted value never left head — the UI would then
+  // disagree with disk until the app is restarted.
+  const [pending, setPending] = useState(false);
 
   const handleChange = async (value: GutterBase) => {
+    if (pending) return;
     const previous = editorGitGutterBase;
     setEditorGitGutterBase(value);
+    setPending(true);
     try {
       setError(null);
       await setAppSetting("editor_git_gutter_base", value);
     } catch (e) {
       setEditorGitGutterBase(previous);
       setError(String(e));
+    } finally {
+      setPending(false);
     }
   };
 
@@ -41,6 +51,7 @@ export function EditorSettings() {
             type="radio"
             name="editor-gutter-base"
             checked={editorGitGutterBase === "head"}
+            disabled={pending}
             onChange={() => handleChange("head")}
           />
           <div>
@@ -56,6 +67,7 @@ export function EditorSettings() {
             type="radio"
             name="editor-gutter-base"
             checked={editorGitGutterBase === "merge_base"}
+            disabled={pending}
             onChange={() => handleChange("merge_base")}
           />
           <div>

@@ -324,4 +324,22 @@ describe("selectWorkspace clears active diff pointer", () => {
       { path: "a.ts", layer: "unstaged" },
     ]);
   });
+
+  it("clears diffMergeBase so the file viewer's git gutter cannot read the prior workspace's SHA", () => {
+    // Regression for PR 602 review: the right sidebar's clearDiff() runs
+    // on workspace switch only when the sidebar is mounted; when it's
+    // hidden, the cached merge-base SHA leaked across the switch and the
+    // file viewer's gutter would diff against the wrong workspace's base.
+    //
+    // Anchor the starting workspace so selectWorkspace's no-op guard
+    // (`if (id === s.selectedWorkspaceId) return s;`) doesn't short-circuit
+    // — earlier tests in this file may have left selectedWorkspaceId at WS_B.
+    useAppStore.getState().selectWorkspace(WS_A);
+    useAppStore.getState().setDiffMergeBase("a".repeat(40));
+    expect(useAppStore.getState().diffMergeBase).not.toBeNull();
+
+    useAppStore.getState().selectWorkspace(WS_B);
+
+    expect(useAppStore.getState().diffMergeBase).toBeNull();
+  });
 });

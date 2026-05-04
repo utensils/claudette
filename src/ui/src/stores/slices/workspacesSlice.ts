@@ -117,6 +117,14 @@ export const createWorkspacesSlice: StateCreator<
         diffPreviewContent: null,
         diffPreviewLoading: false,
         diffPreviewError: null,
+        // diffMergeBase is a single global string keyed off whichever
+        // workspace last set it. Clearing on switch prevents the file
+        // viewer's git gutter (which reads diffMergeBase) from comparing
+        // against the prior workspace's merge-base SHA when the right
+        // sidebar is hidden — without this, RightSidebar's clearDiff()
+        // never runs because the component isn't mounted, and the stale
+        // SHA leaks across the boundary.
+        diffMergeBase: null,
       };
       if (id && s.unreadCompletions.has(id)) {
         const next = new Set(s.unreadCompletions);

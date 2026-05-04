@@ -128,8 +128,16 @@ export function useGitGutter(
       });
     // We intentionally do NOT depend on `buffer` — that would refire the
     // fetch on every keystroke. We snapshot `buffer.length` at run time.
+    //
+    // `diffMergeBase` is included even though `revision` already encodes
+    // it for `merge_base` mode: in `head` mode `revision` is the constant
+    // string `"HEAD"`, so without this dep the fetch effect would no
+    // longer pick up the invalidation signal RightSidebar's
+    // `setDiffFiles(...)` produces after a refresh (e.g. once a commit
+    // has moved HEAD). Re-fetching on `diffMergeBase` change is the
+    // cheapest way to inherit that signal in both modes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspaceId, filename, revision, collectionRef]);
+  }, [workspaceId, filename, revision, diffMergeBase, collectionRef]);
 
   // Debounced recompute on every buffer or head change. (Unchanged from
   // before Task 6 except that it now responds to `head` updates produced

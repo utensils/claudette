@@ -37,4 +37,17 @@ describe("getAppSections", () => {
       "community",
     );
   });
+
+  it("places the Editor section between Notifications and Git", () => {
+    // The Editor section is where the git-gutter base preference lives
+    // — it must sit alongside the other "how the app behaves" settings,
+    // not be hidden under Plugins / Experimental.
+    const ids = getAppSections(false, false).map((section) => section.id);
+    const editorIdx = ids.indexOf("editor");
+    const notificationsIdx = ids.indexOf("notifications");
+    const gitIdx = ids.indexOf("git");
+    expect(editorIdx).toBeGreaterThan(-1);
+    expect(notificationsIdx).toBeLessThan(editorIdx);
+    expect(editorIdx).toBeLessThan(gitIdx);
+  });
 });
