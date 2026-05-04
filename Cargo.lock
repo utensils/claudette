@@ -872,7 +872,7 @@ dependencies = [
 
 [[package]]
 name = "claudette-cli"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "clap",
  "clap_complete",
