@@ -3,6 +3,7 @@ import {
   Cpu,
   Palette,
   Bell,
+  FileCode,
   GitBranch,
   FlaskConical,
   BarChart3,
@@ -24,6 +25,7 @@ export function getAppSections(
     { id: "models", icon: Cpu },
     { id: "appearance", icon: Palette },
     { id: "notifications", icon: Bell },
+    { id: "editor", icon: FileCode },
     { id: "git", icon: GitBranch },
     { id: "pinned-prompts", icon: Bookmark },
     { id: "plugins", icon: Puzzle },
@@ -53,6 +55,7 @@ export function SettingsSidebar() {
     if (id === "models") return t("settings:nav_models");
     if (id === "appearance") return t("settings:nav_appearance");
     if (id === "notifications") return t("settings:nav_notifications");
+    if (id === "editor") return t("settings:nav_editor");
     if (id === "git") return t("settings:nav_git");
     if (id === "plugins") return t("settings:nav_plugins");
     if (id === "claude-code-plugins") return t("settings:nav_claude_code_plugins");

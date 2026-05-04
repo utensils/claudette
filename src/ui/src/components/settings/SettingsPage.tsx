@@ -18,6 +18,9 @@ const AppearanceSettings = lazy(() =>
 const NotificationsSettings = lazy(() =>
   import("./sections/NotificationsSettings").then((m) => ({ default: m.NotificationsSettings })),
 );
+const EditorSettings = lazy(() =>
+  import("./sections/EditorSettings").then((m) => ({ default: m.EditorSettings })),
+);
 const GitSettings = lazy(() =>
   import("./sections/GitSettings").then((m) => ({ default: m.GitSettings })),
 );
@@ -59,6 +62,7 @@ function SectionContent({ section }: { section: string | null }) {
   if (section === "usage") return <UsageSettings />;
   if (section === "appearance") return <AppearanceSettings />;
   if (section === "notifications") return <NotificationsSettings />;
+  if (section === "editor") return <EditorSettings />;
   if (section === "git") return <GitSettings />;
   if (section === "pinned-prompts") return <PinnedPromptsSettings />;
   if (section === "plugins") return <PluginsSettings />;
