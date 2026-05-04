@@ -64,6 +64,6 @@
   white-space: nowrap;
 }
 
-.macNoSidebar {
+[data-platform="mac"] .noSidebar {
   padding-left: 80px;
 }

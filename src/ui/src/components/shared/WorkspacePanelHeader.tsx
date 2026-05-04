@@ -4,9 +4,6 @@ import { WorkspaceActions } from "../chat/WorkspaceActions";
 import { PanelToggles } from "./PanelToggles";
 import styles from "./WorkspacePanelHeader.module.css";
 
-const isMac =
-  typeof navigator !== "undefined" && navigator.platform.startsWith("Mac");
-
 export function WorkspacePanelHeader() {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const workspaces = useAppStore((s) => s.workspaces);
@@ -19,7 +16,7 @@ export function WorkspacePanelHeader() {
   const defaultBranch = repo ? defaultBranchesMap[repo.id] : undefined;
 
   return (
-    <div className={`${styles.header} ${isMac && !sidebarVisible ? styles.macNoSidebar : ""}`} data-tauri-drag-region>
+    <div className={`${styles.header} ${!sidebarVisible ? styles.noSidebar : ""}`} data-tauri-drag-region>
       <div className={styles.headerLeft}>
         {ws && (repo ? (
           <span className={styles.branchInfo}>
