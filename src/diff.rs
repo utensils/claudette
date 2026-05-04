@@ -73,6 +73,46 @@ pub async fn merge_base(repo_path: &str, branch: &str, base: &str) -> Result<Str
     run_git(repo_path, &["merge-base", "--", base, branch]).await
 }
 
+/// Resolve the workspace's merge-base SHA against its repository's base branch.
+///
+/// Encapsulates the workspace + repository lookups and the base-branch
+/// resolution (preferring `repo.base_branch`, falling back to
+/// `git::default_branch`). Used by both the Changes panel's `load_diff_files`
+/// command and the file viewer's lightweight `compute_workspace_merge_base`
+/// command — keeping a single source of truth means the gutter and diff
+/// viewer can never disagree about which SHA "the merge base" is.
+pub async fn resolve_workspace_merge_base(
+    db: &crate::db::Database,
+    workspace_id: &str,
+) -> Result<String, String> {
+    let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
+    let ws = workspaces
+        .iter()
+        .find(|w| w.id == workspace_id)
+        .ok_or_else(|| "Workspace not found".to_string())?;
+    let worktree_path = ws
+        .worktree_path
+        .as_ref()
+        .ok_or_else(|| "Workspace has no worktree".to_string())?;
+
+    let repos = db.list_repositories().map_err(|e| e.to_string())?;
+    let repo = repos
+        .iter()
+        .find(|r| r.id == ws.repository_id)
+        .ok_or_else(|| "Repository not found".to_string())?;
+
+    let base_branch = match repo.base_branch.as_deref() {
+        Some(b) => b.to_string(),
+        None => crate::git::default_branch(&repo.path, repo.default_remote.as_deref())
+            .await
+            .map_err(|e| e.to_string())?,
+    };
+
+    merge_base(worktree_path, "HEAD", &base_branch)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// List all changed files between merge base and current working tree.
 pub async fn changed_files(
     worktree_path: &str,
@@ -1586,5 +1626,38 @@ mod integration_tests {
             .unwrap();
         let parsed = parse_unified_diff(&raw, "file.txt");
         assert!(!parsed.hunks.is_empty(), "default layer should have diff");
+    }
+
+    #[tokio::test]
+    async fn resolve_workspace_merge_base_matches_git_merge_base() {
+        // Build a repo with a feature branch that has diverged from main.
+        // setup_test_repo creates: main (initial commit) → feature (feature commit).
+        // After setup the working tree is on `feature`, so HEAD is the feature commit
+        // and the merge-base of HEAD vs main is the initial commit.
+        let tmp = tempfile::tempdir().unwrap();
+        setup_test_repo(tmp.path());
+
+        // The expected SHA — git's ground truth.
+        let expected = merge_base(tmp.path().to_str().unwrap(), "feature", "main")
+            .await
+            .expect("merge_base helper should succeed");
+        assert!(!expected.is_empty(), "expected SHA must not be empty");
+
+        // Build an in-memory database with one repo + one workspace.
+        let db = crate::db::Database::open_in_memory().unwrap();
+        let mut repo =
+            crate::db::test_support::make_repo("r1", tmp.path().to_str().unwrap(), "test-repo");
+        repo.base_branch = Some("main".into());
+        db.insert_repository(&repo).unwrap();
+
+        let mut ws = crate::db::test_support::make_workspace("w1", "r1", "feature-ws");
+        ws.worktree_path = Some(tmp.path().to_str().unwrap().into());
+        db.insert_workspace(&ws).unwrap();
+
+        let got = resolve_workspace_merge_base(&db, "w1")
+            .await
+            .expect("resolve_workspace_merge_base should succeed");
+
+        assert_eq!(got, expected);
     }
 }

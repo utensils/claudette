@@ -791,6 +791,12 @@ export function readWorkspaceFileAtRevision(
   });
 }
 
+export function computeWorkspaceMergeBase(
+  workspaceId: string,
+): Promise<string> {
+  return invoke("compute_workspace_merge_base", { workspaceId });
+}
+
 export function writeWorkspaceFile(
   workspaceId: string,
   relativePath: string,

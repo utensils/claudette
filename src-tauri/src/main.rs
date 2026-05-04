@@ -508,6 +508,7 @@ fn main() {
             commands::metrics::get_analytics_metrics,
             // Diff
             commands::diff::load_diff_files,
+            commands::diff::compute_workspace_merge_base,
             commands::diff::load_file_diff,
             commands::diff::revert_file,
             commands::diff::discard_file,

@@ -2,7 +2,6 @@ use tauri::State;
 
 use claudette::db::Database;
 use claudette::diff;
-use claudette::git;
 use claudette::model::diff::{CommitEntry, DiffFile, FileDiff, StagedDiffFiles};
 
 use crate::state::AppState;
@@ -22,6 +21,12 @@ pub async fn load_diff_files(
 ) -> Result<DiffFilesResult, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
 
+    let merge_base = diff::resolve_workspace_merge_base(&db, &workspace_id).await?;
+
+    // Re-open the workspace list to get the worktree_path for the file queries.
+    // Two list_workspaces() calls on the same connection is acceptable — both
+    // are cheap reads and keeping resolve_workspace_merge_base's contract simple
+    // (returns only the SHA) is worth the duplication.
     let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
     let ws = workspaces
         .iter()
@@ -31,23 +36,6 @@ pub async fn load_diff_files(
         .worktree_path
         .as_ref()
         .ok_or("Workspace has no worktree")?;
-
-    let repos = db.list_repositories().map_err(|e| e.to_string())?;
-    let repo = repos
-        .iter()
-        .find(|r| r.id == ws.repository_id)
-        .ok_or("Repository not found")?;
-
-    let base_branch = match repo.base_branch.as_deref() {
-        Some(b) => b.to_string(),
-        None => git::default_branch(&repo.path, repo.default_remote.as_deref())
-            .await
-            .map_err(|e| e.to_string())?,
-    };
-
-    let merge_base = diff::merge_base(worktree_path, "HEAD", &base_branch)
-        .await
-        .map_err(|e| e.to_string())?;
 
     // Get both the flat file list (backward compat) and staged groups
     let (files, staged_files, commits) = tokio::join!(
@@ -66,6 +54,20 @@ pub async fn load_diff_files(
         staged_files,
         commits,
     })
+}
+
+/// Lightweight sibling of `load_diff_files` that returns only the workspace's
+/// merge-base SHA. Used by the file viewer's git gutter when the user has
+/// selected the "Workspace branch base" comparison and the SHA isn't already
+/// cached in the diff slice (e.g. they opened a file before the Changes
+/// panel ever ran).
+#[tauri::command]
+pub async fn compute_workspace_merge_base(
+    workspace_id: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    diff::resolve_workspace_merge_base(&db, &workspace_id).await
 }
 
 #[tauri::command]
