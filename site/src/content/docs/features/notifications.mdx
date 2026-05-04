@@ -52,8 +52,8 @@ This means an unconfigured event always falls back to something sensible — you
 Switching the **sound source** in Settings to "OpenPeon" reveals a pack browser that lets you:
 
 - Search the public registry by name, language, or category
-- **Install** a pack (Claudette clones it locally via `git`)
-- **Update** an installed pack to the latest commit
+- **Install** a pack (Claudette downloads a tarball of the pack's source ref from GitHub and extracts it locally)
+- **Update** an installed pack by re-downloading its current source ref
 - **Delete** an installed pack
 - Switch the **active pack** from the list of installed ones
 
@@ -61,12 +61,10 @@ The relevant settings keys (for the curious) are `cesp_active_pack`, `cesp_volum
 
 ### Recommended Packs
 
-We maintain two community packs that pair well with Claudette's defaults — both are available in the OpenPeon registry:
+We maintain two community packs that pair well with Claudette's defaults — both are listed in the OpenPeon registry and discoverable in the in-app browser:
 
 - **[Alan Rickman](https://github.com/utensils/openpeon-alan-rickman-soundpack)** — voice clips from the late great Alan Rickman.
 - **[Elise](https://github.com/utensils/openpeon-elise-soundpack)** — a more melodic pack built around Beethoven's *Für Elise*.
-
-Both are searchable in the in-app browser; you can also install them by URL if your registry mirror differs.
 
 ## Tray and Native Notifications
 
@@ -78,7 +76,7 @@ Native notifications are integrated with the system tray:
 - Linux uses `tauri-plugin-notification`
 - Windows uses the platform-native notification surface
 
-The tray icon also reflects unattended workspaces — see [Settings](/claudette/features/settings/) for the per-workspace attention behaviour.
+The tray icon and sidebar also reflect unattended workspaces, so even with sound muted you'll see a visual indicator when a workspace needs your attention.
 
 ## Custom Notification Command
 
