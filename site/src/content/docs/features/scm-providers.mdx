@@ -3,6 +3,9 @@ title: SCM Providers
 description: Pull request status, CI checks, and extensible plugin support for GitHub, GitLab, and more.
 ---
 
+import { Image } from 'astro:assets';
+import commitSidebar from '../../../assets/screenshots/commit-sidebar.png';
+
 Claudette shows pull request state and CI check results for every workspace, right in the sidebar. No in-app sign-in required — it wraps the CLI tools you already have authenticated (`gh`, `glab`).
 
 ## What You See
@@ -22,6 +25,8 @@ Claudette shows pull request state and CI check results for every workspace, rig
 - PR title, author, base branch, and a link to open in your browser
 - A list of CI checks with individual pass/fail/pending status
 - **Create PR** and **Merge PR** buttons for common actions without leaving the app
+
+<Image src={commitSidebar} alt="Claudette sidebar showing workspace list with PR state badges and the SCM tab open with CI check results" loading="lazy" />
 
 ## How It Works
 
