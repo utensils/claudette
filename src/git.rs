@@ -1702,7 +1702,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod head_blob_tests {
+mod blob_at_revision_tests {
     use super::*;
     use std::process::Command as StdCommand;
     use tempfile::tempdir;
