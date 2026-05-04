@@ -1628,20 +1628,58 @@ mod integration_tests {
         assert!(!parsed.hunks.is_empty(), "default layer should have diff");
     }
 
+    /// Like `setup_test_repo` but adds a post-divergence commit on `main` so that
+    /// the true merge-base (the initial commit) is strictly *less than* both
+    /// `main` HEAD and `feature` HEAD.  Without this, a buggy implementation that
+    /// simply returned `main`'s HEAD would pass undetected.
+    ///
+    /// Final state
+    /// -----------
+    ///   main:    initial ── main-post-divergence
+    ///   feature: initial ── feature-changes          ← worktree HEAD
+    ///
+    /// Expected merge-base: SHA of `initial`.
+    fn setup_diverged_test_repo(dir: &Path) {
+        // Reuse the shared helper: creates `initial` on main, then branches to
+        // `feature` and commits `feature changes`.  Worktree is left on `feature`.
+        setup_test_repo(dir);
+
+        // Switch back to main and add a commit that diverges it past the branch point.
+        git_cmd(dir, &["checkout", "main"]);
+        std::fs::write(dir.join("main_extra.txt"), "main post-divergence\n").unwrap();
+        git_cmd(dir, &["add", "main_extra.txt"]);
+        git_cmd(dir, &["commit", "-m", "main post-divergence"]);
+
+        // Return to feature so the worktree HEAD is the feature tip.
+        git_cmd(dir, &["checkout", "feature"]);
+    }
+
     #[tokio::test]
     async fn resolve_workspace_merge_base_matches_git_merge_base() {
-        // Build a repo with a feature branch that has diverged from main.
-        // setup_test_repo creates: main (initial commit) → feature (feature commit).
-        // After setup the working tree is on `feature`, so HEAD is the feature commit
-        // and the merge-base of HEAD vs main is the initial commit.
+        // Build a repo where both branches have diverged from the branch point so
+        // that merge-base != main HEAD and merge-base != feature HEAD.
         let tmp = tempfile::tempdir().unwrap();
-        setup_test_repo(tmp.path());
+        setup_diverged_test_repo(tmp.path());
 
         // The expected SHA — git's ground truth.
         let expected = merge_base(tmp.path().to_str().unwrap(), "feature", "main")
             .await
             .expect("merge_base helper should succeed");
         assert!(!expected.is_empty(), "expected SHA must not be empty");
+
+        // Sanity-check the divergence: the merge-base (initial commit) must be
+        // strictly different from both branch tips so a buggy implementation that
+        // returns either tip would fail this test.
+        let main_head = git_cmd(tmp.path(), &["rev-parse", "main"]);
+        let feature_head = git_cmd(tmp.path(), &["rev-parse", "feature"]);
+        assert_ne!(
+            expected, main_head,
+            "merge-base must not equal main HEAD — divergence requires post-branch main commit"
+        );
+        assert_ne!(
+            expected, feature_head,
+            "merge-base must not equal feature HEAD — divergence requires post-branch feature commit"
+        );
 
         // Build an in-memory database with one repo + one workspace.
         let db = crate::db::Database::open_in_memory().unwrap();
