@@ -414,6 +414,15 @@
   background: var(--app-bg);
   box-shadow: var(--shadow-md);
 }
+.pillar-media.bare {
+  border: none;
+  background: none;
+}
+.demo-video {
+  width: 100%;
+  height: auto;
+  display: block;
+}
 .demo-tab {
   display: flex;
   gap: 6px;
