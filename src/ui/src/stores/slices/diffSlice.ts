@@ -49,6 +49,7 @@ export interface DiffSlice {
     stagedFiles?: StagedDiffFiles | null,
     commits?: CommitEntry[] | null,
   ) => void;
+  setDiffMergeBase: (sha: string) => void;
   setDiffSelectedFile: (path: string | null, layer?: DiffLayer | null) => void;
   setDiffContent: (content: FileDiff | null) => void;
   setDiffViewMode: (mode: DiffViewMode) => void;
@@ -107,6 +108,7 @@ export const createDiffSlice: StateCreator<AppState, [], [], DiffSlice> = (
       diffStagedFiles: stagedFiles ?? null,
       commitHistory: commits ?? null,
     }),
+  setDiffMergeBase: (sha) => set({ diffMergeBase: sha }),
   setDiffSelectedFile: (path, layer) =>
     set({ diffSelectedFile: path, diffSelectedLayer: layer ?? null }),
   setDiffContent: (content) => set({ diffContent: content }),

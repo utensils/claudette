@@ -40,6 +40,7 @@ function App() {
   const setCommunityRegistryEnabled = useAppStore(
     (s) => s.setCommunityRegistryEnabled,
   );
+  const setEditorGitGutterBase = useAppStore((s) => s.setEditorGitGutterBase);
   const setDisable1mContext = useAppStore((s) => s.setDisable1mContext);
   const setAppVersion = useAppStore((s) => s.setAppVersion);
 
@@ -201,6 +202,11 @@ function App() {
       .catch(() => {});
     getAppSetting("community_registry_enabled")
       .then((val) => { if (val === "true") setCommunityRegistryEnabled(true); })
+      .catch(() => {});
+    getAppSetting("editor_git_gutter_base")
+      .then((val) => {
+        if (val === "merge_base") setEditorGitGutterBase("merge_base");
+      })
       .catch(() => {});
     getAppSetting("language")
       .then((lang) => {
@@ -410,7 +416,7 @@ function App() {
       unlistenAutoArchived.then((fn) => fn());
       unlistenMissingCli.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setShowSidebarRunningCommands, setPluginManagementEnabled, setCommunityRegistryEnabled, setDisable1mContext, setAppVersion]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setShowSidebarRunningCommands, setPluginManagementEnabled, setCommunityRegistryEnabled, setEditorGitGutterBase, setDisable1mContext, setAppVersion]);
 
   // Listen for OS light/dark changes and switch theme when mode is "system".
   useEffect(() => {
