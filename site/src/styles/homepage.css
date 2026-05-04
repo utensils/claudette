@@ -670,7 +670,7 @@
   max-width: 1280px;
   margin: 0 auto;
   display: grid;
-  grid-template-columns: 1fr 2fr;
+  grid-template-columns: 1fr 1fr;
   gap: var(--space-10);
   align-items: center;
 }
@@ -748,10 +748,13 @@
   50%      { opacity: 0.4; }
 }
 
-/* The agent screenshot has window chrome baked in — no extra border or
-   background applied, same approach as .hero-shot. */
+/* The anatomy webm has window chrome baked in — no extra border or
+   background applied. Height is capped so the portrait video clips at
+   a readable point rather than expanding the section to full video height. */
 .app-preview {
   margin: 0;
+  overflow: hidden;
+  max-height: 580px;
 }
 .app-preview img {
   width: 100%;
