@@ -43,11 +43,13 @@ export function EditorSettings() {
             checked={editorGitGutterBase === "head"}
             onChange={() => handleChange("head")}
           />
-          <span>{t("editor_gutter_base_head")}</span>
+          <div>
+            <div>{t("editor_gutter_base_head")}</div>
+            <div className={styles.fieldHint}>
+              {t("editor_gutter_base_head_desc")}
+            </div>
+          </div>
         </label>
-        <div className={styles.fieldHint}>
-          {t("editor_gutter_base_head_desc")}
-        </div>
 
         <label className={styles.radioLabel}>
           <input
@@ -56,11 +58,13 @@ export function EditorSettings() {
             checked={editorGitGutterBase === "merge_base"}
             onChange={() => handleChange("merge_base")}
           />
-          <span>{t("editor_gutter_base_merge_base")}</span>
+          <div>
+            <div>{t("editor_gutter_base_merge_base")}</div>
+            <div className={styles.fieldHint}>
+              {t("editor_gutter_base_merge_base_desc")}
+            </div>
+          </div>
         </label>
-        <div className={styles.fieldHint}>
-          {t("editor_gutter_base_merge_base_desc")}
-        </div>
       </div>
     </div>
   );
