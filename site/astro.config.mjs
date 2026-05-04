@@ -36,10 +36,14 @@ export default defineConfig({
         '@fontsource/inter/400.css',
         '@fontsource/inter/500.css',
         '@fontsource/inter/600.css',
+        // Silkscreen 400 is the display font for the header brand title —
+        // must be global since the header appears on every page.
+        // Weight 700 stays in `src/content/docs/index.mdx` (homepage-only).
+        '@fontsource/silkscreen/400.css',
         // Header chrome (nav links, social icons, search-centering grid)
         // applies site-wide — also global.
         './src/styles/custom.css',
-        // Note: `homepage.css` and `@fontsource/silkscreen/{400,700}.css`
+        // Note: `homepage.css` and `@fontsource/silkscreen/700.css`
         // are intentionally NOT here. They're imported in
         // `src/content/docs/index.mdx` so they only load on the splash
         // homepage, not on every docs page.
