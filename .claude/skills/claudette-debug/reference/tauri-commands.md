@@ -57,6 +57,7 @@ For example, `workspace_id: String` in Rust becomes `workspaceId` in the JS invo
 
 - `loadDiffFiles(workspaceId)` -> `DiffFilesResult { files, merge_base }`
 - `loadFileDiff(worktreePath, mergeBase, filePath)` -> `FileDiff`
+- `computeWorkspaceMergeBase(workspaceId)` -> string  (lightweight: returns just the merge-base SHA, no file list)
 - `revertFile(worktreePath, mergeBase, filePath, status)` -> void
 
 ## Terminal
