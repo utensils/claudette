@@ -3,6 +3,9 @@ title: Notifications & Sound Packs
 description: Per-event notification sounds, volume control, and OpenPeon community sound packs.
 ---
 
+import { Image } from 'astro:assets';
+import notifications from '../../../assets/screenshots/notifications.png';
+
 Claudette has a customisable notification system built around the moments when you actually want the app to grab your attention — when an agent needs your input, when a task finishes, when something goes wrong. You can pick a different sound for each kind of event, or swap the entire sound palette out for an [OpenPeon](https://peonping.github.io/registry/packs/) community sound pack.
 
 ## Notification Events
@@ -29,10 +32,7 @@ Open `Settings > Notifications`. You'll find:
 - One dropdown per event listed above
 - An **OpenPeon sound pack browser** when sound source is set to OpenPeon
 
-{/* TODO: Screenshot of Notifications settings panel */}
-:::note[Screenshot coming soon]
-A screenshot of the Notifications settings panel will be added here.
-:::
+<Image src={notifications} alt="Notifications settings panel showing sound source toggle, active pack selector, volume slider, mute switch, and per-event sound dropdowns" loading="lazy" />
 
 ## Per-Event Sound Resolution
 
