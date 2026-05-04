@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { OnMount } from "@monaco-editor/react";
-import { readWorkspaceFileAtHead } from "../../services/tauri";
+import { readWorkspaceFileAtRevision } from "../../services/tauri";
 import { useAppStore } from "../../stores/useAppStore";
 import { computeLineChanges, lineChangesToDecorations } from "./gitGutter";
 
@@ -68,10 +68,10 @@ export function useGitGutter(
     setHead(null);
     collectionRef.current?.clear();
 
-    readWorkspaceFileAtHead(workspaceId, filename)
+    readWorkspaceFileAtRevision(workspaceId, filename, "HEAD")
       .then((res) => {
         if (version !== fetchVersionRef.current) return;
-        if (!res.exists_at_head) {
+        if (!res.exists_at_revision) {
           setHead("");
           return;
         }
