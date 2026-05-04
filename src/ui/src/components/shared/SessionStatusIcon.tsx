@@ -27,18 +27,21 @@ export function SessionStatusIcon({ status, size = 14 }: Props) {
       );
     case "ask":
       return (
-        <CircleQuestionMark
-          size={size}
-          style={{ color: "var(--badge-ask)" }}
-        />
+        <span className={styles.pulse}>
+          <CircleQuestionMark size={size} style={{ color: "var(--badge-ask)" }} />
+        </span>
       );
     case "plan":
       return (
-        <CircleAlert size={size} style={{ color: "var(--badge-plan)" }} />
+        <span className={styles.pulse}>
+          <CircleAlert size={size} style={{ color: "var(--badge-plan)" }} />
+        </span>
       );
     case "unread":
       return (
-        <CircleCheck size={size} style={{ color: "var(--badge-done)" }} />
+        <span className={styles.pulse}>
+          <CircleCheck size={size} style={{ color: "var(--badge-done)" }} />
+        </span>
       );
     case "stopped":
       return (
