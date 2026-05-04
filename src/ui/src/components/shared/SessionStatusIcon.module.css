@@ -21,8 +21,21 @@
   to   { transform: rotate(360deg); }
 }
 
+.pulse {
+  display: inline-flex;
+  animation: pulse-badge 2s ease-in-out infinite;
+}
+
+@keyframes pulse-badge {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .spinner {
+    animation: none;
+  }
+  .pulse {
     animation: none;
   }
 }

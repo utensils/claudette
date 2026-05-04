@@ -78,19 +78,7 @@
 }
 
 .icon.pulse {
-  animation: pulse-badge 2s ease-in-out infinite;
   opacity: 1;
-}
-
-@keyframes pulse-badge {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .icon.pulse {
-    animation: none;
-  }
 }
 
 .name {

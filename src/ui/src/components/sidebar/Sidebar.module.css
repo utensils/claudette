@@ -462,6 +462,14 @@
   }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .badgeDone,
+  .badgePlan,
+  .badgeAsk {
+    animation: none;
+  }
+}
+
 .wsUnread .wsName {
   font-weight: 700;
 }
