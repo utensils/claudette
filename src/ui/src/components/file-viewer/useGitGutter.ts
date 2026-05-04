@@ -33,18 +33,6 @@ export function selectGutterRevision(
 }
 
 /**
- * True when the hook should fire `compute_workspace_merge_base`. Only fires
- * once per `(workspaceId, setting)` change — gates on the cached SHA being
- * absent, so a previously-resolved SHA short-circuits.
- */
-export function shouldFetchMergeBase(
-  setting: "head" | "merge_base",
-  cachedMergeBase: string | null,
-): boolean {
-  return setting === "merge_base" && cachedMergeBase === null;
-}
-
-/**
  * Wires the git gutter into a mounted Monaco editor. Fetches the file's
  * blob at the configured revision once per `(workspaceId, filename, revision)`,
  * then recomputes line decorations on each buffer change (debounced 250 ms).
@@ -83,7 +71,9 @@ export function useGitGutter(
   // selected and the SHA isn't cached. Errors silently disable the
   // gutter — same UX as today's binary/oversized/no-head paths.
   useEffect(() => {
-    if (!shouldFetchMergeBase(editorGitGutterBase, diffMergeBase)) return;
+    // Resolve the merge-base on demand: fires only when "merge_base" is
+    // selected and no SHA is cached (revision === null in that case).
+    if (revision !== null || editorGitGutterBase !== "merge_base") return;
     let cancelled = false;
     computeWorkspaceMergeBase(workspaceId)
       .then((sha) => {
@@ -95,7 +85,7 @@ export function useGitGutter(
     return () => {
       cancelled = true;
     };
-  }, [editorGitGutterBase, diffMergeBase, workspaceId, setDiffMergeBase]);
+  }, [editorGitGutterBase, revision, workspaceId, setDiffMergeBase]);
 
   // Fetch the blob at `revision` whenever the file or revision changes. The
   // version counter discards stale responses if a newer fetch has already
