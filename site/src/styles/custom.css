@@ -16,6 +16,7 @@
 
   --sl-font: 'Inter', system-ui, -apple-system, sans-serif;
   --sl-font-system: var(--sl-font);
+  --font-display: "Silkscreen", "Inter", sans-serif;
 }
 
 :root[data-theme='light'] {
@@ -35,6 +36,13 @@
 /* Starlight logo image — pixelated rendering for pixel art */
 .site-title img {
   image-rendering: pixelated;
+}
+
+/* Header brand title — Silkscreen pixel font to match the footer brand mark */
+.site-title span {
+  font-family: var(--font-display);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
 
 /* Warmer link colors */

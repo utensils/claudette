@@ -74,7 +74,6 @@
   --transition-normal: 0.2s ease;
 
   --font-mono: ui-monospace, "JetBrains Mono", "SF Mono", "Cascadia Code", monospace;
-  --font-display: "Silkscreen", "Inter", sans-serif;
   --fw-semibold: 600;
   --fw-bold: 700;
 }
