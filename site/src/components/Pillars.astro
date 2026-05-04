@@ -1,5 +1,5 @@
 ---
-const { BASE_URL } = import.meta.env;
+const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : import.meta.env.BASE_URL + '/';
 const pillars = [
   {
     num: '01 / Parallel sessions',
@@ -70,7 +70,7 @@ const pillars = [
           </div>
           <div class={p.media.src ? 'pillar-media bare' : 'pillar-media'}>
             {p.media.src ? (
-              <video src={BASE_URL + p.media.src} autoplay loop muted playsinline class="demo-video" />
+              <video src={base + p.media.src} autoplay loop muted playsinline class="demo-video" />
             ) : (
               <Fragment>
                 <div class="demo-tab">
