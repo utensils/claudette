@@ -1,22 +1,29 @@
 ---
 title: Diff Viewer
-description: Real-time git diff tracking with unified view and syntax highlighting.
+description: Real-time git diff tracking with unified and side-by-side views, syntax highlighting, and markdown preview.
 ---
+
+import { Image } from 'astro:assets';
+import unifiedDiff from '../../../assets/screenshots/unified-diff.png';
+import sideBySideDiff from '../../../assets/screenshots/side-by-side-diff.png';
 
 The diff viewer shows you exactly what the agent changed in your codebase, updated in real time as the agent works.
 
 ## Viewing Changes
 
-After an agent completes work (or while it's still running), the diff panel shows all modified files with:
+After an agent completes work (or while it's still running), the diff panel shows all modified files with syntax highlighting, line numbers, and a choice of two layouts:
 
-- **Unified diff view** — added lines in green, removed lines in red
-- **Syntax highlighting** — code is highlighted by language
-- **Line numbers** — original and new line numbers side by side
+### Unified View
 
-{/* TODO: Screenshot of diff viewer */}
-:::note[Screenshot coming soon]
-A screenshot showing the diff viewer with code changes will be added here.
-:::
+Added lines in green, removed lines in red, displayed as a single column — the classic `git diff` format.
+
+<Image src={unifiedDiff} alt="Diff viewer in unified mode showing added and removed lines with syntax highlighting" loading="lazy" />
+
+### Side-by-Side View
+
+The removed version on the left, the added version on the right. Corresponding changed lines are paired on the same row, making it easier to compare before and after at a glance. Toggle between layouts using the toolbar icons in the top-right corner of the diff panel.
+
+<Image src={sideBySideDiff} alt="Diff viewer in side-by-side mode with the old file version on the left and the new version on the right" loading="lazy" />
 
 ## Changed Files List
 
