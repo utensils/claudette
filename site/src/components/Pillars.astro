@@ -1,4 +1,5 @@
 ---
+const { BASE_URL } = import.meta.env;
 const pillars = [
   {
     num: '01 / Parallel sessions',
@@ -9,7 +10,7 @@ const pillars = [
       'Multi-session tabs per workspace',
       'Auto-named branches from your first prompt',
     ],
-    media: { caption: 'sidebar showing 3 agents on 3 branches', filename: 'parallel-agents.webm', meta: '.webm · ~8s loop', src: '/videos/parallel-agents.webm' },
+    media: { caption: 'sidebar showing 3 agents on 3 branches', filename: 'parallel-agents.webm', meta: '.webm · ~8s loop', src: 'videos/parallel-agents.webm' },
     flip: false,
   },
   {
@@ -21,7 +22,7 @@ const pillars = [
       'Compaction divider in the timeline so nothing gets lost',
       'Per-workspace analytics — tokens, sessions, hot files',
     ],
-    media: { caption: 'composer w/ segmented meter + /compact', filename: 'context.webm', meta: '.webm · ~10s loop', src: '/videos/context.webm' },
+    media: { caption: 'composer w/ segmented meter + /compact', filename: 'context.webm', meta: '.webm · ~10s loop', src: 'videos/context.webm' },
     flip: true,
   },
   {
@@ -69,7 +70,7 @@ const pillars = [
           </div>
           <div class={p.media.src ? 'pillar-media bare' : 'pillar-media'}>
             {p.media.src ? (
-              <video src={p.media.src} autoplay loop muted playsinline class="demo-video" />
+              <video src={BASE_URL + p.media.src} autoplay loop muted playsinline class="demo-video" />
             ) : (
               <Fragment>
                 <div class="demo-tab">
