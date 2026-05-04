@@ -291,7 +291,7 @@ fn validate_revision(revision: &str) -> Result<(), GitError> {
 /// Read a file's contents as they exist at the given `revision` (`HEAD` or a
 /// 40-char hex SHA — see [`validate_revision`]).
 ///
-/// Four return shapes:
+/// Three return shapes:
 /// 1. **Tracked text:** `exists_at_revision = true`, `content = Some(text)`.
 ///    The blob exists in the revision's tree and decodes as UTF-8 (lossy —
 ///    invalid bytes are replaced with `U+FFFD`).
