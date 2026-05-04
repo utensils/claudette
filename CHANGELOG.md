@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.22.0](https://github.com/utensils/claudette/compare/v0.21.0...v0.22.0) (2026-05-04)
+
+
+### Features
+
+* **agent:** inject bundled global system prompt into every session ([#560](https://github.com/utensils/claudette/issues/560)) ([829ffb6](https://github.com/utensils/claudette/commit/829ffb6a47dacc836675773d1dd7aa3d671d93a5))
+* **changes:** committed group, diff stats, and open-in-editor for commit files + diff toolbar ([#598](https://github.com/utensils/claudette/issues/598)) ([d390286](https://github.com/utensils/claudette/commit/d3902862e82958c94a1463b58d9d832b9a60f388))
+* **changes:** expandable commit list in Changes panel ([#593](https://github.com/utensils/claudette/issues/593)) ([f55e20f](https://github.com/utensils/claudette/commit/f55e20f9065a395e79611b7b3bd07743b88ef08b))
+* **changes:** per-file and bulk stage/unstage/discard controls ([#592](https://github.com/utensils/claudette/issues/592)) ([e59d816](https://github.com/utensils/claudette/commit/e59d81613bc7e50493451ed9554a1057fe454f82))
+* **chat:** paginate history and bundle attachments per page ([#489](https://github.com/utensils/claudette/issues/489)) ([#564](https://github.com/utensils/claudette/issues/564)) ([41cf76f](https://github.com/utensils/claudette/commit/41cf76ffd170c80ccaeb36ac275a228ca57790dc))
+* **community:** registry MVP — discover, install, uninstall third-party plugins ([#567](https://github.com/utensils/claudette/issues/567) PR 2 + [#570](https://github.com/utensils/claudette/issues/570)) ([#572](https://github.com/utensils/claudette/issues/572)) ([a5fb802](https://github.com/utensils/claudette/commit/a5fb802539e96a8840375dc49367a591dfa0585d))
+* **community:** verify minisign-signed registry + commit-pin install URLs ([#586](https://github.com/utensils/claudette/issues/586)) ([a61104e](https://github.com/utensils/claudette/commit/a61104e71483f4f8e6773b5c02405f2f2fe09c00))
+* **file-viewer:** show git gutter markers in Monaco editor ([#596](https://github.com/utensils/claudette/issues/596)) ([4821253](https://github.com/utensils/claudette/commit/482125313167208fe35a9db48bea0cd193d5718c))
+* **files:** add tabbed Files browser with Monaco editor ([#556](https://github.com/utensils/claudette/issues/556)) ([266203f](https://github.com/utensils/claudette/commit/266203f02bb45bf23d42baff2fade510e1471aa5))
+* generalize pinned commands and move management into settings ([#541](https://github.com/utensils/claudette/issues/541)) ([8029ec3](https://github.com/utensils/claudette/commit/8029ec388cda263b28a291c4f2dbd419089d09ca))
+* **pinned-prompts:** redesign settings UI and add slash autocomplete ([#544](https://github.com/utensils/claudette/issues/544)) ([e6326fa](https://github.com/utensils/claudette/commit/e6326fa91694abc91633557d74001e48dc1fb51a))
+* **plugins:** enforce granted_capabilities at every host.* call site ([#585](https://github.com/utensils/claudette/issues/585)) ([941029c](https://github.com/utensils/claudette/commit/941029ca49576edd5cfbde22f6413eff02349e05))
+* **plugins:** language-grammar plugin kind ([#568](https://github.com/utensils/claudette/issues/568)) ([0c2966e](https://github.com/utensils/claudette/commit/0c2966ef954f960af6c230f11f96de7984690798))
+* **site:** add Themeable and Remote access feature cards ([#599](https://github.com/utensils/claudette/issues/599)) ([cc5029a](https://github.com/utensils/claudette/commit/cc5029a34e38853189633f61f4217d7fe9ba758b))
+* **site:** redesign homepage to v2 with pillars, anatomy, and real-app icons ([#533](https://github.com/utensils/claudette/issues/533)) ([c51b349](https://github.com/utensils/claudette/commit/c51b3498f636891715c1d5d9a618ca28b5a725bf))
+* **tabs:** right-click context menus and Actions menu in diff view ([#557](https://github.com/utensils/claudette/issues/557)) ([994602b](https://github.com/utensils/claudette/commit/994602b47c1558e10e8d1363eb32111771a848d6))
+* **ui:** files-first right sidebar, terminal/chat polish, drop file viewer view/edit toggle ([#566](https://github.com/utensils/claudette/issues/566)) ([3181e71](https://github.com/utensils/claudette/commit/3181e713a26fc13bdfa7ef92dab809756cba0c08))
+
+
+### Bug Fixes
+
+* **apps:** drop redundant path arg from nvim/vim launch ([#558](https://github.com/utensils/claudette/issues/558)) ([2e4f5d3](https://github.com/utensils/claudette/commit/2e4f5d381213c20c4302ac3e21a168c0833e12d5))
+* **cesp:** drop refs/tags/ prefix from pack archive URL ([#551](https://github.com/utensils/claudette/issues/551)) ([bb35515](https://github.com/utensils/claudette/commit/bb3551515c9a2fc4ef046b0b5bfeed4deb700ce2))
+* **chat:** require Shift modifier for input history navigation ([#555](https://github.com/utensils/claudette/issues/555)) ([b033bc2](https://github.com/utensils/claudette/commit/b033bc286a9b8f08361826fb303fcf2eda36de44))
+* **chat:** stabilize streaming spinner rotation ([#552](https://github.com/utensils/claudette/issues/552)) ([a9c286d](https://github.com/utensils/claudette/commit/a9c286d24cc43afb21eff376585e5e40a919e718)), closes [#545](https://github.com/utensils/claudette/issues/545)
+* **chat:** unblock + new session button while a session is streaming ([#574](https://github.com/utensils/claudette/issues/574)) ([#575](https://github.com/utensils/claudette/issues/575)) ([d4a083c](https://github.com/utensils/claudette/commit/d4a083c0df0a45c47d2eae69769e2837eb6c3938))
+* **file-viewer:** co-locate markdown styles, add Cmd+Shift+V preview toggle ([#571](https://github.com/utensils/claudette/issues/571)) ([4282918](https://github.com/utensils/claudette/commit/4282918ccb324e16139dff9b71e5d4e14df345a2))
+* **git:** create workspace branches with no upstream ([#559](https://github.com/utensils/claudette/issues/559)) ([2837cce](https://github.com/utensils/claudette/commit/2837cce555c87ff2b78846e317a9b8998b47b6f5))
+* handle workspace name collisions ([#591](https://github.com/utensils/claudette/issues/591)) ([1caed93](https://github.com/utensils/claudette/commit/1caed9385400dea14799c2c675ddf086ce66b281))
+* persist diff selection and chat drafts across workspace switches ([#543](https://github.com/utensils/claudette/issues/543)) ([dc30ebb](https://github.com/utensils/claudette/commit/dc30ebb16adfa440f65a8b266f5045925e5abdee))
+* **terminal:** align xterm.js mouse coords with rendered rows ([#550](https://github.com/utensils/claudette/issues/550)) ([e34c392](https://github.com/utensils/claudette/commit/e34c392ba15f0b50a3a1acdf5db4f229c3a84b84))
+* **terminal:** stop stealing focus from chat composer when agent finishes ([#549](https://github.com/utensils/claudette/issues/549)) ([3f5d38b](https://github.com/utensils/claudette/commit/3f5d38b033f28f00a51a6da1b2e4894595da7f68))
+* **tray:** clear workspace attention server-side on menu click ([#594](https://github.com/utensils/claudette/issues/594)) ([6c4cb71](https://github.com/utensils/claudette/commit/6c4cb7135955c5fd30ee1edf17d62d79030bbe67))
+* **ui:** clear active file tab when selecting Changes diff entry ([#573](https://github.com/utensils/claudette/issues/573)) ([#578](https://github.com/utensils/claudette/issues/578)) ([386b346](https://github.com/utensils/claudette/commit/386b3469cce903d2d1b71a92016494eea2e47704))
+* **workspace:** level-triggered branch reconcile so a stale sidebar self-heals ([#540](https://github.com/utensils/claudette/issues/540)) ([cc2c9b2](https://github.com/utensils/claudette/commit/cc2c9b28584165ffc979fab8023ea0712f61f466))
+* **workspace:** preserve branch names for imported workspaces ([#553](https://github.com/utensils/claudette/issues/553)) ([624820a](https://github.com/utensils/claudette/commit/624820abf5e8b09865ba5e83fe8e4e3e1209410b))
+
+
+### Performance Improvements
+
+* **workspace:** apply optimistic UI when archiving ([#595](https://github.com/utensils/claudette/issues/595)) ([9c0e33b](https://github.com/utensils/claudette/commit/9c0e33bce3d13fcd7035568c4492ddee5e110319))
+
 ## [0.21.0](https://github.com/utensils/claudette/compare/v0.20.1...v0.21.0) (2026-04-30)
 
 
