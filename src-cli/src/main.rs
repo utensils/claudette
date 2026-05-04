@@ -17,7 +17,9 @@ mod output;
 
 use clap::{CommandFactory, Parser, Subcommand};
 
-use crate::commands::{batch as batch_cmd, capabilities, chat, repo, rpc, version, workspace};
+use crate::commands::{
+    batch as batch_cmd, capabilities, chat, plugin, pr, repo, rpc, version, workspace,
+};
 
 #[derive(Parser)]
 #[command(
@@ -88,6 +90,22 @@ enum Command {
         action: batch_cmd::Action,
     },
 
+    /// Plugin operations — list discovered plugins and invoke arbitrary
+    /// plugin operations against a workspace context.
+    Plugin {
+        #[command(subcommand)]
+        action: plugin::Action,
+    },
+
+    /// Pull-request operations against the active SCM provider plugin
+    /// (e.g. `scm-github`, `scm-gitlab`). Resolves the provider per
+    /// workspace, so the same command works in any repo with a matching
+    /// plugin loaded.
+    Pr {
+        #[command(subcommand)]
+        action: pr::Action,
+    },
+
     /// Generate shell completion script for the named shell.
     /// Pipe to your shell's completion file:
     ///   `claudette completion zsh > ~/.zsh/completions/_claudette`
@@ -108,6 +126,8 @@ async fn main() {
         Command::Chat { action } => chat::run(action, cli.json).await,
         Command::Repo { action } => repo::run(action, cli.json).await,
         Command::Batch { action } => batch_cmd::run(action).await,
+        Command::Plugin { action } => plugin::run(action, cli.json).await,
+        Command::Pr { action } => pr::run(action, cli.json).await,
         Command::Completion { shell } => {
             let mut cmd = Cli::command();
             let bin_name = cmd.get_name().to_string();
