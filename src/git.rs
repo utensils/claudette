@@ -253,44 +253,67 @@ pub async fn validate_repo(path: &str) -> Result<(), GitError> {
     Ok(())
 }
 
-/// Result of reading a file's blob at HEAD via [`read_blob_at_head`].
+/// Result of reading a file's blob at an arbitrary revision via
+/// [`read_blob_at_revision`]. The "revision" can be `HEAD` or a full 40-char
+/// commit SHA (validated by `validate_revision`).
 #[derive(Debug, Clone, Serialize)]
-pub struct HeadBlobResult {
+pub struct BlobAtRevisionResult {
     /// UTF-8 text of the blob, or `None` when the blob is binary, oversized,
     /// or absent.
     pub content: Option<String>,
-    /// Whether the file path resolves to a blob in the current `HEAD` tree.
-    pub exists_at_head: bool,
+    /// Whether the file path resolves to a blob in the requested revision's tree.
+    pub exists_at_revision: bool,
 }
 
-/// Maximum blob size we materialize via `read_blob_at_head`. Mirrors the
+/// Maximum blob size we materialize via `read_blob_at_revision`. Mirrors the
 /// frontend's `GUTTER_MAX_BYTES` cap — beyond this the file viewer's git
 /// gutter is disabled anyway, so reading the bytes only wastes IPC.
-pub const MAX_BLOB_AT_HEAD_BYTES: u64 = 1024 * 1024;
+pub const MAX_BLOB_AT_REVISION_BYTES: u64 = 1024 * 1024;
 
-/// Read a file's contents as they exist at the current `HEAD` commit.
+/// Allow-list for revisions accepted by [`read_blob_at_revision`]. Two
+/// shapes only: literal `"HEAD"` or a full 40-char hex SHA. The merge-base
+/// values the gutter passes in are pre-resolved SHAs (via `diff::merge_base`,
+/// which returns the SHA from `git merge-base`), so this covers every
+/// in-product caller while keeping arbitrary user input out of the
+/// `git cat-file` argv.
+fn validate_revision(revision: &str) -> Result<(), GitError> {
+    if revision == "HEAD" {
+        return Ok(());
+    }
+    if revision.len() == 40 && revision.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Ok(());
+    }
+    Err(GitError::CommandFailed(format!(
+        "invalid revision (expected 'HEAD' or 40-char hex SHA): {revision}"
+    )))
+}
+
+/// Read a file's contents as they exist at the given `revision` (`HEAD` or a
+/// 40-char hex SHA — see [`validate_revision`]).
 ///
 /// Four return shapes:
-/// 1. **Tracked text:** `exists_at_head = true`, `content = Some(text)`. The
-///    blob exists at `HEAD` and decodes as UTF-8 (lossy — invalid bytes are
-///    replaced with `U+FFFD`).
-/// 2. **Tracked binary or oversized:** `exists_at_head = true`,
+/// 1. **Tracked text:** `exists_at_revision = true`, `content = Some(text)`.
+///    The blob exists in the revision's tree and decodes as UTF-8 (lossy —
+///    invalid bytes are replaced with `U+FFFD`).
+/// 2. **Tracked binary or oversized:** `exists_at_revision = true`,
 ///    `content = None`. Either the blob contains a NUL byte in its first
-///    8 KiB (treated as binary) or its size exceeds [`MAX_BLOB_AT_HEAD_BYTES`]
-///    (the frontend gutter is disabled at that scale anyway, so we skip the
-///    IPC cost of materializing it).
-/// 3. **Not at HEAD:** `exists_at_head = false`, `content = None`. The path is
-///    untracked, staged-only, or otherwise absent from the `HEAD` tree.
+///    8 KiB (treated as binary) or its size exceeds [`MAX_BLOB_AT_REVISION_BYTES`].
+/// 3. **Not at revision:** `exists_at_revision = false`, `content = None`.
+///    The path is untracked, staged-only, or otherwise absent from the
+///    revision's tree.
 ///
 /// Returns [`GitError::NotAGitRepo`] / [`GitError::CommandFailed`] when the
-/// directory is not a git worktree, and propagates other git failures verbatim.
-pub async fn read_blob_at_head(
+/// directory is not a git worktree, when the revision fails the allow-list,
+/// or when an underlying git command fails.
+pub async fn read_blob_at_revision(
     worktree_path: &str,
     file_path: &str,
-) -> Result<HeadBlobResult, GitError> {
+    revision: &str,
+) -> Result<BlobAtRevisionResult, GitError> {
+    validate_revision(revision)?;
     validate_repo(worktree_path).await?;
 
-    let spec = format!("HEAD:{file_path}");
+    let spec = format!("{revision}:{file_path}");
     let exists = Command::new(crate::git::resolve_git_path_blocking())
         .no_console_window()
         .args(["-C", worktree_path])
@@ -300,9 +323,9 @@ pub async fn read_blob_at_head(
         .map_err(GitError::from_spawn_io)?;
 
     if !exists.status.success() {
-        return Ok(HeadBlobResult {
+        return Ok(BlobAtRevisionResult {
             content: None,
-            exists_at_head: false,
+            exists_at_revision: false,
         });
     }
 
@@ -328,10 +351,10 @@ pub async fn read_blob_at_head(
         .parse()
         .map_err(|e| GitError::CommandFailed(format!("could not parse cat-file -s output: {e}")))?;
 
-    if size > MAX_BLOB_AT_HEAD_BYTES {
-        return Ok(HeadBlobResult {
+    if size > MAX_BLOB_AT_REVISION_BYTES {
+        return Ok(BlobAtRevisionResult {
             content: None,
-            exists_at_head: true,
+            exists_at_revision: true,
         });
     }
 
@@ -353,16 +376,16 @@ pub async fn read_blob_at_head(
     let is_binary = raw[..check_len].contains(&0);
 
     if is_binary {
-        return Ok(HeadBlobResult {
+        return Ok(BlobAtRevisionResult {
             content: None,
-            exists_at_head: true,
+            exists_at_revision: true,
         });
     }
 
     let text = String::from_utf8_lossy(&raw).into_owned();
-    Ok(HeadBlobResult {
+    Ok(BlobAtRevisionResult {
         content: Some(text),
-        exists_at_head: true,
+        exists_at_revision: true,
     })
 }
 
@@ -1713,10 +1736,10 @@ mod head_blob_tests {
         git_cmd(tmp.path(), &["add", "a.txt"]);
         git_cmd(tmp.path(), &["commit", "-q", "-m", "init"]);
 
-        let result = read_blob_at_head(tmp.path().to_str().unwrap(), "a.txt")
+        let result = read_blob_at_revision(tmp.path().to_str().unwrap(), "a.txt", "HEAD")
             .await
             .expect("read");
-        assert!(result.exists_at_head);
+        assert!(result.exists_at_revision);
         assert_eq!(result.content.as_deref(), Some("hello\nworld\n"));
     }
 
@@ -1729,10 +1752,10 @@ mod head_blob_tests {
         git_cmd(tmp.path(), &["commit", "-q", "-m", "init"]);
 
         std::fs::write(tmp.path().join("new.txt"), "fresh\n").unwrap();
-        let result = read_blob_at_head(tmp.path().to_str().unwrap(), "new.txt")
+        let result = read_blob_at_revision(tmp.path().to_str().unwrap(), "new.txt", "HEAD")
             .await
             .expect("read");
-        assert!(!result.exists_at_head);
+        assert!(!result.exists_at_revision);
         assert!(result.content.is_none());
     }
 
@@ -1747,10 +1770,10 @@ mod head_blob_tests {
         std::fs::write(tmp.path().join("staged.txt"), "staged\n").unwrap();
         git_cmd(tmp.path(), &["add", "staged.txt"]);
 
-        let result = read_blob_at_head(tmp.path().to_str().unwrap(), "staged.txt")
+        let result = read_blob_at_revision(tmp.path().to_str().unwrap(), "staged.txt", "HEAD")
             .await
             .expect("read");
-        assert!(!result.exists_at_head);
+        assert!(!result.exists_at_revision);
         assert!(result.content.is_none());
     }
 
@@ -1765,10 +1788,10 @@ mod head_blob_tests {
         git_cmd(tmp.path(), &["add", "blob.bin"]);
         git_cmd(tmp.path(), &["commit", "-q", "-m", "init"]);
 
-        let result = read_blob_at_head(tmp.path().to_str().unwrap(), "blob.bin")
+        let result = read_blob_at_revision(tmp.path().to_str().unwrap(), "blob.bin", "HEAD")
             .await
             .expect("read");
-        assert!(result.exists_at_head);
+        assert!(result.exists_at_revision);
         assert!(result.content.is_none());
     }
 
@@ -1776,7 +1799,7 @@ mod head_blob_tests {
     async fn errors_in_non_git_directory() {
         let tmp = tempdir().unwrap();
         std::fs::write(tmp.path().join("a.txt"), "hi").unwrap();
-        let result = read_blob_at_head(tmp.path().to_str().unwrap(), "a.txt").await;
+        let result = read_blob_at_revision(tmp.path().to_str().unwrap(), "a.txt", "HEAD").await;
         assert!(result.is_err());
     }
 
@@ -1786,15 +1809,68 @@ mod head_blob_tests {
         init_repo(tmp.path());
         // One byte over the cap — size check fires before binary detection,
         // so any bytes work.
-        let bytes = vec![b'a'; (MAX_BLOB_AT_HEAD_BYTES + 1) as usize];
+        let bytes = vec![b'a'; (MAX_BLOB_AT_REVISION_BYTES + 1) as usize];
         std::fs::write(tmp.path().join("big.txt"), &bytes).unwrap();
         git_cmd(tmp.path(), &["add", "big.txt"]);
         git_cmd(tmp.path(), &["commit", "-q", "-m", "init"]);
 
-        let result = read_blob_at_head(tmp.path().to_str().unwrap(), "big.txt")
+        let result = read_blob_at_revision(tmp.path().to_str().unwrap(), "big.txt", "HEAD")
             .await
             .expect("read");
-        assert!(result.exists_at_head);
+        assert!(result.exists_at_revision);
         assert!(result.content.is_none());
+    }
+
+    #[tokio::test]
+    async fn read_blob_at_revision_with_sha_returns_blob() {
+        let tmp = tempdir().unwrap();
+        init_repo(tmp.path());
+        std::fs::write(tmp.path().join("a.txt"), "hello\n").unwrap();
+        git_cmd(tmp.path(), &["add", "a.txt"]);
+        git_cmd(tmp.path(), &["commit", "-q", "-m", "init"]);
+
+        let sha = git_cmd(tmp.path(), &["rev-parse", "HEAD"])
+            .trim()
+            .to_string();
+
+        let result = read_blob_at_revision(tmp.path().to_str().unwrap(), "a.txt", &sha)
+            .await
+            .expect("read");
+        assert!(result.exists_at_revision);
+        assert_eq!(result.content.as_deref(), Some("hello\n"));
+    }
+
+    #[tokio::test]
+    async fn read_blob_at_revision_rejects_non_head_non_sha_inputs() {
+        let tmp = tempdir().unwrap();
+        init_repo(tmp.path());
+        std::fs::write(tmp.path().join("a.txt"), "x\n").unwrap();
+        git_cmd(tmp.path(), &["add", "a.txt"]);
+        git_cmd(tmp.path(), &["commit", "-q", "-m", "init"]);
+
+        for bad in ["main", "HEAD~1", "; rm -rf /", "refs/heads/main", ""] {
+            let err = read_blob_at_revision(tmp.path().to_str().unwrap(), "a.txt", bad)
+                .await
+                .expect_err(&format!("expected error for revision {bad:?}"));
+            assert!(
+                matches!(err, GitError::CommandFailed(_)),
+                "expected CommandFailed for {bad:?}, got {err:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn read_blob_at_revision_rejects_short_sha() {
+        let tmp = tempdir().unwrap();
+        init_repo(tmp.path());
+        std::fs::write(tmp.path().join("a.txt"), "x\n").unwrap();
+        git_cmd(tmp.path(), &["add", "a.txt"]);
+        git_cmd(tmp.path(), &["commit", "-q", "-m", "init"]);
+
+        let short = "abc1234"; // 7 hex chars — valid in git, but our allow-list rejects.
+        let err = read_blob_at_revision(tmp.path().to_str().unwrap(), "a.txt", short)
+            .await
+            .expect_err("short sha must be rejected");
+        assert!(matches!(err, GitError::CommandFailed(_)));
     }
 }
