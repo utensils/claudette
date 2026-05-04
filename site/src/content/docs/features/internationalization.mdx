@@ -3,6 +3,9 @@ title: Internationalization
 description: Use Claudette in your language — five languages ship today, with runtime switching and English fallback.
 ---
 
+import { Image } from 'astro:assets';
+import internationalization from '../../../assets/screenshots/internationalization.png';
+
 Claudette supports multiple languages out of the box, with runtime language switching and a graceful fallback to English for any keys a translation hasn't filled in yet.
 
 ## Supported Languages
@@ -25,10 +28,7 @@ Open `Settings > General` and pick a language from the **Language** dropdown. Th
 
 Your selection is persisted, so the next time you launch Claudette it'll come up in the language you picked.
 
-{/* TODO: Screenshot of language dropdown in General settings */}
-:::note[Screenshot coming soon]
-A screenshot of the language dropdown in `Settings > General` will be added here.
-:::
+<Image src={internationalization} alt="General settings with the Language dropdown open, showing English, Español, Portuguese (Brazil), Japanese, and Simplified Chinese options" loading="lazy" />
 
 ## Fallback Behaviour
 

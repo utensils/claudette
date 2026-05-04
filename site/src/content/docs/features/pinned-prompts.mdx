@@ -1,0 +1,65 @@
+---
+title: Pinned Prompts
+description: Named prompt shortcuts that appear above the chat composer for fast, repeatable workflows.
+---
+
+import { Image } from 'astro:assets';
+import composerPins from '../../../assets/screenshots/composer-pins.png';
+import globalPins from '../../../assets/screenshots/global-pins.png';
+import repoPins from '../../../assets/screenshots/repo-pins.png';
+
+Pinned prompts are named shortcuts that appear as clickable pills above the chat composer. Use them to send recurring instructions, slash commands, or multi-line prompts in a single click — without retyping or scrolling through history.
+
+## The Prompt Bar
+
+When at least one pinned prompt is configured, a row of pills appears above the chat input. Each pill shows the prompt's **display name**. Clicking a pill either sends the prompt immediately or inserts it into the composer, depending on whether **Auto-send when clicked** is enabled.
+
+<Image src={composerPins} alt="Chat composer with a row of pinned prompt pills above the message input" loading="lazy" />
+
+## Auto-send vs Insert
+
+Each pinned prompt has an **Auto-send when clicked** toggle (referred to as **Auto-send** below for brevity):
+
+| Mode | Behavior |
+|------|----------|
+| Auto-send **on** | Clicking the pill sends the prompt immediately, as if you had typed it and pressed Enter |
+| Auto-send **off** | Clicking the pill inserts the prompt text into the composer so you can review or edit before sending |
+
+Use auto-send for prompts you always want to run as-is. Leave it off for templates you customize each time.
+
+## Using "/" in Prompt Bodies
+
+When creating or editing a pinned prompt, the prompt body field supports the same **/** slash command picker as the main chat composer. Type `/` to open the picker and select a command to insert it.
+
+This lets you build prompts that combine slash commands with custom context — for example, a "Review changes" prompt that runs `/review` followed by project-specific instructions.
+
+## Global Prompts
+
+Global pinned prompts appear in every repository. Manage them at **Settings → Pinned Prompts**.
+
+<Image src={globalPins} alt="Global Pinned Prompts settings page showing several saved prompts with edit, reorder, and add controls" loading="lazy" />
+
+To create a global prompt:
+1. Open **Settings → Pinned Prompts**
+2. Click **Add prompt**
+3. Enter a **Display name** (shown on the pill) and the **Prompt body**
+4. Toggle **Auto-send** on or off
+5. Click **Save**
+
+Use the **↑** and **↓** buttons to reorder prompts within the list. Order is preserved in the pill bar.
+
+## Repo-Specific Prompts
+
+Each repository can have its own pinned prompts that appear only when working in that repo. Manage them at **Settings → [Repository Name] → Pinned Prompts**.
+
+<Image src={repoPins} alt="Repository settings page with a Pinned Prompts section and an Inherited from Global list below it" loading="lazy" />
+
+Repo prompts appear **before** global prompts in the pill bar. See [Per-Repo Settings](/claudette/features/per-repo-settings/) for other repository-level configuration.
+
+## Inheritance and Overrides
+
+Repositories inherit all global pinned prompts automatically. If a repo defines a prompt with the **same display name** as a global prompt, the repo's version takes precedence and the global one is hidden.
+
+In repo settings, inherited global prompts are listed below the repo-specific prompts. Any global prompt that is being overridden by a repo prompt of the same display name shows an **Overridden** badge.
+
+This lets you define a common baseline globally while tailoring specific prompts per project — for example, a global "Run tests" prompt that a repo overrides with its specific test command.

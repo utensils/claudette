@@ -69,6 +69,7 @@ export default defineConfig({
             { slug: 'features/integrated-terminal' },
             { slug: 'features/remote-workspaces' },
             { slug: 'features/agent-configuration' },
+            { slug: 'features/pinned-prompts' },
             { slug: 'features/theming' },
             { slug: 'features/notifications' },
             { slug: 'features/keyboard-shortcuts' },
