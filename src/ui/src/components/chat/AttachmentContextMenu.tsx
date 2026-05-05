@@ -123,6 +123,15 @@ export function AttachmentContextMenu({
       style={{ left: clamped.x, top: clamped.y }}
       role="menu"
       data-testid="attachment-context-menu"
+      // A parent component sometimes attaches its own `pointerdown` /
+      // `mousedown` outside-click listener on window. Without stopping
+      // propagation here, that listener fires for clicks INSIDE the menu
+      // and unmounts it before the button's `click` event runs, silently
+      // swallowing onSelect. Stopping at the menu boundary keeps the
+      // outside-click semantics correct without requiring callers to
+      // remember the gotcha.
+      onPointerDown={(ev) => ev.stopPropagation()}
+      onMouseDown={(ev) => ev.stopPropagation()}
     >
       {items.map((item, i) => (
         <button

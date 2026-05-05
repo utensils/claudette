@@ -1085,19 +1085,10 @@ export const TerminalPanel = memo(function TerminalPanel() {
     return () => cancelAnimationFrame(id);
   }, [terminalPanelVisible, activeTerminalTabId]);
 
-  useEffect(() => {
-    if (!contextMenu) return;
-    const close = () => setContextMenu(null);
-    const handleKeyDown = (ev: KeyboardEvent) => {
-      if (ev.key === "Escape") close();
-    };
-    window.addEventListener("pointerdown", close);
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("pointerdown", close);
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [contextMenu]);
+  // Outside-click and Escape handling are owned by AttachmentContextMenu
+  // (which listens for `mousedown` capture on window). A redundant
+  // `pointerdown` listener here would unmount the menu before `click` fires
+  // on the menu item, breaking onSelect entirely.
 
   const handleClearContextTerminal = useCallback(() => {
     if (!contextMenu) return;
