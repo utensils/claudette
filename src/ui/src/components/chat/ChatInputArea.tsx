@@ -192,12 +192,25 @@ export function ChatInputArea({
 
   // VU meter: subscribe to `voice://level` events while recording and apply
   // exponential moving average smoothing so the bars animate smoothly.
+  // Skip the subscription entirely when the OS asks for reduced motion —
+  // the bars are rendered at a static height in that case.
   const [vuLevel, setVuLevel] = useState(0);
   const smoothedRef = useRef(0);
+  const [reducedMotion, setReducedMotion] = useState(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return false;
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  });
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const onChange = (e: MediaQueryListEvent) => setReducedMotion(e.matches);
+    mq.addEventListener?.("change", onChange);
+    return () => mq.removeEventListener?.("change", onChange);
+  }, []);
   // Only show the live level while actively recording; show 0 otherwise.
   const displayedLevel = voice.state === "recording" ? vuLevel : 0;
   useEffect(() => {
-    if (voice.state !== "recording") return;
+    if (voice.state !== "recording" || reducedMotion) return;
     smoothedRef.current = 0;
     let unlistenFn: UnlistenFn | undefined;
     const promise = listen<{ level: number }>("voice://level", (event) => {
@@ -211,7 +224,7 @@ export function ChatInputArea({
       promise.then(() => unlistenFn?.());
       smoothedRef.current = 0;
     };
-  }, [voice.state]);
+  }, [voice.state, reducedMotion]);
 
   // Esc cancels an active recording regardless of where focus is. The
   // textarea's onKeyDown also handles Esc when it has focus; clicking
@@ -1022,17 +1035,26 @@ export function ChatInputArea({
             // Perceptual mapping: sqrt expands quiet speech, the noise gate
             // ignores ambient hiss, and saturating at RMS=0.4 leaves headroom
             // for loud peaks while letting typical speech (RMS 0.05–0.15)
-            // reach the middle of the bar range.
-            const noiseFloor = 0.002;
-            const saturation = 0.4;
-            const perceptual =
-              displayedLevel <= noiseFloor
-                ? 0
-                : Math.min(Math.sqrt(displayedLevel / saturation), 1);
+            // reach the middle of the bar range. With prefers-reduced-motion,
+            // freeze the bars at a static mid-range height so the indicator
+            // still reads as "recording" without animating.
             const barMin = 4;
             const barRange = 10; // 4–14 px
-            const center = barMin + perceptual * barRange;
-            const outer = barMin + perceptual * barRange * 0.85;
+            let center: number;
+            let outer: number;
+            if (reducedMotion) {
+              center = 8;
+              outer = 8;
+            } else {
+              const noiseFloor = 0.002;
+              const saturation = 0.4;
+              const perceptual =
+                displayedLevel <= noiseFloor
+                  ? 0
+                  : Math.min(Math.sqrt(displayedLevel / saturation), 1);
+              center = barMin + perceptual * barRange;
+              outer = barMin + perceptual * barRange * 0.85;
+            }
             return (
               <div className={styles.voiceRecordingStatus} aria-live="polite">
                 <span className={styles.voiceWaveform} aria-hidden="true">
