@@ -398,6 +398,19 @@
   line-height: 1;
 }
 
+.keyboardSearch {
+  composes: input;
+  width: 100%;
+  margin: 0 0 8px;
+}
+
+.keyboardEmpty {
+  padding: 24px 0;
+  color: var(--text-dim);
+  font-size: 13px;
+  text-align: center;
+}
+
 .keyboardGroup {
   padding: 20px 0;
   border-bottom: 1px solid var(--divider);

@@ -152,6 +152,8 @@
   "editor_gutter_base_merge_base_desc": "Show every change made on this workspace's branch since it diverged from the repository's base branch. Matches the Changes panel.",
 
   "keyboard_title": "Keyboard",
+  "keyboard_search_placeholder": "Search shortcuts…",
+  "keyboard_no_results": "No shortcuts match",
   "keyboard_category_navigation": "Navigation",
   "keyboard_category_terminal": "Terminal",
   "keyboard_category_editor": "Editor",

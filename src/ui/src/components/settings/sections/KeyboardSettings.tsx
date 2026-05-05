@@ -12,6 +12,7 @@ import { isMacHotkeyPlatform } from "../../../hotkeys/platform";
 import { useAppStore } from "../../../stores/useAppStore";
 import { deleteAppSetting, setAppSetting } from "../../../services/tauri";
 import styles from "../Settings.module.css";
+import { shortcutMatchesQuery } from "./keyboardSearch";
 
 function isCaptureMatchByCode(action: HotkeyAction): boolean {
   return action.match === "code" || action.holdMode === true;
@@ -32,16 +33,27 @@ export function KeyboardSettings() {
   const setKeybindings = useAppStore((s) => s.setKeybindings);
   const [rebinding, setRebinding] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
 
-  const actionsByCategory = useMemo(() => {
+  const filteredActionsByCategory = useMemo(() => {
     const groups = new Map<string, HotkeyAction[]>();
     for (const action of HOTKEY_ACTIONS) {
+      const description = tx(action.description);
+      const category = tx(action.category);
+      const effective = getEffectiveBinding(action, keybindings);
+      const bindingLabel = formatBindingParts(effective, isMac).join(" ");
+      if (!shortcutMatchesQuery({ description, category, bindingLabel }, search)) {
+        continue;
+      }
       const list = groups.get(action.category) ?? [];
       list.push(action);
       groups.set(action.category, list);
     }
     return Array.from(groups.entries());
-  }, []);
+    // `tx` is a stable wrapper around the i18n `t` function — re-running on
+    // every render is fine and lets the filter respond to language changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search, keybindings, isMac, t]);
 
   const saveBinding = useCallback(async (action: HotkeyAction, binding: string | null) => {
     const updates = buildRebindUpdates(action.id, binding, keybindings);
@@ -125,7 +137,20 @@ export function KeyboardSettings() {
       </div>
       {error && <div className={styles.error}>{error}</div>}
 
-      {actionsByCategory.map(([category, actions]) => (
+      <input
+        type="search"
+        className={styles.keyboardSearch}
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder={t("keyboard_search_placeholder")}
+        aria-label={t("keyboard_search_placeholder")}
+      />
+
+      {filteredActionsByCategory.length === 0 ? (
+        <div className={styles.keyboardEmpty}>{t("keyboard_no_results")}</div>
+      ) : null}
+
+      {filteredActionsByCategory.map(([category, actions]) => (
         <div className={styles.keyboardGroup} key={category}>
           <div className={styles.keyboardGroupLabel}>{tx(category)}</div>
           {actions.map((action) => {

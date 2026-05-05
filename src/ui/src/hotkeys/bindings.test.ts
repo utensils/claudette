@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  bindingMatchesEvent,
   buildRebindUpdates,
   eventToBinding,
   getEffectiveBindingById,
@@ -134,6 +135,58 @@ describe("resolveHotkeyAction with conflict updates", () => {
     ).toBe("global.toggle-sidebar");
     expect(getEffectiveBindingById("global.toggle-right-sidebar", updates, "mac"))
       .toBeNull();
+  });
+});
+
+describe("bindingMatchesEvent — modifier-only codes", () => {
+  // Regression: hold-to-talk on Right Alt was bound to `code:AltRight`,
+  // but pressing Alt asserts e.altKey, which the matcher used to reject
+  // because the binding string had no explicit `alt+` prefix.
+  it("matches code:AltRight when Right Alt is pressed alone", () => {
+    expect(
+      bindingMatchesEvent(
+        "code:AltRight",
+        macKey({ key: "Alt", code: "AltRight", altKey: true }),
+        "mac",
+      ),
+    ).toBe(true);
+  });
+
+  it("matches code:ShiftRight when Right Shift is pressed alone", () => {
+    expect(
+      bindingMatchesEvent(
+        "code:ShiftRight",
+        macKey({ key: "Shift", code: "ShiftRight", shiftKey: true }),
+        "mac",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match a different modifier code than the one bound", () => {
+    expect(
+      bindingMatchesEvent(
+        "code:AltRight",
+        macKey({ key: "Alt", code: "AltLeft", altKey: true }),
+        "mac",
+      ),
+    ).toBe(false);
+  });
+
+  it("still requires bound modifiers when binding is compound", () => {
+    expect(
+      bindingMatchesEvent(
+        "shift+code:KeyA",
+        macKey({ key: "a", code: "KeyA", shiftKey: true }),
+        "mac",
+      ),
+    ).toBe(true);
+    expect(
+      bindingMatchesEvent(
+        "shift+code:KeyA",
+        macKey({ key: "a", code: "KeyA" }),
+        "mac",
+      ),
+    ).toBe(false);
   });
 });
 

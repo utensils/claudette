@@ -288,6 +288,8 @@
   "pinned_prompts_inherited_label": "从全局继承",
   "pinned_prompts_overridden_badge": "已覆盖",
   "keyboard_title": "Keyboard Shortcuts",
+  "keyboard_search_placeholder": "Search shortcuts…",
+  "keyboard_no_results": "No shortcuts match",
   "keyboard_category_navigation": "Navigation",
   "keyboard_category_terminal": "Terminal",
   "keyboard_category_editor": "Editor",
