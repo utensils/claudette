@@ -96,6 +96,7 @@ export function useVoiceInput(
   const [activeProvider, setActiveProvider] = useState<VoiceProviderInfo | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const nativeProviderRef = useRef<string | null>(null);
+  const transcribingProviderRef = useRef<string | null>(null);
   const nativeRequestIdRef = useRef(0);
   const finalTranscriptRef = useRef("");
   const cancelledRef = useRef(false);
@@ -144,6 +145,10 @@ export function useVoiceInput(
     if (nativeProviderRef.current) {
       void cancelVoiceRecording(nativeProviderRef.current);
       nativeProviderRef.current = null;
+    }
+    if (transcribingProviderRef.current) {
+      void cancelVoiceRecording(transcribingProviderRef.current);
+      transcribingProviderRef.current = null;
     }
     finalTranscriptRef.current = "";
     setInterimTranscript("");
@@ -309,9 +314,11 @@ export function useVoiceInput(
       nativeProviderRef.current = null;
       const requestId = nativeRequestIdRef.current + 1;
       nativeRequestIdRef.current = requestId;
+      transcribingProviderRef.current = providerId;
       setState("transcribing");
       void stopAndTranscribeVoice(providerId)
         .then((transcript) => {
+          transcribingProviderRef.current = null;
           if (
             cancelledRef.current ||
             nativeRequestIdRef.current !== requestId
@@ -323,6 +330,7 @@ export function useVoiceInput(
           setState("idle");
         })
         .catch((err) => {
+          transcribingProviderRef.current = null;
           if (
             cancelledRef.current ||
             nativeRequestIdRef.current !== requestId

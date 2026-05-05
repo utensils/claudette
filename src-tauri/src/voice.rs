@@ -210,7 +210,12 @@ trait AudioRecorder: Send + Sync {
 }
 
 trait VoiceTranscriber: Send + Sync {
-    fn transcribe(&self, cache_path: &Path, audio: CapturedAudio) -> Result<String, String>;
+    fn transcribe(
+        &self,
+        cache_path: &Path,
+        audio: CapturedAudio,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<String, String>;
 }
 
 struct CpalAudioRecorder;
@@ -289,6 +294,7 @@ pub struct VoiceProviderRegistry {
     backend_checker: Arc<dyn CandleBackendChecker>,
     transcription_timeout: Duration,
     was_prewarmed: AtomicBool,
+    transcription_cancelled: Arc<AtomicBool>,
 }
 
 fn compute_rms(samples: &[f32]) -> f32 {
@@ -420,6 +426,7 @@ impl VoiceProviderRegistry {
             backend_checker,
             transcription_timeout,
             was_prewarmed: AtomicBool::new(false),
+            transcription_cancelled: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -635,6 +642,8 @@ impl VoiceProviderRegistry {
 
     async fn cancel_platform_recording(&self) -> Result<(), String> {
         let _ = self.active_recording.lock().take();
+        #[cfg(target_os = "macos")]
+        crate::platform_speech::cancel_active_transcription();
         Ok(())
     }
 
@@ -681,10 +690,14 @@ impl VoiceProviderRegistry {
         }
         validate_captured_audio(&audio)?;
 
+        self.transcription_cancelled.store(false, Ordering::Relaxed);
+        let cancel = Arc::clone(&self.transcription_cancelled);
         let cache_path = self.distil_cache_path();
         let transcriber = Arc::clone(&self.transcriber);
         let timeout = self.transcription_timeout;
-        let task = tokio::task::spawn_blocking(move || transcriber.transcribe(&cache_path, audio));
+        let task = tokio::task::spawn_blocking(move || {
+            transcriber.transcribe(&cache_path, audio, &cancel)
+        });
         let transcript = tokio::time::timeout(timeout, task)
             .await
             .map_err(|_| {
@@ -704,6 +717,7 @@ impl VoiceProviderRegistry {
     }
 
     async fn cancel_distil_recording(&self) -> Result<(), String> {
+        self.transcription_cancelled.store(true, Ordering::Relaxed);
         let _ = self.active_recording.lock().take();
         Ok(())
     }
@@ -1383,8 +1397,13 @@ impl AudioRecorder for CpalAudioRecorder {
 }
 
 impl VoiceTranscriber for CandleWhisperTranscriber {
-    fn transcribe(&self, cache_path: &Path, captured: CapturedAudio) -> Result<String, String> {
-        transcribe_distil_whisper(cache_path, captured)
+    fn transcribe(
+        &self,
+        cache_path: &Path,
+        captured: CapturedAudio,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<String, String> {
+        transcribe_distil_whisper(cache_path, captured, cancel)
     }
 }
 
@@ -1471,7 +1490,7 @@ impl WhisperDecoder {
         })
     }
 
-    fn run(&mut self, mel: &Tensor) -> Result<String, String> {
+    fn run(&mut self, mel: &Tensor, cancel: &Arc<AtomicBool>) -> Result<String, String> {
         if self.language_token.is_none() {
             self.language_token = self.detect_language_token(mel)?;
         }
@@ -1482,11 +1501,14 @@ impl WhisperDecoder {
         let mut text = String::new();
 
         while seek < content_frames {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("Transcription cancelled.".to_string());
+            }
             let segment_size = usize::min(content_frames - seek, whisper::N_FRAMES);
             let segment = mel
                 .narrow(2, seek, segment_size)
                 .map_err(|e| format!("Failed to slice Whisper mel segment: {e}"))?;
-            let decoded = self.decode(&segment)?;
+            let decoded = self.decode(&segment, cancel)?;
             if decoded.no_speech_prob > whisper::NO_SPEECH_THRESHOLD
                 && decoded.avg_logprob < whisper::LOGPROB_THRESHOLD
             {
@@ -1560,7 +1582,11 @@ impl WhisperDecoder {
             .ok_or_else(|| "Whisper returned no language probabilities".to_string())
     }
 
-    fn decode(&mut self, mel: &Tensor) -> Result<WhisperDecodingResult, String> {
+    fn decode(
+        &mut self,
+        mel: &Tensor,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<WhisperDecodingResult, String> {
         let audio_features = self
             .model
             .encoder_forward(mel, true)
@@ -1577,6 +1603,9 @@ impl WhisperDecoder {
         let mut no_speech_prob = f64::NAN;
 
         for index in 0..sample_len {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("Transcription cancelled.".to_string());
+            }
             let tokens_tensor = Tensor::new(tokens.as_slice(), mel.device())
                 .and_then(|tensor| tensor.unsqueeze(0))
                 .map_err(|e| format!("Failed to build Whisper token tensor: {e}"))?;
@@ -1673,7 +1702,11 @@ fn token_id(tokenizer: &Tokenizer, token: &str) -> Result<u32, String> {
         .ok_or_else(|| format!("Whisper tokenizer is missing token {token}"))
 }
 
-fn transcribe_distil_whisper(cache_path: &Path, captured: CapturedAudio) -> Result<String, String> {
+fn transcribe_distil_whisper(
+    cache_path: &Path,
+    captured: CapturedAudio,
+    cancel: &Arc<AtomicBool>,
+) -> Result<String, String> {
     if captured.sample_rate != TARGET_SAMPLE_RATE {
         return Err(format!(
             "Expected {TARGET_SAMPLE_RATE} Hz audio, got {} Hz",
@@ -1709,7 +1742,7 @@ fn transcribe_distil_whisper(cache_path: &Path, captured: CapturedAudio) -> Resu
         .map_err(|e| format!("Failed to initialize Whisper model on {backend_label}: {e}"))?;
     let mut decoder = WhisperDecoder::new(WhisperModel::Normal(model), tokenizer, &device)?;
     decoder
-        .run(&mel)
+        .run(&mel, cancel)
         .map_err(|e| format!("Whisper transcription failed on {backend_label}: {e}"))
 }
 
@@ -2058,7 +2091,9 @@ mod tests {
             .expect("set CLAUDETTE_VOICE_SAMPLE_WAV to a short speech WAV");
         let audio = read_wav_fixture(&sample_path).expect("read speech wav");
 
-        let transcript = transcribe_distil_whisper(&cache_path, audio).expect("transcribe fixture");
+        let cancel = Arc::new(AtomicBool::new(false));
+        let transcript =
+            transcribe_distil_whisper(&cache_path, audio, &cancel).expect("transcribe fixture");
 
         assert!(!transcript.trim().is_empty());
     }
@@ -2140,7 +2175,12 @@ mod tests {
     }
 
     impl VoiceTranscriber for FakeTranscriber {
-        fn transcribe(&self, _cache_path: &Path, _audio: CapturedAudio) -> Result<String, String> {
+        fn transcribe(
+            &self,
+            _cache_path: &Path,
+            _audio: CapturedAudio,
+            _cancel: &Arc<AtomicBool>,
+        ) -> Result<String, String> {
             self.calls.fetch_add(1, Ordering::Relaxed);
             std::thread::sleep(self.sleep_for);
             self.result.lock().clone()

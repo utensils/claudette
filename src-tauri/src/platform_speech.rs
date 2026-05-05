@@ -222,6 +222,11 @@ unsafe fn take_c_string(pointer: *mut std::ffi::c_char) -> Option<String> {
 }
 
 #[cfg(target_os = "macos")]
+pub(crate) fn cancel_active_transcription() {
+    unsafe { claudette_platform_speech_cancel() };
+}
+
+#[cfg(target_os = "macos")]
 unsafe extern "C" {
     fn claudette_platform_speech_status(
         code: *mut i32,
@@ -241,6 +246,7 @@ unsafe extern "C" {
         message: *mut *mut std::ffi::c_char,
     );
     fn claudette_platform_speech_free_string(pointer: *mut std::ffi::c_char);
+    fn claudette_platform_speech_cancel();
 }
 
 #[cfg(all(test, target_os = "macos"))]
