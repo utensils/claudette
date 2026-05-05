@@ -347,17 +347,20 @@
   cursor: default;
 }
 
-/* ── Hotkey badge (Keyboard settings) ── */
+/* ── Hotkey badge (Keyboard settings) ──
+ * Composes iconBtn so the visual height/padding/border-radius matches the
+ * adjacent Rebind/Reset/Disable buttons exactly. Overrides cursor (it's not
+ * clickable) and font-family (mono for the keystroke glyphs). */
 
 .hotkeyBadge {
+  composes: iconBtn;
   font-family: var(--font-mono);
-  font-size: 13px;
-  padding: 4px 8px;
-  background: var(--selected-bg);
-  border: 1px solid var(--divider);
-  border-radius: 4px;
+  cursor: default;
   min-width: 60px;
-  text-align: center;
+}
+
+.hotkeyBadge:hover {
+  background: var(--selected-bg);
 }
 
 /* ── Textarea fields (setup script, instructions) ── */

@@ -164,15 +164,13 @@ export function createVoiceHotkeyHandlers(
       }
     },
 
-    // Window blur (e.g. Cmd+Tab to another app while holding the key) must
-    // be treated as a key release so the recording doesn't get stuck on.
+    // Window blur (e.g. Cmd+Tab away while holding the key): clear the
+    // hold-state flag so a stale keyup arriving later is a no-op. The
+    // actual recording stop is handled centrally by useVoiceInput so it
+    // applies regardless of how the recording was started (mic button,
+    // toggle hotkey, hold-to-talk).
     onBlur() {
-      if (!holdActive) return;
       holdActive = false;
-      const v = getVoice();
-      if (v.state === "recording" || v.state === "starting") {
-        v.stop();
-      }
     },
   };
 }

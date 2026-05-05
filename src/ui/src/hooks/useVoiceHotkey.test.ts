@@ -196,9 +196,13 @@ describe("createVoiceHotkeyHandlers — hold-to-talk", () => {
     expect(voice.stop).toHaveBeenCalledOnce();
   });
 
-  it("stops recording on window blur during hold (critical edge case)", () => {
+  it("clears holdActive on blur so a late keyup is a no-op", () => {
+    // useVoiceInput owns the actual stop-on-blur (so it applies to recordings
+    // started by mic button or toggle hotkey too). The hotkey's onBlur job is
+    // narrower: clear the closure-local holdActive so a stale keyup arriving
+    // later doesn't trigger spurious behavior.
     const voice = makeVoice("idle");
-    const { onKeyDown, onBlur } = createVoiceHotkeyHandlers(
+    const { onKeyDown, onKeyUp, onBlur } = createVoiceHotkeyHandlers(
       () => voice,
       null,
       "AltRight",
@@ -206,9 +210,12 @@ describe("createVoiceHotkeyHandlers — hold-to-talk", () => {
 
     onKeyDown(keyEvent({ code: "AltRight" }));
     voice.state = "recording";
+    onBlur();
+    voice.state = "idle";
+    onKeyUp(keyEvent({ code: "AltRight" }));
 
-    onBlur(); // window loses focus mid-hold
-    expect(voice.stop).toHaveBeenCalledOnce();
+    // No stop fired by the hotkey path — useVoiceInput handles that centrally.
+    expect(voice.stop).not.toHaveBeenCalled();
   });
 
   it("ignores OS-repeat keydowns after initial press", () => {
@@ -223,9 +230,11 @@ describe("createVoiceHotkeyHandlers — hold-to-talk", () => {
     expect(voice.start).toHaveBeenCalledOnce();
   });
 
-  it("late keyup after blur does not double-stop", () => {
+  it("a fresh hold cycle works after a blur cleared holdActive", () => {
+    // After blur clears holdActive, the next physical press should start
+    // a new recording cleanly (rather than being blocked by a stale flag).
     const voice = makeVoice("idle");
-    const { onKeyDown, onKeyUp, onBlur } = createVoiceHotkeyHandlers(
+    const { onKeyDown, onBlur } = createVoiceHotkeyHandlers(
       () => voice,
       null,
       "AltRight",
@@ -233,12 +242,11 @@ describe("createVoiceHotkeyHandlers — hold-to-talk", () => {
 
     onKeyDown(keyEvent({ code: "AltRight" }));
     voice.state = "recording";
-    onBlur(); // clears holdActive
+    onBlur(); // clears holdActive (but useVoiceInput stops the recording)
     voice.state = "idle";
-    onKeyUp(keyEvent({ code: "AltRight" })); // arrives after blur already fired
 
-    // stop() should only have been called once (by blur)
-    expect(voice.stop).toHaveBeenCalledOnce();
+    onKeyDown(keyEvent({ code: "AltRight" })); // fresh press
+    expect(voice.start).toHaveBeenCalledTimes(2);
   });
 
   it("does not start hold when voice is recording/starting/transcribing", () => {

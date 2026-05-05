@@ -332,6 +332,16 @@ export function useVoiceInput(
     recognitionRef.current.stop();
   }, [onTranscript]);
 
+  // Stop any active recording when the window loses focus, regardless of how
+  // it was started (mic button, toggle hotkey, hold-to-talk). Without this,
+  // a Cmd+Tab away from the app would leave the mic hot in the background.
+  // stop() is internally gated — it's a no-op when no recording is in flight.
+  useEffect(() => {
+    const onBlur = () => stop();
+    window.addEventListener("blur", onBlur);
+    return () => window.removeEventListener("blur", onBlur);
+  }, [stop]);
+
   return {
     state,
     elapsedSeconds,
