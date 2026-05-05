@@ -182,7 +182,11 @@ for var in VITE_PORT CLAUDETTE_DEBUG_PORT CLAUDETTE_DEV_OVERRIDE RUST_LOG RUST_B
 done
 
 echo "▸ Launching $bundle_dir via Launch Services"
-open -W -a "$bundle_dir" \
+# `-n` matters for dev loops: the bundle identifier is stable, so Launch
+# Services may otherwise activate an already-running Claudette Dev instance
+# and return immediately. That makes cargo-tauri tear down Vite, which Bun
+# reports as exit 143.
+open -n -W -a "$bundle_dir" \
   --stdout "$stdout_fifo" \
   --stderr "$stderr_fifo" \
   "${env_args[@]}" \

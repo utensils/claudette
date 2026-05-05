@@ -9,7 +9,7 @@ use crate::env::WorkspaceEnv;
 use crate::process::CommandWindowExt as _;
 
 use super::AgentSettings;
-use super::args::build_stdin_message;
+use super::args::{build_stdin_message, build_steering_stdin_message};
 use super::binary::resolve_claude_path;
 use super::process::{AgentEvent, TurnHandle};
 use super::types::{FileAttachment, StreamEvent, parse_stream_line};
@@ -175,27 +175,12 @@ impl PersistentSession {
         prompt: &str,
         attachments: &[FileAttachment],
     ) -> Result<TurnHandle, String> {
-        use tokio::io::AsyncWriteExt;
-
         // Subscribe BEFORE writing to stdin to avoid a race where a fast turn
         // emits events before the receiver exists (broadcast doesn't replay).
         let mut broadcast_rx = self.event_tx.subscribe();
 
-        let message = build_stdin_message(prompt, attachments);
-        let mut stdin = self.stdin.lock().await;
-        stdin
-            .write_all(message.as_bytes())
-            .await
-            .map_err(|e| format!("Failed to write to persistent session: {e}"))?;
-        stdin
-            .write_all(b"\n")
-            .await
-            .map_err(|e| format!("Failed to write newline: {e}"))?;
-        stdin
-            .flush()
-            .await
-            .map_err(|e| format!("Failed to flush stdin: {e}"))?;
-        drop(stdin); // Release lock so other code can check process state.
+        self.write_user_message(build_stdin_message(prompt, attachments))
+            .await?;
         let (mpsc_tx, mpsc_rx) = mpsc::channel::<AgentEvent>(128);
         tokio::spawn(async move {
             loop {
@@ -224,6 +209,37 @@ impl PersistentSession {
             event_rx: mpsc_rx,
             pid: self.pid,
         })
+    }
+
+    /// Send a user message to the currently active turn without creating a
+    /// new per-turn receiver. This is used for mid-turn steering, where the
+    /// existing active `TurnHandle` must continue to own stream attribution.
+    pub async fn steer_user_message(
+        &self,
+        prompt: &str,
+        attachments: &[FileAttachment],
+    ) -> Result<(), String> {
+        self.write_user_message(build_steering_stdin_message(prompt, attachments))
+            .await
+    }
+
+    async fn write_user_message(&self, message: String) -> Result<(), String> {
+        use tokio::io::AsyncWriteExt;
+
+        let mut stdin = self.stdin.lock().await;
+        stdin
+            .write_all(message.as_bytes())
+            .await
+            .map_err(|e| format!("Failed to write to persistent session: {e}"))?;
+        stdin
+            .write_all(b"\n")
+            .await
+            .map_err(|e| format!("Failed to write newline: {e}"))?;
+        stdin
+            .flush()
+            .await
+            .map_err(|e| format!("Failed to flush stdin: {e}"))?;
+        Ok(())
     }
 
     /// Subscribe to the persistent process's raw stream-json events without

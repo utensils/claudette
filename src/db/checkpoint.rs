@@ -93,6 +93,14 @@ impl Database {
         Ok(deleted)
     }
 
+    pub fn delete_checkpoint(&self, checkpoint_id: &str) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "DELETE FROM conversation_checkpoints WHERE id = ?1",
+            params![checkpoint_id],
+        )?;
+        Ok(())
+    }
+
     pub fn get_checkpoint(
         &self,
         id: &str,
@@ -672,6 +680,34 @@ mod tests {
 
         let turns = db.list_completed_turns("w1").unwrap();
         assert!(turns.is_empty());
+    }
+
+    #[test]
+    fn test_delete_checkpoint_deletes_exact_row_and_cascades_activities() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::Assistant, "a1"))
+            .unwrap();
+        db.insert_chat_message(&make_chat_msg(&db, "m2", "w1", ChatRole::Assistant, "a2"))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp1", "w1", "m1", 0))
+            .unwrap();
+        db.insert_checkpoint(&make_checkpoint(&db, "cp2", "w1", "m2", 1))
+            .unwrap();
+        db.insert_turn_tool_activities(&[
+            make_tool_activity("a1", "cp1", "Read", 0),
+            make_tool_activity("a2", "cp2", "Edit", 0),
+        ])
+        .unwrap();
+
+        db.delete_checkpoint("cp1").unwrap();
+
+        assert!(db.get_checkpoint("cp1").unwrap().is_none());
+        assert!(db.get_checkpoint("cp2").unwrap().is_some());
+        let turns = db.list_completed_turns("w1").unwrap();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].checkpoint_id, "cp2");
+        assert_eq!(turns[0].activities.len(), 1);
+        assert_eq!(turns[0].activities[0].id, "a2");
     }
 
     #[test]

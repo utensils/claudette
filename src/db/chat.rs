@@ -122,6 +122,22 @@ impl Database {
         rows.collect()
     }
 
+    pub fn last_chat_message_id_for_session(
+        &self,
+        chat_session_id: &str,
+    ) -> Result<Option<String>, rusqlite::Error> {
+        self.conn
+            .query_row(
+                "SELECT id FROM chat_messages
+                 WHERE chat_session_id = ?1
+                 ORDER BY created_at DESC, rowid DESC
+                 LIMIT 1",
+                params![chat_session_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+    }
+
     /// Count all non-legacy messages for a session (legacy = empty assistant
     /// rows; see `NON_LEGACY_MESSAGE_PREDICATE`). Used to compute pagination
     /// metadata (`total_count`) so callers can derive the global index offset
@@ -291,6 +307,14 @@ impl Database {
         self.conn.execute(
             "DELETE FROM chat_messages WHERE chat_session_id = ?1",
             params![chat_session_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_chat_message(&self, message_id: &str) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "DELETE FROM chat_messages WHERE id = ?1",
+            params![message_id],
         )?;
         Ok(())
     }
@@ -712,6 +736,44 @@ mod tests {
     }
 
     #[test]
+    fn test_last_chat_message_id_for_session_uses_rowid_tie_break() {
+        let db = setup_db_with_workspace();
+        let sid = db.default_session_id_for_workspace("w1").unwrap().unwrap();
+        let other_session = db.create_chat_session("w1").unwrap();
+
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "first"))
+            .unwrap();
+        db.insert_chat_message(&make_chat_msg(
+            &db,
+            "m2",
+            "w1",
+            ChatRole::Assistant,
+            "second",
+        ))
+        .unwrap();
+        let mut other = make_chat_msg(&db, "m3", "w1", ChatRole::User, "other session");
+        other.chat_session_id = other_session.id.clone();
+        db.insert_chat_message(&other).unwrap();
+
+        assert_eq!(
+            db.last_chat_message_id_for_session(&sid)
+                .unwrap()
+                .as_deref(),
+            Some("m2")
+        );
+        assert_eq!(
+            db.last_chat_message_id_for_session(&other_session.id)
+                .unwrap()
+                .as_deref(),
+            Some("m3")
+        );
+        assert_eq!(
+            db.last_chat_message_id_for_session("missing").unwrap(),
+            None
+        );
+    }
+
+    #[test]
     fn test_chat_messages_filtered_by_workspace() {
         let db = setup_db_with_workspace();
         db.insert_workspace(&make_workspace("w2", "r1", "feature"))
@@ -1067,6 +1129,27 @@ mod tests {
         db.delete_chat_messages_for_workspace("w1").unwrap();
         let atts = db.list_attachments_for_message("m1").unwrap();
         assert!(atts.is_empty());
+    }
+
+    #[test]
+    fn test_delete_chat_message_deletes_exact_row_and_cascades_attachments() {
+        let db = setup_db_with_workspace();
+        db.insert_chat_message(&make_chat_msg(&db, "m1", "w1", ChatRole::User, "first"))
+            .unwrap();
+        db.insert_chat_message(&make_chat_msg(&db, "m2", "w1", ChatRole::User, "second"))
+            .unwrap();
+        db.insert_attachment(&make_attachment("a1", "m1", "first.png"))
+            .unwrap();
+        db.insert_attachment(&make_attachment("a2", "m2", "second.png"))
+            .unwrap();
+
+        db.delete_chat_message("m2").unwrap();
+
+        let msgs = db.list_chat_messages("w1").unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].id, "m1");
+        assert_eq!(db.list_attachments_for_message("m1").unwrap().len(), 1);
+        assert!(db.list_attachments_for_message("m2").unwrap().is_empty());
     }
 
     #[test]

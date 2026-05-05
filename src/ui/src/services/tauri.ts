@@ -35,6 +35,7 @@ import type {
   PluginConfiguration,
   PluginMarketplace,
 } from "../types/plugins";
+import type { ConversationCheckpoint } from "../types/checkpoint";
 
 // -- Data --
 
@@ -530,6 +531,22 @@ export function sendChatMessage(
   });
 }
 
+export function steerQueuedChatMessage(
+  sessionId: string,
+  content: string,
+  mentionedFiles?: string[],
+  attachments?: AttachmentInput[],
+  messageId?: string,
+): Promise<ConversationCheckpoint | null> {
+  return invoke("steer_queued_chat_message", {
+    sessionId,
+    messageId: messageId ?? null,
+    content,
+    mentionedFiles: mentionedFiles ?? null,
+    attachments: attachments ?? null,
+  });
+}
+
 export function loadAttachmentsForSession(
   sessionId: string,
 ): Promise<ChatAttachment[]> {
@@ -595,8 +612,6 @@ export function submitPlanApproval(
 }
 
 // -- Checkpoints --
-
-import type { ConversationCheckpoint } from "../types/checkpoint";
 
 export function listCheckpoints(
   sessionId: string,

@@ -129,6 +129,19 @@ pub fn build_claude_args(
 /// prompt, then one block per attachment — text files become `"text"` blocks,
 /// PDFs become `"document"` blocks, and images become `"image"` blocks.
 pub fn build_stdin_message(prompt: &str, attachments: &[FileAttachment]) -> String {
+    build_stdin_message_inner(prompt, attachments, None)
+}
+
+/// Build a stdin SDK user message that should be delivered to the active turn.
+pub fn build_steering_stdin_message(prompt: &str, attachments: &[FileAttachment]) -> String {
+    build_stdin_message_inner(prompt, attachments, Some("next"))
+}
+
+fn build_stdin_message_inner(
+    prompt: &str,
+    attachments: &[FileAttachment],
+    priority: Option<&str>,
+) -> String {
     let mut content_blocks = Vec::new();
 
     // Only add a text block if the prompt is non-empty — the API rejects
@@ -163,7 +176,7 @@ pub fn build_stdin_message(prompt: &str, attachments: &[FileAttachment]) -> Stri
         }
     }
 
-    serde_json::json!({
+    let mut payload = serde_json::json!({
         "type": "user",
         "uuid": uuid::Uuid::new_v4().to_string(),
         "message": {
@@ -171,8 +184,16 @@ pub fn build_stdin_message(prompt: &str, attachments: &[FileAttachment]) -> Stri
             "content": content_blocks,
         },
         "parent_tool_use_id": null,
-    })
-    .to_string()
+    });
+    if let Some(priority) = priority
+        && let Some(obj) = payload.as_object_mut()
+    {
+        obj.insert(
+            "priority".to_string(),
+            serde_json::Value::String(priority.to_string()),
+        );
+    }
+    payload.to_string()
 }
 
 #[cfg(test)]
@@ -602,6 +623,7 @@ mod tests {
         let msg = build_stdin_message("hello", &[]);
         let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
         assert_eq!(parsed["type"], "user");
+        assert!(parsed.get("priority").is_none());
         assert!(
             parsed["uuid"]
                 .as_str()
@@ -612,6 +634,17 @@ mod tests {
         assert_eq!(content.len(), 1);
         assert_eq!(content[0]["type"], "text");
         assert_eq!(content[0]["text"], "hello");
+    }
+
+    #[test]
+    fn test_build_steering_stdin_message_sets_next_priority() {
+        let msg = build_steering_stdin_message("steer this turn", &[]);
+        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+        assert_eq!(parsed["type"], "user");
+        assert_eq!(parsed["priority"], "next");
+        assert_eq!(parsed["message"]["role"], "user");
+        let content = parsed["message"]["content"].as_array().unwrap();
+        assert_eq!(content[0]["text"], "steer this turn");
     }
 
     #[test]

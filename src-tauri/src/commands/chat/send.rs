@@ -755,56 +755,55 @@ pub async fn load_chat_history_page(
     })
 }
 
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub async fn send_chat_message(
-    session_id: String,
+struct PreparedUserSend {
+    user_msg: ChatMessage,
+    att_models: Vec<claudette::model::Attachment>,
+    cli_atts: Vec<FileAttachment>,
+}
+
+// Mirrors the agent-side allow-list in
+// `src/agent_mcp/tools/send_to_user.rs::policy`. Keep the two in sync —
+// outbound (agent → user) symmetry with inbound (user → agent) is the
+// documented invariant.
+const ALLOWED_ATTACHMENT_MIME: &[&str] = &[
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "image/svg+xml",
+    "application/pdf",
+    "text/plain",
+    "text/csv",
+    "text/markdown",
+    "application/json",
+];
+const MAX_IMAGE_BYTES: usize = 3_932_160; // 3.75 MB
+const MAX_PDF_BYTES: usize = 20 * 1024 * 1024; // 20 MB
+const MAX_TEXT_BYTES: usize = 1024 * 1024; // 1 MB
+const MAX_CSV_BYTES: usize = 2 * 1024 * 1024; // 2 MB
+const MAX_MARKDOWN_BYTES: usize = 1024 * 1024; // 1 MB
+const MAX_JSON_BYTES: usize = 1024 * 1024; // 1 MB
+
+fn is_text_attachment_kind(media_type: &str) -> bool {
+    matches!(
+        media_type,
+        "text/plain" | "text/csv" | "text/markdown" | "application/json"
+    )
+}
+
+fn prepare_user_send(
+    workspace_id: &str,
+    chat_session_id: &str,
     message_id: Option<String>,
-    content: String,
-    mentioned_files: Option<Vec<String>>,
-    permission_level: Option<String>,
-    model: Option<String>,
-    fast_mode: Option<bool>,
-    thinking_enabled: Option<bool>,
-    plan_mode: Option<bool>,
-    effort: Option<String>,
-    chrome_enabled: Option<bool>,
-    disable_1m_context: Option<bool>,
-    attachments: Option<Vec<AttachmentInput>>,
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-
-    let chat_session_id = session_id;
-    let chat_session = db
-        .get_chat_session(&chat_session_id)
-        .map_err(|e| e.to_string())?
-        .ok_or("Chat session not found")?;
-    let workspace_id = chat_session.workspace_id.clone();
-    let _is_first_session = chat_session.sort_order == 0;
-    let session_name_already_edited = chat_session.name_edited;
-
-    // Look up workspace for worktree path.
-    let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
-    let ws = workspaces
-        .iter()
-        .find(|w| w.id == workspace_id)
-        .ok_or("Workspace not found")?;
-    let worktree_path = ws
-        .worktree_path
-        .as_ref()
-        .ok_or("Workspace has no worktree")?
-        .clone();
-
-    // Save user message to DB. Use the frontend-provided ID so optimistic
-    // UI state (attachments keyed by message ID) stays consistent.
+    content: &str,
+    attachments: Option<&[AttachmentInput]>,
+) -> Result<PreparedUserSend, String> {
     let user_msg = ChatMessage {
         id: message_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
-        workspace_id: workspace_id.clone(),
-        chat_session_id: chat_session_id.clone(),
+        workspace_id: workspace_id.to_string(),
+        chat_session_id: chat_session_id.to_string(),
         role: ChatRole::User,
-        content: content.clone(),
+        content: content.to_string(),
         cost_usd: None,
         duration_ms: None,
         created_at: now_iso(),
@@ -814,45 +813,13 @@ pub async fn send_chat_message(
         cache_read_tokens: None,
         cache_creation_tokens: None,
     };
-    // Decode, validate, and persist attachments alongside the user message.
-    // Both inserts share a transaction so the message and its attachments are
-    // atomic — a failed attachment decode won't leave an orphaned message.
-    // Mirrors the agent-side allow-list in
-    // `src/agent_mcp/tools/send_to_user.rs::policy`. Keep the two in sync —
-    // outbound (agent → user) symmetry with inbound (user → agent) is the
-    // documented invariant.
-    const ALLOWED_MIME: &[&str] = &[
-        "image/png",
-        "image/jpeg",
-        "image/gif",
-        "image/webp",
-        "image/svg+xml",
-        "application/pdf",
-        "text/plain",
-        "text/csv",
-        "text/markdown",
-        "application/json",
-    ];
-    const MAX_IMAGE_BYTES: usize = 3_932_160; // 3.75 MB
-    const MAX_PDF_BYTES: usize = 20 * 1024 * 1024; // 20 MB
-    const MAX_TEXT_BYTES: usize = 1024 * 1024; // 1 MB
-    const MAX_CSV_BYTES: usize = 2 * 1024 * 1024; // 2 MB
-    const MAX_MARKDOWN_BYTES: usize = 1024 * 1024; // 1 MB
-    const MAX_JSON_BYTES: usize = 1024 * 1024; // 1 MB
-
-    fn is_text_kind(media_type: &str) -> bool {
-        matches!(
-            media_type,
-            "text/plain" | "text/csv" | "text/markdown" | "application/json"
-        )
-    }
 
     let mut att_models: Vec<claudette::model::Attachment> = Vec::new();
     let mut cli_atts: Vec<FileAttachment> = Vec::new();
 
-    if let Some(ref inputs) = attachments {
+    if let Some(inputs) = attachments {
         for input in inputs {
-            if !ALLOWED_MIME.contains(&input.media_type.as_str()) {
+            if !ALLOWED_ATTACHMENT_MIME.contains(&input.media_type.as_str()) {
                 return Err(format!("Unsupported attachment type: {}", input.media_type));
             }
             let data = base64_decode(&input.data_base64).map_err(|e| format!("Bad base64: {e}"))?;
@@ -874,7 +841,7 @@ pub async fn send_chat_message(
             if input.media_type == "application/pdf" && !data.starts_with(b"%PDF-") {
                 return Err("Invalid PDF: missing %PDF- header".to_string());
             }
-            let text_content = if is_text_kind(&input.media_type) {
+            let text_content = if is_text_attachment_kind(&input.media_type) {
                 let check_len = data.len().min(8192);
                 if data[..check_len].contains(&0) {
                     return Err(format!(
@@ -920,14 +887,192 @@ pub async fn send_chat_message(
         }
     }
 
-    // Atomic insert: message + attachments in one transaction.
-    db.insert_chat_message(&user_msg)
+    Ok(PreparedUserSend {
+        user_msg,
+        att_models,
+        cli_atts,
+    })
+}
+
+fn persist_user_send(db: &Database, prepared: &PreparedUserSend) -> Result<(), String> {
+    db.insert_chat_message(&prepared.user_msg)
         .map_err(|e| e.to_string())?;
-    if !att_models.is_empty() {
-        db.insert_attachments_batch(&att_models)
+    if !prepared.att_models.is_empty() {
+        db.insert_attachments_batch(&prepared.att_models)
             .map_err(|e| e.to_string())?;
     }
-    let image_attachments = cli_atts;
+    Ok(())
+}
+
+fn cleanup_failed_steer_persistence(
+    db: &Database,
+    checkpoint_id: &str,
+    message_id: &str,
+    cause: &str,
+) {
+    if let Err(e) = db.delete_chat_message(message_id) {
+        eprintln!("[chat] failed to clean up steered user message after {cause}: {e}");
+    }
+    if let Err(e) = db.delete_checkpoint(checkpoint_id) {
+        eprintln!("[chat] failed to clean up pre-steer checkpoint after {cause}: {e}");
+    }
+}
+
+#[tauri::command]
+pub async fn steer_queued_chat_message(
+    session_id: String,
+    message_id: Option<String>,
+    content: String,
+    mentioned_files: Option<Vec<String>>,
+    attachments: Option<Vec<AttachmentInput>>,
+    state: State<'_, AppState>,
+) -> Result<Option<claudette::model::ConversationCheckpoint>, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+
+    let chat_session_id = session_id;
+    let chat_session = db
+        .get_chat_session(&chat_session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Chat session not found")?;
+    let workspace_id = chat_session.workspace_id.clone();
+
+    let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
+    let ws = workspaces
+        .iter()
+        .find(|w| w.id == workspace_id)
+        .ok_or("Workspace not found")?;
+    let worktree_path = ws
+        .worktree_path
+        .as_ref()
+        .ok_or("Workspace has no worktree")?
+        .clone();
+
+    let ps = {
+        let agents = state.agents.read().await;
+        let session = agents
+            .get(&chat_session_id)
+            .ok_or("No active local Claude session for this chat")?;
+        if session.persistent_session.is_none() {
+            return Err("No active persistent Claude session for this chat".to_string());
+        }
+        if session.active_pid.is_none() {
+            return Err("No running Claude turn to steer".to_string());
+        }
+        session
+            .persistent_session
+            .clone()
+            .ok_or("No active persistent Claude session for this chat")?
+    };
+
+    let prepared_user_send = prepare_user_send(
+        &workspace_id,
+        &chat_session_id,
+        message_id,
+        &content,
+        attachments.as_deref(),
+    )?;
+
+    let anchor_msg_id = db
+        .last_chat_message_id_for_session(&chat_session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Cannot steer before chat history has a message")?;
+    let pre_steer_checkpoint = create_turn_checkpoint(CheckpointArgs {
+        db_path: &state.db_path,
+        workspace_id: &workspace_id,
+        chat_session_id: &chat_session_id,
+        anchor_msg_id: &anchor_msg_id,
+        worktree_path: &worktree_path,
+        created_at: now_iso(),
+    })
+    .await
+    .ok_or("Failed to create pre-steer checkpoint")?;
+    let pre_steer_checkpoint_id = pre_steer_checkpoint.id.clone();
+
+    let prompt = claudette::file_expand::expand_file_mentions(
+        std::path::Path::new(&worktree_path),
+        &content,
+        mentioned_files.as_deref().unwrap_or(&[]),
+    )
+    .await;
+
+    if let Err(e) = persist_user_send(&db, &prepared_user_send) {
+        cleanup_failed_steer_persistence(
+            &db,
+            &pre_steer_checkpoint_id,
+            &prepared_user_send.user_msg.id,
+            "persist failure",
+        );
+        return Err(e);
+    }
+    if let Err(e) = ps
+        .steer_user_message(&prompt, &prepared_user_send.cli_atts)
+        .await
+    {
+        cleanup_failed_steer_persistence(
+            &db,
+            &pre_steer_checkpoint_id,
+            &prepared_user_send.user_msg.id,
+            "stdin write failure",
+        );
+        return Err(e);
+    }
+    Ok(Some(pre_steer_checkpoint))
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn send_chat_message(
+    session_id: String,
+    message_id: Option<String>,
+    content: String,
+    mentioned_files: Option<Vec<String>>,
+    permission_level: Option<String>,
+    model: Option<String>,
+    fast_mode: Option<bool>,
+    thinking_enabled: Option<bool>,
+    plan_mode: Option<bool>,
+    effort: Option<String>,
+    chrome_enabled: Option<bool>,
+    disable_1m_context: Option<bool>,
+    attachments: Option<Vec<AttachmentInput>>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+
+    let chat_session_id = session_id;
+    let chat_session = db
+        .get_chat_session(&chat_session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Chat session not found")?;
+    let workspace_id = chat_session.workspace_id.clone();
+    let _is_first_session = chat_session.sort_order == 0;
+    let session_name_already_edited = chat_session.name_edited;
+
+    // Look up workspace for worktree path.
+    let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
+    let ws = workspaces
+        .iter()
+        .find(|w| w.id == workspace_id)
+        .ok_or("Workspace not found")?;
+    let worktree_path = ws
+        .worktree_path
+        .as_ref()
+        .ok_or("Workspace has no worktree")?
+        .clone();
+
+    // Save user message to DB. Use the frontend-provided ID so optimistic
+    // UI state (attachments keyed by message ID) stays consistent.
+    let prepared_user_send = prepare_user_send(
+        &workspace_id,
+        &chat_session_id,
+        message_id,
+        &content,
+        attachments.as_deref(),
+    )?;
+    persist_user_send(&db, &prepared_user_send)?;
+    let user_msg = prepared_user_send.user_msg.clone();
+    let image_attachments = prepared_user_send.cli_atts;
 
     // Resolve allowed tools from permission level.
     let level = permission_level.as_deref().unwrap_or("full");
