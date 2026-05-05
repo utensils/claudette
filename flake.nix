@@ -580,6 +580,12 @@
                 category = "development";
               }
               {
+                name = "claudette";
+                command = ''exec cargo run --quiet -p claudette-cli --bin claudette -- "$@"'';
+                help = "Run the claudette CLI against the running GUI (e.g. `claudette ws list`, `claudette pr list`)";
+                category = "development";
+              }
+              {
                 name = "check";
                 command = ''
                   mkdir -p src/ui/dist
