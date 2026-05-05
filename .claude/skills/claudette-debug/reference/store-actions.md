@@ -82,6 +82,7 @@ All actions are on `window.__CLAUDETTE_STORE__.getState()`.
 ## Diff
 
 - `setDiffFiles(files, mergeBase)` -- load diff file list (note: two params)
+- `setDiffMergeBase(sha)` -- update only the merge-base SHA, leaving the diff file list intact
 - `setDiffSelectedFile(path)` -- select file (path or null)
 - `setDiffContent(content)` -- load diff content (FileDiff or null)
 - `setDiffViewMode(mode)` -- "Unified" or "Split"
@@ -130,6 +131,8 @@ All actions are on `window.__CLAUDETTE_STORE__.getState()`.
 - `setAudioNotifications(enabled)` -- boolean
 - `setCurrentThemeId(id)` -- theme identifier
 - `setLastMessages(msgs)` -- Record<wsId, ChatMessage>
+- `editorGitGutterBase: "head" | "merge_base"` -- which revision the Monaco git gutter compares against
+- `setEditorGitGutterBase(value)` -- update store state (persistence to app_settings is the caller's responsibility)
 
 ## Remote Connections
 

@@ -27,7 +27,7 @@ mod workspace;
 mod commands;
 
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 pub struct Database {
     conn: Connection,

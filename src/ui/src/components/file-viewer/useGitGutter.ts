@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { OnMount } from "@monaco-editor/react";
-import { readWorkspaceFileAtHead } from "../../services/tauri";
+import {
+  readWorkspaceFileAtRevision,
+  computeWorkspaceMergeBase,
+} from "../../services/tauri";
 import { useAppStore } from "../../stores/useAppStore";
 import { computeLineChanges, lineChangesToDecorations } from "./gitGutter";
 
@@ -14,15 +17,33 @@ export type DecorationsCollection = ReturnType<Editor["createDecorationsCollecti
 export type DecorationsCollectionRef = React.MutableRefObject<DecorationsCollection | null>;
 
 /**
- * Wires the git gutter into a mounted Monaco editor. Fetches the file's
- * HEAD blob once per `(workspaceId, filename, diffMergeBase)`, then
- * recomputes line decorations on each buffer change (debounced 250 ms).
+ * Given the current setting and the cached merge-base SHA, return the
+ * revision string to use for the gutter's blob fetch — or `null` when the
+ * merge-base SHA hasn't been resolved yet (the caller should wait).
  *
- * The decoration collection is owned by the parent (created in
- * `handleMount` once Monaco has resolved both `editor` and `monaco`) and
- * passed in via `collectionRef`. The hook can't create it itself: a
- * `[]`-deps init effect would run before the lazy-loaded editor is
- * mounted, and a deps-tracked effect can't reliably detect mount.
+ * - `"head"`        → `"HEAD"` (always available).
+ * - `"merge_base"`  → the cached SHA, or `null` if not yet resolved.
+ */
+export function selectGutterRevision(
+  setting: "head" | "merge_base",
+  cachedMergeBase: string | null,
+): string | null {
+  if (setting === "head") return "HEAD";
+  return cachedMergeBase;
+}
+
+/**
+ * Wires the git gutter into a mounted Monaco editor. Fetches the file's
+ * blob at the configured revision once per `(workspaceId, filename, revision)`,
+ * then recomputes line decorations on each buffer change (debounced 250 ms).
+ *
+ * The revision is selected by `editorGitGutterBase`:
+ *   - "head"        → "HEAD"
+ *   - "merge_base"  → diffMergeBase (lazily fetched via
+ *                     compute_workspace_merge_base when not yet cached).
+ *
+ * Failure modes are silent (no toasts): missing merge-base, binary blob,
+ * oversized file, IPC error — all leave the gutter cleared.
  *
  * Bails out for files larger than 1 MiB or 20 000 lines — the diff cost
  * isn't worth the gutter on files that big.
@@ -34,44 +55,68 @@ export function useGitGutter(
   filename: string,
   buffer: string,
 ) {
-  // `null` = gutter unavailable (no head, fetch error, binary). Empty
-  // string `""` = file untracked at HEAD; treat every line as added.
-  // Lifted into state so HEAD fetch resolution triggers a re-render and
-  // the buffer-effect re-runs even when the buffer hasn't changed yet
-  // (the common case on file open: `currentBuffer === initialValue`).
+  // `null` = gutter unavailable (no head, fetch error, binary, or revision
+  // not yet resolved). Empty string `""` = file untracked at the revision;
+  // treat every line as added.
   const [head, setHead] = useState<string | null>(null);
-  // Race-safety counter for the async HEAD fetch — mirrors the
-  // `loadVersionRef` pattern in FileViewer.tsx.
   const fetchVersionRef = useRef(0);
 
+  const editorGitGutterBase = useAppStore((s) => s.editorGitGutterBase);
   const diffMergeBase = useAppStore((s) => s.diffMergeBase);
+  const setDiffMergeBase = useAppStore((s) => s.setDiffMergeBase);
 
-  // Fetch the HEAD blob whenever the file or merge-base changes. The
-  // version counter discards stale responses if a newer fetch has
-  // already started.
+  const revision = selectGutterRevision(editorGitGutterBase, diffMergeBase);
+
+  // One-shot merge-base resolution. Only fires when "merge_base" is
+  // selected and the SHA isn't cached. Errors silently disable the
+  // gutter — same UX as today's binary/oversized/no-head paths.
+  useEffect(() => {
+    // Resolve the merge-base on demand: fires only when "merge_base" is
+    // selected and no SHA is cached (revision === null in that case).
+    if (revision !== null || editorGitGutterBase !== "merge_base") return;
+    let cancelled = false;
+    computeWorkspaceMergeBase(workspaceId)
+      .then((sha) => {
+        if (!cancelled) setDiffMergeBase(sha);
+      })
+      .catch(() => {
+        // Stay silent — gutter remains cleared.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [editorGitGutterBase, revision, workspaceId, setDiffMergeBase]);
+
+  // Fetch the blob at `revision` whenever the file or revision changes. The
+  // version counter discards stale responses if a newer fetch has already
+  // started.
   useEffect(() => {
     const version = ++fetchVersionRef.current;
-    // Skip the fetch entirely when the buffer is already past the cap —
-    // the gutter would be disabled regardless. Read `buffer.length` once
-    // at effect-run time; we don't depend on `buffer` (would fire per
-    // keystroke), so we just snapshot the value as it stands when this
-    // fires (file open, merge-base change).
+
+    // Bail when the file is past the cap — gutter is disabled regardless.
+    // We snapshot `buffer.length` at run time so we don't fire per
+    // keystroke (`buffer` is intentionally not in the deps array).
     if (buffer.length > GUTTER_MAX_BYTES) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setHead(null);
       collectionRef.current?.clear();
       return;
     }
-    // Reset to "loading" synchronously so the buffer-effect bails out
-    // until the new fetch resolves — the cascade is intentional and
-    // bounded (one extra render per file/merge-base change).
+
+    // Bail when the revision isn't resolved yet (merge-base in flight).
+    if (revision === null) {
+      setHead(null);
+      collectionRef.current?.clear();
+      return;
+    }
+
     setHead(null);
     collectionRef.current?.clear();
 
-    readWorkspaceFileAtHead(workspaceId, filename)
+    readWorkspaceFileAtRevision(workspaceId, filename, revision)
       .then((res) => {
         if (version !== fetchVersionRef.current) return;
-        if (!res.exists_at_head) {
+        if (!res.exists_at_revision) {
           setHead("");
           return;
         }
@@ -83,12 +128,20 @@ export function useGitGutter(
       });
     // We intentionally do NOT depend on `buffer` — that would refire the
     // fetch on every keystroke. We snapshot `buffer.length` at run time.
+    //
+    // `diffMergeBase` is included even though `revision` already encodes
+    // it for `merge_base` mode: in `head` mode `revision` is the constant
+    // string `"HEAD"`, so without this dep the fetch effect would no
+    // longer pick up the invalidation signal RightSidebar's
+    // `setDiffFiles(...)` produces after a refresh (e.g. once a commit
+    // has moved HEAD). Re-fetching on `diffMergeBase` change is the
+    // cheapest way to inherit that signal in both modes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspaceId, filename, diffMergeBase, collectionRef]);
+  }, [workspaceId, filename, revision, diffMergeBase, collectionRef]);
 
-  // Debounced recompute on every buffer or head change. Skips work when
-  // the head hasn't loaded yet or the file is too big — Monaco's
-  // decoration model is fast but the diff isn't free at scale.
+  // Debounced recompute on every buffer or head change. (Unchanged from
+  // before Task 6 except that it now responds to `head` updates produced
+  // by the dynamic-revision fetch above.)
   useEffect(() => {
     const collection = collectionRef.current;
     const monacoInstance = monacoRef.current;

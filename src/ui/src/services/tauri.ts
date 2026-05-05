@@ -772,20 +772,29 @@ export function readWorkspaceFileBytes(
   return invoke("read_workspace_file_bytes", { workspaceId, relativePath });
 }
 
-export interface HeadBlobContent {
+export interface BlobAtRevisionContent {
   path: string;
+  revision: string;
   content: string | null;
-  exists_at_head: boolean;
+  exists_at_revision: boolean;
 }
 
-export function readWorkspaceFileAtHead(
+export function readWorkspaceFileAtRevision(
   workspaceId: string,
   relativePath: string,
-): Promise<HeadBlobContent> {
-  return invoke("read_workspace_file_at_head", {
+  revision: string,
+): Promise<BlobAtRevisionContent> {
+  return invoke("read_workspace_file_at_revision", {
     workspaceId,
     relativePath,
+    revision,
   });
+}
+
+export function computeWorkspaceMergeBase(
+  workspaceId: string,
+): Promise<string> {
+  return invoke("compute_workspace_merge_base", { workspaceId });
 }
 
 export function writeWorkspaceFile(

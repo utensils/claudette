@@ -141,6 +141,15 @@
   "notifications_sound_session_start_label": "会话开始",
   "notifications_sound_session_start_desc": "当新会话开始时播放的声音",
 
+  "nav_editor": "Editor",
+  "editor_title": "Editor",
+  "editor_gutter_base_label": "Git gutter base",
+  "editor_gutter_base_desc": "Choose what the editor's git gutter (the colored markers next to line numbers) compares your buffer against.",
+  "editor_gutter_base_head": "Last commit (HEAD)",
+  "editor_gutter_base_head_desc": "Show only changes you haven't committed yet. Default.",
+  "editor_gutter_base_merge_base": "Workspace branch base",
+  "editor_gutter_base_merge_base_desc": "Show every change made on this workspace's branch since it diverged from the repository's base branch. Matches the Changes panel.",
+
   "git_title": "Git",
   "git_branch_prefix": "分支名称前缀",
   "git_branch_prefix_desc": "新工作区分支名称的前缀。",

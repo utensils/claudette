@@ -141,6 +141,15 @@
   "notifications_sound_session_start_label": "Inicio de sesión",
   "notifications_sound_session_start_desc": "Sonido cuando comienza una nueva sesión",
 
+  "nav_editor": "Editor",
+  "editor_title": "Editor",
+  "editor_gutter_base_label": "Git gutter base",
+  "editor_gutter_base_desc": "Choose what the editor's git gutter (the colored markers next to line numbers) compares your buffer against.",
+  "editor_gutter_base_head": "Last commit (HEAD)",
+  "editor_gutter_base_head_desc": "Show only changes you haven't committed yet. Default.",
+  "editor_gutter_base_merge_base": "Workspace branch base",
+  "editor_gutter_base_merge_base_desc": "Show every change made on this workspace's branch since it diverged from the repository's base branch. Matches the Changes panel.",
+
   "git_title": "Git",
   "git_branch_prefix": "Prefijo del nombre de la rama",
   "git_branch_prefix_desc": "Prefijo para los nombres de las ramas de los nuevos espacios de trabajo.",

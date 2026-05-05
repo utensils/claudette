@@ -64,6 +64,20 @@ curl -X POST "$SLACK_WEBHOOK_URL" \
   -d "{\"text\": \"Claudette: $CLAUDETTE_WORKSPACE_NAME needs attention\"}"
 ```
 
+## Editor
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| Git gutter base | Which revision the editor's git gutter compares your buffer against. `Last commit (HEAD)` shows uncommitted changes only; `Workspace branch base` shows every change made on this workspace's branch since it diverged from the repository's base branch (matches the [Changes panel](/claudette/features/diff-viewer/)). | Last commit (HEAD) |
+
+### Git Gutter Base
+
+The git gutter is the colored marker column to the left of line numbers in the file editor. By default it compares your editor buffer against `HEAD`, so the markers reflect uncommitted changes only.
+
+If you'd rather see every change you've made in this workspace since branching from the repository's base branch, switch to **Workspace branch base**. This matches the view in the **Changes** panel.
+
+When the workspace is checked out on the base branch itself, "Workspace branch base" collapses to `HEAD`, so the gutter behaves identically. The setting is global — it applies to every workspace.
+
 ## Git
 
 | Setting | Description | Default |

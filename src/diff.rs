@@ -73,6 +73,90 @@ pub async fn merge_base(repo_path: &str, branch: &str, base: &str) -> Result<Str
     run_git(repo_path, &["merge-base", "--", base, branch]).await
 }
 
+/// Owned inputs extracted from the DB for [`resolve_workspace_merge_base`].
+///
+/// Returned by the synchronous extraction step so the `&Database` reference is
+/// fully dropped before any `.await` — necessary because
+/// `rusqlite::Connection` is not `Sync`, so `&Database` is not `Send`, and
+/// Tauri requires command futures to be `Send`.
+struct WorkspaceMergeBaseInputs {
+    worktree_path: String,
+    repo_path: String,
+    base_branch: Option<String>,
+    default_remote: Option<String>,
+}
+
+/// Resolve the workspace's merge-base SHA against its repository's base branch.
+///
+/// Returns `(merge_base_sha, worktree_path)` so callers that need the worktree
+/// path (e.g. `load_diff_files`) don't need a second `list_workspaces` call.
+///
+/// Encapsulates the workspace + repository lookups and the base-branch
+/// resolution (preferring `repo.base_branch`, falling back to
+/// `git::default_branch`). Used by both the Changes panel's `load_diff_files`
+/// command and the file viewer's lightweight `compute_workspace_merge_base`
+/// command — keeping a single source of truth means the gutter and diff
+/// viewer can never disagree about which SHA "the merge base" is.
+///
+/// # Send-safety
+///
+/// This function is intentionally **not** `async`. It performs the
+/// synchronous DB extraction first, then returns a `Future` that owns only the
+/// extracted data — so `&Database` is never held across an `.await` point.
+/// This is required because `rusqlite::Connection` is not `Sync` (it contains
+/// `RefCell`), which means `&Database` is not `Send`, and Tauri command futures
+/// must be `Send`.
+pub fn resolve_workspace_merge_base(
+    db: &crate::db::Database,
+    workspace_id: &str,
+) -> impl std::future::Future<Output = Result<(String, String), String>> + Send {
+    // Perform all synchronous DB work here, before the async block.
+    // After this point the &Database reference is no longer needed.
+    let inputs_result: Result<WorkspaceMergeBaseInputs, String> = (|| {
+        let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
+        let ws = workspaces
+            .iter()
+            .find(|w| w.id == workspace_id)
+            .ok_or_else(|| "Workspace not found".to_string())?;
+        let worktree_path = ws
+            .worktree_path
+            .as_ref()
+            .ok_or_else(|| "Workspace has no worktree".to_string())?
+            .clone();
+
+        let repos = db.list_repositories().map_err(|e| e.to_string())?;
+        let repo = repos
+            .iter()
+            .find(|r| r.id == ws.repository_id)
+            .ok_or_else(|| "Repository not found".to_string())?;
+
+        Ok(WorkspaceMergeBaseInputs {
+            worktree_path,
+            repo_path: repo.path.clone(),
+            base_branch: repo.base_branch.clone(),
+            default_remote: repo.default_remote.clone(),
+        })
+    })();
+
+    // The returned async block owns only `inputs_result` (no &Database).
+    async move {
+        let inputs = inputs_result?;
+
+        let base_branch = match inputs.base_branch {
+            Some(b) => b,
+            None => crate::git::default_branch(&inputs.repo_path, inputs.default_remote.as_deref())
+                .await
+                .map_err(|e| e.to_string())?,
+        };
+
+        let sha = merge_base(&inputs.worktree_path, "HEAD", &base_branch)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        Ok((sha, inputs.worktree_path))
+    }
+}
+
 /// List all changed files between merge base and current working tree.
 pub async fn changed_files(
     worktree_path: &str,
@@ -1586,5 +1670,76 @@ mod integration_tests {
             .unwrap();
         let parsed = parse_unified_diff(&raw, "file.txt");
         assert!(!parsed.hunks.is_empty(), "default layer should have diff");
+    }
+
+    /// Like `setup_test_repo` but adds a post-divergence commit on `main` so that
+    /// the true merge-base (the initial commit) is strictly *less than* both
+    /// `main` HEAD and `feature` HEAD.  Without this, a buggy implementation that
+    /// simply returned `main`'s HEAD would pass undetected.
+    ///
+    /// Final state
+    /// -----------
+    ///   main:    initial ── main-post-divergence
+    ///   feature: initial ── feature-changes          ← worktree HEAD
+    ///
+    /// Expected merge-base: SHA of `initial`.
+    fn setup_diverged_test_repo(dir: &Path) {
+        // Reuse the shared helper: creates `initial` on main, then branches to
+        // `feature` and commits `feature changes`.  Worktree is left on `feature`.
+        setup_test_repo(dir);
+
+        // Switch back to main and add a commit that diverges it past the branch point.
+        git_cmd(dir, &["checkout", "main"]);
+        std::fs::write(dir.join("main_extra.txt"), "main post-divergence\n").unwrap();
+        git_cmd(dir, &["add", "main_extra.txt"]);
+        git_cmd(dir, &["commit", "-m", "main post-divergence"]);
+
+        // Return to feature so the worktree HEAD is the feature tip.
+        git_cmd(dir, &["checkout", "feature"]);
+    }
+
+    #[tokio::test]
+    async fn resolve_workspace_merge_base_matches_git_merge_base() {
+        // Build a repo where both branches have diverged from the branch point so
+        // that merge-base != main HEAD and merge-base != feature HEAD.
+        let tmp = tempfile::tempdir().unwrap();
+        setup_diverged_test_repo(tmp.path());
+
+        // The expected SHA — git's ground truth.
+        let expected = merge_base(tmp.path().to_str().unwrap(), "feature", "main")
+            .await
+            .expect("merge_base helper should succeed");
+        assert!(!expected.is_empty(), "expected SHA must not be empty");
+
+        // Sanity-check the divergence: the merge-base (initial commit) must be
+        // strictly different from both branch tips so a buggy implementation that
+        // returns either tip would fail this test.
+        let main_head = git_cmd(tmp.path(), &["rev-parse", "main"]);
+        let feature_head = git_cmd(tmp.path(), &["rev-parse", "feature"]);
+        assert_ne!(
+            expected, main_head,
+            "merge-base must not equal main HEAD — divergence requires post-branch main commit"
+        );
+        assert_ne!(
+            expected, feature_head,
+            "merge-base must not equal feature HEAD — divergence requires post-branch feature commit"
+        );
+
+        // Build an in-memory database with one repo + one workspace.
+        let db = crate::db::Database::open_in_memory().unwrap();
+        let mut repo =
+            crate::db::test_support::make_repo("r1", tmp.path().to_str().unwrap(), "test-repo");
+        repo.base_branch = Some("main".into());
+        db.insert_repository(&repo).unwrap();
+
+        let mut ws = crate::db::test_support::make_workspace("w1", "r1", "feature-ws");
+        ws.worktree_path = Some(tmp.path().to_str().unwrap().into());
+        db.insert_workspace(&ws).unwrap();
+
+        let (got_sha, _worktree_path) = resolve_workspace_merge_base(&db, "w1")
+            .await
+            .expect("resolve_workspace_merge_base should succeed");
+
+        assert_eq!(got_sha, expected);
     }
 }

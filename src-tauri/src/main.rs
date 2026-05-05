@@ -473,7 +473,7 @@ fn main() {
             commands::files::read_workspace_file,
             commands::files::read_workspace_file_for_viewer,
             commands::files::read_workspace_file_bytes,
-            commands::files::read_workspace_file_at_head,
+            commands::files::read_workspace_file_at_revision,
             commands::files::write_workspace_file,
             commands::files::save_attachment_bytes,
             commands::files::open_attachment_in_browser,
@@ -508,6 +508,7 @@ fn main() {
             commands::metrics::get_analytics_metrics,
             // Diff
             commands::diff::load_diff_files,
+            commands::diff::compute_workspace_merge_base,
             commands::diff::load_file_diff,
             commands::diff::revert_file,
             commands::diff::discard_file,

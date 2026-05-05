@@ -213,37 +213,45 @@ pub async fn read_workspace_file_bytes(
 }
 
 #[derive(Clone, Serialize)]
-pub struct HeadBlobContent {
+pub struct BlobAtRevisionContent {
     pub path: String,
-    /// Some(text) for tracked text blobs; None for binary blobs at HEAD or
-    /// when the file doesn't exist at HEAD.
+    /// The revision the blob was read at. Echoed back so the caller can
+    /// distinguish responses across in-flight requests.
+    pub revision: String,
+    /// Some(text) for tracked text blobs; None for binary blobs at the
+    /// revision, oversized blobs, or when the file doesn't exist at the
+    /// revision.
     pub content: Option<String>,
-    /// false when the path is not tracked at HEAD (untracked / staged-only /
-    /// not on the branch).
-    pub exists_at_head: bool,
+    /// false when the path is not tracked at the revision (untracked /
+    /// staged-only / not on the branch / not in the SHA's tree).
+    pub exists_at_revision: bool,
 }
 
-/// Read a file's HEAD-blob contents. Used by the file viewer's git gutter
-/// to compute per-line decorations against the last committed version.
+/// Read a file's blob contents at the given `revision`. Used by the file
+/// viewer's git gutter to compute per-line decorations against either HEAD
+/// (default) or the workspace's merge-base with the repo's base branch.
 ///
-/// On any error (workspace missing, no worktree, not a git repo, etc.) we
-/// return an `Err` string. The frontend treats errors as "gutter unavailable
-/// for this file" and silently disables markers — they are not surfaced as
-/// toasts.
+/// `revision` must be either the literal string `"HEAD"` or a 40-char hex
+/// SHA — anything else is rejected by `git::read_blob_at_revision` and
+/// surfaces here as an `Err(String)`. The frontend treats errors as "gutter
+/// unavailable for this revision" and silently disables markers — they are
+/// not surfaced as toasts.
 #[tauri::command]
-pub async fn read_workspace_file_at_head(
+pub async fn read_workspace_file_at_revision(
     workspace_id: String,
     relative_path: String,
+    revision: String,
     state: State<'_, AppState>,
-) -> Result<HeadBlobContent, String> {
+) -> Result<BlobAtRevisionContent, String> {
     let worktree_path = resolve_worktree_path(&workspace_id, &state)?;
-    let result = claudette::git::read_blob_at_head(&worktree_path, &relative_path)
+    let result = claudette::git::read_blob_at_revision(&worktree_path, &relative_path, &revision)
         .await
         .map_err(|e| e.to_string())?;
-    Ok(HeadBlobContent {
+    Ok(BlobAtRevisionContent {
         path: relative_path,
+        revision,
         content: result.content,
-        exists_at_head: result.exists_at_head,
+        exists_at_revision: result.exists_at_revision,
     })
 }
 

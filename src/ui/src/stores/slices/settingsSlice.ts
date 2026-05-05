@@ -45,6 +45,12 @@ export interface SettingsSlice {
   setCommunityRegistryEnabled: (enabled: boolean) => void;
   disable1mContext: boolean;
   setDisable1mContext: (v: boolean) => void;
+  /// Which revision the Monaco git gutter compares the editor buffer
+  /// against. "head" (default) shows uncommitted changes only; "merge_base"
+  /// shows every change made on the workspace's branch since it diverged
+  /// from the repo's base branch (matches the Changes panel).
+  editorGitGutterBase: "head" | "merge_base";
+  setEditorGitGutterBase: (value: "head" | "merge_base") => void;
 }
 
 export const createSettingsSlice: StateCreator<
@@ -107,4 +113,6 @@ export const createSettingsSlice: StateCreator<
     })),
   disable1mContext: false,
   setDisable1mContext: (v) => set({ disable1mContext: v }),
+  editorGitGutterBase: "head",
+  setEditorGitGutterBase: (value) => set({ editorGitGutterBase: value }),
 });
