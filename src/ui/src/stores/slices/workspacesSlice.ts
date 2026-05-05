@@ -21,7 +21,21 @@ export const createWorkspacesSlice: StateCreator<
   workspaces: [],
   selectedWorkspaceId: null,
   setWorkspaces: (workspaces) => set({ workspaces }),
-  addWorkspace: (ws) => set((s) => ({ workspaces: [...s.workspaces, ws] })),
+  // Idempotent by id: workspace creates can race between the Tauri
+  // command's response (Sidebar calls `addWorkspace` after the await
+  // resolves) and the `workspaces-changed` event the IPC hook emits.
+  // Whichever fires first wins; the other becomes a merge-update so
+  // the row never doubles in the sidebar.
+  addWorkspace: (ws) =>
+    set((s) => {
+      const idx = s.workspaces.findIndex((w) => w.id === ws.id);
+      if (idx === -1) {
+        return { workspaces: [...s.workspaces, ws] };
+      }
+      const merged = [...s.workspaces];
+      merged[idx] = { ...merged[idx], ...ws };
+      return { workspaces: merged };
+    }),
   updateWorkspace: (id, updates) =>
     set((s) => ({
       workspaces: s.workspaces.map((w) =>

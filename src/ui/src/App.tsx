@@ -446,12 +446,9 @@ function App() {
         }
         return;
       }
-      const exists = store.workspaces.some((w) => w.id === workspace.id);
-      if (exists) {
-        store.updateWorkspace(workspace.id, workspace);
-      } else {
-        store.addWorkspace(workspace);
-      }
+      // `addWorkspace` is idempotent by id, so this safely handles
+      // both new workspaces and re-emitted updates without duplicating.
+      store.addWorkspace(workspace);
     });
 
     const unlistenAutoArchived = listen<{ workspace_id: string; workspace_name: string; pr_number?: number; deleted?: boolean }>("workspace-auto-archived", (event) => {
