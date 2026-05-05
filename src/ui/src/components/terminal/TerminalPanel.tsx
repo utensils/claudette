@@ -70,6 +70,7 @@ interface AgentTaskOutputPayload {
 }
 
 const terminalInputEncoder = new TextEncoder();
+const terminalContextMenuOptions = { capture: true };
 
 // Per-leaf xterm + PTY handle. The container is a detached <div> that we
 // appendChild into whichever target div the pane tree currently emits for
@@ -647,7 +648,11 @@ export const TerminalPanel = memo(function TerminalPanel() {
         ev.stopPropagation();
         setContextMenu({ x: ev.clientX, y: ev.clientY, leafId: spec.leafId });
       };
-      container.addEventListener("contextmenu", handleContextMenu);
+      container.addEventListener(
+        "contextmenu",
+        handleContextMenu,
+        terminalContextMenuOptions,
+      );
 
       let currentInst: LeafInstance | null = null;
       const resizeObserver = new ResizeObserver(() => {
@@ -765,7 +770,11 @@ export const TerminalPanel = memo(function TerminalPanel() {
     if (inst.reclaimDisposer) inst.reclaimDisposer();
     inst.resizeObserver.disconnect();
     inst.container.removeEventListener("copy", inst.handleCopy);
-    inst.container.removeEventListener("contextmenu", inst.handleContextMenu);
+    inst.container.removeEventListener(
+      "contextmenu",
+      inst.handleContextMenu,
+      terminalContextMenuOptions,
+    );
     inst.term.dispose();
     if (inst.unlisten) inst.unlisten();
     if (inst.isAgentTask) stopAgentTaskTailBestEffort(inst.tabId);
