@@ -425,6 +425,35 @@ function App() {
 
     // Listen for workspace auto-archived events (e.g. PR merged with archive_on_merge).
     // When `deleted` is true the workspace record was fully removed; otherwise it moved to Archived.
+    // CLI- and remote-driven workspace mutations emit this event so the
+    // store stays in sync without a manual reload. The full workspace
+    // row rides on the payload so we can `addWorkspace` / `updateWorkspace`
+    // in one shot — see `src-tauri/src/ops_hooks.rs`.
+    const unlistenWorkspacesChanged = listen<{
+      kind: "created" | "archived" | "restored" | "deleted" | "renamed";
+      workspace_id: string;
+      workspace: import("./types/workspace").Workspace | null;
+    }>("workspaces-changed", (event) => {
+      const { kind, workspace_id, workspace } = event.payload;
+      const store = useAppStore.getState();
+      if (kind === "deleted" || workspace === null) {
+        if (kind === "deleted") {
+          store.removeWorkspace(workspace_id);
+          if (store.selectedWorkspaceId === workspace_id) store.selectWorkspace(null);
+        } else if (kind === "archived") {
+          // Backend couldn't fetch the row but we know its status — fall back.
+          store.updateWorkspace(workspace_id, { status: "Archived" as const });
+        }
+        return;
+      }
+      const exists = store.workspaces.some((w) => w.id === workspace.id);
+      if (exists) {
+        store.updateWorkspace(workspace.id, workspace);
+      } else {
+        store.addWorkspace(workspace);
+      }
+    });
+
     const unlistenAutoArchived = listen<{ workspace_id: string; workspace_name: string; pr_number?: number; deleted?: boolean }>("workspace-auto-archived", (event) => {
       const { workspace_id, workspace_name, pr_number, deleted } = event.payload;
       const store = useAppStore.getState();
@@ -460,6 +489,7 @@ function App() {
       unlistenResetZoom.then((fn) => fn());
       unlistenScmUpdate.then((fn) => fn());
       unlistenAutoArchived.then((fn) => fn());
+      unlistenWorkspacesChanged.then((fn) => fn());
       unlistenMissingCli.then((fn) => fn());
     };
   }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setPluginManagementEnabled, setCommunityRegistryEnabled, setEditorGitGutterBase, setEditorMinimapEnabled, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings]);
