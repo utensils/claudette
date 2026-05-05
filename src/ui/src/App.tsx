@@ -436,13 +436,34 @@ function App() {
     }>("workspaces-changed", (event) => {
       const { kind, workspace_id, workspace } = event.payload;
       const store = useAppStore.getState();
-      if (kind === "deleted" || workspace === null) {
-        if (kind === "deleted") {
-          store.removeWorkspace(workspace_id);
-          if (store.selectedWorkspaceId === workspace_id) store.selectWorkspace(null);
-        } else if (kind === "archived") {
-          // Backend couldn't fetch the row but we know its status — fall back.
+      if (kind === "deleted") {
+        store.removeWorkspace(workspace_id);
+        if (store.selectedWorkspaceId === workspace_id) store.selectWorkspace(null);
+        return;
+      }
+      if (workspace === null) {
+        // Backend couldn't fetch the fresh row (rare — DB read race or
+        // workspace removed between event and read). For "archived" we
+        // know enough to apply a partial update and stay live; for
+        // every other lifecycle kind a targeted refresh of the workspace
+        // list keeps the sidebar consistent without losing per-workspace
+        // runtime state (chat sessions, terminals, etc.) the way a full
+        // page reload would.
+        if (kind === "archived") {
           store.updateWorkspace(workspace_id, { status: "Archived" as const });
+        } else {
+          loadInitialData()
+            .then((data) => {
+              store.setWorkspaces(
+                data.workspaces.map((w) => ({ ...w, remote_connection_id: null })),
+              );
+            })
+            .catch((err) =>
+              console.warn(
+                `workspaces-changed (kind=${kind}) for ${workspace_id} arrived with workspace=null and refresh failed:`,
+                err,
+              ),
+            );
         }
         return;
       }
