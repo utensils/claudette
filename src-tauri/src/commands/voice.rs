@@ -92,13 +92,13 @@ pub async fn voice_start_recording(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let t0 = Instant::now();
     let provider_id = {
         let db = open_db(&state)?;
         state
             .voice
             .resolve_provider_id(&db, provider_id.as_deref())?
     };
-    let t0 = Instant::now();
     let latency = state
         .voice
         .start_recording(&state.db_path, &provider_id, Some(app.clone()))
