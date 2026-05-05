@@ -38,26 +38,45 @@ pub enum Action {
         #[arg(long)]
         model: Option<String>,
         /// Run the agent in plan mode (read-only, must approve plan
-        /// before any tool use).
-        #[arg(long)]
+        /// before any tool use). Pair: `--no-plan` forces off, useful
+        /// when the workspace's GUI default is on.
+        #[arg(long, overrides_with = "no_plan")]
         plan: bool,
-        /// Enable extended thinking for this turn.
-        #[arg(long)]
+        #[arg(long = "no-plan", overrides_with = "plan", hide = true)]
+        no_plan: bool,
+        /// Enable extended thinking for this turn. Pair: `--no-thinking`
+        /// forces off.
+        #[arg(long, overrides_with = "no_thinking")]
         thinking: bool,
+        #[arg(long = "no-thinking", overrides_with = "thinking", hide = true)]
+        no_thinking: bool,
         /// Enable fast mode (lower-latency model variant when supported).
-        #[arg(long)]
+        /// Pair: `--no-fast` forces off.
+        #[arg(long, overrides_with = "no_fast")]
         fast: bool,
+        #[arg(long = "no-fast", overrides_with = "fast", hide = true)]
+        no_fast: bool,
         /// Effort level: `low`, `medium`, `high`, `xhigh`, `max`
         /// (`max` requires Opus 4.6).
         #[arg(long)]
         effort: Option<String>,
-        /// Enable Chrome browser mode for this session.
-        #[arg(long)]
+        /// Enable Chrome browser mode for this session. Pair: `--no-chrome`
+        /// forces off.
+        #[arg(long, overrides_with = "no_chrome")]
         chrome: bool,
+        #[arg(long = "no-chrome", overrides_with = "chrome", hide = true)]
+        no_chrome: bool,
         /// Suppress the Max-plan auto-upgrade to a 1M context window
-        /// for the spawned CLI process.
-        #[arg(long = "disable-1m-context")]
+        /// for the spawned CLI process. Pair: `--no-disable-1m-context`
+        /// forces the upgrade on for this turn.
+        #[arg(long = "disable-1m-context", overrides_with = "no_disable_1m_context")]
         disable_1m_context: bool,
+        #[arg(
+            long = "no-disable-1m-context",
+            overrides_with = "disable_1m_context",
+            hide = true
+        )]
+        no_disable_1m_context: bool,
         /// Override the permission level (`default`, `acceptEdits`,
         /// `bypassPermissions`).
         #[arg(long)]
@@ -88,11 +107,16 @@ pub async fn run(action: Action, json: bool) -> Result<(), Box<dyn Error>> {
             prompt,
             model,
             plan,
+            no_plan,
             thinking,
+            no_thinking,
             fast,
+            no_fast,
             effort,
             chrome,
+            no_chrome,
             disable_1m_context,
+            no_disable_1m_context,
             permission,
         } => {
             let content = resolve_prompt(&prompt)?;
@@ -103,27 +127,37 @@ pub async fn run(action: Action, json: bool) -> Result<(), Box<dyn Error>> {
             if let Some(m) = model {
                 params["model"] = serde_json::json!(m);
             }
-            // Boolean toggles: only include the field when set so the
-            // IPC handler distinguishes "user explicitly asked for X" from
-            // "user didn't override, use the workspace default". Sending
-            // `false` would be indistinguishable from a deliberate opt-out.
-            if plan {
-                params["plan_mode"] = serde_json::json!(true);
+            // Tri-state booleans. `--plan` → Some(true), `--no-plan` →
+            // Some(false), neither → None (workspace default applies).
+            // The IPC handler distinguishes "explicitly false" from
+            // "use the default" because Some(false) is sent as a real
+            // JSON `false` while None is omitted from the params object.
+            let resolve = |yes: bool, no: bool| -> Option<bool> {
+                if yes {
+                    Some(true)
+                } else if no {
+                    Some(false)
+                } else {
+                    None
+                }
+            };
+            if let Some(v) = resolve(plan, no_plan) {
+                params["plan_mode"] = serde_json::json!(v);
             }
-            if thinking {
-                params["thinking_enabled"] = serde_json::json!(true);
+            if let Some(v) = resolve(thinking, no_thinking) {
+                params["thinking_enabled"] = serde_json::json!(v);
             }
-            if fast {
-                params["fast_mode"] = serde_json::json!(true);
+            if let Some(v) = resolve(fast, no_fast) {
+                params["fast_mode"] = serde_json::json!(v);
             }
             if let Some(e) = effort {
                 params["effort"] = serde_json::json!(e);
             }
-            if chrome {
-                params["chrome_enabled"] = serde_json::json!(true);
+            if let Some(v) = resolve(chrome, no_chrome) {
+                params["chrome_enabled"] = serde_json::json!(v);
             }
-            if disable_1m_context {
-                params["disable_1m_context"] = serde_json::json!(true);
+            if let Some(v) = resolve(disable_1m_context, no_disable_1m_context) {
+                params["disable_1m_context"] = serde_json::json!(v);
             }
             if let Some(p) = permission {
                 params["permission_level"] = serde_json::json!(p);
