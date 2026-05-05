@@ -1018,16 +1018,32 @@ export function ChatInputArea({
             sessionId={sessionId}
             onClick={() => setContextPopoverOpen((v) => !v)}
           />
-          {voice.state === "recording" && (
-            <div className={styles.voiceRecordingStatus} aria-live="polite">
-              <span className={styles.voiceWaveform} aria-hidden="true">
-                <span style={{ height: `${Math.min(4 + displayedLevel * 40 * 0.85, 14)}px` }} />
-                <span style={{ height: `${Math.min(4 + displayedLevel * 40, 14)}px` }} />
-                <span style={{ height: `${Math.min(4 + displayedLevel * 40 * 0.85, 14)}px` }} />
-              </span>
-              <span>{formatElapsedSeconds(voice.elapsedSeconds)}</span>
-            </div>
-          )}
+          {voice.state === "recording" && (() => {
+            // Perceptual mapping: sqrt expands quiet speech, the noise gate
+            // ignores ambient hiss, and saturating at RMS=0.4 leaves headroom
+            // for loud peaks while letting typical speech (RMS 0.05–0.15)
+            // reach the middle of the bar range.
+            const noiseFloor = 0.002;
+            const saturation = 0.4;
+            const perceptual =
+              displayedLevel <= noiseFloor
+                ? 0
+                : Math.min(Math.sqrt(displayedLevel / saturation), 1);
+            const barMin = 4;
+            const barRange = 10; // 4–14 px
+            const center = barMin + perceptual * barRange;
+            const outer = barMin + perceptual * barRange * 0.85;
+            return (
+              <div className={styles.voiceRecordingStatus} aria-live="polite">
+                <span className={styles.voiceWaveform} aria-hidden="true">
+                  <span style={{ height: `${outer}px` }} />
+                  <span style={{ height: `${center}px` }} />
+                  <span style={{ height: `${outer}px` }} />
+                </span>
+                <span>{formatElapsedSeconds(voice.elapsedSeconds)}</span>
+              </div>
+            );
+          })()}
           {voice.state === "starting" && (
             <div className={styles.voiceStatusText} aria-live="polite">
               <LoaderCircle
