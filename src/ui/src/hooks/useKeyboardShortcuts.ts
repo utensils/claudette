@@ -8,6 +8,8 @@ import {
   isTerminalFocused,
 } from "../utils/focusTargets";
 import { adjustUiFontSize } from "../utils/fontSettings";
+import { resolveHotkeyAction } from "../hotkeys/bindings";
+import type { HotkeyActionId } from "../hotkeys/actions";
 
 export function useKeyboardShortcuts() {
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
@@ -40,25 +42,15 @@ export function useKeyboardShortcuts() {
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      const mod = e.metaKey || e.ctrlKey;
-
-      // Shift+Tab: toggle plan mode — only when no overlay is open and no
-      // interactive element (input, textarea, select, button) is focused,
-      // so it doesn't break standard focus navigation.
+      const state = useAppStore.getState();
       const activeTag = document.activeElement?.tagName?.toLowerCase();
       const isInteractive = activeTag === "input" || activeTag === "textarea" ||
         activeTag === "select" || activeTag === "button";
-      if (
-        e.key === "Tab" && e.shiftKey && !mod && activeSessionId &&
-        !activeModal && !commandPaletteOpen && !fuzzyFinderOpen && !isInteractive
-      ) {
-        e.preventDefault();
-        setPlanMode(activeSessionId, !planMode);
-        return;
-      }
+      const action = resolveHotkeyAction(e, "global", state.keybindings);
+      if (!action) return;
 
       // Escape: dismiss topmost overlay, or stop running agent
-      if (e.key === "Escape") {
+      if (action === "global.dismiss-or-stop") {
         if (commandPaletteOpen) {
           toggleCommandPalette();
         } else if (activeModal) {
@@ -106,155 +98,118 @@ export function useKeyboardShortcuts() {
         return;
       }
 
-      if (!mod) return;
+      const overlayOpen =
+        state.settingsOpen || !!state.activeModal || state.commandPaletteOpen || state.fuzzyFinderOpen;
+      if (
+        overlayOpen &&
+        action !== "global.open-settings" &&
+        action !== "global.toggle-command-palette" &&
+        action !== "global.toggle-fuzzy-finder"
+      ) return;
+      if (action === "global.toggle-plan-mode" && (!activeSessionId || isInteractive)) return;
 
-      // Cmd/Ctrl+Shift+[ or ]: cycle workspaces in current project
-      if (e.shiftKey && (e.key === "[" || e.key === "]") && selectedWorkspaceId) {
+      const jumpMatch = action.match(/^global\.jump-to-project-(\d)$/);
+      const cycleWorkspace = (direction: "prev" | "next") => {
+        if (!selectedWorkspaceId) return;
         e.preventDefault();
-        const state = useAppStore.getState();
-        const currentWs = state.workspaces.find((w) => w.id === selectedWorkspaceId);
-        if (currentWs) {
-          const siblings = state.workspaces.filter(
-            (w) => w.repository_id === currentWs.repository_id && w.status === "Active",
-          );
-          if (siblings.length > 1) {
-            const idx = siblings.findIndex((w) => w.id === selectedWorkspaceId);
-            const next = e.key === "]"
-              ? siblings[(idx + 1) % siblings.length]
-              : siblings[(idx - 1 + siblings.length) % siblings.length];
-            state.selectWorkspace(next.id);
-          }
-        }
-        return;
-      }
+        const currentState = useAppStore.getState();
+        const currentWs = currentState.workspaces.find((w) => w.id === selectedWorkspaceId);
+        if (!currentWs) return;
+        const siblings = currentState.workspaces.filter(
+          (w) => w.repository_id === currentWs.repository_id && w.status === "Active",
+        );
+        if (siblings.length <= 1) return;
+        const idx = siblings.findIndex((w) => w.id === selectedWorkspaceId);
+        const next = direction === "next"
+          ? siblings[(idx + 1) % siblings.length]
+          : siblings[(idx - 1 + siblings.length) % siblings.length];
+        currentState.selectWorkspace(next.id);
+      };
 
-      // Cmd/Ctrl+1-9: jump to project by index
-      if (e.key >= "1" && e.key <= "9" && !e.shiftKey) {
+      if (jumpMatch) {
         e.preventDefault();
-        const state = useAppStore.getState();
-        const localRepos = state.repositories.filter((r) => !r.remote_connection_id);
-        const idx = parseInt(e.key, 10) - 1;
+        const currentState = useAppStore.getState();
+        const localRepos = currentState.repositories.filter((r) => !r.remote_connection_id);
+        const idx = parseInt(jumpMatch[1], 10) - 1;
         if (idx < localRepos.length) {
           const repo = localRepos[idx];
-          // Select first active workspace for this repo
-          const ws = state.workspaces.find(
+          const ws = currentState.workspaces.find(
             (w) => w.repository_id === repo.id && w.status === "Active",
           );
-          if (ws) state.selectWorkspace(ws.id);
+          if (ws) currentState.selectWorkspace(ws.id);
         }
         return;
       }
 
-      // Cmd/Ctrl+0: focus-toggle between terminal and chat prompt.
-      // Unlike Cmd+` this NEVER changes panel visibility — it only moves
-      // focus. If the panel is hidden, we reveal it first so the user can
-      // actually see the terminal we're putting focus into.
-      if (e.key === "0" && !e.shiftKey) {
+      const run = (id: HotkeyActionId) => {
         e.preventDefault();
-        if (isTerminalFocused()) {
-          focusChatPrompt();
-        } else {
-          const store = useAppStore.getState();
-          if (!store.terminalPanelVisible) {
-            store.toggleTerminalPanel();
-            requestAnimationFrame(() => focusActiveTerminal());
-          } else {
-            focusActiveTerminal();
-          }
-        }
-        return;
-      }
-
-      // Cmd/Ctrl + =/+ — increase UI font size.
-      // Use e.code ("Equal") to handle both Cmd+= and Cmd+Shift+= (which
-      // produces key="+", shiftKey=true on US keyboards).
-      if (e.code === "Equal") {
-        e.preventDefault();
-        adjustUiFontSize(+1);
-        return;
-      }
-
-      // Cmd/Ctrl + - — decrease UI font size.
-      if (e.code === "Minus") {
-        e.preventDefault();
-        adjustUiFontSize(-1);
-        return;
-      }
-
-      // Cmd/Ctrl + F — open the in-chat search bar for the current workspace.
-      // Suppressed while any overlay owns focus so the hotkey doesn't steal
-      // from settings / fuzzy finder / modal inputs.
-      if (e.code === "KeyF" && !e.shiftKey && !e.altKey) {
-        if (!selectedWorkspaceId) return;
-        const state = useAppStore.getState();
-        if (
-          state.settingsOpen ||
-          state.activeModal ||
-          state.commandPaletteOpen ||
-          state.fuzzyFinderOpen
-        ) {
-          return;
-        }
-        e.preventDefault();
-        openChatSearch(selectedWorkspaceId);
-        return;
-      }
-
-      switch (e.key) {
-        case "b":
-          e.preventDefault();
-          toggleSidebar();
-          break;
-        case "k":
-          e.preventDefault();
-          toggleFuzzyFinder();
-          break;
-        case "p":
-          e.preventDefault();
-          toggleCommandPalette();
-          break;
-        case "o":
-          if (!e.shiftKey && !e.altKey && selectedWorkspaceId) {
-            e.preventDefault();
-            openCommandPaletteFileMode();
-          }
-          break;
-        case "d":
-          e.preventDefault();
-          toggleRightSidebar();
-          break;
-        case "`":
-          // Cmd+` — toggle terminal panel AND move focus to whichever
-          // surface just became active: terminal when showing, chat when
-          // hiding. The shells keep running while hidden (the panel is
-          // CSS-hidden, not unmounted).
-          e.preventDefault();
-          toggleTerminalPanel();
-          requestAnimationFrame(() => {
-            const visible = useAppStore.getState().terminalPanelVisible;
-            if (visible) focusActiveTerminal();
-            else focusChatPrompt();
-          });
-          break;
-        // NOTE: Terminal-scoped hotkeys (Cmd+T for new tab, Cmd+Shift+[/]
-        // for prev/next tab) are intentionally NOT bound here. They are
-        // intercepted inside xterm via attachCustomKeyEventHandler in
-        // TerminalPanel.tsx so they only fire when the terminal has focus
-        // and xterm can suppress forwarding the key to the PTY. Cmd+` and
-        // Cmd+0 are bound both here (for focus arriving from the chat side)
-        // and in the xterm handler (so they don't send bytes to the PTY).
-        case ",":
-          e.preventDefault();
-          {
-            const store = useAppStore.getState();
-            if (store.settingsOpen) {
-              store.closeSettings();
+        switch (id) {
+          case "global.toggle-plan-mode":
+            if (activeSessionId) setPlanMode(activeSessionId, !planMode);
+            return;
+          case "global.cycle-workspace-prev":
+            cycleWorkspace("prev");
+            return;
+          case "global.cycle-workspace-next":
+            cycleWorkspace("next");
+            return;
+          case "global.focus-toggle":
+            if (isTerminalFocused()) {
+              focusChatPrompt();
             } else {
-              store.openSettings();
+              const store = useAppStore.getState();
+              if (!store.terminalPanelVisible) {
+                store.toggleTerminalPanel();
+                requestAnimationFrame(() => focusActiveTerminal());
+              } else {
+                focusActiveTerminal();
+              }
             }
+            return;
+          case "global.increase-ui-font":
+            adjustUiFontSize(+1);
+            return;
+          case "global.decrease-ui-font":
+            adjustUiFontSize(-1);
+            return;
+          case "global.open-chat-search":
+            if (selectedWorkspaceId) openChatSearch(selectedWorkspaceId);
+            return;
+          case "global.toggle-sidebar":
+            toggleSidebar();
+            return;
+          case "global.toggle-fuzzy-finder":
+            toggleFuzzyFinder();
+            return;
+          case "global.toggle-command-palette":
+            toggleCommandPalette();
+            return;
+          case "global.open-command-palette-file-mode":
+            if (selectedWorkspaceId) openCommandPaletteFileMode();
+            return;
+          case "global.toggle-right-sidebar":
+            toggleRightSidebar();
+            return;
+          case "global.toggle-terminal-panel":
+            toggleTerminalPanel();
+            requestAnimationFrame(() => {
+              const visible = useAppStore.getState().terminalPanelVisible;
+              if (visible) focusActiveTerminal();
+              else focusChatPrompt();
+            });
+            return;
+          case "global.open-settings": {
+            const store = useAppStore.getState();
+            if (store.settingsOpen) store.closeSettings();
+            else store.openSettings();
+            return;
           }
-          break;
-      }
+          default:
+            return;
+        }
+      };
+
+      run(action);
     };
 
     // Track Cmd/Ctrl key hold for visual shortcut hints.

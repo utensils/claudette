@@ -1,6 +1,11 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { useAppStore } from "../stores/useAppStore";
 import type { VoiceInputController } from "./useVoiceInput";
+import {
+  bindingMatchesEvent,
+  formatBinding,
+  getEffectiveBindingById,
+} from "../hotkeys/bindings";
 
 // Re-export so existing call sites (KeyboardSettings, tests) keep working.
 export {
@@ -43,21 +48,7 @@ export function matchesToggle(e: KeyboardEvent, hotkey: string): boolean {
 
 /** Human-readable display of a toggle hotkey string (e.g. "mod+shift+m" → "⌘⇧M"). */
 export function formatToggleHotkey(hotkey: string | null, isMac: boolean): string {
-  if (!hotkey) return "—";
-  return hotkey
-    .split("+")
-    .map((part) => {
-      switch (part.toLowerCase()) {
-        case "mod": return isMac ? "⌘" : "Ctrl";
-        case "meta": return "⌘";
-        case "ctrl": return "Ctrl";
-        case "shift": return isMac ? "⇧" : "Shift";
-        case "alt": return isMac ? "⌥" : "Alt";
-        case "plus": return "+";
-        default: return part.toUpperCase();
-      }
-    })
-    .join(isMac ? "" : "+");
+  return formatBinding(hotkey, isMac);
 }
 
 const HOLD_KEY_DISPLAY: Record<string, { mac: string; other: string }> = {
@@ -93,7 +84,7 @@ export function formatHoldHotkey(code: string | null, isMac: boolean): string {
 export function createVoiceHotkeyHandlers(
   getVoice: () => VoiceHandle,
   toggleHotkey: string | null,
-  holdHotkey: string | null,
+  holdBinding: string | null,
   /** Returns true when the hotkey should not fire START actions (e.g. a modal
    * or settings panel is open). Stop/cancel/release actions still run so an
    * in-flight recording can always be ended. */
@@ -104,6 +95,7 @@ export function createVoiceHotkeyHandlers(
   onBlur: () => void;
 } {
   let holdActive = false;
+  const holdCode = holdBindingToCode(holdBinding);
 
   return {
     onKeyDown(e: KeyboardEvent) {
@@ -112,7 +104,7 @@ export function createVoiceHotkeyHandlers(
       // a printable toggle binding (e.g. user rebinds to a single letter)
       // would leak repeated characters into the focused input on hold.
       if (e.repeat) {
-        if (holdHotkey && e.code === holdHotkey && holdActive) e.preventDefault();
+        if (holdCode && e.code === holdCode && holdActive) e.preventDefault();
         if (toggleHotkey && matchesToggle(e, toggleHotkey)) e.preventDefault();
         return;
       }
@@ -139,11 +131,11 @@ export function createVoiceHotkeyHandlers(
       // Reject AltGr presses outright — Right Alt acts as AltGr on most
       // non-US layouts and is used to type @, {}, ñ, ç, etc. Triggering
       // hold-to-talk on those would break normal text entry.
-      if (holdHotkey && e.code === holdHotkey && isAltGr(e)) return;
+      if (holdCode && e.code === holdCode && isAltGr(e)) return;
 
       if (
-        holdHotkey &&
-        e.code === holdHotkey &&
+        holdBinding &&
+        holdBindingMatchesEvent(holdBinding, e) &&
         !holdActive &&
         v.state !== "recording" &&
         v.state !== "starting" &&
@@ -157,7 +149,7 @@ export function createVoiceHotkeyHandlers(
     },
 
     onKeyUp(e: KeyboardEvent) {
-      if (!holdHotkey || !holdActive || e.code !== holdHotkey) return;
+      if (!holdCode || !holdActive || e.code !== holdCode) return;
       holdActive = false;
       const v = getVoice();
       if (v.state === "recording" || v.state === "starting") {
@@ -190,6 +182,7 @@ export function useVoiceHotkey(
   holdHotkey: string | null,
 ): void {
   const voiceRef = useRef<VoiceInputController>(voice);
+  const keybindings = useAppStore((s) => s.keybindings);
 
   // Keep the ref in sync after every render so event handlers always read
   // the latest voice state without being re-registered on every state change.
@@ -207,10 +200,19 @@ export function useVoiceHotkey(
       const s = useAppStore.getState();
       return s.settingsOpen || !!s.activeModal || s.commandPaletteOpen || s.fuzzyFinderOpen;
     };
+    const hasToggleOverride = Object.prototype.hasOwnProperty.call(keybindings, "voice.toggle");
+    const hasHoldOverride = Object.prototype.hasOwnProperty.call(keybindings, "voice.hold");
+    const toggleBinding = hasToggleOverride
+      ? keybindings["voice.toggle"] ?? null
+      : getEffectiveBindingById("voice.toggle", keybindings) ?? toggleHotkey;
+    const holdBinding = hasHoldOverride
+      ? keybindings["voice.hold"] ?? null
+      : getEffectiveBindingById("voice.hold", keybindings) ??
+        (holdHotkey ? `code:${holdHotkey}` : null);
     const { onKeyDown, onKeyUp, onBlur } = createVoiceHotkeyHandlers(
       () => voiceRef.current,
-      toggleHotkey,
-      holdHotkey,
+      toggleBinding,
+      holdBinding,
       isInputBlocked,
     );
     window.addEventListener("keydown", onKeyDown);
@@ -221,5 +223,19 @@ export function useVoiceHotkey(
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
     };
-  }, [toggleHotkey, holdHotkey]);
+  }, [toggleHotkey, holdHotkey, keybindings]);
+}
+
+function holdBindingMatchesEvent(binding: string, e: KeyboardEvent): boolean {
+  if (binding.startsWith("code:") || binding.includes("+")) {
+    return bindingMatchesEvent(binding, e);
+  }
+  return e.code === binding;
+}
+
+function holdBindingToCode(binding: string | null): string | null {
+  if (!binding) return null;
+  const finalPart = binding.split("+").at(-1);
+  if (!finalPart) return null;
+  return finalPart.startsWith("code:") ? finalPart.slice("code:".length) : finalPart;
 }

@@ -531,7 +531,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
   // is effectively zero-cost updating.
   useEffect(() => {
     keyHandlerRef.current = (ev: KeyboardEvent): boolean => {
-      const action = terminalKeyAction(ev);
+      const action = terminalKeyAction(ev, useAppStore.getState().keybindings);
       if (!action) {
         if (shouldStopTerminalEventPropagation(ev)) {
           ev.stopImmediatePropagation();
@@ -588,12 +588,11 @@ export const TerminalPanel = memo(function TerminalPanel() {
       };
       container.addEventListener("copy", handleCopy);
 
-      let inst!: LeafInstance;
       const resizeObserver = new ResizeObserver(() => {
         if (inst.fitTimer) clearTimeout(inst.fitTimer);
         inst.fitTimer = setTimeout(() => safeFit(inst), 150);
       });
-      inst = {
+      const inst: LeafInstance = {
         leafId: spec.leafId,
         tabId: spec.tabId,
         workspaceId: spec.workspaceId,

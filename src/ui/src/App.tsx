@@ -2,11 +2,12 @@ import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { useAppStore } from "./stores/useAppStore";
-import { loadInitialData, getAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab } from "./services/tauri";
+import { loadInitialData, getAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix } from "./services/tauri";
 import { applyTheme, applyUserFonts, loadAllThemes, findTheme, cacheThemePreference, getThemeDataAttr } from "./utils/theme";
 import { DEFAULT_THEME_ID, DEFAULT_LIGHT_THEME_ID } from "./styles/themes";
 import type { ThemeDefinition } from "./types/theme";
 import { adjustUiFontSize, resetUiFontSize } from "./utils/fontSettings";
+import { KEYBINDING_SETTING_PREFIX } from "./hotkeys/bindings";
 import { useMcpStatus } from "./hooks/useMcpStatus";
 import { AppLayout } from "./components/layout/AppLayout";
 import { findLeafByPtyId } from "./stores/terminalPaneTree";
@@ -44,6 +45,7 @@ function App() {
   const setDisable1mContext = useAppStore((s) => s.setDisable1mContext);
   const setVoiceToggleHotkey = useAppStore((s) => s.setVoiceToggleHotkey);
   const setVoiceHoldHotkey = useAppStore((s) => s.setVoiceHoldHotkey);
+  const setKeybindings = useAppStore((s) => s.setKeybindings);
   const setAppVersion = useAppStore((s) => s.setAppVersion);
 
   // Cached theme list — populated on initial load, reused by the OS handler.
@@ -210,16 +212,31 @@ function App() {
         if (val === "merge_base") setEditorGitGutterBase("merge_base");
       })
       .catch(() => {});
-    getAppSetting("voice_toggle_hotkey")
-      .then((val) => {
-        if (val === "disabled") setVoiceToggleHotkey(null);
-        else if (val) setVoiceToggleHotkey(val);
-      })
-      .catch(() => {});
-    getAppSetting("voice_hold_hotkey")
-      .then((val) => {
-        if (val === "disabled") setVoiceHoldHotkey(null);
-        else if (val) setVoiceHoldHotkey(val);
+    Promise.all([
+      listAppSettingsWithPrefix(KEYBINDING_SETTING_PREFIX),
+      getAppSetting("voice_toggle_hotkey"),
+      getAppSetting("voice_hold_hotkey"),
+    ])
+      .then(([entries, legacyVoiceToggle, legacyVoiceHold]) => {
+        if (legacyVoiceToggle === "disabled") setVoiceToggleHotkey(null);
+        else if (legacyVoiceToggle) setVoiceToggleHotkey(legacyVoiceToggle);
+        if (legacyVoiceHold === "disabled") setVoiceHoldHotkey(null);
+        else if (legacyVoiceHold) setVoiceHoldHotkey(legacyVoiceHold);
+
+        const bindings: Record<string, string | null> = {};
+        for (const [key, value] of entries) {
+          const actionId = key.slice(KEYBINDING_SETTING_PREFIX.length);
+          bindings[actionId] = value === "disabled" ? null : value;
+        }
+        if (bindings["voice.toggle"] === undefined && legacyVoiceToggle) {
+          bindings["voice.toggle"] =
+            legacyVoiceToggle === "disabled" ? null : legacyVoiceToggle;
+        }
+        if (bindings["voice.hold"] === undefined && legacyVoiceHold) {
+          bindings["voice.hold"] =
+            legacyVoiceHold === "disabled" ? null : `code:${legacyVoiceHold}`;
+        }
+        setKeybindings(bindings);
       })
       .catch(() => {});
     getAppSetting("language")
@@ -430,7 +447,7 @@ function App() {
       unlistenAutoArchived.then((fn) => fn());
       unlistenMissingCli.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setShowSidebarRunningCommands, setPluginManagementEnabled, setCommunityRegistryEnabled, setEditorGitGutterBase, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setShowSidebarRunningCommands, setPluginManagementEnabled, setCommunityRegistryEnabled, setEditorGitGutterBase, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings]);
 
   // Listen for OS light/dark changes and switch theme when mode is "system".
   useEffect(() => {

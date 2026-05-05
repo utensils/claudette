@@ -534,6 +534,8 @@ fn main() {
             // Settings
             commands::settings::get_app_setting,
             commands::settings::set_app_setting,
+            commands::settings::delete_app_setting,
+            commands::settings::list_app_settings_with_prefix,
             commands::settings::list_user_themes,
             commands::settings::list_notification_sounds,
             commands::settings::list_system_fonts,

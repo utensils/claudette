@@ -1,9 +1,5 @@
 import type { StateCreator } from "zustand";
 import { DEFAULT_THEME_ID, DEFAULT_LIGHT_THEME_ID } from "../../styles/themes";
-import {
-  DEFAULT_TOGGLE_HOTKEY,
-  getDefaultHoldHotkey,
-} from "../../utils/voiceHotkeys";
 import type { AppState } from "../useAppStore";
 
 export interface SettingsSlice {
@@ -55,6 +51,10 @@ export interface SettingsSlice {
   /// from the repo's base branch (matches the Changes panel).
   editorGitGutterBase: "head" | "merge_base";
   setEditorGitGutterBase: (value: "head" | "merge_base") => void;
+  keybindings: Record<string, string | null>;
+  setKeybinding: (actionId: string, binding: string | null) => void;
+  resetKeybinding: (actionId: string) => void;
+  setKeybindings: (bindings: Record<string, string | null>) => void;
   voiceToggleHotkey: string | null;
   setVoiceToggleHotkey: (hotkey: string | null) => void;
   voiceHoldHotkey: string | null;
@@ -123,8 +123,18 @@ export const createSettingsSlice: StateCreator<
   setDisable1mContext: (v) => set({ disable1mContext: v }),
   editorGitGutterBase: "head",
   setEditorGitGutterBase: (value) => set({ editorGitGutterBase: value }),
-  voiceToggleHotkey: DEFAULT_TOGGLE_HOTKEY,
+  keybindings: {},
+  setKeybinding: (actionId, binding) =>
+    set((state) => ({ keybindings: { ...state.keybindings, [actionId]: binding } })),
+  resetKeybinding: (actionId) =>
+    set((state) => {
+      const next = { ...state.keybindings };
+      delete next[actionId];
+      return { keybindings: next };
+    }),
+  setKeybindings: (bindings) => set({ keybindings: bindings }),
+  voiceToggleHotkey: null,
   setVoiceToggleHotkey: (hotkey) => set({ voiceToggleHotkey: hotkey }),
-  voiceHoldHotkey: getDefaultHoldHotkey(),
+  voiceHoldHotkey: null,
   setVoiceHoldHotkey: (hotkey) => set({ voiceHoldHotkey: hotkey }),
 });
