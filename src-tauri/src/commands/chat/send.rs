@@ -217,12 +217,75 @@ async fn apply_task_notification_status(
     }
 }
 
-const BACKGROUND_TASK_WAKE_PROMPT: &str = "\
-<system-reminder>
-Claudette is waking this stream-json session so Claude Code can deliver queued background task notifications.
-First call the Sleep tool for 1 second so Claude Code can flush queued background task notifications.
-After Sleep returns, do not answer unless a <task-notification> is present in the runtime context. If no task notification is present yet, produce no user-facing text.
-</system-reminder>";
+#[derive(Debug, Clone)]
+struct BackgroundTaskCompletion {
+    task_id: String,
+    tool_use_id: Option<String>,
+    output_file: Option<String>,
+    status: String,
+    summary: Option<String>,
+}
+
+fn task_completion_from_notification(
+    notification: claudette::agent::background::TaskNotification,
+) -> Option<BackgroundTaskCompletion> {
+    let status = notification.status.unwrap_or_else(|| "running".to_string());
+    if !is_terminal_task_status(&status) {
+        return None;
+    }
+    Some(BackgroundTaskCompletion {
+        task_id: notification.task_id,
+        tool_use_id: notification.tool_use_id,
+        output_file: notification.output_file,
+        status,
+        summary: notification.summary,
+    })
+}
+
+fn read_background_output_for_prompt(output_file: Option<&str>) -> Option<String> {
+    let output_file = output_file?.trim();
+    if output_file.is_empty() {
+        return None;
+    }
+    let bytes = std::fs::read(output_file).ok()?;
+    const MAX_OUTPUT_BYTES: usize = 24_000;
+    let start = bytes.len().saturating_sub(MAX_OUTPUT_BYTES);
+    let mut text = String::from_utf8_lossy(&bytes[start..]).to_string();
+    if start > 0 {
+        text.insert_str(0, "[output truncated to last 24000 bytes]\n");
+    }
+    if text.trim().is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
+fn build_background_task_completion_prompt(completion: &BackgroundTaskCompletion) -> String {
+    let mut prompt = format!(
+        "A background Bash task completed. Respond to the user now with the result.\n\n<task-notification>\n<task-id>{}</task-id>\n<status>{}</status>",
+        completion.task_id, completion.status
+    );
+    if let Some(tool_use_id) = completion.tool_use_id.as_deref() {
+        prompt.push_str(&format!("\n<tool-use-id>{tool_use_id}</tool-use-id>"));
+    }
+    if let Some(output_file) = completion.output_file.as_deref() {
+        prompt.push_str(&format!("\n<output-file>{output_file}</output-file>"));
+    }
+    if let Some(summary) = completion.summary.as_deref() {
+        prompt.push_str(&format!("\n<summary>{summary}</summary>"));
+    }
+    prompt.push_str("\n</task-notification>");
+    if let Some(output) = read_background_output_for_prompt(completion.output_file.as_deref()) {
+        prompt.push_str("\n\nOutput:\n```text\n");
+        prompt.push_str(&output);
+        if !output.ends_with('\n') {
+            prompt.push('\n');
+        }
+        prompt.push_str("```");
+    }
+    prompt
+}
 
 fn schedule_background_task_wake(
     app: AppHandle,
@@ -251,10 +314,95 @@ fn schedule_background_task_wake(
             return;
         };
 
-        let handle = match ps.send_turn(BACKGROUND_TASK_WAKE_PROMPT, &[]).await {
+        let mut rx = ps.subscribe();
+        let completion = loop {
+            let event = match tokio::time::timeout(Duration::from_secs(600), rx.recv()).await {
+                Ok(Ok(event)) => event,
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) | Err(_) => {
+                    break None;
+                }
+            };
+
+            if let AgentEvent::ProcessExited(_) = &event {
+                break None;
+            }
+            if let AgentEvent::Stream(StreamEvent::System {
+                subtype,
+                task_id: Some(task_id),
+                tool_use_id,
+                output_file,
+                summary,
+                status: Some(status),
+                ..
+            }) = &event
+                && subtype == "task_notification"
+                && is_terminal_task_status(status)
+            {
+                break Some(BackgroundTaskCompletion {
+                    task_id: task_id.clone(),
+                    tool_use_id: tool_use_id.clone(),
+                    output_file: output_file.clone(),
+                    status: status.clone(),
+                    summary: summary.clone(),
+                });
+            }
+            if let AgentEvent::Stream(StreamEvent::User { message, .. }) = &event {
+                match &message.content {
+                    claudette::agent::UserMessageContent::Text(body) => {
+                        if let Some(notification) = parse_task_notification(body)
+                            && let Some(completion) =
+                                task_completion_from_notification(notification)
+                        {
+                            break Some(completion);
+                        }
+                    }
+                    claudette::agent::UserMessageContent::Blocks(blocks) => {
+                        let mut found = None;
+                        for block in blocks {
+                            if let claudette::agent::UserContentBlock::Text { text } = block
+                                && let Some(notification) = parse_task_notification(text)
+                                && let Some(completion) =
+                                    task_completion_from_notification(notification)
+                            {
+                                found = Some(completion);
+                                break;
+                            }
+                        }
+                        if found.is_some() {
+                            break found;
+                        }
+                    }
+                }
+            }
+        };
+
+        let Some(completion) = completion else {
+            let mut agents = app_state.agents.write().await;
+            if let Some(session) = agents.get_mut(&chat_session_id) {
+                session.background_wake_active = false;
+            }
+            return;
+        };
+
+        apply_task_notification_status(
+            &app,
+            &db_path,
+            &workspace_id,
+            &chat_session_id,
+            &completion.task_id,
+            completion.tool_use_id.as_deref(),
+            &completion.status,
+            completion.summary.as_deref(),
+            completion.output_file.as_deref(),
+        )
+        .await;
+
+        let prompt = build_background_task_completion_prompt(&completion);
+        let handle = match ps.send_turn(&prompt, &[]).await {
             Ok(handle) => handle,
             Err(err) => {
-                eprintln!("[chat] failed to wake background task notifications: {err}");
+                eprintln!("[chat] failed to deliver background task notification: {err}");
                 let mut agents = app_state.agents.write().await;
                 if let Some(session) = agents.get_mut(&chat_session_id) {
                     session.background_wake_active = false;
@@ -272,14 +420,11 @@ fn schedule_background_task_wake(
         crate::tray::rebuild_tray(&app);
 
         let mut rx = handle.event_rx;
-        let mut saw_task_notification = false;
         let mut last_assistant_msg_id: Option<String> = None;
         let mut pending_thinking: Option<String> = None;
         let mut latest_usage: Option<claudette::agent::TokenUsage> = None;
 
         while let Some(event) = rx.recv().await {
-            let mut should_emit_stream = saw_task_notification;
-
             if let AgentEvent::Stream(StreamEvent::System {
                 subtype,
                 task_id: Some(task_id),
@@ -291,8 +436,6 @@ fn schedule_background_task_wake(
             }) = &event
                 && subtype == "task_notification"
             {
-                saw_task_notification = true;
-                should_emit_stream = true;
                 apply_task_notification_status(
                     &app,
                     &db_path,
@@ -311,8 +454,6 @@ fn schedule_background_task_wake(
                 && let claudette::agent::UserMessageContent::Text(body) = &message.content
                 && let Some(notification) = parse_task_notification(body)
             {
-                saw_task_notification = true;
-                should_emit_stream = true;
                 let status = notification.status.as_deref().unwrap_or("running");
                 apply_task_notification_status(
                     &app,
@@ -335,8 +476,6 @@ fn schedule_background_task_wake(
                     if let claudette::agent::UserContentBlock::Text { text } = block
                         && let Some(notification) = parse_task_notification(text)
                     {
-                        saw_task_notification = true;
-                        should_emit_stream = true;
                         let status = notification.status.as_deref().unwrap_or("running");
                         apply_task_notification_status(
                             &app,
@@ -351,24 +490,6 @@ fn schedule_background_task_wake(
                         )
                         .await;
                     }
-                }
-            }
-
-            if let AgentEvent::Stream(StreamEvent::ControlRequest {
-                request_id,
-                request:
-                    ControlRequestInner::CanUseTool {
-                        tool_name, input, ..
-                    },
-            }) = &event
-                && tool_name == "Sleep"
-            {
-                let response = serde_json::json!({
-                    "behavior": "allow",
-                    "updatedInput": input,
-                });
-                if let Err(err) = ps.send_control_response(request_id, response).await {
-                    eprintln!("[chat] failed to allow background wake Sleep: {err}");
                 }
             }
 
@@ -390,8 +511,7 @@ fn schedule_background_task_wake(
                         None => t,
                     });
                 }
-                if saw_task_notification
-                    && !full_text.trim().is_empty()
+                if !full_text.trim().is_empty()
                     && let Ok(db) = Database::open(&db_path)
                 {
                     let msg = build_assistant_chat_message(BuildAssistantArgs {
@@ -428,14 +548,12 @@ fn schedule_background_task_wake(
                 AgentEvent::Stream(StreamEvent::Result { .. }) | AgentEvent::ProcessExited(_)
             );
 
-            if should_emit_stream || (is_done && saw_task_notification) {
-                let payload = AgentStreamPayload {
-                    workspace_id: workspace_id.clone(),
-                    chat_session_id: chat_session_id.clone(),
-                    event,
-                };
-                let _ = app.emit("agent-stream", &payload);
-            }
+            let payload = AgentStreamPayload {
+                workspace_id: workspace_id.clone(),
+                chat_session_id: chat_session_id.clone(),
+                event,
+            };
+            let _ = app.emit("agent-stream", &payload);
 
             if is_done {
                 break;

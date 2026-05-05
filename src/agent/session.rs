@@ -226,6 +226,13 @@ impl PersistentSession {
         })
     }
 
+    /// Subscribe to the persistent process's raw stream-json events without
+    /// sending a new turn. Used by session-level infrastructure that must
+    /// observe SDK events emitted while no user turn receiver is active.
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<AgentEvent> {
+        self.event_tx.subscribe()
+    }
+
     /// Write a `control_response` line to the CLI's stdin, answering a
     /// prior `control_request: can_use_tool`. The inner `response` value is
     /// either a permission-allow (`{ behavior: "allow", updatedInput }`) or
