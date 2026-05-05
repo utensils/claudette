@@ -189,8 +189,8 @@ echo "▸ Launching $bundle_dir via Launch Services"
 open -n -W -a "$bundle_dir" \
   --stdout "$stdout_fifo" \
   --stderr "$stderr_fifo" \
-  "${env_args[@]}" \
-  --args "${app_args[@]}" &
+  ${env_args[@]+"${env_args[@]}"} \
+  --args ${app_args[@]+"${app_args[@]}"} &
 open_pid=$!
 
 wait "$open_pid"
