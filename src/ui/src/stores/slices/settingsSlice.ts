@@ -1,5 +1,9 @@
 import type { StateCreator } from "zustand";
 import { DEFAULT_THEME_ID, DEFAULT_LIGHT_THEME_ID } from "../../styles/themes";
+import {
+  DEFAULT_TOGGLE_HOTKEY,
+  getDefaultHoldHotkey,
+} from "../../utils/voiceHotkeys";
 import type { AppState } from "../useAppStore";
 
 export interface SettingsSlice {
@@ -119,8 +123,8 @@ export const createSettingsSlice: StateCreator<
   setDisable1mContext: (v) => set({ disable1mContext: v }),
   editorGitGutterBase: "head",
   setEditorGitGutterBase: (value) => set({ editorGitGutterBase: value }),
-  voiceToggleHotkey: "mod+shift+m",
+  voiceToggleHotkey: DEFAULT_TOGGLE_HOTKEY,
   setVoiceToggleHotkey: (hotkey) => set({ voiceToggleHotkey: hotkey }),
-  voiceHoldHotkey: "AltRight",
+  voiceHoldHotkey: getDefaultHoldHotkey(),
   setVoiceHoldHotkey: (hotkey) => set({ voiceHoldHotkey: hotkey }),
 });

@@ -3,10 +3,10 @@ import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../../stores/useAppStore";
 import { setAppSetting } from "../../../services/tauri";
 import {
-  DEFAULT_HOLD_HOTKEY,
   DEFAULT_TOGGLE_HOTKEY,
   formatHoldHotkey,
   formatToggleHotkey,
+  getDefaultHoldHotkey,
   normalizeToggleKey,
 } from "../../../hooks/useVoiceHotkey";
 import styles from "../Settings.module.css";
@@ -20,7 +20,10 @@ type RebindTarget = "toggle" | "hold" | null;
 
 /** Capture a toggle-hotkey combo from a keydown event. Returns null for modifier-only presses. */
 function captureToggleCombo(e: KeyboardEvent): string | null {
-  const modifierKeys = new Set(["Meta", "Control", "Shift", "Alt"]);
+  // AltGraph is the modifier produced by Right Alt on most non-US layouts —
+  // include it here so the rebind dialog doesn't capture "altgraph" as the
+  // non-modifier part of the combo before the user hits the intended key.
+  const modifierKeys = new Set(["Meta", "Control", "Shift", "Alt", "AltGraph"]);
   if (modifierKeys.has(e.key)) return null;
   const parts: string[] = [];
   if (e.metaKey || e.ctrlKey) parts.push("mod");
@@ -89,9 +92,12 @@ export function KeyboardSettings() {
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
+      // Check captured BEFORE preventDefault — otherwise post-Escape keys
+      // arriving in the brief window before the effect cleanup would be
+      // silently swallowed.
+      if (captured) return;
       e.preventDefault();
       e.stopPropagation();
-      if (captured) return;
 
       if (e.key === "Escape") {
         captured = true;
@@ -192,8 +198,8 @@ export function KeyboardSettings() {
                 </button>
                 <button
                   className={styles.iconBtn}
-                  onClick={() => void saveHoldHotkey(DEFAULT_HOLD_HOTKEY)}
-                  disabled={voiceHoldHotkey === DEFAULT_HOLD_HOTKEY}
+                  onClick={() => void saveHoldHotkey(getDefaultHoldHotkey())}
+                  disabled={voiceHoldHotkey === getDefaultHoldHotkey()}
                 >
                   {t("keyboard_reset")}
                 </button>

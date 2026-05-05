@@ -37,6 +37,7 @@ function keyEvent(
     shiftKey: boolean;
     altKey: boolean;
     repeat: boolean;
+    getModifierState: (m: string) => boolean;
   }>,
 ): KeyboardEvent {
   return {
@@ -48,6 +49,7 @@ function keyEvent(
     altKey: false,
     repeat: false,
     preventDefault: vi.fn(),
+    getModifierState: () => false,
     ...overrides,
   } as unknown as KeyboardEvent;
 }
@@ -277,5 +279,66 @@ describe("createVoiceHotkeyHandlers — hold-to-talk", () => {
 
     onKeyUp(keyEvent({ code: "AltRight" })); // correct key
     expect(voice.stop).toHaveBeenCalledOnce();
+  });
+
+  it("ignores AltGr presses (Right Alt on non-US layouts)", () => {
+    // AltGr fires e.key === "AltGraph" on most browsers, sometimes also as
+    // ctrlKey+altKey, sometimes only as a modifier-state flag. All forms
+    // must be ignored so typing @ / {} on a German/French/Spanish layout
+    // doesn't start voice recording.
+    const voice = makeVoice("idle");
+    const { onKeyDown } = createVoiceHotkeyHandlers(() => voice, null, "AltRight");
+
+    onKeyDown(keyEvent({ code: "AltRight", key: "AltGraph" }));
+    expect(voice.start).not.toHaveBeenCalled();
+
+    onKeyDown(keyEvent({ code: "AltRight", ctrlKey: true, altKey: true }));
+    expect(voice.start).not.toHaveBeenCalled();
+
+    onKeyDown(keyEvent({
+      code: "AltRight",
+      getModifierState: (m) => m === "AltGraph",
+    }));
+    expect(voice.start).not.toHaveBeenCalled();
+  });
+});
+
+describe("createVoiceHotkeyHandlers — input blocked gate", () => {
+  it("blocks toggle from starting recording when an overlay is open", () => {
+    const voice = makeVoice("idle");
+    const { onKeyDown } = createVoiceHotkeyHandlers(
+      () => voice,
+      "mod+shift+m",
+      null,
+      () => true, // overlay open
+    );
+    onKeyDown(keyEvent({ key: "m", metaKey: true, shiftKey: true }));
+    expect(voice.start).not.toHaveBeenCalled();
+  });
+
+  it("still allows toggle to STOP an in-flight recording when overlay is open", () => {
+    // If user opens settings while recording, the hotkey must still be able
+    // to end the recording — otherwise it gets stuck on.
+    const voice = makeVoice("recording");
+    const { onKeyDown } = createVoiceHotkeyHandlers(
+      () => voice,
+      "mod+shift+m",
+      null,
+      () => true,
+    );
+    onKeyDown(keyEvent({ key: "m", metaKey: true, shiftKey: true }));
+    expect(voice.stop).toHaveBeenCalledOnce();
+  });
+
+  it("blocks hold from starting when overlay is open", () => {
+    const voice = makeVoice("idle");
+    const { onKeyDown } = createVoiceHotkeyHandlers(
+      () => voice,
+      null,
+      "AltRight",
+      () => true,
+    );
+    onKeyDown(keyEvent({ code: "AltRight" }));
+    expect(voice.start).not.toHaveBeenCalled();
   });
 });

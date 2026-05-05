@@ -1,8 +1,23 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
+import { useAppStore } from "../stores/useAppStore";
 import type { VoiceInputController } from "./useVoiceInput";
 
-export const DEFAULT_TOGGLE_HOTKEY = "mod+shift+m";
-export const DEFAULT_HOLD_HOTKEY = "AltRight";
+// Re-export so existing call sites (KeyboardSettings, tests) keep working.
+export {
+  DEFAULT_TOGGLE_HOTKEY,
+  DEFAULT_HOLD_HOTKEY_MAC,
+  getDefaultHoldHotkey,
+} from "../utils/voiceHotkeys";
+
+/** Detect AltGr — Right Alt on most non-US layouts produces this and is used
+ * to type common characters. We must never treat AltGr presses as hotkey
+ * activations. */
+function isAltGr(e: KeyboardEvent): boolean {
+  if (e.key === "AltGraph") return true;
+  // Some browsers/OSes report AltGr as Ctrl+Alt with code AltRight.
+  if (typeof e.getModifierState === "function" && e.getModifierState("AltGraph")) return true;
+  return e.code === "AltRight" && e.ctrlKey && e.altKey;
+}
 
 type VoiceHandle = Pick<VoiceInputController, "state" | "start" | "stop" | "cancel">;
 
@@ -78,6 +93,10 @@ export function createVoiceHotkeyHandlers(
   getVoice: () => VoiceHandle,
   toggleHotkey: string | null,
   holdHotkey: string | null,
+  /** Returns true when the hotkey should not fire START actions (e.g. a modal
+   * or settings panel is open). Stop/cancel/release actions still run so an
+   * in-flight recording can always be ended. */
+  isInputBlocked: () => boolean = () => false,
 ): {
   onKeyDown: (e: KeyboardEvent) => void;
   onKeyUp: (e: KeyboardEvent) => void;
@@ -105,17 +124,21 @@ export function createVoiceHotkeyHandlers(
           v.stop();
         } else if (v.state === "starting" || v.state === "transcribing") {
           v.cancel();
-        } else {
-          // idle, setup-required, or error — try start. Mirrors the mic
-          // button's catchall: from setup-required, start() re-runs the
-          // provider check (now succeeding after the user granted perms);
-          // from error, it clears the error and re-attempts. Without this,
-          // the hotkey was a silent no-op in those states and recovery
-          // required clicking the mic button.
+        } else if (!isInputBlocked()) {
+          // idle, setup-required, or error — try start (only when no overlay
+          // owns input focus). Mirrors the mic button's catchall: from
+          // setup-required, start() re-runs the provider check (now
+          // succeeding after the user granted perms); from error it clears
+          // the error and re-attempts.
           void v.start();
         }
         return;
       }
+
+      // Reject AltGr presses outright — Right Alt acts as AltGr on most
+      // non-US layouts and is used to type @, {}, ñ, ç, etc. Triggering
+      // hold-to-talk on those would break normal text entry.
+      if (holdHotkey && e.code === holdHotkey && isAltGr(e)) return;
 
       if (
         holdHotkey &&
@@ -123,7 +146,8 @@ export function createVoiceHotkeyHandlers(
         !holdActive &&
         v.state !== "recording" &&
         v.state !== "starting" &&
-        v.state !== "transcribing"
+        v.state !== "transcribing" &&
+        !isInputBlocked()
       ) {
         e.preventDefault();
         holdActive = true;
@@ -177,10 +201,18 @@ export function useVoiceHotkey(
   });
 
   useEffect(() => {
+    // Block START actions when an overlay owns input focus — same gating
+    // pattern as useKeyboardShortcuts.ts. Stop/cancel/release are never
+    // gated, so an in-flight recording can always be ended.
+    const isInputBlocked = () => {
+      const s = useAppStore.getState();
+      return s.settingsOpen || !!s.activeModal || s.commandPaletteOpen || s.fuzzyFinderOpen;
+    };
     const { onKeyDown, onKeyUp, onBlur } = createVoiceHotkeyHandlers(
       () => voiceRef.current,
       toggleHotkey,
       holdHotkey,
+      isInputBlocked,
     );
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
