@@ -35,6 +35,7 @@ import type {
   PluginConfiguration,
   PluginMarketplace,
 } from "../types/plugins";
+import type { ConversationCheckpoint } from "../types/checkpoint";
 
 // -- Data --
 
@@ -536,7 +537,7 @@ export function steerQueuedChatMessage(
   mentionedFiles?: string[],
   attachments?: AttachmentInput[],
   messageId?: string,
-): Promise<void> {
+): Promise<ConversationCheckpoint | null> {
   return invoke("steer_queued_chat_message", {
     sessionId,
     messageId: messageId ?? null,
@@ -611,8 +612,6 @@ export function submitPlanApproval(
 }
 
 // -- Checkpoints --
-
-import type { ConversationCheckpoint } from "../types/checkpoint";
 
 export function listCheckpoints(
   sessionId: string,

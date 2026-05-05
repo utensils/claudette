@@ -231,6 +231,7 @@ export function ChatPanel() {
   );
   const setQueuedMessage = useAppStore((s) => s.setQueuedMessage);
   const clearQueuedMessage = useAppStore((s) => s.clearQueuedMessage);
+  const addCheckpoint = useAppStore((s) => s.addCheckpoint);
   const addWorkspace = useAppStore((s) => s.addWorkspace);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
   const activeSessionStatus = useAppStore((s) => {
@@ -716,13 +717,16 @@ export function ChatPanel() {
     setError(null);
     setIsSteeringQueued(true);
     try {
-      await steerQueuedChatMessage(
+      const checkpoint = await steerQueuedChatMessage(
         sessionId,
         content,
         mentionedFiles,
         attachments,
         messageId,
       );
+      if (checkpoint) {
+        addCheckpoint(sessionId, checkpoint);
+      }
       const history = (historyRef.current[sessionId] ??= []);
       history.push(content);
       historyIndexRef.current = -1;

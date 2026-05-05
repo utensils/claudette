@@ -191,6 +191,17 @@ describe("buildRollbackMap", () => {
     expect(result.get(2)?.id).toBe("cp1");
   });
 
+  it("maps a steered user message to a pre-steer checkpoint in the same turn", () => {
+    const messages = [
+      msg("m1", "User"),
+      msg("m2", "User"),
+      msg("m3", "Assistant"),
+    ];
+    const cps = [{ ...cp("cp-pre-steer", null, 0), message_id: "m1" }];
+    const result = buildRollbackMap(messages, cps);
+    expect(result.get(1)?.id).toBe("cp-pre-steer");
+  });
+
   it("scans backward past interrupted turn to find checkpoint", () => {
     // Turn 1: user → assistant (checkpoint), Turn 2: user → assistant (no checkpoint, stopped)
     const messages = [

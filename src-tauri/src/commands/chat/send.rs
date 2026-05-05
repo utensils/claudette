@@ -912,7 +912,7 @@ pub async fn steer_queued_chat_message(
     mentioned_files: Option<Vec<String>>,
     attachments: Option<Vec<AttachmentInput>>,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+) -> Result<Option<claudette::model::ConversationCheckpoint>, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
 
     let chat_session_id = session_id;
@@ -957,6 +957,24 @@ pub async fn steer_queued_chat_message(
         &content,
         attachments.as_deref(),
     )?;
+
+    let anchor_msg_id = db
+        .list_chat_messages_for_session(&chat_session_id)
+        .map_err(|e| e.to_string())?
+        .last()
+        .map(|msg| msg.id.clone())
+        .ok_or("Cannot steer before chat history has a message")?;
+    let pre_steer_checkpoint = create_turn_checkpoint(CheckpointArgs {
+        db_path: &state.db_path,
+        workspace_id: &workspace_id,
+        chat_session_id: &chat_session_id,
+        anchor_msg_id: &anchor_msg_id,
+        worktree_path: &worktree_path,
+        created_at: now_iso(),
+    })
+    .await
+    .ok_or("Failed to create pre-steer checkpoint")?;
+
     let prompt = claudette::file_expand::expand_file_mentions(
         std::path::Path::new(&worktree_path),
         &content,
@@ -972,7 +990,8 @@ pub async fn steer_queued_chat_message(
         }
     }
     ps.steer_user_message(&prompt, &prepared_user_send.cli_atts)
-        .await
+        .await?;
+    Ok(Some(pre_steer_checkpoint))
 }
 
 #[tauri::command]
