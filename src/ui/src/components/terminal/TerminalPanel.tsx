@@ -19,6 +19,7 @@ import {
   deleteTerminalTab,
   ensureClaudetteTerminalTab,
   listTerminalTabs,
+  updateTerminalTabOrder,
   openUrl,
   spawnPty,
   writePty,
@@ -56,7 +57,15 @@ import {
   shouldForwardPtyResize,
   type PtySizeSnapshot,
 } from "./terminalPtyResize";
+import {
+  reorderTerminalTabs,
+  tabDropPlacement,
+} from "./terminalPanelLogic";
 import { reclaimScrollLines } from "./terminalReclaim";
+import {
+  AttachmentContextMenu,
+  type AttachmentContextMenuItem,
+} from "../chat/AttachmentContextMenu";
 import "@xterm/xterm/css/xterm.css";
 import styles from "./TerminalPanel.module.css";
 
@@ -354,8 +363,10 @@ export const TerminalPanel = memo(function TerminalPanel() {
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
-    leafId: string;
+    tabId: number;
+    leafId?: string;
   } | null>(null);
+  const [draggedTabId, setDraggedTabId] = useState<number | null>(null);
 
   const autoCreatedRef = useRef<string | null>(null);
   // Tracks the last (tabId, leafId, visible) tuple we applied keyboard
@@ -426,6 +437,11 @@ export const TerminalPanel = memo(function TerminalPanel() {
 
   const handleStopAgentTask = useCallback(async (tab: TerminalTab) => {
     if (!tab.agent_chat_session_id || !tab.agent_task_id) return;
+    const label = tab.task_summary?.trim() || tab.title || tab.agent_task_id;
+    const ok = window.confirm(
+      `Stop background task "${label}"?\n\nThis will terminate the running command.`,
+    );
+    if (!ok) return;
     try {
       await stopAgentBackgroundTask(tab.agent_chat_session_id, tab.agent_task_id);
     } catch (err) {
@@ -662,7 +678,12 @@ export const TerminalPanel = memo(function TerminalPanel() {
       const handleContextMenu = (ev: MouseEvent) => {
         ev.preventDefault();
         ev.stopPropagation();
-        setContextMenu({ x: ev.clientX, y: ev.clientY, leafId: spec.leafId });
+        setContextMenu({
+          x: ev.clientX,
+          y: ev.clientY,
+          tabId: spec.tabId,
+          leafId: spec.leafId,
+        });
       };
       container.addEventListener(
         "contextmenu",
@@ -1037,10 +1058,24 @@ export const TerminalPanel = memo(function TerminalPanel() {
 
   const handleClearContextTerminal = useCallback(() => {
     if (!contextMenu) return;
-    const inst = instancesRef.current.get(contextMenu.leafId);
-    inst?.term.clear();
+    if (contextMenu.leafId) {
+      instancesRef.current.get(contextMenu.leafId)?.term.clear();
+    } else {
+      for (const inst of instancesRef.current.values()) {
+        if (inst.tabId === contextMenu.tabId) inst.term.clear();
+      }
+    }
     setContextMenu(null);
   }, [contextMenu]);
+  const contextMenuItems = useMemo<AttachmentContextMenuItem[]>(
+    () => [
+      {
+        label: "Clear",
+        onSelect: handleClearContextTerminal,
+      },
+    ],
+    [handleClearContextTerminal],
+  );
 
   const handleTerminalContextMenu = useCallback(
     (ev: ReactMouseEvent<HTMLDivElement>) => {
@@ -1049,9 +1084,68 @@ export const TerminalPanel = memo(function TerminalPanel() {
       if (!activeLeafId) return;
       ev.preventDefault();
       ev.stopPropagation();
-      setContextMenu({ x: ev.clientX, y: ev.clientY, leafId: activeLeafId });
+      setContextMenu({
+        x: ev.clientX,
+        y: ev.clientY,
+        tabId: activeTerminalTabId,
+        leafId: activeLeafId,
+      });
     },
     [activeTerminalPaneId, activeTerminalTabId],
+  );
+
+  const handleTabContextMenu = useCallback(
+    (ev: ReactMouseEvent<HTMLDivElement>, tab: TerminalTab) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (selectedWorkspaceId) setActiveTerminalTab(selectedWorkspaceId, tab.id);
+      setContextMenu({
+        x: ev.clientX,
+        y: ev.clientY,
+        tabId: tab.id,
+      });
+    },
+    [selectedWorkspaceId, setActiveTerminalTab],
+  );
+
+  const handleTabDrop = useCallback(
+    (ev: ReactMouseEvent<HTMLDivElement>, targetTab: TerminalTab) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (!selectedWorkspaceId || draggedTabId == null || draggedTabId === targetTab.id) {
+        setDraggedTabId(null);
+        return;
+      }
+      const currentTabs = terminalTabs[selectedWorkspaceId] ?? [];
+      const withSortOrder = reorderTerminalTabs(
+        currentTabs,
+        draggedTabId,
+        targetTab.id,
+        tabDropPlacement(
+          ev.clientX,
+          ev.currentTarget.getBoundingClientRect().left,
+          ev.currentTarget.getBoundingClientRect().width,
+        ),
+      );
+      if (!withSortOrder) {
+        setDraggedTabId(null);
+        return;
+      }
+      setTerminalTabs(selectedWorkspaceId, withSortOrder);
+      setActiveTerminalTab(selectedWorkspaceId, draggedTabId);
+      setDraggedTabId(null);
+      void updateTerminalTabOrder(
+        selectedWorkspaceId,
+        withSortOrder.map((tab) => tab.id),
+      ).catch((err) => console.error("Failed to persist terminal tab order:", err));
+    },
+    [
+      draggedTabId,
+      selectedWorkspaceId,
+      setActiveTerminalTab,
+      setTerminalTabs,
+      terminalTabs,
+    ],
   );
 
   // Destroy everything on unmount.
@@ -1099,6 +1193,21 @@ export const TerminalPanel = memo(function TerminalPanel() {
             onClick={() =>
               selectedWorkspaceId && setActiveTerminalTab(selectedWorkspaceId, tab.id)
             }
+            onContextMenu={(e) => handleTabContextMenu(e, tab)}
+            draggable
+            onDragStart={(e) => {
+              setDraggedTabId(tab.id);
+              e.dataTransfer.effectAllowed = "move";
+              e.dataTransfer.setData("text/plain", String(tab.id));
+            }}
+            onDragOver={(e) => {
+              if (draggedTabId != null && draggedTabId !== tab.id) {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+              }
+            }}
+            onDrop={(e) => handleTabDrop(e, tab)}
+            onDragEnd={() => setDraggedTabId(null)}
           >
             <span className={styles.tabTitle}>{tab.title}</span>
             {tab.kind === "agent_task" && tab.task_status && (
@@ -1139,7 +1248,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
       </div>
       <div
         className={styles.termContainer}
-        onContextMenu={handleTerminalContextMenu}
+        onContextMenuCapture={handleTerminalContextMenu}
       >
         {tabs.map((tab) => {
           const tree = terminalPaneTrees[tab.id];
@@ -1163,21 +1272,12 @@ export const TerminalPanel = memo(function TerminalPanel() {
           );
         })}
         {contextMenu && (
-          <div
-            className={styles.contextMenu}
-            style={{ left: contextMenu.x, top: contextMenu.y }}
-            onPointerDown={(ev) => ev.stopPropagation()}
-            role="menu"
-          >
-            <button
-              className={styles.contextMenuItem}
-              type="button"
-              onClick={handleClearContextTerminal}
-              role="menuitem"
-            >
-              Clear
-            </button>
-          </div>
+          <AttachmentContextMenu
+            x={contextMenu.x}
+            y={contextMenu.y}
+            items={contextMenuItems}
+            onClose={() => setContextMenu(null)}
+          />
         )}
       </div>
     </div>

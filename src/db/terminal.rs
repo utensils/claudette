@@ -345,6 +345,26 @@ impl Database {
         Ok(())
     }
 
+    pub fn update_terminal_tab_sort_order(
+        &self,
+        workspace_id: &str,
+        tab_ids: &[i64],
+    ) -> Result<(), rusqlite::Error> {
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "UPDATE terminal_tabs
+                 SET sort_order = ?1
+                 WHERE workspace_id = ?2 AND id = ?3",
+            )?;
+            for (sort_order, id) in tab_ids.iter().enumerate() {
+                stmt.execute(params![sort_order as i32, workspace_id, id])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     #[allow(dead_code)]
     pub fn delete_terminal_tabs_for_workspace(
         &self,
@@ -566,6 +586,45 @@ mod tests {
         db.delete_terminal_tab(1).unwrap();
         let tabs = db.list_terminal_tabs_by_workspace("w1").unwrap();
         assert!(tabs.is_empty());
+    }
+
+    #[test]
+    fn test_update_terminal_tab_sort_order() {
+        let db = setup_db_with_workspace();
+        db.insert_terminal_tab(&make_terminal_tab(1, "w1", "Terminal 1"))
+            .unwrap();
+        db.insert_terminal_tab(&make_terminal_tab(2, "w1", "Terminal 2"))
+            .unwrap();
+        db.insert_terminal_tab(&make_terminal_tab(3, "w1", "Terminal 3"))
+            .unwrap();
+
+        db.update_terminal_tab_sort_order("w1", &[3, 1, 2]).unwrap();
+
+        let tabs = db.list_terminal_tabs_by_workspace("w1").unwrap();
+        let ids: Vec<_> = tabs.iter().map(|tab| tab.id).collect();
+        assert_eq!(ids, vec![3, 1, 2]);
+    }
+
+    #[test]
+    fn test_update_terminal_tab_sort_order_is_workspace_scoped() {
+        let db = setup_db_with_workspace();
+        db.insert_workspace(&make_workspace("w2", "r1", "workspace-2"))
+            .unwrap();
+        let mut w1_tab = make_terminal_tab(1, "w1", "Terminal 1");
+        w1_tab.sort_order = 0;
+        let mut w2_tab = make_terminal_tab(2, "w2", "Terminal 2");
+        w2_tab.sort_order = 0;
+        db.insert_terminal_tab(&w1_tab).unwrap();
+        db.insert_terminal_tab(&w2_tab).unwrap();
+
+        db.update_terminal_tab_sort_order("w1", &[2, 1]).unwrap();
+
+        let w1_tabs = db.list_terminal_tabs_by_workspace("w1").unwrap();
+        let w2_tabs = db.list_terminal_tabs_by_workspace("w2").unwrap();
+        assert_eq!(w1_tabs[0].id, 1);
+        assert_eq!(w1_tabs[0].sort_order, 1);
+        assert_eq!(w2_tabs[0].id, 2);
+        assert_eq!(w2_tabs[0].sort_order, 0);
     }
 
     #[test]

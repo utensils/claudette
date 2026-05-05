@@ -123,6 +123,17 @@ pub async fn list_terminal_tabs(
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn update_terminal_tab_order(
+    workspace_id: String,
+    tab_ids: Vec<i64>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    db.update_terminal_tab_sort_order(&workspace_id, &tab_ids)
+        .map_err(|e| e.to_string())
+}
+
 #[derive(Clone, Serialize)]
 struct AgentTaskOutputPayload {
     tab_id: i64,

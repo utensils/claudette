@@ -878,6 +878,13 @@ export function listTerminalTabs(
   return invoke("list_terminal_tabs", { workspaceId });
 }
 
+export function updateTerminalTabOrder(
+  workspaceId: string,
+  tabIds: number[],
+): Promise<void> {
+  return invoke("update_terminal_tab_order", { workspaceId, tabIds });
+}
+
 // -- PTY --
 
 export function spawnPty(

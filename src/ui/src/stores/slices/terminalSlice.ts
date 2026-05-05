@@ -17,9 +17,6 @@ import type { AppState } from "../useAppStore";
 
 function orderTerminalTabs(tabs: TerminalTab[]): TerminalTab[] {
   return [...tabs].sort((a, b) => {
-    const aKind = a.kind === "agent_task" ? 0 : 1;
-    const bKind = b.kind === "agent_task" ? 0 : 1;
-    if (aKind !== bKind) return aKind - bKind;
     const bySortOrder = a.sort_order - b.sort_order;
     if (bySortOrder !== 0) return bySortOrder;
     return a.id - b.id;

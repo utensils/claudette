@@ -185,6 +185,7 @@ describe("terminal slice: upsertAgentTaskTerminalTab", () => {
     };
     const claudetteTerminal: TerminalTab = {
       ...makeTab(3, WS_A),
+      sort_order: 0,
       title: "Claudette terminal",
       kind: "agent_task",
       agent_chat_session_id: "session-a",
@@ -203,6 +204,26 @@ describe("terminal slice: upsertAgentTaskTerminalTab", () => {
     expect(
       useAppStore.getState().agentBackgroundTasksBySessionId["session-a"],
     ).toEqual([claudetteTerminal]);
+  });
+
+  it("preserves explicit user tab order even when an agent terminal is present", () => {
+    const userTerminal = { ...makeTab(1, WS_A), sort_order: 0 };
+    const claudetteTerminal: TerminalTab = {
+      ...makeTab(2, WS_A),
+      sort_order: 1,
+      title: "Claudette terminal",
+      kind: "agent_task",
+      agent_chat_session_id: "session-a",
+    };
+
+    useAppStore
+      .getState()
+      .setTerminalTabs(WS_A, [claudetteTerminal, userTerminal]);
+
+    expect(useAppStore.getState().terminalTabs[WS_A]).toEqual([
+      userTerminal,
+      claudetteTerminal,
+    ]);
   });
 });
 
