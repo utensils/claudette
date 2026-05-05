@@ -22,9 +22,18 @@ local function join(dir, name)
     return dir .. "/" .. name
 end
 
+-- The env-provider dispatcher historically injects `args.worktree`
+-- into every call. Other callers (e.g. `claudette plugin invoke`)
+-- don't, so prefer the always-populated `host.workspace()` and only
+-- fall back to `args.worktree` for backwards compat.
+local function worktree_of(args)
+    return (args and args.worktree) or host.workspace().worktree_path
+end
+
 function M.detect(args)
-    return host.file_exists(join(args.worktree, "flake.nix"))
-        or host.file_exists(join(args.worktree, "shell.nix"))
+    local wt = worktree_of(args)
+    return host.file_exists(join(wt, "flake.nix"))
+        or host.file_exists(join(wt, "shell.nix"))
 end
 
 function M.export(args)
@@ -32,8 +41,9 @@ function M.export(args)
     -- legacy `shell.nix`-only repos we must pass `-f shell.nix`
     -- explicitly; otherwise nix errors with "could not find a
     -- flake.nix" even though detect said the repo was eligible.
-    local flake_path = join(args.worktree, "flake.nix")
-    local shell_path = join(args.worktree, "shell.nix")
+    local wt = worktree_of(args)
+    local flake_path = join(wt, "flake.nix")
+    local shell_path = join(wt, "shell.nix")
     local result
     if host.file_exists(flake_path) then
         result = host.exec("nix", { "print-dev-env", "--json" })
@@ -65,7 +75,7 @@ function M.export(args)
 
     local watched = {}
     for _, name in ipairs({ "flake.nix", "flake.lock", "shell.nix" }) do
-        local path = join(args.worktree, name)
+        local path = join(wt, name)
         if host.file_exists(path) then
             table.insert(watched, path)
         end

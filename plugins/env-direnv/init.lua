@@ -17,8 +17,16 @@ local function join(dir, name)
     return dir .. "/" .. name
 end
 
+-- The env-provider dispatcher historically injects `args.worktree`
+-- into every call. Other callers (e.g. `claudette plugin invoke`)
+-- don't, so prefer the always-populated `host.workspace()` and only
+-- fall back to `args.worktree` for backwards compat.
+local function worktree_of(args)
+    return (args and args.worktree) or host.workspace().worktree_path
+end
+
 function M.detect(args)
-    return host.file_exists(join(args.worktree, ".envrc"))
+    return host.file_exists(join(worktree_of(args), ".envrc"))
 end
 
 function M.export(args)
@@ -65,7 +73,7 @@ function M.export(args)
             table.insert(watched, path)
         end
     end
-    add(join(args.worktree, ".envrc"))
+    add(join(worktree_of(args), ".envrc"))
     local direnv_watches = env_map["DIRENV_WATCHES"]
     if type(direnv_watches) == "string" and #direnv_watches > 0 then
         for _, path in ipairs(host.direnv_decode_watches(direnv_watches)) do

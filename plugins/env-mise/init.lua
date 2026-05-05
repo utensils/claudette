@@ -10,12 +10,21 @@ local function join(dir, name)
     return dir .. "/" .. name
 end
 
+-- The env-provider dispatcher historically injects `args.worktree`
+-- into every call. Other callers (e.g. `claudette plugin invoke`)
+-- don't, so prefer the always-populated `host.workspace()` and only
+-- fall back to `args.worktree` for backwards compat.
+local function worktree_of(args)
+    return (args and args.worktree) or host.workspace().worktree_path
+end
+
 -- Config files in order of mise's own precedence.
 local CONFIG_FILES = { "mise.toml", ".mise.toml", ".tool-versions" }
 
 function M.detect(args)
+    local wt = worktree_of(args)
     for _, name in ipairs(CONFIG_FILES) do
-        if host.file_exists(join(args.worktree, name)) then
+        if host.file_exists(join(wt, name)) then
             return true
         end
     end
@@ -46,8 +55,9 @@ function M.export(args)
 
     -- Watch all known config files — mise may use whichever is present.
     local watched = {}
+    local wt = worktree_of(args)
     for _, name in ipairs(CONFIG_FILES) do
-        local path = join(args.worktree, name)
+        local path = join(wt, name)
         if host.file_exists(path) then
             table.insert(watched, path)
         end
