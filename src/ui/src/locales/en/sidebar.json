@@ -28,6 +28,7 @@
   "filter_workspaces": "Filter workspaces",
   "workspace_filters_aria": "Workspace filters",
   "rename_workspace_aria": "Rename workspace",
+  "rename_workspace_failed": "Couldn't rename workspace: {{error}}",
   "archive_workspace": "Archive",
   "restore_workspace": "Restore",
   "delete_workspace": "Delete",
