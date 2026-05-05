@@ -345,6 +345,37 @@
   background: var(--accent-primary);
 }
 
+/* Workspace drag-reorder visuals. Mirrors the repo-group reorder + the
+ * terminal/workspace tab reorder: a translucent dragged item, an accent
+ * bar drawn at the top/bottom edge of the hover target showing where the
+ * dropped workspace will land. Pseudo-elements are safe here — wsItem only
+ * uses ::before for the selection bar (left edge), so top/bottom indicators
+ * don't conflict. */
+.wsDragging {
+  opacity: 0.4;
+  cursor: grabbing;
+}
+
+.wsItem[data-drop-before="true"]::after,
+.wsItem[data-drop-after="true"]::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  background: var(--accent-primary);
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+.wsItem[data-drop-before="true"]::after {
+  top: -1px;
+}
+
+.wsItem[data-drop-after="true"]::after {
+  bottom: -1px;
+}
+
 .wsItemLoading {
   opacity: 0.6;
   cursor: default;

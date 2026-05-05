@@ -82,6 +82,11 @@ export interface FileTreeSlice {
   ) => void;
 
   // Tab management
+  /** Replace the entire ordered list of file tabs for a workspace. Used by
+   *  drag-reorder (volatile — not persisted across restarts; see SessionTabs
+   *  unified reorder). Caller is responsible for keeping the active tab in
+   *  the new list. */
+  setFileTabsForWorkspace: (workspaceId: string, paths: string[]) => void;
   /** Open a file tab and make it active. If already open, just selects it. */
   openFileTab: (workspaceId: string, path: string) => void;
   /** Switch to an already-open tab (no-op if not in the workspace's tabs). */
@@ -172,6 +177,14 @@ export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> 
       allFilesSelectedPathByWorkspace: {
         ...s.allFilesSelectedPathByWorkspace,
         [workspaceId]: path,
+      },
+    })),
+
+  setFileTabsForWorkspace: (workspaceId, paths) =>
+    set((s) => ({
+      fileTabsByWorkspace: {
+        ...s.fileTabsByWorkspace,
+        [workspaceId]: paths,
       },
     })),
 

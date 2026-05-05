@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
 # Claudette dev launcher.
 #
-# Probes for the first free Vite port (starting at 1420) and the first free
-# debug eval port (starting at 19432), exports them for the child processes,
-# then starts `cargo tauri dev` with an inline config override so the webview
-# loads from the port Vite actually bound.
+# Probes for the first free Vite port (starting at 14253 — deliberately NOT
+# Tauri's stock 1420, so other Tauri starter-template dev builds can't
+# accidentally rebind our port and swap their bundle into our webview) and
+# the first free debug eval port (starting at 19432), exports them for the
+# child processes, then starts `cargo tauri dev` with an inline config
+# override so the webview loads from the port Vite actually bound.
 #
 # A discovery file is written to ${TMPDIR:-/tmp}/claudette-dev/<pid>.json so
 # helpers like `debug-eval.sh` can find the matching instance when multiple
 # dev builds run side-by-side. The file is cleaned up on exit.
 #
 # Env overrides:
-#   VITE_PORT_BASE         start port for Vite probe (default 1420)
+#   VITE_PORT_BASE         start port for Vite probe (default 14253)
 #   CLAUDETTE_DEBUG_PORT_BASE   start port for debug probe (default 19432)
 #   CARGO_TAURI_FEATURES   features to pass to tauri (default devtools,server)
 set -euo pipefail
@@ -27,7 +29,13 @@ find_free_port() {
   echo "$p"
 }
 
-vite_port=$(find_free_port "${VITE_PORT_BASE:-1420}")
+# Default Vite port is 14253 — deliberately moved off Tauri's stock 1420
+# to avoid the cross-app dev-port hijack scenario where another Tauri
+# starter template (which also defaults to 1420) launches and rebinds
+# the port underneath our running webview, displaying its own bundle in
+# Claudette's window. The inline guard in src/ui/index.html catches the
+# residual case where another app still picks the same number.
+vite_port=$(find_free_port "${VITE_PORT_BASE:-14253}")
 debug_port=$(find_free_port "${CLAUDETTE_DEBUG_PORT_BASE:-19432}")
 
 export VITE_PORT="$vite_port"

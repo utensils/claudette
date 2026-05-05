@@ -6,8 +6,24 @@
 
 .tabBar {
   display: flex;
+  align-items: stretch;
   border-bottom: 1px solid var(--sidebar-border);
   flex-shrink: 0;
+  /* Match WorkspacePanelHeader height so the bottom-divider line is
+   * continuous from the chat header into the right-sidebar header. Without
+   * this, the right-sidebar tab bar bottoms out at ~32px while the chat
+   * header bottoms out at 54px, leaving a visible misalignment. */
+  min-height: var(--workspace-header-h);
+}
+
+/* When the PR banner is rendered above us (banner is the .panel's first
+ * child, tab bar becomes the second), drop to the second-row height so
+ * our bottom border lands at the same Y as the chat session tab bar's
+ * bottom border. Without this, the right column has a 2× tall header
+ * stack (banner + full-height tabs) while the chat column has a
+ * normal-height header + tab strip. */
+.tabBar:not(:first-child) {
+  min-height: var(--tab-bar-h);
 }
 
 .tab {

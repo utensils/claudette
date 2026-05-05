@@ -169,4 +169,9 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("20260505055527_agent_task_terminal_tabs.sql"),
         legacy_version: None,
     },
+    Migration {
+        id: "20260505180023_workspace_sort_order",
+        sql: include_str!("20260505180023_workspace_sort_order.sql"),
+        legacy_version: None,
+    },
 ];

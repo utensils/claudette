@@ -167,7 +167,7 @@ pub async fn create_workspace(
         })?
     };
 
-    let ws = Workspace {
+    let mut ws = Workspace {
         id: uuid::Uuid::new_v4().to_string(),
         repository_id: repo_id,
         name: allocation.name,
@@ -177,6 +177,7 @@ pub async fn create_workspace(
         agent_status: AgentStatus::Idle,
         status_line: String::new(),
         created_at: now_iso(),
+        sort_order: 0,
     };
 
     // If the DB insert fails, roll back the worktree + branch we just created
@@ -185,6 +186,12 @@ pub async fn create_workspace(
         let _ = git::remove_worktree(&repo_path, &actual_path, true).await;
         let _ = git::branch_delete(&repo_path, &ws.branch_name).await;
         return Err(e.to_string());
+    }
+    // Patch sort_order to the value the DB assigned so the workspace this
+    // command returns to the UI lands at the bottom of its repo group
+    // immediately, instead of rendering at sort_order=0 until reload.
+    if let Ok(Some(o)) = db.lookup_workspace_sort_order(&ws.id) {
+        ws.sort_order = o;
     }
 
     // Resolve and execute setup script (unless caller requested skip).
@@ -802,6 +809,21 @@ pub fn generate_workspace_name() -> GeneratedWorkspaceName {
     }
 }
 
+/// Reassign per-repository `sort_order` of workspaces in the given repo to
+/// match the supplied id sequence. Mirrors `reorder_repositories` but scoped
+/// per-repo because workspaces live inside a specific repo's worktree on
+/// disk and only ever reorder among siblings (option 2A — within-repo only).
+#[tauri::command]
+pub async fn reorder_workspaces(
+    repository_id: String,
+    workspace_ids: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    db.reorder_workspaces(&repository_id, &workspace_ids)
+        .map_err(|e| e.to_string())
+}
+
 /// Re-read the current branch for every active workspace. Returns one
 /// `(workspace_id, current_branch)` entry per workspace we could probe
 /// (level-triggered: every active workspace, not just ones that drifted),
@@ -996,6 +1018,7 @@ pub async fn import_worktrees(
             agent_status: AgentStatus::Idle,
             status_line: String::new(),
             created_at: now_iso(),
+            sort_order: 0,
         };
 
         created.push(ws);
@@ -1004,6 +1027,15 @@ pub async fn import_worktrees(
     // Atomic batch insert — all or nothing.
     db.insert_workspaces_batch(&created)
         .map_err(|e| e.to_string())?;
+    // Patch each row's sort_order to the value the DB assigned so the
+    // workspaces this command returns to the UI render at the bottom of
+    // their repo groups immediately (Codex P2). One readback query per
+    // import; imports are rare and bounded so no batching needed.
+    for ws in created.iter_mut() {
+        if let Ok(Some(o)) = db.lookup_workspace_sort_order(&ws.id) {
+            ws.sort_order = o;
+        }
+    }
 
     // Imported workspaces already have user-defined branch names — pre-claim
     // the auto-rename slot so the first-message rename never fires. Match the

@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { FileDiff as FileDiffIcon, Plus, X } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
@@ -11,7 +18,11 @@ import {
   createChatSession,
   renameChatSession,
   archiveChatSession,
+  reorderChatSessions,
 } from "../../services/tauri";
+import { useTabDragReorder } from "../../hooks/useTabDragReorder";
+import { TabDragGhost } from "../shared/TabDragGhost";
+import { splitUnifiedTabOrder } from "./sessionTabsLogic";
 import { SessionStatusIcon, type SessionStatusKind } from "../shared/SessionStatusIcon";
 import {
   AttachmentContextMenu,
@@ -219,9 +230,23 @@ export function SessionTabs({ workspaceId }: Props) {
   // navigation can focus any tab in the strip, regardless of kind.
   const tabRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
-  // Unified ordered list of focusable tab entries. Sessions first, diffs
-  // second — the layout users see in the strip. Wrapped in useMemo so the
-  // navigateTabs callback identity stays stable across unrelated re-renders.
+  const tabOrderForWorkspace = useAppStore(
+    (s) => s.tabOrderByWorkspace[workspaceId],
+  );
+  const setTabOrderForWorkspace = useAppStore((s) => s.setTabOrderForWorkspace);
+  // Per-kind setters used by `onReorder` to keep the per-kind arrays in
+  // sync with the unified order — other call sites (closeFileTab etc.)
+  // still consult the per-kind arrays for adjacency, so they have to
+  // match the visible order.
+  const setFileTabsForWorkspace = useAppStore((s) => s.setFileTabsForWorkspace);
+  const setDiffTabsForWorkspace = useAppStore((s) => s.setDiffTabsForWorkspace);
+
+  // Unified ordered list of focusable tab entries. Default layout is
+  // sessions → diffs → files; once the user has dragged the strip into
+  // a custom unified order (`tabOrderByWorkspace`), we honor that order
+  // instead and reconcile against the live per-kind state on every render
+  // (drop entries whose underlying tab is gone; append newly-opened tabs
+  // at the end so they don't disappear into the abyss).
   type NavEntry =
     | { key: string; kind: "session"; sessionId: string }
     | { key: string; kind: "diff"; path: string; layer: DiffLayer | null }
@@ -243,8 +268,107 @@ export function SessionTabs({ workspaceId }: Props) {
       kind: "file",
       path: p,
     }));
-    return [...sessionEntries, ...diffEntries, ...fileEntries];
-  }, [activeSessions, diffTabs, fileTabs]);
+    const defaultOrder = [...sessionEntries, ...diffEntries, ...fileEntries];
+
+    if (!tabOrderForWorkspace || tabOrderForWorkspace.length === 0) {
+      return defaultOrder;
+    }
+
+    // Reconcile saved unified order with the live per-kind state. A small
+    // map keyed by NavEntry.key lets us O(1) resolve each saved entry; new
+    // tabs (not yet in the saved order) append at the end, preserving the
+    // user's drag intent for everything they touched.
+    const byKey = new Map(defaultOrder.map((e) => [e.key, e]));
+    const out: NavEntry[] = [];
+    const used = new Set<string>();
+    for (const ord of tabOrderForWorkspace) {
+      const key =
+        ord.kind === "session"
+          ? sessionNavKey(ord.sessionId)
+          : ord.kind === "diff"
+            ? diffNavKey(ord.path, ord.layer)
+            : fileNavKey(ord.path);
+      const entry = byKey.get(key);
+      if (entry && !used.has(key)) {
+        out.push(entry);
+        used.add(key);
+      }
+    }
+    for (const e of defaultOrder) {
+      if (!used.has(e.key)) out.push(e);
+    }
+    return out;
+  }, [activeSessions, diffTabs, fileTabs, tabOrderForWorkspace]);
+
+  // Drag-reorder over the unified strip. The hook is generic over an `Id`
+  // type — we use the unified nav key (`s:`/`d:`/`f:` prefix) as the
+  // identifier so chat sessions, diffs, and files share one drag namespace.
+  // On drop we split the new order back into three lists, push the volatile
+  // file/diff arrays to the store, and persist session sort_order via the
+  // backend.
+  const navEntryByKey = useMemo(() => {
+    const m = new Map<string, NavEntry>();
+    for (const e of navEntries) m.set(e.key, e);
+    return m;
+  }, [navEntries]);
+
+  const tabReorder = useTabDragReorder<NavEntry, string>({
+    items: navEntries,
+    dataAttr: "sessionTabKey",
+    parseId: (raw) => raw,
+    getId: (e) => e.key,
+    getTitle: (e) => {
+      if (e.kind === "session") {
+        return activeSessions.find((s) => s.id === e.sessionId)?.name ?? "";
+      }
+      if (e.kind === "diff" || e.kind === "file") {
+        return e.path.split("/").pop() || e.path;
+      }
+      return "";
+    },
+    onReorder: (next) => {
+      // Convert the reordered nav-entry list into the unified-tab-order
+      // shape. The render block iterates the unified order directly, but
+      // we ALSO write the per-kind arrays back so other code paths that
+      // read them — e.g. `closeFileTab` picking the adjacent tab to
+      // activate, or `closeDiffTab`/keyboard nav after-close — see the
+      // same relative order the user just dragged into. Without those
+      // writebacks, those code paths still pick from the pre-drag
+      // sequence (Copilot review of the second push). Sessions are
+      // additionally persisted via reorder_chat_sessions for restart
+      // round-tripping.
+      const unified = next.map((e) =>
+        e.kind === "session"
+          ? { kind: "session" as const, sessionId: e.sessionId }
+          : e.kind === "diff"
+            ? { kind: "diff" as const, path: e.path, layer: e.layer }
+            : { kind: "file" as const, path: e.path },
+      );
+      setTabOrderForWorkspace(workspaceId, unified);
+      const split = splitUnifiedTabOrder(
+        unified,
+        activeSessions,
+        diffTabs,
+        fileTabs,
+      );
+      // Sessions: merge the reordered active set back with archived
+      // sessions (which never appear in navEntries) so the slice still
+      // has the full list per-workspace.
+      const archivedSessions = sessions.filter((s) => s.status === "Archived");
+      setSessionsForWorkspace(workspaceId, [
+        ...split.sessions,
+        ...archivedSessions,
+      ]);
+      setFileTabsForWorkspace(workspaceId, split.files);
+      setDiffTabsForWorkspace(workspaceId, split.diffs);
+      if (split.sessionPersistIds.length > 0) {
+        void reorderChatSessions(workspaceId, split.sessionPersistIds).catch(
+          (err) =>
+            console.error("[SessionTabs] Failed to persist session order:", err),
+        );
+      }
+    },
+  });
 
   // Right-click menu state. Tracks which tab was clicked (by its NavEntry key)
   // and the click position. Rendered once at the bottom; portal'd to body so
@@ -420,75 +544,113 @@ export function SessionTabs({ workspaceId }: Props) {
     ];
   }, [contextMenu, navEntries, closeEntries, selectEntry, t]);
 
+  // Convenience helper that builds the drag-reorder slice of props each
+  // sub-tab needs. Avoids repeating `tabReorder.getTabHandlers(...)` and the
+  // drop-indicator booleans three times in the render block below.
+  const dragPropsFor = (navKey: string) => {
+    const entry = navEntryByKey.get(navKey);
+    if (!entry) return null;
+    const handlers = tabReorder.getTabHandlers(entry);
+    return {
+      navKey,
+      handlers,
+      isDragging: tabReorder.draggingId === navKey,
+      dropBefore:
+        tabReorder.dropTarget?.id === navKey &&
+        tabReorder.dropTarget?.placement === "before",
+      dropAfter:
+        tabReorder.dropTarget?.id === navKey &&
+        tabReorder.dropTarget?.placement === "after",
+      isClickSuppressed: tabReorder.justEnded,
+    };
+  };
+
   return (
-    <div className={styles.tabBar} role="tablist">
-      {activeSessions.map((session) => {
-        const navKey = sessionNavKey(session.id);
-        return (
-          <SessionTab
-            key={session.id}
-            session={session}
-            isActive={
-              session.id === selectedSessionId &&
-              diffSelectedFile === null &&
-              activeFileTab === null
-            }
-            onSelect={() => switchToSession(session.id)}
-            onClose={() => handleArchive(session)}
-            onRename={(name) => {
-              updateChatSession(session.id, { name, name_edited: true });
-            }}
-            onNavigate={(direction) => navigateTabs(navKey, direction)}
-            onContextMenu={(x, y) => openContextMenu(navKey, x, y)}
-            tabRef={(el) => {
-              if (el) tabRefs.current.set(navKey, el);
-              else tabRefs.current.delete(navKey);
-            }}
-          />
-        );
-      })}
-      {diffTabs.map((tab) => {
-        const navKey = diffNavKey(tab.path, tab.layer);
-        // A file tab takes visual priority — if a file is open, the diff
-        // tab is no longer the "active" pane even if its path/layer still
-        // matches the diff selection.
-        const isActive =
-          activeFileTab === null &&
-          diffSelectedFile === tab.path &&
-          diffSelectedLayer === tab.layer;
-        return (
-          <DiffTab
-            key={navKey}
-            tab={tab}
-            isActive={isActive}
-            onSelect={() => switchToDiff(tab.path, tab.layer)}
-            onClose={() => closeDiffTab(workspaceId, tab.path, tab.layer)}
-            onNavigate={(direction) => navigateTabs(navKey, direction)}
-            onContextMenu={(x, y) => openContextMenu(navKey, x, y)}
-            tabRef={(el) => {
-              if (el) tabRefs.current.set(navKey, el);
-              else tabRefs.current.delete(navKey);
-            }}
-          />
-        );
-      })}
-      {fileTabs.map((path) => {
-        const navKey = fileNavKey(path);
-        const isActive = activeFileTab === path;
+    <div
+      className={styles.tabBar}
+      role="tablist"
+      data-tab-dragging={tabReorder.draggingId !== null || undefined}
+    >
+      {/* Single render loop over the unified navEntries — this is what
+          honors a user-customized order. The earlier "sessions.map then
+          diffs.map then files.map" approach re-segregated tabs back into
+          their kinds after every drop, defeating cross-kind drag. */}
+      {navEntries.map((entry) => {
+        const navKey = entry.key;
+        const drag = dragPropsFor(navKey);
+        if (entry.kind === "session") {
+          const session = activeSessions.find((s) => s.id === entry.sessionId);
+          if (!session) return null;
+          return (
+            <SessionTab
+              key={navKey}
+              session={session}
+              isActive={
+                session.id === selectedSessionId &&
+                diffSelectedFile === null &&
+                activeFileTab === null
+              }
+              onSelect={() => switchToSession(session.id)}
+              onClose={() => handleArchive(session)}
+              onRename={(name) => {
+                updateChatSession(session.id, { name, name_edited: true });
+              }}
+              onNavigate={(direction) => navigateTabs(navKey, direction)}
+              onContextMenu={(x, y) => openContextMenu(navKey, x, y)}
+              tabRef={(el) => {
+                if (el) tabRefs.current.set(navKey, el);
+                else tabRefs.current.delete(navKey);
+              }}
+              drag={drag}
+            />
+          );
+        }
+        if (entry.kind === "diff") {
+          const tab = diffTabs.find(
+            (d) => d.path === entry.path && d.layer === entry.layer,
+          );
+          if (!tab) return null;
+          // A file tab takes visual priority — if a file is open, the diff
+          // tab is no longer the "active" pane even if its path/layer still
+          // matches the diff selection.
+          const isActive =
+            activeFileTab === null &&
+            diffSelectedFile === tab.path &&
+            diffSelectedLayer === tab.layer;
+          return (
+            <DiffTab
+              key={navKey}
+              tab={tab}
+              isActive={isActive}
+              onSelect={() => switchToDiff(tab.path, tab.layer)}
+              onClose={() => closeDiffTab(workspaceId, tab.path, tab.layer)}
+              onNavigate={(direction) => navigateTabs(navKey, direction)}
+              onContextMenu={(x, y) => openContextMenu(navKey, x, y)}
+              tabRef={(el) => {
+                if (el) tabRefs.current.set(navKey, el);
+                else tabRefs.current.delete(navKey);
+              }}
+              drag={drag}
+            />
+          );
+        }
+        // entry.kind === "file"
+        const isActive = activeFileTab === entry.path;
         return (
           <FileTab
             key={navKey}
             workspaceId={workspaceId}
-            path={path}
+            path={entry.path}
             isActive={isActive}
-            onSelect={() => selectFileTab(workspaceId, path)}
-            onClose={() => requestCloseFileTab(path)}
+            onSelect={() => selectFileTab(workspaceId, entry.path)}
+            onClose={() => requestCloseFileTab(entry.path)}
             onNavigate={(direction) => navigateTabs(navKey, direction)}
             onContextMenu={(x, y) => openContextMenu(navKey, x, y)}
             tabRef={(el) => {
               if (el) tabRefs.current.set(navKey, el);
               else tabRefs.current.delete(navKey);
             }}
+            drag={drag}
           />
         );
       })}
@@ -523,8 +685,29 @@ export function SessionTabs({ workspaceId }: Props) {
           onClose={() => setPendingClosePaths([])}
         />
       )}
+      {tabReorder.dragGhost && tabReorder.draggingId !== null && (
+        <TabDragGhost ghost={tabReorder.dragGhost} />
+      )}
     </div>
   );
+}
+
+// Drag-reorder slice of props each sub-tab consumes. Built once per render
+// by SessionTabs.dragPropsFor; passed straight through to the tab element.
+interface TabDragProps {
+  navKey: string;
+  handlers: {
+    onPointerDown: (ev: ReactPointerEvent<HTMLElement>) => void;
+    onPointerMove: (ev: ReactPointerEvent<HTMLElement>) => void;
+    onPointerUp: (ev: ReactPointerEvent<HTMLElement>) => void;
+    onPointerCancel: (ev: ReactPointerEvent<HTMLElement>) => void;
+  };
+  isDragging: boolean;
+  dropBefore: boolean;
+  dropAfter: boolean;
+  /** Reads the latest "did a drag just end" flag from the hook. Tab onClick
+   *  handlers call this to skip the synthetic post-pointerup click. */
+  isClickSuppressed: () => boolean;
 }
 
 interface TabProps {
@@ -536,6 +719,7 @@ interface TabProps {
   onNavigate: (direction: "prev" | "next" | "first" | "last") => void;
   onContextMenu: (x: number, y: number) => void;
   tabRef: (el: HTMLDivElement | null) => void;
+  drag: TabDragProps | null;
 }
 
 function SessionTab({
@@ -547,6 +731,7 @@ function SessionTab({
   onNavigate,
   onContextMenu,
   tabRef,
+  drag,
 }: TabProps) {
   const { t } = useTranslation("chat");
   const [editing, setEditing] = useState(false);
@@ -592,8 +777,10 @@ function SessionTab({
       role="tab"
       aria-selected={isActive}
       tabIndex={isActive ? 0 : -1}
-      className={`${styles.tab} ${isActive ? styles.active : ""}`}
+      data-session-tab-key={drag?.navKey}
+      className={`${styles.tab} ${isActive ? styles.active : ""} ${drag?.isDragging ? styles.dragging : ""}`}
       onClick={() => {
+        if (drag?.isClickSuppressed()) return;
         if (!editing) onSelect();
       }}
       onContextMenu={(e) => {
@@ -607,6 +794,10 @@ function SessionTab({
         e.stopPropagation();
         startEditing();
       }}
+      onPointerDown={drag?.handlers.onPointerDown}
+      onPointerMove={drag?.handlers.onPointerMove}
+      onPointerUp={drag?.handlers.onPointerUp}
+      onPointerCancel={drag?.handlers.onPointerCancel}
       onKeyDown={(e) => {
         if (editing) return;
         if (e.key === "Enter" || e.key === " ") {
@@ -630,6 +821,12 @@ function SessionTab({
         }
       }}
     >
+      {drag?.dropBefore && (
+        <span className={`${styles.dropEdge} ${styles.dropBefore}`} aria-hidden />
+      )}
+      {drag?.dropAfter && (
+        <span className={`${styles.dropEdge} ${styles.dropAfter}`} aria-hidden />
+      )}
       <span className={`${styles.icon} ${session.needs_attention ? styles.pulse : ""}`}>
         <SessionStatusIcon status={statusFor(session)} size={12} />
       </span>
@@ -678,6 +875,7 @@ interface FileTabProps {
   onNavigate: (direction: NavDirection) => void;
   onContextMenu: (x: number, y: number) => void;
   tabRef: (el: HTMLDivElement | null) => void;
+  drag: TabDragProps | null;
 }
 
 function FileTab({
@@ -689,6 +887,7 @@ function FileTab({
   onNavigate,
   onContextMenu,
   tabRef,
+  drag,
 }: FileTabProps) {
   const { t } = useTranslation("chat");
   // Subscribe only to dirty state for this tab's buffer. Reading the whole
@@ -708,12 +907,20 @@ function FileTab({
       role="tab"
       aria-selected={isActive}
       tabIndex={isActive ? 0 : -1}
-      className={`${styles.tab} ${isActive ? styles.active : ""}`}
-      onClick={onSelect}
+      data-session-tab-key={drag?.navKey}
+      className={`${styles.tab} ${isActive ? styles.active : ""} ${drag?.isDragging ? styles.dragging : ""}`}
+      onClick={() => {
+        if (drag?.isClickSuppressed()) return;
+        onSelect();
+      }}
       onContextMenu={(e) => {
         e.preventDefault();
         onContextMenu(e.clientX, e.clientY);
       }}
+      onPointerDown={drag?.handlers.onPointerDown}
+      onPointerMove={drag?.handlers.onPointerMove}
+      onPointerUp={drag?.handlers.onPointerUp}
+      onPointerCancel={drag?.handlers.onPointerCancel}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
@@ -733,6 +940,12 @@ function FileTab({
         }
       }}
     >
+      {drag?.dropBefore && (
+        <span className={`${styles.dropEdge} ${styles.dropBefore}`} aria-hidden />
+      )}
+      {drag?.dropAfter && (
+        <span className={`${styles.dropEdge} ${styles.dropAfter}`} aria-hidden />
+      )}
       <span className={styles.icon}>
         <Icon size={12} />
       </span>
@@ -766,6 +979,7 @@ interface DiffTabProps {
   onNavigate: (direction: NavDirection) => void;
   onContextMenu: (x: number, y: number) => void;
   tabRef: (el: HTMLDivElement | null) => void;
+  drag: TabDragProps | null;
 }
 
 function DiffTab({
@@ -776,6 +990,7 @@ function DiffTab({
   onNavigate,
   onContextMenu,
   tabRef,
+  drag,
 }: DiffTabProps) {
   const { t } = useTranslation("chat");
   // Show just the basename in the tab; the full path goes in the tooltip
@@ -789,12 +1004,20 @@ function DiffTab({
       role="tab"
       aria-selected={isActive}
       tabIndex={isActive ? 0 : -1}
-      className={`${styles.tab} ${isActive ? styles.active : ""}`}
-      onClick={onSelect}
+      data-session-tab-key={drag?.navKey}
+      className={`${styles.tab} ${isActive ? styles.active : ""} ${drag?.isDragging ? styles.dragging : ""}`}
+      onClick={() => {
+        if (drag?.isClickSuppressed()) return;
+        onSelect();
+      }}
       onContextMenu={(e) => {
         e.preventDefault();
         onContextMenu(e.clientX, e.clientY);
       }}
+      onPointerDown={drag?.handlers.onPointerDown}
+      onPointerMove={drag?.handlers.onPointerMove}
+      onPointerUp={drag?.handlers.onPointerUp}
+      onPointerCancel={drag?.handlers.onPointerCancel}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
@@ -814,6 +1037,12 @@ function DiffTab({
         }
       }}
     >
+      {drag?.dropBefore && (
+        <span className={`${styles.dropEdge} ${styles.dropBefore}`} aria-hidden />
+      )}
+      {drag?.dropAfter && (
+        <span className={`${styles.dropEdge} ${styles.dropAfter}`} aria-hidden />
+      )}
       <span className={styles.icon}>
         <FileDiffIcon size={12} />
       </span>

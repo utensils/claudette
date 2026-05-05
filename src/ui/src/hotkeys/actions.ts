@@ -298,6 +298,21 @@ export const HOTKEY_ACTIONS = [
     suppressUnderOverlay: true,
   },
   {
+    // Skip the queue: while the agent is running, send the typed message
+    // immediately as a steer (mid-turn injection) instead of queuing it
+    // for after the current turn finishes. Defaults to Cmd/Ctrl+Enter so
+    // a regular Enter still queues — matches the muscle-memory of "send
+    // now" in editors and ChatGPT's web UI.
+    id: "chat.steer-immediate",
+    scope: "global",
+    category: "keyboard_category_chat",
+    description: "keyboard_action_chat_steer_immediate",
+    defaultBinding: allPlatforms("mod+enter"),
+    match: "key",
+    rebindable: true,
+    suppressUnderOverlay: true,
+  },
+  {
     id: "voice.toggle",
     scope: "global",
     category: "keyboard_category_voice",

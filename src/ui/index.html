@@ -4,6 +4,69 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      Identity marker for the cross-app dev-port hijack guard. If another
+      Tauri app's Vite ever ends up serving on Claudette's dev port (because
+      it killed our listener and rebound the port, etc.), the foreign
+      bundle won't carry this meta tag and the inline guard below — which
+      runs BEFORE any ES module loads, so i18n / state init never touch
+      the foreign DOM — will render a hard error instead of silently
+      rendering the wrong app's UI inside Claudette's window.
+    -->
+    <meta name="x-tauri-app-id" content="com.claudette.app" />
+    <script>
+      // Cross-app dev-port hijack guard. ES module imports hoist, so this
+      // MUST be inline (and before the bundle script) to beat them.
+      // Mirrors bootIdentityGuard.ts; that module exists for tests.
+      (function () {
+        var EXPECTED = "com.claudette.app";
+        var meta = document.querySelector('meta[name="x-tauri-app-id"]');
+        var observed = (meta && meta.getAttribute("content")) || "(missing)";
+        if (observed === EXPECTED) return;
+        window.__claudetteHijackBlocked = true;
+        var esc = function (s) {
+          return String(s)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;");
+        };
+        var html =
+          '<div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#1c1815;color:#e07850;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;padding:32px;text-align:center;z-index:999999;">' +
+          '<div style="max-width:560px;">' +
+          '<h1 style="margin:0 0 16px;color:#f5a0b8;">Foreign content detected</h1>' +
+          '<p style="margin:0 0 12px;line-height:1.5;color:#e6dccf;">Claudette’s dev webview is serving content from another app. Expected app id <code style="font-family:JetBrains Mono,monospace;">' +
+          esc(EXPECTED) +
+          "</code>, observed <code style=\"font-family:JetBrains Mono,monospace;\">" +
+          esc(observed) +
+          "</code>.</p>" +
+          '<p style="margin:0 0 16px;line-height:1.5;color:#e6dccf;">A Tauri app on this machine probably grabbed the dev port that Claudette’s webview was pointed at. Quit any other Tauri dev builds, then restart Claudette via <code>scripts/dev.sh</code>.</p>' +
+          '<p style="margin:0;font-size:12px;color:#c4b5fd;">You’re seeing this instead of a silent UI swap because of the inline guard in <code>index.html</code>.</p>' +
+          "</div></div>";
+        // Replace the document so even if the foreign bundle's main script
+        // tag runs, its DOM mutations target our error overlay's <body>
+        // and most attempts to find their root element fail benignly.
+        document.open();
+        document.write(
+          '<!doctype html><html><head><meta charset="utf-8"><title>Claudette — hijack guard</title></head><body>' +
+            html +
+            "</body></html>",
+        );
+        document.close();
+        // Stop further script execution as cleanly as we can; ES modules
+        // already in flight can't be cancelled, but they'll throw against
+        // the rewritten DOM rather than render anything.
+        if (window.stop) window.stop();
+        // eslint-disable-next-line no-console
+        console.error(
+          "[claudette] Hijack guard tripped: expected x-tauri-app-id=" +
+            EXPECTED +
+            ", got " +
+            observed +
+            ". See index.html inline guard.",
+        );
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Silkscreen:wght@400;700&display=swap" rel="stylesheet" />

@@ -849,7 +849,7 @@ async fn handle_create_workspace(
         })?
     };
 
-    let workspace = Workspace {
+    let mut workspace = Workspace {
         id: uuid::Uuid::new_v4().to_string(),
         repository_id: repository_id.to_string(),
         name: allocation.name,
@@ -859,11 +859,17 @@ async fn handle_create_workspace(
         agent_status: claudette::model::AgentStatus::Idle,
         status_line: String::new(),
         created_at: now_iso(),
+        sort_order: 0,
     };
     if let Err(e) = db.insert_workspace(&workspace) {
         let _ = claudette::git::remove_worktree(&repo.path, &actual_path, true).await;
         let _ = claudette::git::branch_delete(&repo.path, &workspace.branch_name).await;
         return Err(e.to_string());
+    }
+    // Patch sort_order to the value the DB assigned so the remote client
+    // sees the new workspace at the right position in the sidebar (Codex P2).
+    if let Ok(Some(o)) = db.lookup_workspace_sort_order(&workspace.id) {
+        workspace.sort_order = o;
     }
 
     Ok(serde_json::to_value(&workspace).unwrap_or_default())

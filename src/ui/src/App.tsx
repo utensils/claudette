@@ -9,6 +9,7 @@ import type { ThemeDefinition } from "./types/theme";
 import { adjustUiFontSize, resetUiFontSize } from "./utils/fontSettings";
 import { KEYBINDING_SETTING_PREFIX } from "./hotkeys/bindings";
 import { useMcpStatus } from "./hooks/useMcpStatus";
+import { useViewTogglePersistence } from "./hooks/useViewTogglePersistence";
 import { AppLayout } from "./components/layout/AppLayout";
 import { findLeafByPtyId } from "./stores/terminalPaneTree";
 import type { CommandEvent } from "./types";
@@ -58,6 +59,12 @@ function App() {
 
   // Listen for MCP supervisor status events from the Rust backend.
   useMcpStatus();
+
+  // Hydrate sidebar / panel visibility + sizes from app_settings on mount,
+  // and write back when the user toggles or resizes anything. Without this
+  // the user's preferred layout (e.g. right sidebar closed, terminal
+  // hidden, custom widths) resets to the slice defaults on every restart.
+  useViewTogglePersistence();
 
   useEffect(() => {
     loadInitialData().then((data) => {

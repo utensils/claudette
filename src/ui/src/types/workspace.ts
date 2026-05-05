@@ -18,6 +18,9 @@ export interface Workspace {
   agent_status: AgentStatus;
   status_line: string;
   created_at: string;
+  /** Per-repository display order in the sidebar. Persisted via the
+   *  `workspaces.sort_order` column; reassigned by `reorder_workspaces`. */
+  sort_order: number;
   /** Non-null when this workspace belongs to a remote connection. */
   remote_connection_id: string | null;
 }

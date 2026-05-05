@@ -154,6 +154,18 @@ export function renameWorkspace(id: string, newName: string): Promise<void> {
   return invoke("rename_workspace", { id, newName });
 }
 
+/**
+ * Reassign per-repository workspace sort_order to match the supplied id
+ * sequence. Backend ignores ids that don't belong to `repositoryId`, so a
+ * client bug can't move workspaces across repos.
+ */
+export function reorderWorkspaces(
+  repositoryId: string,
+  workspaceIds: string[],
+): Promise<void> {
+  return invoke("reorder_workspaces", { repositoryId, workspaceIds });
+}
+
 export function deleteWorkspace(id: string): Promise<void> {
   return invoke("delete_workspace", { id });
 }
@@ -683,6 +695,18 @@ export function renameChatSession(
   name: string,
 ): Promise<void> {
   return invoke("rename_chat_session", { sessionId, name });
+}
+
+/**
+ * Reassign chat-session sort_order to match the supplied id sequence.
+ * Used by the unified workspace-tab drag-reorder; only sessions persist —
+ * file/diff tabs reorder in volatile frontend state.
+ */
+export function reorderChatSessions(
+  workspaceId: string,
+  sessionIds: string[],
+): Promise<void> {
+  return invoke("reorder_chat_sessions", { workspaceId, sessionIds });
 }
 
 /**

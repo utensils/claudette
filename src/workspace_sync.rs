@@ -194,6 +194,7 @@ mod tests {
             agent_status: AgentStatus::Idle,
             status_line: String::new(),
             created_at: String::new(),
+            sort_order: 0,
         }
     }
 

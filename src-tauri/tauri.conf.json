@@ -4,7 +4,7 @@
   "build": {
     "beforeDevCommand": { "script": "bun install && bun run dev", "cwd": "../src/ui" },
     "beforeBuildCommand": { "script": "bun install && bun run build", "cwd": "../src/ui" },
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://localhost:14253",
     "frontendDist": "../src/ui/dist"
   },
   "app": {

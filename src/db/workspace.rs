@@ -19,9 +19,22 @@ impl Database {
 
     pub fn insert_workspace(&self, ws: &Workspace) -> Result<(), rusqlite::Error> {
         let tx = self.conn.unchecked_transaction()?;
+        // Assign the next per-repo sort_order so a freshly created workspace
+        // lands at the bottom of its repo group, matching how
+        // `insert_chat_session` handles per-workspace session ordering.
+        // Callers that hand the same `Workspace` back to the UI should
+        // call `lookup_workspace_sort_order(&ws.id)` after this returns
+        // and patch the value before optimistically updating the store —
+        // otherwise the new row appears at sort_order=0 in the UI until
+        // a full reload reads it back (Codex P2).
+        let next_sort_order: i32 = tx.query_row(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM workspaces WHERE repository_id = ?1",
+            params![ws.repository_id],
+            |row| row.get(0),
+        )?;
         tx.execute(
-            "INSERT INTO workspaces (id, repository_id, name, branch_name, worktree_path, status, status_line)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO workspaces (id, repository_id, name, branch_name, worktree_path, status, status_line, sort_order)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 ws.id,
                 ws.repository_id,
@@ -30,6 +43,7 @@ impl Database {
                 ws.worktree_path,
                 ws.status.as_str(),
                 ws.status_line,
+                next_sort_order,
             ],
         )?;
         // Every workspace starts with one active session so the multi-session
@@ -45,14 +59,40 @@ impl Database {
         Ok(())
     }
 
+    /// Read back the persisted `sort_order` for a workspace. Used by
+    /// creation paths that need to patch the in-memory `Workspace` they
+    /// just inserted (since `insert_workspace` assigns the value via SQL
+    /// and the caller's struct still has the placeholder 0). See Codex
+    /// P2 review of the sidebar drag-reorder PR.
+    pub fn lookup_workspace_sort_order(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Option<i32>, rusqlite::Error> {
+        self.conn
+            .query_row(
+                "SELECT sort_order FROM workspaces WHERE id = ?1",
+                params![workspace_id],
+                |row| row.get(0),
+            )
+            .optional()
+    }
+
     /// Insert multiple workspaces atomically. All succeed or none are committed.
     /// Each workspace is seeded with one active chat session.
+    /// As with `insert_workspace`, callers that send the inserted rows back
+    /// to the UI should call `lookup_workspace_sort_order` per-id afterwards.
     pub fn insert_workspaces_batch(&self, workspaces: &[Workspace]) -> Result<(), rusqlite::Error> {
         let tx = self.conn.unchecked_transaction()?;
         {
+            // Inline the per-repo MAX subquery so each row in the batch lands
+            // at MAX+1 within its own repo even when multiple new workspaces
+            // share a repo. This is monotonically increasing within the
+            // transaction because subsequent rows see the just-inserted
+            // values.
             let mut ws_stmt = tx.prepare(
-                "INSERT INTO workspaces (id, repository_id, name, branch_name, worktree_path, status, status_line)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO workspaces (id, repository_id, name, branch_name, worktree_path, status, status_line, sort_order)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7,
+                    (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM workspaces WHERE repository_id = ?2))",
             )?;
             let mut session_stmt = tx.prepare(
                 "INSERT INTO chat_sessions
@@ -79,8 +119,8 @@ impl Database {
 
     pub fn list_workspaces(&self) -> Result<Vec<Workspace>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, repository_id, name, branch_name, worktree_path, status, status_line, created_at
-             FROM workspaces ORDER BY created_at",
+            "SELECT id, repository_id, name, branch_name, worktree_path, status, status_line, created_at, sort_order
+             FROM workspaces ORDER BY repository_id, sort_order, created_at",
         )?;
         let rows = stmt.query_map([], |row| {
             let status_str: String = row.get(5)?;
@@ -106,9 +146,35 @@ impl Database {
                 agent_status,
                 status_line: row.get(6)?,
                 created_at: row.get(7)?,
+                sort_order: row.get(8)?,
             })
         })?;
         rows.collect()
+    }
+
+    /// Reassign per-repository `sort_order` of workspaces in the supplied
+    /// repo to match the supplied id sequence. Mirrors `reorder_repositories`
+    /// but scoped to a single repo because workspace sort_order is per-repo
+    /// (option 2A — within-repo reorder only). Ids that don't belong to
+    /// `repository_id` are ignored — the WHERE clause defends against
+    /// cross-repo edits.
+    pub fn reorder_workspaces(
+        &self,
+        repository_id: &str,
+        ids: &[String],
+    ) -> Result<(), rusqlite::Error> {
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "UPDATE workspaces SET sort_order = ?1 \
+                 WHERE id = ?2 AND repository_id = ?3",
+            )?;
+            for (i, id) in ids.iter().enumerate() {
+                stmt.execute(params![i as i32, id, repository_id])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn update_workspace_status(

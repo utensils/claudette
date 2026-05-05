@@ -99,6 +99,21 @@ pub async fn rename_chat_session(
         .map_err(|e| e.to_string())
 }
 
+/// Reassign `sort_order` of chat sessions in the given workspace to match the
+/// supplied id sequence. Used by the unified workspace-tab drag-reorder; for
+/// files/diffs the order is volatile and only needs frontend state, so this
+/// command only ever touches chat sessions.
+#[tauri::command]
+pub async fn reorder_chat_sessions(
+    workspace_id: String,
+    session_ids: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    db.reorder_chat_sessions(&workspace_id, &session_ids)
+        .map_err(|e| e.to_string())
+}
+
 /// Archive a chat session (soft-delete). Stops its running agent first, then
 /// marks the row archived. If this was the workspace's last active session,
 /// a fresh `New chat` session is created so every workspace always has ≥1
@@ -186,6 +201,7 @@ mod tests {
             agent_status: AgentStatus::Idle,
             status_line: String::new(),
             created_at: String::new(),
+            sort_order: 0,
         }
     }
 

@@ -187,156 +187,80 @@ fn main() {
     // Custom app menu (macOS only): replace the default Quit item (which
     // calls NSApp.terminate() immediately) with one we can intercept to
     // confirm quit when agents are running.
+    //
+    // Built with the `*Builder` API and applied via `app.set_menu()` from
+    // `.setup()` rather than the `.menu(|app| ...)` configuration closure.
+    // Tauri's `.menu(...)` path appears to register the resulting menu in
+    // a way that triggers AppKit's auto-detection of a Help submenu (which
+    // injects a Spotlight-style search field into it); building inside
+    // `setup` and calling `set_menu` directly skips that registration. See
+    // `../aethon/src-tauri/src/commands/extensions.rs` for the same
+    // pattern in another Tauri 2 project where the Help menu renders
+    // search-field-free.
     #[cfg(target_os = "macos")]
     {
-        builder = builder
-            .menu(|app| {
-                use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
-                let app_menu = Submenu::with_items(
-                    app,
-                    "Claudette",
-                    true,
-                    &[
-                        &PredefinedMenuItem::about(app, None, None)?,
-                        &PredefinedMenuItem::separator(app)?,
-                        &MenuItem::with_id(
-                            app,
-                            "open-settings",
-                            "Settings...",
-                            true,
-                            Some("CmdOrCtrl+,"),
-                        )?,
-                        &PredefinedMenuItem::separator(app)?,
-                        &PredefinedMenuItem::services(app, None)?,
-                        &PredefinedMenuItem::separator(app)?,
-                        &PredefinedMenuItem::hide(app, None)?,
-                        &PredefinedMenuItem::hide_others(app, None)?,
-                        &PredefinedMenuItem::show_all(app, None)?,
-                        &PredefinedMenuItem::separator(app)?,
-                        &MenuItem::with_id(
-                            app,
-                            "quit-app",
-                            "Quit Claudette",
-                            true,
-                            Some("CmdOrCtrl+Q"),
-                        )?,
-                    ],
-                )?;
-                let edit_menu = Submenu::with_items(
-                    app,
-                    "Edit",
-                    true,
-                    &[
-                        &PredefinedMenuItem::undo(app, None)?,
-                        &PredefinedMenuItem::redo(app, None)?,
-                        &PredefinedMenuItem::separator(app)?,
-                        &PredefinedMenuItem::cut(app, None)?,
-                        &PredefinedMenuItem::copy(app, None)?,
-                        &PredefinedMenuItem::paste(app, None)?,
-                        &PredefinedMenuItem::select_all(app, None)?,
-                    ],
-                )?;
-                let view_menu = Submenu::with_items(
-                    app,
-                    "View",
-                    true,
-                    &[
-                        &MenuItem::with_id(
-                            app,
-                            "zoom-in",
-                            "Zoom In",
-                            true,
-                            Some("CmdOrCtrl+Equal"),
-                        )?,
-                        &MenuItem::with_id(
-                            app,
-                            "zoom-out",
-                            "Zoom Out",
-                            true,
-                            Some("CmdOrCtrl+Minus"),
-                        )?,
-                        &PredefinedMenuItem::separator(app)?,
-                        &MenuItem::with_id(
-                            app,
-                            "reset-zoom",
-                            "Actual Size",
-                            true,
-                            Some("CmdOrCtrl+Shift+0"),
-                        )?,
-                    ],
-                )?;
-                let window_menu = Submenu::with_items(
-                    app,
-                    "Window",
-                    true,
-                    &[
-                        &PredefinedMenuItem::minimize(app, None)?,
-                        &PredefinedMenuItem::maximize(app, None)?,
-                        // Custom Close Window item. We can't use
-                        // `PredefinedMenuItem::close_window` because it
-                        // bakes in the platform default accelerator (Cmd+W
-                        // on macOS), which would shadow the terminal's
-                        // `Cmd+W = close pane` shortcut — the OS menu
-                        // would catch the key before the webview saw it.
-                        &MenuItem::with_id(
-                            app,
-                            "close-window",
-                            "Close Window",
-                            true,
-                            Some(MACOS_CLOSE_WINDOW_ACCELERATOR),
-                        )?,
-                        &PredefinedMenuItem::separator(app)?,
-                        &PredefinedMenuItem::fullscreen(app, None)?,
-                    ],
-                )?;
-                Menu::with_items(app, &[&app_menu, &edit_menu, &view_menu, &window_menu])
-            })
-            .on_menu_event(|app, event| {
-                if event.id().as_ref() == "zoom-in" {
-                    let _ = app.emit("zoom-in", ());
-                } else if event.id().as_ref() == "zoom-out" {
-                    let _ = app.emit("zoom-out", ());
-                } else if event.id().as_ref() == "reset-zoom" {
-                    let _ = app.emit("reset-zoom", ());
-                } else if event.id().as_ref() == "open-settings" {
-                    tray::show_and_focus(app);
-                    let _ = app.emit("open-settings", ());
-                } else if event.id().as_ref() == "close-window" {
-                    // Route to the existing CloseRequested flow so the
-                    // macOS "hide instead of quit" logic in
-                    // on_window_event stays in one place.
-                    if let Some(win) = app.get_webview_window("main") {
-                        let _ = win.close();
-                    }
-                } else if event.id().as_ref() == "quit-app" {
-                    let state = app.state::<state::AppState>();
-                    let running = state
-                        .agents
-                        .try_read()
-                        .map_or(true, |a| tray::has_running_agents(&a));
-                    if running {
-                        let handle = app.clone();
-                        {
-                            use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
-                            handle
-                                .dialog()
-                                .message("Agents are still running. Quit anyway?")
-                                .title("Quit Claudette")
-                                .buttons(MessageDialogButtons::OkCancelCustom(
-                                    "Quit".into(),
-                                    "Cancel".into(),
-                                ))
-                                .show(move |confirmed| {
-                                    if confirmed {
-                                        handle.exit(0);
-                                    }
-                                });
-                        }
-                    } else {
-                        app.exit(0);
-                    }
+        builder = builder.on_menu_event(|app, event| {
+            if event.id().as_ref() == "help-open-docs" {
+                // Open the Claudette docs root in the system browser.
+                // Root URL (not a deeper page) so the link survives
+                // doc-site reorganization.
+                if let Err(e) = commands::shell::opener::open("https://utensils.io/claudette/") {
+                    eprintln!("[help] Failed to open docs URL: {e}");
                 }
-            });
+            } else if event.id().as_ref() == "help-report-issue" {
+                // GitHub issue tracker. Mirrors Aethon's "Report an
+                // Issue…" item — gives users a one-click path to file a
+                // bug report.
+                if let Err(e) = commands::shell::opener::open(
+                    "https://github.com/utensils/claudette/issues/new",
+                ) {
+                    eprintln!("[help] Failed to open issues URL: {e}");
+                }
+            } else if event.id().as_ref() == "zoom-in" {
+                let _ = app.emit("zoom-in", ());
+            } else if event.id().as_ref() == "zoom-out" {
+                let _ = app.emit("zoom-out", ());
+            } else if event.id().as_ref() == "reset-zoom" {
+                let _ = app.emit("reset-zoom", ());
+            } else if event.id().as_ref() == "open-settings" {
+                tray::show_and_focus(app);
+                let _ = app.emit("open-settings", ());
+            } else if event.id().as_ref() == "close-window" {
+                // Route to the existing CloseRequested flow so the
+                // macOS "hide instead of quit" logic in
+                // on_window_event stays in one place.
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.close();
+                }
+            } else if event.id().as_ref() == "quit-app" {
+                let state = app.state::<state::AppState>();
+                let running = state
+                    .agents
+                    .try_read()
+                    .map_or(true, |a| tray::has_running_agents(&a));
+                if running {
+                    let handle = app.clone();
+                    {
+                        use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+                        handle
+                            .dialog()
+                            .message("Agents are still running. Quit anyway?")
+                            .title("Quit Claudette")
+                            .buttons(MessageDialogButtons::OkCancelCustom(
+                                "Quit".into(),
+                                "Cancel".into(),
+                            ))
+                            .show(move |confirmed| {
+                                if confirmed {
+                                    handle.exit(0);
+                                }
+                            });
+                    }
+                } else {
+                    app.exit(0);
+                }
+            }
+        });
     }
 
     let builder = builder
@@ -344,6 +268,102 @@ fn main() {
             // Start mDNS browser to discover nearby claudette-server instances.
             if let Err(e) = mdns::start_mdns_browser(app.handle(), saved_fingerprints) {
                 eprintln!("[mdns] Failed to start browser: {e}");
+            }
+
+            // macOS native menu — built and applied here (rather than via
+            // tauri::Builder::menu) so AppKit doesn't auto-promote the
+            // "Help" submenu to its built-in help-search behavior. See
+            // the comment block above the `on_menu_event` handler for
+            // the full rationale.
+            #[cfg(target_os = "macos")]
+            {
+                use tauri::menu::{
+                    MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder,
+                };
+                let app_handle = app.handle();
+                let app_menu = SubmenuBuilder::new(app_handle, "Claudette")
+                    .item(&PredefinedMenuItem::about(app_handle, None, None)?)
+                    .separator()
+                    .item(
+                        &MenuItemBuilder::with_id("open-settings", "Settings...")
+                            .accelerator("CmdOrCtrl+,")
+                            .build(app_handle)?,
+                    )
+                    .separator()
+                    .item(&PredefinedMenuItem::services(app_handle, None)?)
+                    .separator()
+                    .item(&PredefinedMenuItem::hide(app_handle, None)?)
+                    .item(&PredefinedMenuItem::hide_others(app_handle, None)?)
+                    .item(&PredefinedMenuItem::show_all(app_handle, None)?)
+                    .separator()
+                    .item(
+                        &MenuItemBuilder::with_id("quit-app", "Quit Claudette")
+                            .accelerator("CmdOrCtrl+Q")
+                            .build(app_handle)?,
+                    )
+                    .build()?;
+                let edit_menu = SubmenuBuilder::new(app_handle, "Edit")
+                    .item(&PredefinedMenuItem::undo(app_handle, None)?)
+                    .item(&PredefinedMenuItem::redo(app_handle, None)?)
+                    .separator()
+                    .item(&PredefinedMenuItem::cut(app_handle, None)?)
+                    .item(&PredefinedMenuItem::copy(app_handle, None)?)
+                    .item(&PredefinedMenuItem::paste(app_handle, None)?)
+                    .item(&PredefinedMenuItem::select_all(app_handle, None)?)
+                    .build()?;
+                let view_menu = SubmenuBuilder::new(app_handle, "View")
+                    .item(
+                        &MenuItemBuilder::with_id("zoom-in", "Zoom In")
+                            .accelerator("CmdOrCtrl+Equal")
+                            .build(app_handle)?,
+                    )
+                    .item(
+                        &MenuItemBuilder::with_id("zoom-out", "Zoom Out")
+                            .accelerator("CmdOrCtrl+Minus")
+                            .build(app_handle)?,
+                    )
+                    .separator()
+                    .item(
+                        &MenuItemBuilder::with_id("reset-zoom", "Actual Size")
+                            .accelerator("CmdOrCtrl+Shift+0")
+                            .build(app_handle)?,
+                    )
+                    .build()?;
+                // Custom Close Window item. We can't use
+                // `PredefinedMenuItem::close_window` because it bakes in
+                // Cmd+W on macOS, which would shadow the terminal's
+                // `Cmd+W = close pane` shortcut — the OS menu would catch
+                // the key before the webview saw it.
+                let window_menu = SubmenuBuilder::new(app_handle, "Window")
+                    .item(&PredefinedMenuItem::minimize(app_handle, None)?)
+                    .item(&PredefinedMenuItem::maximize(app_handle, None)?)
+                    .item(
+                        &MenuItemBuilder::with_id("close-window", "Close Window")
+                            .accelerator(MACOS_CLOSE_WINDOW_ACCELERATOR)
+                            .build(app_handle)?,
+                    )
+                    .separator()
+                    .item(&PredefinedMenuItem::fullscreen(app_handle, None)?)
+                    .build()?;
+                // Help menu — two items, no auto-search. AppKit's
+                // helpMenu auto-detection only fires when the menu is
+                // attached via `tauri::Builder::menu(...)`; here we go
+                // the `set_menu` route from setup, which skips that.
+                // (Compare to ../aethon/src-tauri/src/commands/extensions.rs.)
+                let help_menu = SubmenuBuilder::new(app_handle, "Help")
+                    .item(
+                        &MenuItemBuilder::with_id("help-open-docs", "Claudette Documentation")
+                            .build(app_handle)?,
+                    )
+                    .item(
+                        &MenuItemBuilder::with_id("help-report-issue", "Report an Issue…")
+                            .build(app_handle)?,
+                    )
+                    .build()?;
+                let menu = MenuBuilder::new(app_handle)
+                    .items(&[&app_menu, &edit_menu, &view_menu, &window_menu, &help_menu])
+                    .build()?;
+                app.set_menu(menu)?;
             }
 
             // Set the notification app identity before any notifications are sent.
@@ -454,6 +474,7 @@ fn main() {
             commands::workspace::archive_workspace,
             commands::workspace::restore_workspace,
             commands::workspace::rename_workspace,
+            commands::workspace::reorder_workspaces,
             commands::workspace::delete_workspace,
             commands::workspace::generate_workspace_name,
             commands::workspace::refresh_branches,
@@ -503,6 +524,7 @@ fn main() {
             commands::chat::session::get_chat_session,
             commands::chat::session::create_chat_session,
             commands::chat::session::rename_chat_session,
+            commands::chat::session::reorder_chat_sessions,
             commands::chat::session::archive_chat_session,
             // Plan
             commands::plan::read_plan_file,

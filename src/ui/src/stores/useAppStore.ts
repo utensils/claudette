@@ -52,6 +52,10 @@ import {
 } from "./slices/settingsSlice";
 import { createSystemSlice, type SystemSlice } from "./slices/systemSlice";
 import {
+  createTabOrderSlice,
+  type TabOrderSlice,
+} from "./slices/tabOrderSlice";
+import {
   createTerminalSlice,
   type TerminalSlice,
 } from "./slices/terminalSlice";
@@ -90,7 +94,8 @@ export type AppState = RepositoriesSlice &
   PinnedPromptsSlice &
   SettingsSlice &
   RemoteSlice &
-  SystemSlice;
+  SystemSlice &
+  TabOrderSlice;
 
 export const useAppStore = create<AppState>()((...a) => ({
   ...createRepositoriesSlice(...a),
@@ -111,6 +116,7 @@ export const useAppStore = create<AppState>()((...a) => ({
   ...createSettingsSlice(...a),
   ...createRemoteSlice(...a),
   ...createSystemSlice(...a),
+  ...createTabOrderSlice(...a),
 }));
 
 /**

@@ -83,6 +83,7 @@ fn make_workspace(repo_id: &str, worktree: &str) -> Workspace {
         agent_status: AgentStatus::Idle,
         status_line: String::new(),
         created_at: "2026-01-01 00:00:00".into(),
+        sort_order: 0,
     }
 }
 

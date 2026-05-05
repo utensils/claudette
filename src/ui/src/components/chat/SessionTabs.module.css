@@ -7,6 +7,9 @@
   background: transparent;
   scrollbar-width: thin;
   scrollbar-color: var(--border-subtle) transparent;
+  /* Pin to the shared second-row height so the right-sidebar tab bar (when
+   * pushed under a PR banner) bottoms out at the same Y as this strip. */
+  min-height: var(--tab-bar-h);
 }
 
 .tabBar::-webkit-scrollbar {
@@ -29,9 +32,17 @@
   color: var(--text-dim);
   background: transparent;
   border: none;
-  cursor: pointer;
+  /* `grab` advertises drag-to-reorder; the dragging state below switches to
+   * `grabbing`. */
+  cursor: grab;
   white-space: nowrap;
+  /* WebKit (macOS Tauri) honors only the prefixed -webkit-user-select. The
+   * unprefixed property silently defaults to "text" on `<span>` descendants
+   * even when the parent says "none", which lets the browser start a text
+   * selection on mousedown before our pointer-capture fires and visually
+   * "highlights" the tab name mid-drag. Set both. */
   user-select: none;
+  -webkit-user-select: none;
   position: relative;
   transition: color 80ms ease;
 }
@@ -168,3 +179,38 @@
   opacity: 0.5;
 }
 
+/* While a tab drag is in progress, force the grabbing cursor and suppress
+ * hover styles on non-target tabs so the drop indicator is the only visible
+ * feedback. Mirrors the terminal tab bar's drag state. */
+.tabBar[data-tab-dragging="true"] {
+  cursor: grabbing;
+}
+.tabBar[data-tab-dragging="true"] .tab:hover:not(.active) {
+  color: inherit;
+}
+
+.tab.dragging {
+  opacity: 0.4;
+  cursor: grabbing;
+}
+
+/* Drop-edge indicator. Sibling spans (not pseudo-elements) because the tab
+ * already uses `::after` for the active-underline; we don't want the two
+ * effects fighting for the same pseudo. The accent bar matches the
+ * terminal tab bar's drop indicator for visual consistency. */
+.dropEdge {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  background: var(--accent-primary);
+  border-radius: 2px;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px rgba(var(--accent-primary-rgb), 0.25);
+}
+.dropBefore {
+  left: -2px;
+}
+.dropAfter {
+  right: -2px;
+}

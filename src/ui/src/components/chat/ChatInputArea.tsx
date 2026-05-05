@@ -28,6 +28,10 @@ import {
 } from "../../utils/voice";
 import { useVoiceInput } from "../../hooks/useVoiceInput";
 import { useVoiceHotkey } from "../../hooks/useVoiceHotkey";
+import {
+  eventToBinding,
+  getEffectiveBindingById,
+} from "../../hotkeys/bindings";
 import { ComposerToolbar } from "./composer/ComposerToolbar";
 import { ContextPopover } from "./composer/ContextPopover";
 import { SegmentedMeter } from "./composer/SegmentedMeter";
@@ -86,6 +90,7 @@ function fileToBase64(file: Blob): Promise<string> {
 // Separate component for input area to prevent full ChatPanel re-renders on every keystroke
 export function ChatInputArea({
   onSend,
+  onSendSteer,
   onStop,
   isRunning,
   isRemote,
@@ -104,6 +109,15 @@ export function ChatInputArea({
     mentionedFiles?: Set<string>,
     attachments?: AttachmentInput[],
   ) => Promise<void>;
+  /** Skip-queue / mid-turn steer entry point. Called when the user presses
+   *  the configured "send now" hotkey (defaults to Cmd/Ctrl+Enter) while
+   *  the agent is running. ChatPanel should call steerQueuedChatMessage
+   *  directly with this content instead of routing through the queue. */
+  onSendSteer?: (
+    content: string,
+    mentionedFiles?: Set<string>,
+    attachments?: AttachmentInput[],
+  ) => void | Promise<void>;
   onStop: () => void | Promise<void>;
   isRunning: boolean;
   isRemote: boolean;
@@ -181,6 +195,9 @@ export function ChatInputArea({
   const voiceToggleHotkey = useAppStore((s) => s.voiceToggleHotkey);
   const voiceHoldHotkey = useAppStore((s) => s.voiceHoldHotkey);
   const focusVoiceProvider = useAppStore((s) => s.focusVoiceProvider);
+  // User-remappable bindings (`chat.steer-immediate` etc) — empty `{}` keeps
+  // defaults active until the user customises one.
+  const keybindings = useAppStore((s) => s.keybindings);
   const voice = useVoiceInput(
     insertTranscript,
     (providerId) => {
@@ -696,7 +713,12 @@ export function ChatInputArea({
     }
   }, [addAttachment]);
 
-  const handleSend = () => {
+  // Build the (content, files, attachments) payload from the current
+  // composer state and clear local UI state. Shared by the normal Enter
+  // path (handleSend) and the skip-queue / steer hotkey (handleSendSteer)
+  // so they stay in lockstep — every key press should clear the same
+  // pile of stuff.
+  const consumeComposer = () => {
     voice.cancel();
     // Only include files whose @path tokens are still in the text, so that
     // removed references don't get expanded.
@@ -716,7 +738,7 @@ export function ChatInputArea({
             text_content: a.text_content ?? undefined,
           }))
         : undefined;
-    onSend(chatInput, files, attachmentPayload);
+    const content = chatInput;
     setChatInput("");
     // Revoke blob URLs to free memory (data: URLs don't need cleanup).
     for (const a of pendingAttachments) {
@@ -724,6 +746,35 @@ export function ChatInputArea({
     }
     setPendingAttachments([]);
     mentionedFilesRef.current = new Set();
+    return { content, files, attachmentPayload };
+  };
+
+  const handleSend = () => {
+    const { content, files, attachmentPayload } = consumeComposer();
+    onSend(content, files, attachmentPayload);
+  };
+
+  const handleSendSteer = () => {
+    if (!onSendSteer) return;
+    // Steering only makes sense during a running turn — a regular send
+    // path handles the idle case, and the agent has nothing to steer
+    // when it isn't generating. Defensive guard so a misfired hotkey on
+    // an idle session doesn't double-send.
+    if (!isRunning) {
+      handleSend();
+      return;
+    }
+    // Mid-turn steering isn't supported over the remote transport yet
+    // (Codex P2). Fall back to the normal send path — which queues for
+    // after the current turn — instead of consuming the composer and
+    // dropping the text on the floor.
+    if (isRemote) {
+      handleSend();
+      return;
+    }
+    if (!chatInput.trim() && pendingAttachments.length === 0) return;
+    const { content, files, attachmentPayload } = consumeComposer();
+    void onSendSteer(content, files, attachmentPayload);
   };
 
   const planMode = useAppStore(
@@ -820,6 +871,25 @@ export function ChatInputArea({
       if (e.key === "Escape") {
         e.preventDefault();
         setSlashPickerDismissed(true);
+        return;
+      }
+    }
+
+    // Skip-queue / steer: when the configured "send now" hotkey fires
+    // (default Cmd/Ctrl+Enter), bypass the queue and inject the typed
+    // content directly as a mid-turn steer. We intercept BEFORE the bare
+    // Enter handler below so a Mod+Enter press doesn't get caught by it.
+    // The binding is read from the hotkey settings system, so users can
+    // remap it (e.g. Cmd+Shift+Enter) via the Keyboard settings page.
+    const steerBinding = getEffectiveBindingById(
+      "chat.steer-immediate",
+      keybindings,
+    );
+    if (steerBinding) {
+      const pressed = eventToBinding(e.nativeEvent, "key");
+      if (pressed && pressed === steerBinding) {
+        e.preventDefault();
+        handleSendSteer();
         return;
       }
     }
