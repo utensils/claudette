@@ -1,9 +1,10 @@
 //! Discovery file the running Claudette GUI advertises so the
 //! `claudette` CLI can find its IPC socket.
 //!
-//! On startup the GUI writes `${state_dir}/claudette/app.json` containing
+//! On startup the GUI writes `${state_dir}/Claudette/app.json` containing
 //! its pid, IPC socket address, auth token, and version. On shutdown the
-//! file is removed via the [`AppInfoFile`] RAII guard.
+//! file is removed via the [`AppInfoFile`] RAII guard. The directory
+//! name is `Claudette` (capitalized) to match `STATE_SUBDIR` below.
 //!
 //! `${state_dir}` is `dirs::data_local_dir()` (e.g.
 //! `~/Library/Application Support` on macOS, `~/.local/share` on Linux,

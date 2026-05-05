@@ -32,17 +32,11 @@ struct IpcGuard {
     _file: app_info::AppInfoFile,
 }
 
-/// Cheap ISO 8601 timestamp builder for the discovery file's
-/// `started_at`. Avoids a `chrono` dep just for this one string —
-/// formats UTC seconds as a Z-suffixed instant.
+/// RFC 3339 / ISO 8601 timestamp builder for the discovery file's
+/// `started_at`. `chrono` is already a workspace dep (used elsewhere
+/// in this file), so we just delegate.
 fn chrono_iso_now() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    // 1970-01-01T00:00:00Z + offset; good enough for triage. Real
-    // calendar formatting can be added when something needs it.
-    format!("@{secs}")
+    chrono::Utc::now().to_rfc3339()
 }
 
 #[cfg(target_os = "macos")]
