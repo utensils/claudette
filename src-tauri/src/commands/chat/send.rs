@@ -180,6 +180,20 @@ fn is_terminal_task_status(status: &str) -> bool {
     )
 }
 
+fn should_defer_persistent_restart(session: &AgentSessionState) -> bool {
+    should_defer_persistent_restart_for_state(
+        session.persistent_session.is_some(),
+        !session.running_background_tasks.is_empty(),
+    )
+}
+
+fn should_defer_persistent_restart_for_state(
+    has_persistent_session: bool,
+    has_running_background_tasks: bool,
+) -> bool {
+    has_persistent_session && has_running_background_tasks
+}
+
 async fn apply_task_notification_status(
     app: &AppHandle,
     db_path: &std::path::Path,
@@ -1062,7 +1076,11 @@ pub async fn send_chat_message(
     // MCP config changed while a previous turn was in flight — tear down the
     // persistent session so the next spawn picks up updated --mcp-config.
     // The session is idle between turns so a graceful SIGTERM is sufficient.
-    if session.mcp_config_dirty {
+    if session.mcp_config_dirty && should_defer_persistent_restart(session) {
+        eprintln!(
+            "[chat] MCP config dirty, but background tasks are running — deferring persistent session restart for {workspace_id}"
+        );
+    } else if session.mcp_config_dirty {
         eprintln!("[chat] MCP config dirty — tearing down persistent session for {workspace_id}");
         let to_deny_mcp = drain_pending_permissions(session);
         let stale_pid = session.persistent_session.as_ref().map(|ps| ps.pid());
@@ -1128,7 +1146,25 @@ pub async fn send_chat_message(
     // "Approve plan", and the next turn arrives with `plan_mode=false`.
     // Without a teardown the process stays in plan mode and every mutating
     // tool is silently auto-denied.
-    if session.persistent_session.is_some()
+    if should_defer_persistent_restart(session)
+        && persistent_session_flags_drifted(
+            SessionFlags {
+                plan_mode: session.session_plan_mode,
+                allowed_tools: &session.session_allowed_tools,
+                exited_plan: session.session_exited_plan,
+                disable_1m_context: session.session_disable_1m_context,
+            },
+            RequestedFlags {
+                plan_mode: agent_settings.plan_mode,
+                allowed_tools: &allowed_tools,
+                disable_1m_context: agent_settings.disable_1m_context,
+            },
+        )
+    {
+        eprintln!(
+            "[chat] session flags drifted, but background tasks are running — deferring persistent session restart for {workspace_id}"
+        );
+    } else if session.persistent_session.is_some()
         && persistent_session_flags_drifted(
             SessionFlags {
                 plan_mode: session.session_plan_mode,
@@ -1242,7 +1278,14 @@ pub async fn send_chat_message(
     // snapshot stored at spawn and teardown on any divergence. The
     // mtime-keyed cache makes this re-resolve nearly free on quiet
     // turns, so the check costs nothing in the common case.
-    if session.persistent_session.is_some() && session.session_resolved_env != resolved_env.vars {
+    if should_defer_persistent_restart(session) && session.session_resolved_env != resolved_env.vars
+    {
+        eprintln!(
+            "[chat] env-provider output changed, but background tasks are running — deferring persistent session restart for {workspace_id}"
+        );
+    } else if session.persistent_session.is_some()
+        && session.session_resolved_env != resolved_env.vars
+    {
         eprintln!(
             "[chat] env-provider output changed ({} vars before, {} after) — tearing down persistent session for {workspace_id}",
             session.session_resolved_env.len(),
@@ -2429,7 +2472,7 @@ pub async fn send_chat_message(
 
 #[cfg(test)]
 mod tests {
-    use super::terminal_text;
+    use super::{should_defer_persistent_restart_for_state, terminal_text};
 
     #[test]
     fn terminal_text_converts_newlines_to_terminal_newlines() {
@@ -2455,5 +2498,13 @@ mod tests {
     #[test]
     fn terminal_text_normalizes_crlf_without_extra_clear() {
         assert_eq!(terminal_text("one\r\ntwo\r\n"), "one\r\ntwo\r\n");
+    }
+
+    #[test]
+    fn persistent_restart_is_deferred_only_while_background_tasks_are_owned() {
+        assert!(should_defer_persistent_restart_for_state(true, true));
+        assert!(!should_defer_persistent_restart_for_state(true, false));
+        assert!(!should_defer_persistent_restart_for_state(false, true));
+        assert!(!should_defer_persistent_restart_for_state(false, false));
     }
 }
