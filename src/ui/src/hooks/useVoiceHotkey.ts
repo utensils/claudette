@@ -60,24 +60,25 @@ export function formatToggleHotkey(hotkey: string | null, isMac: boolean): strin
     .join(isMac ? "" : "+");
 }
 
+const HOLD_KEY_DISPLAY: Record<string, { mac: string; other: string }> = {
+  AltRight: { mac: "Right ⌥", other: "Right Alt" },
+  AltLeft: { mac: "Left ⌥", other: "Left Alt" },
+  ControlRight: { mac: "Right ⌃", other: "Right Ctrl" },
+  ControlLeft: { mac: "Left ⌃", other: "Left Ctrl" },
+  ShiftRight: { mac: "Right ⇧", other: "Right Shift" },
+  ShiftLeft: { mac: "Left ⇧", other: "Left Shift" },
+  MetaRight: { mac: "Right ⌘", other: "Right Meta" },
+  MetaLeft: { mac: "Left ⌘", other: "Left Meta" },
+  Space: { mac: "Space", other: "Space" },
+  F13: { mac: "F13", other: "F13" },
+  F14: { mac: "F14", other: "F14" },
+  F15: { mac: "F15", other: "F15" },
+};
+
 /** Human-readable display of a hold key code (e.g. "AltRight" → "Right ⌥"). */
 export function formatHoldHotkey(code: string | null, isMac: boolean): string {
   if (!code) return "—";
-  const map: Record<string, { mac: string; other: string }> = {
-    AltRight: { mac: "Right ⌥", other: "Right Alt" },
-    AltLeft: { mac: "Left ⌥", other: "Left Alt" },
-    ControlRight: { mac: "Right ⌃", other: "Right Ctrl" },
-    ControlLeft: { mac: "Left ⌃", other: "Left Ctrl" },
-    ShiftRight: { mac: "Right ⇧", other: "Right Shift" },
-    ShiftLeft: { mac: "Left ⇧", other: "Left Shift" },
-    MetaRight: { mac: "Right ⌘", other: "Right Meta" },
-    MetaLeft: { mac: "Left ⌘", other: "Left Meta" },
-    Space: { mac: "Space", other: "Space" },
-    F13: { mac: "F13", other: "F13" },
-    F14: { mac: "F14", other: "F14" },
-    F15: { mac: "F15", other: "F15" },
-  };
-  const entry = map[code];
+  const entry = HOLD_KEY_DISPLAY[code];
   if (entry) return isMac ? entry.mac : entry.other;
   return code.replace(/^(?:Key|Digit)/, "");
 }

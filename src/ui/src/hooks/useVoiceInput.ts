@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   cancelVoiceRecording,
   listVoiceProviders,
@@ -213,6 +213,14 @@ export function useVoiceInput(
         return;
       }
 
+      // If cancel() (or blur) fired during the await, the recording must not
+      // be allowed to become active — roll the native provider back rather
+      // than letting the mic stay hot in the background.
+      if (cancelledRef.current) {
+        void cancelVoiceRecording(provider.id);
+        return;
+      }
+
       nativeProviderRef.current = provider.id;
       setElapsedSeconds(0);
       setState("recording");
@@ -334,13 +342,26 @@ export function useVoiceInput(
 
   // Stop any active recording when the window loses focus, regardless of how
   // it was started (mic button, toggle hotkey, hold-to-talk). Without this,
-  // a Cmd+Tab away from the app would leave the mic hot in the background.
-  // stop() is internally gated — it's a no-op when no recording is in flight.
+  // a Cmd+Tab away would leave the mic hot in the background.
+  //
+  // We must distinguish "starting" from "recording": during the brief window
+  // between user trigger and startVoiceRecording resolving, nativeProviderRef
+  // is still null and stop() is a no-op. cancel() flips cancelledRef so the
+  // in-flight start() rolls itself back after its await. State is read via a
+  // ref so the listener doesn't need to be re-registered on every transition.
+  const stateRef = useRef(state);
+  useLayoutEffect(() => {
+    stateRef.current = state;
+  });
+
   useEffect(() => {
-    const onBlur = () => stop();
+    const onBlur = () => {
+      if (stateRef.current === "starting") cancel();
+      else stop();
+    };
     window.addEventListener("blur", onBlur);
     return () => window.removeEventListener("blur", onBlur);
-  }, [stop]);
+  }, [stop, cancel]);
 
   return {
     state,

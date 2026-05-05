@@ -9,12 +9,8 @@ import {
   getDefaultHoldHotkey,
   normalizeToggleKey,
 } from "../../../hooks/useVoiceHotkey";
+import { isMacPlatform } from "../../../utils/voiceHotkeys";
 import styles from "../Settings.module.css";
-
-function isMacPlatform(): boolean {
-  if (typeof navigator === "undefined") return false;
-  return /Mac/.test(navigator.platform) || /Mac OS X/.test(navigator.userAgent);
-}
 
 type RebindTarget = "toggle" | "hold" | null;
 
