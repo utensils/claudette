@@ -632,6 +632,20 @@ fn tool_result_content_text(content: &serde_json::Value) -> String {
     content.to_string()
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatTurnSettingsPayload<'a> {
+    workspace_id: &'a str,
+    chat_session_id: &'a str,
+    model: Option<&'a str>,
+    fast_mode: bool,
+    thinking_enabled: bool,
+    plan_mode: bool,
+    effort: Option<&'a str>,
+    chrome_enabled: bool,
+    disable_1m_context: bool,
+}
+
 #[tauri::command]
 pub async fn load_chat_history(
     session_id: String,
@@ -1283,6 +1297,24 @@ pub async fn send_chat_message(
         disable_1m_context: disable_1m_context.unwrap_or(false),
         hook_bridge: None,
     };
+
+    // Tell the frontend toolbar what this turn is actually using so the input
+    // bar reflects reality — matters when a turn arrives from a non-GUI surface
+    // (CLI, IPC) whose flags don't pass through the toolbar slice setters.
+    let _ = app.emit(
+        "chat-turn-settings",
+        &ChatTurnSettingsPayload {
+            workspace_id: &workspace_id,
+            chat_session_id: &chat_session_id,
+            model: agent_settings.model.as_deref(),
+            fast_mode: agent_settings.fast_mode,
+            thinking_enabled: agent_settings.thinking_enabled,
+            plan_mode: agent_settings.plan_mode,
+            effort: agent_settings.effort.as_deref(),
+            chrome_enabled: agent_settings.chrome_enabled,
+            disable_1m_context: agent_settings.disable_1m_context,
+        },
+    );
 
     // `--permission-mode` and `--allowedTools` are baked into the persistent
     // `claude` process at spawn — subsequent stdin turns cannot change them.

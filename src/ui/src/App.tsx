@@ -451,6 +451,33 @@ function App() {
       store.addWorkspace(workspace);
     });
 
+    // Reflect what the agent actually used into the input bar after every
+    // turn. Without this, a turn dispatched from the CLI / IPC (or a remote
+    // surface that bypasses the toolbar slice) leaves the toolbar showing
+    // stale defaults — misleading because the *next* manual send would then
+    // diverge from the displayed flags.
+    const unlistenChatTurnSettings = listen<{
+      workspaceId: string;
+      chatSessionId: string;
+      model: string | null;
+      fastMode: boolean;
+      thinkingEnabled: boolean;
+      planMode: boolean;
+      effort: string | null;
+      chromeEnabled: boolean;
+      disable1mContext: boolean;
+    }>("chat-turn-settings", (event) => {
+      useAppStore.getState().applyChatTurnSettings({
+        chatSessionId: event.payload.chatSessionId,
+        model: event.payload.model,
+        fastMode: event.payload.fastMode,
+        thinkingEnabled: event.payload.thinkingEnabled,
+        planMode: event.payload.planMode,
+        effort: event.payload.effort,
+        chromeEnabled: event.payload.chromeEnabled,
+      });
+    });
+
     const unlistenAutoArchived = listen<{ workspace_id: string; workspace_name: string; pr_number?: number; deleted?: boolean }>("workspace-auto-archived", (event) => {
       const { workspace_id, workspace_name, pr_number, deleted } = event.payload;
       const store = useAppStore.getState();
@@ -487,6 +514,7 @@ function App() {
       unlistenScmUpdate.then((fn) => fn());
       unlistenAutoArchived.then((fn) => fn());
       unlistenWorkspacesChanged.then((fn) => fn());
+      unlistenChatTurnSettings.then((fn) => fn());
       unlistenMissingCli.then((fn) => fn());
     };
   }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setPluginManagementEnabled, setCommunityRegistryEnabled, setEditorGitGutterBase, setEditorMinimapEnabled, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings]);
