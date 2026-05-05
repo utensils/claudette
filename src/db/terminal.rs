@@ -471,6 +471,94 @@ mod tests {
     }
 
     #[test]
+    fn test_agent_terminal_session_update_resets_legacy_task_metadata() {
+        let db = setup_db_with_workspace();
+        let mut legacy = make_agent_terminal_tab(2, "w1", "Agent shell", "old-chat");
+        legacy.agent_tool_use_id = Some("toolu-old".into());
+        legacy.agent_task_id = Some("task-old".into());
+        legacy.output_path = Some("/tmp/old.output".into());
+        legacy.task_status = Some("running".into());
+        legacy.task_summary = Some("old command".into());
+        db.insert_terminal_tab(&legacy).unwrap();
+
+        db.update_agent_shell_terminal_tab_session(2, "new-chat", "/tmp/new.output")
+            .unwrap();
+
+        let tab = db
+            .get_agent_shell_terminal_tab("new-chat")
+            .unwrap()
+            .unwrap();
+        assert_eq!(tab.title, CLAUDETTE_TERMINAL_TITLE);
+        assert_eq!(tab.sort_order, 0);
+        assert_eq!(tab.agent_chat_session_id.as_deref(), Some("new-chat"));
+        assert_eq!(tab.agent_tool_use_id, None);
+        assert_eq!(tab.agent_task_id, None);
+        assert_eq!(tab.output_path.as_deref(), Some("/tmp/new.output"));
+        assert_eq!(tab.task_status, None);
+        assert_eq!(tab.task_summary, None);
+    }
+
+    #[test]
+    fn test_agent_terminal_status_updates_task_binding_and_keeps_summary() {
+        let db = setup_db_with_workspace();
+        let mut tab = make_agent_terminal_tab(2, "w1", CLAUDETTE_TERMINAL_TITLE, "chat-1");
+        tab.task_summary = Some("sleep 30 && date".into());
+        db.insert_terminal_tab(&tab).unwrap();
+
+        db.update_agent_shell_terminal_tab_status("chat-1", Some("task-1"), "running", None)
+            .unwrap();
+        let running = db.get_agent_shell_terminal_tab("chat-1").unwrap().unwrap();
+        assert_eq!(running.agent_task_id.as_deref(), Some("task-1"));
+        assert_eq!(running.task_status.as_deref(), Some("running"));
+        assert_eq!(running.task_summary.as_deref(), Some("sleep 30 && date"));
+
+        db.update_agent_shell_terminal_tab_status(
+            "chat-1",
+            Some("task-1"),
+            "completed",
+            Some("exit 0"),
+        )
+        .unwrap();
+        let completed = db.get_agent_shell_terminal_tab("chat-1").unwrap().unwrap();
+        assert_eq!(completed.agent_task_id.as_deref(), Some("task-1"));
+        assert_eq!(completed.task_status.as_deref(), Some("completed"));
+        assert_eq!(completed.task_summary.as_deref(), Some("exit 0"));
+    }
+
+    #[test]
+    fn test_agent_terminal_status_ignores_command_task_tabs() {
+        let db = setup_db_with_workspace();
+        db.insert_terminal_tab(&make_agent_terminal_tab(
+            2,
+            "w1",
+            CLAUDETTE_TERMINAL_TITLE,
+            "chat-1",
+        ))
+        .unwrap();
+        let mut command_tab = make_agent_terminal_tab(3, "w1", "Agent: sleep 30 && date", "chat-1");
+        command_tab.agent_tool_use_id = Some("toolu-command".into());
+        command_tab.task_status = Some("running".into());
+        db.insert_terminal_tab(&command_tab).unwrap();
+
+        db.update_agent_shell_terminal_tab_status(
+            "chat-1",
+            Some("task-1"),
+            "completed",
+            Some("exit 0"),
+        )
+        .unwrap();
+
+        let command_tab = db
+            .get_terminal_tab_by_tool_use_id("toolu-command")
+            .unwrap()
+            .unwrap();
+        assert_eq!(command_tab.agent_task_id, None);
+        assert_eq!(command_tab.task_status.as_deref(), Some("running"));
+        let shell = db.get_agent_shell_terminal_tab("chat-1").unwrap().unwrap();
+        assert_eq!(shell.task_status.as_deref(), Some("completed"));
+    }
+
+    #[test]
     fn test_delete_terminal_tab() {
         let db = setup_db_with_workspace();
         db.insert_terminal_tab(&make_terminal_tab(1, "w1", "Terminal 1"))

@@ -193,10 +193,33 @@ mod tests {
     }
 
     #[test]
+    fn parses_explicit_foreground_bash_start() {
+        let start = parse_bash_start(r#"{"command":"pwd","run_in_background":false}"#).unwrap();
+        assert_eq!(start.command.as_deref(), Some("pwd"));
+        assert!(!start.run_in_background);
+        assert!(
+            parse_background_bash_start(r#"{"command":"pwd","run_in_background":false}"#).is_none()
+        );
+    }
+
+    #[test]
     fn parses_foreground_bash_start() {
         let start = parse_bash_start(r#"{"command":"pwd"}"#).unwrap();
         assert_eq!(start.command.as_deref(), Some("pwd"));
         assert!(!start.run_in_background);
+    }
+
+    #[test]
+    fn parses_empty_bash_command_as_none() {
+        let start = parse_bash_start(r#"{"command":"   ","run_in_background":true}"#).unwrap();
+        assert_eq!(start.command, None);
+        assert!(start.run_in_background);
+    }
+
+    #[test]
+    fn rejects_invalid_bash_start_json() {
+        assert!(parse_bash_start("not json").is_none());
+        assert!(parse_background_bash_start("not json").is_none());
     }
 
     #[test]
@@ -209,6 +232,13 @@ mod tests {
     }
 
     #[test]
+    fn detects_tail_commands_with_shell_prefix_boundaries() {
+        assert!(is_tail_bash_command("tail\t-f /tmp/out"));
+        assert!(is_tail_bash_command("/opt/homebrew/bin/gtail && true"));
+        assert!(!is_tail_bash_command("env tail -f /tmp/out"));
+    }
+
+    #[test]
     fn parses_background_task_binding() {
         let binding = parse_background_task_binding(
             "Command running in background with ID: task_123. Output is being written to: /tmp/out.log",
@@ -216,6 +246,30 @@ mod tests {
         .unwrap();
         assert_eq!(binding.task_id, "task_123");
         assert_eq!(binding.output_path, "/tmp/out.log");
+    }
+
+    #[test]
+    fn parses_background_task_binding_inside_tool_text() {
+        let binding = parse_background_task_binding(
+            "Started.\nCommand running in background with ID: task_123.\nOutput is being written to: /tmp/out.log.\n",
+        )
+        .unwrap();
+        assert_eq!(binding.task_id, "task_123");
+        assert_eq!(binding.output_path, "/tmp/out.log");
+    }
+
+    #[test]
+    fn rejects_incomplete_background_task_binding() {
+        assert!(
+            parse_background_task_binding("Command running in background with ID: task_123.")
+                .is_none()
+        );
+        assert!(
+            parse_background_task_binding(
+                "Command running in background with ID: . Output is being written to: /tmp/out.log",
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -240,5 +294,25 @@ mod tests {
         assert_eq!(notification.task_id, "task_123");
         assert_eq!(notification.status, None);
         assert_eq!(notification.summary.as_deref(), Some("waiting for input"));
+    }
+
+    #[test]
+    fn parses_task_notification_with_escaped_fields() {
+        let notification = parse_task_notification(
+            "<task-notification><task-id>task_123</task-id><summary>done &amp; wrote &lt;file&gt;</summary></task-notification>",
+        )
+        .unwrap();
+        assert_eq!(notification.summary.as_deref(), Some("done & wrote <file>"));
+    }
+
+    #[test]
+    fn rejects_task_notification_without_task_id() {
+        assert!(
+            parse_task_notification(
+                "<task-notification><status>completed</status></task-notification>",
+            )
+            .is_none()
+        );
+        assert!(parse_task_notification("plain text").is_none());
     }
 }

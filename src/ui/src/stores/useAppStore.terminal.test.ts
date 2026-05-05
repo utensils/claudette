@@ -132,6 +132,48 @@ describe("terminal slice: upsertAgentTaskTerminalTab", () => {
     ).toEqual([completed]);
   });
 
+  it("replaces prior agent tabs for the same session but preserves other sessions", () => {
+    const previousSameSession: TerminalTab = {
+      ...makeTab(10, WS_A),
+      title: "Agent: sleep 30",
+      kind: "agent_task",
+      agent_chat_session_id: "session-a",
+      task_status: "running",
+    };
+    const otherSession: TerminalTab = {
+      ...makeTab(11, WS_A),
+      title: "Claudette terminal",
+      kind: "agent_task",
+      agent_chat_session_id: "session-b",
+      task_status: "running",
+    };
+    const replacement: TerminalTab = {
+      ...makeTab(12, WS_A),
+      title: "Claudette terminal",
+      kind: "agent_task",
+      agent_chat_session_id: "session-a",
+      task_status: "running",
+    };
+
+    useAppStore
+      .getState()
+      .setTerminalTabs(WS_A, [previousSameSession, otherSession]);
+    useAppStore
+      .getState()
+      .upsertAgentTaskTerminalTab(WS_A, "session-a", replacement);
+
+    expect(useAppStore.getState().terminalTabs[WS_A]).toEqual([
+      otherSession,
+      replacement,
+    ]);
+    expect(
+      useAppStore.getState().agentBackgroundTasksBySessionId["session-a"],
+    ).toEqual([replacement]);
+    expect(
+      useAppStore.getState().agentBackgroundTasksBySessionId["session-b"],
+    ).toBeUndefined();
+  });
+
   it("keeps the read-only agent terminal first and replaces legacy command tabs", () => {
     const userTerminal = makeTab(1, WS_A);
     const legacyAgentTab: TerminalTab = {
@@ -217,6 +259,24 @@ describe("terminal slice: removeTerminalTab", () => {
     useAppStore.getState().removeTerminalTab(WS_A, 1);
 
     expect(useAppStore.getState().activeTerminalTabId[WS_B]).toBe(99);
+  });
+
+  it("removing an agent tab clears its tracked background task entry", () => {
+    const agentTab: TerminalTab = {
+      ...makeTab(10, WS_A),
+      kind: "agent_task",
+      agent_chat_session_id: "session-a",
+      task_status: "running",
+    };
+    useAppStore
+      .getState()
+      .upsertAgentTaskTerminalTab(WS_A, "session-a", agentTab);
+
+    useAppStore.getState().removeTerminalTab(WS_A, 10);
+
+    expect(
+      useAppStore.getState().agentBackgroundTasksBySessionId["session-a"],
+    ).toBeUndefined();
   });
 });
 

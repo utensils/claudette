@@ -2443,4 +2443,17 @@ mod tests {
             "Building [======]\r\x1b[KBuilding [>]\r\ndone"
         );
     }
+
+    #[test]
+    fn terminal_text_preserves_ansi_sequences() {
+        assert_eq!(
+            terminal_text("\x1b[32mok\x1b[0m\n"),
+            "\x1b[32mok\x1b[0m\r\n"
+        );
+    }
+
+    #[test]
+    fn terminal_text_normalizes_crlf_without_extra_clear() {
+        assert_eq!(terminal_text("one\r\ntwo\r\n"), "one\r\ntwo\r\n");
+    }
 }
