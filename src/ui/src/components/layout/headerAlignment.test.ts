@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// Resolve from the test file's own URL — `__dirname` is undefined in ESM
+// (`"type": "module"` in package.json), and while vitest happens to shim
+// it today, deriving from `import.meta.url` keeps this test portable
+// against future tooling changes (Copilot review).
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // Regression test for the layout's two-row top alignment.
 //

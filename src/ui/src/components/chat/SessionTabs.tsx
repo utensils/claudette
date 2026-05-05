@@ -234,6 +234,12 @@ export function SessionTabs({ workspaceId }: Props) {
     (s) => s.tabOrderByWorkspace[workspaceId],
   );
   const setTabOrderForWorkspace = useAppStore((s) => s.setTabOrderForWorkspace);
+  // Per-kind setters used by `onReorder` to keep the per-kind arrays in
+  // sync with the unified order — other call sites (closeFileTab etc.)
+  // still consult the per-kind arrays for adjacency, so they have to
+  // match the visible order.
+  const setFileTabsForWorkspace = useAppStore((s) => s.setFileTabsForWorkspace);
+  const setDiffTabsForWorkspace = useAppStore((s) => s.setDiffTabsForWorkspace);
 
   // Unified ordered list of focusable tab entries. Default layout is
   // sessions → diffs → files; once the user has dragged the strip into
@@ -322,11 +328,15 @@ export function SessionTabs({ workspaceId }: Props) {
     },
     onReorder: (next) => {
       // Convert the reordered nav-entry list into the unified-tab-order
-      // shape. This drives the render directly — no need to also write the
-      // per-kind arrays back, because the render block iterates the unified
-      // order. Splitting still happens for chat-session DB persistence,
-      // since the relative order of sessions (ignoring files/diffs) is
-      // what reorder_chat_sessions cares about.
+      // shape. The render block iterates the unified order directly, but
+      // we ALSO write the per-kind arrays back so other code paths that
+      // read them — e.g. `closeFileTab` picking the adjacent tab to
+      // activate, or `closeDiffTab`/keyboard nav after-close — see the
+      // same relative order the user just dragged into. Without those
+      // writebacks, those code paths still pick from the pre-drag
+      // sequence (Copilot review of the second push). Sessions are
+      // additionally persisted via reorder_chat_sessions for restart
+      // round-tripping.
       const unified = next.map((e) =>
         e.kind === "session"
           ? { kind: "session" as const, sessionId: e.sessionId }
@@ -341,6 +351,16 @@ export function SessionTabs({ workspaceId }: Props) {
         diffTabs,
         fileTabs,
       );
+      // Sessions: merge the reordered active set back with archived
+      // sessions (which never appear in navEntries) so the slice still
+      // has the full list per-workspace.
+      const archivedSessions = sessions.filter((s) => s.status === "Archived");
+      setSessionsForWorkspace(workspaceId, [
+        ...split.sessions,
+        ...archivedSessions,
+      ]);
+      setFileTabsForWorkspace(workspaceId, split.files);
+      setDiffTabsForWorkspace(workspaceId, split.diffs);
       if (split.sessionPersistIds.length > 0) {
         void reorderChatSessions(workspaceId, split.sessionPersistIds).catch(
           (err) =>

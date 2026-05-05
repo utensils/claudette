@@ -713,7 +713,12 @@ export function ChatPanel() {
     const trimmed = content.trim();
     if ((!trimmed && !attachments?.length) || !activeSessionId) return;
     if (ws?.remote_connection_id) {
-      setError("Mid-turn steering is not yet supported for remote workspaces");
+      // Mid-turn steering isn't supported over the remote transport yet,
+      // but the typed message must NOT be lost — fall back to the normal
+      // send path so it lands in the queue (which IS supported remotely).
+      // ChatInputArea also catches this earlier; this is defense in depth
+      // for any future caller that bypasses the composer (Copilot review).
+      await handleSend(content, mentionedFiles, attachments);
       return;
     }
     if (!isRunning) {

@@ -371,12 +371,28 @@ export const Sidebar = memo(function Sidebar() {
     onReorder: (next, draggedId) => {
       const moved = next.find((w) => w.id === draggedId);
       if (!moved) return;
-      // Persist only the moved workspace's repo. Other repos' relative
-      // ordering hasn't changed (cross-group is rejected upstream by
-      // isSameGroup), so we leave them alone.
-      const repoIds = next
+      // Build the persistence sequence from the visible-order ids of the
+      // moved repo, then APPEND any siblings in the same repo that the
+      // current filter (e.g. "Show archived" off) hides. Without those
+      // hidden tail entries, `reorder_workspaces` would leave them at
+      // their stale sort_order — when the user toggles archived workspaces
+      // back on, the archived rows could land mid-sequence with
+      // duplicated/interleaved values (Copilot review of the second push).
+      const visibleRepoIds = next
         .filter((w) => w.repository_id === moved.repository_id)
         .map((w) => w.id);
+      const visibleSet = new Set(visibleRepoIds);
+      const hiddenTailIds = workspaces
+        .filter(
+          (w) =>
+            w.repository_id === moved.repository_id && !visibleSet.has(w.id),
+        )
+        // Stable order for hidden siblings: preserve their existing
+        // sort_order so a later "show archived" toggle keeps them in the
+        // same relative position they were in before the drag.
+        .sort((a, b) => a.sort_order - b.sort_order)
+        .map((w) => w.id);
+      const repoIds = [...visibleRepoIds, ...hiddenTailIds];
       const orderIndex = new Map(repoIds.map((id, i) => [id, i]));
       // Optimistic update: rewrite both the array order AND each
       // workspace's `sort_order` for the moved repo. Reordering the array
