@@ -1,11 +1,19 @@
 //! Wire types for Claudette's request/response protocols.
 //!
 //! Both the local-IPC channel (`src-tauri/src/ipc.rs`) and the existing
-//! WebSocket server (`claudette-server`) speak line-delimited JSON-RPC v2:
-//! a request `{"id", "method", "params"}` and a response `{"id", "result"}`
-//! or `{"id", "error": {"code", "message"}}`. This module defines the
-//! shared shapes so the CLI client and either server-side speak the same
-//! wire format without duplicate definitions.
+//! WebSocket server (`claudette-server`) speak a line-delimited
+//! JSON-RPC-inspired envelope: a request `{"id", "method", "params"}` and
+//! a response `{"id", "result"}` or `{"id", "error": {"code", "message"}}`.
+//! The shapes match JSON-RPC 2.0 layout but intentionally omit the
+//! `"jsonrpc": "2.0"` discriminator field — every Claudette client
+//! already knows which surface it dialed, and skipping the field keeps
+//! payloads compact for the local socket use case. Strict JSON-RPC 2.0
+//! servers won't be drop-in compatible without that field; if you need
+//! one, add it (with validation/defaulting) to both `RpcRequest` /
+//! `RpcResponse` and the producer sites.
+//!
+//! This module defines the shared shapes so the CLI client and either
+//! server-side speak the same wire format without duplicate definitions.
 //!
 //! Method names are kept as strings rather than enums — every server
 //! decides what it accepts, and a closed enum would force every callsite
