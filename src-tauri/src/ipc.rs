@@ -21,7 +21,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use claudette::db::Database;
-use claudette::ops::workspace as ops_workspace;
 use claudette::plugin_runtime::host_api::WorkspaceInfo;
 use claudette::rpc::{Capabilities, RpcRequest, RpcResponse};
 use claudette::scm::detect;
@@ -38,7 +37,6 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
-use crate::ops_hooks::TauriHooks;
 use crate::state::AppState;
 
 /// Wire-protocol identifier sent in the `capabilities` response. Distinct
@@ -294,6 +292,10 @@ where
     f(&db)
 }
 
+/// Delegates to the shared `commands::workspace::create_workspace_inner`
+/// helper so CLI- and remote-driven creates run the same setup-script +
+/// env-provider pipeline as the GUI button. Without that, batch runs
+/// would dispatch agent prompts into uninitialized worktrees.
 async fn handle_create_workspace(
     app: &AppHandle,
     params: &serde_json::Value,
@@ -306,33 +308,23 @@ async fn handle_create_workspace(
         .get("name")
         .and_then(|v| v.as_str())
         .ok_or("missing name")?;
+    let skip_setup = params
+        .get("skip_setup")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let state = app
         .try_state::<AppState>()
         .ok_or_else(|| "AppState not initialised".to_string())?;
-    let mut db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    let (mode, custom) = ops_workspace::read_branch_prefix_settings(&db);
-    let prefix = ops_workspace::resolve_branch_prefix(&mode, &custom).await;
-    let worktree_base = state.worktree_base_dir.read().await.clone();
 
-    let hooks: Arc<TauriHooks> = TauriHooks::new(app.clone());
-    let out = ops_workspace::create(
-        &mut db,
-        hooks.as_ref(),
-        worktree_base.as_path(),
-        ops_workspace::CreateParams {
-            repo_id,
-            name,
-            branch_prefix: &prefix,
-        },
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    let result =
+        crate::commands::workspace::create_workspace_inner(repo_id, name, skip_setup, app, &state)
+            .await?;
 
     Ok(json!({
-        "workspace": out.workspace,
-        "default_session_id": out.default_session_id,
-        "worktree_path": out.worktree_path,
+        "workspace": result.workspace,
+        "default_session_id": result.default_session_id,
+        "setup_result": result.setup_result,
     }))
 }
 
@@ -415,6 +407,13 @@ async fn handle_send_chat_message(
     Ok(json!({ "ok": true }))
 }
 
+/// Delegates to the shared `commands::workspace::archive_workspace_inner`
+/// helper so CLI-driven archives perform the same agent process
+/// teardown, env-watcher cleanup, and MCP supervisor shutdown the GUI
+/// does. Note: the `delete_branch` payload field is ignored — the
+/// helper reads `git_delete_branch_on_archive` from app_settings to
+/// match GUI behavior. Pass `delete_branch_override` if a future client
+/// genuinely needs to override per-call.
 async fn handle_archive_workspace(
     app: &AppHandle,
     params: &serde_json::Value,
@@ -423,33 +422,28 @@ async fn handle_archive_workspace(
         .get("workspace_id")
         .and_then(|v| v.as_str())
         .ok_or("missing workspace_id")?;
-    let delete_branch = params
-        .get("delete_branch")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
 
     let state = app
         .try_state::<AppState>()
         .ok_or_else(|| "AppState not initialised".to_string())?;
-    let mut db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let supervisor = app
+        .try_state::<Arc<claudette::mcp_supervisor::McpSupervisor>>()
+        .ok_or_else(|| "McpSupervisor not initialised".to_string())?;
 
-    let hooks: Arc<TauriHooks> = TauriHooks::new(app.clone());
-    let out = ops_workspace::archive(
-        &mut db,
-        hooks.as_ref(),
-        ops_workspace::ArchiveParams {
-            workspace_id,
-            delete_branch,
-        },
+    let out = crate::commands::workspace::archive_workspace_inner(
+        workspace_id,
+        app,
+        &state,
+        supervisor.inner(),
     )
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     Ok(json!({
         "branch_deleted": out.branch_deleted,
         "was_last_workspace": out.was_last_workspace,
         "worktree_path": out.worktree_path,
         "repository_id": out.repository_id,
+        "delete_branch": out.delete_branch,
     }))
 }
 

@@ -36,6 +36,24 @@ pub async fn create_workspace(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<CreateWorkspaceResult, String> {
+    create_workspace_inner(&repo_id, &name, skip_setup.unwrap_or(false), &app, &state).await
+}
+
+/// Shared implementation of the GUI's `create_workspace` command.
+///
+/// The IPC handler (`src-tauri/src/ipc.rs::handle_create_workspace`)
+/// calls this directly so CLI- and remote-driven creates run the same
+/// setup-script + env-provider pipeline as the GUI button. Without
+/// this, `claudette workspace create` (and `claudette batch run`)
+/// would dispatch agent prompts into worktrees that haven't had their
+/// `.claudette.json` setup script run.
+pub(crate) async fn create_workspace_inner(
+    repo_id: &str,
+    name: &str,
+    skip_setup: bool,
+    app: &AppHandle,
+    state: &AppState,
+) -> Result<CreateWorkspaceResult, String> {
     let mut db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let (prefix_mode, prefix_custom) = ops_workspace::read_branch_prefix_settings(&db);
     let prefix = ops_workspace::resolve_branch_prefix(&prefix_mode, &prefix_custom).await;
@@ -46,8 +64,8 @@ pub async fn create_workspace(
         TauriHooks::new(app.clone()).as_ref(),
         worktree_base.as_path(),
         CreateParams {
-            repo_id: &repo_id,
-            name: &name,
+            repo_id,
+            name,
             branch_prefix: &prefix,
         },
     )
@@ -59,7 +77,7 @@ pub async fn create_workspace(
     // resulting env into the script's process. The op intentionally
     // stays out of env resolution because the plugin registry lives in
     // AppState — only the GUI has it today.
-    let setup_result = if skip_setup.unwrap_or(false) {
+    let setup_result = if skip_setup {
         None
     } else {
         let repos = db.list_repositories().map_err(|e| e.to_string())?;
@@ -67,7 +85,7 @@ pub async fn create_workspace(
             .iter()
             .find(|r| r.id == repo_id)
             .ok_or("Repository not found")?;
-        let resolved_env = resolve_env_for_workspace(&state, &out.workspace, &repo.path).await;
+        let resolved_env = resolve_env_for_workspace(state, &out.workspace, &repo.path).await;
         ops_workspace::resolve_and_run_setup(
             &out.workspace,
             Path::new(&repo.path),
@@ -217,6 +235,35 @@ pub async fn archive_workspace(
     state: State<'_, AppState>,
     supervisor: State<'_, Arc<McpSupervisor>>,
 ) -> Result<bool, String> {
+    let out = archive_workspace_inner(&id, &app, &state, &supervisor).await?;
+    Ok(out.delete_branch)
+}
+
+/// Result of the shared archive helper. Tauri command discards everything
+/// except `delete_branch`; the IPC handler returns the full struct so
+/// CLI clients see the same response shape they'd get from the WS server.
+pub(crate) struct ArchiveWorkspaceOutput {
+    pub delete_branch: bool,
+    pub branch_deleted: bool,
+    pub was_last_workspace: bool,
+    pub worktree_path: Option<String>,
+    pub repository_id: String,
+}
+
+/// Shared implementation of the GUI's `archive_workspace` command.
+///
+/// The IPC handler (`src-tauri/src/ipc.rs::handle_archive_workspace`)
+/// calls this directly so CLI- and remote-driven archives perform the
+/// same agent teardown, env-watcher cleanup, and MCP supervisor
+/// shutdown the GUI does. Without this, an in-flight agent could keep
+/// running against a worktree that was just removed and `state.agents`
+/// would accumulate ghost entries.
+pub(crate) async fn archive_workspace_inner(
+    id: &str,
+    app: &AppHandle,
+    state: &AppState,
+    supervisor: &McpSupervisor,
+) -> Result<ArchiveWorkspaceOutput, String> {
     let mut db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
 
     // The user-visible "delete branch on archive" setting lives in app
@@ -265,7 +312,7 @@ pub async fn archive_workspace(
         &mut db,
         TauriHooks::new(app.clone()).as_ref(),
         ops_workspace::ArchiveParams {
-            workspace_id: &id,
+            workspace_id: id,
             delete_branch,
         },
     )
@@ -291,7 +338,13 @@ pub async fn archive_workspace(
         let _ = app.emit("mcp-status-cleared", &out.repository_id);
     }
 
-    Ok(delete_branch)
+    Ok(ArchiveWorkspaceOutput {
+        delete_branch,
+        branch_deleted: out.branch_deleted,
+        was_last_workspace: out.was_last_workspace,
+        worktree_path: out.worktree_path,
+        repository_id: out.repository_id,
+    })
 }
 
 #[tauri::command]
