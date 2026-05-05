@@ -142,6 +142,7 @@
   "notifications_sound_session_start_desc": "Sound when a new session begins",
 
   "nav_editor": "Editor",
+  "nav_keyboard": "Keyboard",
   "editor_title": "Editor",
   "editor_gutter_base_label": "Git gutter base",
   "editor_gutter_base_desc": "Choose what the editor's git gutter (the colored markers next to line numbers) compares your buffer against.",
@@ -304,5 +305,17 @@
   "pinned_prompts_keep": "Keep",
   "pinned_prompts_delete_prompt": "Delete prompt",
   "pinned_prompts_confirm_delete_title": "Delete this prompt?",
-  "pinned_prompts_confirm_delete_subtitle": "This action cannot be undone."
+  "pinned_prompts_confirm_delete_subtitle": "This action cannot be undone.",
+
+  "keyboard_title": "Keyboard Shortcuts",
+  "keyboard_voice_section": "Voice input",
+  "keyboard_voice_toggle_label": "Toggle recording",
+  "keyboard_voice_toggle_desc": "Start or stop voice recording without touching the mouse.",
+  "keyboard_voice_hold_label": "Hold to talk",
+  "keyboard_voice_hold_desc": "Hold the key to record, release to stop and transcribe.",
+  "keyboard_rebind": "Rebind",
+  "keyboard_press_key": "Press a key…",
+  "keyboard_reset": "Reset",
+  "keyboard_disable": "Disable",
+  "keyboard_cancel": "Cancel"
 }
