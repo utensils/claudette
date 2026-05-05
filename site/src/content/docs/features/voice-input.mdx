@@ -9,8 +9,8 @@ Claudette lets you dictate prompts to the composer using your microphone. Three 
 
 | Provider | Platforms | Runs where | Notes |
 |----------|-----------|-----------|-------|
-| **Apple Speech** | macOS | On-device, OS-managed | Uses the native Speech framework. Fast and lightweight — no model download required. Needs microphone permission in System Settings → Privacy & Security → Microphone. |
-| **Distil-Whisper** | macOS, Linux, Windows | Fully on-device | Bundled local model (distil-whisper-large-v3). Downloads ~1.5 GB once from Hugging Face on first use; all subsequent transcription is offline. Metal GPU acceleration on macOS; CPU on Linux and Windows. |
+| **Apple Speech** | macOS | On-device, OS-managed | Uses the native Speech framework. Fast and lightweight — no model download required. Requires Microphone and Speech Recognition permission in System Settings. |
+| **Distil-Whisper** | macOS, Linux, Windows | Fully on-device | Uses the [`distil-whisper/distil-large-v3`](https://huggingface.co/distil-whisper/distil-large-v3) model (~1.5 GB), downloaded once from Hugging Face on first use and cached locally. All subsequent transcription is offline. Metal GPU acceleration on macOS; CPU on Linux and Windows. |
 | **Web Speech API** | Linux, Windows (fallback) | Browser-managed | Used when native capture is unavailable. Quality and language support depend on the OS browser engine. |
 
 Claudette's automatic selection order: a **pinned** provider (if set and enabled) → any **ready local model** → **Apple Speech** → a provider that still needs setup. The mic button in the composer reflects whichever provider is active.
@@ -40,9 +40,10 @@ Apple Speech uses the system's active language and locale settings.
 
 ### Apple Speech
 
-macOS requires an explicit microphone permission grant. The first time you start recording, macOS will prompt you. You can also grant it in advance:
+macOS requires two permissions — **Microphone** and **Speech Recognition**. The first time you start recording, macOS will prompt for both. You can also grant them in advance:
 
-**System Settings → Privacy & Security → Microphone → Claudette**
+- **System Settings → Privacy & Security → Microphone → Claudette**
+- **System Settings → Privacy & Security → Speech Recognition → Claudette**
 
 ### Distil-Whisper
 
@@ -67,6 +68,6 @@ All voice provider management lives in **Settings → Plugins → Voice Input**:
 
 ## Privacy
 
-All transcription runs on your machine. Distil-Whisper performs inference entirely locally via [Candle](https://github.com/huggingface/candle) — no audio leaves the app. Apple Speech sends audio to Apple's servers per their privacy policy; if that matters for your workflow, use Distil-Whisper instead.
+**Distil-Whisper** performs inference entirely locally via [Candle](https://github.com/huggingface/candle) — audio never leaves the app. The model is fetched from `huggingface.co/distil-whisper/distil-large-v3/` on first use; after that, no network access is needed for voice.
 
-The Distil-Whisper model is fetched from `huggingface.co/distil-whisper/distil-large-v3/` on first use. After that, no network access is needed for voice.
+**Apple Speech** and **Web Speech API** may process audio off-device depending on OS and browser settings. Apple's offline behavior varies by language support; the Web Speech API's behavior depends on the browser engine. If strict on-device processing is required, use Distil-Whisper.
