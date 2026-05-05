@@ -92,6 +92,19 @@ impl IpcServer {
             .create_tokio()
             .map_err(|e| format!("bind socket {socket_addr}: {e}"))?;
 
+        // Tighten the bound socket file to 0600 so only this user can
+        // connect — the module-level threat model promises a filesystem
+        // permission boundary, and `interprocess`'s default bind path
+        // doesn't enforce it. Best-effort: a failure here is logged but
+        // not fatal, since the bearer token still gates access.
+        #[cfg(unix)]
+        if let Some(ref path) = socket_file_path {
+            use std::os::unix::fs::PermissionsExt;
+            if let Err(e) = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)) {
+                eprintln!("[ipc] chmod 0600 {} failed: {e}", path.display());
+            }
+        }
+
         let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
         let task_token = token.clone();
         let task_app = app.clone();
@@ -129,16 +142,29 @@ fn generate_token() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Decide the socket address. Unix: short file under `${TMPDIR}/cclt/`
-/// — `claudette-cli` would push past macOS's 104-byte `sun_path` limit
-/// when TMPDIR is the long `/var/folders/.../T/` form, so a terse
-/// directory + 8-char id is used. Windows: a namespaced pipe name.
+/// Decide the socket address. Unix: short file under
+/// `${TMPDIR}/cclt-<uid>/` — `claudette-cli` would push past macOS's
+/// 104-byte `sun_path` limit when TMPDIR is the long
+/// `/var/folders/.../T/` form, so a terse directory + 8-char id is used.
+/// The uid suffix scopes the directory to a single user even when
+/// TMPDIR is shared (e.g. `/tmp` on Linux), so chmod-to-0700 below
+/// doesn't lock other users out of binding their own sockets.
+/// Windows: a namespaced pipe name (per-user namespace by OS default).
 fn make_socket_address(app_uuid: &str) -> Result<(String, Option<PathBuf>), String> {
     #[cfg(unix)]
     {
+        use std::os::unix::fs::PermissionsExt;
         let short_id: String = app_uuid.chars().take(8).collect();
-        let dir = std::env::temp_dir().join("cclt");
+        // SAFETY: getuid() is async-signal-safe and never fails.
+        let uid = unsafe { libc::getuid() };
+        let dir = std::env::temp_dir().join(format!("cclt-{uid}"));
         std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+        // Tighten the directory to 0700. The module-level threat model
+        // names filesystem permissions as the primary auth boundary;
+        // a default-umask 0755 (or 0777 on some Linux setups) would let
+        // other local users enumerate / DoS the socket dir even though
+        // they couldn't read the bearer token.
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
         let path = dir.join(format!("{short_id}.sock"));
         // Pre-clean any stale file (e.g. from a crashed parent).
         let _ = std::fs::remove_file(&path);
