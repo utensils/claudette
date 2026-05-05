@@ -353,6 +353,12 @@ pub async fn resolve_and_run_setup(
             }
             let _ = child.kill().await;
             let _ = child.wait().await;
+            // Drain the reader tasks deterministically. Killing the child
+            // closes its stdio pipes so the read_to_end calls return on
+            // their own; awaiting here just ensures both tasks have exited
+            // before we return rather than leaving them detached.
+            let _ = stdout_task.await;
+            let _ = stderr_task.await;
             Some(SetupResult {
                 source: source.to_string(),
                 script,
