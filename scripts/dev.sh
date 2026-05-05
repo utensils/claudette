@@ -15,7 +15,7 @@
 # Env overrides:
 #   VITE_PORT_BASE         start port for Vite probe (default 14253)
 #   CLAUDETTE_DEBUG_PORT_BASE   start port for debug probe (default 19432)
-#   CARGO_TAURI_FEATURES   features to pass to tauri (default devtools,server)
+#   CARGO_TAURI_FEATURES   features to pass to tauri (default devtools,server,voice)
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -77,7 +77,7 @@ echo "▸ Discovery file:   $discovery_file"
 
 (cd src/ui && bun install)
 
-features="${CARGO_TAURI_FEATURES:-devtools,server}"
+features="${CARGO_TAURI_FEATURES:-devtools,server,voice}"
 runner_args=()
 if [[ "$(uname -s)" == "Darwin" ]]; then
   runner_args=(--runner "$repo_root/scripts/macos-dev-app-runner.sh")

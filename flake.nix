@@ -560,7 +560,7 @@
               {
                 name = "dev";
                 command = "exec ./scripts/dev.sh";
-                help = "Start Tauri dev mode with hot-reload (auto-selects free Vite + debug ports)";
+                help = "Start Tauri dev mode with hot-reload, voice, and auto-selected Vite/debug ports";
                 category = "development";
               }
               {
