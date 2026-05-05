@@ -7,6 +7,7 @@ import { RepoIcon } from "../shared/RepoIcon";
 import { PanelToggles } from "../shared/PanelToggles";
 import { StatsStrip, AnalyticsSection, MicroStats } from "../metrics";
 import { SessionStatusIcon, type SessionStatusKind } from "../shared/SessionStatusIcon";
+import { formatElapsedSeconds } from "../chat/chatHelpers";
 import styles from "./Dashboard.module.css";
 
 /** Strip markdown syntax for a clean one-line preview. */
@@ -26,30 +27,6 @@ function stripMarkdown(s: string): string {
     .trim();
 }
 
-function formatElapsed(secs: number): string {
-  if (secs < 60) return `${secs}s`;
-  const m = Math.floor(secs / 60);
-  const s = secs % 60;
-  return `${m}m ${s}s`;
-}
-
-function useElapsed(isRunning: boolean): number {
-  const [elapsed, setElapsed] = useState(0);
-
-  useEffect(() => {
-    if (!isRunning) {
-      setElapsed(0);
-      return;
-    }
-    const start = Date.now();
-    const interval = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - start) / 1000));
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [isRunning]);
-
-  return elapsed;
-}
 
 const WorkspaceCard = memo(function WorkspaceCard({
   ws,
@@ -71,7 +48,19 @@ const WorkspaceCard = memo(function WorkspaceCard({
   index: number;
 }) {
   const isRunning = isAgentBusy(ws.agent_status);
-  const elapsed = useElapsed(isRunning);
+  const promptStartTime = useAppStore((s) => s.promptStartTime[ws.id] ?? null);
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!isRunning || promptStartTime == null) {
+      setElapsed(0);
+      return;
+    }
+    setElapsed(Math.floor((Date.now() - promptStartTime) / 1000));
+    const interval = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - promptStartTime) / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [isRunning, promptStartTime]);
 
   const statusColor =
     isRunning
@@ -137,7 +126,7 @@ const WorkspaceCard = memo(function WorkspaceCard({
         <span className={styles.statusIndicator}>
           {isRunning && (
             <span className={styles.statusLabel} style={{ color: statusColor }}>
-              {formatElapsed(elapsed)}
+              {formatElapsedSeconds(elapsed)}
             </span>
           )}
           <span title={statusIconTitle} aria-label={statusIconTitle} role="img">
