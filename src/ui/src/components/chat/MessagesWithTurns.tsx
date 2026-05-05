@@ -63,6 +63,9 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   onAttachmentClick,
   searchQuery,
   globalOffset = 0,
+  liveToolActivityStartedAt,
+  liveToolActivityNode,
+  liveTaskProgressNode,
 }: {
   messages: ChatMessage[];
   /** The enclosing workspace id — forwarded into rollback data so the modal
@@ -98,6 +101,9 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
    *  have not been fetched yet (pagination). Used to match CompletedTurn
    *  positions (which are global) against the local message array. */
   globalOffset?: number;
+  liveToolActivityStartedAt?: string | null;
+  liveToolActivityNode?: React.ReactNode;
+  liveTaskProgressNode?: React.ReactNode;
 }) {
   const { t } = useTranslation("chat");
   const completedTurns = useAppStore(
@@ -274,6 +280,19 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   }, [completedTurns, findTriggeringUserIdx, globalOffset, messages]);
 
   const completedTurnPositions = chronologicalTurnLayout.positions;
+
+  const liveToolActivityPosition = useMemo(() => {
+    if (!liveToolActivityStartedAt || !liveToolActivityNode) return null;
+    const startedAtMs = Date.parse(liveToolActivityStartedAt);
+    if (!Number.isFinite(startedAtMs)) return globalOffset + messages.length;
+    const laterIndex = messages.findIndex((msg) => {
+      const createdAtMs = Date.parse(msg.created_at);
+      return Number.isFinite(createdAtMs) && createdAtMs > startedAtMs;
+    });
+    return laterIndex === -1
+      ? globalOffset + messages.length
+      : globalOffset + laterIndex;
+  }, [globalOffset, liveToolActivityNode, liveToolActivityStartedAt, messages]);
 
   // Local version of completedTurnPositions with global indices shifted to
   // local array indices. Used by buildPlainTurnFooters, which works in local
@@ -491,6 +510,18 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
     );
   };
 
+  const renderLiveToolActivity = (position: number) => {
+    if (liveToolActivityPosition !== position || !liveToolActivityNode) {
+      return null;
+    }
+    return (
+      <React.Fragment key={`live-tool-activity-${position}`}>
+        {liveToolActivityNode}
+        {liveTaskProgressNode}
+      </React.Fragment>
+    );
+  };
+
   return (
     <>
       {messages.map((msg, idx) => {
@@ -503,6 +534,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
             return (
               <React.Fragment key={msg.id}>
                 {renderTurns(globalOffset + idx)}
+                {renderLiveToolActivity(globalOffset + idx)}
                 <CompactionDivider
                   event={{
                     ...compaction,
@@ -518,6 +550,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
             return (
               <React.Fragment key={msg.id}>
                 {renderTurns(globalOffset + idx)}
+                {renderLiveToolActivity(globalOffset + idx)}
                 <SyntheticContinuationMessage body={syntheticBody} />
               </React.Fragment>
             );
@@ -527,6 +560,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
         return (
           <React.Fragment key={msg.id}>
             {renderTurns(globalOffset + idx)}
+            {renderLiveToolActivity(globalOffset + idx)}
             {msg.id === pendingMessageId ? null : (
               <div className={`${styles.message} ${styles[roleClassKey(msg.role, msg.content)]}`}>
                 {msg.role === "User" && (
@@ -652,6 +686,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
       })}
       {/* Turn activity groups that land after the last loaded message */}
       {renderTurns(globalOffset + messages.length)}
+      {renderLiveToolActivity(globalOffset + messages.length)}
     </>
   );
 });

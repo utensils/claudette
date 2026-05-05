@@ -548,6 +548,34 @@
   color: var(--text-dim);
 }
 
+.agentToolCallList {
+  display: grid;
+  gap: 2px;
+  padding: 0 8px 6px 24px;
+}
+
+.agentToolCall {
+  display: flex;
+  min-width: 0;
+  gap: 8px;
+  align-items: center;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.agentToolCallName {
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agentToolCallStatus {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+}
+
 .toolContent {
   padding: 10px 12px;
   font-size: 12px;

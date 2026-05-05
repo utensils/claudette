@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "../stores/useAppStore";
 import { loadChatHistory, saveTurnToolActivities } from "../services/tauri";
 import type { AgentStreamPayload } from "../types/agent-events";
+import type { AgentToolCall } from "../stores/useAppStore";
 import type { ChatMessage } from "../types/chat";
 import type { ConversationCheckpoint } from "../types/checkpoint";
 import type { TerminalTab } from "../types/terminal";
@@ -21,6 +22,21 @@ import { pickMeterUsageFromResult } from "./pickMeterUsageFromResult";
 
 const ASK_USER_QUESTION_TOOL = "AskUserQuestion";
 
+interface AgentHookEventPayload {
+  workspace_id: string;
+  chat_session_id: string;
+  input: {
+    hook_event_name?: string;
+    agent_id?: string;
+    agent_type?: string;
+    tool_name?: string;
+    tool_input?: unknown;
+    tool_response?: unknown;
+    tool_use_id?: string;
+    error?: string;
+  };
+}
+
 export function useAgentStream() {
   const appendStreamingContent = useAppStore((s) => s.appendStreamingContent);
   const setStreamingContent = useAppStore((s) => s.setStreamingContent);
@@ -30,6 +46,7 @@ export function useAgentStream() {
   const addChatMessage = useAppStore((s) => s.addChatMessage);
   const addToolActivity = useAppStore((s) => s.addToolActivity);
   const updateToolActivity = useAppStore((s) => s.updateToolActivity);
+  const upsertAgentToolCall = useAppStore((s) => s.upsertAgentToolCall);
   const appendToolActivityInput = useAppStore(
     (s) => s.appendToolActivityInput
   );
@@ -53,6 +70,7 @@ export function useAgentStream() {
   const turnCheckpointIdRef = useRef<Record<string, string | undefined>>({});
   const planFilePathRef = useRef<Record<string, string>>({});
   const thinkingBlocksRef = useRef<Record<string, Set<number>>>({});
+  const pendingAgentToolCallsRef = useRef<Record<string, AgentToolCall[]>>({});
 
   // Recompute the workspace-level `agent_status` from the current
   // per-session statuses plus active background tasks. Priority:
@@ -174,6 +192,17 @@ export function useAgentStream() {
                 updates.agentStatus = "running";
               }
               updateToolActivity(sessionId, streamEvent.tool_use_id, updates);
+              if (streamEvent.task_id) {
+                const pending = pendingAgentToolCallsRef.current[streamEvent.task_id] || [];
+                const remaining = pending.filter(
+                  (call) => !upsertAgentToolCall(sessionId, streamEvent.task_id!, call),
+                );
+                if (remaining.length > 0) {
+                  pendingAgentToolCallsRef.current[streamEvent.task_id] = remaining;
+                } else {
+                  delete pendingAgentToolCallsRef.current[streamEvent.task_id];
+                }
+              }
             }
             // Compaction lifecycle: status -> "compacting" marks start;
             // compact_boundary marks end.
@@ -357,8 +386,13 @@ export function useAgentStream() {
                       resultText: "",
                       collapsed: true,
                       summary: "",
+                      startedAt: new Date().toISOString(),
                       assistantMessageOrdinal:
-                        turnMessageCountRef.current[sessionId] || 0,
+                        (turnMessageCountRef.current[sessionId] || 0) +
+                        ((useAppStore.getState().streamingContent[sessionId] || "")
+                          .trim().length > 0
+                          ? 1
+                          : 0),
                     });
                     // Detect plan mode changes from agent tool calls.
                     if (inner.content_block.name === "EnterPlanMode") {
@@ -540,11 +574,78 @@ export function useAgentStream() {
     updateWorkspace,
     setAgentQuestion,
     setPlanApproval,
+    upsertAgentToolCall,
     finalizeTurn,
     setPlanMode,
     addCompactionEvent,
     updateChatSession,
   ]);
+
+  useEffect(() => {
+    let active = true;
+    const unlisten = listen<AgentHookEventPayload>("agent-hook-event", (event) => {
+      if (!active) return;
+      const { chat_session_id: sessionId, input } = event.payload;
+      const agentId = input.agent_id;
+      const hookName = input.hook_event_name;
+      if (!agentId || !hookName) return;
+
+      if (hookName === "SubagentStart") {
+        const pending = pendingAgentToolCallsRef.current[agentId] || [];
+        const remaining = pending.filter((call) => !upsertAgentToolCall(sessionId, agentId, call));
+        if (remaining.length > 0) {
+          pendingAgentToolCallsRef.current[agentId] = remaining;
+        } else {
+          delete pendingAgentToolCallsRef.current[agentId];
+        }
+        return;
+      }
+
+      if (
+        hookName !== "PreToolUse" &&
+        hookName !== "PostToolUse" &&
+        hookName !== "PostToolUseFailure"
+      ) {
+        return;
+      }
+
+      const toolUseId = input.tool_use_id;
+      const toolName = input.tool_name;
+      if (!toolUseId || !toolName) return;
+
+      const now = new Date().toISOString();
+      const call: AgentToolCall = {
+        toolUseId,
+        toolName,
+        agentId,
+        agentType: input.agent_type ?? null,
+        input: input.tool_input,
+        response: input.tool_response,
+        error: input.error ?? null,
+        status:
+          hookName === "PostToolUseFailure"
+            ? "failed"
+            : hookName === "PostToolUse"
+              ? "completed"
+              : "running",
+        startedAt: now,
+        completedAt: hookName === "PreToolUse" ? null : now,
+      };
+
+      if (!upsertAgentToolCall(sessionId, agentId, call)) {
+        pendingAgentToolCallsRef.current[agentId] = [
+          ...(pendingAgentToolCallsRef.current[agentId] || []).filter(
+            (item) => item.toolUseId !== toolUseId,
+          ),
+          call,
+        ];
+      }
+    });
+    return () => {
+      active = false;
+      unlisten.then((fn) => fn());
+    };
+  }, [upsertAgentToolCall]);
 
   // Listen for `agent-permission-prompt` — emitted by the Rust bridge the
   // moment a CLI `control_request: can_use_tool` is captured for
@@ -688,6 +789,7 @@ export function useAgentStream() {
               agent_last_tool_name: a.agentLastToolName ?? null,
               agent_tool_use_count: a.agentToolUseCount ?? null,
               agent_status: a.agentStatus ?? null,
+              agent_tool_calls_json: JSON.stringify(a.agentToolCalls ?? []),
             }));
             return saveTurnToolActivities(checkpoint.id, messageCount, activities);
           })()

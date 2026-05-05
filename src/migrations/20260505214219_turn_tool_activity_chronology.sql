@@ -15,3 +15,6 @@ ALTER TABLE turn_tool_activities
 
 ALTER TABLE turn_tool_activities
     ADD COLUMN agent_status TEXT;
+
+ALTER TABLE turn_tool_activities
+    ADD COLUMN agent_tool_calls_json TEXT NOT NULL DEFAULT '[]';

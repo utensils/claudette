@@ -386,6 +386,7 @@ fn copy_history(
                     agent_last_tool_name: a.agent_last_tool_name.clone(),
                     agent_tool_use_count: a.agent_tool_use_count,
                     agent_status: a.agent_status.clone(),
+                    agent_tool_calls_json: a.agent_tool_calls_json.clone(),
                 })
                 .collect();
             db.insert_turn_tool_activities(&remapped)?;
@@ -573,6 +574,7 @@ mod tests {
             agent_last_tool_name: None,
             agent_tool_use_count: None,
             agent_status: None,
+            agent_tool_calls_json: "[]".into(),
         }])
         .unwrap();
         db.insert_turn_tool_activities(&[TurnToolActivity {
@@ -590,6 +592,7 @@ mod tests {
             agent_last_tool_name: None,
             agent_tool_use_count: None,
             agent_status: None,
+            agent_tool_calls_json: "[]".into(),
         }])
         .unwrap();
         db

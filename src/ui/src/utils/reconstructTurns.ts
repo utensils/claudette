@@ -91,6 +91,7 @@ export function reconstructCompletedTurns(
         agentLastToolName: a.agent_last_tool_name,
         agentToolUseCount: a.agent_tool_use_count,
         agentStatus: a.agent_status,
+        agentToolCalls: parseAgentToolCalls(a.agent_tool_calls_json),
       })),
       messageCount: td.message_count,
       collapsed: true,
@@ -103,4 +104,14 @@ export function reconstructCompletedTurns(
       cacheCreationTokens,
     };
   });
+}
+
+function parseAgentToolCalls(value: string | null | undefined) {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }

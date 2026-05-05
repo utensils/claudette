@@ -87,15 +87,50 @@ pub(crate) async fn start_bridge_and_inject_mcp(
     chat_session_id: &str,
     base_mcp_config: Option<String>,
 ) -> Result<(Arc<McpBridgeSession>, Option<String>), String> {
+    let bridge = start_chat_bridge(app, db_path, workspace_id, chat_session_id).await?;
+    let merged = inject_claudette_mcp_entry(base_mcp_config, bridge.handle())?;
+    Ok((bridge, merged))
+}
+
+pub(crate) async fn start_chat_bridge(
+    app: &AppHandle,
+    db_path: &std::path::Path,
+    workspace_id: &str,
+    chat_session_id: &str,
+) -> Result<Arc<McpBridgeSession>, String> {
     let sink = Arc::new(ChatBridgeSink {
         app: app.clone(),
         db_path: db_path.to_path_buf(),
         workspace_id: workspace_id.to_string(),
         chat_session_id: chat_session_id.to_string(),
     });
-    let bridge = Arc::new(McpBridgeSession::start(sink).await?);
-    let merged = inject_claudette_mcp_entry(base_mcp_config, bridge.handle())?;
-    Ok((bridge, merged))
+    Ok(Arc::new(McpBridgeSession::start(sink).await?))
+}
+
+pub(crate) fn build_agent_hook_bridge(
+    bridge: &McpBridgeSession,
+) -> Result<claudette::agent::AgentHookBridge, String> {
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("current_exe: {e}"))?
+        .to_string_lossy()
+        .to_string();
+    let command = format!("{} --agent-hook", shell_quote(&exe));
+    Ok(claudette::agent::AgentHookBridge {
+        command,
+        socket_addr: bridge.handle().socket_addr.clone(),
+        token: bridge.handle().token.clone(),
+    })
+}
+
+fn shell_quote(value: &str) -> String {
+    if value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | ':'))
+    {
+        value.to_string()
+    } else {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
 }
 
 fn inject_claudette_mcp_entry(

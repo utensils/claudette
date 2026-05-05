@@ -29,7 +29,8 @@ use super::interaction::{deny_drained_permissions, drain_pending_permissions};
 use super::naming::{try_auto_rename, try_generate_session_name};
 use super::{
     ATTENTION_NOTIFY_DELAY_MS, AgentStreamPayload, AttachmentInput, AttachmentResponse,
-    ChatHistoryPage, fire_completion_notification, now_iso, start_bridge_and_inject_mcp,
+    ChatHistoryPage, build_agent_hook_bridge, fire_completion_notification, now_iso,
+    start_bridge_and_inject_mcp, start_chat_bridge,
 };
 
 fn emit_agent_background_task_event(
@@ -1280,6 +1281,7 @@ pub async fn send_chat_message(
         chrome_enabled: chrome_enabled.unwrap_or(false),
         mcp_config,
         disable_1m_context: disable_1m_context.unwrap_or(false),
+        hook_bridge: None,
     };
 
     // `--permission-mode` and `--allowedTools` are baked into the persistent
@@ -1561,10 +1563,11 @@ pub async fn send_chat_message(
                     )
                     .await?;
                     respawn_settings.mcp_config = mcp_with_claudette;
-                    Some(b)
+                    b
                 } else {
-                    None
+                    start_chat_bridge(&app, &state.db_path, &workspace_id, &chat_session_id).await?
                 };
+                respawn_settings.hook_bridge = Some(build_agent_hook_bridge(&bridge)?);
 
                 let is_resume = saved_turn_count > 1;
                 let (ps, final_sid) = match start_persistent(
@@ -1602,7 +1605,7 @@ pub async fn send_chat_message(
                 agents = state.agents.write().await;
                 let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
                 session.persistent_session = Some(ps);
-                session.mcp_bridge = bridge;
+                session.mcp_bridge = Some(bridge);
                 session.session_id = final_sid;
                 session.session_plan_mode = agent_settings.plan_mode;
                 session.session_allowed_tools = allowed_tools.clone();
@@ -1646,10 +1649,11 @@ pub async fn send_chat_message(
             )
             .await?;
             spawn_settings.mcp_config = mcp_with_claudette;
-            Some(b)
+            b
         } else {
-            None
+            start_chat_bridge(&app, &state.db_path, &workspace_id, &chat_session_id).await?
         };
+        spawn_settings.hook_bridge = Some(build_agent_hook_bridge(&bridge)?);
 
         let (ps, final_sid) = match start_persistent(
             worktree_path.clone(),
@@ -1698,7 +1702,7 @@ pub async fn send_chat_message(
         agents = state.agents.write().await;
         let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
         session.persistent_session = Some(ps);
-        session.mcp_bridge = bridge;
+        session.mcp_bridge = Some(bridge);
         session.session_id = final_sid.clone();
         session.session_plan_mode = agent_settings.plan_mode;
         session.session_allowed_tools = allowed_tools.clone();

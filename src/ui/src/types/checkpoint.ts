@@ -24,6 +24,7 @@ export interface TurnToolActivityData {
   agent_last_tool_name: string | null;
   agent_tool_use_count: number | null;
   agent_status: string | null;
+  agent_tool_calls_json: string;
 }
 
 export interface CompletedTurnData {

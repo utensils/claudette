@@ -9,7 +9,7 @@ use crate::env::WorkspaceEnv;
 use crate::process::CommandWindowExt as _;
 
 use super::AgentSettings;
-use super::args::{build_stdin_message, build_steering_stdin_message};
+use super::args::{build_settings_json, build_stdin_message, build_steering_stdin_message};
 use super::binary::resolve_claude_path;
 use super::process::{AgentEvent, TurnHandle};
 use super::types::{FileAttachment, StreamEvent, parse_stream_line};
@@ -79,6 +79,14 @@ impl PersistentSession {
         cmd.env_remove("CLAUDE_CODE_DISABLE_1M_CONTEXT");
         if settings.disable_1m_context {
             cmd.env("CLAUDE_CODE_DISABLE_1M_CONTEXT", "1");
+        }
+
+        if let Some(ref bridge) = settings.hook_bridge {
+            cmd.env(
+                crate::agent_mcp::server::ENV_SOCKET_ADDR,
+                &bridge.socket_addr,
+            );
+            cmd.env(crate::agent_mcp::server::ENV_TOKEN, &bridge.token);
         }
 
         if let Some(env) = ws_env {
@@ -384,19 +392,9 @@ fn build_persistent_args(
         args.push("bypassPermissions".to_string());
     }
 
-    if settings.fast_mode || settings.thinking_enabled {
-        let mut obj = serde_json::Map::new();
-        if settings.fast_mode {
-            obj.insert("fastMode".to_string(), serde_json::Value::Bool(true));
-        }
-        if settings.thinking_enabled {
-            obj.insert(
-                "alwaysThinkingEnabled".to_string(),
-                serde_json::Value::Bool(true),
-            );
-        }
+    if let Some(settings_json) = build_settings_json(settings) {
         args.push("--settings".to_string());
-        args.push(serde_json::Value::Object(obj).to_string());
+        args.push(settings_json);
     }
 
     // Effort level — "auto" and unknown values are skipped (let the CLI use
@@ -564,6 +562,7 @@ mod tests {
             chrome_enabled: true,
             mcp_config: Some(r#"{"mcpServers":{}}"#.to_string()),
             disable_1m_context: false,
+            hook_bridge: None,
         };
         let args = build_persistent_args(
             "sess-1",

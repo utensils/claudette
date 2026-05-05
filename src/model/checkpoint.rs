@@ -43,6 +43,7 @@ pub struct TurnToolActivity {
     pub agent_last_tool_name: Option<String>,
     pub agent_tool_use_count: Option<i32>,
     pub agent_status: Option<String>,
+    pub agent_tool_calls_json: String,
 }
 
 /// Grouped checkpoint + activities for loading completed turns.

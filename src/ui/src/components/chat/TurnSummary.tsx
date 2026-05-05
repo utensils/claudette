@@ -129,6 +129,20 @@ export function TurnSummary({
                     )}
                   </div>
                 )}
+                {act.agentToolCalls && act.agentToolCalls.length > 0 && (
+                  <div className={styles.agentToolCallList}>
+                    {act.agentToolCalls.map((call) => (
+                      <div key={call.toolUseId} className={styles.agentToolCall}>
+                        <span className={styles.agentToolCallName}>
+                          {call.toolName}
+                        </span>
+                        <span className={styles.agentToolCallStatus}>
+                          {call.status}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
           </div>
