@@ -338,8 +338,8 @@ pub struct AppState {
     pub usage_cache: RwLock<Option<UsageCacheEntry>>,
     /// SCM provider plugin registry.
     pub plugins: RwLock<PluginRegistry>,
-    /// Native voice provider registry and model cache metadata.
     #[cfg(feature = "voice")]
+    /// Native voice provider registry and model cache metadata.
     pub voice: Arc<VoiceProviderRegistry>,
     /// mtime-keyed cache of env-provider exports. One entry per
     /// `(worktree, plugin_name)` pair, invalidated when any watched
