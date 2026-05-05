@@ -17,13 +17,43 @@
     <script>
       // Cross-app dev-port hijack guard. ES module imports hoist, so this
       // MUST be inline (and before the bundle script) to beat them.
-      // Mirrors bootIdentityGuard.ts; that module exists for tests.
+      //
+      // bootIdentityGuard.ts is a logic mirror used only by unit tests —
+      // it covers the meta-tag-check / overlay-render branches without
+      // requiring a browser harness. The inline version diverges
+      // intentionally: it gates on location.protocol so release builds
+      // skip the guard entirely, and calls window.stop() to abort
+      // foreign asset fetches. The TS mirror has neither because it's
+      // exercised in a fake-DOM environment where neither would make
+      // sense.
+      //
+      // IMPORTANT: do NOT introduce raw HEAD / BODY / TITLE element open
+      // or close tags as substrings anywhere in this script's source —
+      // not in code, not in string literals, and (yes, really) not even
+      // in COMMENTS. Vite's HTML transform is regex/string-based and
+      // will splice production-mode asset preloads before the first such
+      // substring it finds, mangling whatever it lands inside. An
+      // earlier version of this guard used document.open() + document.write
+      // with a full-document HTML string and shipped a SyntaxError-broken
+      // bundle to release for exactly that reason; we now build the
+      // overlay imperatively from a body fragment with no doctype or
+      // root-element wrappers.
       (function () {
+        // Threat model is cross-app Vite dev port hijack (another Tauri
+        // starter template's dev script kills our listener and rebinds
+        // the port, so our webview reloads into a foreign bundle).
+        // Release builds load via the tauri:// custom protocol (or
+        // https://tauri.localhost on Windows) directly from the binary's
+        // resources — there's no localhost port to squat, so the guard
+        // is a no-op there. Skip immediately on any non-dev protocol so
+        // the rest of this script can never affect production boot.
+        if (location.protocol !== "http:") return;
         var EXPECTED = "com.claudette.app";
         var meta = document.querySelector('meta[name="x-tauri-app-id"]');
         var observed = (meta && meta.getAttribute("content")) || "(missing)";
         if (observed === EXPECTED) return;
         window.__claudetteHijackBlocked = true;
+
         var esc = function (s) {
           return String(s)
             .replace(/&/g, "&amp;")
@@ -31,6 +61,7 @@
             .replace(/>/g, "&gt;")
             .replace(/"/g, "&quot;");
         };
+        // Body-fragment only — no document/head/body/title wrappers.
         var html =
           '<div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#1c1815;color:#e07850;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;padding:32px;text-align:center;z-index:999999;">' +
           '<div style="max-width:560px;">' +
@@ -43,20 +74,30 @@
           '<p style="margin:0 0 16px;line-height:1.5;color:#e6dccf;">A Tauri app on this machine probably grabbed the dev port that Claudette’s webview was pointed at. Quit any other Tauri dev builds, then restart Claudette via <code>scripts/dev.sh</code>.</p>' +
           '<p style="margin:0;font-size:12px;color:#c4b5fd;">You’re seeing this instead of a silent UI swap because of the inline guard in <code>index.html</code>.</p>' +
           "</div></div>";
-        // Replace the document so even if the foreign bundle's main script
-        // tag runs, its DOM mutations target our error overlay's <body>
-        // and most attempts to find their root element fail benignly.
-        document.open();
-        document.write(
-          '<!doctype html><html><head><meta charset="utf-8"><title>Claudette — hijack guard</title></head><body>' +
-            html +
-            "</body></html>",
-        );
-        document.close();
-        // Stop further script execution as cleanly as we can; ES modules
-        // already in flight can't be cancelled, but they'll throw against
-        // the rewritten DOM rather than render anything.
+
+        // Paint the overlay synchronously before halting the parser.
+        // document.body may not exist yet (we're inside <head>), but
+        // documentElement always does — and waiting on DOMContentLoaded
+        // is unsafe here because the window.stop() below can halt the
+        // parser in some webviews and prevent that event from firing,
+        // which would leave the user staring at a half-loaded foreign
+        // page with no error overlay. position:fixed in the overlay
+        // CSS means it doesn't need to live inside <body> to render
+        // correctly. We attach to <body> when it's already parsed
+        // (just so devtools' element tree looks normal), otherwise
+        // straight to <html>.
+        var holder = document.createElement("div");
+        holder.innerHTML = html;
+        var fragment = document.createDocumentFragment();
+        while (holder.firstChild) fragment.appendChild(holder.firstChild);
+        (document.body || document.documentElement).appendChild(fragment);
+
+        // Now that the overlay is attached, abort any pending fetches
+        // for the foreign bundle. ES modules already in flight can't
+        // be cancelled, but main.tsx re-checks __claudetteHijackBlocked
+        // and bails before mounting React.
         if (window.stop) window.stop();
+
         // eslint-disable-next-line no-console
         console.error(
           "[claudette] Hijack guard tripped: expected x-tauri-app-id=" +
