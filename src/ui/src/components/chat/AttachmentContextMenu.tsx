@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
+import { viewportLayoutSize, viewportToFixed } from "../../utils/zoom";
 import styles from "./AttachmentContextMenu.module.css";
 
 export interface AttachmentContextMenuItem {
@@ -72,14 +73,13 @@ export function buildAttachmentMenuLabels(mediaType: string): {
 
 function clampToViewport(x: number, y: number, width: number, height: number) {
   if (typeof window === "undefined") return { x, y };
-  return clampMenuToViewport(
-    x,
-    y,
-    width,
-    height,
-    window.innerWidth,
-    window.innerHeight,
-  );
+  // `x`/`y` arrive as event clientX/clientY (visual pixels under html zoom)
+  // but `position: fixed; left/top` interpret values as layout pixels — so
+  // translate the click point and the viewport bounds into the same layout
+  // frame before clamping.
+  const fixed = viewportToFixed(x, y);
+  const { width: vw, height: vh } = viewportLayoutSize();
+  return clampMenuToViewport(fixed.x, fixed.y, width, height, vw, vh);
 }
 
 export function AttachmentContextMenu({

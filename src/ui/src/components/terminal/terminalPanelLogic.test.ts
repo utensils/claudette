@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TerminalTab } from "../../types/terminal";
-import {
-  clampTerminalContextMenu,
-  reorderTerminalTabs,
-  tabDropPlacement,
-} from "./terminalPanelLogic";
+import { reorderTerminalTabs, tabDropPlacement } from "./terminalPanelLogic";
 
 function tab(id: number, sortOrder = id): TerminalTab {
   return {
@@ -60,21 +56,5 @@ describe("tabDropPlacement", () => {
     expect(tabDropPlacement(124, 100, 50)).toBe("before");
     expect(tabDropPlacement(125, 100, 50)).toBe("after");
     expect(tabDropPlacement(149, 100, 50)).toBe("after");
-  });
-});
-
-describe("clampTerminalContextMenu", () => {
-  it("keeps the menu anchored near the pointer when there is room", () => {
-    expect(clampTerminalContextMenu(120, 80, 140, 36, 500, 400)).toEqual({
-      x: 120,
-      y: 80,
-    });
-  });
-
-  it("keeps the menu inside the viewport near the right and bottom edges", () => {
-    expect(clampTerminalContextMenu(490, 390, 140, 36, 500, 400)).toEqual({
-      x: 352,
-      y: 356,
-    });
   });
 });

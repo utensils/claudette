@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import { createPortal } from "react-dom";
 import { Terminal } from "@xterm/xterm";
@@ -59,10 +60,15 @@ import {
   type PtySizeSnapshot,
 } from "./terminalPtyResize";
 import {
-  clampTerminalContextMenu,
   reorderTerminalTabs,
   tabDropPlacement,
+  type TabDropPlacement,
 } from "./terminalPanelLogic";
+import {
+  AttachmentContextMenu,
+  type AttachmentContextMenuItem,
+} from "../chat/AttachmentContextMenu";
+import { viewportToFixed } from "../../utils/zoom";
 import { reclaimScrollLines } from "./terminalReclaim";
 import "@xterm/xterm/css/xterm.css";
 import styles from "./TerminalPanel.module.css";
@@ -365,7 +371,42 @@ export const TerminalPanel = memo(function TerminalPanel() {
     tabId: number;
     leafId?: string;
   } | null>(null);
-  const [draggedTabId, setDraggedTabId] = useState<number | null>(null);
+  // Pointer-event-based tab drag — native HTML5 DnD does not deliver
+  // dragover/drop events under the html `zoom` we apply for UI font scaling
+  // (WebKit-on-macOS quirk), so we hand-roll the drag with pointer events
+  // which work correctly under zoom.
+  const tabDragRef = useRef<{
+    tabId: number;
+    startX: number;
+    startY: number;
+    pointerId: number;
+    active: boolean;
+    offsetX: number;
+    offsetY: number;
+    width: number;
+    height: number;
+    title: string;
+  } | null>(null);
+  const tabDragJustEndedRef = useRef(false);
+  const [draggingTabId, setDraggingTabId] = useState<number | null>(null);
+  const [tabDropTarget, setTabDropTarget] = useState<{
+    tabId: number;
+    placement: TabDropPlacement;
+  } | null>(null);
+  // Cursor position + dragged-tab geometry, captured at drag start so the
+  // floating ghost can mimic the source tab's size and offset relative to
+  // the click point. Coords are event clientX/Y (visual pixels under html
+  // zoom) — the ghost uses viewportToFixed to convert into layout pixels
+  // for `position: fixed`.
+  const [dragGhost, setDragGhost] = useState<{
+    cursorX: number;
+    cursorY: number;
+    offsetX: number;
+    offsetY: number;
+    width: number;
+    height: number;
+    title: string;
+  } | null>(null);
 
   const autoCreatedRef = useRef<string | null>(null);
   // Tracks the last (tabId, leafId, visible) tuple we applied keyboard
@@ -1070,6 +1111,16 @@ export const TerminalPanel = memo(function TerminalPanel() {
     setContextMenu(null);
   }, [contextMenu]);
 
+  const terminalContextMenuItems = useMemo<AttachmentContextMenuItem[]>(
+    () => [
+      {
+        label: "Clear terminal",
+        onSelect: handleClearContextTerminal,
+      },
+    ],
+    [handleClearContextTerminal],
+  );
+
   const handleTabContextMenu = useCallback(
     (ev: ReactMouseEvent<HTMLDivElement>, tab: TerminalTab) => {
       ev.preventDefault();
@@ -1084,44 +1135,156 @@ export const TerminalPanel = memo(function TerminalPanel() {
     [selectedWorkspaceId, setActiveTerminalTab],
   );
 
-  const handleTabDrop = useCallback(
-    (ev: ReactMouseEvent<HTMLDivElement>, targetTab: TerminalTab) => {
-      ev.preventDefault();
-      ev.stopPropagation();
-      if (!selectedWorkspaceId || draggedTabId == null || draggedTabId === targetTab.id) {
-        setDraggedTabId(null);
+  const handleTabPointerDown = useCallback(
+    (ev: ReactPointerEvent<HTMLDivElement>, tab: TerminalTab) => {
+      if (ev.button !== 0) return;
+      const target = ev.target as HTMLElement;
+      if (target.closest(`.${styles.tabClose}, .${styles.tabStop}`)) return;
+      const rect = ev.currentTarget.getBoundingClientRect();
+      tabDragRef.current = {
+        tabId: tab.id,
+        startX: ev.clientX,
+        startY: ev.clientY,
+        pointerId: ev.pointerId,
+        active: false,
+        offsetX: ev.clientX - rect.left,
+        offsetY: ev.clientY - rect.top,
+        width: rect.width,
+        height: rect.height,
+        title: tab.title,
+      };
+      try {
+        ev.currentTarget.setPointerCapture(ev.pointerId);
+      } catch {
+        // setPointerCapture can throw if the pointer was already released
+        // synchronously (rare, e.g. during programmatic events) — treat it
+        // as the user not committing to a drag.
+        tabDragRef.current = null;
+      }
+    },
+    [],
+  );
+
+  const handleTabPointerMove = useCallback(
+    (ev: ReactPointerEvent<HTMLDivElement>) => {
+      const drag = tabDragRef.current;
+      if (!drag || drag.pointerId !== ev.pointerId) return;
+      if (!drag.active) {
+        const dx = ev.clientX - drag.startX;
+        const dy = ev.clientY - drag.startY;
+        // 4px hysteresis — anything below is treated as a click.
+        if (dx * dx + dy * dy < 16) return;
+        drag.active = true;
+        setDraggingTabId(drag.tabId);
+      }
+      // Move the floating ghost to follow the cursor, preserving the
+      // offset between the cursor and the source tab's top-left so the
+      // ghost doesn't snap-jump when drag activates.
+      setDragGhost({
+        cursorX: ev.clientX,
+        cursorY: ev.clientY,
+        offsetX: drag.offsetX,
+        offsetY: drag.offsetY,
+        width: drag.width,
+        height: drag.height,
+        title: drag.title,
+      });
+      const overEl = document.elementFromPoint(ev.clientX, ev.clientY);
+      const tabEl = overEl?.closest<HTMLElement>("[data-terminal-tab-id]") ?? null;
+      const overId = tabEl ? Number(tabEl.dataset.terminalTabId) : null;
+      if (overId == null || overId === drag.tabId || !tabEl) {
+        setTabDropTarget((prev) => (prev === null ? prev : null));
+        return;
+      }
+      const r = tabEl.getBoundingClientRect();
+      const placement = tabDropPlacement(ev.clientX, r.left, r.width);
+      setTabDropTarget((prev) =>
+        prev && prev.tabId === overId && prev.placement === placement
+          ? prev
+          : { tabId: overId, placement },
+      );
+    },
+    [],
+  );
+
+  const finishTabDrag = useCallback(
+    (committedHover: typeof tabDropTarget) => {
+      const drag = tabDragRef.current;
+      tabDragRef.current = null;
+      setDraggingTabId(null);
+      setTabDropTarget(null);
+      setDragGhost(null);
+      if (!drag) return;
+      if (!drag.active) {
+        // No movement → click — onClick on the tab handles activation.
+        return;
+      }
+      // Suppress the synthetic click that follows pointerup on the captured
+      // tab, otherwise a drag would also re-activate the source tab.
+      tabDragJustEndedRef.current = true;
+      // Clear the suppressor on the next microtask, after the click handler
+      // has had a chance to run.
+      queueMicrotask(() => {
+        tabDragJustEndedRef.current = false;
+      });
+      if (
+        !committedHover ||
+        committedHover.tabId === drag.tabId ||
+        !selectedWorkspaceId
+      ) {
         return;
       }
       const currentTabs = terminalTabs[selectedWorkspaceId] ?? [];
-      const withSortOrder = reorderTerminalTabs(
+      const reordered = reorderTerminalTabs(
         currentTabs,
-        draggedTabId,
-        targetTab.id,
-        tabDropPlacement(
-          ev.clientX,
-          ev.currentTarget.getBoundingClientRect().left,
-          ev.currentTarget.getBoundingClientRect().width,
-        ),
+        drag.tabId,
+        committedHover.tabId,
+        committedHover.placement,
       );
-      if (!withSortOrder) {
-        setDraggedTabId(null);
-        return;
-      }
-      setTerminalTabs(selectedWorkspaceId, withSortOrder);
-      setActiveTerminalTab(selectedWorkspaceId, draggedTabId);
-      setDraggedTabId(null);
+      if (!reordered) return;
+      setTerminalTabs(selectedWorkspaceId, reordered);
+      setActiveTerminalTab(selectedWorkspaceId, drag.tabId);
       void updateTerminalTabOrder(
         selectedWorkspaceId,
-        withSortOrder.map((tab) => tab.id),
-      ).catch((err) => console.error("Failed to persist terminal tab order:", err));
+        reordered.map((tab) => tab.id),
+      ).catch((err) =>
+        console.error("Failed to persist terminal tab order:", err),
+      );
     },
     [
-      draggedTabId,
       selectedWorkspaceId,
       setActiveTerminalTab,
       setTerminalTabs,
       terminalTabs,
     ],
+  );
+
+  const handleTabPointerUp = useCallback(
+    (ev: ReactPointerEvent<HTMLDivElement>) => {
+      const drag = tabDragRef.current;
+      if (!drag || drag.pointerId !== ev.pointerId) return;
+      try {
+        ev.currentTarget.releasePointerCapture(ev.pointerId);
+      } catch {
+        // Already released.
+      }
+      finishTabDrag(tabDropTarget);
+    },
+    [finishTabDrag, tabDropTarget],
+  );
+
+  const handleTabPointerCancel = useCallback(
+    (ev: ReactPointerEvent<HTMLDivElement>) => {
+      const drag = tabDragRef.current;
+      if (!drag || drag.pointerId !== ev.pointerId) return;
+      try {
+        ev.currentTarget.releasePointerCapture(ev.pointerId);
+      } catch {
+        // Already released.
+      }
+      finishTabDrag(null);
+    },
+    [finishTabDrag],
   );
 
   // Destroy everything on unmount.
@@ -1161,29 +1324,33 @@ export const TerminalPanel = memo(function TerminalPanel() {
 
   return (
     <div className={styles.panel}>
-      <div className={styles.tabBar}>
-        {tabs.map((tab) => (
+      <div
+        className={styles.tabBar}
+        data-tab-dragging={draggingTabId !== null || undefined}
+      >
+        {tabs.map((tab) => {
+          const isDragging = draggingTabId === tab.id;
+          const dropBefore =
+            tabDropTarget?.tabId === tab.id && tabDropTarget.placement === "before";
+          const dropAfter =
+            tabDropTarget?.tabId === tab.id && tabDropTarget.placement === "after";
+          return (
           <div
             key={tab.id}
-            className={`${styles.tab} ${activeTerminalTabId === tab.id ? styles.tabActive : ""}`}
-            onClick={() =>
-              selectedWorkspaceId && setActiveTerminalTab(selectedWorkspaceId, tab.id)
-            }
+            data-terminal-tab-id={tab.id}
+            data-drop-before={dropBefore || undefined}
+            data-drop-after={dropAfter || undefined}
+            className={`${styles.tab} ${activeTerminalTabId === tab.id ? styles.tabActive : ""} ${isDragging ? styles.tabDragging : ""}`}
+            onClick={() => {
+              if (tabDragJustEndedRef.current) return;
+              if (selectedWorkspaceId)
+                setActiveTerminalTab(selectedWorkspaceId, tab.id);
+            }}
             onContextMenu={(e) => handleTabContextMenu(e, tab)}
-            draggable
-            onDragStart={(e) => {
-              setDraggedTabId(tab.id);
-              e.dataTransfer.effectAllowed = "move";
-              e.dataTransfer.setData("text/plain", String(tab.id));
-            }}
-            onDragOver={(e) => {
-              if (draggedTabId != null && draggedTabId !== tab.id) {
-                e.preventDefault();
-                e.dataTransfer.dropEffect = "move";
-              }
-            }}
-            onDrop={(e) => handleTabDrop(e, tab)}
-            onDragEnd={() => setDraggedTabId(null)}
+            onPointerDown={(e) => handleTabPointerDown(e, tab)}
+            onPointerMove={handleTabPointerMove}
+            onPointerUp={handleTabPointerUp}
+            onPointerCancel={handleTabPointerCancel}
           >
             <span className={styles.tabTitle}>{tab.title}</span>
             {tab.kind === "agent_task" && tab.task_status && (
@@ -1213,7 +1380,8 @@ export const TerminalPanel = memo(function TerminalPanel() {
               ×
             </button>
           </div>
-        ))}
+          );
+        })}
         <button className={styles.addTab} onClick={handleCreateTab}>
           +
         </button>
@@ -1244,65 +1412,49 @@ export const TerminalPanel = memo(function TerminalPanel() {
             </div>
           );
         })}
-        {contextMenu && (
-          <TerminalContextMenu
-            x={contextMenu.x}
-            y={contextMenu.y}
-            onClear={handleClearContextTerminal}
-            onClose={() => setContextMenu(null)}
-          />
-        )}
       </div>
+      {contextMenu && (
+        <AttachmentContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={terminalContextMenuItems}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
+      {dragGhost && draggingTabId !== null && <TabDragGhost ghost={dragGhost} />}
     </div>
   );
 });
 
-function TerminalContextMenu({
-  x,
-  y,
-  onClear,
-  onClose,
+function TabDragGhost({
+  ghost,
 }: {
-  x: number;
-  y: number;
-  onClear: () => void;
-  onClose: () => void;
+  ghost: {
+    cursorX: number;
+    cursorY: number;
+    offsetX: number;
+    offsetY: number;
+    width: number;
+    height: number;
+    title: string;
+  };
 }) {
-  const width = 148;
-  const height = 40;
-  const clamped =
-    typeof window === "undefined"
-      ? { x, y }
-      : clampTerminalContextMenu(
-          x,
-          y,
-          width,
-          height,
-          window.innerWidth,
-          window.innerHeight,
-        );
-  const menu = (
+  // Translate the cursor position from event coords (visual pixels under
+  // html zoom) into layout pixels for `position: fixed` placement, then
+  // anchor the ghost at the same offset within the tab where the user
+  // grabbed it. Without this, dragging mid-tab would teleport the ghost's
+  // top-left to the cursor and jitter on first move.
+  const top = viewportToFixed(0, ghost.cursorY - ghost.offsetY).y;
+  const left = viewportToFixed(ghost.cursorX - ghost.offsetX, 0).x;
+  if (typeof document === "undefined") return null;
+  return createPortal(
     <div
-      className={styles.terminalContextMenu}
-      style={{ left: clamped.x, top: clamped.y, width }}
-      role="menu"
-      onContextMenu={(ev) => ev.preventDefault()}
-      onPointerDown={(ev) => ev.stopPropagation()}
+      className={styles.tabGhost}
+      style={{ left, top, width: ghost.width, height: ghost.height }}
+      aria-hidden
     >
-      <button
-        type="button"
-        role="menuitem"
-        className={styles.terminalContextMenuItem}
-        onClick={() => {
-          onClear();
-          onClose();
-        }}
-      >
-        Clear terminal
-      </button>
-    </div>
+      <span className={styles.tabGhostTitle}>{ghost.title}</span>
+    </div>,
+    document.body,
   );
-  return typeof document === "undefined"
-    ? menu
-    : createPortal(menu, document.body);
 }
