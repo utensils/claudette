@@ -168,11 +168,6 @@ export const createTerminalSlice: StateCreator<
           ...s.agentBackgroundTasksBySessionId,
           [sessionId]: tasks,
         },
-        activeTerminalTabId:
-          existingIndex >= 0
-            ? s.activeTerminalTabId
-            : { ...s.activeTerminalTabId, [wsId]: tab.id },
-        terminalPanelVisible: true,
       };
     }),
   setActiveTerminalTab: (wsId, id) =>

@@ -14,8 +14,9 @@ pub struct BackgroundTaskBinding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskNotification {
     pub task_id: String,
+    pub tool_use_id: Option<String>,
     pub output_file: Option<String>,
-    pub status: String,
+    pub status: Option<String>,
     pub summary: Option<String>,
 }
 
@@ -76,11 +77,11 @@ pub fn parse_task_notification(text: &str) -> Option<TaskNotification> {
         return None;
     }
     let task_id = extract_xml_tag(text, "task-id")?;
-    let status = extract_xml_tag(text, "status")?;
     Some(TaskNotification {
         task_id,
+        tool_use_id: extract_xml_tag(text, "tool-use-id"),
         output_file: extract_xml_tag(text, "output-file"),
-        status,
+        status: extract_xml_tag(text, "status"),
         summary: extract_xml_tag(text, "summary"),
     })
 }
@@ -137,12 +138,24 @@ mod tests {
     #[test]
     fn parses_task_notification_xml() {
         let notification = parse_task_notification(
-            "<task-notification><task-id>task_123</task-id><output-file>/tmp/out.log</output-file><status>completed</status><summary>exit 0</summary></task-notification>",
+            "<task-notification><task-id>task_123</task-id><tool-use-id>toolu_1</tool-use-id><output-file>/tmp/out.log</output-file><status>completed</status><summary>exit 0</summary></task-notification>",
         )
         .unwrap();
         assert_eq!(notification.task_id, "task_123");
+        assert_eq!(notification.tool_use_id.as_deref(), Some("toolu_1"));
         assert_eq!(notification.output_file.as_deref(), Some("/tmp/out.log"));
-        assert_eq!(notification.status, "completed");
+        assert_eq!(notification.status.as_deref(), Some("completed"));
         assert_eq!(notification.summary.as_deref(), Some("exit 0"));
+    }
+
+    #[test]
+    fn parses_statusless_task_notification_xml() {
+        let notification = parse_task_notification(
+            "<task-notification><task-id>task_123</task-id><output-file>/tmp/out.log</output-file><summary>waiting for input</summary></task-notification>",
+        )
+        .unwrap();
+        assert_eq!(notification.task_id, "task_123");
+        assert_eq!(notification.status, None);
+        assert_eq!(notification.summary.as_deref(), Some("waiting for input"));
     }
 }

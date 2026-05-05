@@ -263,24 +263,25 @@ impl PersistentSession {
     }
 
     /// Ask the persistent Claude CLI process to stop an agent-owned
-    /// background task. The CLI accepts out-of-band JSON lines on the same
-    /// stream-json stdin used for user turns and permission responses.
+    /// background task. The CLI accepts this as an SDK `control_request` on
+    /// the same stream-json stdin used for user turns and permission responses.
     pub async fn send_task_stop(&self, task_id: &str) -> Result<(), String> {
         use tokio::io::AsyncWriteExt;
-        let message = build_task_stop_message(task_id);
+        let request_id = format!("claudette-stop-task-{}", uuid::Uuid::new_v4());
+        let message = build_task_stop_message(&request_id, task_id);
         let mut stdin = self.stdin.lock().await;
         stdin
             .write_all(message.as_bytes())
             .await
-            .map_err(|e| format!("Failed to write task_stop: {e}"))?;
+            .map_err(|e| format!("Failed to write stop_task control_request: {e}"))?;
         stdin
             .write_all(b"\n")
             .await
-            .map_err(|e| format!("Failed to write task_stop newline: {e}"))?;
+            .map_err(|e| format!("Failed to write stop_task control_request newline: {e}"))?;
         stdin
             .flush()
             .await
-            .map_err(|e| format!("Failed to flush task_stop: {e}"))?;
+            .map_err(|e| format!("Failed to flush stop_task control_request: {e}"))?;
         Ok(())
     }
 
@@ -290,10 +291,14 @@ impl PersistentSession {
     }
 }
 
-fn build_task_stop_message(task_id: &str) -> String {
+fn build_task_stop_message(request_id: &str, task_id: &str) -> String {
     serde_json::json!({
-        "type": "task_stop",
-        "task_id": task_id,
+        "type": "control_request",
+        "request_id": request_id,
+        "request": {
+            "subtype": "stop_task",
+            "task_id": task_id,
+        },
     })
     .to_string()
 }
@@ -646,9 +651,11 @@ mod tests {
 
     #[test]
     fn build_task_stop_message_writes_out_of_band_control_shape() {
-        let raw = build_task_stop_message("task_123");
+        let raw = build_task_stop_message("req_123", "task_123");
         let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
-        assert_eq!(parsed["type"], "task_stop");
-        assert_eq!(parsed["task_id"], "task_123");
+        assert_eq!(parsed["type"], "control_request");
+        assert_eq!(parsed["request_id"], "req_123");
+        assert_eq!(parsed["request"]["subtype"], "stop_task");
+        assert_eq!(parsed["request"]["task_id"], "task_123");
     }
 }

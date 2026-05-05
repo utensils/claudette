@@ -18,6 +18,14 @@ export type StreamEvent =
       session_id?: string | null;
       /** Only present on `subtype: "status"` events. */
       status?: string | null;
+      /** Only present on `subtype: "task_notification"` events. */
+      task_id?: string | null;
+      /** Only present on `subtype: "task_notification"` events. */
+      tool_use_id?: string | null;
+      /** Only present on `subtype: "task_notification"` events. */
+      output_file?: string | null;
+      /** Only present on `subtype: "task_notification"` events. */
+      summary?: string | null;
       /** Only present on the end-of-compaction status event. Rust
        * serializes `Option<String>` as `null` (no `skip_serializing_if`),
        * so the wire payload carries `null` when absent. */

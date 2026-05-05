@@ -76,6 +76,63 @@ describe("terminal slice: addTerminalTab", () => {
   });
 });
 
+describe("terminal slice: upsertAgentTaskTerminalTab", () => {
+  beforeEach(() => {
+    useAppStore.setState({
+      terminalTabs: {},
+      activeTerminalTabId: { [WS_A]: 99 },
+      terminalPanelVisible: false,
+      agentBackgroundTasksBySessionId: {},
+    });
+  });
+
+  it("registers agent task tabs without opening or stealing the terminal", () => {
+    const tab: TerminalTab = {
+      ...makeTab(10, WS_A),
+      kind: "agent_task",
+      agent_chat_session_id: "session-a",
+      agent_tool_use_id: "toolu_1",
+      task_status: "running",
+    };
+
+    useAppStore
+      .getState()
+      .upsertAgentTaskTerminalTab(WS_A, "session-a", tab);
+
+    expect(useAppStore.getState().terminalTabs[WS_A]).toEqual([tab]);
+    expect(
+      useAppStore.getState().agentBackgroundTasksBySessionId["session-a"],
+    ).toEqual([tab]);
+    expect(useAppStore.getState().activeTerminalTabId[WS_A]).toBe(99);
+    expect(useAppStore.getState().terminalPanelVisible).toBe(false);
+  });
+
+  it("updates an existing agent task tab in place", () => {
+    const running: TerminalTab = {
+      ...makeTab(10, WS_A),
+      kind: "agent_task",
+      task_status: "running",
+    };
+    const completed: TerminalTab = {
+      ...running,
+      task_status: "completed",
+      task_summary: "done",
+    };
+
+    useAppStore
+      .getState()
+      .upsertAgentTaskTerminalTab(WS_A, "session-a", running);
+    useAppStore
+      .getState()
+      .upsertAgentTaskTerminalTab(WS_A, "session-a", completed);
+
+    expect(useAppStore.getState().terminalTabs[WS_A]).toEqual([completed]);
+    expect(
+      useAppStore.getState().agentBackgroundTasksBySessionId["session-a"],
+    ).toEqual([completed]);
+  });
+});
+
 describe("terminal slice: removeTerminalTab", () => {
   beforeEach(() => {
     useAppStore.setState({

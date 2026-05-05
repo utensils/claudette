@@ -60,6 +60,13 @@ fn emit_agent_background_task_event(
     let _ = app.emit("agent-background-task", &payload);
 }
 
+fn is_terminal_task_status(status: &str) -> bool {
+    matches!(
+        status.to_ascii_lowercase().as_str(),
+        "completed" | "failed" | "stopped" | "killed" | "cancelled" | "canceled"
+    )
+}
+
 fn create_agent_task_terminal_tab(
     db_path: &std::path::Path,
     workspace_id: &str,
@@ -1149,6 +1156,50 @@ pub async fn send_chat_message(
                 got_init = true;
             }
 
+            // Claude Code emits a structured SDK event for terminal
+            // task-notifications before feeding the XML notification back to
+            // the model. Use it to keep read-only agent task tabs accurate
+            // even when the corresponding user-role XML is collapsed or delayed.
+            if let AgentEvent::Stream(StreamEvent::System {
+                subtype,
+                task_id: Some(task_id),
+                status: Some(status),
+                output_file,
+                summary,
+                ..
+            }) = &event
+                && subtype == "task_notification"
+                && let Ok(db) = Database::open(&db_path)
+            {
+                if is_terminal_task_status(status) {
+                    let app_state = app.state::<AppState>();
+                    let mut agents = app_state.agents.write().await;
+                    if let Some(session) = agents.get_mut(&chat_session_id_for_stream) {
+                        session.running_background_tasks.remove(task_id);
+                    }
+                }
+                let output_file = output_file.as_deref().filter(|s| !s.trim().is_empty());
+                let summary = summary.as_deref().filter(|s| !s.trim().is_empty());
+                let _ = db.update_agent_task_terminal_tab_status(
+                    &chat_session_id_for_stream,
+                    task_id,
+                    status,
+                    summary,
+                    output_file,
+                );
+                if let Ok(Some(tab)) =
+                    db.get_terminal_tab_by_agent_task(&chat_session_id_for_stream, task_id)
+                {
+                    emit_agent_background_task_event(
+                        &app,
+                        AgentBackgroundTaskEventKind::Status,
+                        &ws_id,
+                        &chat_session_id_for_stream,
+                        tab,
+                    );
+                }
+            }
+
             if let AgentEvent::Stream(StreamEvent::Stream {
                 event:
                     InnerStreamEvent::ContentBlockStart {
@@ -1493,10 +1544,12 @@ pub async fn send_chat_message(
                         if let Some(notification) = parse_task_notification(body)
                             && let Ok(db) = Database::open(&db_path)
                         {
-                            if matches!(
-                                notification.status.to_ascii_lowercase().as_str(),
-                                "completed" | "failed" | "stopped" | "cancelled" | "canceled"
-                            ) {
+                            let status = notification.status.as_deref().unwrap_or("running");
+                            if notification
+                                .status
+                                .as_deref()
+                                .is_some_and(is_terminal_task_status)
+                            {
                                 let app_state = app.state::<AppState>();
                                 let mut agents = app_state.agents.write().await;
                                 if let Some(session) = agents.get_mut(&chat_session_id_for_stream) {
@@ -1508,7 +1561,7 @@ pub async fn send_chat_message(
                             let _ = db.update_agent_task_terminal_tab_status(
                                 &chat_session_id_for_stream,
                                 &notification.task_id,
-                                &notification.status,
+                                status,
                                 notification.summary.as_deref(),
                                 notification.output_file.as_deref(),
                             );
