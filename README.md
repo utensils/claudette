@@ -21,7 +21,7 @@ Claudette is a cross-platform desktop application built with [Tauri 2](https://t
 - [Tauri CLI](https://tauri.app/start/): `cargo install tauri-cli --version "^2"`
 - Platform dependencies for Tauri:
   - **macOS**: Xcode Command Line Tools (`xcode-select --install`)
-  - **Linux**: System libraries for WebKitGTK and ALSA (the latter is needed by the voice-input recorder). On Debian/Ubuntu:
+  - **Linux**: System libraries for WebKitGTK and (when building with the default `voice` feature) ALSA. On Debian/Ubuntu:
 
     ```sh
     sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
@@ -30,6 +30,12 @@ Claudette is a cross-platform desktop application built with [Tauri 2](https://t
     ```
 
     Equivalents on other distros: `alsa-lib-devel` (Fedora/RHEL), `alsa-lib` (Arch). Nix users get this automatically via `flake.nix`.
+
+    Headless or sandboxed Linux environments that lack ALSA can build without voice support:
+
+    ```sh
+    cargo tauri build --no-default-features --features tauri/custom-protocol,server
+    ```
 
 ## Getting started
 

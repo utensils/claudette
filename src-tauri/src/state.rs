@@ -14,6 +14,7 @@ use claudette::scm::types::{CiCheck, PullRequest};
 use crate::commands::apps::DetectedApp;
 use crate::remote::DiscoveredServer;
 use crate::usage::UsageCacheEntry;
+#[cfg(feature = "voice")]
 use crate::voice::VoiceProviderRegistry;
 
 /// Re-export for use in tray module without direct tauri::tray import.
@@ -337,6 +338,7 @@ pub struct AppState {
     pub usage_cache: RwLock<Option<UsageCacheEntry>>,
     /// SCM provider plugin registry.
     pub plugins: RwLock<PluginRegistry>,
+    #[cfg(feature = "voice")]
     /// Native voice provider registry and model cache metadata.
     pub voice: Arc<VoiceProviderRegistry>,
     /// mtime-keyed cache of env-provider exports. One entry per
@@ -383,6 +385,7 @@ impl AppState {
             next_tray_seq: AtomicU64::new(1),
             usage_cache: RwLock::new(None),
             plugins: RwLock::new(plugins),
+            #[cfg(feature = "voice")]
             voice: Arc::new(VoiceProviderRegistry::new(
                 VoiceProviderRegistry::default_model_root(),
             )),

@@ -1,13 +1,20 @@
+// Real implementations (compiled when the `voice` feature is enabled).
+#[cfg(feature = "voice")]
 use claudette::db::Database;
+#[cfg(feature = "voice")]
 use tauri::{AppHandle, State};
 
+#[cfg(feature = "voice")]
 use crate::state::AppState;
+#[cfg(feature = "voice")]
 use crate::voice::VoiceProviderInfo;
 
+#[cfg(feature = "voice")]
 fn open_db(state: &State<'_, AppState>) -> Result<Database, String> {
     Database::open(&state.db_path).map_err(|e| e.to_string())
 }
 
+#[cfg(feature = "voice")]
 #[tauri::command]
 pub async fn voice_list_providers(
     state: State<'_, AppState>,
@@ -16,6 +23,7 @@ pub async fn voice_list_providers(
     Ok(state.voice.list_providers(&db))
 }
 
+#[cfg(feature = "voice")]
 #[tauri::command]
 pub async fn voice_set_selected_provider(
     provider_id: Option<String>,
@@ -27,6 +35,7 @@ pub async fn voice_set_selected_provider(
         .set_selected_provider(&db, provider_id.as_deref())
 }
 
+#[cfg(feature = "voice")]
 #[tauri::command]
 pub async fn voice_set_provider_enabled(
     provider_id: String,
@@ -37,6 +46,7 @@ pub async fn voice_set_provider_enabled(
     state.voice.set_enabled(&db, &provider_id, enabled)
 }
 
+#[cfg(feature = "voice")]
 #[tauri::command]
 pub async fn voice_prepare_provider(
     provider_id: String,
@@ -49,6 +59,7 @@ pub async fn voice_prepare_provider(
         .await
 }
 
+#[cfg(feature = "voice")]
 #[tauri::command]
 pub async fn voice_remove_provider_model(
     provider_id: String,
@@ -60,6 +71,7 @@ pub async fn voice_remove_provider_model(
         .await
 }
 
+#[cfg(feature = "voice")]
 #[tauri::command]
 pub async fn voice_start_recording(
     provider_id: Option<String>,
@@ -78,6 +90,7 @@ pub async fn voice_start_recording(
         .await
 }
 
+#[cfg(feature = "voice")]
 #[tauri::command]
 pub async fn voice_stop_and_transcribe(
     provider_id: Option<String>,
@@ -92,6 +105,7 @@ pub async fn voice_stop_and_transcribe(
     state.voice.stop_and_transcribe(&provider_id).await
 }
 
+#[cfg(feature = "voice")]
 #[tauri::command]
 pub async fn voice_cancel_recording(
     provider_id: Option<String>,
@@ -104,4 +118,74 @@ pub async fn voice_cancel_recording(
             .resolve_provider_id(&db, provider_id.as_deref())?
     };
     state.voice.cancel_recording(&provider_id).await
+}
+
+// Shim implementations (compiled when the `voice` feature is disabled).
+// These preserve the JS binding surface — including parameter names — so the
+// frontend's existing invoke args still deserialize cleanly and callers get
+// the intended VOICE_NOT_BUILT error instead of a Tauri arg-parse failure.
+#[cfg(not(feature = "voice"))]
+const VOICE_NOT_BUILT: &str = "voice support not built into this binary";
+
+#[cfg(not(feature = "voice"))]
+#[tauri::command]
+pub async fn voice_list_providers() -> Result<Vec<serde_json::Value>, String> {
+    Err(VOICE_NOT_BUILT.into())
+}
+
+#[cfg(not(feature = "voice"))]
+#[tauri::command]
+pub async fn voice_set_selected_provider(
+    #[allow(unused_variables)] provider_id: Option<String>,
+) -> Result<(), String> {
+    Err(VOICE_NOT_BUILT.into())
+}
+
+#[cfg(not(feature = "voice"))]
+#[tauri::command]
+pub async fn voice_set_provider_enabled(
+    #[allow(unused_variables)] provider_id: String,
+    #[allow(unused_variables)] enabled: bool,
+) -> Result<(), String> {
+    Err(VOICE_NOT_BUILT.into())
+}
+
+#[cfg(not(feature = "voice"))]
+#[tauri::command]
+pub async fn voice_prepare_provider(
+    #[allow(unused_variables)] provider_id: String,
+) -> Result<serde_json::Value, String> {
+    Err(VOICE_NOT_BUILT.into())
+}
+
+#[cfg(not(feature = "voice"))]
+#[tauri::command]
+pub async fn voice_remove_provider_model(
+    #[allow(unused_variables)] provider_id: String,
+) -> Result<serde_json::Value, String> {
+    Err(VOICE_NOT_BUILT.into())
+}
+
+#[cfg(not(feature = "voice"))]
+#[tauri::command]
+pub async fn voice_start_recording(
+    #[allow(unused_variables)] provider_id: Option<String>,
+) -> Result<(), String> {
+    Err(VOICE_NOT_BUILT.into())
+}
+
+#[cfg(not(feature = "voice"))]
+#[tauri::command]
+pub async fn voice_stop_and_transcribe(
+    #[allow(unused_variables)] provider_id: Option<String>,
+) -> Result<String, String> {
+    Err(VOICE_NOT_BUILT.into())
+}
+
+#[cfg(not(feature = "voice"))]
+#[tauri::command]
+pub async fn voice_cancel_recording(
+    #[allow(unused_variables)] provider_id: Option<String>,
+) -> Result<(), String> {
+    Err(VOICE_NOT_BUILT.into())
 }
