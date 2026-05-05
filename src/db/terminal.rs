@@ -113,6 +113,41 @@ impl Database {
         }))
     }
 
+    pub fn get_agent_shell_terminal_tab(
+        &self,
+        chat_session_id: &str,
+    ) -> Result<Option<TerminalTab>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, workspace_id, title, kind, is_script_output, sort_order, created_at,
+                    agent_chat_session_id, agent_tool_use_id, agent_task_id,
+                    output_path, task_status, task_summary
+             FROM terminal_tabs
+             WHERE agent_chat_session_id = ?1 AND kind = 'agent_task' AND title = 'Agent shell'
+             LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![chat_session_id])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        let kind: String = row.get(3)?;
+        let is_script: i32 = row.get(4)?;
+        Ok(Some(TerminalTab {
+            id: row.get(0)?,
+            workspace_id: row.get(1)?,
+            title: row.get(2)?,
+            kind: parse_terminal_tab_kind(&kind),
+            is_script_output: is_script != 0,
+            sort_order: row.get(5)?,
+            created_at: row.get(6)?,
+            agent_chat_session_id: row.get(7)?,
+            agent_tool_use_id: row.get(8)?,
+            agent_task_id: row.get(9)?,
+            output_path: row.get(10)?,
+            task_status: row.get(11)?,
+            task_summary: row.get(12)?,
+        }))
+    }
+
     pub fn get_terminal_tab_by_agent_task(
         &self,
         chat_session_id: &str,
@@ -160,6 +195,24 @@ impl Database {
              SET agent_task_id = ?1, output_path = ?2, task_status = 'running'
              WHERE agent_tool_use_id = ?3",
             params![task_id, output_path, tool_use_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_agent_shell_terminal_tab_status(
+        &self,
+        chat_session_id: &str,
+        task_id: Option<&str>,
+        status: &str,
+        summary: Option<&str>,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE terminal_tabs
+             SET agent_task_id = ?1,
+                 task_status = ?2,
+                 task_summary = COALESCE(?3, task_summary)
+             WHERE agent_chat_session_id = ?4 AND kind = 'agent_task' AND title = 'Agent shell'",
+            params![task_id, status, summary, chat_session_id],
         )?;
         Ok(())
     }

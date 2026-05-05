@@ -4,8 +4,8 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use claudette::agent::background::{
-    AgentBackgroundTaskEvent, AgentBackgroundTaskEventKind, is_tail_bash_command,
-    parse_background_task_binding, parse_bash_start, parse_task_notification,
+    AgentBackgroundTaskEvent, AgentBackgroundTaskEventKind, parse_background_task_binding,
+    parse_bash_start, parse_task_notification,
 };
 use claudette::agent::{
     self, AgentEvent, AgentSettings, ControlRequestInner, FileAttachment, InnerStreamEvent,
@@ -32,19 +32,6 @@ use super::{
     ChatHistoryPage, fire_completion_notification, now_iso, start_bridge_and_inject_mcp,
 };
 
-fn truncate_task_title(command: Option<&str>) -> String {
-    let raw = command.unwrap_or("Bash").trim();
-    let mut title = if raw.is_empty() {
-        "Bash".to_string()
-    } else {
-        raw.to_string()
-    };
-    if title.chars().count() > 42 {
-        title = title.chars().take(39).collect::<String>() + "...";
-    }
-    format!("Agent: {title}")
-}
-
 fn emit_agent_background_task_event(
     app: &AppHandle,
     kind: AgentBackgroundTaskEventKind,
@@ -61,11 +48,11 @@ fn emit_agent_background_task_event(
     let _ = app.emit("agent-background-task", &payload);
 }
 
-fn agent_bash_output_path(chat_session_id: &str, tool_use_id: &str) -> std::path::PathBuf {
+fn agent_bash_output_path(chat_session_id: &str) -> std::path::PathBuf {
     std::env::temp_dir()
         .join("claudette-agent-bash")
         .join(chat_session_id)
-        .join(format!("{tool_use_id}.output"))
+        .join("agent-shell.output")
 }
 
 fn terminal_text(text: &str) -> String {
@@ -84,34 +71,80 @@ fn append_agent_bash_output(path: &std::path::Path, text: &str) -> std::io::Resu
     file.write_all(text.as_bytes())
 }
 
-fn create_agent_bash_terminal_tab(
+fn mirror_background_task_output(source: std::path::PathBuf, destination: std::path::PathBuf) {
+    tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
+        let mut offset = 0_u64;
+        let mut idle_ticks_after_output = 0_u8;
+        let mut buf = vec![0_u8; 8192];
+        loop {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let Ok(mut file) = tokio::fs::File::open(&source).await else {
+                continue;
+            };
+            let len = file.metadata().await.ok().map(|m| m.len()).unwrap_or(0);
+            if len < offset {
+                offset = 0;
+            }
+            if file.seek(std::io::SeekFrom::Start(offset)).await.is_err() {
+                continue;
+            }
+            let mut wrote = false;
+            loop {
+                match file.read(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        offset += n as u64;
+                        wrote = true;
+                        if let Err(err) = append_agent_bash_output(
+                            &destination,
+                            &String::from_utf8_lossy(&buf[..n]),
+                        ) {
+                            eprintln!("[chat] failed to mirror background output: {err}");
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            if wrote {
+                idle_ticks_after_output = 0;
+            } else if offset > 0 {
+                idle_ticks_after_output = idle_ticks_after_output.saturating_add(1);
+                if idle_ticks_after_output >= 20 {
+                    break;
+                }
+            }
+        }
+    });
+}
+
+fn get_or_create_agent_shell_terminal_tab(
     db_path: &std::path::Path,
     workspace_id: &str,
     chat_session_id: &str,
-    tool_use_id: &str,
-    command: Option<&str>,
-    output_path: Option<&std::path::Path>,
 ) -> Option<TerminalTab> {
     let db = Database::open(db_path).ok()?;
-    if let Ok(Some(tab)) = db.get_terminal_tab_by_tool_use_id(tool_use_id) {
+    if let Ok(Some(tab)) = db.get_agent_shell_terminal_tab(chat_session_id) {
         return Some(tab);
     }
     let max_id = db.max_terminal_tab_id().ok()?;
     let existing = db.list_terminal_tabs_by_workspace(workspace_id).ok()?;
+    let output_path = agent_bash_output_path(chat_session_id);
     let tab = TerminalTab {
         id: max_id + 1,
         workspace_id: workspace_id.to_string(),
-        title: truncate_task_title(command),
+        title: "Agent shell".to_string(),
         kind: TerminalTabKind::AgentTask,
         is_script_output: false,
         sort_order: existing.len() as i32,
         created_at: now_iso(),
         agent_chat_session_id: Some(chat_session_id.to_string()),
-        agent_tool_use_id: Some(tool_use_id.to_string()),
+        agent_tool_use_id: None,
         agent_task_id: None,
-        output_path: output_path.map(|path| path.to_string_lossy().into_owned()),
-        task_status: Some("starting".to_string()),
-        task_summary: command.map(ToOwned::to_owned),
+        output_path: Some(output_path.to_string_lossy().into_owned()),
+        task_status: None,
+        task_summary: None,
     };
     db.insert_terminal_tab(&tab).ok()?;
     Some(tab)
@@ -151,7 +184,22 @@ async fn apply_task_notification_status(
         summary.filter(|s| !s.trim().is_empty()),
         output_file.filter(|s| !s.trim().is_empty()),
     );
-    if let Ok(Some(tab)) = db.get_terminal_tab_by_agent_task(chat_session_id, task_id) {
+    let _ = db.update_agent_shell_terminal_tab_status(
+        chat_session_id,
+        Some(task_id),
+        status,
+        summary.filter(|s| !s.trim().is_empty()),
+    );
+    let tab = db
+        .get_terminal_tab_by_agent_task(chat_session_id, task_id)
+        .ok()
+        .flatten()
+        .or_else(|| {
+            db.get_agent_shell_terminal_tab(chat_session_id)
+                .ok()
+                .flatten()
+        });
+    if let Some(tab) = tab {
         emit_agent_background_task_event(
             app,
             AgentBackgroundTaskEventKind::Status,
@@ -266,6 +314,31 @@ fn schedule_background_task_wake(
                     notification.output_file.as_deref(),
                 )
                 .await;
+            }
+
+            if let AgentEvent::Stream(StreamEvent::User { message, .. }) = &event
+                && let claudette::agent::UserMessageContent::Blocks(blocks) = &message.content
+            {
+                for block in blocks {
+                    if let claudette::agent::UserContentBlock::Text { text } = block
+                        && let Some(notification) = parse_task_notification(text)
+                    {
+                        saw_task_notification = true;
+                        should_emit_stream = true;
+                        let status = notification.status.as_deref().unwrap_or("running");
+                        apply_task_notification_status(
+                            &app,
+                            &db_path,
+                            &workspace_id,
+                            &chat_session_id,
+                            &notification.task_id,
+                            status,
+                            notification.summary.as_deref(),
+                            notification.output_file.as_deref(),
+                        )
+                        .await;
+                    }
+                }
             }
 
             if let AgentEvent::Stream(StreamEvent::ControlRequest {
@@ -1503,35 +1576,42 @@ pub async fn send_chat_message(
                         session.running_background_tasks.insert(tool_use_id.clone());
                     }
                 }
-                if !command.is_some_and(is_tail_bash_command) {
-                    let output_path = if start.run_in_background {
-                        None
-                    } else {
-                        let path =
-                            agent_bash_output_path(&chat_session_id_for_stream, &tool_use_id);
-                        let echo = command
-                            .map(|cmd| format!("\r\n$ {}\r\n", terminal_text(cmd)))
-                            .unwrap_or_else(|| "\r\n$ Bash\r\n".to_string());
-                        if let Err(err) = append_agent_bash_output(&path, &echo) {
-                            eprintln!("[chat] failed to write agent bash output: {err}");
-                        }
-                        Some(path)
-                    };
-                    if let Some(tab) = create_agent_bash_terminal_tab(
-                        &db_path,
-                        &ws_id,
-                        &chat_session_id_for_stream,
-                        &tool_use_id,
-                        command,
-                        output_path.as_deref(),
-                    ) {
-                        emit_agent_background_task_event(
-                            &app,
-                            AgentBackgroundTaskEventKind::Starting,
-                            &ws_id,
+                let path = agent_bash_output_path(&chat_session_id_for_stream);
+                let echo = command
+                    .map(|cmd| format!("\r\n$ {}\r\n", terminal_text(cmd)))
+                    .unwrap_or_else(|| "\r\n$ Bash\r\n".to_string());
+                if let Err(err) = append_agent_bash_output(&path, &echo) {
+                    eprintln!("[chat] failed to write agent bash output: {err}");
+                }
+                if get_or_create_agent_shell_terminal_tab(
+                    &db_path,
+                    &ws_id,
+                    &chat_session_id_for_stream,
+                )
+                .is_some()
+                {
+                    if let Ok(db) = Database::open(&db_path) {
+                        let _ = db.update_agent_shell_terminal_tab_status(
                             &chat_session_id_for_stream,
-                            tab,
+                            None,
+                            if start.run_in_background {
+                                "running"
+                            } else {
+                                "starting"
+                            },
+                            command,
                         );
+                        if let Ok(Some(tab)) =
+                            db.get_agent_shell_terminal_tab(&chat_session_id_for_stream)
+                        {
+                            emit_agent_background_task_event(
+                                &app,
+                                AgentBackgroundTaskEventKind::Starting,
+                                &ws_id,
+                                &chat_session_id_for_stream,
+                                tab,
+                            );
+                        }
                     }
                 }
             }
@@ -1778,78 +1858,105 @@ pub async fn send_chat_message(
                 match &message.content {
                     claudette::agent::UserMessageContent::Blocks(blocks) => {
                         for block in blocks {
-                            if let claudette::agent::UserContentBlock::ToolResult {
-                                tool_use_id,
-                                content,
-                            } = block
-                            {
-                                let text = tool_result_content_text(content);
-                                if let Some(binding) = parse_background_task_binding(&text) {
-                                    {
-                                        let app_state = app.state::<AppState>();
-                                        let mut agents = app_state.agents.write().await;
-                                        if let Some(session) =
-                                            agents.get_mut(&chat_session_id_for_stream)
+                            match block {
+                                claudette::agent::UserContentBlock::ToolResult {
+                                    tool_use_id,
+                                    content,
+                                } => {
+                                    let text = tool_result_content_text(content);
+                                    if let Some(binding) = parse_background_task_binding(&text) {
                                         {
-                                            session.running_background_tasks.remove(tool_use_id);
-                                            session
-                                                .running_background_tasks
-                                                .insert(binding.task_id.clone());
+                                            let app_state = app.state::<AppState>();
+                                            let mut agents = app_state.agents.write().await;
+                                            if let Some(session) =
+                                                agents.get_mut(&chat_session_id_for_stream)
+                                            {
+                                                session
+                                                    .running_background_tasks
+                                                    .remove(tool_use_id);
+                                                session
+                                                    .running_background_tasks
+                                                    .insert(binding.task_id.clone());
+                                            }
                                         }
-                                    }
-                                    if let Ok(db) = Database::open(&db_path) {
-                                        let _ = db.update_agent_task_terminal_tab_binding(
-                                            tool_use_id,
-                                            &binding.task_id,
-                                            &binding.output_path,
+                                        let aggregate_path =
+                                            agent_bash_output_path(&chat_session_id_for_stream);
+                                        mirror_background_task_output(
+                                            std::path::PathBuf::from(&binding.output_path),
+                                            aggregate_path,
                                         );
-                                        if let Ok(Some(tab)) =
-                                            db.get_terminal_tab_by_tool_use_id(tool_use_id)
-                                        {
-                                            emit_agent_background_task_event(
-                                                &app,
-                                                AgentBackgroundTaskEventKind::Bound,
-                                                &ws_id,
+                                        if let Ok(db) = Database::open(&db_path) {
+                                            let _ = db.update_agent_shell_terminal_tab_status(
                                                 &chat_session_id_for_stream,
-                                                tab,
+                                                Some(&binding.task_id),
+                                                "running",
+                                                None,
                                             );
+                                            if let Ok(Some(tab)) = db.get_agent_shell_terminal_tab(
+                                                &chat_session_id_for_stream,
+                                            ) {
+                                                emit_agent_background_task_event(
+                                                    &app,
+                                                    AgentBackgroundTaskEventKind::Bound,
+                                                    &ws_id,
+                                                    &chat_session_id_for_stream,
+                                                    tab,
+                                                );
+                                            }
                                         }
-                                    }
-                                } else if let Ok(db) = Database::open(&db_path)
-                                    && let Ok(Some(tab)) =
-                                        db.get_terminal_tab_by_tool_use_id(tool_use_id)
-                                {
-                                    if let Some(path) = tab.output_path.as_deref() {
+                                    } else {
+                                        let path =
+                                            agent_bash_output_path(&chat_session_id_for_stream);
                                         let text = terminal_text(&text);
                                         let suffix =
                                             if text.ends_with("\r\n") { "" } else { "\r\n" };
                                         if let Err(err) = append_agent_bash_output(
-                                            std::path::Path::new(path),
+                                            &path,
                                             &format!("{text}{suffix}"),
                                         ) {
                                             eprintln!(
                                                 "[chat] failed to append agent bash output: {err}"
                                             );
                                         }
-                                    }
-                                    let _ = db.update_agent_task_terminal_tab_by_tool_use_id(
-                                        tool_use_id,
-                                        "completed",
-                                        Some("Command completed"),
-                                        None,
-                                    );
-                                    if let Ok(Some(tab)) =
-                                        db.get_terminal_tab_by_tool_use_id(tool_use_id)
-                                    {
-                                        emit_agent_background_task_event(
-                                            &app,
-                                            AgentBackgroundTaskEventKind::Status,
-                                            &ws_id,
-                                            &chat_session_id_for_stream,
-                                            tab,
-                                        );
+                                        if let Ok(db) = Database::open(&db_path) {
+                                            let _ = db.update_agent_shell_terminal_tab_status(
+                                                &chat_session_id_for_stream,
+                                                None,
+                                                "completed",
+                                                Some("Command completed"),
+                                            );
+                                            if let Ok(Some(tab)) = db.get_agent_shell_terminal_tab(
+                                                &chat_session_id_for_stream,
+                                            ) {
+                                                emit_agent_background_task_event(
+                                                    &app,
+                                                    AgentBackgroundTaskEventKind::Status,
+                                                    &ws_id,
+                                                    &chat_session_id_for_stream,
+                                                    tab,
+                                                );
+                                            }
+                                        }
                                     }
                                 }
+                                claudette::agent::UserContentBlock::Text { text } => {
+                                    if let Some(notification) = parse_task_notification(text) {
+                                        let status =
+                                            notification.status.as_deref().unwrap_or("running");
+                                        apply_task_notification_status(
+                                            &app,
+                                            &db_path,
+                                            &ws_id,
+                                            &chat_session_id_for_stream,
+                                            &notification.task_id,
+                                            status,
+                                            notification.summary.as_deref(),
+                                            notification.output_file.as_deref(),
+                                        )
+                                        .await;
+                                    }
+                                }
+                                claudette::agent::UserContentBlock::Unknown => {}
                             }
                         }
                     }

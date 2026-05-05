@@ -251,6 +251,12 @@ impl Default for UserMessageContent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum UserContentBlock {
+    #[serde(rename = "text")]
+    Text {
+        #[serde(default)]
+        text: String,
+    },
+
     #[serde(rename = "tool_result")]
     ToolResult {
         tool_use_id: String,
