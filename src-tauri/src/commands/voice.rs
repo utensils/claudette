@@ -63,6 +63,7 @@ pub async fn voice_remove_provider_model(
 #[tauri::command]
 pub async fn voice_start_recording(
     provider_id: Option<String>,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let provider_id = {
@@ -73,7 +74,7 @@ pub async fn voice_start_recording(
     };
     state
         .voice
-        .start_recording(&state.db_path, &provider_id)
+        .start_recording(&state.db_path, &provider_id, Some(app))
         .await
 }
 

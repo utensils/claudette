@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next";
 import { AlertCircle, FileText, LoaderCircle, Mic, Plus, Send, Square, X } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useAppStore } from "../../stores/useAppStore";
 import {
   listSlashCommands,
@@ -188,6 +189,29 @@ export function ChatInputArea({
   const voiceErrorOpensSettings = shouldOpenVoiceSettingsForError(
     voice.activeProvider,
   );
+
+  // VU meter: subscribe to `voice://level` events while recording and apply
+  // exponential moving average smoothing so the bars animate smoothly.
+  const [vuLevel, setVuLevel] = useState(0);
+  const smoothedRef = useRef(0);
+  // Only show the live level while actively recording; show 0 otherwise.
+  const displayedLevel = voice.state === "recording" ? vuLevel : 0;
+  useEffect(() => {
+    if (voice.state !== "recording") return;
+    smoothedRef.current = 0;
+    let unlistenFn: UnlistenFn | undefined;
+    const promise = listen<{ level: number }>("voice://level", (event) => {
+      const raw = event.payload.level;
+      smoothedRef.current = 0.6 * smoothedRef.current + 0.4 * raw;
+      setVuLevel(smoothedRef.current);
+    }).then((fn) => {
+      unlistenFn = fn;
+    });
+    return () => {
+      promise.then(() => unlistenFn?.());
+      smoothedRef.current = 0;
+    };
+  }, [voice.state]);
 
   // Esc cancels an active recording regardless of where focus is. The
   // textarea's onKeyDown also handles Esc when it has focus; clicking
@@ -997,9 +1021,9 @@ export function ChatInputArea({
           {voice.state === "recording" && (
             <div className={styles.voiceRecordingStatus} aria-live="polite">
               <span className={styles.voiceWaveform} aria-hidden="true">
-                <span />
-                <span />
-                <span />
+                <span style={{ height: `${Math.min(4 + displayedLevel * 40 * 0.85, 14)}px` }} />
+                <span style={{ height: `${Math.min(4 + displayedLevel * 40, 14)}px` }} />
+                <span style={{ height: `${Math.min(4 + displayedLevel * 40 * 0.85, 14)}px` }} />
               </span>
               <span>{formatElapsedSeconds(voice.elapsedSeconds)}</span>
             </div>
