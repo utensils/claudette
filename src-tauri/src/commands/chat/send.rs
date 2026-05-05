@@ -64,6 +64,13 @@ fn append_agent_bash_output(path: &std::path::Path, text: &str) -> std::io::Resu
     file.write_all(text.as_bytes())
 }
 
+fn truncate_agent_bash_output(path: &std::path::Path) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::File::create(path).map(|_| ())
+}
+
 fn mirror_background_task_output(source: std::path::PathBuf, destination: std::path::PathBuf) {
     tokio::spawn(async move {
         use tokio::io::{AsyncReadExt, AsyncSeekExt};
@@ -1705,6 +1712,13 @@ pub async fn send_chat_message(
                 && let Some(start) = parse_bash_start(&input_json)
             {
                 let command = start.command.as_deref();
+                let had_running_background_tasks = {
+                    let app_state = app.state::<AppState>();
+                    let agents = app_state.agents.read().await;
+                    agents
+                        .get(&chat_session_id_for_stream)
+                        .is_some_and(|s| !s.running_background_tasks.is_empty())
+                };
                 if start.run_in_background {
                     let app_state = app.state::<AppState>();
                     let mut agents = app_state.agents.write().await;
@@ -1713,6 +1727,10 @@ pub async fn send_chat_message(
                     }
                 }
                 let path = agent_bash_output_path(&chat_session_id_for_stream);
+                if !had_running_background_tasks && let Err(err) = truncate_agent_bash_output(&path)
+                {
+                    eprintln!("[chat] failed to reset agent bash output: {err}");
+                }
                 let echo = command
                     .map(|cmd| format!("\r\n$ {}\r\n", terminal_text(cmd)))
                     .unwrap_or_else(|| "\r\n$ Bash\r\n".to_string());

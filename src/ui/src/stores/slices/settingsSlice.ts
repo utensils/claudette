@@ -33,6 +33,8 @@ export interface SettingsSlice {
   setShowSidebarRunningCommands: (v: boolean) => void;
 
   // Experimental
+  claudetteTerminalEnabled: boolean;
+  setClaudetteTerminalEnabled: (enabled: boolean) => void;
   usageInsightsEnabled: boolean;
   setUsageInsightsEnabled: (enabled: boolean) => void;
   pluginManagementEnabled: boolean;
@@ -93,6 +95,9 @@ export const createSettingsSlice: StateCreator<
   showSidebarRunningCommands: false,
   setShowSidebarRunningCommands: (v) => set({ showSidebarRunningCommands: v }),
 
+  claudetteTerminalEnabled: false,
+  setClaudetteTerminalEnabled: (enabled) =>
+    set({ claudetteTerminalEnabled: enabled }),
   usageInsightsEnabled: false,
   setUsageInsightsEnabled: (enabled) => set({ usageInsightsEnabled: enabled }),
   pluginManagementEnabled: false,

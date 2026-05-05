@@ -219,6 +219,9 @@
   "git_delete_warning": "The branch will be permanently deleted, including any unmerged commits.",
 
   "experimental_title": "Experimental",
+  "experimental_claudette_terminal": "Claudette Terminal",
+  "experimental_claudette_terminal_desc": "Show a read-only terminal tab that mirrors agent shell commands and background task output. Background task completion handling stays enabled even when this is off.",
+  "experimental_claudette_terminal_aria": "Claudette Terminal",
   "experimental_plugin_mgmt": "Plugin Management",
   "experimental_plugin_mgmt_desc": "Show the Plugins settings section and enable the built-in plugin-management slash commands that open it.",
   "experimental_plugin_mgmt_aria": "Plugin Management",

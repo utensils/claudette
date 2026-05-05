@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type MouseEvent as ReactMouseEvent,
 } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -329,6 +330,9 @@ export const TerminalPanel = memo(function TerminalPanel() {
   const setActiveTerminalTab = useAppStore((s) => s.setActiveTerminalTab);
   const toggleTerminalPanel = useAppStore((s) => s.toggleTerminalPanel);
   const terminalPanelVisible = useAppStore((s) => s.terminalPanelVisible);
+  const claudetteTerminalEnabled = useAppStore(
+    (s) => s.claudetteTerminalEnabled,
+  );
   const terminalPaneTrees = useAppStore((s) => s.terminalPaneTrees);
   const activeTerminalPaneId = useAppStore((s) => s.activeTerminalPaneId);
   const ensurePaneTree = useAppStore((s) => s.ensurePaneTree);
@@ -375,8 +379,13 @@ export const TerminalPanel = memo(function TerminalPanel() {
   }, [activeTerminalTabId]);
 
   const tabs = useMemo(
-    () => (selectedWorkspaceId ? terminalTabs[selectedWorkspaceId] ?? [] : []),
-    [selectedWorkspaceId, terminalTabs],
+    () =>
+      selectedWorkspaceId
+        ? (terminalTabs[selectedWorkspaceId] ?? []).filter(
+            (tab) => claudetteTerminalEnabled || tab.kind !== "agent_task",
+          )
+        : [],
+    [claudetteTerminalEnabled, selectedWorkspaceId, terminalTabs],
   );
 
   const handleCreateTab = useCallback(async () => {
@@ -439,21 +448,27 @@ export const TerminalPanel = memo(function TerminalPanel() {
     if (!selectedWorkspaceId || !terminalPanelVisible) return;
     const wsId = selectedWorkspaceId;
     listTerminalTabs(wsId).then(async (t) => {
-      if (selectedSessionId) {
+      if (claudetteTerminalEnabled && selectedSessionId) {
         await ensureClaudetteTerminalTab(wsId, selectedSessionId);
         t = await listTerminalTabs(wsId);
       }
       if (t.length > 0) {
         setTerminalTabs(wsId, t);
+        const visibleTabs = t.filter(
+          (tab) => claudetteTerminalEnabled || tab.kind !== "agent_task",
+        );
         const currentActive = useAppStore.getState().activeTerminalTabId[wsId];
         const activeStillValid =
-          currentActive != null && t.some((tab) => tab.id === currentActive);
-        if (!activeStillValid) setActiveTerminalTab(wsId, t[0].id);
+          currentActive != null &&
+          visibleTabs.some((tab) => tab.id === currentActive);
+        if (!activeStillValid) {
+          setActiveTerminalTab(wsId, visibleTabs[0]?.id ?? t[0].id);
+        }
         if (!t.some((tab) => tab.kind !== "agent_task")) {
           try {
             const tab = await createTerminalTab(wsId);
             addTerminalTab(wsId, tab);
-            setActiveTerminalTab(wsId, t[0].id);
+            setActiveTerminalTab(wsId, claudetteTerminalEnabled ? t[0].id : tab.id);
           } catch (err) {
             console.error("Failed to create terminal tab:", err);
           }
@@ -471,6 +486,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
   }, [
     selectedWorkspaceId,
     selectedSessionId,
+    claudetteTerminalEnabled,
     terminalPanelVisible,
     setTerminalTabs,
     setActiveTerminalTab,
@@ -1026,6 +1042,18 @@ export const TerminalPanel = memo(function TerminalPanel() {
     setContextMenu(null);
   }, [contextMenu]);
 
+  const handleTerminalContextMenu = useCallback(
+    (ev: ReactMouseEvent<HTMLDivElement>) => {
+      if (!activeTerminalTabId) return;
+      const activeLeafId = activeTerminalPaneId[activeTerminalTabId] ?? null;
+      if (!activeLeafId) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      setContextMenu({ x: ev.clientX, y: ev.clientY, leafId: activeLeafId });
+    },
+    [activeTerminalPaneId, activeTerminalTabId],
+  );
+
   // Destroy everything on unmount.
   useEffect(() => {
     const instances = instancesRef.current;
@@ -1109,7 +1137,10 @@ export const TerminalPanel = memo(function TerminalPanel() {
           −
         </button>
       </div>
-      <div className={styles.termContainer}>
+      <div
+        className={styles.termContainer}
+        onContextMenu={handleTerminalContextMenu}
+      >
         {tabs.map((tab) => {
           const tree = terminalPaneTrees[tab.id];
           if (!tree) return null;
