@@ -111,7 +111,7 @@ fn create_agent_bash_terminal_tab(
         agent_task_id: None,
         output_path: output_path.map(|path| path.to_string_lossy().into_owned()),
         task_status: Some("starting".to_string()),
-        task_summary: None,
+        task_summary: command.map(ToOwned::to_owned),
     };
     db.insert_terminal_tab(&tab).ok()?;
     Some(tab)
@@ -165,7 +165,8 @@ async fn apply_task_notification_status(
 const BACKGROUND_TASK_WAKE_PROMPT: &str = "\
 <system-reminder>
 Claudette is waking this stream-json session so Claude Code can deliver queued background task notifications.
-Do not answer unless a <task-notification> is present in the runtime context. If no task notification is present yet, produce no user-facing text.
+First call the Sleep tool for 1 second so Claude Code can flush queued background task notifications.
+After Sleep returns, do not answer unless a <task-notification> is present in the runtime context. If no task notification is present yet, produce no user-facing text.
 </system-reminder>";
 
 fn schedule_background_task_wake(
@@ -265,6 +266,24 @@ fn schedule_background_task_wake(
                     notification.output_file.as_deref(),
                 )
                 .await;
+            }
+
+            if let AgentEvent::Stream(StreamEvent::ControlRequest {
+                request_id,
+                request:
+                    ControlRequestInner::CanUseTool {
+                        tool_name, input, ..
+                    },
+            }) = &event
+                && tool_name == "Sleep"
+            {
+                let response = serde_json::json!({
+                    "behavior": "allow",
+                    "updatedInput": input,
+                });
+                if let Err(err) = ps.send_control_response(request_id, response).await {
+                    eprintln!("[chat] failed to allow background wake Sleep: {err}");
+                }
             }
 
             if let AgentEvent::Stream(StreamEvent::Stream {

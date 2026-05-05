@@ -901,6 +901,12 @@ export const TerminalPanel = memo(function TerminalPanel() {
       stopAgentTaskTailBestEffort(inst.tabId);
       inst.agentTaskTailPath = outputPath;
       inst.term.reset();
+      const command =
+        tab?.task_summary ??
+        (tab?.title?.startsWith("Agent: ") ? tab.title.slice("Agent: ".length) : null);
+      if (tab?.agent_task_id && command?.trim()) {
+        inst.term.writeln(`$ ${command.trim()}`);
+      }
       (async () => {
         const unlistenFn = await listen<AgentTaskOutputPayload>(
           "agent-task-output",
