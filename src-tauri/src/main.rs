@@ -5,6 +5,7 @@ mod agent_mcp_sink;
 mod commands;
 mod mdns;
 mod missing_cli;
+#[cfg(feature = "voice")]
 mod platform_speech;
 mod pty;
 mod pty_tracker;
@@ -14,6 +15,7 @@ mod subprocess_cleanup;
 mod transport;
 mod tray;
 mod usage;
+#[cfg(feature = "voice")]
 mod voice;
 mod webview2_check;
 
@@ -379,6 +381,7 @@ fn main() {
             // hits warm CoreAudio + Speech.framework state instead of
             // a multi-second cold-start delay. Touches enumeration /
             // status APIs only — no permission prompts triggered.
+            #[cfg(feature = "voice")]
             {
                 let voice = app.state::<state::AppState>().voice.clone();
                 std::thread::spawn(move || voice.prewarm());

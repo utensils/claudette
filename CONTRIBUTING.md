@@ -69,6 +69,12 @@ cargo tauri dev
 > The `cpal` audio crate fails to build without it. The full apt
 > install line is in the [README prerequisites](README.md#prerequisites).
 > Nix users get this automatically via `flake.nix`.
+>
+> Headless or sandboxed Linux environments without ALSA can omit voice
+> support entirely:
+> ```sh
+> cargo tauri build --no-default-features --features tauri/custom-protocol,server
+> ```
 
 ## Commit Conventions
 
