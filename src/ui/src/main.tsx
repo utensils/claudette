@@ -1,3 +1,16 @@
+// Cross-app webview hijack guard runs as an inline <script> in index.html
+// BEFORE any module loads — ES imports hoist over top-level statements, so
+// putting the check here would let i18n + grammar bootstrap run first
+// against a possibly-foreign DOM. The inline check is the source of truth;
+// the bootIdentityGuard module is exported only for tests.
+//
+// If the inline guard rendered an error, `window.__claudetteHijackBlocked`
+// is set; we abort early so no further side effects (state, network calls)
+// touch the foreign bundle's environment.
+if ((window as unknown as { __claudetteHijackBlocked?: boolean }).__claudetteHijackBlocked) {
+  throw new Error("Claudette hijack guard refused to mount React.");
+}
+
 import "./i18n";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";

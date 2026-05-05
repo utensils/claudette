@@ -17,8 +17,9 @@ import {
   sendRemoteCommand,
   pairWithServer,
   startLocalServer,
+  openUrl,
 } from "../../services/tauri";
-import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, CircleStop, GitPullRequestArrow, GitPullRequestDraft, GitMerge, GitPullRequestClosed, ChevronRight, ChevronDown } from "lucide-react";
+import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, CircleStop, GitPullRequestArrow, GitPullRequestDraft, GitMerge, GitPullRequestClosed, ChevronRight, ChevronDown, CircleHelp } from "lucide-react";
 import { RepoIcon } from "../shared/RepoIcon";
 import { UpdateBanner } from "../layout/UpdateBanner";
 import { getScmSortPriority } from "../../utils/scmSortPriority";
@@ -1044,6 +1045,20 @@ export const Sidebar = memo(function Sidebar() {
           <Globe size={16} />
         </button>
         <ShareButton openModal={openModal} />
+        <button
+          className={styles.footerBtn}
+          onClick={() => {
+            // Cross-platform docs entry. The native Help menu (macOS only,
+            // wired in src-tauri/src/main.rs) targets the same URL — use
+            // the docs root, not a deeper page, so the link survives any
+            // doc-site reorganization.
+            void openUrl("https://utensils.io/claudette/");
+          }}
+          title={t("help_open_docs")}
+          aria-label={t("help_open_docs")}
+        >
+          <CircleHelp size={16} />
+        </button>
         <button
           className={styles.footerBtn}
           onClick={() => openSettings()}

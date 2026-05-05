@@ -167,7 +167,7 @@ pub async fn create_workspace(
         })?
     };
 
-    let ws = Workspace {
+    let mut ws = Workspace {
         id: uuid::Uuid::new_v4().to_string(),
         repository_id: repo_id,
         name: allocation.name,
@@ -186,6 +186,12 @@ pub async fn create_workspace(
         let _ = git::remove_worktree(&repo_path, &actual_path, true).await;
         let _ = git::branch_delete(&repo_path, &ws.branch_name).await;
         return Err(e.to_string());
+    }
+    // Patch sort_order to the value the DB assigned so the workspace this
+    // command returns to the UI lands at the bottom of its repo group
+    // immediately, instead of rendering at sort_order=0 until reload.
+    if let Ok(Some(o)) = db.lookup_workspace_sort_order(&ws.id) {
+        ws.sort_order = o;
     }
 
     // Resolve and execute setup script (unless caller requested skip).
@@ -1021,6 +1027,15 @@ pub async fn import_worktrees(
     // Atomic batch insert — all or nothing.
     db.insert_workspaces_batch(&created)
         .map_err(|e| e.to_string())?;
+    // Patch each row's sort_order to the value the DB assigned so the
+    // workspaces this command returns to the UI render at the bottom of
+    // their repo groups immediately (Codex P2). One readback query per
+    // import; imports are rare and bounded so no batching needed.
+    for ws in created.iter_mut() {
+        if let Ok(Some(o)) = db.lookup_workspace_sort_order(&ws.id) {
+            ws.sort_order = o;
+        }
+    }
 
     // Imported workspaces already have user-defined branch names — pre-claim
     // the auto-rename slot so the first-message rename never fires. Match the

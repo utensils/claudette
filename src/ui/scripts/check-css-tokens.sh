@@ -18,6 +18,11 @@
 #     must match the hex in the corresponding `[data-theme]` block.
 #   * `accent_preview: "#..."` — same as above but in snake_case (the
 #     wire format used by the community-registry parsers in tests).
+#   * `src/utils/bootIdentityGuard.ts` — cross-app dev-port hijack guard
+#     that runs BEFORE React mounts (and BEFORE theme tokens are guaranteed
+#     to resolve, especially in the foreign-bundle case it's catching).
+#     Theme tokens cannot be the source of truth for an error overlay
+#     designed to render even when the surrounding app's CSS hasn't loaded.
 #
 # Runs from src/ui. Exits non-zero with a report when violations are found.
 
@@ -45,6 +50,7 @@ hex_hits=$(grep -rnE '#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b' src \
   | grep -vE 'getPropertyValue\(.*\)\.trim\(\) \|\| "#' \
   | grep -vE 'getPropertyValue\(.*\)\.trim\(\)\s*\|\| \(.*\?.*"#' \
   | grep -vE '(accentPreview|accent_preview):\s*"#' \
+  | grep -vE '^src/utils/bootIdentityGuard\.ts:' \
   || true)
 
 if [ -n "$hex_hits" ]; then

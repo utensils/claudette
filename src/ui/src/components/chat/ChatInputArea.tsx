@@ -764,6 +764,14 @@ export function ChatInputArea({
       handleSend();
       return;
     }
+    // Mid-turn steering isn't supported over the remote transport yet
+    // (Codex P2). Fall back to the normal send path — which queues for
+    // after the current turn — instead of consuming the composer and
+    // dropping the text on the floor.
+    if (isRemote) {
+      handleSend();
+      return;
+    }
     if (!chatInput.trim() && pendingAttachments.length === 0) return;
     const { content, files, attachmentPayload } = consumeComposer();
     void onSendSteer(content, files, attachmentPayload);

@@ -22,6 +22,11 @@ impl Database {
         // Assign the next per-repo sort_order so a freshly created workspace
         // lands at the bottom of its repo group, matching how
         // `insert_chat_session` handles per-workspace session ordering.
+        // Callers that hand the same `Workspace` back to the UI should
+        // call `lookup_workspace_sort_order(&ws.id)` after this returns
+        // and patch the value before optimistically updating the store —
+        // otherwise the new row appears at sort_order=0 in the UI until
+        // a full reload reads it back (Codex P2).
         let next_sort_order: i32 = tx.query_row(
             "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM workspaces WHERE repository_id = ?1",
             params![ws.repository_id],
@@ -54,8 +59,28 @@ impl Database {
         Ok(())
     }
 
+    /// Read back the persisted `sort_order` for a workspace. Used by
+    /// creation paths that need to patch the in-memory `Workspace` they
+    /// just inserted (since `insert_workspace` assigns the value via SQL
+    /// and the caller's struct still has the placeholder 0). See Codex
+    /// P2 review of the sidebar drag-reorder PR.
+    pub fn lookup_workspace_sort_order(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Option<i32>, rusqlite::Error> {
+        self.conn
+            .query_row(
+                "SELECT sort_order FROM workspaces WHERE id = ?1",
+                params![workspace_id],
+                |row| row.get(0),
+            )
+            .optional()
+    }
+
     /// Insert multiple workspaces atomically. All succeed or none are committed.
     /// Each workspace is seeded with one active chat session.
+    /// As with `insert_workspace`, callers that send the inserted rows back
+    /// to the UI should call `lookup_workspace_sort_order` per-id afterwards.
     pub fn insert_workspaces_batch(&self, workspaces: &[Workspace]) -> Result<(), rusqlite::Error> {
         let tx = self.conn.unchecked_transaction()?;
         {

@@ -289,10 +289,37 @@ fn main() {
                         &PredefinedMenuItem::fullscreen(app, None)?,
                     ],
                 )?;
-                Menu::with_items(app, &[&app_menu, &edit_menu, &view_menu, &window_menu])
+                // Help menu — single entry pointing at the docs root. The
+                // root URL is preferred over a deeper page (e.g. /getting-
+                // started/installation/) so the link survives doc-site
+                // reorganization. Click is wired via on_menu_event below.
+                let help_menu = Submenu::with_items(
+                    app,
+                    "Help",
+                    true,
+                    &[&MenuItem::with_id(
+                        app,
+                        "help-open-docs",
+                        "Claudette Documentation",
+                        true,
+                        None::<&str>,
+                    )?],
+                )?;
+                Menu::with_items(
+                    app,
+                    &[&app_menu, &edit_menu, &view_menu, &window_menu, &help_menu],
+                )
             })
             .on_menu_event(|app, event| {
-                if event.id().as_ref() == "zoom-in" {
+                if event.id().as_ref() == "help-open-docs" {
+                    // Open the Claudette docs root in the system browser.
+                    // Root URL (not a deeper page) so the link survives
+                    // doc-site reorganization.
+                    if let Err(e) = commands::shell::opener::open("https://utensils.io/claudette/")
+                    {
+                        eprintln!("[help] Failed to open docs URL: {e}");
+                    }
+                } else if event.id().as_ref() == "zoom-in" {
                     let _ = app.emit("zoom-in", ());
                 } else if event.id().as_ref() == "zoom-out" {
                     let _ = app.emit("zoom-out", ());

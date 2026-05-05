@@ -199,7 +199,7 @@ async fn fork_after_worktree(
             .map_err(|e| ForkError::Snapshot(e.to_string()))?;
     }
 
-    let new_ws = Workspace {
+    let mut new_ws = Workspace {
         id: uuid::Uuid::new_v4().to_string(),
         repository_id: source_ws.repository_id.clone(),
         name: new_name,
@@ -209,10 +209,15 @@ async fn fork_after_worktree(
         agent_status: AgentStatus::Idle,
         status_line: String::new(),
         created_at: (inputs.now_iso)(),
-        // sort_order is overwritten by `insert_workspace` (MAX+1 within repo).
+        // Placeholder; patched below to the value `insert_workspace` actually
+        // assigned (MAX+1 within repo) so callers handing this struct back
+        // to the UI render the new fork at the right sidebar position.
         sort_order: 0,
     };
     db.insert_workspace(&new_ws)?;
+    if let Some(o) = db.lookup_workspace_sort_order(&new_ws.id)? {
+        new_ws.sort_order = o;
+    }
 
     copy_history(db, &source_ws.id, &new_ws.id, checkpoint)?;
 

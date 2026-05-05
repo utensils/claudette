@@ -163,9 +163,20 @@ export function useTabDragReorder<T, Id>(
     if (!drag) return;
     if (!drag.active) return; // pure click — let onClick handle activation
     justEndedRef.current = true;
-    queueMicrotask(() => {
+    // Clear AFTER the synthetic click that follows pointerup. Microtasks
+    // can drain before the browser dispatches the click on macOS WebKit
+    // (pointerup → microtask flush → click), which would re-activate the
+    // dragged tab. requestAnimationFrame fires on the NEXT paint, well
+    // after the click has been delivered, matching the rAF pattern the
+    // existing repo-group drag in Sidebar.tsx uses (Codex P2).
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => {
+        justEndedRef.current = false;
+      });
+    } else {
+      // node/test fallback — no synthetic click to suppress here.
       justEndedRef.current = false;
-    });
+    }
     if (cancelled || !hover) return;
     if (Object.is(hover.id, drag.id)) return;
     const next = reorderById(items, drag.id, hover.id, hover.placement, getId);
