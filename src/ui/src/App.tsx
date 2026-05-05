@@ -454,9 +454,28 @@ function App() {
         } else {
           loadInitialData()
             .then((data) => {
-              store.setWorkspaces(
-                data.workspaces.map((w) => ({ ...w, remote_connection_id: null })),
-              );
+              // Merge each refreshed row through `addWorkspace` rather
+              // than `setWorkspaces` so the slice's status-aware merge
+              // preserves live runtime fields (notably `agent_status`,
+              // which `db.list_workspaces` synthesizes as Idle on every
+              // read). Wholesale-replacing would reintroduce the
+              // Running→Idle sidebar regression that addWorkspace
+              // already guards against.
+              const fresh = useAppStore.getState().workspaces;
+              const incomingIds = new Set(data.workspaces.map((w) => w.id));
+              for (const ws of data.workspaces) {
+                useAppStore
+                  .getState()
+                  .addWorkspace({ ...ws, remote_connection_id: null });
+              }
+              // Drop any local rows the DB no longer knows about (e.g.
+              // a hard delete that raced with this refresh) so the
+              // sidebar doesn't keep ghost entries around.
+              for (const local of fresh) {
+                if (!incomingIds.has(local.id)) {
+                  useAppStore.getState().removeWorkspace(local.id);
+                }
+              }
             })
             .catch((err) =>
               console.warn(
