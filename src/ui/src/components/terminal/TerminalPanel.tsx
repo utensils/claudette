@@ -5,6 +5,7 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  useState,
 } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -90,6 +91,7 @@ interface LeafInstance {
   reclaimTimer: ReturnType<typeof setTimeout> | null;
   reclaimDisposer: (() => void) | null;
   handleCopy: (ev: ClipboardEvent) => void;
+  handleContextMenu: (ev: MouseEvent) => void;
   keyHandler: (ev: KeyboardEvent) => boolean;
   lastPtySize: PtySizeSnapshot | null;
 }
@@ -344,6 +346,11 @@ export const TerminalPanel = memo(function TerminalPanel() {
   const fontFamilyMono = useAppStore((s) => s.fontFamilyMono);
   const currentThemeId = useAppStore((s) => s.currentThemeId);
   const uiFontSize = useAppStore((s) => s.uiFontSize);
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    leafId: string;
+  } | null>(null);
 
   const autoCreatedRef = useRef<string | null>(null);
   // Tracks the last (tabId, leafId, visible) tuple we applied keyboard
@@ -635,6 +642,12 @@ export const TerminalPanel = memo(function TerminalPanel() {
         );
       };
       container.addEventListener("copy", handleCopy);
+      const handleContextMenu = (ev: MouseEvent) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        setContextMenu({ x: ev.clientX, y: ev.clientY, leafId: spec.leafId });
+      };
+      container.addEventListener("contextmenu", handleContextMenu);
 
       let currentInst: LeafInstance | null = null;
       const resizeObserver = new ResizeObserver(() => {
@@ -662,6 +675,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
         reclaimTimer: null,
         reclaimDisposer: null,
         handleCopy,
+        handleContextMenu,
         keyHandler,
         lastPtySize: null,
         resizeObserver,
@@ -751,6 +765,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
     if (inst.reclaimDisposer) inst.reclaimDisposer();
     inst.resizeObserver.disconnect();
     inst.container.removeEventListener("copy", inst.handleCopy);
+    inst.container.removeEventListener("contextmenu", inst.handleContextMenu);
     inst.term.dispose();
     if (inst.unlisten) inst.unlisten();
     if (inst.isAgentTask) stopAgentTaskTailBestEffort(inst.tabId);
@@ -981,6 +996,27 @@ export const TerminalPanel = memo(function TerminalPanel() {
     return () => cancelAnimationFrame(id);
   }, [terminalPanelVisible, activeTerminalTabId]);
 
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    const handleKeyDown = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") close();
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [contextMenu]);
+
+  const handleClearContextTerminal = useCallback(() => {
+    if (!contextMenu) return;
+    const inst = instancesRef.current.get(contextMenu.leafId);
+    inst?.term.clear();
+    setContextMenu(null);
+  }, [contextMenu]);
+
   // Destroy everything on unmount.
   useEffect(() => {
     const instances = instancesRef.current;
@@ -1086,6 +1122,23 @@ export const TerminalPanel = memo(function TerminalPanel() {
             </div>
           );
         })}
+        {contextMenu && (
+          <div
+            className={styles.contextMenu}
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+            onPointerDown={(ev) => ev.stopPropagation()}
+            role="menu"
+          >
+            <button
+              className={styles.contextMenuItem}
+              type="button"
+              onClick={handleClearContextTerminal}
+              role="menuitem"
+            >
+              Clear
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
