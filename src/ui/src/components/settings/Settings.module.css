@@ -347,6 +347,19 @@
   cursor: default;
 }
 
+/* ── Hotkey badge (Keyboard settings) ── */
+
+.hotkeyBadge {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 4px 8px;
+  background: var(--selected-bg);
+  border: 1px solid var(--divider);
+  border-radius: 4px;
+  min-width: 60px;
+  text-align: center;
+}
+
 /* ── Textarea fields (setup script, instructions) ── */
 
 .textarea {

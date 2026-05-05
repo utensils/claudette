@@ -6,11 +6,19 @@ export const DEFAULT_HOLD_HOTKEY = "AltRight";
 
 type VoiceHandle = Pick<VoiceInputController, "state" | "start" | "stop" | "cancel">;
 
+/** Normalize a key name for use in the `+`-delimited combo format.
+ * "+" itself becomes "plus" so the serialized combo stays unambiguous
+ * (otherwise "mod+shift+" + "+" would split into a stray empty segment). */
+export function normalizeToggleKey(key: string): string {
+  if (key === "+") return "plus";
+  return key.toLowerCase();
+}
+
 /** Check if a keyboard event matches a stored toggle combo like "mod+shift+m". */
 export function matchesToggle(e: KeyboardEvent, hotkey: string): boolean {
   const parts = hotkey.toLowerCase().split("+");
   const key = parts[parts.length - 1];
-  if (!key || e.key.toLowerCase() !== key) return false;
+  if (!key || normalizeToggleKey(e.key) !== key) return false;
   const wantsMod = parts.includes("mod");
   const wantsShift = parts.includes("shift");
   const wantsAlt = parts.includes("alt");
@@ -30,6 +38,7 @@ export function formatToggleHotkey(hotkey: string | null, isMac: boolean): strin
         case "ctrl": return "Ctrl";
         case "shift": return isMac ? "⇧" : "Shift";
         case "alt": return isMac ? "⌥" : "Alt";
+        case "plus": return "+";
         default: return part.toUpperCase();
       }
     })
@@ -78,12 +87,13 @@ export function createVoiceHotkeyHandlers(
 
   return {
     onKeyDown(e: KeyboardEvent) {
-      // Suppress repeated hold-key events so the OS key-repeat doesn't
-      // re-trigger start(). The !e.repeat guard on the hold branch below
-      // already handles this, but we also preventDefault so the webview
-      // doesn't receive spurious Alt/Option characters while holding.
+      // Suppress repeated keydowns. Toggle and hold-to-talk both fire once per
+      // physical press, so OS key-repeat events should be eaten — otherwise
+      // a printable toggle binding (e.g. user rebinds to a single letter)
+      // would leak repeated characters into the focused input on hold.
       if (e.repeat) {
         if (holdHotkey && e.code === holdHotkey && holdActive) e.preventDefault();
+        if (toggleHotkey && matchesToggle(e, toggleHotkey)) e.preventDefault();
         return;
       }
 

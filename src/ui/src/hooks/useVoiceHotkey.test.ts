@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { createVoiceHotkeyHandlers, matchesToggle } from "./useVoiceHotkey";
+import {
+  createVoiceHotkeyHandlers,
+  matchesToggle,
+  normalizeToggleKey,
+} from "./useVoiceHotkey";
 import type { VoiceInputController } from "./useVoiceInput";
 
 type VoiceState = VoiceInputController["state"];
@@ -75,6 +79,12 @@ describe("matchesToggle", () => {
     ).toBe(false);
   });
 
+  it("matches mod+shift+plus against the literal '+' key", () => {
+    expect(
+      matchesToggle(keyEvent({ key: "+", metaKey: true, shiftKey: true }), "mod+shift+plus"),
+    ).toBe(true);
+  });
+
   it("rejects when alt is held but not required", () => {
     expect(
       matchesToggle(
@@ -120,6 +130,26 @@ describe("createVoiceHotkeyHandlers — toggle", () => {
     const { onKeyDown } = createVoiceHotkeyHandlers(() => voice, "mod+shift+m", null);
     onKeyDown(keyEvent({ key: "m", metaKey: true, shiftKey: true, repeat: true }));
     expect(voice.start).not.toHaveBeenCalled();
+  });
+
+  it("preventDefaults repeat events that match the toggle (no-modifier rebind)", () => {
+    const voice = makeVoice("recording");
+    const { onKeyDown } = createVoiceHotkeyHandlers(() => voice, "a", null);
+    const e = keyEvent({ key: "a", repeat: true });
+    onKeyDown(e);
+    expect(e.preventDefault).toHaveBeenCalled();
+    expect(voice.stop).not.toHaveBeenCalled();
+  });
+});
+
+describe("normalizeToggleKey", () => {
+  it("maps '+' to 'plus' to avoid delimiter collision", () => {
+    expect(normalizeToggleKey("+")).toBe("plus");
+  });
+
+  it("lowercases everything else", () => {
+    expect(normalizeToggleKey("M")).toBe("m");
+    expect(normalizeToggleKey("Enter")).toBe("enter");
   });
 
   it("does nothing when toggle hotkey is null", () => {

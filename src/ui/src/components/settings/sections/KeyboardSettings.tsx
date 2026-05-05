@@ -7,6 +7,7 @@ import {
   DEFAULT_TOGGLE_HOTKEY,
   formatHoldHotkey,
   formatToggleHotkey,
+  normalizeToggleKey,
 } from "../../../hooks/useVoiceHotkey";
 import styles from "../Settings.module.css";
 
@@ -25,7 +26,8 @@ function captureToggleCombo(e: KeyboardEvent): string | null {
   if (e.metaKey || e.ctrlKey) parts.push("mod");
   if (e.shiftKey) parts.push("shift");
   if (e.altKey) parts.push("alt");
-  parts.push(e.key.toLowerCase());
+  // Use normalizeToggleKey so "+" doesn't collide with the "+" delimiter.
+  parts.push(normalizeToggleKey(e.key));
   return parts.join("+");
 }
 
@@ -69,6 +71,12 @@ export function KeyboardSettings() {
   useEffect(() => {
     if (!rebinding) return;
 
+    // Closure-local guard: setRebinding(null) doesn't synchronously unregister
+    // this listener (state update + re-render is async), so without this flag a
+    // burst of keydowns between the await and the next render could fire
+    // multiple persist() calls and overwrite the intended binding.
+    let captured = false;
+
     const persist = async (settingKey: string, value: string | null, storeSetter: (v: string | null) => void) => {
       try {
         await setAppSetting(settingKey, value ?? "disabled");
@@ -83,16 +91,21 @@ export function KeyboardSettings() {
     const onKeyDown = (e: KeyboardEvent) => {
       e.preventDefault();
       e.stopPropagation();
+      if (captured) return;
 
       if (e.key === "Escape") {
+        captured = true;
         setRebinding(null);
         return;
       }
 
       if (rebinding === "toggle") {
         const combo = captureToggleCombo(e);
-        if (combo) void persist("voice_toggle_hotkey", combo, setVoiceToggleHotkey);
+        if (!combo) return; // modifier-only press — keep listening
+        captured = true;
+        void persist("voice_toggle_hotkey", combo, setVoiceToggleHotkey);
       } else {
+        captured = true;
         void persist("voice_hold_hotkey", e.code, setVoiceHoldHotkey);
       }
     };
@@ -120,7 +133,7 @@ export function KeyboardSettings() {
         </div>
         <div className={styles.settingControl}>
           <div className={styles.inlineControl}>
-            <code style={{ fontFamily: "var(--font-mono)", fontSize: 13, padding: "4px 8px", background: "var(--selected-bg)", border: "1px solid var(--divider)", borderRadius: 4, minWidth: 60, textAlign: "center" }}>
+            <code className={styles.hotkeyBadge}>
               {rebinding === "toggle"
                 ? t("keyboard_press_key")
                 : formatToggleHotkey(voiceToggleHotkey, isMac)}
@@ -163,7 +176,7 @@ export function KeyboardSettings() {
         </div>
         <div className={styles.settingControl}>
           <div className={styles.inlineControl}>
-            <code style={{ fontFamily: "var(--font-mono)", fontSize: 13, padding: "4px 8px", background: "var(--selected-bg)", border: "1px solid var(--divider)", borderRadius: 4, minWidth: 60, textAlign: "center" }}>
+            <code className={styles.hotkeyBadge}>
               {rebinding === "hold"
                 ? t("keyboard_press_key")
                 : formatHoldHotkey(voiceHoldHotkey, isMac)}
