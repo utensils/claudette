@@ -105,13 +105,26 @@ export function createVoiceHotkeyHandlers(
           v.stop();
         } else if (v.state === "starting" || v.state === "transcribing") {
           v.cancel();
-        } else if (v.state === "idle") {
+        } else {
+          // idle, setup-required, or error — try start. Mirrors the mic
+          // button's catchall: from setup-required, start() re-runs the
+          // provider check (now succeeding after the user granted perms);
+          // from error, it clears the error and re-attempts. Without this,
+          // the hotkey was a silent no-op in those states and recovery
+          // required clicking the mic button.
           void v.start();
         }
         return;
       }
 
-      if (holdHotkey && e.code === holdHotkey && !holdActive && v.state === "idle") {
+      if (
+        holdHotkey &&
+        e.code === holdHotkey &&
+        !holdActive &&
+        v.state !== "recording" &&
+        v.state !== "starting" &&
+        v.state !== "transcribing"
+      ) {
         e.preventDefault();
         holdActive = true;
         void v.start();

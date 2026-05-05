@@ -118,6 +118,23 @@ describe("createVoiceHotkeyHandlers — toggle", () => {
     expect(voice.cancel).toHaveBeenCalledOnce();
   });
 
+  it("starts from setup-required (post-permission-grant recovery)", () => {
+    // Repro for the bug where hotkey did nothing after the user granted TCC
+    // perms — the controller was sitting in setup-required and only the mic
+    // button's catchall onClick would re-attempt start().
+    const voice = makeVoice("setup-required");
+    const { onKeyDown } = createVoiceHotkeyHandlers(() => voice, "mod+shift+m", null);
+    onKeyDown(keyEvent({ key: "m", metaKey: true, shiftKey: true }));
+    expect(voice.start).toHaveBeenCalledOnce();
+  });
+
+  it("starts from error state (clears error and retries)", () => {
+    const voice = makeVoice("error");
+    const { onKeyDown } = createVoiceHotkeyHandlers(() => voice, "mod+shift+m", null);
+    onKeyDown(keyEvent({ key: "m", metaKey: true, shiftKey: true }));
+    expect(voice.start).toHaveBeenCalledOnce();
+  });
+
   it("cancels when transcribing", () => {
     const voice = makeVoice("transcribing");
     const { onKeyDown } = createVoiceHotkeyHandlers(() => voice, "mod+shift+m", null);
@@ -222,11 +239,27 @@ describe("createVoiceHotkeyHandlers — hold-to-talk", () => {
     expect(voice.stop).toHaveBeenCalledOnce();
   });
 
-  it("does not start hold when voice is not idle", () => {
-    const voice = makeVoice("transcribing");
+  it("does not start hold when voice is recording/starting/transcribing", () => {
+    for (const state of ["recording", "starting", "transcribing"] as const) {
+      const voice = makeVoice(state);
+      const { onKeyDown } = createVoiceHotkeyHandlers(() => voice, null, "AltRight");
+      onKeyDown(keyEvent({ code: "AltRight" }));
+      expect(voice.start, `state=${state}`).not.toHaveBeenCalled();
+    }
+  });
+
+  it("starts hold from setup-required (post-permission-grant recovery)", () => {
+    const voice = makeVoice("setup-required");
     const { onKeyDown } = createVoiceHotkeyHandlers(() => voice, null, "AltRight");
     onKeyDown(keyEvent({ code: "AltRight" }));
-    expect(voice.start).not.toHaveBeenCalled();
+    expect(voice.start).toHaveBeenCalledOnce();
+  });
+
+  it("starts hold from error state", () => {
+    const voice = makeVoice("error");
+    const { onKeyDown } = createVoiceHotkeyHandlers(() => voice, null, "AltRight");
+    onKeyDown(keyEvent({ code: "AltRight" }));
+    expect(voice.start).toHaveBeenCalledOnce();
   });
 
   it("does not stop on keyup for a different key code", () => {
