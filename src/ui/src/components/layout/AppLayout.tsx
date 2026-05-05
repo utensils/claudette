@@ -16,6 +16,7 @@ import { ModalRouter } from "../modals/ModalRouter";
 import { SettingsPage } from "../settings/SettingsPage";
 import { ResizeHandle } from "./ResizeHandle";
 import { ToastContainer } from "./Toast";
+import { Footer } from "./Footer";
 import { useAgentStream } from "../../hooks/useAgentStream";
 import { useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
 import { useBranchRefresh } from "../../hooks/useBranchRefresh";
@@ -183,6 +184,7 @@ export function AppLayout() {
       {fuzzyFinderOpen && <FuzzyFinder />}
       {commandPaletteOpen && <CommandPalette />}
       <ToastContainer />
+      <Footer />
     </div>
   );
 }
