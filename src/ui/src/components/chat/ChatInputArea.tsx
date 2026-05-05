@@ -192,8 +192,11 @@ export function ChatInputArea({
 
   // VU meter: subscribe to `voice://level` events while recording and apply
   // exponential moving average smoothing so the bars animate smoothly.
-  // Skip the subscription entirely when the OS asks for reduced motion —
-  // the bars are rendered at a static height in that case.
+  // Skipped (and replaced with a static indicator) when the OS asks for
+  // reduced motion, or when the active provider is webview-driven (Web
+  // Speech API) — that path captures audio in the browser and emits no
+  // `voice://level` events from Rust, so dynamic bars would sit at the
+  // floor for the whole recording.
   const [vuLevel, setVuLevel] = useState(0);
   const smoothedRef = useRef(0);
   const [reducedMotion, setReducedMotion] = useState(() => {
@@ -207,11 +210,14 @@ export function ChatInputArea({
     mq.addEventListener?.("change", onChange);
     return () => mq.removeEventListener?.("change", onChange);
   }, []);
+  const nativeRecording = voice.activeProvider?.recordingMode === "native";
+  const useDynamicMeter = !reducedMotion && nativeRecording;
   // Only show the live level while actively recording; show 0 otherwise.
   const displayedLevel = voice.state === "recording" ? vuLevel : 0;
   useEffect(() => {
-    if (voice.state !== "recording" || reducedMotion) return;
+    if (voice.state !== "recording" || !useDynamicMeter) return;
     smoothedRef.current = 0;
+    setVuLevel(0);
     let unlistenFn: UnlistenFn | undefined;
     const promise = listen<{ level: number }>("voice://level", (event) => {
       const raw = event.payload.level;
@@ -223,8 +229,9 @@ export function ChatInputArea({
     return () => {
       promise.then(() => unlistenFn?.());
       smoothedRef.current = 0;
+      setVuLevel(0);
     };
-  }, [voice.state, reducedMotion]);
+  }, [voice.state, useDynamicMeter]);
 
   // Esc cancels an active recording regardless of where focus is. The
   // textarea's onKeyDown also handles Esc when it has focus; clicking
@@ -1035,14 +1042,14 @@ export function ChatInputArea({
             // Perceptual mapping: sqrt expands quiet speech, the noise gate
             // ignores ambient hiss, and saturating at RMS=0.4 leaves headroom
             // for loud peaks while letting typical speech (RMS 0.05–0.15)
-            // reach the middle of the bar range. With prefers-reduced-motion,
-            // freeze the bars at a static mid-range height so the indicator
-            // still reads as "recording" without animating.
+            // reach the middle of the bar range. Falls back to a static
+            // mid-range height when reduced motion is requested or the
+            // provider is webview-driven (no `voice://level` events).
             const barMin = 4;
             const barRange = 10; // 4–14 px
             let center: number;
             let outer: number;
-            if (reducedMotion) {
+            if (!useDynamicMeter) {
               center = 8;
               outer = 8;
             } else {
