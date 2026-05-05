@@ -164,6 +164,24 @@ impl Database {
         Ok(())
     }
 
+    pub fn update_agent_task_terminal_tab_by_tool_use_id(
+        &self,
+        tool_use_id: &str,
+        status: &str,
+        summary: Option<&str>,
+        output_path: Option<&str>,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE terminal_tabs
+             SET task_status = ?1,
+                 task_summary = COALESCE(?2, task_summary),
+                 output_path = COALESCE(?3, output_path)
+             WHERE agent_tool_use_id = ?4",
+            params![status, summary, output_path, tool_use_id],
+        )?;
+        Ok(())
+    }
+
     pub fn update_agent_task_terminal_tab_status(
         &self,
         chat_session_id: &str,

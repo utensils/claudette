@@ -1,6 +1,12 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BashStart {
+    pub command: Option<String>,
+    pub run_in_background: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackgroundBashStart {
     pub command: Option<String>,
 }
@@ -36,22 +42,76 @@ pub struct AgentBackgroundTaskEvent {
     pub tab: crate::model::TerminalTab,
 }
 
-pub fn parse_background_bash_start(input_json: &str) -> Option<BackgroundBashStart> {
+pub fn parse_bash_start(input_json: &str) -> Option<BashStart> {
     let value: serde_json::Value = serde_json::from_str(input_json).ok()?;
-    if value
+    let run_in_background = value
         .get("run_in_background")
         .and_then(serde_json::Value::as_bool)
-        != Some(true)
-    {
-        return None;
-    }
+        == Some(true);
     let command = value
         .get("command")
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(ToOwned::to_owned);
-    Some(BackgroundBashStart { command })
+    Some(BashStart {
+        command,
+        run_in_background,
+    })
+}
+
+pub fn parse_background_bash_start(input_json: &str) -> Option<BackgroundBashStart> {
+    let start = parse_bash_start(input_json)?;
+    if !start.run_in_background {
+        return None;
+    }
+    Some(BackgroundBashStart {
+        command: start.command,
+    })
+}
+
+pub fn is_tail_bash_command(command: &str) -> bool {
+    let Some(first) = first_shell_word(command.trim_start()) else {
+        return false;
+    };
+    let command_name = first.rsplit('/').next().unwrap_or(first);
+    command_name == "tail" || command_name == "gtail"
+}
+
+fn first_shell_word(command: &str) -> Option<&str> {
+    let mut end = 0;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (idx, ch) in command.char_indices() {
+        if escaped {
+            escaped = false;
+            end = idx + ch.len_utf8();
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            end = idx + ch.len_utf8();
+            continue;
+        }
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            }
+            end = idx + ch.len_utf8();
+            continue;
+        }
+        if ch == '"' || ch == '\'' {
+            quote = Some(ch);
+            end = idx + ch.len_utf8();
+            continue;
+        }
+        if ch.is_whitespace() || matches!(ch, '|' | '&' | ';' | '(' | ')') {
+            break;
+        }
+        end = idx + ch.len_utf8();
+    }
+    let word = command.get(..end)?.trim();
+    if word.is_empty() { None } else { Some(word) }
 }
 
 pub fn parse_background_task_binding(text: &str) -> Option<BackgroundTaskBinding> {
@@ -123,6 +183,22 @@ mod tests {
     #[test]
     fn ignores_foreground_bash() {
         assert!(parse_background_bash_start(r#"{"command":"pwd"}"#).is_none());
+    }
+
+    #[test]
+    fn parses_foreground_bash_start() {
+        let start = parse_bash_start(r#"{"command":"pwd"}"#).unwrap();
+        assert_eq!(start.command.as_deref(), Some("pwd"));
+        assert!(!start.run_in_background);
+    }
+
+    #[test]
+    fn detects_tail_commands() {
+        assert!(is_tail_bash_command("tail -f /tmp/out"));
+        assert!(is_tail_bash_command(" /usr/bin/tail -n 20 file"));
+        assert!(is_tail_bash_command("gtail -F file"));
+        assert!(!is_tail_bash_command("tailwindcss --help"));
+        assert!(!is_tail_bash_command("cat file | tail -n 1"));
     }
 
     #[test]

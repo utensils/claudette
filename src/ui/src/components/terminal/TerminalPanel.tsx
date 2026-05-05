@@ -651,7 +651,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
 
       if (inst.isAgentTask) {
         term.options.cursorBlink = false;
-        term.writeln("Starting background task...");
+        term.writeln("Starting agent command...");
         safeFit(inst);
         return inst;
       }
@@ -901,7 +901,6 @@ export const TerminalPanel = memo(function TerminalPanel() {
       stopAgentTaskTailBestEffort(inst.tabId);
       inst.agentTaskTailPath = outputPath;
       inst.term.reset();
-      inst.term.writeln(`Tailing ${outputPath}`);
       (async () => {
         const unlistenFn = await listen<AgentTaskOutputPayload>(
           "agent-task-output",
