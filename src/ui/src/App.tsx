@@ -467,9 +467,15 @@ function App() {
         }
         return;
       }
-      // `addWorkspace` is idempotent by id, so this safely handles
-      // both new workspaces and re-emitted updates without duplicating.
-      store.addWorkspace(workspace);
+      // The Rust `claudette::model::Workspace` doesn't include the
+      // UI-only `remote_connection_id` field. Stamp it as `null` here so
+      // downstream code that strict-checks `=== null` (rather than
+      // `!= null` or truthy) doesn't trip on `undefined`. All
+      // `workspaces-changed` events come from local ops by definition
+      // (the WS server doesn't emit them), so null is correct.
+      // `addWorkspace` is idempotent by id, so this safely handles both
+      // new workspaces and re-emitted updates without duplicating.
+      store.addWorkspace({ ...workspace, remote_connection_id: null });
     });
 
     // Reflect what the agent actually used into the input bar after every
