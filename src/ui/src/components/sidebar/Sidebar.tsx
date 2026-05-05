@@ -50,6 +50,7 @@ export const Sidebar = memo(function Sidebar() {
   const openSettings = useAppStore((s) => s.openSettings);
   const updateWorkspace = useAppStore((s) => s.updateWorkspace);
   const removeWorkspace = useAppStore((s) => s.removeWorkspace);
+  const addToast = useAppStore((s) => s.addToast);
   const unreadCompletions = useAppStore((s) => s.unreadCompletions);
   const agentQuestions = useAppStore((s) => s.agentQuestions);
   const planApprovals = useAppStore((s) => s.planApprovals);
@@ -301,9 +302,10 @@ export const Sidebar = memo(function Sidebar() {
       updateWorkspace(wsId, { name: trimmed });
     } catch (e) {
       console.error("Failed to rename workspace:", e);
+      addToast(t("rename_workspace_failed", { error: String(e) }));
     }
     setRenamingWsId(null);
-  }, [renameValue, workspaces, updateWorkspace]);
+  }, [renameValue, workspaces, updateWorkspace, addToast, t]);
 
   const renderWorkspace = (ws: typeof workspaces[number]) => {
     const wsSessions = sessionsByWorkspace[ws.id] ?? [];
