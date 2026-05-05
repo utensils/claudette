@@ -1,16 +1,11 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TerminalTabKind {
+    #[default]
     Pty,
     AgentTask,
-}
-
-impl Default for TerminalTabKind {
-    fn default() -> Self {
-        Self::Pty
-    }
 }
 
 /// Metadata for a terminal tab. The actual PTY process state is
