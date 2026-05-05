@@ -70,8 +70,8 @@ impl RpcResponse {
 }
 
 /// Capabilities record the IPC server returns from the `capabilities`
-/// method. Mirrors cmux's `capabilities` shape so CLI users can discover
-/// the server's surface without out-of-band documentation.
+/// method. Lets CLI users discover the server's surface without
+/// out-of-band documentation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Capabilities {
     /// Wire-protocol identifier — `"claudette-ipc"` (local socket) or

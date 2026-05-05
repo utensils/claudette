@@ -1,10 +1,10 @@
 //! `claudette rpc <method> [params]` — raw JSON-RPC escape hatch.
 //!
-//! Mirrors `cmux rpc`. Lets users invoke any method the IPC server
-//! exposes (use `claudette capabilities` to discover them) without
-//! waiting for a typed subcommand to ship. `params` is parsed as
-//! arbitrary JSON; if it's not valid JSON the error message includes
-//! the position so users can fix their quoting.
+//! Lets users invoke any method the IPC server exposes (use
+//! `claudette capabilities` to discover them) without waiting for a
+//! typed subcommand to ship. `params` is parsed as arbitrary JSON; if
+//! it's not valid JSON the error message includes the position so
+//! users can fix their quoting.
 
 use std::error::Error;
 

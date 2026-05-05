@@ -127,7 +127,7 @@ fn generate_token() -> String {
 }
 
 /// Decide where to put the per-session socket. Unix: a short file under
-/// `${TMPDIR}/cmux/` — macOS caps `sun_path` at 104 bytes, so directory and
+/// `${TMPDIR}/cmcp/` — macOS caps `sun_path` at 104 bytes, so directory and
 /// filename are kept terse. Windows: a namespaced pipe name (no fs entry).
 fn make_socket_address(session_uuid: &str) -> Result<(String, Option<PathBuf>), String> {
     #[cfg(unix)]

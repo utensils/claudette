@@ -52,7 +52,7 @@ enum Command {
     Capabilities,
 
     /// Issue a raw JSON-RPC call. Escape hatch for methods that don't
-    /// have a typed subcommand yet, mirrors `cmux rpc`. Example:
+    /// have a typed subcommand yet. Example:
     /// `claudette rpc list_workspaces`
     Rpc {
         /// Method name, e.g. `list_workspaces`, `create_workspace`.

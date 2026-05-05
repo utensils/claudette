@@ -29,7 +29,7 @@ describe("filterSlashCommands", () => {
     cmd({ name: "status", kind: "local_action" }),
     cmd({ name: "commit", source: "user" }),
     cmd({ name: "deploy", source: "project" }),
-    cmd({ name: "cmux-browser", source: "plugin" }),
+    cmd({ name: "browser-tools", source: "plugin" }),
   ];
 
   it("matches by substring on the canonical name", () => {
