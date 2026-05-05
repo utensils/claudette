@@ -158,6 +158,7 @@
   "keyboard_category_terminal": "Terminal",
   "keyboard_category_editor": "Editor",
   "keyboard_category_voice": "Voice",
+  "keyboard_category_chat": "Chat",
   "keyboard_press_key": "Press keys…",
   "keyboard_cancel": "Cancel",
   "keyboard_rebind": "Rebind",
@@ -206,6 +207,7 @@
   "keyboard_action_file_toggle_markdown_preview": "Toggle Markdown preview",
   "keyboard_action_voice_toggle": "Toggle voice input",
   "keyboard_action_voice_hold": "Push to talk",
+  "keyboard_action_chat_steer_immediate": "Send now (skip queue / steer mid-turn)",
 
   "git_title": "Git",
   "git_branch_prefix": "Branch name prefix",

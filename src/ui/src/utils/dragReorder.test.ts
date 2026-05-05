@@ -9,6 +9,12 @@ describe("tabDropPlacement", () => {
     expect(tabDropPlacement(125, 100, 50)).toBe("after");
     expect(tabDropPlacement(149, 100, 50)).toBe("after");
   });
+  it("works for any axis — caller passes the relevant component (x or y)", () => {
+    // Vertical list: a tab at top=200, height=40 has midpoint 220.
+    // The pure helper doesn't know x from y, only "cursor vs midpoint".
+    expect(tabDropPlacement(210, 200, 40)).toBe("before");
+    expect(tabDropPlacement(230, 200, 40)).toBe("after");
+  });
 });
 
 describe("reorderById", () => {

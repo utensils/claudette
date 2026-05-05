@@ -8,18 +8,23 @@
 // component — pure functions over an items list and a hovered tab geometry.
 
 export type TabDropPlacement = "before" | "after";
+export type DragOrientation = "horizontal" | "vertical";
 
 /**
- * Decide whether the cursor is over the left or right half of a tab.
- * Pure geometry — `clientX` and `tabLeft` must be in the same coordinate
- * space (typically pointer-event clientX and DOMRect.left).
+ * Decide whether the cursor sits "before" or "after" the midpoint of a
+ * tab along the relevant axis. Horizontal lists (tab strips, where items
+ * are arranged left→right) compare on x; vertical lists (sidebar
+ * workspaces stacked top→bottom) compare on y. Mixing the axes — using x
+ * for a vertical list — leaves the user unable to drop "after" the last
+ * item, because the cursor would have to leave the item's bounding box
+ * to ever cross the midpoint along the wrong axis.
  */
 export function tabDropPlacement(
-  clientX: number,
-  tabLeft: number,
-  tabWidth: number,
+  cursor: number,
+  tabStart: number,
+  tabExtent: number,
 ): TabDropPlacement {
-  return clientX < tabLeft + tabWidth / 2 ? "before" : "after";
+  return cursor < tabStart + tabExtent / 2 ? "before" : "after";
 }
 
 /**

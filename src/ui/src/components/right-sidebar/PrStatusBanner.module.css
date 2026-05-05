@@ -3,7 +3,11 @@
   align-items: center;
   gap: 6px;
   padding: 10px 20px;
-  height: 47px;
+  /* Pin to the workspace-header row height so this banner's bottom border
+   * lines up with WorkspacePanelHeader's bottom border on the chat side.
+   * Without it (47px vs 54px), the layout's top horizontal divider goes
+   * jagged the moment a PR appears. */
+  min-height: var(--workspace-header-h);
   box-sizing: border-box;
   flex-shrink: 0;
   background: var(--chat-header-bg);

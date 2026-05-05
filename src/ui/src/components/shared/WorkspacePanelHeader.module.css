@@ -3,6 +3,11 @@
   align-items: center;
   justify-content: space-between;
   padding: 10px 20px;
+  /* Pin to the shared layout header height so the right-sidebar's tab bar
+   * (which uses the same var) lines up with this header's bottom border.
+   * box-sizing: border-box keeps the 1px bottom border inside the height. */
+  min-height: var(--workspace-header-h);
+  box-sizing: border-box;
   background: var(--chat-header-bg);
   border-bottom: 1px solid var(--divider);
   box-shadow: var(--shadow-sm);

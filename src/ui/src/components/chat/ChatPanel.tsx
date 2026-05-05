@@ -700,6 +700,66 @@ export function ChatPanel() {
     }
   };
 
+  // Skip-queue / steer entry from the chat composer (default Cmd+Enter).
+  // Mirrors handleSteerQueuedMessage but takes content from the input area
+  // directly instead of the queued-message slot — the user is asking to
+  // inject the freshly-typed message mid-turn instead of letting it sit
+  // in the queue until the current turn finishes.
+  const handleSendSteer = async (
+    content: string,
+    mentionedFiles?: Set<string>,
+    attachments?: AttachmentInput[],
+  ) => {
+    const trimmed = content.trim();
+    if ((!trimmed && !attachments?.length) || !activeSessionId) return;
+    if (ws?.remote_connection_id) {
+      setError("Mid-turn steering is not yet supported for remote workspaces");
+      return;
+    }
+    if (!isRunning) {
+      // Defensive — ChatInputArea also falls back to handleSend when not
+      // running, but the user could conceivably trigger this from another
+      // entry point in the future. Route through the normal send path.
+      await handleSend(content, mentionedFiles, attachments);
+      return;
+    }
+    if (isSteeringQueued) return;
+
+    const sessionId = activeSessionId;
+    const messageId = crypto.randomUUID();
+    const mentionedFilesArray = mentionedFiles?.size
+      ? [...mentionedFiles]
+      : undefined;
+    setError(null);
+    setIsSteeringQueued(true);
+    try {
+      const checkpoint = await steerQueuedChatMessage(
+        sessionId,
+        content,
+        mentionedFilesArray,
+        attachments,
+        messageId,
+      );
+      if (checkpoint) {
+        addCheckpoint(sessionId, checkpoint);
+      }
+      const history = (historyRef.current[sessionId] ??= []);
+      history.push(content);
+      historyIndexRef.current = -1;
+      draftRef.current = "";
+      addPersistedUserMessageToStore(sessionId, messageId, content, attachments);
+    } catch (e) {
+      const errMsg = String(e);
+      console.error("steerQueuedChatMessage (skip-queue) failed:", errMsg);
+      // Steer failed mid-turn — fall back to queueing so the user's typed
+      // message doesn't vanish. They can re-trigger it manually.
+      setQueuedMessage(sessionId, content, mentionedFilesArray, attachments);
+      setError(errMsg);
+    } finally {
+      setIsSteeringQueued(false);
+    }
+  };
+
   const handleSteerQueuedMessage = async () => {
     if (!activeSessionId || !queuedMessage || isSteeringQueued) return;
     if (ws.remote_connection_id) {
@@ -1283,6 +1343,7 @@ export function ChatPanel() {
 
       <ChatInputArea
         onSend={handleSend}
+        onSendSteer={handleSendSteer}
         onStop={handleStop}
         isRunning={isRunning}
         isRemote={!!ws?.remote_connection_id}

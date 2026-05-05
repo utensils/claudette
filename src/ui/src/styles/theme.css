@@ -165,6 +165,19 @@
   --radius-pill: 999px;
   --border-radius: var(--radius-lg); /* legacy alias */
 
+  /* ---- Layout heights ----
+   * Shared header height for the workspace panel and any sibling panel
+   * (e.g. RightSidebar's FILES/CHANGES/TASKS tab strip) so their bottom
+   * borders form a continuous horizontal divider across the layout.
+   */
+  --workspace-header-h: 54px;
+  /* Second-row height: chat session tab strip and the right-sidebar tab
+   * strip when it's pushed under a PR banner. Keeping these matched lets
+   * the right side's "PR banner + tabs" stack land its second border
+   * exactly where the chat tab bar's border lives.
+   */
+  --tab-bar-h: 39px;
+
   /* ---- Spacing (4px grid) ---- */
   --space-1:  4px;
   --space-2:  8px;

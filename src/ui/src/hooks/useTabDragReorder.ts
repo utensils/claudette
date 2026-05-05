@@ -6,6 +6,7 @@ import {
 import {
   reorderById,
   tabDropPlacement,
+  type DragOrientation,
   type TabDropPlacement,
 } from "../utils/dragReorder";
 
@@ -74,6 +75,15 @@ interface UseTabDragReorderOptions<T, Id> {
    */
   thresholdSquared?: number;
 
+  /**
+   * Axis along which items are arranged. "horizontal" (default) compares
+   * cursor x against tab left/width — correct for tab strips. "vertical"
+   * compares cursor y against tab top/height — correct for stacked lists
+   * like the sidebar workspace list, where the last item can only be
+   * dropped "after" by hovering its lower half (not its right half).
+   */
+  orientation?: DragOrientation;
+
   /** Items currently rendered, in display order. */
   items: readonly T[];
 }
@@ -111,6 +121,7 @@ export function useTabDragReorder<T, Id>(
     isSameGroup,
     onReorder,
     thresholdSquared = 16,
+    orientation = "horizontal",
     items,
   } = opts;
 
@@ -252,7 +263,10 @@ export function useTabDragReorder<T, Id>(
           }
         }
         const r = tabEl.getBoundingClientRect();
-        const placement = tabDropPlacement(ev.clientX, r.left, r.width);
+        const placement =
+          orientation === "vertical"
+            ? tabDropPlacement(ev.clientY, r.top, r.height)
+            : tabDropPlacement(ev.clientX, r.left, r.width);
         setDropTarget((prev) =>
           prev &&
           Object.is(prev.id, overId) &&

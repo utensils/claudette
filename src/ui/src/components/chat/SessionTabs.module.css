@@ -7,6 +7,9 @@
   background: transparent;
   scrollbar-width: thin;
   scrollbar-color: var(--border-subtle) transparent;
+  /* Pin to the shared second-row height so the right-sidebar tab bar (when
+   * pushed under a PR banner) bottoms out at the same Y as this strip. */
+  min-height: var(--tab-bar-h);
 }
 
 .tabBar::-webkit-scrollbar {

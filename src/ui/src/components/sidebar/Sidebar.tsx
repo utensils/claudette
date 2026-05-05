@@ -220,6 +220,39 @@ export const Sidebar = memo(function Sidebar() {
     [workspaces, sidebarShowArchived, sidebarRepoFilter]
   );
 
+  // Workspaces in the order the sidebar actually renders them: each repo
+  // group sorted by `sort_order` (with SCM priority as tiebreaker for legacy
+  // pre-migration rows where every workspace shares sort_order=0). The drag
+  // hook needs this visual sequence so reorderById's "from"/"to" positions
+  // match what the user sees — without it, a second drag in the same repo
+  // would compute against the unsorted DB order and persist the wrong
+  // sequence (Codex review #629, P2).
+  const visuallyOrderedWorkspaces = useMemo(() => {
+    const localRepos = repositories.filter((r) => !r.remote_connection_id);
+    const repoIndex = new Map(localRepos.map((r, i) => [r.id, i]));
+    const out: typeof workspaces = [];
+    for (const repo of localRepos) {
+      const repoWs = filteredWorkspaces
+        .filter((ws) => ws.repository_id === repo.id)
+        .sort((a, b) => {
+          if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
+          return (
+            getScmSortPriority(scmSummary[a.id]) -
+            getScmSortPriority(scmSummary[b.id])
+          );
+        });
+      out.push(...repoWs);
+    }
+    // Also include any workspaces whose repo isn't in `localRepos` (shouldn't
+    // happen because filteredWorkspaces already excludes remote, but defends
+    // against orphaned rows). Append in their existing relative order so the
+    // hook can still hit-test them if rendered.
+    for (const ws of filteredWorkspaces) {
+      if (!repoIndex.has(ws.repository_id) && !out.includes(ws)) out.push(ws);
+    }
+    return out;
+  }, [filteredWorkspaces, repositories, scmSummary]);
+
   const statusBuckets = useMemo(() => {
     const buckets = new Map<StatusBucketKey, typeof workspaces>();
     for (const key of STATUS_BUCKET_ORDER) buckets.set(key, []);
@@ -323,8 +356,13 @@ export const Sidebar = memo(function Sidebar() {
   // targets) and the reorder math; the onReorder callback persists the new
   // per-repo order.
   const workspaceDrag = useTabDragReorder<typeof workspaces[number], string>({
-    items: filteredWorkspaces,
+    items: visuallyOrderedWorkspaces,
     dataAttr: "sidebarWorkspaceId",
+    // Workspaces stack vertically, so the drop midpoint must be Y-axis.
+    // Without this, dragging a workspace toward the bottom of its repo
+    // group can never produce an "after" placement on the last sibling
+    // (the cursor would have to leave the row to cross an X midpoint).
+    orientation: "vertical",
     parseId: (raw) => raw,
     getId: (ws) => ws.id,
     getTitle: (ws) => ws.name,
@@ -338,15 +376,29 @@ export const Sidebar = memo(function Sidebar() {
       const repoIds = next
         .filter((w) => w.repository_id === moved.repository_id)
         .map((w) => w.id);
-      // Optimistic local update: assign sort_order = position-within-repo
-      // for the moved repo's workspaces so the sort comparator picks up
-      // the new order on the next render. Other repos pass through.
       const orderIndex = new Map(repoIds.map((id, i) => [id, i]));
-      const optimistic = workspaces.map((w) =>
-        w.repository_id === moved.repository_id
-          ? { ...w, sort_order: orderIndex.get(w.id) ?? w.sort_order }
-          : w,
-      );
+      // Optimistic update: rewrite both the array order AND each
+      // workspace's `sort_order` for the moved repo. Reordering the array
+      // (not just the field) ensures a second drag in this repo runs the
+      // hook against the post-drop sequence, not the stale pre-drag one
+      // (Codex P2). Workspaces in other repos pass through untouched.
+      const movedRepoIdSet = new Set(repoIds);
+      const movedRepoUpdated = repoIds
+        .map((id, i) => {
+          const ws = workspaces.find((w) => w.id === id);
+          return ws ? { ...ws, sort_order: i } : null;
+        })
+        .filter((w): w is (typeof workspaces)[number] => w !== null);
+      const replacements = movedRepoUpdated[Symbol.iterator]();
+      const optimistic = workspaces.map((w) => {
+        if (movedRepoIdSet.has(w.id)) {
+          const r = replacements.next();
+          return r.done
+            ? { ...w, sort_order: orderIndex.get(w.id) ?? w.sort_order }
+            : r.value;
+        }
+        return w;
+      });
       setWorkspaces(optimistic);
       void reorderWorkspaces(moved.repository_id, repoIds).catch((err) =>
         console.error("[Sidebar] Failed to persist workspace order:", err),

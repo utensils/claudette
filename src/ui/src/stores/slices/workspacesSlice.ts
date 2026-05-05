@@ -57,6 +57,11 @@ export const createWorkspacesSlice: StateCreator<
       for (const session of s.sessionsByWorkspace[id] ?? []) {
         delete newChatDrafts[session.id];
       }
+      // Drop the unified workspace-tab order so a workspace id reused
+      // later (e.g. restore-from-archive collision) starts from default
+      // sessions→diffs→files layout instead of dredging up old entries.
+      const newTabOrder = { ...s.tabOrderByWorkspace };
+      delete newTabOrder[id];
       return {
         workspaces: s.workspaces.filter((w) => w.id !== id),
         selectedWorkspaceId:
@@ -70,6 +75,7 @@ export const createWorkspacesSlice: StateCreator<
         diffTabsByWorkspace: newDiffTabs,
         diffSelectionByWorkspace: newDiffSelection,
         chatDrafts: newChatDrafts,
+        tabOrderByWorkspace: newTabOrder,
       };
     }),
   selectWorkspace: (id) =>
