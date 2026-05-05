@@ -8,6 +8,7 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -58,14 +59,11 @@ import {
   type PtySizeSnapshot,
 } from "./terminalPtyResize";
 import {
+  clampTerminalContextMenu,
   reorderTerminalTabs,
   tabDropPlacement,
 } from "./terminalPanelLogic";
 import { reclaimScrollLines } from "./terminalReclaim";
-import {
-  AttachmentContextMenu,
-  type AttachmentContextMenuItem,
-} from "../chat/AttachmentContextMenu";
 import "@xterm/xterm/css/xterm.css";
 import styles from "./TerminalPanel.module.css";
 
@@ -77,6 +75,7 @@ interface PtyOutputPayload {
 interface AgentTaskOutputPayload {
   tab_id: number;
   data: number[];
+  reset?: boolean;
 }
 
 const terminalInputEncoder = new TextEncoder();
@@ -980,13 +979,16 @@ export const TerminalPanel = memo(function TerminalPanel() {
       }
       stopAgentTaskTailBestEffort(inst.tabId);
       inst.agentTaskTailPath = outputPath;
-      inst.term.reset();
+      inst.term.clear();
       (async () => {
         const unlistenFn = await listen<AgentTaskOutputPayload>(
           "agent-task-output",
           (event) => {
             if (event.payload.tab_id === inst.tabId) {
-              inst.term.write(new Uint8Array(event.payload.data));
+              if (event.payload.reset) inst.term.clear();
+              if (event.payload.data.length > 0) {
+                inst.term.write(new Uint8Array(event.payload.data));
+              }
             }
           },
         );
@@ -1067,32 +1069,6 @@ export const TerminalPanel = memo(function TerminalPanel() {
     }
     setContextMenu(null);
   }, [contextMenu]);
-  const contextMenuItems = useMemo<AttachmentContextMenuItem[]>(
-    () => [
-      {
-        label: "Clear",
-        onSelect: handleClearContextTerminal,
-      },
-    ],
-    [handleClearContextTerminal],
-  );
-
-  const handleTerminalContextMenu = useCallback(
-    (ev: ReactMouseEvent<HTMLDivElement>) => {
-      if (!activeTerminalTabId) return;
-      const activeLeafId = activeTerminalPaneId[activeTerminalTabId] ?? null;
-      if (!activeLeafId) return;
-      ev.preventDefault();
-      ev.stopPropagation();
-      setContextMenu({
-        x: ev.clientX,
-        y: ev.clientY,
-        tabId: activeTerminalTabId,
-        leafId: activeLeafId,
-      });
-    },
-    [activeTerminalPaneId, activeTerminalTabId],
-  );
 
   const handleTabContextMenu = useCallback(
     (ev: ReactMouseEvent<HTMLDivElement>, tab: TerminalTab) => {
@@ -1246,10 +1222,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
           −
         </button>
       </div>
-      <div
-        className={styles.termContainer}
-        onContextMenuCapture={handleTerminalContextMenu}
-      >
+      <div className={styles.termContainer}>
         {tabs.map((tab) => {
           const tree = terminalPaneTrees[tab.id];
           if (!tree) return null;
@@ -1272,10 +1245,10 @@ export const TerminalPanel = memo(function TerminalPanel() {
           );
         })}
         {contextMenu && (
-          <AttachmentContextMenu
+          <TerminalContextMenu
             x={contextMenu.x}
             y={contextMenu.y}
-            items={contextMenuItems}
+            onClear={handleClearContextTerminal}
             onClose={() => setContextMenu(null)}
           />
         )}
@@ -1283,3 +1256,53 @@ export const TerminalPanel = memo(function TerminalPanel() {
     </div>
   );
 });
+
+function TerminalContextMenu({
+  x,
+  y,
+  onClear,
+  onClose,
+}: {
+  x: number;
+  y: number;
+  onClear: () => void;
+  onClose: () => void;
+}) {
+  const width = 148;
+  const height = 40;
+  const clamped =
+    typeof window === "undefined"
+      ? { x, y }
+      : clampTerminalContextMenu(
+          x,
+          y,
+          width,
+          height,
+          window.innerWidth,
+          window.innerHeight,
+        );
+  const menu = (
+    <div
+      className={styles.terminalContextMenu}
+      style={{ left: clamped.x, top: clamped.y, width }}
+      role="menu"
+      onContextMenu={(ev) => ev.preventDefault()}
+      onPointerDown={(ev) => ev.stopPropagation()}
+    >
+      <button
+        type="button"
+        role="menuitem"
+        className={styles.terminalContextMenuItem}
+        onClick={() => {
+          onClear();
+          onClose();
+        }}
+      >
+        Clear terminal
+      </button>
+    </div>
+  );
+  return typeof document === "undefined"
+    ? menu
+    : createPortal(menu, document.body);
+}

@@ -123,6 +123,38 @@
   position: relative;
 }
 
+.terminalContextMenu {
+  position: fixed;
+  z-index: 10002;
+  padding: 4px;
+  border: 1px solid var(--sidebar-border);
+  border-radius: var(--radius-md);
+  background: var(--sidebar-bg);
+  box-shadow: var(--shadow-lg);
+  user-select: none;
+}
+
+.terminalContextMenuItem {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 30px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-sm);
+  line-height: 1.2;
+  text-align: left;
+  cursor: pointer;
+}
+
+.terminalContextMenuItem:hover {
+  background: var(--hover-bg);
+}
+
 .spawnError {
   position: absolute;
   top: 12px;

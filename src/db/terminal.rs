@@ -74,7 +74,6 @@ impl Database {
                    )
                )
              ORDER BY
-               CASE WHEN kind = 'agent_task' THEN 0 ELSE 1 END,
                sort_order,
                id",
         )?;
@@ -218,7 +217,6 @@ impl Database {
         self.conn.execute(
             "UPDATE terminal_tabs
              SET title = 'Claudette terminal',
-                 sort_order = 0,
                  agent_chat_session_id = ?1,
                  agent_tool_use_id = NULL,
                  agent_task_id = NULL,
@@ -465,10 +463,11 @@ mod tests {
     }
 
     #[test]
-    fn test_agent_terminal_tabs_are_single_fixed_tab_first() {
+    fn test_agent_terminal_tabs_are_single_visible_tab_ordered_by_sort_order() {
         let db = setup_db_with_workspace();
-        db.insert_terminal_tab(&make_terminal_tab(1, "w1", "Terminal 1"))
-            .unwrap();
+        let mut user_tab = make_terminal_tab(1, "w1", "Terminal 1");
+        user_tab.sort_order = 0;
+        db.insert_terminal_tab(&user_tab).unwrap();
         db.insert_terminal_tab(&make_agent_terminal_tab(
             2,
             "w1",
@@ -476,18 +475,15 @@ mod tests {
             "chat-1",
         ))
         .unwrap();
-        db.insert_terminal_tab(&make_agent_terminal_tab(
-            3,
-            "w1",
-            CLAUDETTE_TERMINAL_TITLE,
-            "chat-1",
-        ))
-        .unwrap();
+        let mut claudette_tab =
+            make_agent_terminal_tab(3, "w1", CLAUDETTE_TERMINAL_TITLE, "chat-1");
+        claudette_tab.sort_order = 1;
+        db.insert_terminal_tab(&claudette_tab).unwrap();
 
         let tabs = db.list_terminal_tabs_by_workspace("w1").unwrap();
         assert_eq!(tabs.len(), 2);
-        assert_eq!(tabs[0].title, CLAUDETTE_TERMINAL_TITLE);
-        assert_eq!(tabs[1].title, "Terminal 1");
+        assert_eq!(tabs[0].title, "Terminal 1");
+        assert_eq!(tabs[1].title, CLAUDETTE_TERMINAL_TITLE);
     }
 
     #[test]
@@ -509,7 +505,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(tab.title, CLAUDETTE_TERMINAL_TITLE);
-        assert_eq!(tab.sort_order, 0);
+        assert_eq!(tab.sort_order, legacy.sort_order);
         assert_eq!(tab.agent_chat_session_id.as_deref(), Some("new-chat"));
         assert_eq!(tab.agent_tool_use_id, None);
         assert_eq!(tab.agent_task_id, None);
@@ -603,6 +599,22 @@ mod tests {
         let tabs = db.list_terminal_tabs_by_workspace("w1").unwrap();
         let ids: Vec<_> = tabs.iter().map(|tab| tab.id).collect();
         assert_eq!(ids, vec![3, 1, 2]);
+    }
+
+    #[test]
+    fn test_update_terminal_tab_sort_order_can_move_agent_terminal() {
+        let db = setup_db_with_workspace();
+        let mut agent_tab = make_agent_terminal_tab(1, "w1", CLAUDETTE_TERMINAL_TITLE, "chat-1");
+        agent_tab.sort_order = -1;
+        db.insert_terminal_tab(&agent_tab).unwrap();
+        db.insert_terminal_tab(&make_terminal_tab(2, "w1", "Terminal 1"))
+            .unwrap();
+
+        db.update_terminal_tab_sort_order("w1", &[2, 1]).unwrap();
+
+        let tabs = db.list_terminal_tabs_by_workspace("w1").unwrap();
+        let ids: Vec<_> = tabs.iter().map(|tab| tab.id).collect();
+        assert_eq!(ids, vec![2, 1]);
     }
 
     #[test]

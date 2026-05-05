@@ -174,7 +174,7 @@ describe("terminal slice: upsertAgentTaskTerminalTab", () => {
     ).toBeUndefined();
   });
 
-  it("keeps the read-only agent terminal first and replaces legacy command tabs", () => {
+  it("defaults the read-only agent terminal first and replaces legacy command tabs", () => {
     const userTerminal = makeTab(1, WS_A);
     const legacyAgentTab: TerminalTab = {
       ...makeTab(2, WS_A),
@@ -223,6 +223,26 @@ describe("terminal slice: upsertAgentTaskTerminalTab", () => {
     expect(useAppStore.getState().terminalTabs[WS_A]).toEqual([
       userTerminal,
       claudetteTerminal,
+    ]);
+  });
+
+  it("preserves a reordered agent terminal after the user drags it", () => {
+    const userTerminal = { ...makeTab(1, WS_A), sort_order: 0 };
+    const claudetteTerminal: TerminalTab = {
+      ...makeTab(2, WS_A),
+      sort_order: 1,
+      title: "Claudette terminal",
+      kind: "agent_task",
+      agent_chat_session_id: "session-a",
+    };
+
+    useAppStore
+      .getState()
+      .setTerminalTabs(WS_A, [claudetteTerminal, userTerminal]);
+
+    expect(useAppStore.getState().terminalTabs[WS_A].map((tab) => tab.id)).toEqual([
+      1,
+      2,
     ]);
   });
 });

@@ -143,7 +143,6 @@ fn get_or_create_agent_shell_terminal_tab(
             .into_owned();
         let _ = db.update_agent_shell_terminal_tab_session(tab.id, chat_session_id, &output_path);
         tab.title = CLAUDETTE_TERMINAL_TITLE.to_string();
-        tab.sort_order = 0;
         tab.agent_chat_session_id = Some(chat_session_id.to_string());
         tab.agent_tool_use_id = None;
         tab.agent_task_id = None;
@@ -160,7 +159,7 @@ fn get_or_create_agent_shell_terminal_tab(
         title: CLAUDETTE_TERMINAL_TITLE.to_string(),
         kind: TerminalTabKind::AgentTask,
         is_script_output: false,
-        sort_order: 0,
+        sort_order: -1,
         created_at: now_iso(),
         agent_chat_session_id: Some(chat_session_id.to_string()),
         agent_tool_use_id: None,

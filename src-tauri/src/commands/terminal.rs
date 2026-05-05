@@ -74,7 +74,6 @@ pub async fn ensure_claudette_terminal_tab(
         db.update_agent_shell_terminal_tab_session(tab.id, &chat_session_id, &output_path)
             .map_err(|e| e.to_string())?;
         tab.title = CLAUDETTE_TERMINAL_TITLE.to_string();
-        tab.sort_order = 0;
         tab.agent_chat_session_id = Some(chat_session_id);
         tab.agent_tool_use_id = None;
         tab.agent_task_id = None;
@@ -90,7 +89,7 @@ pub async fn ensure_claudette_terminal_tab(
         title: CLAUDETTE_TERMINAL_TITLE.to_string(),
         kind: TerminalTabKind::AgentTask,
         is_script_output: false,
-        sort_order: 0,
+        sort_order: -1,
         created_at: now_iso(),
         agent_chat_session_id: Some(chat_session_id.clone()),
         agent_tool_use_id: None,
@@ -138,6 +137,7 @@ pub async fn update_terminal_tab_order(
 struct AgentTaskOutputPayload {
     tab_id: i64,
     data: Vec<u8>,
+    reset: bool,
 }
 
 #[tauri::command]
@@ -242,6 +242,14 @@ async fn tail_agent_task_file(
         let len = file.metadata().await.ok().map(|m| m.len()).unwrap_or(0);
         if len < offset {
             offset = 0;
+            let _ = app.emit(
+                "agent-task-output",
+                &AgentTaskOutputPayload {
+                    tab_id,
+                    data: Vec::new(),
+                    reset: true,
+                },
+            );
         }
         if file.seek(SeekFrom::Start(offset)).await.is_err() {
             continue;
@@ -256,6 +264,7 @@ async fn tail_agent_task_file(
                         &AgentTaskOutputPayload {
                             tab_id,
                             data: buf[..n].to_vec(),
+                            reset: false,
                         },
                     );
                 }
