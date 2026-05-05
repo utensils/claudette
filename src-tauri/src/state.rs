@@ -97,6 +97,9 @@ pub struct AgentSessionState {
     /// Keys begin as tool_use_id while the task is starting, then switch to the
     /// CLI task_id once the tool result binds it.
     pub running_background_tasks: std::collections::HashSet<String>,
+    /// True while Claudette has an internal wake turn queued/running to let
+    /// Claude Code drain task-notification messages for background jobs.
+    pub background_wake_active: bool,
     /// Set when the agent emits `ExitPlanMode` during the current persistent
     /// session. The plan phase is over even if the frontend fails to flip
     /// `plan_mode=false` on the next turn, so we force a teardown regardless

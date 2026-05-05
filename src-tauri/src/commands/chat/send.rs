@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -67,6 +68,44 @@ fn is_terminal_task_status(status: &str) -> bool {
     )
 }
 
+async fn apply_task_notification_status(
+    app: &AppHandle,
+    db_path: &std::path::Path,
+    workspace_id: &str,
+    chat_session_id: &str,
+    task_id: &str,
+    status: &str,
+    summary: Option<&str>,
+    output_file: Option<&str>,
+) {
+    let Ok(db) = Database::open(db_path) else {
+        return;
+    };
+    if is_terminal_task_status(status) {
+        let app_state = app.state::<AppState>();
+        let mut agents = app_state.agents.write().await;
+        if let Some(session) = agents.get_mut(chat_session_id) {
+            session.running_background_tasks.remove(task_id);
+        }
+    }
+    let _ = db.update_agent_task_terminal_tab_status(
+        chat_session_id,
+        task_id,
+        status,
+        summary.filter(|s| !s.trim().is_empty()),
+        output_file.filter(|s| !s.trim().is_empty()),
+    );
+    if let Ok(Some(tab)) = db.get_terminal_tab_by_agent_task(chat_session_id, task_id) {
+        emit_agent_background_task_event(
+            app,
+            AgentBackgroundTaskEventKind::Status,
+            workspace_id,
+            chat_session_id,
+            tab,
+        );
+    }
+}
+
 fn create_agent_task_terminal_tab(
     db_path: &std::path::Path,
     workspace_id: &str,
@@ -97,6 +136,204 @@ fn create_agent_task_terminal_tab(
     };
     db.insert_terminal_tab(&tab).ok()?;
     Some(tab)
+}
+
+const BACKGROUND_TASK_WAKE_PROMPT: &str = "\
+<system-reminder>
+Claudette is waking this stream-json session so Claude Code can deliver queued background task notifications.
+Do not answer unless a <task-notification> is present in the runtime context. If no task notification is present yet, produce no user-facing text.
+</system-reminder>";
+
+fn schedule_background_task_wake(
+    app: AppHandle,
+    db_path: std::path::PathBuf,
+    workspace_id: String,
+    chat_session_id: String,
+) {
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+
+        let app_state = app.state::<AppState>();
+        let Some(ps) = ({
+            let mut agents = app_state.agents.write().await;
+            let Some(session) = agents.get_mut(&chat_session_id) else {
+                return;
+            };
+            if session.running_background_tasks.is_empty()
+                || session.background_wake_active
+                || session.persistent_session.is_none()
+            {
+                return;
+            }
+            session.background_wake_active = true;
+            session.persistent_session.clone()
+        }) else {
+            return;
+        };
+
+        let handle = match ps.send_turn(BACKGROUND_TASK_WAKE_PROMPT, &[]).await {
+            Ok(handle) => handle,
+            Err(err) => {
+                eprintln!("[chat] failed to wake background task notifications: {err}");
+                let mut agents = app_state.agents.write().await;
+                if let Some(session) = agents.get_mut(&chat_session_id) {
+                    session.background_wake_active = false;
+                }
+                return;
+            }
+        };
+
+        {
+            let mut agents = app_state.agents.write().await;
+            if let Some(session) = agents.get_mut(&chat_session_id) {
+                session.active_pid = Some(handle.pid);
+            }
+        }
+        crate::tray::rebuild_tray(&app);
+
+        let mut rx = handle.event_rx;
+        let mut saw_task_notification = false;
+        let mut last_assistant_msg_id: Option<String> = None;
+        let mut pending_thinking: Option<String> = None;
+        let mut latest_usage: Option<claudette::agent::TokenUsage> = None;
+
+        while let Some(event) = rx.recv().await {
+            let mut should_emit_stream = saw_task_notification;
+
+            if let AgentEvent::Stream(StreamEvent::System {
+                subtype,
+                task_id: Some(task_id),
+                status: Some(status),
+                output_file,
+                summary,
+                ..
+            }) = &event
+                && subtype == "task_notification"
+            {
+                saw_task_notification = true;
+                should_emit_stream = true;
+                apply_task_notification_status(
+                    &app,
+                    &db_path,
+                    &workspace_id,
+                    &chat_session_id,
+                    task_id,
+                    status,
+                    summary.as_deref(),
+                    output_file.as_deref(),
+                )
+                .await;
+            }
+
+            if let AgentEvent::Stream(StreamEvent::User { message, .. }) = &event
+                && let claudette::agent::UserMessageContent::Text(body) = &message.content
+                && let Some(notification) = parse_task_notification(body)
+            {
+                saw_task_notification = true;
+                should_emit_stream = true;
+                let status = notification.status.as_deref().unwrap_or("running");
+                apply_task_notification_status(
+                    &app,
+                    &db_path,
+                    &workspace_id,
+                    &chat_session_id,
+                    &notification.task_id,
+                    status,
+                    notification.summary.as_deref(),
+                    notification.output_file.as_deref(),
+                )
+                .await;
+            }
+
+            if let AgentEvent::Stream(StreamEvent::Stream {
+                event: InnerStreamEvent::MessageDelta { usage: Some(u) },
+            }) = &event
+            {
+                latest_usage = Some(u.clone());
+            }
+
+            if let AgentEvent::Stream(StreamEvent::Assistant { message }) = &event {
+                let full_text = extract_assistant_text(message);
+                if let Some(t) = extract_event_thinking(message) {
+                    pending_thinking = Some(match pending_thinking.take() {
+                        Some(mut existing) => {
+                            existing.push_str(&t);
+                            existing
+                        }
+                        None => t,
+                    });
+                }
+                if saw_task_notification
+                    && !full_text.trim().is_empty()
+                    && let Ok(db) = Database::open(&db_path)
+                {
+                    let msg = build_assistant_chat_message(BuildAssistantArgs {
+                        workspace_id: &workspace_id,
+                        chat_session_id: &chat_session_id,
+                        content: full_text,
+                        thinking: pending_thinking.take(),
+                        usage: latest_usage.take(),
+                        created_at: now_iso(),
+                    });
+                    let msg_id = msg.id.clone();
+                    if db.insert_chat_message(&msg).is_ok() {
+                        last_assistant_msg_id = Some(msg_id);
+                    }
+                }
+            }
+
+            if let AgentEvent::Stream(StreamEvent::Result {
+                total_cost_usd,
+                duration_ms,
+                ..
+            }) = &event
+            {
+                if let Ok(db) = Database::open(&db_path)
+                    && let (Some(cost), Some(dur)) = (total_cost_usd, duration_ms)
+                    && let Some(ref msg_id) = last_assistant_msg_id
+                {
+                    let _ = db.update_chat_message_cost(msg_id, *cost, *dur);
+                }
+            }
+
+            let is_done = matches!(
+                &event,
+                AgentEvent::Stream(StreamEvent::Result { .. }) | AgentEvent::ProcessExited(_)
+            );
+
+            if should_emit_stream || (is_done && saw_task_notification) {
+                let payload = AgentStreamPayload {
+                    workspace_id: workspace_id.clone(),
+                    chat_session_id: chat_session_id.clone(),
+                    event,
+                };
+                let _ = app.emit("agent-stream", &payload);
+            }
+
+            if is_done {
+                break;
+            }
+        }
+
+        let should_retry = {
+            let mut agents = app_state.agents.write().await;
+            if let Some(session) = agents.get_mut(&chat_session_id) {
+                session.background_wake_active = false;
+                if session.active_pid == Some(ps.pid()) {
+                    session.active_pid = None;
+                }
+                !session.running_background_tasks.is_empty() && session.persistent_session.is_some()
+            } else {
+                false
+            }
+        };
+        crate::tray::rebuild_tray(&app);
+
+        if should_retry {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            schedule_background_task_wake(app, db_path, workspace_id, chat_session_id);
+        }
+    });
 }
 
 fn tool_result_content_text(content: &serde_json::Value) -> String {
@@ -484,6 +721,7 @@ pub async fn send_chat_message(
                 session_disable_1m_context: false,
                 pending_permissions: std::collections::HashMap::new(),
                 running_background_tasks: std::collections::HashSet::new(),
+                background_wake_active: false,
                 session_exited_plan: false,
                 session_resolved_env: Default::default(),
                 mcp_bridge: None,
@@ -508,6 +746,7 @@ pub async fn send_chat_message(
             session_disable_1m_context: false,
             pending_permissions: std::collections::HashMap::new(),
             running_background_tasks: std::collections::HashSet::new(),
+            background_wake_active: false,
             session_exited_plan: false,
             session_resolved_env: Default::default(),
             mcp_bridge: None,
@@ -1169,35 +1408,18 @@ pub async fn send_chat_message(
                 ..
             }) = &event
                 && subtype == "task_notification"
-                && let Ok(db) = Database::open(&db_path)
             {
-                if is_terminal_task_status(status) {
-                    let app_state = app.state::<AppState>();
-                    let mut agents = app_state.agents.write().await;
-                    if let Some(session) = agents.get_mut(&chat_session_id_for_stream) {
-                        session.running_background_tasks.remove(task_id);
-                    }
-                }
-                let output_file = output_file.as_deref().filter(|s| !s.trim().is_empty());
-                let summary = summary.as_deref().filter(|s| !s.trim().is_empty());
-                let _ = db.update_agent_task_terminal_tab_status(
+                apply_task_notification_status(
+                    &app,
+                    &db_path,
+                    &ws_id,
                     &chat_session_id_for_stream,
                     task_id,
                     status,
-                    summary,
-                    output_file,
-                );
-                if let Ok(Some(tab)) =
-                    db.get_terminal_tab_by_agent_task(&chat_session_id_for_stream, task_id)
-                {
-                    emit_agent_background_task_event(
-                        &app,
-                        AgentBackgroundTaskEventKind::Status,
-                        &ws_id,
-                        &chat_session_id_for_stream,
-                        tab,
-                    );
-                }
+                    summary.as_deref(),
+                    output_file.as_deref(),
+                )
+                .await;
             }
 
             if let AgentEvent::Stream(StreamEvent::Stream {
@@ -1541,42 +1763,19 @@ pub async fn send_chat_message(
                         }
                     }
                     claudette::agent::UserMessageContent::Text(body) => {
-                        if let Some(notification) = parse_task_notification(body)
-                            && let Ok(db) = Database::open(&db_path)
-                        {
+                        if let Some(notification) = parse_task_notification(body) {
                             let status = notification.status.as_deref().unwrap_or("running");
-                            if notification
-                                .status
-                                .as_deref()
-                                .is_some_and(is_terminal_task_status)
-                            {
-                                let app_state = app.state::<AppState>();
-                                let mut agents = app_state.agents.write().await;
-                                if let Some(session) = agents.get_mut(&chat_session_id_for_stream) {
-                                    session
-                                        .running_background_tasks
-                                        .remove(&notification.task_id);
-                                }
-                            }
-                            let _ = db.update_agent_task_terminal_tab_status(
+                            apply_task_notification_status(
+                                &app,
+                                &db_path,
+                                &ws_id,
                                 &chat_session_id_for_stream,
                                 &notification.task_id,
                                 status,
                                 notification.summary.as_deref(),
                                 notification.output_file.as_deref(),
-                            );
-                            if let Ok(Some(tab)) = db.get_terminal_tab_by_agent_task(
-                                &chat_session_id_for_stream,
-                                &notification.task_id,
-                            ) {
-                                emit_agent_background_task_event(
-                                    &app,
-                                    AgentBackgroundTaskEventKind::Status,
-                                    &ws_id,
-                                    &chat_session_id_for_stream,
-                                    tab,
-                                );
-                            }
+                            )
+                            .await;
                         }
                     }
                 }
@@ -1662,6 +1861,21 @@ pub async fn send_chat_message(
                     fire_completion_notification(&db_path, &app_state.cesp_playback, event, &ws_id)
                         .await;
                     notified_via_result = true;
+                }
+
+                let should_wake_background_tasks = {
+                    let agents = app_state.agents.read().await;
+                    agents
+                        .get(&chat_session_id_for_stream)
+                        .is_some_and(|s| !s.running_background_tasks.is_empty())
+                };
+                if should_wake_background_tasks {
+                    schedule_background_task_wake(
+                        app.clone(),
+                        db_path.clone(),
+                        ws_id.clone(),
+                        chat_session_id_for_stream.clone(),
+                    );
                 }
             }
 

@@ -809,6 +809,7 @@ mod tests {
             session_disable_1m_context: false,
             pending_permissions: HashMap::new(),
             running_background_tasks: Default::default(),
+            background_wake_active: false,
             session_exited_plan: false,
             session_resolved_env: Default::default(),
             mcp_bridge: None,
