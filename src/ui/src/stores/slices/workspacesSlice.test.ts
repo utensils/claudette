@@ -86,6 +86,41 @@ describe("workspacesSlice.addWorkspace", () => {
     expect(useAppStore.getState().workspaces[0].agent_status).toBe("Stopped");
   });
 
+  // Regression: a CLI/IPC-driven archive emits `workspaces-changed` with
+  // status: Archived AND agent_status: Stopped (the archive really does
+  // kill the agent). The blanket "preserve agent_status" rule above was
+  // suppressing that legitimate transition, leaving the sidebar showing
+  // the archived row as still busy. Status transitions ARE authoritative
+  // for agent_status; same-status updates are not.
+  it("lets a status transition (Active→Archived) overwrite agent_status with the incoming Stopped", () => {
+    useAppStore
+      .getState()
+      .addWorkspace(makeWorkspace({ status: "Active", agent_status: "Running" }));
+    useAppStore.getState().addWorkspace(
+      makeWorkspace({ status: "Archived", agent_status: "Stopped" }),
+    );
+    const result = useAppStore.getState().workspaces;
+    expect(result).toHaveLength(1);
+    expect(result[0].status).toBe("Archived");
+    expect(result[0].agent_status).toBe("Stopped");
+  });
+
+  // The inverse — restoring an archived row should let the incoming
+  // synthetic Idle land, otherwise the sidebar would show the restored
+  // row as still Stopped until the next agent stream event.
+  it("lets a status transition (Archived→Active) overwrite agent_status with the incoming Idle", () => {
+    useAppStore
+      .getState()
+      .addWorkspace(makeWorkspace({ status: "Archived", agent_status: "Stopped" }));
+    useAppStore
+      .getState()
+      .addWorkspace(makeWorkspace({ status: "Active", agent_status: "Idle" }));
+    const result = useAppStore.getState().workspaces;
+    expect(result).toHaveLength(1);
+    expect(result[0].status).toBe("Active");
+    expect(result[0].agent_status).toBe("Idle");
+  });
+
   it("appends additional workspaces with different ids without disturbing prior rows", () => {
     useAppStore.getState().addWorkspace(makeWorkspace({ id: "ws-1" }));
     useAppStore.getState().addWorkspace(makeWorkspace({ id: "ws-2", name: "other" }));
