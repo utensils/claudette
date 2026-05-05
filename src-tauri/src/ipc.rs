@@ -442,10 +442,10 @@ pub(crate) fn parse_send_chat_params(params: &serde_json::Value) -> Result<SendC
 /// Delegates to the shared `commands::workspace::archive_workspace_inner`
 /// helper so CLI-driven archives perform the same agent process
 /// teardown, env-watcher cleanup, and MCP supervisor shutdown the GUI
-/// does. Note: the `delete_branch` payload field is ignored — the
-/// helper reads `git_delete_branch_on_archive` from app_settings to
-/// match GUI behavior. Pass `delete_branch_override` if a future client
-/// genuinely needs to override per-call.
+/// does. The optional `delete_branch` payload field overrides the GUI's
+/// `git_delete_branch_on_archive` setting per-call — `claudette workspace
+/// archive --delete-branch` must work even when the GUI setting is off.
+/// Omit the field to let the GUI setting decide.
 async fn handle_archive_workspace(
     app: &AppHandle,
     params: &serde_json::Value,
@@ -454,6 +454,7 @@ async fn handle_archive_workspace(
         .get("workspace_id")
         .and_then(|v| v.as_str())
         .ok_or("missing workspace_id")?;
+    let delete_branch_override = params.get("delete_branch").and_then(|v| v.as_bool());
 
     let state = app
         .try_state::<AppState>()
@@ -464,6 +465,7 @@ async fn handle_archive_workspace(
 
     let out = crate::commands::workspace::archive_workspace_inner(
         workspace_id,
+        delete_branch_override,
         app,
         &state,
         supervisor.inner(),

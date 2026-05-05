@@ -235,7 +235,7 @@ pub async fn archive_workspace(
     state: State<'_, AppState>,
     supervisor: State<'_, Arc<McpSupervisor>>,
 ) -> Result<bool, String> {
-    let out = archive_workspace_inner(&id, &app, &state, &supervisor).await?;
+    let out = archive_workspace_inner(&id, None, &app, &state, &supervisor).await?;
     Ok(out.delete_branch)
 }
 
@@ -258,8 +258,14 @@ pub(crate) struct ArchiveWorkspaceOutput {
 /// shutdown the GUI does. Without this, an in-flight agent could keep
 /// running against a worktree that was just removed and `state.agents`
 /// would accumulate ghost entries.
+///
+/// `delete_branch_override` lets non-GUI callers force the delete-branch
+/// behavior per request — `claudette workspace archive --delete-branch`
+/// must work even when the user has `git_delete_branch_on_archive`
+/// disabled in the GUI settings. `None` falls back to the saved setting.
 pub(crate) async fn archive_workspace_inner(
     id: &str,
+    delete_branch_override: Option<bool>,
     app: &AppHandle,
     state: &AppState,
     supervisor: &McpSupervisor,
@@ -269,12 +275,17 @@ pub(crate) async fn archive_workspace_inner(
     // The user-visible "delete branch on archive" setting lives in app
     // settings; we read it sync before the op so we can pass the boolean
     // through cleanly without the op needing DB access for settings.
-    let delete_branch = db
-        .get_app_setting("git_delete_branch_on_archive")
-        .ok()
-        .flatten()
-        .as_deref()
-        == Some("true");
+    // CLI/IPC callers can override this per-call via `delete_branch_override`.
+    let delete_branch = match delete_branch_override {
+        Some(b) => b,
+        None => {
+            db.get_app_setting("git_delete_branch_on_archive")
+                .ok()
+                .flatten()
+                .as_deref()
+                == Some("true")
+        }
+    };
 
     // Stop any in-flight agent processes before mutating DB state. Agent
     // tracking lives in AppState (not the shared ops layer), so this part
