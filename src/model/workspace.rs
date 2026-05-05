@@ -79,4 +79,7 @@ pub struct Workspace {
     pub agent_status: AgentStatus,
     pub status_line: String,
     pub created_at: String,
+    /// Per-repository display order for the sidebar. Persisted via the
+    /// `workspaces.sort_order` column; reassigned by `reorder_workspaces`.
+    pub sort_order: i32,
 }

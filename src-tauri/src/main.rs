@@ -454,6 +454,7 @@ fn main() {
             commands::workspace::archive_workspace,
             commands::workspace::restore_workspace,
             commands::workspace::rename_workspace,
+            commands::workspace::reorder_workspaces,
             commands::workspace::delete_workspace,
             commands::workspace::generate_workspace_name,
             commands::workspace::refresh_branches,
@@ -503,6 +504,7 @@ fn main() {
             commands::chat::session::get_chat_session,
             commands::chat::session::create_chat_session,
             commands::chat::session::rename_chat_session,
+            commands::chat::session::reorder_chat_sessions,
             commands::chat::session::archive_chat_session,
             // Plan
             commands::plan::read_plan_file,

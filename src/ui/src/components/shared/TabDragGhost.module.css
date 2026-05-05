@@ -1,0 +1,32 @@
+/* Floating drag-clone visuals shared across tab surfaces. Resting visuals
+ * mirror the surrounding tab; lift shadow + slight rotation read as
+ * "picked up". `pointer-events: none` keeps elementFromPoint reaching the
+ * tab beneath the ghost, which is essential for the drop hit-test. */
+.ghost {
+  position: fixed;
+  z-index: 10003;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  background: var(--sidebar-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--sidebar-border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  font-size: 12px;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  transform: rotate(1deg);
+  transform-origin: top left;
+}
+
+.title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}

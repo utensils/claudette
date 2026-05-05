@@ -571,6 +571,30 @@ impl Database {
         Ok(sort_order == Some(0))
     }
 
+    /// Reassign `sort_order` of chat sessions within a workspace to match the
+    /// supplied id sequence. Mirrors `reorder_repositories`. Ids that don't
+    /// belong to `workspace_id` are ignored — the WHERE clause keeps cross-
+    /// workspace edits from sneaking through. Wrapped in a transaction so a
+    /// failed UPDATE leaves all sessions at their previous sort_order.
+    pub fn reorder_chat_sessions(
+        &self,
+        workspace_id: &str,
+        ids: &[String],
+    ) -> Result<(), rusqlite::Error> {
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "UPDATE chat_sessions SET sort_order = ?1 \
+                 WHERE id = ?2 AND workspace_id = ?3",
+            )?;
+            for (i, id) in ids.iter().enumerate() {
+                stmt.execute(params![i as i32, id, workspace_id])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     // --- Attachments ---
 
     pub fn insert_attachment(&self, att: &Attachment) -> Result<(), rusqlite::Error> {

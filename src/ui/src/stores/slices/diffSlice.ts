@@ -62,6 +62,10 @@ export interface DiffSlice {
   setDiffPreviewLoading: (loading: boolean) => void;
   setDiffPreviewError: (error: string | null) => void;
   clearDiff: () => void;
+  // Replace the entire ordered list of diff tabs for a workspace. Used by
+  // drag-reorder (volatile — not persisted across restarts; see SessionTabs
+  // unified reorder).
+  setDiffTabsForWorkspace: (workspaceId: string, tabs: DiffFileTab[]) => void;
   // Open a diff tab for the given file (deduped by path+layer) and make it
   // the active view. The previously-selected chat session stays selected so
   // closing all diff tabs restores it.
@@ -139,6 +143,13 @@ export const createDiffSlice: StateCreator<AppState, [], [], DiffSlice> = (
       commitHistory: null,
       diffSelectedCommitHash: null,
     }),
+  setDiffTabsForWorkspace: (workspaceId, tabs) =>
+    set((s) => ({
+      diffTabsByWorkspace: {
+        ...s.diffTabsByWorkspace,
+        [workspaceId]: tabs,
+      },
+    })),
   openDiffTab: (workspaceId, path, layer) =>
     set((s) => {
       const normalizedLayer = layer ?? null;

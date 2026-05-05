@@ -859,6 +859,7 @@ async fn handle_create_workspace(
         agent_status: claudette::model::AgentStatus::Idle,
         status_line: String::new(),
         created_at: now_iso(),
+        sort_order: 0,
     };
     if let Err(e) = db.insert_workspace(&workspace) {
         let _ = claudette::git::remove_worktree(&repo.path, &actual_path, true).await;

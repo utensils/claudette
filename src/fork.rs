@@ -209,6 +209,8 @@ async fn fork_after_worktree(
         agent_status: AgentStatus::Idle,
         status_line: String::new(),
         created_at: (inputs.now_iso)(),
+        // sort_order is overwritten by `insert_workspace` (MAX+1 within repo).
+        sort_order: 0,
     };
     db.insert_workspace(&new_ws)?;
 
@@ -465,6 +467,7 @@ mod tests {
             agent_status: AgentStatus::Idle,
             status_line: String::new(),
             created_at: String::new(),
+            sort_order: 0,
         }
     }
 

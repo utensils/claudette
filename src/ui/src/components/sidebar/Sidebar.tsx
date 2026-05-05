@@ -22,6 +22,9 @@ import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, C
 import { RepoIcon } from "../shared/RepoIcon";
 import { UpdateBanner } from "../layout/UpdateBanner";
 import { getScmSortPriority } from "../../utils/scmSortPriority";
+import { useTabDragReorder } from "../../hooks/useTabDragReorder";
+import { TabDragGhost } from "../shared/TabDragGhost";
+import { reorderWorkspaces } from "../../services/tauri";
 import styles from "./Sidebar.module.css";
 
 type StatusBucketKey = "in-progress" | "in-review" | "draft" | "merged" | "closed" | "archived";
@@ -57,6 +60,7 @@ export const Sidebar = memo(function Sidebar() {
   const sessionsByWorkspace = useAppStore((s) => s.sessionsByWorkspace);
   const scmSummary = useAppStore((s) => s.scmSummary);
   const setRepositories = useAppStore((s) => s.setRepositories);
+  const setWorkspaces = useAppStore((s) => s.setWorkspaces);
   const metaKeyHeld = useAppStore((s) => s.metaKeyHeld);
   const isMac = navigator.platform.startsWith("Mac");
   const { t } = useTranslation("sidebar");
@@ -307,7 +311,60 @@ export const Sidebar = memo(function Sidebar() {
     setRenamingWsId(null);
   }, [renameValue, workspaces, updateWorkspace, addToast, t]);
 
-  const renderWorkspace = (ws: typeof workspaces[number]) => {
+  // Drag-reorder for workspaces inside a repo group. Disabled in "by status"
+  // grouping mode (option 2A — within-repo only): when the sidebar is grouped
+  // by status, sibling workspaces in a status bucket can come from different
+  // repos, so the within-repo invariant doesn't apply and we simply skip the
+  // pointer handlers there.
+  //
+  // Items are the full filtered workspace list; isSameGroup enforces that a
+  // dragged workspace can only land next to a sibling in the same repo. The
+  // hook handles the visual feedback (drop indicator suppressed for invalid
+  // targets) and the reorder math; the onReorder callback persists the new
+  // per-repo order.
+  const workspaceDrag = useTabDragReorder<typeof workspaces[number], string>({
+    items: filteredWorkspaces,
+    dataAttr: "sidebarWorkspaceId",
+    parseId: (raw) => raw,
+    getId: (ws) => ws.id,
+    getTitle: (ws) => ws.name,
+    isSameGroup: (a, b) => a.repository_id === b.repository_id,
+    onReorder: (next, draggedId) => {
+      const moved = next.find((w) => w.id === draggedId);
+      if (!moved) return;
+      // Persist only the moved workspace's repo. Other repos' relative
+      // ordering hasn't changed (cross-group is rejected upstream by
+      // isSameGroup), so we leave them alone.
+      const repoIds = next
+        .filter((w) => w.repository_id === moved.repository_id)
+        .map((w) => w.id);
+      // Optimistic local update: assign sort_order = position-within-repo
+      // for the moved repo's workspaces so the sort comparator picks up
+      // the new order on the next render. Other repos pass through.
+      const orderIndex = new Map(repoIds.map((id, i) => [id, i]));
+      const optimistic = workspaces.map((w) =>
+        w.repository_id === moved.repository_id
+          ? { ...w, sort_order: orderIndex.get(w.id) ?? w.sort_order }
+          : w,
+      );
+      setWorkspaces(optimistic);
+      void reorderWorkspaces(moved.repository_id, repoIds).catch((err) =>
+        console.error("[Sidebar] Failed to persist workspace order:", err),
+      );
+    },
+  });
+
+  const renderWorkspace = (ws: typeof workspaces[number], dragEnabled: boolean) => {
+    const dragHandlers = dragEnabled ? workspaceDrag.getTabHandlers(ws) : null;
+    const isDragging = dragEnabled && workspaceDrag.draggingId === ws.id;
+    const dropBefore =
+      dragEnabled &&
+      workspaceDrag.dropTarget?.id === ws.id &&
+      workspaceDrag.dropTarget.placement === "before";
+    const dropAfter =
+      dragEnabled &&
+      workspaceDrag.dropTarget?.id === ws.id &&
+      workspaceDrag.dropTarget.placement === "after";
     const wsSessions = sessionsByWorkspace[ws.id] ?? [];
     const hasQuestion = wsSessions.some((s) => agentQuestions[s.id]);
     const hasPlan = wsSessions.some((s) => planApprovals[s.id]);
@@ -319,10 +376,18 @@ export const Sidebar = memo(function Sidebar() {
     return (
       <div
         key={ws.id}
-        className={`${styles.wsItem} ${selectedWorkspaceId === ws.id ? styles.wsSelected : ""} ${badge ? styles.wsUnread : ""}`}
+        data-sidebar-workspace-id={dragEnabled ? ws.id : undefined}
+        data-drop-before={dropBefore || undefined}
+        data-drop-after={dropAfter || undefined}
+        className={`${styles.wsItem} ${selectedWorkspaceId === ws.id ? styles.wsSelected : ""} ${badge ? styles.wsUnread : ""} ${isDragging ? styles.wsDragging : ""}`}
         onClick={() => {
+          if (dragEnabled && workspaceDrag.justEnded()) return;
           selectWorkspace(ws.id);
         }}
+        onPointerDown={dragHandlers?.onPointerDown}
+        onPointerMove={dragHandlers?.onPointerMove}
+        onPointerUp={dragHandlers?.onPointerUp}
+        onPointerCancel={dragHandlers?.onPointerCancel}
       >
         {badge === "done" ? (
           <span className={styles.badgeDone} title={t("status_badge_completed_title")} aria-label={t("status_badge_completed_aria")} role="img">
@@ -623,7 +688,7 @@ export const Sidebar = memo(function Sidebar() {
                   <span className={styles.statusGroupCount}>{bucketWorkspaces.length}</span>
                 </span>
               </div>
-              {!collapsed && bucketWorkspaces.map(renderWorkspace)}
+              {!collapsed && bucketWorkspaces.map((ws) => renderWorkspace(ws, false))}
             </div>
           );
         })}
@@ -697,9 +762,16 @@ export const Sidebar = memo(function Sidebar() {
           .filter((r) => sidebarRepoFilter === "all" || r.id === sidebarRepoFilter)
           .map((repo, repoIdx) => {
           const collapsed = repoCollapsed[repo.id];
+          // Sort by user-defined order (sort_order) as authoritative; fall
+          // back to SCM priority only as a tiebreaker so workspaces seeded
+          // with the same sort_order value (legacy DBs pre-migration) keep
+          // their previous "by PR state" arrangement.
           const repoWorkspaces = filteredWorkspaces
             .filter((ws) => ws.repository_id === repo.id)
-            .sort((a, b) => getScmSortPriority(scmSummary[a.id]) - getScmSortPriority(scmSummary[b.id]));
+            .sort((a, b) => {
+              if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
+              return getScmSortPriority(scmSummary[a.id]) - getScmSortPriority(scmSummary[b.id]);
+            });
           const runningCount = repoWorkspaces.filter(
             (ws) => isAgentBusy(ws.agent_status)
           ).length;
@@ -878,7 +950,7 @@ export const Sidebar = memo(function Sidebar() {
                 )}
               </div>
 
-              {!collapsed && repoWorkspaces.map(renderWorkspace)}
+              {!collapsed && repoWorkspaces.map((ws) => renderWorkspace(ws, true))}
               {/* Show loading workspace while creating */}
               {!collapsed && creatingWorkspace && creatingWorkspace.repoId === repo.id && (
                 <div className={`${styles.wsItem} ${styles.wsItemLoading}`}>
@@ -928,6 +1000,9 @@ export const Sidebar = memo(function Sidebar() {
           <Settings size={16} />
         </button>
       </div>
+      {workspaceDrag.dragGhost && workspaceDrag.draggingId !== null && (
+        <TabDragGhost ghost={workspaceDrag.dragGhost} />
+      )}
     </div>
   );
 });
