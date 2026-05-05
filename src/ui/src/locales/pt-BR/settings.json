@@ -288,6 +288,8 @@
   "pinned_prompts_inherited_label": "Herdados dos globais",
   "pinned_prompts_overridden_badge": "Substituído",
   "keyboard_title": "Keyboard Shortcuts",
+  "keyboard_search_placeholder": "Search shortcuts…",
+  "keyboard_no_results": "No shortcuts match",
   "keyboard_category_navigation": "Navigation",
   "keyboard_category_terminal": "Terminal",
   "keyboard_category_editor": "Editor",
@@ -337,12 +339,7 @@
   "keyboard_action_terminal_focus_pane_down": "Focus pane down",
   "keyboard_action_file_toggle_markdown_preview": "Toggle Markdown preview",
   "keyboard_action_voice_toggle": "Toggle voice input",
-  "keyboard_action_voice_hold": "Hold to talk",
-  "keyboard_voice_section": "Voice input",
-  "keyboard_voice_toggle_label": "Toggle recording",
-  "keyboard_voice_toggle_desc": "Start or stop voice recording without touching the mouse.",
-  "keyboard_voice_hold_label": "Hold to talk",
-  "keyboard_voice_hold_desc": "Hold the key to record, release to stop and transcribe.",
+  "keyboard_action_voice_hold": "Push to talk",
   "keyboard_reset_all": "Reset all defaults",
   "keyboard_disabled_binding": "Shortcut disabled"
 }

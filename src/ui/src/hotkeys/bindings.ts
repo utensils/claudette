@@ -7,6 +7,21 @@ export const KEYBINDING_SETTING_PREFIX = "keybinding:";
 
 const MODIFIER_KEYS = new Set(["Meta", "Control", "Shift", "Alt", "AltGraph"]);
 
+/** Event `code` values that ARE themselves a modifier. Pressing them asserts
+ * the corresponding `e.altKey`/`e.shiftKey`/etc. flag, so a binding like
+ * `code:AltRight` (used for hold-to-talk on Right Alt) must not require the
+ * `alt` modifier flag to be absent — it would always be present. */
+const MODIFIER_CODE_TO_FLAG: Record<string, "alt" | "shift" | "mod"> = {
+  altleft: "alt",
+  altright: "alt",
+  shiftleft: "shift",
+  shiftright: "shift",
+  controlleft: "mod",
+  controlright: "mod",
+  metaleft: "mod",
+  metaright: "mod",
+};
+
 function normalizeKey(key: string): string {
   if (key === "+") return "plus";
   if (key === " ") return "space";
@@ -97,10 +112,21 @@ export function bindingMatchesEvent(
   const hasMod = platform === "mac"
     ? e.metaKey && !e.ctrlKey
     : e.ctrlKey && !e.metaKey;
+
+  // When the bound key is itself a modifier (e.g. `code:AltRight` for
+  // hold-to-talk), pressing it asserts the matching modifier flag on the
+  // event. Mask out that flag from the equality check so the binding
+  // resolves on its own — without forcing the user to also tick the
+  // implicit modifier in the rebind UI.
+  const selfMod = parsed.match === "code" ? MODIFIER_CODE_TO_FLAG[parsed.key] : undefined;
+  const eventShift = selfMod === "shift" ? parsed.shift : e.shiftKey;
+  const eventAlt = selfMod === "alt" ? parsed.alt : e.altKey;
+  const eventMod = selfMod === "mod" ? parsed.mod : hasMod;
+
   return (
-    parsed.mod === hasMod &&
-    parsed.shift === e.shiftKey &&
-    parsed.alt === e.altKey
+    parsed.mod === eventMod &&
+    parsed.shift === eventShift &&
+    parsed.alt === eventAlt
   );
 }
 
