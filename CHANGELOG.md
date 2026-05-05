@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.23.0](https://github.com/utensils/claudette/compare/v0.22.0...v0.23.0) (2026-05-05)
+
+
+### Features
+
+* add configurable hotkeys ([#621](https://github.com/utensils/claudette/issues/621)) ([7c754fb](https://github.com/utensils/claudette/commit/7c754fb6689f10a9f2a051942e6884ed90a828e3))
+* add mid-turn steering for queued messages ([#629](https://github.com/utensils/claudette/issues/629)) ([b8db6a5](https://github.com/utensils/claudette/commit/b8db6a53d1dad2be40ec6110635e4ede699047b4))
+* **chat:** add copy-to-clipboard button to plan approval card ([#630](https://github.com/utensils/claudette/issues/630)) ([fe63d56](https://github.com/utensils/claudette/commit/fe63d56b01b2fa66766011478d8f4657aae2885a))
+* **icon-picker:** expand curated icon set for workspace differentiation ([#600](https://github.com/utensils/claudette/issues/600)) ([f164550](https://github.com/utensils/claudette/commit/f1645505b5234ccd750121d8071eda2360bf3a76))
+* **settings:** configurable git gutter base in new Editor section ([#602](https://github.com/utensils/claudette/issues/602)) ([1dd242e](https://github.com/utensils/claudette/commit/1dd242e2f48eb2d5a7334dfde4dafa02a9224a5d))
+* **site:** use Silkscreen pixel font for header brand title ([#606](https://github.com/utensils/claudette/issues/606)) ([ac243f0](https://github.com/utensils/claudette/commit/ac243f037e4b6442518f2c20401678d45f795956))
+* **terminal:** agent background terminal tabs + drag/context-menu polish ([#625](https://github.com/utensils/claudette/issues/625)) ([5e7b201](https://github.com/utensils/claudette/commit/5e7b201bcb964d9df7425d39a27d25e6dde66df2))
+* **voice:** cancel in-flight transcription end-to-end ([#615](https://github.com/utensils/claudette/issues/615)) ([e14dba2](https://github.com/utensils/claudette/commit/e14dba2413f41ef7a20beb5e6e90270b166f1170))
+* **voice:** keyboard shortcuts for toggle and hold-to-talk ([#441](https://github.com/utensils/claudette/issues/441).2) ([#617](https://github.com/utensils/claudette/issues/617)) ([cc4bef2](https://github.com/utensils/claudette/commit/cc4bef2dd274ea98de1279c247e1416218f80ce2))
+* **voice:** real VU meter driven by RMS from cpal ([#441](https://github.com/utensils/claudette/issues/441) item 4) ([#616](https://github.com/utensils/claudette/issues/616)) ([22ac4e4](https://github.com/utensils/claudette/commit/22ac4e45439e5aa82a8e3bf30b8ca01ec7038d5b))
+
+
+### Bug Fixes
+
+* **hotkeys:** restore push-to-talk on Right Alt and add keyboard-shortcut search ([#627](https://github.com/utensils/claudette/issues/627)) ([3ee2359](https://github.com/utensils/claudette/commit/3ee2359b575b9f2deb1e0a9c52cd4f082abdc497))
+* **sidebar:** surface rename failures via toast ([#626](https://github.com/utensils/claudette/issues/626)) ([527434e](https://github.com/utensils/claudette/commit/527434e1d42aeee5a26a49c2fa5f55bb75b7dd91))
+* **site:** pin header brand title to Silkscreen weight 400 ([#608](https://github.com/utensils/claudette/issues/608)) ([91fb586](https://github.com/utensils/claudette/commit/91fb58672e52a9a63affa9e01dc77fa3cfd0cc2d))
+* **ui:** prevent repo name overlap with macOS traffic lights when sidebar closed ([#605](https://github.com/utensils/claudette/issues/605)) ([af4a165](https://github.com/utensils/claudette/commit/af4a1654c251dc4f2ed3accbe6c5455047fdee62))
+* **ui:** pulse dashboard ask/plan/done icons to match sidebar ([#611](https://github.com/utensils/claudette/issues/611)) ([714b5aa](https://github.com/utensils/claudette/commit/714b5aaf89f2a3cfcd470b930440416ac4cc6c50))
+
 ## [0.22.0](https://github.com/utensils/claudette/compare/v0.21.0...v0.22.0) (2026-05-04)
 
 
