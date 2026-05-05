@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next";
 import { AlertCircle, FileText, LoaderCircle, Mic, Plus, Send, Square, X } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { VoiceMeter } from "./VoiceMeter";
 import { useAppStore } from "../../stores/useAppStore";
 import {
   listSlashCommands,
@@ -35,7 +36,6 @@ import { PinnedPromptsBar } from "./PinnedPromptsBar";
 import { SlashCommandPicker, filterSlashCommands } from "./SlashCommandPicker";
 import { describeSlashQuery } from "./nativeSlashCommands";
 import { hasUltrathink, renderUltrathinkText } from "./ultrathink";
-import { formatElapsedSeconds } from "./chatHelpers";
 import styles from "./ChatPanel.module.css";
 
 /** Extract the @-query based on cursor position in the textarea. */
@@ -188,6 +188,24 @@ export function ChatInputArea({
   const voiceErrorOpensSettings = shouldOpenVoiceSettingsForError(
     voice.activeProvider,
   );
+
+  // VU meter dynamic-vs-static decision lives in the parent because it
+  // depends on the OS reduced-motion preference and the active provider's
+  // `recordingMode`. The meter itself is a child component so 30 Hz level
+  // events don't re-render this large composer.
+  const [reducedMotion, setReducedMotion] = useState(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return false;
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  });
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const onChange = (e: MediaQueryListEvent) => setReducedMotion(e.matches);
+    mq.addEventListener?.("change", onChange);
+    return () => mq.removeEventListener?.("change", onChange);
+  }, []);
+  const nativeRecording = voice.activeProvider?.recordingMode === "native";
+  const useDynamicMeter = !reducedMotion && nativeRecording;
 
   // Esc cancels an active recording regardless of where focus is. The
   // textarea's onKeyDown also handles Esc when it has focus; clicking
@@ -995,14 +1013,10 @@ export function ChatInputArea({
             onClick={() => setContextPopoverOpen((v) => !v)}
           />
           {voice.state === "recording" && (
-            <div className={styles.voiceRecordingStatus} aria-live="polite">
-              <span className={styles.voiceWaveform} aria-hidden="true">
-                <span />
-                <span />
-                <span />
-              </span>
-              <span>{formatElapsedSeconds(voice.elapsedSeconds)}</span>
-            </div>
+            <VoiceMeter
+              elapsedSeconds={voice.elapsedSeconds}
+              useDynamicMeter={useDynamicMeter}
+            />
           )}
           {voice.state === "starting" && (
             <div className={styles.voiceStatusText} aria-live="polite">

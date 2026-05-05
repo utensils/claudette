@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tokenizers::Tokenizer;
 use tokio::io::AsyncWriteExt;
+use tokio::task::AbortHandle;
 
 #[cfg(target_os = "macos")]
 use crate::platform_speech::PlatformSpeechAvailability;
@@ -74,6 +75,15 @@ pub enum VoiceRecordingMode {
     Webview,
 }
 
+/// Payload emitted on the `voice://level` Tauri event at ~30 Hz during recording.
+/// `level` is linear RMS of the mic buffer window, clamped to [0.0, 1.0].
+/// Full-scale sine wave ≈ 0.707; typical speech 0.05–0.3; silence < 0.01.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceLevelPayload {
+    pub level: f32,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VoiceProviderMetadata {
@@ -129,11 +139,22 @@ pub(crate) struct CapturedAudio {
     pub(crate) sample_rate: u32,
 }
 
+/// Cancels the level-emitter Tokio task when dropped.
+struct LevelTask(AbortHandle);
+
+impl Drop for LevelTask {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 struct RecordingSession {
     samples: Arc<Mutex<Vec<f32>>>,
     stream_error: Arc<Mutex<Option<String>>>,
     sample_rate: u32,
     _stream: Option<cpal::Stream>,
+    /// Kept alive to abort the level-emitter task when recording stops.
+    _level_task: Option<LevelTask>,
 }
 
 impl RecordingSession {
@@ -144,6 +165,7 @@ impl RecordingSession {
             stream_error: Arc::new(Mutex::new(None)),
             sample_rate,
             _stream: None,
+            _level_task: None,
         }
     }
 
@@ -158,6 +180,7 @@ impl RecordingSession {
             stream_error: Arc::new(Mutex::new(Some(stream_error.into()))),
             sample_rate,
             _stream: None,
+            _level_task: None,
         }
     }
 
@@ -254,6 +277,46 @@ pub struct VoiceProviderRegistry {
     platform_speech: Arc<dyn PlatformSpeechEngine>,
     backend_checker: Arc<dyn CandleBackendChecker>,
     transcription_timeout: Duration,
+}
+
+fn compute_rms(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
+    (sum_sq / samples.len() as f32).sqrt().min(1.0)
+}
+
+/// Spawn a Tokio task that emits `voice://level` events at ~30 Hz.
+///
+/// The task reads samples accumulated since its last tick, computes RMS
+/// over that window, and emits a normalized [0.0, 1.0] level. The first
+/// three ticks are suppressed so the buffer has time to fill before the
+/// frontend sees any signal (avoids a flash of empty bars at recording start).
+///
+/// Returns an `AbortHandle`; store it in a `LevelTask` so the task is
+/// cancelled automatically when recording stops.
+fn spawn_level_emitter(app: AppHandle, samples: Arc<Mutex<Vec<f32>>>) -> AbortHandle {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(33));
+        let mut offset = 0usize;
+        let mut tick = 0u8;
+        loop {
+            interval.tick().await;
+            let (level, new_offset) = {
+                let s = samples.lock();
+                let window = &s[offset.min(s.len())..];
+                let rms = compute_rms(window);
+                (rms, s.len())
+            };
+            offset = new_offset;
+            tick = tick.saturating_add(1);
+            if tick > 3 {
+                let _ = app.emit("voice://level", VoiceLevelPayload { level });
+            }
+        }
+    })
+    .abort_handle()
 }
 
 impl VoiceProviderRegistry {
@@ -452,11 +515,16 @@ impl VoiceProviderRegistry {
         Ok(DistilWhisperCandleProvider.status(self, &db))
     }
 
-    pub async fn start_recording(&self, db_path: &Path, provider_id: &str) -> Result<(), String> {
+    pub async fn start_recording(
+        &self,
+        db_path: &Path,
+        provider_id: &str,
+        app: Option<AppHandle>,
+    ) -> Result<(), String> {
         self.ensure_known(provider_id)?;
         match provider_id {
-            PLATFORM_ID => self.start_platform_recording(db_path).await,
-            DISTIL_ID => self.start_distil_recording(db_path).await,
+            PLATFORM_ID => self.start_platform_recording(db_path, app).await,
+            DISTIL_ID => self.start_distil_recording(db_path, app).await,
             _ => Err(format!("Unknown voice provider: {provider_id}")),
         }
     }
@@ -479,7 +547,11 @@ impl VoiceProviderRegistry {
         }
     }
 
-    async fn start_platform_recording(&self, db_path: &Path) -> Result<(), String> {
+    async fn start_platform_recording(
+        &self,
+        db_path: &Path,
+        app: Option<AppHandle>,
+    ) -> Result<(), String> {
         {
             let db = Database::open(db_path).map_err(|e| e.to_string())?;
             if !self.enabled(&db, PLATFORM_ID) {
@@ -495,7 +567,12 @@ impl VoiceProviderRegistry {
         if active.is_some() {
             return Err("Voice recording is already active".to_string());
         }
-        *active = Some(self.recorder.start()?);
+        let mut session = self.recorder.start()?;
+        if let Some(app) = app {
+            let abort = spawn_level_emitter(app, Arc::clone(&session.samples));
+            session._level_task = Some(LevelTask(abort));
+        }
+        *active = Some(session);
         Ok(())
     }
 
@@ -537,7 +614,11 @@ impl VoiceProviderRegistry {
         Ok(())
     }
 
-    async fn start_distil_recording(&self, db_path: &Path) -> Result<(), String> {
+    async fn start_distil_recording(
+        &self,
+        db_path: &Path,
+        app: Option<AppHandle>,
+    ) -> Result<(), String> {
         {
             let db = Database::open(db_path).map_err(|e| e.to_string())?;
             if !self.enabled(&db, DISTIL_ID) {
@@ -553,7 +634,12 @@ impl VoiceProviderRegistry {
         if active.is_some() {
             return Err("Voice recording is already active".to_string());
         }
-        *active = Some(self.recorder.start()?);
+        let mut session = self.recorder.start()?;
+        if let Some(app) = app {
+            let abort = spawn_level_emitter(app, Arc::clone(&session.samples));
+            session._level_task = Some(LevelTask(abort));
+        }
+        *active = Some(session);
         Ok(())
     }
 
@@ -1265,6 +1351,7 @@ impl AudioRecorder for CpalAudioRecorder {
             stream_error,
             sample_rate,
             _stream: Some(stream),
+            _level_task: None,
         })
     }
 }
@@ -2357,7 +2444,7 @@ mod tests {
         );
 
         let err = registry
-            .start_recording(&db_path, DISTIL_ID)
+            .start_recording(&db_path, DISTIL_ID, None)
             .await
             .expect_err("disabled provider should not record");
         assert!(err.contains("disabled"));
@@ -2374,7 +2461,7 @@ mod tests {
         );
 
         let err = registry
-            .start_recording(&db_path, DISTIL_ID)
+            .start_recording(&db_path, DISTIL_ID, None)
             .await
             .expect_err("missing model should not record");
         assert!(err.contains("Download"));
@@ -2393,11 +2480,11 @@ mod tests {
         );
 
         registry
-            .start_recording(&db_path, DISTIL_ID)
+            .start_recording(&db_path, DISTIL_ID, None)
             .await
             .expect("first recording starts");
         let err = registry
-            .start_recording(&db_path, DISTIL_ID)
+            .start_recording(&db_path, DISTIL_ID, None)
             .await
             .expect_err("second recording should fail");
 
@@ -2419,7 +2506,7 @@ mod tests {
         );
 
         registry
-            .start_recording(&db_path, PLATFORM_ID)
+            .start_recording(&db_path, PLATFORM_ID, None)
             .await
             .expect("platform recording starts");
         let transcript = registry
@@ -2444,7 +2531,7 @@ mod tests {
         );
 
         registry
-            .start_recording(&db_path, PLATFORM_ID)
+            .start_recording(&db_path, PLATFORM_ID, None)
             .await
             .expect("platform recording starts");
         registry
@@ -2488,7 +2575,7 @@ mod tests {
         );
 
         registry
-            .start_recording(&db_path, DISTIL_ID)
+            .start_recording(&db_path, DISTIL_ID, None)
             .await
             .expect("recording starts");
         registry
@@ -2517,7 +2604,7 @@ mod tests {
         );
 
         registry
-            .start_recording(&db_path, DISTIL_ID)
+            .start_recording(&db_path, DISTIL_ID, None)
             .await
             .expect("recording starts");
         let transcript = registry
@@ -2545,7 +2632,7 @@ mod tests {
         );
 
         registry
-            .start_recording(&db_path, DISTIL_ID)
+            .start_recording(&db_path, DISTIL_ID, None)
             .await
             .expect("recording starts");
         let err = registry
@@ -2570,7 +2657,7 @@ mod tests {
         );
 
         registry
-            .start_recording(&db_path, DISTIL_ID)
+            .start_recording(&db_path, DISTIL_ID, None)
             .await
             .expect("recording starts");
         let err = registry
@@ -2594,7 +2681,7 @@ mod tests {
         );
 
         registry
-            .start_recording(&db_path, DISTIL_ID)
+            .start_recording(&db_path, DISTIL_ID, None)
             .await
             .expect("recording starts");
         let err = registry
@@ -2621,7 +2708,7 @@ mod tests {
         );
 
         registry
-            .start_recording(&db_path, DISTIL_ID)
+            .start_recording(&db_path, DISTIL_ID, None)
             .await
             .expect("recording starts");
         let err = registry
@@ -2645,7 +2732,7 @@ mod tests {
         );
 
         registry
-            .start_recording(&db_path, DISTIL_ID)
+            .start_recording(&db_path, DISTIL_ID, None)
             .await
             .expect("recording starts");
         let err = registry
@@ -2656,7 +2743,7 @@ mod tests {
 
         *transcriber.result.lock() = Ok("recovered".to_string());
         registry
-            .start_recording(&db_path, DISTIL_ID)
+            .start_recording(&db_path, DISTIL_ID, None)
             .await
             .expect("recording can start again");
         let transcript = registry
