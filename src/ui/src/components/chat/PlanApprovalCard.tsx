@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { writeText as clipboardWriteText } from "@tauri-apps/plugin-clipboard-manager";
 import { MessageMarkdown } from "./MessageMarkdown";
 import type { PlanApproval } from "../../stores/useAppStore";
 import { readPlanFile, sendRemoteCommand } from "../../services/tauri";
@@ -77,7 +78,7 @@ export function PlanApprovalCard({
     setCopying(true);
     try {
       const content = await fetchPlanContent();
-      await navigator.clipboard.writeText(content);
+      await clipboardWriteText(content);
       setCopied(true);
       if (copyTimeoutRef.current !== null) {
         window.clearTimeout(copyTimeoutRef.current);
