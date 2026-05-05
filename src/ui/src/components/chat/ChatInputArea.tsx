@@ -27,6 +27,7 @@ import {
   shouldOpenVoiceSettingsForError,
 } from "../../utils/voice";
 import { useVoiceInput } from "../../hooks/useVoiceInput";
+import { useVoiceHotkey } from "../../hooks/useVoiceHotkey";
 import { ComposerToolbar } from "./composer/ComposerToolbar";
 import { ContextPopover } from "./composer/ContextPopover";
 import { SegmentedMeter } from "./composer/SegmentedMeter";
@@ -177,6 +178,8 @@ export function ChatInputArea({
     });
   }, [cursorPos]);
 
+  const voiceToggleHotkey = useAppStore((s) => s.voiceToggleHotkey);
+  const voiceHoldHotkey = useAppStore((s) => s.voiceHoldHotkey);
   const focusVoiceProvider = useAppStore((s) => s.focusVoiceProvider);
   const voice = useVoiceInput(
     insertTranscript,
@@ -188,6 +191,7 @@ export function ChatInputArea({
   const voiceErrorOpensSettings = shouldOpenVoiceSettingsForError(
     voice.activeProvider,
   );
+  useVoiceHotkey(voice, voiceToggleHotkey, voiceHoldHotkey);
 
   // VU meter dynamic-vs-static decision lives in the parent because it
   // depends on the OS reduced-motion preference and the active provider's

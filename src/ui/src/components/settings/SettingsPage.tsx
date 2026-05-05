@@ -51,6 +51,11 @@ const PinnedPromptsSettings = lazy(() =>
     default: m.PinnedPromptsSettings,
   })),
 );
+const KeyboardSettings = lazy(() =>
+  import("./sections/KeyboardSettings").then((m) => ({
+    default: m.KeyboardSettings,
+  })),
+);
 
 function SectionContent({ section }: { section: string | null }) {
   const pluginManagementEnabled = useAppStore((s) => s.pluginManagementEnabled);
@@ -64,6 +69,7 @@ function SectionContent({ section }: { section: string | null }) {
   if (section === "notifications") return <NotificationsSettings />;
   if (section === "editor") return <EditorSettings />;
   if (section === "git") return <GitSettings />;
+  if (section === "keyboard") return <KeyboardSettings />;
   if (section === "pinned-prompts") return <PinnedPromptsSettings />;
   if (section === "plugins") return <PluginsSettings />;
   if (section === "claude-code-plugins") {

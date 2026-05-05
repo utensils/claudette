@@ -15,6 +15,7 @@ vi.mock("react", () => ({
   useCallback: <T extends (...args: never[]) => unknown>(callback: T): T =>
     callback,
   useEffect: () => undefined,
+  useLayoutEffect: () => undefined,
   useMemo: <T>(factory: () => T): T => factory(),
   useRef: <T>(initial: T): { current: T } => ({ current: initial }),
   useState: <T>(initial: T): [T, (next: T) => void] => [initial, vi.fn()],
@@ -123,6 +124,36 @@ describe("useVoiceInput", () => {
     await controller.start();
     controller.cancel();
 
+    expect(voiceService.cancelVoiceRecording).toHaveBeenCalledWith(
+      "voice-distil-whisper-candle",
+    );
+  });
+
+  it("rolls back the native start when cancelled mid-await", async () => {
+    // Repro for the blur-during-starting race: stop() can't shut down a
+    // recording whose nativeProviderRef hasn't been set yet, so cancel()
+    // must flip cancelledRef BEFORE startVoiceRecording resolves and the
+    // post-await code in start() must honor it.
+    const onTranscript = vi.fn();
+    const controller = useVoiceInput(onTranscript, vi.fn());
+    const startPromise = deferred<undefined>();
+    voiceService.listVoiceProviders.mockResolvedValueOnce([
+      provider({
+        id: "voice-distil-whisper-candle",
+        kind: "local-model",
+        recordingMode: "native",
+      }),
+    ]);
+    voiceService.startVoiceRecording.mockReturnValueOnce(startPromise.promise);
+
+    const startCall = controller.start();
+    controller.cancel(); // simulate blur arriving mid-start
+    startPromise.resolve(undefined);
+    await startCall;
+    await flushPromises();
+
+    // Provider was rolled back (cancelVoiceRecording fired) and the
+    // controller didn't transition to "recording".
     expect(voiceService.cancelVoiceRecording).toHaveBeenCalledWith(
       "voice-distil-whisper-candle",
     );
