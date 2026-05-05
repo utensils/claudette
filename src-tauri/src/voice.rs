@@ -210,7 +210,12 @@ trait AudioRecorder: Send + Sync {
 }
 
 trait VoiceTranscriber: Send + Sync {
-    fn transcribe(&self, cache_path: &Path, audio: CapturedAudio) -> Result<String, String>;
+    fn transcribe(
+        &self,
+        cache_path: &Path,
+        audio: CapturedAudio,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<String, String>;
 }
 
 struct CpalAudioRecorder;
@@ -289,6 +294,7 @@ pub struct VoiceProviderRegistry {
     backend_checker: Arc<dyn CandleBackendChecker>,
     transcription_timeout: Duration,
     was_prewarmed: AtomicBool,
+    active_distil_cancel: Mutex<Option<Arc<AtomicBool>>>,
 }
 
 fn compute_rms(samples: &[f32]) -> f32 {
@@ -420,6 +426,7 @@ impl VoiceProviderRegistry {
             backend_checker,
             transcription_timeout,
             was_prewarmed: AtomicBool::new(false),
+            active_distil_cancel: Mutex::new(None),
         }
     }
 
@@ -635,6 +642,8 @@ impl VoiceProviderRegistry {
 
     async fn cancel_platform_recording(&self) -> Result<(), String> {
         let _ = self.active_recording.lock().take();
+        #[cfg(target_os = "macos")]
+        crate::platform_speech::cancel_active_transcription();
         Ok(())
     }
 
@@ -681,12 +690,34 @@ impl VoiceProviderRegistry {
         }
         validate_captured_audio(&audio)?;
 
+        let cancel = Arc::new(AtomicBool::new(false));
+        *self.active_distil_cancel.lock() = Some(Arc::clone(&cancel));
+
         let cache_path = self.distil_cache_path();
         let transcriber = Arc::clone(&self.transcriber);
         let timeout = self.transcription_timeout;
-        let task = tokio::task::spawn_blocking(move || transcriber.transcribe(&cache_path, audio));
-        let transcript = tokio::time::timeout(timeout, task)
-            .await
+        let cancel_for_task = Arc::clone(&cancel);
+        let task = tokio::task::spawn_blocking(move || {
+            transcriber.transcribe(&cache_path, audio, &cancel_for_task)
+        });
+        let result = tokio::time::timeout(timeout, task).await;
+
+        // On timeout, signal the worker to bail at its next cancel poll so it
+        // doesn't keep grinding on a transcript that's already been discarded.
+        if result.is_err() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+
+        // Vacate our slot in the registry, but only if a newer transcription
+        // hasn't already replaced it.
+        {
+            let mut active = self.active_distil_cancel.lock();
+            if active.as_ref().is_some_and(|a| Arc::ptr_eq(a, &cancel)) {
+                *active = None;
+            }
+        }
+
+        let transcript = result
             .map_err(|_| {
                 format!(
                     "Voice transcription timed out after {} seconds. Try a shorter recording or check the selected voice provider.",
@@ -704,6 +735,9 @@ impl VoiceProviderRegistry {
     }
 
     async fn cancel_distil_recording(&self) -> Result<(), String> {
+        if let Some(cancel) = self.active_distil_cancel.lock().clone() {
+            cancel.store(true, Ordering::Relaxed);
+        }
         let _ = self.active_recording.lock().take();
         Ok(())
     }
@@ -1383,8 +1417,13 @@ impl AudioRecorder for CpalAudioRecorder {
 }
 
 impl VoiceTranscriber for CandleWhisperTranscriber {
-    fn transcribe(&self, cache_path: &Path, captured: CapturedAudio) -> Result<String, String> {
-        transcribe_distil_whisper(cache_path, captured)
+    fn transcribe(
+        &self,
+        cache_path: &Path,
+        captured: CapturedAudio,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<String, String> {
+        transcribe_distil_whisper(cache_path, captured, cancel)
     }
 }
 
@@ -1471,7 +1510,7 @@ impl WhisperDecoder {
         })
     }
 
-    fn run(&mut self, mel: &Tensor) -> Result<String, String> {
+    fn run(&mut self, mel: &Tensor, cancel: &Arc<AtomicBool>) -> Result<String, String> {
         if self.language_token.is_none() {
             self.language_token = self.detect_language_token(mel)?;
         }
@@ -1482,11 +1521,14 @@ impl WhisperDecoder {
         let mut text = String::new();
 
         while seek < content_frames {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("Transcription cancelled.".to_string());
+            }
             let segment_size = usize::min(content_frames - seek, whisper::N_FRAMES);
             let segment = mel
                 .narrow(2, seek, segment_size)
                 .map_err(|e| format!("Failed to slice Whisper mel segment: {e}"))?;
-            let decoded = self.decode(&segment)?;
+            let decoded = self.decode(&segment, cancel)?;
             if decoded.no_speech_prob > whisper::NO_SPEECH_THRESHOLD
                 && decoded.avg_logprob < whisper::LOGPROB_THRESHOLD
             {
@@ -1560,7 +1602,11 @@ impl WhisperDecoder {
             .ok_or_else(|| "Whisper returned no language probabilities".to_string())
     }
 
-    fn decode(&mut self, mel: &Tensor) -> Result<WhisperDecodingResult, String> {
+    fn decode(
+        &mut self,
+        mel: &Tensor,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<WhisperDecodingResult, String> {
         let audio_features = self
             .model
             .encoder_forward(mel, true)
@@ -1577,6 +1623,9 @@ impl WhisperDecoder {
         let mut no_speech_prob = f64::NAN;
 
         for index in 0..sample_len {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("Transcription cancelled.".to_string());
+            }
             let tokens_tensor = Tensor::new(tokens.as_slice(), mel.device())
                 .and_then(|tensor| tensor.unsqueeze(0))
                 .map_err(|e| format!("Failed to build Whisper token tensor: {e}"))?;
@@ -1673,7 +1722,11 @@ fn token_id(tokenizer: &Tokenizer, token: &str) -> Result<u32, String> {
         .ok_or_else(|| format!("Whisper tokenizer is missing token {token}"))
 }
 
-fn transcribe_distil_whisper(cache_path: &Path, captured: CapturedAudio) -> Result<String, String> {
+fn transcribe_distil_whisper(
+    cache_path: &Path,
+    captured: CapturedAudio,
+    cancel: &Arc<AtomicBool>,
+) -> Result<String, String> {
     if captured.sample_rate != TARGET_SAMPLE_RATE {
         return Err(format!(
             "Expected {TARGET_SAMPLE_RATE} Hz audio, got {} Hz",
@@ -1709,7 +1762,7 @@ fn transcribe_distil_whisper(cache_path: &Path, captured: CapturedAudio) -> Resu
         .map_err(|e| format!("Failed to initialize Whisper model on {backend_label}: {e}"))?;
     let mut decoder = WhisperDecoder::new(WhisperModel::Normal(model), tokenizer, &device)?;
     decoder
-        .run(&mel)
+        .run(&mel, cancel)
         .map_err(|e| format!("Whisper transcription failed on {backend_label}: {e}"))
 }
 
@@ -2058,7 +2111,9 @@ mod tests {
             .expect("set CLAUDETTE_VOICE_SAMPLE_WAV to a short speech WAV");
         let audio = read_wav_fixture(&sample_path).expect("read speech wav");
 
-        let transcript = transcribe_distil_whisper(&cache_path, audio).expect("transcribe fixture");
+        let cancel = Arc::new(AtomicBool::new(false));
+        let transcript =
+            transcribe_distil_whisper(&cache_path, audio, &cancel).expect("transcribe fixture");
 
         assert!(!transcript.trim().is_empty());
     }
@@ -2140,9 +2195,26 @@ mod tests {
     }
 
     impl VoiceTranscriber for FakeTranscriber {
-        fn transcribe(&self, _cache_path: &Path, _audio: CapturedAudio) -> Result<String, String> {
+        fn transcribe(
+            &self,
+            _cache_path: &Path,
+            _audio: CapturedAudio,
+            cancel: &Arc<AtomicBool>,
+        ) -> Result<String, String> {
             self.calls.fetch_add(1, Ordering::Relaxed);
-            std::thread::sleep(self.sleep_for);
+            // Poll the cancel flag at coarse intervals to mirror how the real
+            // Whisper decoder checks between segments — lets tests exercise the
+            // cancellation path without changing the production loop.
+            let step = std::time::Duration::from_millis(10);
+            let mut remaining = self.sleep_for;
+            while remaining > std::time::Duration::ZERO {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err("Transcription cancelled.".to_string());
+                }
+                let nap = std::cmp::min(step, remaining);
+                std::thread::sleep(nap);
+                remaining = remaining.saturating_sub(nap);
+            }
             self.result.lock().clone()
         }
     }
@@ -2615,6 +2687,53 @@ mod tests {
             .expect_err("cancelled recording should be gone");
         assert!(err.contains("No voice recording is active"));
         assert_eq!(transcriber.calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn cancel_during_distil_transcription_returns_early() {
+        let (_db_dir, db_path) = test_db_path();
+        let model_dir = tempdir().expect("model dir");
+        write_complete_distil_model(&model_dir.path().join(DISTIL_CACHE_DIR));
+        let transcriber = Arc::new(FakeTranscriber::slow(
+            "would have transcribed",
+            Duration::from_secs(5),
+        ));
+        let registry = Arc::new(VoiceProviderRegistry::with_runtime(
+            model_dir.path().to_path_buf(),
+            Arc::new(FakeRecorder::new(vec![0.1, 0.2, 0.3])),
+            transcriber.clone(),
+        ));
+
+        registry
+            .start_recording(&db_path, DISTIL_ID, None)
+            .await
+            .expect("recording starts");
+
+        let stop_registry = Arc::clone(&registry);
+        let stop_handle =
+            tokio::spawn(async move { stop_registry.stop_and_transcribe(DISTIL_ID).await });
+
+        // Give the spawn_blocking worker a moment to enter its sleep loop.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let cancel_started = std::time::Instant::now();
+        registry
+            .cancel_recording(DISTIL_ID)
+            .await
+            .expect("cancel succeeds");
+
+        let result = stop_handle.await.expect("stop task joined");
+        let elapsed = cancel_started.elapsed();
+
+        let err = result.expect_err("transcription should be cancelled");
+        assert!(
+            err.contains("cancelled"),
+            "expected cancellation error, got: {err}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "expected fast return after cancel, took {elapsed:?}"
+        );
     }
 
     #[tokio::test]

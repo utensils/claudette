@@ -19,7 +19,7 @@
   "composer_placeholder_queued": "Type to queue a message...",
   "voice_input": "Voice input",
   "voice_stop": "Stop voice input",
-  "voice_discard": "Discard transcription",
+  "voice_discard": "Cancel transcription",
   "voice_cancel": "Cancel",
   "voice_error_dismiss_hint": "Click to dismiss",
   "voice_starting": "Starting…",

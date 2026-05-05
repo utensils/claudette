@@ -86,6 +86,17 @@ public func claudette_platform_speech_free_string(_ pointer: UnsafeMutablePointe
     }
 }
 
+private let activeSpeechTaskLock = NSLock()
+private var activeSpeechTask: SFSpeechRecognitionTask?
+
+@_cdecl("claudette_platform_speech_cancel")
+public func claudette_platform_speech_cancel() {
+    activeSpeechTaskLock.lock()
+    defer { activeSpeechTaskLock.unlock() }
+    activeSpeechTask?.cancel()
+    activeSpeechTask = nil
+}
+
 private func platformSpeechStatus(prepare: Bool) -> ClaudettePlatformSpeechStatus {
     if let preflightFailure = tccPreflightFailureMessage() {
         return status(statusEngineUnavailable, engineNone, preflightFailure)
@@ -230,8 +241,24 @@ private func transcribeWithSFSpeech(url: URL) -> ClaudettePlatformSpeechTranscri
         }
     }
 
+    activeSpeechTaskLock.lock()
+    activeSpeechTask = task
+    activeSpeechTaskLock.unlock()
+
+    // Only clear the global if it still points at our task — a newer
+    // overlapping transcription may have replaced it, and clobbering its
+    // registration would silently break cancellation for that newer call.
+    let clearIfStillOurs = {
+        activeSpeechTaskLock.lock()
+        if activeSpeechTask === task {
+            activeSpeechTask = nil
+        }
+        activeSpeechTaskLock.unlock()
+    }
+
     let timeout = DispatchTime.now() + .seconds(90)
     if semaphore.wait(timeout: timeout) == .timedOut {
+        clearIfStillOurs()
         task?.cancel()
         return transcriptionError(
             statusEngineUnavailable,
@@ -240,6 +267,7 @@ private func transcribeWithSFSpeech(url: URL) -> ClaudettePlatformSpeechTranscri
         )
     }
 
+    clearIfStillOurs()
     task?.cancel()
     lock.lock()
     let finalTranscript = transcript
