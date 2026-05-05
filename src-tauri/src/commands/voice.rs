@@ -1,8 +1,13 @@
 // Real implementations (compiled when the `voice` feature is enabled).
 #[cfg(feature = "voice")]
+use std::time::Instant;
+
+#[cfg(feature = "voice")]
 use claudette::db::Database;
 #[cfg(feature = "voice")]
 use tauri::{AppHandle, State};
+#[cfg(all(feature = "voice", debug_assertions))]
+use {serde::Serialize, tauri::Emitter};
 
 #[cfg(feature = "voice")]
 use crate::state::AppState;
@@ -71,6 +76,15 @@ pub async fn voice_remove_provider_model(
         .await
 }
 
+#[cfg(all(feature = "voice", debug_assertions))]
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VoiceStartLatencyEvent {
+    cold_start: bool,
+    total_ms: u128,
+    stream_open_ms: u128,
+}
+
 #[cfg(feature = "voice")]
 #[tauri::command]
 pub async fn voice_start_recording(
@@ -84,10 +98,30 @@ pub async fn voice_start_recording(
             .voice
             .resolve_provider_id(&db, provider_id.as_deref())?
     };
-    state
+    let t0 = Instant::now();
+    let latency = state
         .voice
-        .start_recording(&state.db_path, &provider_id, Some(app))
-        .await
+        .start_recording(&state.db_path, &provider_id, Some(app.clone()))
+        .await?;
+    let total_ms = t0.elapsed().as_millis();
+    eprintln!(
+        "[voice] start latency cold_start={} total_ms={total_ms}ms stream_open_ms={}ms",
+        !latency.was_prewarmed, latency.stream_open_ms
+    );
+    #[cfg(debug_assertions)]
+    {
+        let _ = app.emit(
+            "voice://debug/start_latency",
+            VoiceStartLatencyEvent {
+                cold_start: !latency.was_prewarmed,
+                total_ms,
+                stream_open_ms: latency.stream_open_ms,
+            },
+        );
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = app;
+    Ok(())
 }
 
 #[cfg(feature = "voice")]

@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use candle_core::{D, Device, IndexOp, Tensor};
@@ -269,6 +270,16 @@ pub trait VoiceProvider: Send + Sync {
     ) -> Result<VoiceProviderInfo, String>;
 }
 
+/// Timing data returned from a successful `start_recording` call.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceStartLatency {
+    /// True when `prewarm()` ran before this start call.
+    pub was_prewarmed: bool,
+    /// Milliseconds spent opening the cpal input stream (the part prewarm amortizes).
+    pub stream_open_ms: u128,
+}
+
 pub struct VoiceProviderRegistry {
     model_root: PathBuf,
     active_recording: Mutex<Option<RecordingSession>>,
@@ -277,6 +288,7 @@ pub struct VoiceProviderRegistry {
     platform_speech: Arc<dyn PlatformSpeechEngine>,
     backend_checker: Arc<dyn CandleBackendChecker>,
     transcription_timeout: Duration,
+    was_prewarmed: AtomicBool,
 }
 
 fn compute_rms(samples: &[f32]) -> f32 {
@@ -407,6 +419,7 @@ impl VoiceProviderRegistry {
             platform_speech,
             backend_checker,
             transcription_timeout,
+            was_prewarmed: AtomicBool::new(false),
         }
     }
 
@@ -441,6 +454,7 @@ impl VoiceProviderRegistry {
         self.recorder.warmup();
         let _ = self.platform_speech.availability();
         let _ = self.backend_checker.ready_backend();
+        self.was_prewarmed.store(true, Ordering::Relaxed);
     }
 
     pub fn set_selected_provider(
@@ -520,13 +534,21 @@ impl VoiceProviderRegistry {
         db_path: &Path,
         provider_id: &str,
         app: Option<AppHandle>,
-    ) -> Result<(), String> {
+    ) -> Result<VoiceStartLatency, String> {
         self.ensure_known(provider_id)?;
-        match provider_id {
+        // Snapshot before opening the stream: prewarm runs on a separate
+        // thread (see main.rs), so a fast first click can race with it and
+        // pay the cold-start cost even though the flag flips mid-flight.
+        let was_prewarmed = self.was_prewarmed.load(Ordering::Relaxed);
+        let stream_open_ms = match provider_id {
             PLATFORM_ID => self.start_platform_recording(db_path, app).await,
             DISTIL_ID => self.start_distil_recording(db_path, app).await,
             _ => Err(format!("Unknown voice provider: {provider_id}")),
-        }
+        }?;
+        Ok(VoiceStartLatency {
+            was_prewarmed,
+            stream_open_ms,
+        })
     }
 
     pub async fn stop_and_transcribe(&self, provider_id: &str) -> Result<String, String> {
@@ -551,7 +573,7 @@ impl VoiceProviderRegistry {
         &self,
         db_path: &Path,
         app: Option<AppHandle>,
-    ) -> Result<(), String> {
+    ) -> Result<u128, String> {
         {
             let db = Database::open(db_path).map_err(|e| e.to_string())?;
             if !self.enabled(&db, PLATFORM_ID) {
@@ -567,13 +589,15 @@ impl VoiceProviderRegistry {
         if active.is_some() {
             return Err("Voice recording is already active".to_string());
         }
+        let t_stream = Instant::now();
         let mut session = self.recorder.start()?;
+        let stream_open_ms = t_stream.elapsed().as_millis();
         if let Some(app) = app {
             let abort = spawn_level_emitter(app, Arc::clone(&session.samples));
             session._level_task = Some(LevelTask(abort));
         }
         *active = Some(session);
-        Ok(())
+        Ok(stream_open_ms)
     }
 
     async fn stop_platform_recording(&self) -> Result<String, String> {
@@ -618,7 +642,7 @@ impl VoiceProviderRegistry {
         &self,
         db_path: &Path,
         app: Option<AppHandle>,
-    ) -> Result<(), String> {
+    ) -> Result<u128, String> {
         {
             let db = Database::open(db_path).map_err(|e| e.to_string())?;
             if !self.enabled(&db, DISTIL_ID) {
@@ -634,13 +658,15 @@ impl VoiceProviderRegistry {
         if active.is_some() {
             return Err("Voice recording is already active".to_string());
         }
+        let t_stream = Instant::now();
         let mut session = self.recorder.start()?;
+        let stream_open_ms = t_stream.elapsed().as_millis();
         if let Some(app) = app {
             let abort = spawn_level_emitter(app, Arc::clone(&session.samples));
             session._level_task = Some(LevelTask(abort));
         }
         *active = Some(session);
-        Ok(())
+        Ok(stream_open_ms)
     }
 
     async fn stop_distil_recording(&self) -> Result<String, String> {
