@@ -4,8 +4,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use claudette::agent::background::{
-    AgentBackgroundTaskEvent, AgentBackgroundTaskEventKind, parse_background_bash_start,
-    parse_background_task_binding, parse_task_notification,
+    parse_background_bash_start, parse_background_task_binding, parse_task_notification,
 };
 use claudette::agent::{
     self, AgentEvent, AgentSettings, ControlRequestInner, FileAttachment, InnerStreamEvent,
@@ -20,7 +19,7 @@ use claudette::chat::{
 use claudette::db::Database;
 use claudette::env::WorkspaceEnv;
 use claudette::mcp_supervisor::McpSupervisor;
-use claudette::model::{ChatMessage, ChatRole, TerminalTab, TerminalTabKind};
+use claudette::model::{ChatMessage, ChatRole};
 use claudette::permissions::tools_for_level;
 
 use crate::state::{AgentSessionState, AppState, PendingPermission};
@@ -32,35 +31,6 @@ use super::{
     ChatHistoryPage, fire_completion_notification, now_iso, start_bridge_and_inject_mcp,
 };
 
-fn truncate_task_title(command: Option<&str>) -> String {
-    let raw = command.unwrap_or("Background task").trim();
-    let mut title = if raw.is_empty() {
-        "Background task".to_string()
-    } else {
-        raw.to_string()
-    };
-    if title.chars().count() > 42 {
-        title = title.chars().take(39).collect::<String>() + "...";
-    }
-    format!("Agent: {title}")
-}
-
-fn emit_agent_background_task_event(
-    app: &AppHandle,
-    kind: AgentBackgroundTaskEventKind,
-    workspace_id: &str,
-    chat_session_id: &str,
-    tab: TerminalTab,
-) {
-    let payload = AgentBackgroundTaskEvent {
-        kind,
-        workspace_id: workspace_id.to_string(),
-        chat_session_id: chat_session_id.to_string(),
-        tab,
-    };
-    let _ = app.emit("agent-background-task", &payload);
-}
-
 fn is_terminal_task_status(status: &str) -> bool {
     matches!(
         status.to_ascii_lowercase().as_str(),
@@ -70,17 +40,10 @@ fn is_terminal_task_status(status: &str) -> bool {
 
 async fn apply_task_notification_status(
     app: &AppHandle,
-    db_path: &std::path::Path,
-    workspace_id: &str,
     chat_session_id: &str,
     task_id: &str,
     status: &str,
-    summary: Option<&str>,
-    output_file: Option<&str>,
 ) {
-    let Ok(db) = Database::open(db_path) else {
-        return;
-    };
     if is_terminal_task_status(status) {
         let app_state = app.state::<AppState>();
         let mut agents = app_state.agents.write().await;
@@ -88,54 +51,6 @@ async fn apply_task_notification_status(
             session.running_background_tasks.remove(task_id);
         }
     }
-    let _ = db.update_agent_task_terminal_tab_status(
-        chat_session_id,
-        task_id,
-        status,
-        summary.filter(|s| !s.trim().is_empty()),
-        output_file.filter(|s| !s.trim().is_empty()),
-    );
-    if let Ok(Some(tab)) = db.get_terminal_tab_by_agent_task(chat_session_id, task_id) {
-        emit_agent_background_task_event(
-            app,
-            AgentBackgroundTaskEventKind::Status,
-            workspace_id,
-            chat_session_id,
-            tab,
-        );
-    }
-}
-
-fn create_agent_task_terminal_tab(
-    db_path: &std::path::Path,
-    workspace_id: &str,
-    chat_session_id: &str,
-    tool_use_id: &str,
-    command: Option<&str>,
-) -> Option<TerminalTab> {
-    let db = Database::open(db_path).ok()?;
-    if let Ok(Some(tab)) = db.get_terminal_tab_by_tool_use_id(tool_use_id) {
-        return Some(tab);
-    }
-    let max_id = db.max_terminal_tab_id().ok()?;
-    let existing = db.list_terminal_tabs_by_workspace(workspace_id).ok()?;
-    let tab = TerminalTab {
-        id: max_id + 1,
-        workspace_id: workspace_id.to_string(),
-        title: truncate_task_title(command),
-        kind: TerminalTabKind::AgentTask,
-        is_script_output: false,
-        sort_order: existing.len() as i32,
-        created_at: now_iso(),
-        agent_chat_session_id: Some(chat_session_id.to_string()),
-        agent_tool_use_id: Some(tool_use_id.to_string()),
-        agent_task_id: None,
-        output_path: None,
-        task_status: Some("starting".to_string()),
-        task_summary: None,
-    };
-    db.insert_terminal_tab(&tab).ok()?;
-    Some(tab)
 }
 
 const BACKGROUND_TASK_WAKE_PROMPT: &str = "\
@@ -204,25 +119,13 @@ fn schedule_background_task_wake(
                 subtype,
                 task_id: Some(task_id),
                 status: Some(status),
-                output_file,
-                summary,
                 ..
             }) = &event
                 && subtype == "task_notification"
             {
                 saw_task_notification = true;
                 should_emit_stream = true;
-                apply_task_notification_status(
-                    &app,
-                    &db_path,
-                    &workspace_id,
-                    &chat_session_id,
-                    task_id,
-                    status,
-                    summary.as_deref(),
-                    output_file.as_deref(),
-                )
-                .await;
+                apply_task_notification_status(&app, &chat_session_id, task_id, status).await;
             }
 
             if let AgentEvent::Stream(StreamEvent::User { message, .. }) = &event
@@ -234,13 +137,9 @@ fn schedule_background_task_wake(
                 let status = notification.status.as_deref().unwrap_or("running");
                 apply_task_notification_status(
                     &app,
-                    &db_path,
-                    &workspace_id,
                     &chat_session_id,
                     &notification.task_id,
                     status,
-                    notification.summary.as_deref(),
-                    notification.output_file.as_deref(),
                 )
                 .await;
             }
@@ -1403,23 +1302,12 @@ pub async fn send_chat_message(
                 subtype,
                 task_id: Some(task_id),
                 status: Some(status),
-                output_file,
-                summary,
                 ..
             }) = &event
                 && subtype == "task_notification"
             {
-                apply_task_notification_status(
-                    &app,
-                    &db_path,
-                    &ws_id,
-                    &chat_session_id_for_stream,
-                    task_id,
-                    status,
-                    summary.as_deref(),
-                    output_file.as_deref(),
-                )
-                .await;
+                apply_task_notification_status(&app, &chat_session_id_for_stream, task_id, status)
+                    .await;
             }
 
             if let AgentEvent::Stream(StreamEvent::Stream {
@@ -1454,29 +1342,13 @@ pub async fn send_chat_message(
                 event: InnerStreamEvent::ContentBlockStop { index },
             }) = &event
                 && let Some((tool_use_id, input_json)) = background_bash_inputs.remove(index)
-                && let Some(start) = parse_background_bash_start(&input_json)
-                && let Some(tab) = create_agent_task_terminal_tab(
-                    &db_path,
-                    &ws_id,
-                    &chat_session_id_for_stream,
-                    &tool_use_id,
-                    start.command.as_deref(),
-                )
+                && parse_background_bash_start(&input_json).is_some()
             {
-                {
-                    let app_state = app.state::<AppState>();
-                    let mut agents = app_state.agents.write().await;
-                    if let Some(session) = agents.get_mut(&chat_session_id_for_stream) {
-                        session.running_background_tasks.insert(tool_use_id.clone());
-                    }
+                let app_state = app.state::<AppState>();
+                let mut agents = app_state.agents.write().await;
+                if let Some(session) = agents.get_mut(&chat_session_id_for_stream) {
+                    session.running_background_tasks.insert(tool_use_id);
                 }
-                emit_agent_background_task_event(
-                    &app,
-                    AgentBackgroundTaskEventKind::Starting,
-                    &ws_id,
-                    &chat_session_id_for_stream,
-                    tab,
-                );
             }
 
             // Compaction boundary event: the CLI emits this after context
@@ -1727,9 +1599,7 @@ pub async fn send_chat_message(
                             } = block
                             {
                                 let text = tool_result_content_text(content);
-                                if let Some(binding) = parse_background_task_binding(&text)
-                                    && let Ok(db) = Database::open(&db_path)
-                                {
+                                if let Some(binding) = parse_background_task_binding(&text) {
                                     {
                                         let app_state = app.state::<AppState>();
                                         let mut agents = app_state.agents.write().await;
@@ -1742,22 +1612,6 @@ pub async fn send_chat_message(
                                                 .insert(binding.task_id.clone());
                                         }
                                     }
-                                    let _ = db.update_agent_task_terminal_tab_binding(
-                                        tool_use_id,
-                                        &binding.task_id,
-                                        &binding.output_path,
-                                    );
-                                    if let Ok(Some(tab)) =
-                                        db.get_terminal_tab_by_tool_use_id(tool_use_id)
-                                    {
-                                        emit_agent_background_task_event(
-                                            &app,
-                                            AgentBackgroundTaskEventKind::Bound,
-                                            &ws_id,
-                                            &chat_session_id_for_stream,
-                                            tab,
-                                        );
-                                    }
                                 }
                             }
                         }
@@ -1767,13 +1621,9 @@ pub async fn send_chat_message(
                             let status = notification.status.as_deref().unwrap_or("running");
                             apply_task_notification_status(
                                 &app,
-                                &db_path,
-                                &ws_id,
                                 &chat_session_id_for_stream,
                                 &notification.task_id,
                                 status,
-                                notification.summary.as_deref(),
-                                notification.output_file.as_deref(),
                             )
                             .await;
                         }
