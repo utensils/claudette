@@ -1,7 +1,7 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import type { ToolActivity } from "../../stores/useAppStore";
-import { relativizePath } from "../../hooks/toolSummary";
+import { extractToolSummary, relativizePath } from "../../hooks/toolSummary";
 import { HighlightedPlainText } from "./HighlightedPlainText";
 import styles from "./ChatPanel.module.css";
 import { toolColor } from "./chatHelpers";
@@ -46,8 +46,9 @@ export const ToolActivitiesSection = memo(function ToolActivitiesSection({
   const queryHasMatch =
     !!searchQuery &&
     activities.some((a) => {
-      if (!a.summary) return false;
-      const text = relativizePath(a.summary, worktreePath);
+      const summary = activitySummaryText(a);
+      if (!summary) return false;
+      const text = relativizePath(summary, worktreePath);
       return text.toLowerCase().includes(searchQuery.toLowerCase());
     });
   const isExpanded = !collapsed || queryHasMatch;
@@ -81,12 +82,28 @@ export const ToolActivitiesSection = memo(function ToolActivitiesSection({
               <div key={act.toolUseId} className={styles.toolActivity}>
                 <div className={styles.toolHeader}>
                   <span className={styles.toolName} style={{ color: toolColor(act.toolName) }}>{act.toolName}</span>
-                  {act.summary && (
+                  {activitySummaryText(act) && (
                     <span className={styles.toolSummary}>
-                      <HighlightedPlainText text={relativizePath(act.summary, worktreePath)} query={searchQuery} />
+                      <HighlightedPlainText text={relativizePath(activitySummaryText(act), worktreePath)} query={searchQuery} />
                     </span>
                   )}
                 </div>
+                {(act.agentLastToolName || act.agentToolUseCount || act.agentStatus) && (
+                  <div className={styles.agentToolProgress}>
+                    {act.agentStatus && (
+                      <span className={styles.agentToolStatus}>{act.agentStatus}</span>
+                    )}
+                    {typeof act.agentToolUseCount === "number" && (
+                      <span>
+                        {act.agentToolUseCount} agent tool call
+                        {act.agentToolUseCount !== 1 ? "s" : ""}
+                      </span>
+                    )}
+                    {act.agentLastToolName && (
+                      <span>latest: {act.agentLastToolName}</span>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -95,3 +112,12 @@ export const ToolActivitiesSection = memo(function ToolActivitiesSection({
     </div>
   );
 });
+
+function activitySummaryText(activity: ToolActivity): string {
+  return (
+    activity.summary ||
+    activity.agentDescription ||
+    extractToolSummary(activity.toolName, activity.inputJson) ||
+    ""
+  );
+}

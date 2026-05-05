@@ -11,6 +11,12 @@ export interface ToolActivity {
   resultText: string;
   collapsed: boolean;
   summary: string;
+  assistantMessageOrdinal?: number;
+  agentTaskId?: string | null;
+  agentDescription?: string | null;
+  agentLastToolName?: string | null;
+  agentToolUseCount?: number | null;
+  agentStatus?: string | null;
 }
 
 export interface CompletedTurn {
@@ -405,6 +411,12 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
           resultText: a.resultText,
           collapsed: true,
           summary: a.summary,
+          assistantMessageOrdinal: a.assistantMessageOrdinal,
+          agentTaskId: a.agentTaskId,
+          agentDescription: a.agentDescription,
+          agentLastToolName: a.agentLastToolName,
+          agentToolUseCount: a.agentToolUseCount,
+          agentStatus: a.agentStatus,
         })),
         messageCount,
         collapsed: true,

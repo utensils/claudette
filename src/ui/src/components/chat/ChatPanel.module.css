@@ -534,6 +534,20 @@
   color: var(--text-faint);
 }
 
+.agentToolProgress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 4px 8px;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.agentToolStatus {
+  color: var(--text-dim);
+}
+
 .toolContent {
   padding: 10px 12px;
   font-size: 12px;

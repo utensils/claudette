@@ -259,8 +259,13 @@ impl Database {
         let tx = self.conn.unchecked_transaction()?;
         {
             let mut stmt = tx.prepare(
-                "INSERT INTO turn_tool_activities (id, checkpoint_id, tool_use_id, tool_name, input_json, result_text, summary, sort_order)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO turn_tool_activities (
+                    id, checkpoint_id, tool_use_id, tool_name, input_json,
+                    result_text, summary, sort_order, assistant_message_ordinal,
+                    agent_task_id, agent_description, agent_last_tool_name,
+                    agent_tool_use_count, agent_status
+                 )
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             )?;
             for a in activities {
                 stmt.execute(params![
@@ -272,6 +277,12 @@ impl Database {
                     a.result_text,
                     a.summary,
                     a.sort_order,
+                    a.assistant_message_ordinal,
+                    a.agent_task_id,
+                    a.agent_description,
+                    a.agent_last_tool_name,
+                    a.agent_tool_use_count,
+                    a.agent_status,
                 ])?;
             }
         }
@@ -305,8 +316,13 @@ impl Database {
         )?;
         {
             let mut stmt = tx.prepare(
-                "INSERT INTO turn_tool_activities (id, checkpoint_id, tool_use_id, tool_name, input_json, result_text, summary, sort_order)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO turn_tool_activities (
+                    id, checkpoint_id, tool_use_id, tool_name, input_json,
+                    result_text, summary, sort_order, assistant_message_ordinal,
+                    agent_task_id, agent_description, agent_last_tool_name,
+                    agent_tool_use_count, agent_status
+                 )
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             )?;
             for a in activities {
                 stmt.execute(params![
@@ -318,6 +334,12 @@ impl Database {
                     a.result_text,
                     a.summary,
                     a.sort_order,
+                    a.assistant_message_ordinal,
+                    a.agent_task_id,
+                    a.agent_description,
+                    a.agent_last_tool_name,
+                    a.agent_tool_use_count,
+                    a.agent_status,
                 ])?;
             }
         }
@@ -337,11 +359,14 @@ impl Database {
         // Then load all activities for this workspace in one query.
         let mut stmt = self.conn.prepare(
             "SELECT ta.id, ta.checkpoint_id, ta.tool_use_id, ta.tool_name,
-                    ta.input_json, ta.result_text, ta.summary, ta.sort_order
+                    ta.input_json, ta.result_text, ta.summary, ta.sort_order,
+                    ta.assistant_message_ordinal, ta.agent_task_id,
+                    ta.agent_description, ta.agent_last_tool_name,
+                    ta.agent_tool_use_count, ta.agent_status
              FROM turn_tool_activities ta
              JOIN conversation_checkpoints cp ON ta.checkpoint_id = cp.id
              WHERE cp.workspace_id = ?1
-             ORDER BY cp.turn_index, ta.sort_order",
+             ORDER BY cp.turn_index, ta.assistant_message_ordinal, ta.sort_order",
         )?;
         let activities: Vec<TurnToolActivity> = stmt
             .query_map(params![workspace_id], |row| {
@@ -354,6 +379,12 @@ impl Database {
                     result_text: row.get(5)?,
                     summary: row.get(6)?,
                     sort_order: row.get(7)?,
+                    assistant_message_ordinal: row.get(8)?,
+                    agent_task_id: row.get(9)?,
+                    agent_description: row.get(10)?,
+                    agent_last_tool_name: row.get(11)?,
+                    agent_tool_use_count: row.get(12)?,
+                    agent_status: row.get(13)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -431,11 +462,14 @@ impl Database {
 
         let mut stmt = self.conn.prepare(
             "SELECT ta.id, ta.checkpoint_id, ta.tool_use_id, ta.tool_name,
-                    ta.input_json, ta.result_text, ta.summary, ta.sort_order
+                    ta.input_json, ta.result_text, ta.summary, ta.sort_order,
+                    ta.assistant_message_ordinal, ta.agent_task_id,
+                    ta.agent_description, ta.agent_last_tool_name,
+                    ta.agent_tool_use_count, ta.agent_status
              FROM turn_tool_activities ta
              JOIN conversation_checkpoints cp ON ta.checkpoint_id = cp.id
              WHERE cp.chat_session_id = ?1
-             ORDER BY cp.turn_index, ta.sort_order",
+             ORDER BY cp.turn_index, ta.assistant_message_ordinal, ta.sort_order",
         )?;
         let activities: Vec<TurnToolActivity> = stmt
             .query_map(params![chat_session_id], |row| {
@@ -448,6 +482,12 @@ impl Database {
                     result_text: row.get(5)?,
                     summary: row.get(6)?,
                     sort_order: row.get(7)?,
+                    assistant_message_ordinal: row.get(8)?,
+                    agent_task_id: row.get(9)?,
+                    agent_description: row.get(10)?,
+                    agent_last_tool_name: row.get(11)?,
+                    agent_tool_use_count: row.get(12)?,
+                    agent_status: row.get(13)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -523,6 +563,12 @@ mod tests {
             result_text: "ok".into(),
             summary: format!("{tool} test.rs"),
             sort_order: order,
+            assistant_message_ordinal: 0,
+            agent_task_id: None,
+            agent_description: None,
+            agent_last_tool_name: None,
+            agent_tool_use_count: None,
+            agent_status: None,
         }
     }
 

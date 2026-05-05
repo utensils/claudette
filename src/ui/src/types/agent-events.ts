@@ -26,6 +26,16 @@ export type StreamEvent =
       output_file?: string | null;
       /** Only present on `subtype: "task_notification"` events. */
       summary?: string | null;
+      /** Present on `subtype: "task_started"` and `subtype: "task_progress"` events. */
+      description?: string | null;
+      /** Present on Claude Code subagent `task_progress` events. */
+      last_tool_name?: string | null;
+      /** Present on Claude Code task progress/notification events. */
+      usage?: {
+        total_tokens?: number | null;
+        tool_uses?: number | null;
+        duration_ms?: number | null;
+      } | null;
       /** Only present on the end-of-compaction status event. Rust
        * serializes `Option<String>` as `null` (no `skip_serializing_if`),
        * so the wire payload carries `null` when absent. */

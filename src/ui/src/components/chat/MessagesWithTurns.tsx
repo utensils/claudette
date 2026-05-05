@@ -186,21 +186,94 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
     return map;
   }, [chatAttachments, messages]);
 
-  // Build an index: afterMessageIndex → array of (turn, globalIndex) pairs.
-  // Only recomputed when completedTurns changes, not on every streaming update.
-  const turnsByPosition = useMemo(() => {
-    const map: Record<number, Array<{ turn: CompletedTurn; globalIdx: number }>> = {};
-    completedTurns.forEach((turn, globalIdx) => {
-      const key = turn.afterMessageIndex;
-      (map[key] ??= []).push({ turn, globalIdx });
-    });
-    return map;
-  }, [completedTurns]);
-
-  const completedTurnPositions = useMemo(
-    () => new Set(completedTurns.map((turn) => turn.afterMessageIndex)),
-    [completedTurns],
+  // CompletedTurn.afterMessageIndex is GLOBAL (counts from message 0 of the
+  // session, not from the loaded window). Shift to local before indexing into
+  // the `messages` array; otherwise older summaries' "Copy output", rollback,
+  // and fork actions would target the wrong message once the loaded window
+  // contains more than one user message.
+  const findTriggeringUserIdx = useCallback(
+    (afterMessageIndex: number) => {
+      const localAfter = afterMessageIndex - globalOffset;
+      if (localAfter <= 0) return -1;
+      return findTriggeringUserIndex(messages, localAfter);
+    },
+    [messages, globalOffset],
   );
+
+  const chronologicalTurnLayout = useMemo(() => {
+    const groupsByPosition: Record<
+      number,
+      Array<{
+        turn: CompletedTurn;
+        globalIdx: number;
+        activities: CompletedTurn["activities"];
+        showFooter: boolean;
+      }>
+    > = {};
+    const finalFooterByPosition: Record<
+      number,
+      Array<{ turn: CompletedTurn; globalIdx: number }>
+    > = {};
+    const positions = new Set<number>();
+
+    completedTurns.forEach((turn, globalIdx) => {
+      const localAfter = turn.afterMessageIndex - globalOffset;
+      const userIdx = findTriggeringUserIdx(turn.afterMessageIndex);
+      const assistantPositions: number[] = [];
+
+      if (userIdx !== -1) {
+        const end = Math.min(localAfter, messages.length);
+        for (let idx = userIdx + 1; idx < end; idx++) {
+          if (messages[idx]?.role === "Assistant") {
+            assistantPositions.push(globalOffset + idx + 1);
+          }
+        }
+      }
+
+      const positionForOrdinal = (ordinal: number | undefined) => {
+        if (userIdx === -1) return turn.afterMessageIndex;
+        if (typeof ordinal !== "number" || ordinal < 0) {
+          return turn.afterMessageIndex;
+        }
+        const safeOrdinal = ordinal;
+        if (safeOrdinal === 0) return globalOffset + userIdx + 1;
+        return assistantPositions[safeOrdinal - 1] ?? turn.afterMessageIndex;
+      };
+
+      const activitiesByPosition = new Map<number, CompletedTurn["activities"]>();
+      for (const activity of turn.activities) {
+        const position = positionForOrdinal(activity.assistantMessageOrdinal);
+        const existing = activitiesByPosition.get(position);
+        if (existing) existing.push(activity);
+        else activitiesByPosition.set(position, [activity]);
+      }
+
+      let hasFinalGroup = false;
+      for (const [position, activities] of activitiesByPosition) {
+        positions.add(position);
+        const showFooter = position === turn.afterMessageIndex;
+        hasFinalGroup ||= showFooter;
+        (groupsByPosition[position] ??= []).push({
+          turn,
+          globalIdx,
+          activities,
+          showFooter,
+        });
+      }
+
+      positions.add(turn.afterMessageIndex);
+      if (!hasFinalGroup) {
+        (finalFooterByPosition[turn.afterMessageIndex] ??= []).push({
+          turn,
+          globalIdx,
+        });
+      }
+    });
+
+    return { groupsByPosition, finalFooterByPosition, positions };
+  }, [completedTurns, findTriggeringUserIdx, globalOffset, messages]);
+
+  const completedTurnPositions = chronologicalTurnLayout.positions;
 
   // Local version of completedTurnPositions with global indices shifted to
   // local array indices. Used by buildPlainTurnFooters, which works in local
@@ -214,20 +287,6 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
           .filter((p) => p >= 0 && p <= messages.length),
       ),
     [completedTurnPositions, globalOffset, messages.length],
-  );
-
-  // CompletedTurn.afterMessageIndex is GLOBAL (counts from message 0 of the
-  // session, not from the loaded window). Shift to local before indexing into
-  // the `messages` array; otherwise older summaries' "Copy output", rollback,
-  // and fork actions would target the wrong message once the loaded window
-  // contains more than one user message.
-  const findTriggeringUserIdx = useCallback(
-    (afterMessageIndex: number) => {
-      const localAfter = afterMessageIndex - globalOffset;
-      if (localAfter <= 0) return -1;
-      return findTriggeringUserIndex(messages, localAfter);
-    },
-    [messages, globalOffset],
   );
 
   // Map user message index → checkpoint for rollback buttons.
@@ -392,25 +451,44 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
         toolCount: turn.activities.length,
       })),
     });
-  }, [workspaceId, sessionId, messages, completedTurns]);
+  }, [workspaceId, sessionId, messages, completedTurns, globalOffset]);
 
   const renderTurns = (position: number) => {
-    const entries = turnsByPosition[position];
-    if (!entries) return null;
-    return entries.map(({ turn, globalIdx }) => (
-      <TurnSummary
-        key={turn.id}
-        turn={turn}
-        collapsed={turn.collapsed}
-        onToggle={() => toggleCompletedTurn(sessionId, globalIdx)}
-        taskProgress={taskProgressByTurn.get(globalIdx)}
-        assistantText={assistantTextByTurnId.get(turn.id) ?? ""}
-        onFork={onForkTurn ? () => onForkTurn(turn.id) : undefined}
-        onRollback={buildOnRollback(turn.id)}
-        searchQuery={searchQuery}
-        worktreePath={worktreePath}
-      />
-    ));
+    const groupEntries = chronologicalTurnLayout.groupsByPosition[position] ?? [];
+    const footerEntries = chronologicalTurnLayout.finalFooterByPosition[position] ?? [];
+    if (groupEntries.length === 0 && footerEntries.length === 0) return null;
+    return (
+      <>
+        {groupEntries.map(({ turn, globalIdx, activities, showFooter }) => (
+          <TurnSummary
+            key={`${turn.id}:${position}`}
+            turn={turn}
+            activities={activities}
+            showFooter={showFooter}
+            collapsed={turn.collapsed}
+            onToggle={() => toggleCompletedTurn(sessionId, globalIdx)}
+            taskProgress={showFooter ? taskProgressByTurn.get(globalIdx) : undefined}
+            assistantText={showFooter ? (assistantTextByTurnId.get(turn.id) ?? "") : ""}
+            onFork={showFooter && onForkTurn ? () => onForkTurn(turn.id) : undefined}
+            onRollback={showFooter ? buildOnRollback(turn.id) : undefined}
+            searchQuery={searchQuery}
+            worktreePath={worktreePath}
+          />
+        ))}
+        {footerEntries.map(({ turn }) => (
+          <TurnFooter
+            key={`${turn.id}:${position}:footer`}
+            durationMs={turn.durationMs}
+            inputTokens={turn.inputTokens}
+            outputTokens={turn.outputTokens}
+            assistantText={assistantTextByTurnId.get(turn.id) || undefined}
+            onFork={onForkTurn ? () => onForkTurn(turn.id) : undefined}
+            onRollback={buildOnRollback(turn.id)}
+            className={styles.messageTurnFooter}
+          />
+        ))}
+      </>
+    );
   };
 
   return (
@@ -572,24 +650,8 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
           </React.Fragment>
         );
       })}
-      {/* Turns that finalized at or after the end of the loaded message window */}
-      {completedTurns
-        .map((turn, globalIdx) => ({ turn, globalIdx }))
-        .filter(({ turn }) => turn.afterMessageIndex >= globalOffset + messages.length)
-        .map(({ turn, globalIdx }) => (
-          <TurnSummary
-            key={turn.id}
-            turn={turn}
-            collapsed={turn.collapsed}
-            onToggle={() => toggleCompletedTurn(sessionId, globalIdx)}
-            taskProgress={taskProgressByTurn.get(globalIdx)}
-            assistantText={assistantTextByTurnId.get(turn.id) ?? ""}
-            onFork={onForkTurn ? () => onForkTurn(turn.id) : undefined}
-            onRollback={buildOnRollback(turn.id)}
-            searchQuery={searchQuery}
-            worktreePath={worktreePath}
-          />
-        ))}
+      {/* Turn activity groups that land after the last loaded message */}
+      {renderTurns(globalOffset + messages.length)}
     </>
   );
 });

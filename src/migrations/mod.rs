@@ -174,4 +174,9 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("20260505180023_workspace_sort_order.sql"),
         legacy_version: None,
     },
+    Migration {
+        id: "20260505214219_turn_tool_activity_chronology",
+        sql: include_str!("20260505214219_turn_tool_activity_chronology.sql"),
+        legacy_version: None,
+    },
 ];

@@ -150,6 +150,31 @@ export function useAgentStream() {
       if ("type" in streamEvent) {
         switch (streamEvent.type) {
           case "system": {
+            if (
+              (streamEvent.subtype === "task_started" ||
+                streamEvent.subtype === "task_progress" ||
+                streamEvent.subtype === "task_notification") &&
+              streamEvent.tool_use_id
+            ) {
+              const updates: Parameters<typeof updateToolActivity>[2] = {};
+              if (streamEvent.task_id) updates.agentTaskId = streamEvent.task_id;
+              if (streamEvent.description || streamEvent.summary) {
+                updates.agentDescription =
+                  streamEvent.description ?? streamEvent.summary ?? null;
+              }
+              if (streamEvent.last_tool_name) {
+                updates.agentLastToolName = streamEvent.last_tool_name;
+              }
+              if (typeof streamEvent.usage?.tool_uses === "number") {
+                updates.agentToolUseCount = streamEvent.usage.tool_uses;
+              }
+              if (streamEvent.status) {
+                updates.agentStatus = streamEvent.status;
+              } else if (streamEvent.subtype === "task_progress") {
+                updates.agentStatus = "running";
+              }
+              updateToolActivity(sessionId, streamEvent.tool_use_id, updates);
+            }
             // Compaction lifecycle: status -> "compacting" marks start;
             // compact_boundary marks end.
             if (
@@ -332,6 +357,8 @@ export function useAgentStream() {
                       resultText: "",
                       collapsed: true,
                       summary: "",
+                      assistantMessageOrdinal:
+                        turnMessageCountRef.current[sessionId] || 0,
                     });
                     // Detect plan mode changes from agent tool calls.
                     if (inner.content_block.name === "EnterPlanMode") {
@@ -506,6 +533,7 @@ export function useAgentStream() {
     appendStreamingThinking,
     clearStreamingThinking,
     addChatMessage,
+    setPendingTypewriter,
     addToolActivity,
     updateToolActivity,
     appendToolActivityInput,
@@ -654,6 +682,12 @@ export function useAgentStream() {
               result_text: a.resultText,
               summary: a.summary,
               sort_order: i,
+              assistant_message_ordinal: a.assistantMessageOrdinal ?? 0,
+              agent_task_id: a.agentTaskId ?? null,
+              agent_description: a.agentDescription ?? null,
+              agent_last_tool_name: a.agentLastToolName ?? null,
+              agent_tool_use_count: a.agentToolUseCount ?? null,
+              agent_status: a.agentStatus ?? null,
             }));
             return saveTurnToolActivities(checkpoint.id, messageCount, activities);
           })()

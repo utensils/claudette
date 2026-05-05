@@ -380,6 +380,12 @@ fn copy_history(
                     result_text: a.result_text.clone(),
                     summary: a.summary.clone(),
                     sort_order: a.sort_order,
+                    assistant_message_ordinal: a.assistant_message_ordinal,
+                    agent_task_id: a.agent_task_id.clone(),
+                    agent_description: a.agent_description.clone(),
+                    agent_last_tool_name: a.agent_last_tool_name.clone(),
+                    agent_tool_use_count: a.agent_tool_use_count,
+                    agent_status: a.agent_status.clone(),
                 })
                 .collect();
             db.insert_turn_tool_activities(&remapped)?;
@@ -561,6 +567,12 @@ mod tests {
             result_text: "ok".into(),
             summary: "read file".into(),
             sort_order: 0,
+            assistant_message_ordinal: 0,
+            agent_task_id: None,
+            agent_description: None,
+            agent_last_tool_name: None,
+            agent_tool_use_count: None,
+            agent_status: None,
         }])
         .unwrap();
         db.insert_turn_tool_activities(&[TurnToolActivity {
@@ -572,6 +584,12 @@ mod tests {
             result_text: "ok".into(),
             summary: "edit file".into(),
             sort_order: 0,
+            assistant_message_ordinal: 0,
+            agent_task_id: None,
+            agent_description: None,
+            agent_last_tool_name: None,
+            agent_tool_use_count: None,
+            agent_status: None,
         }])
         .unwrap();
         db

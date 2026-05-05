@@ -18,6 +18,12 @@ export interface TurnToolActivityData {
   result_text: string;
   summary: string;
   sort_order: number;
+  assistant_message_ordinal: number;
+  agent_task_id: string | null;
+  agent_description: string | null;
+  agent_last_tool_name: string | null;
+  agent_tool_use_count: number | null;
+  agent_status: string | null;
 }
 
 export interface CompletedTurnData {
