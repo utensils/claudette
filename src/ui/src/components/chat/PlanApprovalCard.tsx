@@ -24,6 +24,7 @@ export function PlanApprovalCard({
 }: PlanApprovalCardProps) {
   const { t } = useTranslation("chat");
   const [planContent, setPlanContent] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [feedback, setFeedback] = useState("");
@@ -60,13 +61,14 @@ export function PlanApprovalCard({
       return;
     }
     if (!approval.planFilePath) return;
+    setLoadError(null);
     setLoading(true);
     try {
       await fetchPlanContent();
       setExpanded(true);
     } catch (e) {
       console.error("Failed to read plan file:", e);
-      setPlanContent(t("plan_approval_failed_read"));
+      setLoadError(t("plan_approval_failed_read"));
       setExpanded(true);
     } finally {
       setLoading(false);
@@ -75,6 +77,7 @@ export function PlanApprovalCard({
 
   const handleCopyPlan = async () => {
     if (!approval.planFilePath) return;
+    setLoadError(null);
     setCopying(true);
     try {
       const content = await fetchPlanContent();
@@ -86,6 +89,7 @@ export function PlanApprovalCard({
       copyTimeoutRef.current = window.setTimeout(() => setCopied(false), 1200);
     } catch (e) {
       console.error("Failed to copy plan:", e);
+      setLoadError(t("plan_approval_failed_read"));
     } finally {
       setCopying(false);
     }
@@ -104,7 +108,7 @@ export function PlanApprovalCard({
           <button
             className={styles.planLink}
             onClick={handleViewPlan}
-            disabled={loading}
+            disabled={loading || copying}
           >
             {loading
               ? t("plan_approval_loading")
@@ -140,6 +144,10 @@ export function PlanApprovalCard({
         <div className={styles.planContent}>
           <MessageMarkdown content={planContent} />
         </div>
+      )}
+
+      {expanded && !planContent && loadError && (
+        <div className={styles.planContent}>{loadError}</div>
       )}
 
       {approval.allowedPrompts.length > 0 && (
