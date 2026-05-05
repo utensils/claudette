@@ -1,11 +1,17 @@
 import type { CompletedTurn, ToolActivity } from "../../stores/useAppStore";
 import type { TaskTrackerResult } from "../../hooks/useTaskTracker";
-import { extractToolSummary, relativizePath } from "../../hooks/toolSummary";
+import { relativizePath } from "../../hooks/toolSummary";
 import { HighlightedPlainText } from "./HighlightedPlainText";
 import styles from "./ChatPanel.module.css";
 import { toolColor } from "./chatHelpers";
 import { TurnFooter } from "./TurnFooter";
 import { TaskProgressBar } from "./TaskProgressBar";
+import {
+  activityHasAgentToolCalls,
+  activityMatchesSearch,
+  activitySummaryText,
+} from "./agentToolCallRendering";
+import { AgentToolCallGroup } from "./AgentToolCallGroup";
 
 /**
  * Render a single completed turn summary (collapsible tool call list).
@@ -62,13 +68,9 @@ export function TurnSummary({
   // visible highlight inside.
   const queryHasMatch =
     !!searchQuery &&
-    visibleActivities.some((a) => {
-      const text = relativizePath(
-        activitySummaryText(a),
-        worktreePath,
-      );
-      return text.toLowerCase().includes(searchQuery.toLowerCase());
-    });
+    visibleActivities.some((activity) =>
+      activityMatchesSearch(activity, searchQuery, worktreePath),
+    );
   const isExpanded = !collapsed || queryHasMatch;
 
   return (
@@ -98,53 +100,32 @@ export function TurnSummary({
         </div>
         {isExpanded && (
           <div className={styles.turnActivities}>
-            {visibleActivities.map((act: ToolActivity) => (
-              <div key={act.toolUseId} className={styles.toolActivity}>
-                <div className={styles.toolHeader}>
-                  <span className={styles.toolName} style={{ color: toolColor(act.toolName) }}>
-                    {act.toolName}
-                  </span>
-                  {activitySummaryText(act) && (
-                    <span className={styles.toolSummary}>
-                      <HighlightedPlainText
-                        text={relativizePath(activitySummaryText(act), worktreePath)}
-                        query={searchQuery}
-                      />
+            {visibleActivities.map((act: ToolActivity) =>
+              activityHasAgentToolCalls(act) ? (
+                <AgentToolCallGroup
+                  key={act.toolUseId}
+                  activity={act}
+                  searchQuery={searchQuery}
+                  worktreePath={worktreePath}
+                />
+              ) : (
+                <div key={act.toolUseId} className={styles.toolActivity}>
+                  <div className={styles.toolHeader}>
+                    <span className={styles.toolName} style={{ color: toolColor(act.toolName) }}>
+                      {act.toolName}
                     </span>
-                  )}
-                </div>
-                {(act.agentLastToolName || act.agentToolUseCount || act.agentStatus) && (
-                  <div className={styles.agentToolProgress}>
-                    {act.agentStatus && (
-                      <span className={styles.agentToolStatus}>{act.agentStatus}</span>
-                    )}
-                    {typeof act.agentToolUseCount === "number" && (
-                      <span>
-                        {act.agentToolUseCount} agent tool call
-                        {act.agentToolUseCount !== 1 ? "s" : ""}
+                    {activitySummaryText(act) && (
+                      <span className={styles.toolSummary}>
+                        <HighlightedPlainText
+                          text={relativizePath(activitySummaryText(act), worktreePath)}
+                          query={searchQuery}
+                        />
                       </span>
                     )}
-                    {act.agentLastToolName && (
-                      <span>latest: {act.agentLastToolName}</span>
-                    )}
                   </div>
-                )}
-                {act.agentToolCalls && act.agentToolCalls.length > 0 && (
-                  <div className={styles.agentToolCallList}>
-                    {act.agentToolCalls.map((call) => (
-                      <div key={call.toolUseId} className={styles.agentToolCall}>
-                        <span className={styles.agentToolCallName}>
-                          {call.toolName}
-                        </span>
-                        <span className={styles.agentToolCallStatus}>
-                          {call.status}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
+                </div>
+              ),
+            )}
           </div>
         )}
       </div>
@@ -165,14 +146,5 @@ export function TurnSummary({
         />
       )}
     </div>
-  );
-}
-
-function activitySummaryText(activity: ToolActivity): string {
-  return (
-    activity.summary ||
-    activity.agentDescription ||
-    extractToolSummary(activity.toolName, activity.inputJson) ||
-    ""
   );
 }
