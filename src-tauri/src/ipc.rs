@@ -276,7 +276,15 @@ async fn dispatch(app: &AppHandle, req: RpcRequest) -> RpcResponse {
             protocol: PROTOCOL_NAME.to_string(),
             version: PROTOCOL_VERSION,
             app_version: env!("CARGO_PKG_VERSION").to_string(),
-            methods: METHODS.iter().map(|s| s.to_string()).collect(),
+            methods: {
+                // `Capabilities.methods` is documented as a sorted list
+                // (see `claudette::rpc`). `METHODS` is in declaration
+                // order for readability — sort here so the wire response
+                // matches the contract.
+                let mut m: Vec<String> = METHODS.iter().map(|s| s.to_string()).collect();
+                m.sort();
+                m
+            },
         })
         .unwrap_or(serde_json::Value::Null)),
         "version" => Ok(json!({ "version": env!("CARGO_PKG_VERSION") })),
