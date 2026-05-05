@@ -222,13 +222,38 @@ pub async fn stop_agent_background_task(
     Ok(())
 }
 
+/// Cap the initial dump to the last ~64 KiB of an existing output file.
+/// A long-lived agent shell can accumulate megabytes of history; emitting
+/// it all on first attach would lock the renderer and force xterm to
+/// reflow a huge buffer. New writes (the common case once the tail is
+/// caught up) ignore this cap.
+const INITIAL_TAIL_BYTES: u64 = 64 * 1024;
+
 async fn tail_agent_task_file(
     tab_id: i64,
     path: PathBuf,
     app: AppHandle,
     cancel: Arc<tokio::sync::Notify>,
 ) {
-    let mut offset = 0_u64;
+    // Seed `offset` so the first read returns at most the last
+    // INITIAL_TAIL_BYTES of an already-grown file. We still emit a `reset`
+    // marker before the chunk so the frontend doesn't render half-baked
+    // output ahead of a partial line — the agent shell is line-oriented
+    // so an interior offset is fine for visual continuity.
+    let mut offset = match tokio::fs::metadata(&path).await {
+        Ok(meta) => meta.len().saturating_sub(INITIAL_TAIL_BYTES),
+        Err(_) => 0,
+    };
+    if offset > 0 {
+        let _ = app.emit(
+            "agent-task-output",
+            &AgentTaskOutputPayload {
+                tab_id,
+                data: Vec::new(),
+                reset: true,
+            },
+        );
+    }
     let mut buf = vec![0_u8; 8192];
     loop {
         tokio::select! {

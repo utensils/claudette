@@ -55,10 +55,15 @@ export function useAgentStream() {
   const thinkingBlocksRef = useRef<Record<string, Set<number>>>({});
 
   // Recompute the workspace-level `agent_status` from the current
-  // per-session statuses. A workspace is Running if ANY active session in
-  // it is Running; otherwise Idle. Called whenever a session transitions
-  // between Running and Idle so the workspace aggregate (sidebar badges,
-  // tray) stays accurate even when sessions run concurrently.
+  // per-session statuses plus active background tasks. Priority:
+  //   - `Running` if ANY active session is Running.
+  //   - `IdleWithBackground` if no session is Running but at least one
+  //     active session has a background task in `starting`/`running`.
+  //   - `Idle` otherwise.
+  // Used as a sentinel (sidebar busy badges, tray icon, auto-updater
+  // gating) — it is not displayed verbatim. Call this whenever a session
+  // or background task transitions so the aggregate stays accurate even
+  // with concurrent sessions and async task updates.
   const syncWorkspaceAgentStatus = (wsId: string) => {
     const state = useAppStore.getState();
     const sessions = state.sessionsByWorkspace[wsId] ?? [];
