@@ -904,6 +904,20 @@ fn persist_user_send(db: &Database, prepared: &PreparedUserSend) -> Result<(), S
     Ok(())
 }
 
+fn cleanup_failed_steer_persistence(
+    db: &Database,
+    checkpoint_id: &str,
+    message_id: &str,
+    cause: &str,
+) {
+    if let Err(e) = db.delete_chat_message(message_id) {
+        eprintln!("[chat] failed to clean up steered user message after {cause}: {e}");
+    }
+    if let Err(e) = db.delete_checkpoint(checkpoint_id) {
+        eprintln!("[chat] failed to clean up pre-steer checkpoint after {cause}: {e}");
+    }
+}
+
 #[tauri::command]
 pub async fn steer_queued_chat_message(
     session_id: String,
@@ -959,10 +973,8 @@ pub async fn steer_queued_chat_message(
     )?;
 
     let anchor_msg_id = db
-        .list_chat_messages_for_session(&chat_session_id)
+        .last_chat_message_id_for_session(&chat_session_id)
         .map_err(|e| e.to_string())?
-        .last()
-        .map(|msg| msg.id.clone())
         .ok_or("Cannot steer before chat history has a message")?;
     let pre_steer_checkpoint = create_turn_checkpoint(CheckpointArgs {
         db_path: &state.db_path,
@@ -974,6 +986,7 @@ pub async fn steer_queued_chat_message(
     })
     .await
     .ok_or("Failed to create pre-steer checkpoint")?;
+    let pre_steer_checkpoint_id = pre_steer_checkpoint.id.clone();
 
     let prompt = claudette::file_expand::expand_file_mentions(
         std::path::Path::new(&worktree_path),
@@ -982,15 +995,27 @@ pub async fn steer_queued_chat_message(
     )
     .await;
 
-    persist_user_send(&db, &prepared_user_send)?;
-    {
-        let mut agents = state.agents.write().await;
-        if let Some(session) = agents.get_mut(&chat_session_id) {
-            session.last_user_msg_id = Some(prepared_user_send.user_msg.id.clone());
-        }
+    if let Err(e) = persist_user_send(&db, &prepared_user_send) {
+        cleanup_failed_steer_persistence(
+            &db,
+            &pre_steer_checkpoint_id,
+            &prepared_user_send.user_msg.id,
+            "persist failure",
+        );
+        return Err(e);
     }
-    ps.steer_user_message(&prompt, &prepared_user_send.cli_atts)
-        .await?;
+    if let Err(e) = ps
+        .steer_user_message(&prompt, &prepared_user_send.cli_atts)
+        .await
+    {
+        cleanup_failed_steer_persistence(
+            &db,
+            &pre_steer_checkpoint_id,
+            &prepared_user_send.user_msg.id,
+            "stdin write failure",
+        );
+        return Err(e);
+    }
     Ok(Some(pre_steer_checkpoint))
 }
 

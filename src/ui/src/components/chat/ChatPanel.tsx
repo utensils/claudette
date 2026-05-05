@@ -652,14 +652,14 @@ export function ChatPanel() {
     attachments?: AttachmentInput[],
   ) => void) | null>(null);
   useEffect(() => {
-    if (isRunning || !activeSessionId || !queuedMessage) return;
+    if (isSteeringQueued || isRunning || !activeSessionId || !queuedMessage) return;
     // Agent just finished — dispatch the queued message.
     const { content, mentionedFiles, attachments } = queuedMessage;
     clearQueuedMessage(activeSessionId);
     const filesSet = mentionedFiles?.length ? new Set(mentionedFiles) : undefined;
     // Use a microtask to avoid calling handleSend during render.
     queueMicrotask(() => handleSendRef.current?.(content, filesSet, attachments));
-  }, [isRunning, activeSessionId, queuedMessage, clearQueuedMessage]);
+  }, [isSteeringQueued, isRunning, activeSessionId, queuedMessage, clearQueuedMessage]);
 
   if (!ws) return null;
 
@@ -716,6 +716,7 @@ export function ChatPanel() {
     const messageId = crypto.randomUUID();
     setError(null);
     setIsSteeringQueued(true);
+    clearQueuedMessage(sessionId);
     try {
       const checkpoint = await steerQueuedChatMessage(
         sessionId,
@@ -736,6 +737,7 @@ export function ChatPanel() {
     } catch (e) {
       const errMsg = String(e);
       console.error("steerQueuedChatMessage failed:", errMsg);
+      setQueuedMessage(sessionId, content, mentionedFiles, attachments);
       setError(errMsg);
     } finally {
       setIsSteeringQueued(false);
