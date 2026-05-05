@@ -49,7 +49,19 @@ fn emit_agent_background_task_event(
 }
 
 fn terminal_text(text: &str) -> String {
-    text.replace("\r\n", "\n").replace('\n', "\r\n")
+    let normalized = text.replace("\r\n", "\n");
+    let mut rendered = String::with_capacity(normalized.len());
+    for ch in normalized.chars() {
+        match ch {
+            // Progress renderers such as cargo frequently redraw one terminal
+            // row with carriage returns. Clear the rest of the row so shorter
+            // redraws do not leave stale text behind in the read-only terminal.
+            '\r' => rendered.push_str("\r\x1b[K"),
+            '\n' => rendered.push_str("\r\n"),
+            _ => rendered.push(ch),
+        }
+    }
+    rendered
 }
 
 fn append_agent_bash_output(path: &std::path::Path, text: &str) -> std::io::Result<()> {
@@ -99,7 +111,7 @@ fn mirror_background_task_output(source: std::path::PathBuf, destination: std::p
                         wrote = true;
                         if let Err(err) = append_agent_bash_output(
                             &destination,
-                            &String::from_utf8_lossy(&buf[..n]),
+                            &terminal_text(&String::from_utf8_lossy(&buf[..n])),
                         ) {
                             eprintln!("[chat] failed to mirror background output: {err}");
                         }
@@ -2413,4 +2425,22 @@ pub async fn send_chat_message(
     });
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::terminal_text;
+
+    #[test]
+    fn terminal_text_converts_newlines_to_terminal_newlines() {
+        assert_eq!(terminal_text("one\ntwo\r\nthree"), "one\r\ntwo\r\nthree");
+    }
+
+    #[test]
+    fn terminal_text_clears_carriage_return_redraws() {
+        assert_eq!(
+            terminal_text("Building [======]\rBuilding [>]\ndone"),
+            "Building [======]\r\x1b[KBuilding [>]\r\ndone"
+        );
+    }
 }
