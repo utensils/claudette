@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://codecov.io/gh/utensils/claudette"><img src="https://codecov.io/gh/utensils/claudette/graph/badge.svg" alt="codecov"/></a>
-  <a href="https://discord.gg/Ks9Ghnem"><img src="https://img.shields.io/discord/1491165880820699398?logo=discord&label=Discord" alt="Discord"/></a>
+  <a href="https://discord.gg/JQdfT3Z67F"><img src="https://img.shields.io/discord/1491165880820699398?logo=discord&label=Discord" alt="Discord"/></a>
   <a href="https://www.reddit.com/r/ClaudetteApp"><img src="https://img.shields.io/reddit/subreddit-subscribers/ClaudetteApp?style=social" alt="Reddit"/></a>
 </p>
 
@@ -263,7 +263,7 @@ All traffic is encrypted with TLS. The local app pins the server's certificate f
 
 ## Community
 
-Join us on [Discord](https://discord.gg/aumGBKccmD) to ask questions, share feedback, and connect with other Claudette users.
+Join us on [Discord](https://discord.gg/JQdfT3Z67F) to ask questions, share feedback, and connect with other Claudette users.
 
 ## Contributing
 

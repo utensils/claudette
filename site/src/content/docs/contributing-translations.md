@@ -50,4 +50,4 @@ If you only want to fix a typo or polish wording in an existing language, the pr
 
 ## Questions?
 
-Hop into our [Discord](https://discord.gg/aumGBKccmD) and ask in the contributors channel, or open a discussion on GitHub. Translations are a fantastic way to make Claudette accessible to people who would otherwise have to work in a second language — thank you for helping out.
+Hop into our [Discord](https://discord.gg/JQdfT3Z67F) and ask in the contributors channel, or open a discussion on GitHub. Translations are a fantastic way to make Claudette accessible to people who would otherwise have to work in a second language — thank you for helping out.
