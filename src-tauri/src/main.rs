@@ -524,6 +524,7 @@ fn main() {
             // Terminal
             commands::terminal::create_terminal_tab,
             commands::terminal::delete_terminal_tab,
+            commands::terminal::ensure_claudette_terminal_tab,
             commands::terminal::list_terminal_tabs,
             commands::terminal::start_agent_task_tail,
             commands::terminal::stop_agent_task_tail,

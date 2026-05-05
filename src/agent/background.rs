@@ -1,5 +1,12 @@
 use serde::{Deserialize, Serialize};
 
+pub fn agent_bash_output_path(chat_session_id: &str) -> std::path::PathBuf {
+    std::env::temp_dir()
+        .join("claudette-agent-bash")
+        .join(chat_session_id)
+        .join("agent-shell.output")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BashStart {
     pub command: Option<String>,

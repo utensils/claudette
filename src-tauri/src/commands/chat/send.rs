@@ -4,8 +4,8 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use claudette::agent::background::{
-    AgentBackgroundTaskEvent, AgentBackgroundTaskEventKind, parse_background_task_binding,
-    parse_bash_start, parse_task_notification,
+    AgentBackgroundTaskEvent, AgentBackgroundTaskEventKind, agent_bash_output_path,
+    parse_background_task_binding, parse_bash_start, parse_task_notification,
 };
 use claudette::agent::{
     self, AgentEvent, AgentSettings, ControlRequestInner, FileAttachment, InnerStreamEvent,
@@ -46,13 +46,6 @@ fn emit_agent_background_task_event(
         tab,
     };
     let _ = app.emit("agent-background-task", &payload);
-}
-
-fn agent_bash_output_path(chat_session_id: &str) -> std::path::PathBuf {
-    std::env::temp_dir()
-        .join("claudette-agent-bash")
-        .join(chat_session_id)
-        .join("agent-shell.output")
 }
 
 fn terminal_text(text: &str) -> String {
@@ -125,11 +118,19 @@ fn get_or_create_agent_shell_terminal_tab(
     chat_session_id: &str,
 ) -> Option<TerminalTab> {
     let db = Database::open(db_path).ok()?;
-    if let Ok(Some(mut tab)) = db.get_agent_shell_terminal_tab(chat_session_id) {
-        if tab.title != CLAUDETTE_TERMINAL_TITLE {
-            let _ = db.update_terminal_tab_title(tab.id, CLAUDETTE_TERMINAL_TITLE);
-            tab.title = CLAUDETTE_TERMINAL_TITLE.to_string();
-        }
+    if let Ok(Some(mut tab)) = db.get_agent_shell_terminal_tab_by_workspace(workspace_id) {
+        let output_path = agent_bash_output_path(chat_session_id)
+            .to_string_lossy()
+            .into_owned();
+        let _ = db.update_agent_shell_terminal_tab_session(tab.id, chat_session_id, &output_path);
+        tab.title = CLAUDETTE_TERMINAL_TITLE.to_string();
+        tab.sort_order = 0;
+        tab.agent_chat_session_id = Some(chat_session_id.to_string());
+        tab.agent_tool_use_id = None;
+        tab.agent_task_id = None;
+        tab.output_path = Some(output_path);
+        tab.task_status = None;
+        tab.task_summary = None;
         return Some(tab);
     }
     let max_id = db.max_terminal_tab_id().ok()?;

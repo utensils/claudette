@@ -861,6 +861,13 @@ export function createTerminalTab(
   return invoke("create_terminal_tab", { workspaceId });
 }
 
+export function ensureClaudetteTerminalTab(
+  workspaceId: string,
+  chatSessionId: string
+): Promise<TerminalTab> {
+  return invoke("ensure_claudette_terminal_tab", { workspaceId, chatSessionId });
+}
+
 export function deleteTerminalTab(id: number): Promise<void> {
   return invoke("delete_terminal_tab", { id });
 }

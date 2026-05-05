@@ -15,6 +15,7 @@ import { getTerminalTheme } from "../../utils/theme";
 import {
   createTerminalTab,
   deleteTerminalTab,
+  ensureClaudetteTerminalTab,
   listTerminalTabs,
   openUrl,
   spawnPty,
@@ -335,6 +336,11 @@ export const TerminalPanel = memo(function TerminalPanel() {
   const setPanePtyId = useAppStore((s) => s.setPanePtyId);
   const setPaneSpawnError = useAppStore((s) => s.setPaneSpawnError);
   const terminalFontSize = useAppStore((s) => s.terminalFontSize);
+  const selectedSessionId = useAppStore((s) =>
+    s.selectedWorkspaceId
+      ? (s.selectedSessionIdByWorkspaceId[s.selectedWorkspaceId] ?? null)
+      : null,
+  );
   const fontFamilyMono = useAppStore((s) => s.fontFamilyMono);
   const currentThemeId = useAppStore((s) => s.currentThemeId);
   const uiFontSize = useAppStore((s) => s.uiFontSize);
@@ -425,12 +431,25 @@ export const TerminalPanel = memo(function TerminalPanel() {
     if (!selectedWorkspaceId || !terminalPanelVisible) return;
     const wsId = selectedWorkspaceId;
     listTerminalTabs(wsId).then(async (t) => {
+      if (selectedSessionId) {
+        await ensureClaudetteTerminalTab(wsId, selectedSessionId);
+        t = await listTerminalTabs(wsId);
+      }
       if (t.length > 0) {
         setTerminalTabs(wsId, t);
         const currentActive = useAppStore.getState().activeTerminalTabId[wsId];
         const activeStillValid =
           currentActive != null && t.some((tab) => tab.id === currentActive);
         if (!activeStillValid) setActiveTerminalTab(wsId, t[0].id);
+        if (!t.some((tab) => tab.kind !== "agent_task")) {
+          try {
+            const tab = await createTerminalTab(wsId);
+            addTerminalTab(wsId, tab);
+            setActiveTerminalTab(wsId, t[0].id);
+          } catch (err) {
+            console.error("Failed to create terminal tab:", err);
+          }
+        }
       } else if (autoCreatedRef.current !== wsId) {
         autoCreatedRef.current = wsId;
         try {
@@ -443,6 +462,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
     });
   }, [
     selectedWorkspaceId,
+    selectedSessionId,
     terminalPanelVisible,
     setTerminalTabs,
     setActiveTerminalTab,
@@ -651,7 +671,6 @@ export const TerminalPanel = memo(function TerminalPanel() {
 
       if (inst.isAgentTask) {
         term.options.cursorBlink = false;
-        term.writeln("Starting agent command...");
         safeFit(inst);
         return inst;
       }

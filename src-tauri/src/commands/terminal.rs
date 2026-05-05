@@ -7,8 +7,9 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
-use claudette::db::Database;
-use claudette::model::TerminalTab;
+use claudette::agent::background::agent_bash_output_path;
+use claudette::db::{CLAUDETTE_TERMINAL_TITLE, Database};
+use claudette::model::{TerminalTab, TerminalTabKind};
 
 use crate::state::{AgentTaskTailHandle, AppState};
 
@@ -52,6 +53,57 @@ pub async fn create_terminal_tab(
 
     db.insert_terminal_tab(&tab).map_err(|e| e.to_string())?;
 
+    Ok(tab)
+}
+
+#[tauri::command]
+pub async fn ensure_claudette_terminal_tab(
+    workspace_id: String,
+    chat_session_id: String,
+    state: State<'_, AppState>,
+) -> Result<TerminalTab, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+
+    if let Some(mut tab) = db
+        .get_agent_shell_terminal_tab_by_workspace(&workspace_id)
+        .map_err(|e| e.to_string())?
+    {
+        let output_path = agent_bash_output_path(&chat_session_id)
+            .to_string_lossy()
+            .into_owned();
+        db.update_agent_shell_terminal_tab_session(tab.id, &chat_session_id, &output_path)
+            .map_err(|e| e.to_string())?;
+        tab.title = CLAUDETTE_TERMINAL_TITLE.to_string();
+        tab.sort_order = 0;
+        tab.agent_chat_session_id = Some(chat_session_id);
+        tab.agent_tool_use_id = None;
+        tab.agent_task_id = None;
+        tab.output_path = Some(output_path);
+        tab.task_status = None;
+        tab.task_summary = None;
+        return Ok(tab);
+    }
+
+    let tab = TerminalTab {
+        id: db.max_terminal_tab_id().map_err(|e| e.to_string())? + 1,
+        workspace_id,
+        title: CLAUDETTE_TERMINAL_TITLE.to_string(),
+        kind: TerminalTabKind::AgentTask,
+        is_script_output: false,
+        sort_order: 0,
+        created_at: now_iso(),
+        agent_chat_session_id: Some(chat_session_id.clone()),
+        agent_tool_use_id: None,
+        agent_task_id: None,
+        output_path: Some(
+            agent_bash_output_path(&chat_session_id)
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        task_status: None,
+        task_summary: None,
+    };
+    db.insert_terminal_tab(&tab).map_err(|e| e.to_string())?;
     Ok(tab)
 }
 

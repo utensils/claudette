@@ -62,7 +62,16 @@ impl Database {
              WHERE workspace_id = ?1
                AND (
                    kind != 'agent_task'
-                   OR title IN ('Claudette terminal', 'Agent shell')
+                   OR id = (
+                       SELECT id FROM terminal_tabs AS agent_terminal
+                       WHERE agent_terminal.workspace_id = ?1
+                         AND agent_terminal.kind = 'agent_task'
+                         AND agent_terminal.title IN ('Claudette terminal', 'Agent shell')
+                       ORDER BY
+                         CASE WHEN agent_terminal.title = 'Claudette terminal' THEN 0 ELSE 1 END,
+                         agent_terminal.id
+                       LIMIT 1
+                   )
                )
              ORDER BY
                CASE WHEN kind = 'agent_task' THEN 0 ELSE 1 END,
@@ -160,6 +169,66 @@ impl Database {
             task_status: row.get(11)?,
             task_summary: row.get(12)?,
         }))
+    }
+
+    pub fn get_agent_shell_terminal_tab_by_workspace(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Option<TerminalTab>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, workspace_id, title, kind, is_script_output, sort_order, created_at,
+                    agent_chat_session_id, agent_tool_use_id, agent_task_id,
+                    output_path, task_status, task_summary
+             FROM terminal_tabs
+             WHERE workspace_id = ?1
+               AND kind = 'agent_task'
+               AND title IN ('Claudette terminal', 'Agent shell')
+             ORDER BY CASE WHEN title = 'Claudette terminal' THEN 0 ELSE 1 END, id
+             LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![workspace_id])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        let kind: String = row.get(3)?;
+        let is_script: i32 = row.get(4)?;
+        Ok(Some(TerminalTab {
+            id: row.get(0)?,
+            workspace_id: row.get(1)?,
+            title: row.get(2)?,
+            kind: parse_terminal_tab_kind(&kind),
+            is_script_output: is_script != 0,
+            sort_order: row.get(5)?,
+            created_at: row.get(6)?,
+            agent_chat_session_id: row.get(7)?,
+            agent_tool_use_id: row.get(8)?,
+            agent_task_id: row.get(9)?,
+            output_path: row.get(10)?,
+            task_status: row.get(11)?,
+            task_summary: row.get(12)?,
+        }))
+    }
+
+    pub fn update_agent_shell_terminal_tab_session(
+        &self,
+        id: i64,
+        chat_session_id: &str,
+        output_path: &str,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE terminal_tabs
+             SET title = 'Claudette terminal',
+                 sort_order = 0,
+                 agent_chat_session_id = ?1,
+                 agent_tool_use_id = NULL,
+                 agent_task_id = NULL,
+                 output_path = ?2,
+                 task_status = NULL,
+                 task_summary = NULL
+             WHERE id = ?3",
+            params![chat_session_id, output_path, id],
+        )?;
+        Ok(())
     }
 
     pub fn get_terminal_tab_by_agent_task(
