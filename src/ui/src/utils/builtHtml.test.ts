@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import * as vm from "node:vm";
 
 // Regression test for the production-build dist/index.html.
 //
@@ -57,11 +58,14 @@ describe.skipIf(!existsSync(DIST_HTML))("built dist/index.html", () => {
 
   it("every inline <script> body parses as valid JavaScript", () => {
     inlineScripts.forEach((body, i) => {
-      // new Function() throws SyntaxError on parse failure; the body is
-      // wrapped as a function body so top-level IIFEs / declarations
-      // are fine.
+      // Use vm.Script for parse-only validation against actual Script
+      // grammar (an inline <script> is a Script, not a FunctionBody —
+      // top-level `return`, for example, is a SyntaxError in a Script
+      // but not in `new Function(body)`). The script never runs; the
+      // constructor throws SyntaxError on parse failure and that's all
+      // we care about.
       expect(
-        () => new Function(body),
+        () => new vm.Script(body),
         `inline <script> ${i + 1} of ${inlineScripts.length} is not valid JS`,
       ).not.toThrow();
     });
@@ -105,7 +109,11 @@ describe.skipIf(!existsSync(DIST_HTML))("built dist/index.html", () => {
       guard,
       "no inline <script> with __claudetteHijackBlocked marker found",
     ).toBeDefined();
-    expect(guard).toMatch(/\(function \(\) \{/);
-    expect(guard).toMatch(/\}\)\(\);/);
+    // Allow arbitrary whitespace and an optional trailing semicolon —
+    // we only care that the IIFE structure survives the build, not
+    // that it preserves source-style spacing (which a future
+    // minification pass could legitimately change).
+    expect(guard).toMatch(/\(\s*function\s*\(\s*\)\s*\{/);
+    expect(guard).toMatch(/\}\s*\)\s*\(\s*\)\s*;?/);
   });
 });

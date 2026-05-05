@@ -17,7 +17,15 @@
     <script>
       // Cross-app dev-port hijack guard. ES module imports hoist, so this
       // MUST be inline (and before the bundle script) to beat them.
-      // Mirrors bootIdentityGuard.ts; that module exists for tests.
+      //
+      // bootIdentityGuard.ts is a logic mirror used only by unit tests —
+      // it covers the meta-tag-check / overlay-render branches without
+      // requiring a browser harness. The inline version diverges
+      // intentionally: it gates on location.protocol so release builds
+      // skip the guard entirely, and calls window.stop() to abort
+      // foreign asset fetches. The TS mirror has neither because it's
+      // exercised in a fake-DOM environment where neither would make
+      // sense.
       //
       // IMPORTANT: do NOT introduce raw HEAD / BODY / TITLE element open
       // or close tags as substrings anywhere in this script's source —
@@ -46,13 +54,6 @@
         if (observed === EXPECTED) return;
         window.__claudetteHijackBlocked = true;
 
-        // Halt the foreign bundle as best we can. window.stop() aborts
-        // pending fetches (so the bundle script tag below us never
-        // executes if it hadn't fetched yet). ES modules already in
-        // flight can't be cancelled, but main.tsx re-checks
-        // __claudetteHijackBlocked and bails before mounting React.
-        if (window.stop) window.stop();
-
         var esc = function (s) {
           return String(s)
             .replace(/&/g, "&amp;")
@@ -74,17 +75,28 @@
           '<p style="margin:0;font-size:12px;color:#c4b5fd;">You’re seeing this instead of a silent UI swap because of the inline guard in <code>index.html</code>.</p>' +
           "</div></div>";
 
-        function paint() {
-          // document.body may not exist yet — the parser is still inside
-          // <head> when this script runs synchronously. If so, paint as
-          // soon as the body is parsed.
-          if (!document.body) {
-            document.addEventListener("DOMContentLoaded", paint);
-            return;
-          }
-          document.body.innerHTML = html;
-        }
-        paint();
+        // Paint the overlay synchronously before halting the parser.
+        // document.body may not exist yet (we're inside <head>), but
+        // documentElement always does — and waiting on DOMContentLoaded
+        // is unsafe here because the window.stop() below can halt the
+        // parser in some webviews and prevent that event from firing,
+        // which would leave the user staring at a half-loaded foreign
+        // page with no error overlay. position:fixed in the overlay
+        // CSS means it doesn't need to live inside <body> to render
+        // correctly. We attach to <body> when it's already parsed
+        // (just so devtools' element tree looks normal), otherwise
+        // straight to <html>.
+        var holder = document.createElement("div");
+        holder.innerHTML = html;
+        var fragment = document.createDocumentFragment();
+        while (holder.firstChild) fragment.appendChild(holder.firstChild);
+        (document.body || document.documentElement).appendChild(fragment);
+
+        // Now that the overlay is attached, abort any pending fetches
+        // for the foreign bundle. ES modules already in flight can't
+        // be cancelled, but main.tsx re-checks __claudetteHijackBlocked
+        // and bails before mounting React.
+        if (window.stop) window.stop();
 
         // eslint-disable-next-line no-console
         console.error(
