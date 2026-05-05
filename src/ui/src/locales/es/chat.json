@@ -68,6 +68,8 @@
   "plan_approval_description": "El agente ha escrito un plan y solicita aprobación para proceder con la implementación.",
   "plan_approval_view_plan": "Ver plan",
   "plan_approval_hide_plan": "Ocultar plan",
+  "plan_approval_copy": "Copiar plan",
+  "plan_approval_copied": "¡Copiado!",
   "plan_approval_loading": "Cargando...",
   "plan_approval_failed_read": "(No se pudo leer el archivo del plan)",
   "plan_approval_requested_permissions": "Permisos solicitados",

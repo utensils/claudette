@@ -29,12 +29,18 @@
   margin-bottom: 14px;
 }
 
+.planActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
 .planLink {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   padding: 8px 14px;
-  margin-bottom: 14px;
   background: var(--hover-bg-subtle);
   border: 1px solid var(--divider);
   border-radius: 8px;
@@ -44,7 +50,8 @@
   cursor: pointer;
   transition: border-color var(--transition-fast), background var(--transition-fast);
   text-decoration: none;
-  max-width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -53,6 +60,32 @@
 .planLink:hover {
   border-color: rgba(var(--accent-primary-rgb), 0.3);
   background: rgba(var(--accent-primary-rgb), 0.05);
+}
+
+.copyBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  background: var(--hover-bg-subtle);
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  color: var(--accent-primary);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.copyBtn:hover:not(:disabled) {
+  border-color: rgba(var(--accent-primary-rgb), 0.3);
+  background: rgba(var(--accent-primary-rgb), 0.05);
+}
+
+.copyBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .planContent {

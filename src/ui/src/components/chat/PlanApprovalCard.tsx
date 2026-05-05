@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MessageMarkdown } from "./MessageMarkdown";
 import type { PlanApproval } from "../../stores/useAppStore";
@@ -26,6 +26,32 @@ export function PlanApprovalCard({
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [feedback, setFeedback] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [copying, setCopying] = useState(false);
+  const copyTimeoutRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current !== null) {
+        window.clearTimeout(copyTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const fetchPlanContent = async (): Promise<string> => {
+    if (planContent !== null) return planContent;
+    if (!approval.planFilePath) throw new Error("No plan file path");
+    let content: string;
+    if (remoteConnectionId) {
+      content = (await sendRemoteCommand(remoteConnectionId, "read_plan_file", {
+        path: approval.planFilePath,
+      })) as string;
+    } else {
+      content = await readPlanFile(approval.planFilePath);
+    }
+    setPlanContent(content);
+    return content;
+  };
 
   const handleViewPlan = async () => {
     if (planContent !== null) {
@@ -35,15 +61,7 @@ export function PlanApprovalCard({
     if (!approval.planFilePath) return;
     setLoading(true);
     try {
-      let content: string;
-      if (remoteConnectionId) {
-        content = (await sendRemoteCommand(remoteConnectionId, "read_plan_file", {
-          path: approval.planFilePath,
-        })) as string;
-      } else {
-        content = await readPlanFile(approval.planFilePath);
-      }
-      setPlanContent(content);
+      await fetchPlanContent();
       setExpanded(true);
     } catch (e) {
       console.error("Failed to read plan file:", e);
@@ -51,6 +69,24 @@ export function PlanApprovalCard({
       setExpanded(true);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleCopyPlan = async () => {
+    if (!approval.planFilePath) return;
+    setCopying(true);
+    try {
+      const content = await fetchPlanContent();
+      await navigator.clipboard.writeText(content);
+      setCopied(true);
+      if (copyTimeoutRef.current !== null) {
+        window.clearTimeout(copyTimeoutRef.current);
+      }
+      copyTimeoutRef.current = window.setTimeout(() => setCopied(false), 1200);
+    } catch (e) {
+      console.error("Failed to copy plan:", e);
+    } finally {
+      setCopying(false);
     }
   };
 
@@ -63,19 +99,40 @@ export function PlanApprovalCard({
       </div>
 
       {approval.planFilePath && (
-        <button
-          className={styles.planLink}
-          onClick={handleViewPlan}
-          disabled={loading}
-        >
-          {loading
-            ? t("plan_approval_loading")
-            : expanded
-              ? t("plan_approval_hide_plan")
-              : t("plan_approval_view_plan")}
-          {" \u2014 "}
-          {approval.planFilePath.split("/").slice(-2).join("/")}
-        </button>
+        <div className={styles.planActions}>
+          <button
+            className={styles.planLink}
+            onClick={handleViewPlan}
+            disabled={loading}
+          >
+            {loading
+              ? t("plan_approval_loading")
+              : expanded
+                ? t("plan_approval_hide_plan")
+                : t("plan_approval_view_plan")}
+            {" \u2014 "}
+            {approval.planFilePath.split("/").slice(-2).join("/")}
+          </button>
+          <button
+            type="button"
+            className={styles.copyBtn}
+            onClick={handleCopyPlan}
+            disabled={loading || copying}
+            title={copied ? t("plan_approval_copied") : t("plan_approval_copy")}
+            aria-label={copied ? t("plan_approval_copied") : t("plan_approval_copy")}
+          >
+            {copied ? (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            )}
+          </button>
+        </div>
       )}
 
       {expanded && planContent && (

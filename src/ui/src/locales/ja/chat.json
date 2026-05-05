@@ -68,6 +68,8 @@
   "plan_approval_description": "エージェントがプランを作成し、実装を進めるための承認を求めています。",
   "plan_approval_view_plan": "プランを表示",
   "plan_approval_hide_plan": "プランを非表示",
+  "plan_approval_copy": "プランをコピー",
+  "plan_approval_copied": "コピーしました",
   "plan_approval_loading": "読み込み中...",
   "plan_approval_failed_read": "（プランファイルの読み込みに失敗しました）",
   "plan_approval_requested_permissions": "要求された権限",
