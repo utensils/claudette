@@ -2705,7 +2705,7 @@ mod tests {
         ));
 
         registry
-            .start_recording(&db_path, DISTIL_ID)
+            .start_recording(&db_path, DISTIL_ID, None)
             .await
             .expect("recording starts");
 
