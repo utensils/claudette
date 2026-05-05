@@ -15,6 +15,12 @@ import {
   selectActiveFileTabPath,
   useAppStore,
 } from "../../stores/useAppStore";
+import {
+  formatBinding,
+  getEffectiveBindingById,
+  resolveHotkeyAction,
+} from "../../hotkeys/bindings";
+import { isMacHotkeyPlatform } from "../../hotkeys/platform";
 import { fileBufferKey } from "../../stores/slices/fileTreeSlice";
 import {
   readWorkspaceFileBytes,
@@ -72,6 +78,7 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
   const setFileBufferSaved = useAppStore((s) => s.setFileBufferSaved);
   const setFileTabPreview = useAppStore((s) => s.setFileTabPreview);
   const addToast = useAppStore((s) => s.addToast);
+  const keybindings = useAppStore((s) => s.keybindings);
 
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">(
     "idle",
@@ -278,13 +285,14 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
   useEffect(() => {
     if (!showMarkdownToggle) return;
     const handler = (e: KeyboardEvent) => {
-      const mod = e.metaKey || e.ctrlKey;
-      // Match on `e.key` rather than `e.code` so Cmd/Ctrl+Shift+V fires on
-      // whichever physical key the user's layout assigns to "V" — `e.code`
-      // is "KeyV" only on QWERTY-style layouts.
-      if (!mod || !e.shiftKey || e.key.toLowerCase() !== "v") return;
       if (e.repeat) return;
       const state = useAppStore.getState();
+      if (
+        resolveHotkeyAction(e, "file-viewer", state.keybindings) !==
+        "file-viewer.toggle-markdown-preview"
+      ) {
+        return;
+      }
       if (
         state.settingsOpen ||
         state.activeModal ||
@@ -306,9 +314,13 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
     return () => window.removeEventListener("keydown", handler);
   }, [showMarkdownToggle, togglePreview]);
 
-  const isMacPlatform =
-    typeof navigator !== "undefined" && navigator.platform.startsWith("Mac");
-  const previewShortcutHint = isMacPlatform ? "⌘⇧V" : "Ctrl+Shift+V";
+  const previewShortcutHint = formatBinding(
+    getEffectiveBindingById(
+      "file-viewer.toggle-markdown-preview",
+      keybindings,
+    ),
+    isMacHotkeyPlatform(),
+  );
 
   // Resolution context for relative `<img>` references inside the rendered
   // markdown. Workspace-relative paths in a README — e.g. `./assets/logo.png`

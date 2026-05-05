@@ -196,6 +196,41 @@ describe("createVoiceHotkeyHandlers — hold-to-talk", () => {
     expect(voice.stop).toHaveBeenCalledOnce();
   });
 
+  it("supports code-prefixed hold bindings", () => {
+    const voice = makeVoice("idle");
+    const { onKeyDown, onKeyUp } = createVoiceHotkeyHandlers(
+      () => voice,
+      null,
+      "code:AltRight",
+    );
+
+    onKeyDown(keyEvent({ code: "AltRight" }));
+    expect(voice.start).toHaveBeenCalledOnce();
+
+    voice.state = "recording";
+    onKeyUp(keyEvent({ code: "AltRight" }));
+    expect(voice.stop).toHaveBeenCalledOnce();
+  });
+
+  it("supports modifier-inclusive hold bindings", () => {
+    const voice = makeVoice("idle");
+    const { onKeyDown, onKeyUp } = createVoiceHotkeyHandlers(
+      () => voice,
+      null,
+      "shift+code:AltRight",
+    );
+
+    onKeyDown(keyEvent({ code: "AltRight" }));
+    expect(voice.start).not.toHaveBeenCalled();
+
+    onKeyDown(keyEvent({ code: "AltRight", shiftKey: true }));
+    expect(voice.start).toHaveBeenCalledOnce();
+
+    voice.state = "recording";
+    onKeyUp(keyEvent({ code: "AltRight" }));
+    expect(voice.stop).toHaveBeenCalledOnce();
+  });
+
   it("clears holdActive on blur so a late keyup is a no-op", () => {
     // useVoiceInput owns the actual stop-on-blur (so it applies to recordings
     // started by mic button or toggle hotkey too). The hotkey's onBlur job is

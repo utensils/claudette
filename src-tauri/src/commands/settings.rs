@@ -82,6 +82,22 @@ pub async fn set_app_setting(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn delete_app_setting(key: String, state: State<'_, AppState>) -> Result<(), String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    db.delete_app_setting(&key).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_app_settings_with_prefix(
+    prefix: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<(String, String)>, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    db.list_app_settings_with_prefix(&prefix)
+        .map_err(|e| e.to_string())
+}
+
 /// Read the global `git config user.name` and return it as a branch-safe slug.
 #[tauri::command]
 pub async fn get_git_username() -> Result<Option<String>, String> {
