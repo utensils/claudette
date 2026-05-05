@@ -3,6 +3,7 @@ export type WorkspaceStatus = "Active" | "Archived";
 export type AgentStatus =
   | "Running"
   | "Idle"
+  | "IdleWithBackground"
   | "Stopped"
   | "Compacting"
   | { Error: string };

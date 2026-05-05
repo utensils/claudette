@@ -2,9 +2,16 @@ export interface TerminalTab {
   id: number;
   workspace_id: string;
   title: string;
+  kind?: "pty" | "agent_task";
   is_script_output: boolean;
   sort_order: number;
   created_at: string;
+  agent_chat_session_id?: string | null;
+  agent_tool_use_id?: string | null;
+  agent_task_id?: string | null;
+  output_path?: string | null;
+  task_status?: string | null;
+  task_summary?: string | null;
 }
 
 export interface WorkspaceCommandState {

@@ -2,6 +2,10 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use claudette::agent::background::{
+    AgentBackgroundTaskEvent, AgentBackgroundTaskEventKind, parse_background_bash_start,
+    parse_background_task_binding, parse_task_notification,
+};
 use claudette::agent::{
     self, AgentEvent, AgentSettings, ControlRequestInner, FileAttachment, InnerStreamEvent,
     PersistentSession, StartContentBlock, StreamEvent,
@@ -15,7 +19,7 @@ use claudette::chat::{
 use claudette::db::Database;
 use claudette::env::WorkspaceEnv;
 use claudette::mcp_supervisor::McpSupervisor;
-use claudette::model::{ChatMessage, ChatRole};
+use claudette::model::{ChatMessage, ChatRole, TerminalTab, TerminalTabKind};
 use claudette::permissions::tools_for_level;
 
 use crate::state::{AgentSessionState, AppState, PendingPermission};
@@ -26,6 +30,84 @@ use super::{
     ATTENTION_NOTIFY_DELAY_MS, AgentStreamPayload, AttachmentInput, AttachmentResponse,
     ChatHistoryPage, fire_completion_notification, now_iso, start_bridge_and_inject_mcp,
 };
+
+fn truncate_task_title(command: Option<&str>) -> String {
+    let raw = command.unwrap_or("Background task").trim();
+    let mut title = if raw.is_empty() {
+        "Background task".to_string()
+    } else {
+        raw.to_string()
+    };
+    if title.chars().count() > 42 {
+        title = title.chars().take(39).collect::<String>() + "...";
+    }
+    format!("Agent: {title}")
+}
+
+fn emit_agent_background_task_event(
+    app: &AppHandle,
+    kind: AgentBackgroundTaskEventKind,
+    workspace_id: &str,
+    chat_session_id: &str,
+    tab: TerminalTab,
+) {
+    let payload = AgentBackgroundTaskEvent {
+        kind,
+        workspace_id: workspace_id.to_string(),
+        chat_session_id: chat_session_id.to_string(),
+        tab,
+    };
+    let _ = app.emit("agent-background-task", &payload);
+}
+
+fn create_agent_task_terminal_tab(
+    db_path: &std::path::Path,
+    workspace_id: &str,
+    chat_session_id: &str,
+    tool_use_id: &str,
+    command: Option<&str>,
+) -> Option<TerminalTab> {
+    let db = Database::open(db_path).ok()?;
+    if let Ok(Some(tab)) = db.get_terminal_tab_by_tool_use_id(tool_use_id) {
+        return Some(tab);
+    }
+    let max_id = db.max_terminal_tab_id().ok()?;
+    let existing = db.list_terminal_tabs_by_workspace(workspace_id).ok()?;
+    let tab = TerminalTab {
+        id: max_id + 1,
+        workspace_id: workspace_id.to_string(),
+        title: truncate_task_title(command),
+        kind: TerminalTabKind::AgentTask,
+        is_script_output: false,
+        sort_order: existing.len() as i32,
+        created_at: now_iso(),
+        agent_chat_session_id: Some(chat_session_id.to_string()),
+        agent_tool_use_id: Some(tool_use_id.to_string()),
+        agent_task_id: None,
+        output_path: None,
+        task_status: Some("starting".to_string()),
+        task_summary: None,
+    };
+    db.insert_terminal_tab(&tab).ok()?;
+    Some(tab)
+}
+
+fn tool_result_content_text(content: &serde_json::Value) -> String {
+    if let Some(s) = content.as_str() {
+        return s.to_string();
+    }
+    if let Some(items) = content.as_array() {
+        return items
+            .iter()
+            .filter_map(|item| {
+                item.as_str()
+                    .or_else(|| item.get("text").and_then(serde_json::Value::as_str))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+    content.to_string()
+}
 
 #[tauri::command]
 pub async fn load_chat_history(
@@ -394,6 +476,7 @@ pub async fn send_chat_message(
                 session_allowed_tools: Vec::new(),
                 session_disable_1m_context: false,
                 pending_permissions: std::collections::HashMap::new(),
+                running_background_tasks: std::collections::HashSet::new(),
                 session_exited_plan: false,
                 session_resolved_env: Default::default(),
                 mcp_bridge: None,
@@ -417,6 +500,7 @@ pub async fn send_chat_message(
             session_allowed_tools: Vec::new(),
             session_disable_1m_context: false,
             pending_permissions: std::collections::HashMap::new(),
+            running_background_tasks: std::collections::HashSet::new(),
             session_exited_plan: false,
             session_resolved_env: Default::default(),
             mcp_bridge: None,
@@ -1038,6 +1122,11 @@ pub async fn send_chat_message(
         // MCP monitoring: map tool_use_id → tool_name for MCP error detection.
         let mut mcp_tool_names: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
+        // Background-Bash detection: map content-block index → (tool_use_id,
+        // accumulated input JSON). The CLI streams tool input in deltas, so we
+        // only know `run_in_background` once the block stops.
+        let mut background_bash_inputs: std::collections::HashMap<usize, (String, String)> =
+            std::collections::HashMap::new();
         // Track the last assistant message inserted in THIS turn. Falls back
         // to the user message ID for tool-only turns (AskUserQuestion, plan
         // approval) so that checkpoint creation isn't skipped entirely.
@@ -1058,6 +1147,63 @@ pub async fn send_chat_message(
                 && subtype == "init"
             {
                 got_init = true;
+            }
+
+            if let AgentEvent::Stream(StreamEvent::Stream {
+                event:
+                    InnerStreamEvent::ContentBlockStart {
+                        index,
+                        content_block: Some(StartContentBlock::ToolUse { id, name }),
+                    },
+            }) = &event
+                && name == "Bash"
+            {
+                background_bash_inputs.insert(*index, (id.clone(), String::new()));
+            }
+
+            if let AgentEvent::Stream(StreamEvent::Stream {
+                event: InnerStreamEvent::ContentBlockDelta { index, delta },
+            }) = &event
+                && let Some((_tool_use_id, input)) = background_bash_inputs.get_mut(index)
+            {
+                match delta {
+                    claudette::agent::Delta::ToolUse {
+                        partial_json: Some(part),
+                    }
+                    | claudette::agent::Delta::InputJson {
+                        partial_json: Some(part),
+                    } => input.push_str(part),
+                    _ => {}
+                }
+            }
+
+            if let AgentEvent::Stream(StreamEvent::Stream {
+                event: InnerStreamEvent::ContentBlockStop { index },
+            }) = &event
+                && let Some((tool_use_id, input_json)) = background_bash_inputs.remove(index)
+                && let Some(start) = parse_background_bash_start(&input_json)
+                && let Some(tab) = create_agent_task_terminal_tab(
+                    &db_path,
+                    &ws_id,
+                    &chat_session_id_for_stream,
+                    &tool_use_id,
+                    start.command.as_deref(),
+                )
+            {
+                {
+                    let app_state = app.state::<AppState>();
+                    let mut agents = app_state.agents.write().await;
+                    if let Some(session) = agents.get_mut(&chat_session_id_for_stream) {
+                        session.running_background_tasks.insert(tool_use_id.clone());
+                    }
+                }
+                emit_agent_background_task_event(
+                    &app,
+                    AgentBackgroundTaskEventKind::Starting,
+                    &ws_id,
+                    &chat_session_id_for_stream,
+                    tab,
+                );
             }
 
             // Compaction boundary event: the CLI emits this after context
@@ -1296,6 +1442,91 @@ pub async fn send_chat_message(
                     cache_creation_tokens: None,
                 };
                 let _ = db.insert_chat_message(&msg);
+            }
+
+            if let AgentEvent::Stream(StreamEvent::User { message, .. }) = &event {
+                match &message.content {
+                    claudette::agent::UserMessageContent::Blocks(blocks) => {
+                        for block in blocks {
+                            if let claudette::agent::UserContentBlock::ToolResult {
+                                tool_use_id,
+                                content,
+                            } = block
+                            {
+                                let text = tool_result_content_text(content);
+                                if let Some(binding) = parse_background_task_binding(&text)
+                                    && let Ok(db) = Database::open(&db_path)
+                                {
+                                    {
+                                        let app_state = app.state::<AppState>();
+                                        let mut agents = app_state.agents.write().await;
+                                        if let Some(session) =
+                                            agents.get_mut(&chat_session_id_for_stream)
+                                        {
+                                            session.running_background_tasks.remove(tool_use_id);
+                                            session
+                                                .running_background_tasks
+                                                .insert(binding.task_id.clone());
+                                        }
+                                    }
+                                    let _ = db.update_agent_task_terminal_tab_binding(
+                                        tool_use_id,
+                                        &binding.task_id,
+                                        &binding.output_path,
+                                    );
+                                    if let Ok(Some(tab)) =
+                                        db.get_terminal_tab_by_tool_use_id(tool_use_id)
+                                    {
+                                        emit_agent_background_task_event(
+                                            &app,
+                                            AgentBackgroundTaskEventKind::Bound,
+                                            &ws_id,
+                                            &chat_session_id_for_stream,
+                                            tab,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    claudette::agent::UserMessageContent::Text(body) => {
+                        if let Some(notification) = parse_task_notification(body)
+                            && let Ok(db) = Database::open(&db_path)
+                        {
+                            if matches!(
+                                notification.status.to_ascii_lowercase().as_str(),
+                                "completed" | "failed" | "stopped" | "cancelled" | "canceled"
+                            ) {
+                                let app_state = app.state::<AppState>();
+                                let mut agents = app_state.agents.write().await;
+                                if let Some(session) = agents.get_mut(&chat_session_id_for_stream) {
+                                    session
+                                        .running_background_tasks
+                                        .remove(&notification.task_id);
+                                }
+                            }
+                            let _ = db.update_agent_task_terminal_tab_status(
+                                &chat_session_id_for_stream,
+                                &notification.task_id,
+                                &notification.status,
+                                notification.summary.as_deref(),
+                                notification.output_file.as_deref(),
+                            );
+                            if let Ok(Some(tab)) = db.get_terminal_tab_by_agent_task(
+                                &chat_session_id_for_stream,
+                                &notification.task_id,
+                            ) {
+                                emit_agent_background_task_event(
+                                    &app,
+                                    AgentBackgroundTaskEventKind::Status,
+                                    &ws_id,
+                                    &chat_session_id_for_stream,
+                                    tab,
+                                );
+                            }
+                        }
+                    }
+                }
             }
 
             // MCP monitoring: check tool results for connection failure patterns.

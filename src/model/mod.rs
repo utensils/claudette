@@ -26,5 +26,5 @@ pub use metrics::{
 pub use pinned_prompt::PinnedPrompt;
 pub use remote_connection::RemoteConnection;
 pub use repository::Repository;
-pub use terminal_tab::TerminalTab;
+pub use terminal_tab::{TerminalTab, TerminalTabKind};
 pub use workspace::{AgentStatus, Workspace, WorkspaceStatus};

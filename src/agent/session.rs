@@ -262,10 +262,40 @@ impl PersistentSession {
         Ok(())
     }
 
+    /// Ask the persistent Claude CLI process to stop an agent-owned
+    /// background task. The CLI accepts out-of-band JSON lines on the same
+    /// stream-json stdin used for user turns and permission responses.
+    pub async fn send_task_stop(&self, task_id: &str) -> Result<(), String> {
+        use tokio::io::AsyncWriteExt;
+        let message = build_task_stop_message(task_id);
+        let mut stdin = self.stdin.lock().await;
+        stdin
+            .write_all(message.as_bytes())
+            .await
+            .map_err(|e| format!("Failed to write task_stop: {e}"))?;
+        stdin
+            .write_all(b"\n")
+            .await
+            .map_err(|e| format!("Failed to write task_stop newline: {e}"))?;
+        stdin
+            .flush()
+            .await
+            .map_err(|e| format!("Failed to flush task_stop: {e}"))?;
+        Ok(())
+    }
+
     /// Get the process ID.
     pub fn pid(&self) -> u32 {
         self.pid
     }
+}
+
+fn build_task_stop_message(task_id: &str) -> String {
+    serde_json::json!({
+        "type": "task_stop",
+        "task_id": task_id,
+    })
+    .to_string()
 }
 
 /// Build CLI arguments for a persistent session (no prompt, with `--input-format stream-json`).
@@ -612,5 +642,13 @@ mod tests {
             .position(|a| a == "--permission-prompt-tool")
             .expect("--permission-prompt-tool missing in persistent args");
         assert_eq!(args.get(idx + 1).map(String::as_str), Some("stdio"));
+    }
+
+    #[test]
+    fn build_task_stop_message_writes_out_of_band_control_shape() {
+        let raw = build_task_stop_message("task_123");
+        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(parsed["type"], "task_stop");
+        assert_eq!(parsed["task_id"], "task_123");
     }
 }

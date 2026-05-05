@@ -5,6 +5,7 @@ import { loadChatHistory, saveTurnToolActivities } from "../services/tauri";
 import type { AgentStreamPayload } from "../types/agent-events";
 import type { ChatMessage } from "../types/chat";
 import type { ConversationCheckpoint } from "../types/checkpoint";
+import type { TerminalTab } from "../types/terminal";
 import { extractToolSummary } from "./toolSummary";
 import { parseAskUserQuestion } from "./parseAgentQuestion";
 import {
@@ -59,13 +60,28 @@ export function useAgentStream() {
   // between Running and Idle so the workspace aggregate (sidebar badges,
   // tray) stays accurate even when sessions run concurrently.
   const syncWorkspaceAgentStatus = (wsId: string) => {
-    const sessions =
-      useAppStore.getState().sessionsByWorkspace[wsId] ?? [];
+    const state = useAppStore.getState();
+    const sessions = state.sessionsByWorkspace[wsId] ?? [];
     const anyRunning = sessions.some(
       (s) => s.status === "Active" && s.agent_status === "Running",
     );
-    useAppStore.getState().updateWorkspace(wsId, {
-      agent_status: anyRunning ? "Running" : "Idle",
+    const activeSessionIds = new Set(
+      sessions.filter((s) => s.status === "Active").map((s) => s.id),
+    );
+    const anyBackground = Object.entries(state.agentBackgroundTasksBySessionId)
+      .some(([sessionId, tabs]) =>
+        activeSessionIds.has(sessionId) &&
+        tabs.some((tab) => {
+          const status = (tab.task_status ?? "").toLowerCase();
+          return status === "starting" || status === "running";
+        }),
+      );
+    state.updateWorkspace(wsId, {
+      agent_status: anyRunning
+        ? "Running"
+        : anyBackground
+          ? "IdleWithBackground"
+          : "Idle",
     });
   };
 
@@ -770,4 +786,39 @@ export function useAgentStream() {
       unlisten.then((fn) => fn());
     };
   }, [addChatAttachments]);
+
+  useEffect(() => {
+    let active = true;
+    const unlisten = listen<{
+      kind: "starting" | "bound" | "status";
+      workspace_id: string;
+      chat_session_id: string;
+      tab: TerminalTab;
+    }>("agent-background-task", (event) => {
+      if (!active) return;
+      const { workspace_id: wsId, chat_session_id: sessionId, tab } = event.payload;
+      const store = useAppStore.getState();
+      store.upsertAgentTaskTerminalTab(wsId, sessionId, tab);
+      const nextState = useAppStore.getState();
+      const session = (nextState.sessionsByWorkspace[wsId] ?? []).find(
+        (s) => s.id === sessionId,
+      );
+      if (session?.agent_status !== "Running") {
+        const hasRunningBackground = (
+          nextState.agentBackgroundTasksBySessionId[sessionId] ?? []
+        ).some((taskTab) => {
+          const status = (taskTab.task_status ?? "").toLowerCase();
+          return status === "starting" || status === "running";
+        });
+        nextState.updateChatSession(sessionId, {
+          agent_status: hasRunningBackground ? "IdleWithBackground" : "Idle",
+        });
+      }
+      syncWorkspaceAgentStatus(wsId);
+    });
+    return () => {
+      active = false;
+      unlisten.then((fn) => fn());
+    };
+  }, []);
 }

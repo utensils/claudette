@@ -5,6 +5,7 @@ use serde::Serialize;
 pub enum AgentStatus {
     Running,
     Idle,
+    IdleWithBackground,
     Stopped,
     /// Set while the CLI is context-compacting (~90s). Visually treated
     /// like Running (spinner + disabled input) but with a distinct label.
@@ -17,6 +18,7 @@ impl AgentStatus {
         match self {
             Self::Running => "Running",
             Self::Idle => "Idle",
+            Self::IdleWithBackground => "IdleWithBackground",
             Self::Stopped => "Stopped",
             Self::Compacting => "Compacting",
             Self::Error(_) => "Error",

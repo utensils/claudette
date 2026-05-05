@@ -536,7 +536,9 @@ fn compute_tray_state(state: &AppState) -> TrayState {
 pub fn has_running_agents(
     agents: &std::collections::HashMap<String, crate::state::AgentSessionState>,
 ) -> bool {
-    agents.values().any(|s| s.active_pid.is_some())
+    agents
+        .values()
+        .any(|s| s.active_pid.is_some() || !s.running_background_tasks.is_empty())
 }
 
 /// Authoritatively clear `needs_attention` / `attention_kind` for every
@@ -806,6 +808,7 @@ mod tests {
             session_allowed_tools: Vec::new(),
             session_disable_1m_context: false,
             pending_permissions: HashMap::new(),
+            running_background_tasks: Default::default(),
             session_exited_plan: false,
             session_resolved_env: Default::default(),
             mcp_bridge: None,
@@ -973,6 +976,15 @@ mod tests {
         let mut agents = HashMap::new();
         agents.insert("ws1".to_string(), session(Some(1234), false));
         agents.insert("ws2".to_string(), session(None, false));
+        assert!(has_running_agents(&agents));
+    }
+
+    #[test]
+    fn test_has_running_agents_one_background_task() {
+        let mut agents = HashMap::new();
+        let mut s = session(None, false);
+        s.running_background_tasks.insert("task_1".to_string());
+        agents.insert("ws1".to_string(), s);
         assert!(has_running_agents(&agents));
     }
 

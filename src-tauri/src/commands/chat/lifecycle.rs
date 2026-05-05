@@ -168,6 +168,7 @@ mod tests {
             session_allowed_tools: Vec::new(),
             session_disable_1m_context: false,
             pending_permissions: HashMap::new(),
+            running_background_tasks: Default::default(),
             session_exited_plan: false,
             session_resolved_env: Default::default(),
             mcp_bridge: None,

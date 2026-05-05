@@ -45,9 +45,23 @@
   white-space: nowrap;
   font-family: var(--font-mono);
   font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
 }
 
-.tabClose {
+.tabBadge {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-muted);
+  background: var(--hover-bg-subtle);
+}
+
+.tabClose,
+.tabStop {
   background: none;
   border: none;
   color: var(--text-dim);
@@ -59,9 +73,14 @@
   transition: color var(--transition-fast), background var(--transition-fast);
 }
 
-.tabClose:hover {
+.tabClose:hover,
+.tabStop:hover {
   color: var(--text-primary);
   background: var(--hover-bg);
+}
+
+.tabStop {
+  font-size: 10px;
 }
 
 .addTab {

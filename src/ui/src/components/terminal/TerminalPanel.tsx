@@ -21,6 +21,9 @@ import {
   writePty,
   resizePty,
   closePty,
+  startAgentTaskTail,
+  stopAgentTaskTail,
+  stopAgentBackgroundTask,
 } from "../../services/tauri";
 import {
   cycleTabId,
@@ -39,6 +42,7 @@ import {
   focusChatPrompt,
 } from "../../utils/focusTargets";
 import { TerminalPaneTree } from "./TerminalPaneTree";
+import type { TerminalTab } from "../../types/terminal";
 import {
   collectNeededLeaves,
   diffLeaves,
@@ -58,6 +62,11 @@ interface PtyOutputPayload {
   data: number[];
 }
 
+interface AgentTaskOutputPayload {
+  tab_id: number;
+  data: number[];
+}
+
 const terminalInputEncoder = new TextEncoder();
 
 // Per-leaf xterm + PTY handle. The container is a detached <div> that we
@@ -72,6 +81,8 @@ interface LeafInstance {
   term: Terminal;
   fit: FitAddon;
   ptyId: number;
+  isAgentTask: boolean;
+  agentTaskTailPath: string | null;
   unlisten: (() => void) | null;
   resizeObserver: ResizeObserver;
   fitTimer: ReturnType<typeof setTimeout> | null;
@@ -261,6 +272,12 @@ function closePtyBestEffort(ptyId: number) {
   });
 }
 
+function stopAgentTaskTailBestEffort(tabId: number) {
+  void stopAgentTaskTail(tabId).catch((err) => {
+    console.error(`Failed to stop agent task tail ${tabId}:`, err);
+  });
+}
+
 function forwardPtyResize(
   inst: LeafInstance,
   nextSize: PtySizeSnapshot = { cols: inst.term.cols, rows: inst.term.rows },
@@ -384,6 +401,15 @@ export const TerminalPanel = memo(function TerminalPanel() {
     [selectedWorkspaceId, removeTerminalTab],
   );
 
+  const handleStopAgentTask = useCallback(async (tab: TerminalTab) => {
+    if (!tab.agent_chat_session_id || !tab.agent_task_id) return;
+    try {
+      await stopAgentBackgroundTask(tab.agent_chat_session_id, tab.agent_task_id);
+    } catch (err) {
+      console.error("Failed to stop agent background task:", err);
+    }
+  }, []);
+
   // When the panel gets hidden (most often because the user just closed
   // the last tab via the X button or Cmd+W on the last pane) clear the
   // auto-create guard so that the next time the user reveals the panel
@@ -487,6 +513,8 @@ export const TerminalPanel = memo(function TerminalPanel() {
           return;
         case "split-pane": {
           if (!activePaneId) return;
+          const activeTab = (state.terminalTabs[wsId] ?? []).find((t) => t.id === tabId);
+          if (activeTab?.kind === "agent_task") return;
           splitPane(tabId, activePaneId, action.direction);
           return;
         }
@@ -588,7 +616,10 @@ export const TerminalPanel = memo(function TerminalPanel() {
       };
       container.addEventListener("copy", handleCopy);
 
+      let currentInst: LeafInstance | null = null;
       const resizeObserver = new ResizeObserver(() => {
+        const inst = currentInst;
+        if (!inst) return;
         if (inst.fitTimer) clearTimeout(inst.fitTimer);
         inst.fitTimer = setTimeout(() => safeFit(inst), 150);
       });
@@ -601,6 +632,11 @@ export const TerminalPanel = memo(function TerminalPanel() {
         term,
         fit,
         ptyId: -1,
+        isAgentTask:
+          Object.values(terminalTabs)
+            .flat()
+            .find((tab) => tab.id === spec.tabId)?.kind === "agent_task",
+        agentTaskTailPath: null,
         unlisten: null,
         fitTimer: null,
         reclaimTimer: null,
@@ -610,7 +646,15 @@ export const TerminalPanel = memo(function TerminalPanel() {
         lastPtySize: null,
         resizeObserver,
       };
+      currentInst = inst;
       inst.resizeObserver.observe(container);
+
+      if (inst.isAgentTask) {
+        term.options.cursorBlink = false;
+        term.writeln("Starting background task...");
+        safeFit(inst);
+        return inst;
+      }
 
       // Spawn the PTY asynchronously. If the instance has been destroyed
       // by the time we resolve, close the PTY we just spawned and bail.
@@ -677,7 +721,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
 
       return inst;
     },
-    [setPanePtyId, setPaneSpawnError, terminalFontSize],
+    [setPanePtyId, setPaneSpawnError, terminalFontSize, terminalTabs],
   );
 
   const destroyInstance = useCallback((leafId: string) => {
@@ -690,6 +734,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
     inst.container.removeEventListener("copy", inst.handleCopy);
     inst.term.dispose();
     if (inst.unlisten) inst.unlisten();
+    if (inst.isAgentTask) stopAgentTaskTailBestEffort(inst.tabId);
     if (inst.ptyId >= 0) closePtyBestEffort(inst.ptyId);
     inst.container.remove();
     instancesRef.current.delete(leafId);
@@ -839,6 +884,46 @@ export const TerminalPanel = memo(function TerminalPanel() {
     destroyInstance,
   ]);
 
+  useEffect(() => {
+    const tabsById = new Map<number, TerminalTab>();
+    for (const wsTabs of Object.values(terminalTabs)) {
+      for (const tab of wsTabs) tabsById.set(tab.id, tab);
+    }
+    for (const inst of instancesRef.current.values()) {
+      if (!inst.isAgentTask) continue;
+      const tab = tabsById.get(inst.tabId);
+      const outputPath = tab?.output_path ?? null;
+      if (!outputPath || inst.agentTaskTailPath === outputPath) continue;
+      if (inst.unlisten) {
+        inst.unlisten();
+        inst.unlisten = null;
+      }
+      stopAgentTaskTailBestEffort(inst.tabId);
+      inst.agentTaskTailPath = outputPath;
+      inst.term.reset();
+      inst.term.writeln(`Tailing ${outputPath}`);
+      (async () => {
+        const unlistenFn = await listen<AgentTaskOutputPayload>(
+          "agent-task-output",
+          (event) => {
+            if (event.payload.tab_id === inst.tabId) {
+              inst.term.write(new Uint8Array(event.payload.data));
+            }
+          },
+        );
+        if (instancesRef.current.get(inst.leafId) !== inst) {
+          unlistenFn();
+          stopAgentTaskTailBestEffort(inst.tabId);
+          return;
+        }
+        inst.unlisten = unlistenFn;
+        await startAgentTaskTail(inst.tabId, outputPath);
+      })().catch((err) => {
+        console.error("Failed to start agent task tail:", err);
+      });
+    }
+  }, [terminalTabs, tabs]);
+
   // Font / theme propagation across all live instances. uiFontSize is
   // bundled in here because it drives the page-zoom compensation: when
   // the user changes UI size, every terminal needs its container zoom
@@ -925,6 +1010,23 @@ export const TerminalPanel = memo(function TerminalPanel() {
             }
           >
             <span className={styles.tabTitle}>{tab.title}</span>
+            {tab.kind === "agent_task" && tab.task_status && (
+              <span className={styles.tabBadge}>{tab.task_status}</span>
+            )}
+            {tab.kind === "agent_task" &&
+              tab.agent_task_id &&
+              ["starting", "running"].includes((tab.task_status ?? "").toLowerCase()) && (
+                <button
+                  className={styles.tabStop}
+                  title="Stop background task"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void handleStopAgentTask(tab);
+                  }}
+                >
+                  ■
+                </button>
+              )}
             <button
               className={styles.tabClose}
               onClick={(e) => {

@@ -1,9 +1,16 @@
-use tauri::State;
+use std::io::SeekFrom;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
+use serde::Serialize;
+use tauri::{AppHandle, Emitter, State};
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 use claudette::db::Database;
 use claudette::model::TerminalTab;
 
-use crate::state::AppState;
+use crate::state::{AgentTaskTailHandle, AppState};
 
 #[tauri::command]
 pub async fn create_terminal_tab(
@@ -31,9 +38,16 @@ pub async fn create_terminal_tab(
         id: new_id,
         workspace_id,
         title: format!("Terminal {n}"),
+        kind: Default::default(),
         is_script_output: false,
         sort_order,
         created_at: now_iso(),
+        agent_chat_session_id: None,
+        agent_tool_use_id: None,
+        agent_task_id: None,
+        output_path: None,
+        task_status: None,
+        task_summary: None,
     };
 
     db.insert_terminal_tab(&tab).map_err(|e| e.to_string())?;
@@ -55,6 +69,137 @@ pub async fn list_terminal_tabs(
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     db.list_terminal_tabs_by_workspace(&workspace_id)
         .map_err(|e| e.to_string())
+}
+
+#[derive(Clone, Serialize)]
+struct AgentTaskOutputPayload {
+    tab_id: i64,
+    data: Vec<u8>,
+}
+
+#[tauri::command]
+pub async fn start_agent_task_tail(
+    tab_id: i64,
+    output_path: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    if output_path.trim().is_empty() {
+        return Err("Output path is empty".to_string());
+    }
+
+    stop_agent_task_tail(tab_id, state.clone()).await?;
+
+    let cancel = Arc::new(tokio::sync::Notify::new());
+    state.agent_task_tailers.write().await.insert(
+        tab_id,
+        AgentTaskTailHandle {
+            cancel: cancel.clone(),
+        },
+    );
+
+    tokio::spawn(async move {
+        tail_agent_task_file(tab_id, PathBuf::from(output_path), app, cancel).await;
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn stop_agent_task_tail(tab_id: i64, state: State<'_, AppState>) -> Result<(), String> {
+    if let Some(handle) = state.agent_task_tailers.write().await.remove(&tab_id) {
+        handle.cancel.notify_waiters();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn stop_agent_background_task(
+    chat_session_id: String,
+    task_id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let ps = {
+        let agents = state.agents.read().await;
+        agents
+            .get(&chat_session_id)
+            .and_then(|session| session.persistent_session.clone())
+    };
+    let Some(ps) = ps else {
+        return Err("Agent session is not running".to_string());
+    };
+    ps.send_task_stop(&task_id).await?;
+    {
+        let mut agents = state.agents.write().await;
+        if let Some(session) = agents.get_mut(&chat_session_id) {
+            session.running_background_tasks.remove(&task_id);
+        }
+    }
+
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let _ = db.update_agent_task_terminal_tab_status(
+        &chat_session_id,
+        &task_id,
+        "stopped",
+        Some("Stopped by user"),
+        None,
+    );
+    if let Ok(Some(tab)) = db.get_terminal_tab_by_agent_task(&chat_session_id, &task_id) {
+        let _ = app.emit(
+            "agent-background-task",
+            &claudette::agent::background::AgentBackgroundTaskEvent {
+                kind: claudette::agent::background::AgentBackgroundTaskEventKind::Status,
+                workspace_id: tab.workspace_id.clone(),
+                chat_session_id,
+                tab,
+            },
+        );
+    }
+    Ok(())
+}
+
+async fn tail_agent_task_file(
+    tab_id: i64,
+    path: PathBuf,
+    app: AppHandle,
+    cancel: Arc<tokio::sync::Notify>,
+) {
+    let mut offset = 0_u64;
+    let mut buf = vec![0_u8; 8192];
+    loop {
+        tokio::select! {
+            _ = cancel.notified() => break,
+            _ = tokio::time::sleep(Duration::from_millis(33)) => {}
+        }
+
+        let Ok(mut file) = tokio::fs::File::open(&path).await else {
+            continue;
+        };
+        let len = file.metadata().await.ok().map(|m| m.len()).unwrap_or(0);
+        if len < offset {
+            offset = 0;
+        }
+        if file.seek(SeekFrom::Start(offset)).await.is_err() {
+            continue;
+        }
+        loop {
+            match file.read(&mut buf).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    offset += n as u64;
+                    let _ = app.emit(
+                        "agent-task-output",
+                        &AgentTaskOutputPayload {
+                            tab_id,
+                            data: buf[..n].to_vec(),
+                        },
+                    );
+                }
+                Err(_) => break,
+            }
+        }
+    }
 }
 
 fn now_iso() -> String {

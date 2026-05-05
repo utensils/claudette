@@ -907,6 +907,27 @@ export function closePty(ptyId: number): Promise<void> {
   return invoke("close_pty", { ptyId });
 }
 
+export function startAgentTaskTail(
+  tabId: number,
+  outputPath: string,
+): Promise<void> {
+  return invoke("start_agent_task_tail", { tabId, outputPath });
+}
+
+export function stopAgentTaskTail(tabId: number): Promise<void> {
+  return invoke("stop_agent_task_tail", { tabId });
+}
+
+export function stopAgentBackgroundTask(
+  chatSessionId: string,
+  taskId: string,
+): Promise<void> {
+  return invoke("stop_agent_background_task", {
+    chatSessionId,
+    taskId,
+  });
+}
+
 // -- Settings --
 
 export function getAppSetting(key: string): Promise<string | null> {

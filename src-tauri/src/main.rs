@@ -525,6 +525,9 @@ fn main() {
             commands::terminal::create_terminal_tab,
             commands::terminal::delete_terminal_tab,
             commands::terminal::list_terminal_tabs,
+            commands::terminal::start_agent_task_tail,
+            commands::terminal::stop_agent_task_tail,
+            commands::terminal::stop_agent_background_task,
             // PTY
             pty::spawn_pty,
             pty::write_pty,
