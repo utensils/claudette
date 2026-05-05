@@ -24,6 +24,8 @@ pub enum Action {
         include_archived: bool,
     },
     /// Send a message to a chat session, kicking off an agent turn.
+    /// Mirrors every lever the GUI's chat input bar exposes — pass
+    /// nothing and the workspace's GUI defaults apply.
     Send {
         /// Chat session ID. Newly-created workspaces have a default
         /// session id returned in their `create_workspace` response.
@@ -39,6 +41,23 @@ pub enum Action {
         /// before any tool use).
         #[arg(long)]
         plan: bool,
+        /// Enable extended thinking for this turn.
+        #[arg(long)]
+        thinking: bool,
+        /// Enable fast mode (lower-latency model variant when supported).
+        #[arg(long)]
+        fast: bool,
+        /// Effort level: `low`, `medium`, `high`, `xhigh`, `max`
+        /// (`max` requires Opus 4.6).
+        #[arg(long)]
+        effort: Option<String>,
+        /// Enable Chrome browser mode for this session.
+        #[arg(long)]
+        chrome: bool,
+        /// Suppress the Max-plan auto-upgrade to a 1M context window
+        /// for the spawned CLI process.
+        #[arg(long = "disable-1m-context")]
+        disable_1m_context: bool,
         /// Override the permission level (`default`, `acceptEdits`,
         /// `bypassPermissions`).
         #[arg(long)]
@@ -69,6 +88,11 @@ pub async fn run(action: Action, json: bool) -> Result<(), Box<dyn Error>> {
             prompt,
             model,
             plan,
+            thinking,
+            fast,
+            effort,
+            chrome,
+            disable_1m_context,
             permission,
         } => {
             let content = resolve_prompt(&prompt)?;
@@ -79,8 +103,27 @@ pub async fn run(action: Action, json: bool) -> Result<(), Box<dyn Error>> {
             if let Some(m) = model {
                 params["model"] = serde_json::json!(m);
             }
+            // Boolean toggles: only include the field when set so the
+            // IPC handler distinguishes "user explicitly asked for X" from
+            // "user didn't override, use the workspace default". Sending
+            // `false` would be indistinguishable from a deliberate opt-out.
             if plan {
                 params["plan_mode"] = serde_json::json!(true);
+            }
+            if thinking {
+                params["thinking_enabled"] = serde_json::json!(true);
+            }
+            if fast {
+                params["fast_mode"] = serde_json::json!(true);
+            }
+            if let Some(e) = effort {
+                params["effort"] = serde_json::json!(e);
+            }
+            if chrome {
+                params["chrome_enabled"] = serde_json::json!(true);
+            }
+            if disable_1m_context {
+                params["disable_1m_context"] = serde_json::json!(true);
             }
             if let Some(p) = permission {
                 params["permission_level"] = serde_json::json!(p);

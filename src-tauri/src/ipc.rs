@@ -364,6 +364,54 @@ async fn handle_send_chat_message(
     app: &AppHandle,
     params: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
+    let parsed = parse_send_chat_params(params)?;
+
+    let state: tauri::State<'_, AppState> = app.state::<AppState>();
+    crate::commands::chat::send::send_chat_message(
+        parsed.session_id,
+        None,
+        parsed.content,
+        None,
+        parsed.permission_level,
+        parsed.model,
+        parsed.fast_mode,
+        parsed.thinking_enabled,
+        parsed.plan_mode,
+        parsed.effort,
+        parsed.chrome_enabled,
+        parsed.disable_1m_context,
+        None,
+        app.clone(),
+        state,
+    )
+    .await?;
+    Ok(json!({ "ok": true }))
+}
+
+/// Every agent setting the GUI's chat input bar can flip, modeled here
+/// so the IPC surface (and therefore the `claudette` CLI) can drive a
+/// turn with the same fidelity as the GUI's "Send" button. Mirrors
+/// `AgentSettings` 1:1 — a new field there should grow a field here.
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct SendChatParams {
+    pub session_id: String,
+    pub content: String,
+    pub model: Option<String>,
+    pub fast_mode: Option<bool>,
+    pub thinking_enabled: Option<bool>,
+    pub plan_mode: Option<bool>,
+    pub effort: Option<String>,
+    pub chrome_enabled: Option<bool>,
+    pub disable_1m_context: Option<bool>,
+    pub permission_level: Option<String>,
+}
+
+/// Parse the JSON params object the IPC sends. Tolerant of both
+/// `session_id` and `chat_session_id` so older clients (and the WS
+/// server's wire shape) keep working. All agent-setting fields are
+/// optional — omit and the GUI's per-workspace defaults apply (or, for
+/// freshly-spawned sessions, the `claude` CLI's own defaults).
+pub(crate) fn parse_send_chat_params(params: &serde_json::Value) -> Result<SendChatParams, String> {
     let session_id = params
         .get("session_id")
         .or_else(|| params.get("chat_session_id"))
@@ -375,36 +423,20 @@ async fn handle_send_chat_message(
         .and_then(|v| v.as_str())
         .ok_or("missing content")?
         .to_string();
-    let model = params
-        .get("model")
-        .and_then(|v| v.as_str())
-        .map(String::from);
-    let plan_mode = params.get("plan_mode").and_then(|v| v.as_bool());
-    let permission_level = params
-        .get("permission_level")
-        .and_then(|v| v.as_str())
-        .map(String::from);
-
-    let state: tauri::State<'_, AppState> = app.state::<AppState>();
-    crate::commands::chat::send::send_chat_message(
+    let str_param = |key: &str| params.get(key).and_then(|v| v.as_str()).map(String::from);
+    let bool_param = |key: &str| params.get(key).and_then(|v| v.as_bool());
+    Ok(SendChatParams {
         session_id,
-        None,
         content,
-        None,
-        permission_level,
-        model,
-        None,
-        None,
-        plan_mode,
-        None,
-        None,
-        None,
-        None,
-        app.clone(),
-        state,
-    )
-    .await?;
-    Ok(json!({ "ok": true }))
+        model: str_param("model"),
+        fast_mode: bool_param("fast_mode"),
+        thinking_enabled: bool_param("thinking_enabled"),
+        plan_mode: bool_param("plan_mode"),
+        effort: str_param("effort"),
+        chrome_enabled: bool_param("chrome_enabled"),
+        disable_1m_context: bool_param("disable_1m_context"),
+        permission_level: str_param("permission_level"),
+    })
 }
 
 /// Delegates to the shared `commands::workspace::archive_workspace_inner`
@@ -606,4 +638,94 @@ fn build_workspace_info(
             .unwrap_or_else(|| repo.path.clone()),
         repo_path: repo.path,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Regression: the IPC handler historically dropped every agent-
+    /// setting flag except model / plan_mode / permission_level. CLI
+    /// users couldn't toggle thinking, fast mode, effort, chrome, or
+    /// 1M-context from the command line even though the GUI exposes
+    /// all of them. Asserts every field in `AgentSettings` round-trips.
+    #[test]
+    fn parse_send_chat_params_threads_every_setting_through() {
+        let parsed = parse_send_chat_params(&json!({
+            "session_id": "sess-1",
+            "content": "hello",
+            "model": "sonnet",
+            "fast_mode": true,
+            "thinking_enabled": true,
+            "plan_mode": true,
+            "effort": "high",
+            "chrome_enabled": true,
+            "disable_1m_context": true,
+            "permission_level": "acceptEdits",
+        }))
+        .expect("must parse");
+        assert_eq!(parsed.session_id, "sess-1");
+        assert_eq!(parsed.content, "hello");
+        assert_eq!(parsed.model.as_deref(), Some("sonnet"));
+        assert_eq!(parsed.fast_mode, Some(true));
+        assert_eq!(parsed.thinking_enabled, Some(true));
+        assert_eq!(parsed.plan_mode, Some(true));
+        assert_eq!(parsed.effort.as_deref(), Some("high"));
+        assert_eq!(parsed.chrome_enabled, Some(true));
+        assert_eq!(parsed.disable_1m_context, Some(true));
+        assert_eq!(parsed.permission_level.as_deref(), Some("acceptEdits"));
+    }
+
+    #[test]
+    fn parse_send_chat_params_omits_default_to_none() {
+        let parsed = parse_send_chat_params(&json!({
+            "session_id": "sess-1",
+            "content": "hi",
+        }))
+        .expect("must parse");
+        assert_eq!(parsed.model, None);
+        assert_eq!(parsed.fast_mode, None);
+        assert_eq!(parsed.thinking_enabled, None);
+        assert_eq!(parsed.plan_mode, None);
+        assert_eq!(parsed.effort, None);
+        assert_eq!(parsed.chrome_enabled, None);
+        assert_eq!(parsed.disable_1m_context, None);
+        assert_eq!(parsed.permission_level, None);
+    }
+
+    /// Backwards compat: WS-server clients send `chat_session_id` for
+    /// historical reasons. The parser must accept either spelling so
+    /// the same client code talks to both surfaces.
+    #[test]
+    fn parse_send_chat_params_accepts_chat_session_id_alias() {
+        let parsed = parse_send_chat_params(&json!({
+            "chat_session_id": "sess-2",
+            "content": "hi",
+        }))
+        .expect("must parse");
+        assert_eq!(parsed.session_id, "sess-2");
+    }
+
+    #[test]
+    fn parse_send_chat_params_rejects_missing_required_fields() {
+        assert!(parse_send_chat_params(&json!({"content": "x"})).is_err());
+        assert!(parse_send_chat_params(&json!({"session_id": "x"})).is_err());
+    }
+
+    /// Wrong types should drop to None for booleans and strings, not
+    /// crash. (`as_bool` / `as_str` already handle this; the test
+    /// pins the contract.)
+    #[test]
+    fn parse_send_chat_params_ignores_wrong_types() {
+        let parsed = parse_send_chat_params(&json!({
+            "session_id": "sess-1",
+            "content": "hi",
+            "plan_mode": "yes",   // wrong: string instead of bool
+            "model": true,         // wrong: bool instead of string
+        }))
+        .expect("must parse");
+        assert_eq!(parsed.plan_mode, None);
+        assert_eq!(parsed.model, None);
+    }
 }
