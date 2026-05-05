@@ -294,7 +294,7 @@ pub struct VoiceProviderRegistry {
     backend_checker: Arc<dyn CandleBackendChecker>,
     transcription_timeout: Duration,
     was_prewarmed: AtomicBool,
-    transcription_cancelled: Arc<AtomicBool>,
+    active_distil_cancel: Mutex<Option<Arc<AtomicBool>>>,
 }
 
 fn compute_rms(samples: &[f32]) -> f32 {
@@ -426,7 +426,7 @@ impl VoiceProviderRegistry {
             backend_checker,
             transcription_timeout,
             was_prewarmed: AtomicBool::new(false),
-            transcription_cancelled: Arc::new(AtomicBool::new(false)),
+            active_distil_cancel: Mutex::new(None),
         }
     }
 
@@ -690,16 +690,34 @@ impl VoiceProviderRegistry {
         }
         validate_captured_audio(&audio)?;
 
-        self.transcription_cancelled.store(false, Ordering::Relaxed);
-        let cancel = Arc::clone(&self.transcription_cancelled);
+        let cancel = Arc::new(AtomicBool::new(false));
+        *self.active_distil_cancel.lock() = Some(Arc::clone(&cancel));
+
         let cache_path = self.distil_cache_path();
         let transcriber = Arc::clone(&self.transcriber);
         let timeout = self.transcription_timeout;
+        let cancel_for_task = Arc::clone(&cancel);
         let task = tokio::task::spawn_blocking(move || {
-            transcriber.transcribe(&cache_path, audio, &cancel)
+            transcriber.transcribe(&cache_path, audio, &cancel_for_task)
         });
-        let transcript = tokio::time::timeout(timeout, task)
-            .await
+        let result = tokio::time::timeout(timeout, task).await;
+
+        // On timeout, signal the worker to bail at its next cancel poll so it
+        // doesn't keep grinding on a transcript that's already been discarded.
+        if result.is_err() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+
+        // Vacate our slot in the registry, but only if a newer transcription
+        // hasn't already replaced it.
+        {
+            let mut active = self.active_distil_cancel.lock();
+            if active.as_ref().is_some_and(|a| Arc::ptr_eq(a, &cancel)) {
+                *active = None;
+            }
+        }
+
+        let transcript = result
             .map_err(|_| {
                 format!(
                     "Voice transcription timed out after {} seconds. Try a shorter recording or check the selected voice provider.",
@@ -717,7 +735,9 @@ impl VoiceProviderRegistry {
     }
 
     async fn cancel_distil_recording(&self) -> Result<(), String> {
-        self.transcription_cancelled.store(true, Ordering::Relaxed);
+        if let Some(cancel) = self.active_distil_cancel.lock().clone() {
+            cancel.store(true, Ordering::Relaxed);
+        }
         let _ = self.active_recording.lock().take();
         Ok(())
     }
@@ -2179,10 +2199,22 @@ mod tests {
             &self,
             _cache_path: &Path,
             _audio: CapturedAudio,
-            _cancel: &Arc<AtomicBool>,
+            cancel: &Arc<AtomicBool>,
         ) -> Result<String, String> {
             self.calls.fetch_add(1, Ordering::Relaxed);
-            std::thread::sleep(self.sleep_for);
+            // Poll the cancel flag at coarse intervals to mirror how the real
+            // Whisper decoder checks between segments — lets tests exercise the
+            // cancellation path without changing the production loop.
+            let step = std::time::Duration::from_millis(10);
+            let mut remaining = self.sleep_for;
+            while remaining > std::time::Duration::ZERO {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err("Transcription cancelled.".to_string());
+                }
+                let nap = std::cmp::min(step, remaining);
+                std::thread::sleep(nap);
+                remaining = remaining.saturating_sub(nap);
+            }
             self.result.lock().clone()
         }
     }
@@ -2655,6 +2687,53 @@ mod tests {
             .expect_err("cancelled recording should be gone");
         assert!(err.contains("No voice recording is active"));
         assert_eq!(transcriber.calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn cancel_during_distil_transcription_returns_early() {
+        let (_db_dir, db_path) = test_db_path();
+        let model_dir = tempdir().expect("model dir");
+        write_complete_distil_model(&model_dir.path().join(DISTIL_CACHE_DIR));
+        let transcriber = Arc::new(FakeTranscriber::slow(
+            "would have transcribed",
+            Duration::from_secs(5),
+        ));
+        let registry = Arc::new(VoiceProviderRegistry::with_runtime(
+            model_dir.path().to_path_buf(),
+            Arc::new(FakeRecorder::new(vec![0.1, 0.2, 0.3])),
+            transcriber.clone(),
+        ));
+
+        registry
+            .start_recording(&db_path, DISTIL_ID)
+            .await
+            .expect("recording starts");
+
+        let stop_registry = Arc::clone(&registry);
+        let stop_handle =
+            tokio::spawn(async move { stop_registry.stop_and_transcribe(DISTIL_ID).await });
+
+        // Give the spawn_blocking worker a moment to enter its sleep loop.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let cancel_started = std::time::Instant::now();
+        registry
+            .cancel_recording(DISTIL_ID)
+            .await
+            .expect("cancel succeeds");
+
+        let result = stop_handle.await.expect("stop task joined");
+        let elapsed = cancel_started.elapsed();
+
+        let err = result.expect_err("transcription should be cancelled");
+        assert!(
+            err.contains("cancelled"),
+            "expected cancellation error, got: {err}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "expected fast return after cancel, took {elapsed:?}"
+        );
     }
 
     #[tokio::test]
