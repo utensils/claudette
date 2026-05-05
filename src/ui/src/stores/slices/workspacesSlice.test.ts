@@ -44,15 +44,46 @@ describe("workspacesSlice.addWorkspace", () => {
     expect(result).toHaveLength(1);
   });
 
-  it("merges fresh fields into the existing row when re-added", () => {
+  it("merges fresh fields (other than agent_status) into the existing row when re-added", () => {
     useAppStore.getState().addWorkspace(makeWorkspace({ status_line: "old" }));
     useAppStore
       .getState()
-      .addWorkspace(makeWorkspace({ status_line: "new", agent_status: "Running" }));
+      .addWorkspace(makeWorkspace({ status_line: "new" }));
     const result = useAppStore.getState().workspaces;
     expect(result).toHaveLength(1);
     expect(result[0].status_line).toBe("new");
+  });
+
+  // Regression: `agent_status` isn't a DB column — `db::list_workspaces`
+  // synthesizes "Idle" on every read. The authoritative value is the
+  // one already in the store, set by useAgentStream / ChatPanel from
+  // live agent events. A `workspaces-changed` event firing mid-turn
+  // (e.g. a sibling workspace's lifecycle transition) was overwriting
+  // the live "Running" with the synthetic "Idle", leaving the sidebar
+  // showing inactive for workspaces with actively-running agents.
+  it("preserves live agent_status on merge (synthetic incoming Idle does not clobber Running)", () => {
+    useAppStore
+      .getState()
+      .addWorkspace(makeWorkspace({ agent_status: "Running" }));
+    useAppStore
+      .getState()
+      .addWorkspace(makeWorkspace({ status_line: "fresh", agent_status: "Idle" }));
+    const result = useAppStore.getState().workspaces;
+    expect(result).toHaveLength(1);
     expect(result[0].agent_status).toBe("Running");
+    // Other fields still merge — only agent_status is preserved.
+    expect(result[0].status_line).toBe("fresh");
+  });
+
+  // updateWorkspace remains the explicit setter for legitimate
+  // transitions like archive → Stopped, so callers that DO know the
+  // real value can still write it without bypassing the slice.
+  it("updateWorkspace can still set agent_status explicitly", () => {
+    useAppStore
+      .getState()
+      .addWorkspace(makeWorkspace({ agent_status: "Running" }));
+    useAppStore.getState().updateWorkspace("ws-1", { agent_status: "Stopped" });
+    expect(useAppStore.getState().workspaces[0].agent_status).toBe("Stopped");
   });
 
   it("appends additional workspaces with different ids without disturbing prior rows", () => {

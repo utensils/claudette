@@ -26,6 +26,18 @@ export const createWorkspacesSlice: StateCreator<
   // resolves) and the `workspaces-changed` event the IPC hook emits.
   // Whichever fires first wins; the other becomes a merge-update so
   // the row never doubles in the sidebar.
+  //
+  // The merge preserves the existing `agent_status`. That field isn't
+  // a database column — `db::list_workspaces` synthesizes Idle (or
+  // Stopped for archived) on every read. The authoritative value is
+  // the one already in the React store, set by `useAgentStream` /
+  // `ChatPanel` from live agent events. Letting an incoming row's
+  // synthetic Idle clobber a live "Running" leaves the sidebar
+  // showing inactive for workspaces with active agents — the bug
+  // that bit us when CLI / IPC lifecycle events fire mid-turn.
+  // `updateWorkspace` still accepts agent_status overrides so callers
+  // with a real transition (archive → Stopped, manual restore) can
+  // set it explicitly.
   addWorkspace: (ws) =>
     set((s) => {
       const idx = s.workspaces.findIndex((w) => w.id === ws.id);
@@ -33,7 +45,8 @@ export const createWorkspacesSlice: StateCreator<
         return { workspaces: [...s.workspaces, ws] };
       }
       const merged = [...s.workspaces];
-      merged[idx] = { ...merged[idx], ...ws };
+      const existing = merged[idx];
+      merged[idx] = { ...existing, ...ws, agent_status: existing.agent_status };
       return { workspaces: merged };
     }),
   updateWorkspace: (id, updates) =>
