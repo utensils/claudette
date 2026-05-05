@@ -359,10 +359,16 @@ pub async fn resolve_and_run_setup(
             // before we return rather than leaving them detached.
             let _ = stdout_task.await;
             let _ = stderr_task.await;
+            // Format the deadline from the actual constant so changing
+            // SETUP_SCRIPT_TIMEOUT updates the user-visible diagnostic
+            // automatically. Whole-second precision is plenty here.
             Some(SetupResult {
                 source: source.to_string(),
                 script,
-                output: "Setup script timed out after 5 minutes".to_string(),
+                output: format!(
+                    "Setup script timed out after {} seconds",
+                    SETUP_SCRIPT_TIMEOUT.as_secs()
+                ),
                 exit_code: None,
                 success: false,
                 timed_out: true,
