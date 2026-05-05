@@ -41,7 +41,17 @@ export function KeyboardSettings() {
       const description = tx(action.description);
       const category = tx(action.category);
       const effective = getEffectiveBinding(action, keybindings);
-      const bindingLabel = formatBindingParts(effective, isMac).join(" ");
+      // Include three representations of the binding so common query forms
+      // all hit: "⌘ B" (visual / hint UI), "⌘B" (no separator), "⌘+B" / "Ctrl+B"
+      // (cross-platform written form). The matcher AND-tokens its query, so
+      // duplicating into one space-delimited string is safe — each variant
+      // is its own searchable substring.
+      const parts = formatBindingParts(effective, isMac);
+      const bindingLabel = [
+        parts.join(" "),
+        parts.join(""),
+        parts.join("+"),
+      ].join(" ");
       if (!shortcutMatchesQuery({ description, category, bindingLabel }, search)) {
         continue;
       }

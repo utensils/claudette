@@ -34,6 +34,20 @@ describe("shortcutMatchesQuery", () => {
     ).toBe(false);
   });
 
+  it("matches the binding regardless of separator style", () => {
+    // KeyboardSettings.tsx includes three forms in the haystack so users
+    // can type the binding however they think of it — see the comment at
+    // the bindingLabel construction site.
+    const action = mk(
+      "Toggle left sidebar",
+      "Navigation",
+      "⌘ B ⌘B ⌘+B",
+    );
+    expect(shortcutMatchesQuery(action, "⌘B")).toBe(true);
+    expect(shortcutMatchesQuery(action, "⌘+B")).toBe(true);
+    expect(shortcutMatchesQuery(action, "⌘ B")).toBe(true);
+  });
+
   it("ANDs whitespace-separated tokens — order doesn't matter", () => {
     const action = mk("Split terminal side by side", "Terminal");
     expect(shortcutMatchesQuery(action, "terminal split")).toBe(true);
