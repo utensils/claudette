@@ -76,6 +76,7 @@ export default defineConfig({
             { slug: 'features/pinned-prompts' },
             { slug: 'features/theming' },
             { slug: 'features/notifications' },
+            { slug: 'features/voice-input' },
             { slug: 'features/keyboard-shortcuts' },
             { slug: 'features/per-repo-settings' },
             { slug: 'features/settings' },

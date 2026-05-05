@@ -1,0 +1,72 @@
+---
+title: Voice Input
+description: Speak prompts directly into the chat composer using Apple Speech, on-device Distil-Whisper, or the Web Speech API.
+---
+
+Claudette lets you dictate prompts to the composer using your microphone. Three providers are available — the app picks the best one automatically, or you can pin a specific provider in Settings.
+
+## Providers
+
+| Provider | Platforms | Runs where | Notes |
+|----------|-----------|-----------|-------|
+| **Apple Speech** | macOS | On-device, OS-managed | Uses the native Speech framework. Fast and lightweight — no model download required. Needs microphone permission in System Settings → Privacy & Security → Microphone. |
+| **Distil-Whisper** | macOS, Linux, Windows | Fully on-device | Bundled local model (distil-whisper-large-v3). Downloads ~1.5 GB once from Hugging Face on first use; all subsequent transcription is offline. Metal GPU acceleration on macOS; CPU on Linux and Windows. |
+| **Web Speech API** | Linux, Windows (fallback) | Browser-managed | Used when native capture is unavailable. Quality and language support depend on the OS browser engine. |
+
+Claudette's automatic selection order: a **pinned** provider (if set and enabled) → any **ready local model** → **Apple Speech** → a provider that still needs setup. The mic button in the composer reflects whichever provider is active.
+
+## How to use
+
+Click the **microphone icon** in the chat composer, or use a keyboard shortcut:
+
+| Shortcut | Action |
+|----------|--------|
+| `⌘⇧M` (macOS) / `Ctrl+Shift+M` (Linux/Windows) | Toggle recording on/off |
+| `Right ⌥` (macOS) | Hold to record, release to transcribe |
+
+Hold-to-talk (`Right ⌥`) is macOS-only by default. Linux and Windows users can bind any key in **Settings → Keyboard → Voice: Hold to talk**.
+
+While recording, a live VU meter appears next to the mic button — bar height tracks your microphone level in real time. A noise gate filters out silence, so you don't need to click precisely around pauses.
+
+When you stop recording, the transcription is inserted at the cursor position in the composer. You can edit it before sending.
+
+## Language support
+
+Distil-Whisper supports **99 languages** via Whisper language codes. The model auto-detects the spoken language; no per-session configuration is needed.
+
+Apple Speech uses the system's active language and locale settings.
+
+## Setting up
+
+### Apple Speech
+
+macOS requires an explicit microphone permission grant. The first time you start recording, macOS will prompt you. You can also grant it in advance:
+
+**System Settings → Privacy & Security → Microphone → Claudette**
+
+### Distil-Whisper
+
+Open **Settings → Plugins** and find the **Voice Input** section. Click **Download model** next to Distil-Whisper. The download is roughly 1.5 GB and happens once — subsequent launches load the cached model from disk. The cache path is shown in the provider row.
+
+Once the download completes, click **Use** to pin Distil-Whisper as the active provider.
+
+To free up disk space, click **Remove model** at any time. The model will be re-downloaded if you enable the provider again.
+
+### Keyboard shortcuts
+
+Voice hotkeys can be customised or disabled in **Settings → Keyboard**, under the **Voice** group. Both the toggle shortcut and the hold-to-talk key are independently configurable.
+
+## Configuring providers
+
+All voice provider management lives in **Settings → Plugins → Voice Input**:
+
+- **Enable/disable** each provider independently
+- **Select** (pin) a specific provider as the preferred one
+- **Download** or **remove** the Distil-Whisper model
+- See the model size, cache path, and accelerator in use (Metal / CPU)
+
+## Privacy
+
+All transcription runs on your machine. Distil-Whisper performs inference entirely locally via [Candle](https://github.com/huggingface/candle) — no audio leaves the app. Apple Speech sends audio to Apple's servers per their privacy policy; if that matters for your workflow, use Distil-Whisper instead.
+
+The Distil-Whisper model is fetched from `huggingface.co/distil-whisper/distil-large-v3/` on first use. After that, no network access is needed for voice.
