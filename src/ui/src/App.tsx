@@ -478,6 +478,24 @@ function App() {
       });
     });
 
+    // Flip per-session AND per-workspace `agent_status` to `Running` the
+    // moment the backend has actually spawned (or fed) an agent process.
+    // For GUI manual sends, ChatPanel sets this optimistically before
+    // dispatch — but CLI- and IPC-dispatched turns bypass ChatPanel
+    // entirely, leaving the sidebar status icon stuck on Idle until the
+    // agent finishes. The matching Idle/Stopped transition is handled by
+    // useAgentStream's ProcessExited / result handlers, which already
+    // work correctly.
+    const unlistenChatTurnStarted = listen<{
+      workspaceId: string;
+      chatSessionId: string;
+    }>("chat-turn-started", (event) => {
+      const { workspaceId, chatSessionId } = event.payload;
+      const store = useAppStore.getState();
+      store.updateChatSession(chatSessionId, { agent_status: "Running" });
+      store.updateWorkspace(workspaceId, { agent_status: "Running" });
+    });
+
     const unlistenAutoArchived = listen<{ workspace_id: string; workspace_name: string; pr_number?: number; deleted?: boolean }>("workspace-auto-archived", (event) => {
       const { workspace_id, workspace_name, pr_number, deleted } = event.payload;
       const store = useAppStore.getState();
@@ -515,6 +533,7 @@ function App() {
       unlistenAutoArchived.then((fn) => fn());
       unlistenWorkspacesChanged.then((fn) => fn());
       unlistenChatTurnSettings.then((fn) => fn());
+      unlistenChatTurnStarted.then((fn) => fn());
       unlistenMissingCli.then((fn) => fn());
     };
   }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setPluginManagementEnabled, setCommunityRegistryEnabled, setEditorGitGutterBase, setEditorMinimapEnabled, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings]);

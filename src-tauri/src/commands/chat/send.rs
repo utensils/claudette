@@ -646,6 +646,13 @@ struct ChatTurnSettingsPayload<'a> {
     disable_1m_context: bool,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatTurnStartedPayload<'a> {
+    workspace_id: &'a str,
+    chat_session_id: &'a str,
+}
+
 #[tauri::command]
 pub async fn load_chat_history(
     session_id: String,
@@ -1755,6 +1762,20 @@ pub async fn send_chat_message(
         let _ = db.insert_agent_session(&session.session_id, &workspace_id, &ws.repository_id);
         let _ = db.reopen_agent_session(&session.session_id);
         let _ = db.update_agent_session_turn(&session.session_id, session.turn_count);
+        // The canonical "turn is now running" moment — every dispatch path
+        // (fresh spawn, persistent reuse, drift-respawn) converges here.
+        // Tell the frontend so the sidebar status icon flips to the running
+        // spinner immediately, even for CLI- and IPC-dispatched turns that
+        // bypass ChatPanel's optimistic Running setter. The matching Idle/
+        // Stopped transition is already handled by useAgentStream's
+        // ProcessExited path on the frontend.
+        let _ = app.emit(
+            "chat-turn-started",
+            &ChatTurnStartedPayload {
+                workspace_id: &workspace_id,
+                chat_session_id: &chat_session_id,
+            },
+        );
         if db
             .get_app_setting("first_session_at")
             .ok()
