@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { LoaderCircle } from "lucide-react";
+import { LoaderCircle, SendHorizontal } from "lucide-react";
 import { ChatSearchBar } from "./ChatSearchBar";
 import { useAppStore } from "../../stores/useAppStore";
 import {
@@ -15,6 +15,7 @@ import {
   recordSlashCommandUsage,
   sendChatMessage,
   sendRemoteCommand,
+  steerQueuedChatMessage,
   stopAgent,
   submitAgentAnswer,
   submitPlanApproval,
@@ -97,6 +98,7 @@ export function ChatPanel() {
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const processingRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isSteeringQueued, setIsSteeringQueued] = useState(false);
 
   // Cmd/Ctrl+F search bar state. `searchQuery` flows down to message
   // renderers as the highlight trigger; an empty string short-circuits the
@@ -660,6 +662,82 @@ export function ChatPanel() {
 
   if (!ws) return null;
 
+  const addPersistedUserMessageToStore = (
+    sessionId: string,
+    messageId: string,
+    content: string,
+    attachments?: AttachmentInput[],
+  ) => {
+    addChatMessage(sessionId, {
+      id: messageId,
+      workspace_id: ws.id,
+      chat_session_id: sessionId,
+      role: "User",
+      content,
+      cost_usd: null,
+      duration_ms: null,
+      created_at: new Date().toISOString(),
+      thinking: null,
+      input_tokens: null,
+      output_tokens: null,
+      cache_read_tokens: null,
+      cache_creation_tokens: null,
+    });
+    if (attachments?.length) {
+      const optimisticAtts = attachments.map((a) => ({
+        id: crypto.randomUUID(),
+        message_id: messageId,
+        filename: a.filename,
+        media_type: a.media_type,
+        data_base64: a.data_base64,
+        text_content: a.text_content ?? null,
+        width: null,
+        height: null,
+        size_bytes: Math.ceil(a.data_base64.length * 0.75),
+      }));
+      useAppStore.getState().addChatAttachments(sessionId, optimisticAtts);
+    }
+  };
+
+  const handleSteerQueuedMessage = async () => {
+    if (!activeSessionId || !queuedMessage || isSteeringQueued) return;
+    if (ws.remote_connection_id) {
+      setError("Mid-turn steering is not yet supported for remote workspaces");
+      return;
+    }
+    if (!isRunning) {
+      setError("No running agent turn to steer");
+      return;
+    }
+
+    const sessionId = activeSessionId;
+    const { content, mentionedFiles, attachments } = queuedMessage;
+    const messageId = crypto.randomUUID();
+    setError(null);
+    setIsSteeringQueued(true);
+    try {
+      await steerQueuedChatMessage(
+        sessionId,
+        content,
+        mentionedFiles,
+        attachments,
+        messageId,
+      );
+      const history = (historyRef.current[sessionId] ??= []);
+      history.push(content);
+      historyIndexRef.current = -1;
+      draftRef.current = "";
+      addPersistedUserMessageToStore(sessionId, messageId, content, attachments);
+      clearQueuedMessage(sessionId);
+    } catch (e) {
+      const errMsg = String(e);
+      console.error("steerQueuedChatMessage failed:", errMsg);
+      setError(errMsg);
+    } finally {
+      setIsSteeringQueued(false);
+    }
+  };
+
   const handleSend = async (
     content: string,
     mentionedFiles?: Set<string>,
@@ -929,36 +1007,7 @@ export function ChatPanel() {
     historyIndexRef.current = -1;
     draftRef.current = "";
     const optimisticMsgId = crypto.randomUUID();
-    addChatMessage(sessionId, {
-      id: optimisticMsgId,
-      workspace_id: selectedWorkspaceId,
-      chat_session_id: sessionId,
-      role: "User",
-      content: trimmed,
-      cost_usd: null,
-      duration_ms: null,
-      created_at: new Date().toISOString(),
-      thinking: null,
-      input_tokens: null,
-      output_tokens: null,
-      cache_read_tokens: null,
-      cache_creation_tokens: null,
-    });
-    // Add optimistic attachment data so images display immediately.
-    if (attachments?.length) {
-      const optimisticAtts = attachments.map((a) => ({
-        id: crypto.randomUUID(),
-        message_id: optimisticMsgId,
-        filename: a.filename,
-        media_type: a.media_type,
-        data_base64: a.data_base64,
-        text_content: a.text_content ?? null,
-        width: null,
-        height: null,
-        size_bytes: Math.ceil(a.data_base64.length * 0.75),
-      }));
-      useAppStore.getState().addChatAttachments(sessionId, optimisticAtts);
-    }
+    addPersistedUserMessageToStore(sessionId, optimisticMsgId, trimmed, attachments);
     // Keep both the workspace aggregate AND the per-session status fresh.
     // The tab icon, sidebar badge, and ChatToolbar disable-state all read
     // session-level status; the workspace row still drives tray + unread.
@@ -1190,6 +1239,20 @@ export function ChatPanel() {
                 <div className={styles.queuedMessage}>
                   <span className={styles.queuedLabel}>{t("queued_label")}</span>
                   <span className={styles.queuedContent}>{queuedMessage.content}</span>
+                  <button
+                    className={styles.queuedSteer}
+                    onClick={handleSteerQueuedMessage}
+                    disabled={isSteeringQueued || !isRunning}
+                    title={t("steer_queued")}
+                    aria-label={t("steer_queued")}
+                  >
+                    {isSteeringQueued ? (
+                      <LoaderCircle size={14} className={styles.queuedSteerSpinner} />
+                    ) : (
+                      <SendHorizontal size={14} />
+                    )}
+                    <span>{t("steer_queued_short")}</span>
+                  </button>
                   <button
                     className={styles.queuedCancel}
                     onClick={() => clearQueuedMessage(activeSessionId)}

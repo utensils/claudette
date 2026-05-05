@@ -5,6 +5,8 @@
   "processing_aria": "Processando, {{elapsed}} decorrido",
   "queued_label": "Na fila",
   "cancel_queued": "Cancelar mensagem na fila",
+  "steer_queued": "Enviar ao agente em execução",
+  "steer_queued_short": "Orientar",
   "stop_agent": "Parar agente",
   "send_message": "Enviar mensagem",
   "add_files_connectors": "Adicionar arquivos ou conectores",

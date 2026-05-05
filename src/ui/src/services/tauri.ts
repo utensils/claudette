@@ -530,6 +530,22 @@ export function sendChatMessage(
   });
 }
 
+export function steerQueuedChatMessage(
+  sessionId: string,
+  content: string,
+  mentionedFiles?: string[],
+  attachments?: AttachmentInput[],
+  messageId?: string,
+): Promise<void> {
+  return invoke("steer_queued_chat_message", {
+    sessionId,
+    messageId: messageId ?? null,
+    content,
+    mentionedFiles: mentionedFiles ?? null,
+    attachments: attachments ?? null,
+  });
+}
+
 export function loadAttachmentsForSession(
   sessionId: string,
 ): Promise<ChatAttachment[]> {

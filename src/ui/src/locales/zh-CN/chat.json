@@ -5,6 +5,8 @@
   "processing_aria": "处理中，已用 {{elapsed}}",
   "queued_label": "已排队",
   "cancel_queued": "取消排队的消息",
+  "steer_queued": "发送给正在运行的智能体",
+  "steer_queued_short": "引导",
   "stop_agent": "停止智能体",
   "send_message": "发送消息",
   "add_files_connectors": "添加文件或连接器",

@@ -596,6 +596,37 @@
   color: var(--text-dim);
 }
 
+.queuedSteer {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px solid rgba(var(--accent-primary-rgb), 0.25);
+  border-radius: 6px;
+  background: rgba(var(--accent-primary-rgb), 0.08);
+  color: var(--accent-primary);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.queuedSteer:hover:not(:disabled) {
+  background: rgba(var(--accent-primary-rgb), 0.14);
+  border-color: rgba(var(--accent-primary-rgb), 0.4);
+}
+
+.queuedSteer:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.queuedSteerSpinner {
+  animation: spin 0.8s linear infinite;
+}
+
 .queuedCancel {
   background: none;
   border: none;

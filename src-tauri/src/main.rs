@@ -485,6 +485,7 @@ fn main() {
             commands::chat::send::load_chat_history,
             commands::chat::send::load_chat_history_page,
             commands::chat::send::send_chat_message,
+            commands::chat::send::steer_queued_chat_message,
             commands::chat::attachments::load_attachments_for_session,
             commands::chat::attachments::load_attachment_data,
             commands::chat::attachments::read_file_as_base64,

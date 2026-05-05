@@ -5,6 +5,8 @@
   "processing_aria": "Processing, {{elapsed}} elapsed",
   "queued_label": "Queued",
   "cancel_queued": "Cancel queued message",
+  "steer_queued": "Send to running agent",
+  "steer_queued_short": "Steer",
   "stop_agent": "Stop agent",
   "send_message": "Send message",
   "add_files_connectors": "Add files or connectors",

@@ -75,6 +75,9 @@ pub async fn handle_request(
             )
             .await
         }
+        "steer_queued_chat_message" => {
+            Err("Mid-turn steering is not yet supported for remote sessions".to_string())
+        }
         "stop_agent" => {
             let chat_session_id = param_chat_session_id(&params);
             handle_stop_agent(state, &chat_session_id).await

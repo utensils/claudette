@@ -5,6 +5,8 @@
   "processing_aria": "処理中、経過時間 {{elapsed}}",
   "queued_label": "キュー登録済み",
   "cancel_queued": "キュー登録したメッセージをキャンセル",
+  "steer_queued": "実行中のエージェントに送信",
+  "steer_queued_short": "誘導",
   "stop_agent": "エージェントを停止",
   "send_message": "メッセージを送信",
   "add_files_connectors": "ファイルまたはコネクタを追加",
