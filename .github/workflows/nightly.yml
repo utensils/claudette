@@ -157,7 +157,8 @@ jobs:
           perl -i -pe 's/^version\s*=\s*"[^"]+"/version = "$ENV{NIGHTLY_VERSION}"/' Cargo.toml
           perl -i -pe 's/^version\s*=\s*"[^"]+"/version = "$ENV{NIGHTLY_VERSION}"/' src-tauri/Cargo.toml
           perl -i -pe 's/^version\s*=\s*"[^"]+"/version = "$ENV{NIGHTLY_VERSION}"/' src-server/Cargo.toml
-          grep '^version' Cargo.toml src-tauri/Cargo.toml src-server/Cargo.toml
+          perl -i -pe 's/^version\s*=\s*"[^"]+"/version = "$ENV{NIGHTLY_VERSION}"/' src-cli/Cargo.toml
+          grep '^version' Cargo.toml src-tauri/Cargo.toml src-server/Cargo.toml src-cli/Cargo.toml
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
