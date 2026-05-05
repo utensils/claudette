@@ -131,6 +131,37 @@ describe("terminal slice: upsertAgentTaskTerminalTab", () => {
       useAppStore.getState().agentBackgroundTasksBySessionId["session-a"],
     ).toEqual([completed]);
   });
+
+  it("keeps the read-only agent terminal first and replaces legacy command tabs", () => {
+    const userTerminal = makeTab(1, WS_A);
+    const legacyAgentTab: TerminalTab = {
+      ...makeTab(2, WS_A),
+      title: "Agent: sleep 30 && date",
+      kind: "agent_task",
+      agent_chat_session_id: "session-a",
+      task_status: "running",
+    };
+    const claudetteTerminal: TerminalTab = {
+      ...makeTab(3, WS_A),
+      title: "Claudette terminal",
+      kind: "agent_task",
+      agent_chat_session_id: "session-a",
+      task_status: "running",
+    };
+
+    useAppStore.getState().setTerminalTabs(WS_A, [userTerminal, legacyAgentTab]);
+    useAppStore
+      .getState()
+      .upsertAgentTaskTerminalTab(WS_A, "session-a", claudetteTerminal);
+
+    expect(useAppStore.getState().terminalTabs[WS_A]).toEqual([
+      claudetteTerminal,
+      userTerminal,
+    ]);
+    expect(
+      useAppStore.getState().agentBackgroundTasksBySessionId["session-a"],
+    ).toEqual([claudetteTerminal]);
+  });
 });
 
 describe("terminal slice: removeTerminalTab", () => {

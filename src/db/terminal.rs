@@ -11,6 +11,8 @@ use crate::model::{TerminalTab, TerminalTabKind};
 
 use super::Database;
 
+pub const CLAUDETTE_TERMINAL_TITLE: &str = "Claudette terminal";
+
 impl Database {
     // --- Terminal Tabs ---
 
@@ -56,7 +58,16 @@ impl Database {
             "SELECT id, workspace_id, title, kind, is_script_output, sort_order, created_at,
                     agent_chat_session_id, agent_tool_use_id, agent_task_id,
                     output_path, task_status, task_summary
-             FROM terminal_tabs WHERE workspace_id = ?1 ORDER BY sort_order, id",
+             FROM terminal_tabs
+             WHERE workspace_id = ?1
+               AND (
+                   kind != 'agent_task'
+                   OR title IN ('Claudette terminal', 'Agent shell')
+               )
+             ORDER BY
+               CASE WHEN kind = 'agent_task' THEN 0 ELSE 1 END,
+               sort_order,
+               id",
         )?;
         let rows = stmt.query_map(params![workspace_id], |row| {
             let kind: String = row.get(3)?;
@@ -122,7 +133,10 @@ impl Database {
                     agent_chat_session_id, agent_tool_use_id, agent_task_id,
                     output_path, task_status, task_summary
              FROM terminal_tabs
-             WHERE agent_chat_session_id = ?1 AND kind = 'agent_task' AND title = 'Agent shell'
+             WHERE agent_chat_session_id = ?1
+               AND kind = 'agent_task'
+               AND title IN ('Claudette terminal', 'Agent shell')
+             ORDER BY CASE WHEN title = 'Claudette terminal' THEN 0 ELSE 1 END, id
              LIMIT 1",
         )?;
         let mut rows = stmt.query(params![chat_session_id])?;
@@ -211,7 +225,9 @@ impl Database {
              SET agent_task_id = ?1,
                  task_status = ?2,
                  task_summary = COALESCE(?3, task_summary)
-             WHERE agent_chat_session_id = ?4 AND kind = 'agent_task' AND title = 'Agent shell'",
+             WHERE agent_chat_session_id = ?4
+               AND kind = 'agent_task'
+               AND title IN ('Claudette terminal', 'Agent shell')",
             params![task_id, status, summary, chat_session_id],
         )?;
         Ok(())
@@ -319,6 +335,19 @@ mod tests {
         }
     }
 
+    fn make_agent_terminal_tab(
+        id: i64,
+        ws_id: &str,
+        title: &str,
+        chat_session_id: &str,
+    ) -> TerminalTab {
+        TerminalTab {
+            kind: TerminalTabKind::AgentTask,
+            agent_chat_session_id: Some(chat_session_id.into()),
+            ..make_terminal_tab(id, ws_id, title)
+        }
+    }
+
     #[test]
     fn test_insert_and_list_terminal_tabs() {
         let db = setup_db_with_workspace();
@@ -344,6 +373,32 @@ mod tests {
         let tabs = db.list_terminal_tabs_by_workspace("w1").unwrap();
         assert_eq!(tabs.len(), 1);
         assert_eq!(tabs[0].title, "T1");
+    }
+
+    #[test]
+    fn test_agent_terminal_tabs_are_single_fixed_tab_first() {
+        let db = setup_db_with_workspace();
+        db.insert_terminal_tab(&make_terminal_tab(1, "w1", "Terminal 1"))
+            .unwrap();
+        db.insert_terminal_tab(&make_agent_terminal_tab(
+            2,
+            "w1",
+            "Agent: sleep 30 && date",
+            "chat-1",
+        ))
+        .unwrap();
+        db.insert_terminal_tab(&make_agent_terminal_tab(
+            3,
+            "w1",
+            CLAUDETTE_TERMINAL_TITLE,
+            "chat-1",
+        ))
+        .unwrap();
+
+        let tabs = db.list_terminal_tabs_by_workspace("w1").unwrap();
+        assert_eq!(tabs.len(), 2);
+        assert_eq!(tabs[0].title, CLAUDETTE_TERMINAL_TITLE);
+        assert_eq!(tabs[1].title, "Terminal 1");
     }
 
     #[test]

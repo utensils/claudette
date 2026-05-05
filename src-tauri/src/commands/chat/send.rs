@@ -17,7 +17,7 @@ use claudette::chat::{
     build_compaction_sentinel, build_permission_response, create_turn_checkpoint,
     extract_assistant_text, extract_event_thinking, persistent_session_flags_drifted,
 };
-use claudette::db::Database;
+use claudette::db::{CLAUDETTE_TERMINAL_TITLE, Database};
 use claudette::env::WorkspaceEnv;
 use claudette::mcp_supervisor::McpSupervisor;
 use claudette::model::{ChatMessage, ChatRole, TerminalTab, TerminalTabKind};
@@ -125,19 +125,22 @@ fn get_or_create_agent_shell_terminal_tab(
     chat_session_id: &str,
 ) -> Option<TerminalTab> {
     let db = Database::open(db_path).ok()?;
-    if let Ok(Some(tab)) = db.get_agent_shell_terminal_tab(chat_session_id) {
+    if let Ok(Some(mut tab)) = db.get_agent_shell_terminal_tab(chat_session_id) {
+        if tab.title != CLAUDETTE_TERMINAL_TITLE {
+            let _ = db.update_terminal_tab_title(tab.id, CLAUDETTE_TERMINAL_TITLE);
+            tab.title = CLAUDETTE_TERMINAL_TITLE.to_string();
+        }
         return Some(tab);
     }
     let max_id = db.max_terminal_tab_id().ok()?;
-    let existing = db.list_terminal_tabs_by_workspace(workspace_id).ok()?;
     let output_path = agent_bash_output_path(chat_session_id);
     let tab = TerminalTab {
         id: max_id + 1,
         workspace_id: workspace_id.to_string(),
-        title: "Agent shell".to_string(),
+        title: CLAUDETTE_TERMINAL_TITLE.to_string(),
         kind: TerminalTabKind::AgentTask,
         is_script_output: false,
-        sort_order: existing.len() as i32,
+        sort_order: 0,
         created_at: now_iso(),
         agent_chat_session_id: Some(chat_session_id.to_string()),
         agent_tool_use_id: None,
@@ -163,6 +166,7 @@ async fn apply_task_notification_status(
     workspace_id: &str,
     chat_session_id: &str,
     task_id: &str,
+    tool_use_id: Option<&str>,
     status: &str,
     summary: Option<&str>,
     output_file: Option<&str>,
@@ -175,6 +179,9 @@ async fn apply_task_notification_status(
         let mut agents = app_state.agents.write().await;
         if let Some(session) = agents.get_mut(chat_session_id) {
             session.running_background_tasks.remove(task_id);
+            if let Some(tool_use_id) = tool_use_id {
+                session.running_background_tasks.remove(tool_use_id);
+            }
         }
     }
     let _ = db.update_agent_task_terminal_tab_status(
@@ -276,6 +283,9 @@ fn schedule_background_task_wake(
             if let AgentEvent::Stream(StreamEvent::System {
                 subtype,
                 task_id: Some(task_id),
+                tool_use_id,
+                output_file,
+                summary,
                 status: Some(status),
                 ..
             }) = &event
@@ -289,9 +299,10 @@ fn schedule_background_task_wake(
                     &workspace_id,
                     &chat_session_id,
                     task_id,
+                    tool_use_id.as_deref(),
                     status,
-                    None,
-                    None,
+                    summary.as_deref(),
+                    output_file.as_deref(),
                 )
                 .await;
             }
@@ -309,6 +320,7 @@ fn schedule_background_task_wake(
                     &workspace_id,
                     &chat_session_id,
                     &notification.task_id,
+                    notification.tool_use_id.as_deref(),
                     status,
                     notification.summary.as_deref(),
                     notification.output_file.as_deref(),
@@ -332,6 +344,7 @@ fn schedule_background_task_wake(
                             &workspace_id,
                             &chat_session_id,
                             &notification.task_id,
+                            notification.tool_use_id.as_deref(),
                             status,
                             notification.summary.as_deref(),
                             notification.output_file.as_deref(),
@@ -1516,6 +1529,9 @@ pub async fn send_chat_message(
             if let AgentEvent::Stream(StreamEvent::System {
                 subtype,
                 task_id: Some(task_id),
+                tool_use_id,
+                output_file,
+                summary,
                 status: Some(status),
                 ..
             }) = &event
@@ -1527,9 +1543,10 @@ pub async fn send_chat_message(
                     &ws_id,
                     &chat_session_id_for_stream,
                     task_id,
+                    tool_use_id.as_deref(),
                     status,
-                    None,
-                    None,
+                    summary.as_deref(),
+                    output_file.as_deref(),
                 )
                 .await;
             }
@@ -1949,6 +1966,7 @@ pub async fn send_chat_message(
                                             &ws_id,
                                             &chat_session_id_for_stream,
                                             &notification.task_id,
+                                            notification.tool_use_id.as_deref(),
                                             status,
                                             notification.summary.as_deref(),
                                             notification.output_file.as_deref(),
@@ -1969,6 +1987,7 @@ pub async fn send_chat_message(
                                 &ws_id,
                                 &chat_session_id_for_stream,
                                 &notification.task_id,
+                                notification.tool_use_id.as_deref(),
                                 status,
                                 notification.summary.as_deref(),
                                 notification.output_file.as_deref(),

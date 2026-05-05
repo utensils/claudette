@@ -15,6 +15,17 @@ import {
 } from "../terminalPaneTree";
 import type { AppState } from "../useAppStore";
 
+function orderTerminalTabs(tabs: TerminalTab[]): TerminalTab[] {
+  return [...tabs].sort((a, b) => {
+    const aKind = a.kind === "agent_task" ? 0 : 1;
+    const bKind = b.kind === "agent_task" ? 0 : 1;
+    if (aKind !== bKind) return aKind - bKind;
+    const bySortOrder = a.sort_order - b.sort_order;
+    if (bySortOrder !== 0) return bySortOrder;
+    return a.id - b.id;
+  });
+}
+
 export interface TerminalSlice {
   terminalTabs: Record<string, TerminalTab[]>;
   agentBackgroundTasksBySessionId: Record<string, TerminalTab[]>;
@@ -100,13 +111,13 @@ export const createTerminalSlice: StateCreator<
   workspaceTerminalCommands: {},
   setTerminalTabs: (wsId, tabs) =>
     set((s) => ({
-      terminalTabs: { ...s.terminalTabs, [wsId]: tabs },
+      terminalTabs: { ...s.terminalTabs, [wsId]: orderTerminalTabs(tabs) },
     })),
   addTerminalTab: (wsId, tab) =>
     set((s) => ({
       terminalTabs: {
         ...s.terminalTabs,
-        [wsId]: [...(s.terminalTabs[wsId] || []), tab],
+        [wsId]: orderTerminalTabs([...(s.terminalTabs[wsId] || []), tab]),
       },
       activeTerminalTabId: { ...s.activeTerminalTabId, [wsId]: tab.id },
       terminalPanelVisible: true,
@@ -151,22 +162,24 @@ export const createTerminalSlice: StateCreator<
   upsertAgentTaskTerminalTab: (wsId, sessionId, tab) =>
     set((s) => {
       const existingTabs = s.terminalTabs[wsId] ?? [];
-      const existingIndex = existingTabs.findIndex((t) => t.id === tab.id);
+      const sessionTabsPruned = existingTabs.filter(
+        (t) =>
+          !(
+            t.kind === "agent_task" &&
+            t.agent_chat_session_id === sessionId &&
+            t.id !== tab.id
+          ),
+      );
+      const existingIndex = sessionTabsPruned.findIndex((t) => t.id === tab.id);
       const tabs =
         existingIndex >= 0
-          ? existingTabs.map((t) => (t.id === tab.id ? tab : t))
-          : [...existingTabs, tab];
-      const existingTasks = s.agentBackgroundTasksBySessionId[sessionId] ?? [];
-      const taskIndex = existingTasks.findIndex((t) => t.id === tab.id);
-      const tasks =
-        taskIndex >= 0
-          ? existingTasks.map((t) => (t.id === tab.id ? tab : t))
-          : [...existingTasks, tab];
+          ? sessionTabsPruned.map((t) => (t.id === tab.id ? tab : t))
+          : [...sessionTabsPruned, tab];
       return {
-        terminalTabs: { ...s.terminalTabs, [wsId]: tabs },
+        terminalTabs: { ...s.terminalTabs, [wsId]: orderTerminalTabs(tabs) },
         agentBackgroundTasksBySessionId: {
           ...s.agentBackgroundTasksBySessionId,
-          [sessionId]: tasks,
+          [sessionId]: [tab],
         },
       };
     }),

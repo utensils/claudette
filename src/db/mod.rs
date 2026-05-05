@@ -15,6 +15,7 @@ mod scm;
 pub use scm::ScmStatusCacheRow;
 
 mod terminal;
+pub use terminal::CLAUDETTE_TERMINAL_TITLE;
 
 mod remote;
 
