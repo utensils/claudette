@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next";
 import { AlertCircle, FileText, LoaderCircle, Mic, Plus, Send, Square, X } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { VoiceMeter } from "./VoiceMeter";
 import { useAppStore } from "../../stores/useAppStore";
 import {
   listSlashCommands,
@@ -36,7 +36,6 @@ import { PinnedPromptsBar } from "./PinnedPromptsBar";
 import { SlashCommandPicker, filterSlashCommands } from "./SlashCommandPicker";
 import { describeSlashQuery } from "./nativeSlashCommands";
 import { hasUltrathink, renderUltrathinkText } from "./ultrathink";
-import { formatElapsedSeconds } from "./chatHelpers";
 import styles from "./ChatPanel.module.css";
 
 /** Extract the @-query based on cursor position in the textarea. */
@@ -190,15 +189,10 @@ export function ChatInputArea({
     voice.activeProvider,
   );
 
-  // VU meter: subscribe to `voice://level` events while recording and apply
-  // exponential moving average smoothing so the bars animate smoothly.
-  // Skipped (and replaced with a static indicator) when the OS asks for
-  // reduced motion, or when the active provider is webview-driven (Web
-  // Speech API) — that path captures audio in the browser and emits no
-  // `voice://level` events from Rust, so dynamic bars would sit at the
-  // floor for the whole recording.
-  const [vuLevel, setVuLevel] = useState(0);
-  const smoothedRef = useRef(0);
+  // VU meter dynamic-vs-static decision lives in the parent because it
+  // depends on the OS reduced-motion preference and the active provider's
+  // `recordingMode`. The meter itself is a child component so 30 Hz level
+  // events don't re-render this large composer.
   const [reducedMotion, setReducedMotion] = useState(() => {
     if (typeof window === "undefined" || !window.matchMedia) return false;
     return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -212,26 +206,6 @@ export function ChatInputArea({
   }, []);
   const nativeRecording = voice.activeProvider?.recordingMode === "native";
   const useDynamicMeter = !reducedMotion && nativeRecording;
-  // Only show the live level while actively recording; show 0 otherwise.
-  const displayedLevel = voice.state === "recording" ? vuLevel : 0;
-  useEffect(() => {
-    if (voice.state !== "recording" || !useDynamicMeter) return;
-    smoothedRef.current = 0;
-    setVuLevel(0);
-    let unlistenFn: UnlistenFn | undefined;
-    const promise = listen<{ level: number }>("voice://level", (event) => {
-      const raw = event.payload.level;
-      smoothedRef.current = 0.6 * smoothedRef.current + 0.4 * raw;
-      setVuLevel(smoothedRef.current);
-    }).then((fn) => {
-      unlistenFn = fn;
-    });
-    return () => {
-      promise.then(() => unlistenFn?.());
-      smoothedRef.current = 0;
-      setVuLevel(0);
-    };
-  }, [voice.state, useDynamicMeter]);
 
   // Esc cancels an active recording regardless of where focus is. The
   // textarea's onKeyDown also handles Esc when it has focus; clicking
@@ -1038,41 +1012,12 @@ export function ChatInputArea({
             sessionId={sessionId}
             onClick={() => setContextPopoverOpen((v) => !v)}
           />
-          {voice.state === "recording" && (() => {
-            // Perceptual mapping: sqrt expands quiet speech, the noise gate
-            // ignores ambient hiss, and saturating at RMS=0.4 leaves headroom
-            // for loud peaks while letting typical speech (RMS 0.05–0.15)
-            // reach the middle of the bar range. Falls back to a static
-            // mid-range height when reduced motion is requested or the
-            // provider is webview-driven (no `voice://level` events).
-            const barMin = 4;
-            const barRange = 10; // 4–14 px
-            let center: number;
-            let outer: number;
-            if (!useDynamicMeter) {
-              center = 8;
-              outer = 8;
-            } else {
-              const noiseFloor = 0.002;
-              const saturation = 0.4;
-              const perceptual =
-                displayedLevel <= noiseFloor
-                  ? 0
-                  : Math.min(Math.sqrt(displayedLevel / saturation), 1);
-              center = barMin + perceptual * barRange;
-              outer = barMin + perceptual * barRange * 0.85;
-            }
-            return (
-              <div className={styles.voiceRecordingStatus} aria-live="polite">
-                <span className={styles.voiceWaveform} aria-hidden="true">
-                  <span style={{ height: `${outer}px` }} />
-                  <span style={{ height: `${center}px` }} />
-                  <span style={{ height: `${outer}px` }} />
-                </span>
-                <span>{formatElapsedSeconds(voice.elapsedSeconds)}</span>
-              </div>
-            );
-          })()}
+          {voice.state === "recording" && (
+            <VoiceMeter
+              elapsedSeconds={voice.elapsedSeconds}
+              useDynamicMeter={useDynamicMeter}
+            />
+          )}
           {voice.state === "starting" && (
             <div className={styles.voiceStatusText} aria-live="polite">
               <LoaderCircle
