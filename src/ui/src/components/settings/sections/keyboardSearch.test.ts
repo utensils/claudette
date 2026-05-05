@@ -21,7 +21,7 @@ describe("shortcutMatchesQuery", () => {
 
   it("matches against the category name", () => {
     expect(
-      shortcutMatchesQuery(mk("Hold to talk", "Voice"), "voice"),
+      shortcutMatchesQuery(mk("Push to talk", "Voice"), "voice"),
     ).toBe(true);
   });
 
@@ -41,10 +41,11 @@ describe("shortcutMatchesQuery", () => {
     expect(shortcutMatchesQuery(action, "terminal panel")).toBe(false);
   });
 
-  it("finds the push-to-talk shortcut by `talk` or `hold`", () => {
-    const action = mk("Hold to talk", "Voice", "Right ⌥");
+  it("finds the push-to-talk shortcut by `talk` or `push`", () => {
+    const action = mk("Push to talk", "Voice", "Right ⌥");
     expect(shortcutMatchesQuery(action, "talk")).toBe(true);
-    expect(shortcutMatchesQuery(action, "hold")).toBe(true);
-    expect(shortcutMatchesQuery(action, "push to talk")).toBe(false);
+    expect(shortcutMatchesQuery(action, "push")).toBe(true);
+    expect(shortcutMatchesQuery(action, "push to talk")).toBe(true);
+    expect(shortcutMatchesQuery(action, "hold")).toBe(false);
   });
 });

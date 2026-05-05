@@ -205,7 +205,7 @@
   "keyboard_action_terminal_focus_pane_down": "Focus pane down",
   "keyboard_action_file_toggle_markdown_preview": "Toggle Markdown preview",
   "keyboard_action_voice_toggle": "Toggle voice input",
-  "keyboard_action_voice_hold": "Hold to talk",
+  "keyboard_action_voice_hold": "Push to talk",
 
   "git_title": "Git",
   "git_branch_prefix": "Branch name prefix",
@@ -370,7 +370,7 @@
   "keyboard_voice_section": "Voice input",
   "keyboard_voice_toggle_label": "Toggle recording",
   "keyboard_voice_toggle_desc": "Start or stop voice recording without touching the mouse.",
-  "keyboard_voice_hold_label": "Hold to talk",
+  "keyboard_voice_hold_label": "Push to talk",
   "keyboard_voice_hold_desc": "Hold the key to record, release to stop and transcribe.",
   "keyboard_rebind": "Rebind",
   "keyboard_press_key": "Press a key…",
