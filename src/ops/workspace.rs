@@ -496,7 +496,16 @@ pub async fn archive(
     let remaining = db.list_workspaces()?;
     let was_last_workspace = !remaining.iter().any(|w| w.repository_id == repository_id);
 
-    hooks.workspace_changed(&workspace_id, WorkspaceChangeKind::Archived);
+    // `delete_branch` hard-deletes the workspace row above; surface that
+    // distinction to UI subscribers so the frontend can `removeWorkspace`
+    // (Deleted) instead of `updateWorkspace { status: Archived }` against
+    // a row that no longer exists.
+    let kind = if params.delete_branch {
+        WorkspaceChangeKind::Deleted
+    } else {
+        WorkspaceChangeKind::Archived
+    };
+    hooks.workspace_changed(&workspace_id, kind);
 
     Ok(ArchiveOutput {
         branch_deleted,
@@ -529,4 +538,175 @@ fn now_iso() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
     format!("{}", dur.as_secs())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Repository;
+    use std::sync::Mutex;
+
+    /// Hook impl that records every change so tests can assert the
+    /// surface contract (e.g. archive emits Deleted vs Archived).
+    #[derive(Default)]
+    struct RecordingHooks {
+        changes: Mutex<Vec<(String, WorkspaceChangeKind)>>,
+    }
+
+    impl OpsHooks for RecordingHooks {
+        fn workspace_changed(&self, workspace_id: &str, kind: WorkspaceChangeKind) {
+            self.changes
+                .lock()
+                .unwrap()
+                .push((workspace_id.to_string(), kind));
+        }
+    }
+
+    impl RecordingHooks {
+        fn changes(&self) -> Vec<(String, WorkspaceChangeKind)> {
+            self.changes.lock().unwrap().clone()
+        }
+    }
+
+    async fn run_git_in(repo_path: &std::path::Path, args: &[&str]) {
+        let status = tokio::process::Command::new("git")
+            .args(args)
+            .current_dir(repo_path)
+            .status()
+            .await
+            .unwrap();
+        assert!(status.success(), "git {args:?} failed in {repo_path:?}");
+    }
+
+    /// Build a real git repo + Database with one Repository row pointing
+    /// at it so `create` / `archive` can exercise the full pipeline.
+    /// Returns the temp dirs (kept alive for the test) plus the DB.
+    async fn setup_repo_and_db() -> (tempfile::TempDir, tempfile::TempDir, Database, Repository) {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let repo_path = repo_dir.path();
+        run_git_in(repo_path, &["init", "-b", "main"]).await;
+        run_git_in(repo_path, &["config", "user.email", "test@test.com"]).await;
+        run_git_in(repo_path, &["config", "user.name", "Test"]).await;
+        std::fs::write(repo_path.join("README.md"), "# test").unwrap();
+        run_git_in(repo_path, &["add", "-A"]).await;
+        run_git_in(repo_path, &["commit", "-m", "initial"]).await;
+
+        let db_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&db_dir.path().join("test.db")).unwrap();
+
+        let repo = Repository {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "test".to_string(),
+            path: repo_path.to_string_lossy().to_string(),
+            path_slug: "test".to_string(),
+            icon: None,
+            created_at: now_iso(),
+            setup_script: None,
+            custom_instructions: None,
+            sort_order: 0,
+            branch_rename_preferences: None,
+            setup_script_auto_run: false,
+            base_branch: None,
+            default_remote: None,
+            path_valid: true,
+        };
+        db.insert_repository(&repo).unwrap();
+
+        (repo_dir, db_dir, db, repo)
+    }
+
+    /// Regression for the `claudette workspace archive --delete-branch`
+    /// IPC flow: when the row is hard-deleted, the hook must announce
+    /// `Deleted` (not `Archived`) so the frontend can `removeWorkspace`
+    /// instead of marking a row that no longer exists as archived.
+    #[tokio::test]
+    async fn archive_emits_deleted_when_branch_deleted() {
+        let (_repo_dir, _db_dir, mut db, repo) = setup_repo_and_db().await;
+        let worktree_base = tempfile::tempdir().unwrap();
+        let hooks = RecordingHooks::default();
+
+        let created = create(
+            &mut db,
+            &hooks,
+            worktree_base.path(),
+            CreateParams {
+                repo_id: &repo.id,
+                name: "feature",
+                branch_prefix: "test/",
+            },
+        )
+        .await
+        .unwrap();
+        let ws_id = created.workspace.id.clone();
+
+        archive(
+            &mut db,
+            &hooks,
+            ArchiveParams {
+                workspace_id: &ws_id,
+                delete_branch: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        let kinds: Vec<_> = hooks
+            .changes()
+            .into_iter()
+            .filter(|(id, _)| id == &ws_id)
+            .map(|(_, k)| k)
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![WorkspaceChangeKind::Created, WorkspaceChangeKind::Deleted],
+            "delete_branch=true must emit Deleted (not Archived)"
+        );
+    }
+
+    /// Standard archive (delete_branch=false) keeps the row in the DB
+    /// as Archived; the hook must use `Archived` so the frontend updates
+    /// the existing row instead of removing it.
+    #[tokio::test]
+    async fn archive_emits_archived_when_branch_kept() {
+        let (_repo_dir, _db_dir, mut db, repo) = setup_repo_and_db().await;
+        let worktree_base = tempfile::tempdir().unwrap();
+        let hooks = RecordingHooks::default();
+
+        let created = create(
+            &mut db,
+            &hooks,
+            worktree_base.path(),
+            CreateParams {
+                repo_id: &repo.id,
+                name: "feature",
+                branch_prefix: "test/",
+            },
+        )
+        .await
+        .unwrap();
+        let ws_id = created.workspace.id.clone();
+
+        archive(
+            &mut db,
+            &hooks,
+            ArchiveParams {
+                workspace_id: &ws_id,
+                delete_branch: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        let kinds: Vec<_> = hooks
+            .changes()
+            .into_iter()
+            .filter(|(id, _)| id == &ws_id)
+            .map(|(_, k)| k)
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![WorkspaceChangeKind::Created, WorkspaceChangeKind::Archived,],
+            "delete_branch=false must keep emitting Archived"
+        );
+    }
 }
