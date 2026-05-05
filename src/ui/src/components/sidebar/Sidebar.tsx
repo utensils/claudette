@@ -21,6 +21,7 @@ import {
 } from "../../services/tauri";
 import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, CircleStop, GitPullRequestArrow, GitPullRequestDraft, GitMerge, GitPullRequestClosed, ChevronRight, ChevronDown, CircleHelp } from "lucide-react";
 import { RepoIcon } from "../shared/RepoIcon";
+import { extractRemoteWorkspace } from "./remoteWorkspaceResponse";
 import { UpdateBanner } from "../layout/UpdateBanner";
 import { getScmSortPriority } from "../../utils/scmSortPriority";
 import { useTabDragReorder } from "../../hooks/useTabDragReorder";
@@ -1261,11 +1262,17 @@ function RemoteConnectionGroup({
         repository_id: repoId,
         name: generated.slug,
       });
-      if (result === null || typeof result !== "object" || !("id" in result)) {
+      // Server's create_workspace was changed in the ops-core extraction
+      // (Phase 1) to wrap the row under `workspace` so it can also carry
+      // `default_session_id` and `setup_result`. Accept both shapes —
+      // bare Workspace (legacy) and the new wrapper — so older servers
+      // and the new one both work.
+      const wsPayload = extractRemoteWorkspace(result);
+      if (!wsPayload) {
         throw new Error("Remote server returned an invalid workspace");
       }
       const ws: import("../../types/workspace").Workspace = {
-        ...(result as Omit<import("../../types/workspace").Workspace, "remote_connection_id">),
+        ...wsPayload,
         remote_connection_id: conn.id,
       };
       addWorkspace(ws);
