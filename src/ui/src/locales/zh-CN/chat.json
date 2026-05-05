@@ -70,6 +70,8 @@
   "plan_approval_description": "智能体已撰写计划并请求批准以继续实施。",
   "plan_approval_view_plan": "查看计划",
   "plan_approval_hide_plan": "隐藏计划",
+  "plan_approval_copy": "复制计划",
+  "plan_approval_copied": "已复制！",
   "plan_approval_loading": "加载中...",
   "plan_approval_failed_read": "（无法读取计划文件）",
   "plan_approval_requested_permissions": "请求的权限",
