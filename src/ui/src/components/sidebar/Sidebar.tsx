@@ -226,7 +226,7 @@ export const Sidebar = memo(function Sidebar() {
   // hook needs this visual sequence so reorderById's "from"/"to" positions
   // match what the user sees — without it, a second drag in the same repo
   // would compute against the unsorted DB order and persist the wrong
-  // sequence (Codex review #629, P2).
+  // sequence (P2 finding from the Codex peer review on this branch).
   const visuallyOrderedWorkspaces = useMemo(() => {
     const localRepos = repositories.filter((r) => !r.remote_connection_id);
     const repoIndex = new Map(localRepos.map((r, i) => [r.id, i]));
