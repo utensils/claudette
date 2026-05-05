@@ -17,6 +17,8 @@ fn hydrate_session(
     if let Some(agent) = agents.get(&session.id) {
         session.agent_status = if agent.active_pid.is_some() {
             claudette::model::AgentStatus::Running
+        } else if !agent.running_background_tasks.is_empty() {
+            claudette::model::AgentStatus::IdleWithBackground
         } else {
             claudette::model::AgentStatus::Idle
         };
@@ -190,6 +192,73 @@ mod tests {
     fn fresh_state(db_path: PathBuf) -> AppState {
         let plugins = PluginRegistry::discover(std::path::Path::new("/nonexistent"));
         AppState::new(db_path, std::path::PathBuf::from("/tmp"), plugins)
+    }
+
+    fn make_chat_session(id: &str) -> ChatSession {
+        ChatSession {
+            id: id.to_string(),
+            workspace_id: "w1".to_string(),
+            session_id: None,
+            name: "New chat".to_string(),
+            name_edited: false,
+            turn_count: 0,
+            sort_order: 0,
+            status: claudette::model::SessionStatus::Active,
+            created_at: String::new(),
+            archived_at: None,
+            agent_status: AgentStatus::Idle,
+            needs_attention: false,
+            attention_kind: None,
+        }
+    }
+
+    fn make_agent_state(background_tasks: &[&str], active_pid: Option<u32>) -> AgentSessionState {
+        AgentSessionState {
+            workspace_id: "w1".to_string(),
+            session_id: "claude-session".to_string(),
+            turn_count: 1,
+            active_pid,
+            custom_instructions: None,
+            needs_attention: false,
+            attention_kind: None,
+            attention_notification_sent: false,
+            persistent_session: None,
+            mcp_config_dirty: false,
+            session_plan_mode: false,
+            session_allowed_tools: Vec::new(),
+            session_disable_1m_context: false,
+            pending_permissions: Default::default(),
+            running_background_tasks: background_tasks
+                .iter()
+                .map(|task| (*task).to_string())
+                .collect(),
+            background_wake_active: false,
+            session_exited_plan: false,
+            session_resolved_env: Default::default(),
+            mcp_bridge: None,
+            last_user_msg_id: None,
+            posted_env_trust_warning: false,
+        }
+    }
+
+    #[test]
+    fn hydrate_session_reports_idle_with_background_when_tasks_are_running() {
+        let mut agents = std::collections::HashMap::new();
+        agents.insert("s1".to_string(), make_agent_state(&["task-1"], None));
+
+        let session = hydrate_session(make_chat_session("s1"), &agents);
+
+        assert_eq!(session.agent_status, AgentStatus::IdleWithBackground);
+    }
+
+    #[test]
+    fn hydrate_session_reports_running_before_background_status() {
+        let mut agents = std::collections::HashMap::new();
+        agents.insert("s1".to_string(), make_agent_state(&["task-1"], Some(42)));
+
+        let session = hydrate_session(make_chat_session("s1"), &agents);
+
+        assert_eq!(session.agent_status, AgentStatus::Running);
     }
 
     /// Regression test for issue #574: while a streaming task holds

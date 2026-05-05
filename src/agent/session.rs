@@ -226,6 +226,13 @@ impl PersistentSession {
         })
     }
 
+    /// Subscribe to the persistent process's raw stream-json events without
+    /// sending a new turn. Used by session-level infrastructure that must
+    /// observe SDK events emitted while no user turn receiver is active.
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<AgentEvent> {
+        self.event_tx.subscribe()
+    }
+
     /// Write a `control_response` line to the CLI's stdin, answering a
     /// prior `control_request: can_use_tool`. The inner `response` value is
     /// either a permission-allow (`{ behavior: "allow", updatedInput }`) or
@@ -262,10 +269,45 @@ impl PersistentSession {
         Ok(())
     }
 
+    /// Ask the persistent Claude CLI process to stop an agent-owned
+    /// background task. The CLI accepts this as an SDK `control_request` on
+    /// the same stream-json stdin used for user turns and permission responses.
+    pub async fn send_task_stop(&self, task_id: &str) -> Result<(), String> {
+        use tokio::io::AsyncWriteExt;
+        let request_id = format!("claudette-stop-task-{}", uuid::Uuid::new_v4());
+        let message = build_task_stop_message(&request_id, task_id);
+        let mut stdin = self.stdin.lock().await;
+        stdin
+            .write_all(message.as_bytes())
+            .await
+            .map_err(|e| format!("Failed to write stop_task control_request: {e}"))?;
+        stdin
+            .write_all(b"\n")
+            .await
+            .map_err(|e| format!("Failed to write stop_task control_request newline: {e}"))?;
+        stdin
+            .flush()
+            .await
+            .map_err(|e| format!("Failed to flush stop_task control_request: {e}"))?;
+        Ok(())
+    }
+
     /// Get the process ID.
     pub fn pid(&self) -> u32 {
         self.pid
     }
+}
+
+fn build_task_stop_message(request_id: &str, task_id: &str) -> String {
+    serde_json::json!({
+        "type": "control_request",
+        "request_id": request_id,
+        "request": {
+            "subtype": "stop_task",
+            "task_id": task_id,
+        },
+    })
+    .to_string()
 }
 
 /// Build CLI arguments for a persistent session (no prompt, with `--input-format stream-json`).
@@ -612,5 +654,15 @@ mod tests {
             .position(|a| a == "--permission-prompt-tool")
             .expect("--permission-prompt-tool missing in persistent args");
         assert_eq!(args.get(idx + 1).map(String::as_str), Some("stdio"));
+    }
+
+    #[test]
+    fn build_task_stop_message_writes_out_of_band_control_shape() {
+        let raw = build_task_stop_message("req_123", "task_123");
+        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(parsed["type"], "control_request");
+        assert_eq!(parsed["request_id"], "req_123");
+        assert_eq!(parsed["request"]["subtype"], "stop_task");
+        assert_eq!(parsed["request"]["task_id"], "task_123");
     }
 }

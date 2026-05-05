@@ -18,7 +18,7 @@ export interface ChatMessage {
 
 export type SessionStatus = "Active" | "Archived";
 export type SessionAttentionKind = "Ask" | "Plan";
-export type SessionAgentStatus = "Idle" | "Running" | "Stopped";
+export type SessionAgentStatus = "Idle" | "Running" | "IdleWithBackground" | "Stopped";
 
 /** A chat session (tab) within a workspace. Matches the Rust `ChatSession` struct. */
 export interface ChatSession {

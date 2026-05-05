@@ -5,7 +5,11 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -15,12 +19,17 @@ import { getTerminalTheme } from "../../utils/theme";
 import {
   createTerminalTab,
   deleteTerminalTab,
+  ensureClaudetteTerminalTab,
   listTerminalTabs,
+  updateTerminalTabOrder,
   openUrl,
   spawnPty,
   writePty,
   resizePty,
   closePty,
+  startAgentTaskTail,
+  stopAgentTaskTail,
+  stopAgentBackgroundTask,
 } from "../../services/tauri";
 import {
   cycleTabId,
@@ -39,6 +48,7 @@ import {
   focusChatPrompt,
 } from "../../utils/focusTargets";
 import { TerminalPaneTree } from "./TerminalPaneTree";
+import type { TerminalTab } from "../../types/terminal";
 import {
   collectNeededLeaves,
   diffLeaves,
@@ -49,6 +59,16 @@ import {
   shouldForwardPtyResize,
   type PtySizeSnapshot,
 } from "./terminalPtyResize";
+import {
+  reorderTerminalTabs,
+  tabDropPlacement,
+  type TabDropPlacement,
+} from "./terminalPanelLogic";
+import {
+  AttachmentContextMenu,
+  type AttachmentContextMenuItem,
+} from "../chat/AttachmentContextMenu";
+import { viewportToFixed } from "../../utils/zoom";
 import { reclaimScrollLines } from "./terminalReclaim";
 import "@xterm/xterm/css/xterm.css";
 import styles from "./TerminalPanel.module.css";
@@ -58,7 +78,14 @@ interface PtyOutputPayload {
   data: number[];
 }
 
+interface AgentTaskOutputPayload {
+  tab_id: number;
+  data: number[];
+  reset?: boolean;
+}
+
 const terminalInputEncoder = new TextEncoder();
+const terminalContextMenuOptions = { capture: true };
 
 // Per-leaf xterm + PTY handle. The container is a detached <div> that we
 // appendChild into whichever target div the pane tree currently emits for
@@ -72,12 +99,15 @@ interface LeafInstance {
   term: Terminal;
   fit: FitAddon;
   ptyId: number;
+  isAgentTask: boolean;
+  agentTaskTailPath: string | null;
   unlisten: (() => void) | null;
   resizeObserver: ResizeObserver;
   fitTimer: ReturnType<typeof setTimeout> | null;
   reclaimTimer: ReturnType<typeof setTimeout> | null;
   reclaimDisposer: (() => void) | null;
   handleCopy: (ev: ClipboardEvent) => void;
+  handleContextMenu: (ev: MouseEvent) => void;
   keyHandler: (ev: KeyboardEvent) => boolean;
   lastPtySize: PtySizeSnapshot | null;
 }
@@ -261,6 +291,12 @@ function closePtyBestEffort(ptyId: number) {
   });
 }
 
+function stopAgentTaskTailBestEffort(tabId: number) {
+  void stopAgentTaskTail(tabId).catch((err) => {
+    console.error(`Failed to stop agent task tail ${tabId}:`, err);
+  });
+}
+
 function forwardPtyResize(
   inst: LeafInstance,
   nextSize: PtySizeSnapshot = { cols: inst.term.cols, rows: inst.term.rows },
@@ -308,6 +344,9 @@ export const TerminalPanel = memo(function TerminalPanel() {
   const setActiveTerminalTab = useAppStore((s) => s.setActiveTerminalTab);
   const toggleTerminalPanel = useAppStore((s) => s.toggleTerminalPanel);
   const terminalPanelVisible = useAppStore((s) => s.terminalPanelVisible);
+  const claudetteTerminalEnabled = useAppStore(
+    (s) => s.claudetteTerminalEnabled,
+  );
   const terminalPaneTrees = useAppStore((s) => s.terminalPaneTrees);
   const activeTerminalPaneId = useAppStore((s) => s.activeTerminalPaneId);
   const ensurePaneTree = useAppStore((s) => s.ensurePaneTree);
@@ -318,9 +357,56 @@ export const TerminalPanel = memo(function TerminalPanel() {
   const setPanePtyId = useAppStore((s) => s.setPanePtyId);
   const setPaneSpawnError = useAppStore((s) => s.setPaneSpawnError);
   const terminalFontSize = useAppStore((s) => s.terminalFontSize);
+  const selectedSessionId = useAppStore((s) =>
+    s.selectedWorkspaceId
+      ? (s.selectedSessionIdByWorkspaceId[s.selectedWorkspaceId] ?? null)
+      : null,
+  );
   const fontFamilyMono = useAppStore((s) => s.fontFamilyMono);
   const currentThemeId = useAppStore((s) => s.currentThemeId);
   const uiFontSize = useAppStore((s) => s.uiFontSize);
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    tabId: number;
+    leafId?: string;
+  } | null>(null);
+  // Pointer-event-based tab drag — native HTML5 DnD does not deliver
+  // dragover/drop events under the html `zoom` we apply for UI font scaling
+  // (WebKit-on-macOS quirk), so we hand-roll the drag with pointer events
+  // which work correctly under zoom.
+  const tabDragRef = useRef<{
+    tabId: number;
+    startX: number;
+    startY: number;
+    pointerId: number;
+    active: boolean;
+    offsetX: number;
+    offsetY: number;
+    width: number;
+    height: number;
+    title: string;
+  } | null>(null);
+  const tabDragJustEndedRef = useRef(false);
+  const [draggingTabId, setDraggingTabId] = useState<number | null>(null);
+  const [tabDropTarget, setTabDropTarget] = useState<{
+    tabId: number;
+    placement: TabDropPlacement;
+  } | null>(null);
+  // Cursor position + dragged-tab geometry, captured at drag start so the
+  // floating ghost can mimic the source tab's size and offset relative to
+  // the click point. Coords are event clientX/Y (visual pixels under html
+  // zoom) — the ghost uses viewportToFixed to convert into layout pixels
+  // for `position: fixed`.
+  const [dragGhost, setDragGhost] = useState<{
+    cursorX: number;
+    cursorY: number;
+    offsetX: number;
+    offsetY: number;
+    width: number;
+    height: number;
+    title: string;
+  } | null>(null);
 
   const autoCreatedRef = useRef<string | null>(null);
   // Tracks the last (tabId, leafId, visible) tuple we applied keyboard
@@ -344,8 +430,13 @@ export const TerminalPanel = memo(function TerminalPanel() {
   }, [activeTerminalTabId]);
 
   const tabs = useMemo(
-    () => (selectedWorkspaceId ? terminalTabs[selectedWorkspaceId] ?? [] : []),
-    [selectedWorkspaceId, terminalTabs],
+    () =>
+      selectedWorkspaceId
+        ? (terminalTabs[selectedWorkspaceId] ?? []).filter(
+            (tab) => claudetteTerminalEnabled || tab.kind !== "agent_task",
+          )
+        : [],
+    [claudetteTerminalEnabled, selectedWorkspaceId, terminalTabs],
   );
 
   const handleCreateTab = useCallback(async () => {
@@ -384,6 +475,20 @@ export const TerminalPanel = memo(function TerminalPanel() {
     [selectedWorkspaceId, removeTerminalTab],
   );
 
+  const handleStopAgentTask = useCallback(async (tab: TerminalTab) => {
+    if (!tab.agent_chat_session_id || !tab.agent_task_id) return;
+    const label = tab.task_summary?.trim() || tab.title || tab.agent_task_id;
+    const ok = window.confirm(
+      `Stop background task "${label}"?\n\nThis will terminate the running command.`,
+    );
+    if (!ok) return;
+    try {
+      await stopAgentBackgroundTask(tab.agent_chat_session_id, tab.agent_task_id);
+    } catch (err) {
+      console.error("Failed to stop agent background task:", err);
+    }
+  }, []);
+
   // When the panel gets hidden (most often because the user just closed
   // the last tab via the X button or Cmd+W on the last pane) clear the
   // auto-create guard so that the next time the user reveals the panel
@@ -399,12 +504,31 @@ export const TerminalPanel = memo(function TerminalPanel() {
     if (!selectedWorkspaceId || !terminalPanelVisible) return;
     const wsId = selectedWorkspaceId;
     listTerminalTabs(wsId).then(async (t) => {
+      if (claudetteTerminalEnabled && selectedSessionId) {
+        await ensureClaudetteTerminalTab(wsId, selectedSessionId);
+        t = await listTerminalTabs(wsId);
+      }
       if (t.length > 0) {
         setTerminalTabs(wsId, t);
+        const visibleTabs = t.filter(
+          (tab) => claudetteTerminalEnabled || tab.kind !== "agent_task",
+        );
         const currentActive = useAppStore.getState().activeTerminalTabId[wsId];
         const activeStillValid =
-          currentActive != null && t.some((tab) => tab.id === currentActive);
-        if (!activeStillValid) setActiveTerminalTab(wsId, t[0].id);
+          currentActive != null &&
+          visibleTabs.some((tab) => tab.id === currentActive);
+        if (!activeStillValid) {
+          setActiveTerminalTab(wsId, visibleTabs[0]?.id ?? t[0].id);
+        }
+        if (!t.some((tab) => tab.kind !== "agent_task")) {
+          try {
+            const tab = await createTerminalTab(wsId);
+            addTerminalTab(wsId, tab);
+            setActiveTerminalTab(wsId, claudetteTerminalEnabled ? t[0].id : tab.id);
+          } catch (err) {
+            console.error("Failed to create terminal tab:", err);
+          }
+        }
       } else if (autoCreatedRef.current !== wsId) {
         autoCreatedRef.current = wsId;
         try {
@@ -417,6 +541,8 @@ export const TerminalPanel = memo(function TerminalPanel() {
     });
   }, [
     selectedWorkspaceId,
+    selectedSessionId,
+    claudetteTerminalEnabled,
     terminalPanelVisible,
     setTerminalTabs,
     setActiveTerminalTab,
@@ -487,6 +613,8 @@ export const TerminalPanel = memo(function TerminalPanel() {
           return;
         case "split-pane": {
           if (!activePaneId) return;
+          const activeTab = (state.terminalTabs[wsId] ?? []).find((t) => t.id === tabId);
+          if (activeTab?.kind === "agent_task") return;
           splitPane(tabId, activePaneId, action.direction);
           return;
         }
@@ -587,8 +715,26 @@ export const TerminalPanel = memo(function TerminalPanel() {
         );
       };
       container.addEventListener("copy", handleCopy);
+      const handleContextMenu = (ev: MouseEvent) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        setContextMenu({
+          x: ev.clientX,
+          y: ev.clientY,
+          tabId: spec.tabId,
+          leafId: spec.leafId,
+        });
+      };
+      container.addEventListener(
+        "contextmenu",
+        handleContextMenu,
+        terminalContextMenuOptions,
+      );
 
+      let currentInst: LeafInstance | null = null;
       const resizeObserver = new ResizeObserver(() => {
+        const inst = currentInst;
+        if (!inst) return;
         if (inst.fitTimer) clearTimeout(inst.fitTimer);
         inst.fitTimer = setTimeout(() => safeFit(inst), 150);
       });
@@ -601,16 +747,29 @@ export const TerminalPanel = memo(function TerminalPanel() {
         term,
         fit,
         ptyId: -1,
+        isAgentTask:
+          Object.values(terminalTabs)
+            .flat()
+            .find((tab) => tab.id === spec.tabId)?.kind === "agent_task",
+        agentTaskTailPath: null,
         unlisten: null,
         fitTimer: null,
         reclaimTimer: null,
         reclaimDisposer: null,
         handleCopy,
+        handleContextMenu,
         keyHandler,
         lastPtySize: null,
         resizeObserver,
       };
+      currentInst = inst;
       inst.resizeObserver.observe(container);
+
+      if (inst.isAgentTask) {
+        term.options.cursorBlink = false;
+        safeFit(inst);
+        return inst;
+      }
 
       // Spawn the PTY asynchronously. If the instance has been destroyed
       // by the time we resolve, close the PTY we just spawned and bail.
@@ -677,7 +836,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
 
       return inst;
     },
-    [setPanePtyId, setPaneSpawnError, terminalFontSize],
+    [setPanePtyId, setPaneSpawnError, terminalFontSize, terminalTabs],
   );
 
   const destroyInstance = useCallback((leafId: string) => {
@@ -688,8 +847,14 @@ export const TerminalPanel = memo(function TerminalPanel() {
     if (inst.reclaimDisposer) inst.reclaimDisposer();
     inst.resizeObserver.disconnect();
     inst.container.removeEventListener("copy", inst.handleCopy);
+    inst.container.removeEventListener(
+      "contextmenu",
+      inst.handleContextMenu,
+      terminalContextMenuOptions,
+    );
     inst.term.dispose();
     if (inst.unlisten) inst.unlisten();
+    if (inst.isAgentTask) stopAgentTaskTailBestEffort(inst.tabId);
     if (inst.ptyId >= 0) closePtyBestEffort(inst.ptyId);
     inst.container.remove();
     instancesRef.current.delete(leafId);
@@ -839,6 +1004,48 @@ export const TerminalPanel = memo(function TerminalPanel() {
     destroyInstance,
   ]);
 
+  useEffect(() => {
+    const tabsById = new Map<number, TerminalTab>();
+    for (const wsTabs of Object.values(terminalTabs)) {
+      for (const tab of wsTabs) tabsById.set(tab.id, tab);
+    }
+    for (const inst of instancesRef.current.values()) {
+      if (!inst.isAgentTask) continue;
+      const tab = tabsById.get(inst.tabId);
+      const outputPath = tab?.output_path ?? null;
+      if (!outputPath || inst.agentTaskTailPath === outputPath) continue;
+      if (inst.unlisten) {
+        inst.unlisten();
+        inst.unlisten = null;
+      }
+      stopAgentTaskTailBestEffort(inst.tabId);
+      inst.agentTaskTailPath = outputPath;
+      inst.term.clear();
+      (async () => {
+        const unlistenFn = await listen<AgentTaskOutputPayload>(
+          "agent-task-output",
+          (event) => {
+            if (event.payload.tab_id === inst.tabId) {
+              if (event.payload.reset) inst.term.clear();
+              if (event.payload.data.length > 0) {
+                inst.term.write(new Uint8Array(event.payload.data));
+              }
+            }
+          },
+        );
+        if (instancesRef.current.get(inst.leafId) !== inst) {
+          unlistenFn();
+          stopAgentTaskTailBestEffort(inst.tabId);
+          return;
+        }
+        inst.unlisten = unlistenFn;
+        await startAgentTaskTail(inst.tabId, outputPath);
+      })().catch((err) => {
+        console.error("Failed to start agent task tail:", err);
+      });
+    }
+  }, [terminalTabs, tabs]);
+
   // Font / theme propagation across all live instances. uiFontSize is
   // bundled in here because it drives the page-zoom compensation: when
   // the user changes UI size, every terminal needs its container zoom
@@ -878,6 +1085,199 @@ export const TerminalPanel = memo(function TerminalPanel() {
     return () => cancelAnimationFrame(id);
   }, [terminalPanelVisible, activeTerminalTabId]);
 
+  // Outside-click and Escape handling are owned by AttachmentContextMenu
+  // (which listens for `mousedown` capture on window). A redundant
+  // `pointerdown` listener here would unmount the menu before `click` fires
+  // on the menu item, breaking onSelect entirely.
+
+  const handleClearContextTerminal = useCallback(() => {
+    if (!contextMenu) return;
+    if (contextMenu.leafId) {
+      instancesRef.current.get(contextMenu.leafId)?.term.clear();
+    } else {
+      for (const inst of instancesRef.current.values()) {
+        if (inst.tabId === contextMenu.tabId) inst.term.clear();
+      }
+    }
+    setContextMenu(null);
+  }, [contextMenu]);
+
+  const terminalContextMenuItems = useMemo<AttachmentContextMenuItem[]>(
+    () => [
+      {
+        label: "Clear terminal",
+        onSelect: handleClearContextTerminal,
+      },
+    ],
+    [handleClearContextTerminal],
+  );
+
+  const handleTabContextMenu = useCallback(
+    (ev: ReactMouseEvent<HTMLDivElement>, tab: TerminalTab) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (selectedWorkspaceId) setActiveTerminalTab(selectedWorkspaceId, tab.id);
+      setContextMenu({
+        x: ev.clientX,
+        y: ev.clientY,
+        tabId: tab.id,
+      });
+    },
+    [selectedWorkspaceId, setActiveTerminalTab],
+  );
+
+  const handleTabPointerDown = useCallback(
+    (ev: ReactPointerEvent<HTMLDivElement>, tab: TerminalTab) => {
+      if (ev.button !== 0) return;
+      const target = ev.target as HTMLElement;
+      if (target.closest(`.${styles.tabClose}, .${styles.tabStop}`)) return;
+      const rect = ev.currentTarget.getBoundingClientRect();
+      tabDragRef.current = {
+        tabId: tab.id,
+        startX: ev.clientX,
+        startY: ev.clientY,
+        pointerId: ev.pointerId,
+        active: false,
+        offsetX: ev.clientX - rect.left,
+        offsetY: ev.clientY - rect.top,
+        width: rect.width,
+        height: rect.height,
+        title: tab.title,
+      };
+      try {
+        ev.currentTarget.setPointerCapture(ev.pointerId);
+      } catch {
+        // setPointerCapture can throw if the pointer was already released
+        // synchronously (rare, e.g. during programmatic events) — treat it
+        // as the user not committing to a drag.
+        tabDragRef.current = null;
+      }
+    },
+    [],
+  );
+
+  const handleTabPointerMove = useCallback(
+    (ev: ReactPointerEvent<HTMLDivElement>) => {
+      const drag = tabDragRef.current;
+      if (!drag || drag.pointerId !== ev.pointerId) return;
+      if (!drag.active) {
+        const dx = ev.clientX - drag.startX;
+        const dy = ev.clientY - drag.startY;
+        // 4px hysteresis — anything below is treated as a click.
+        if (dx * dx + dy * dy < 16) return;
+        drag.active = true;
+        setDraggingTabId(drag.tabId);
+      }
+      // Move the floating ghost to follow the cursor, preserving the
+      // offset between the cursor and the source tab's top-left so the
+      // ghost doesn't snap-jump when drag activates.
+      setDragGhost({
+        cursorX: ev.clientX,
+        cursorY: ev.clientY,
+        offsetX: drag.offsetX,
+        offsetY: drag.offsetY,
+        width: drag.width,
+        height: drag.height,
+        title: drag.title,
+      });
+      const overEl = document.elementFromPoint(ev.clientX, ev.clientY);
+      const tabEl = overEl?.closest<HTMLElement>("[data-terminal-tab-id]") ?? null;
+      const overId = tabEl ? Number(tabEl.dataset.terminalTabId) : null;
+      if (overId == null || overId === drag.tabId || !tabEl) {
+        setTabDropTarget((prev) => (prev === null ? prev : null));
+        return;
+      }
+      const r = tabEl.getBoundingClientRect();
+      const placement = tabDropPlacement(ev.clientX, r.left, r.width);
+      setTabDropTarget((prev) =>
+        prev && prev.tabId === overId && prev.placement === placement
+          ? prev
+          : { tabId: overId, placement },
+      );
+    },
+    [],
+  );
+
+  const finishTabDrag = useCallback(
+    (committedHover: typeof tabDropTarget) => {
+      const drag = tabDragRef.current;
+      tabDragRef.current = null;
+      setDraggingTabId(null);
+      setTabDropTarget(null);
+      setDragGhost(null);
+      if (!drag) return;
+      if (!drag.active) {
+        // No movement → click — onClick on the tab handles activation.
+        return;
+      }
+      // Suppress the synthetic click that follows pointerup on the captured
+      // tab, otherwise a drag would also re-activate the source tab.
+      tabDragJustEndedRef.current = true;
+      // Clear the suppressor on the next microtask, after the click handler
+      // has had a chance to run.
+      queueMicrotask(() => {
+        tabDragJustEndedRef.current = false;
+      });
+      if (
+        !committedHover ||
+        committedHover.tabId === drag.tabId ||
+        !selectedWorkspaceId
+      ) {
+        return;
+      }
+      const currentTabs = terminalTabs[selectedWorkspaceId] ?? [];
+      const reordered = reorderTerminalTabs(
+        currentTabs,
+        drag.tabId,
+        committedHover.tabId,
+        committedHover.placement,
+      );
+      if (!reordered) return;
+      setTerminalTabs(selectedWorkspaceId, reordered);
+      setActiveTerminalTab(selectedWorkspaceId, drag.tabId);
+      void updateTerminalTabOrder(
+        selectedWorkspaceId,
+        reordered.map((tab) => tab.id),
+      ).catch((err) =>
+        console.error("Failed to persist terminal tab order:", err),
+      );
+    },
+    [
+      selectedWorkspaceId,
+      setActiveTerminalTab,
+      setTerminalTabs,
+      terminalTabs,
+    ],
+  );
+
+  const handleTabPointerUp = useCallback(
+    (ev: ReactPointerEvent<HTMLDivElement>) => {
+      const drag = tabDragRef.current;
+      if (!drag || drag.pointerId !== ev.pointerId) return;
+      try {
+        ev.currentTarget.releasePointerCapture(ev.pointerId);
+      } catch {
+        // Already released.
+      }
+      finishTabDrag(tabDropTarget);
+    },
+    [finishTabDrag, tabDropTarget],
+  );
+
+  const handleTabPointerCancel = useCallback(
+    (ev: ReactPointerEvent<HTMLDivElement>) => {
+      const drag = tabDragRef.current;
+      if (!drag || drag.pointerId !== ev.pointerId) return;
+      try {
+        ev.currentTarget.releasePointerCapture(ev.pointerId);
+      } catch {
+        // Already released.
+      }
+      finishTabDrag(null);
+    },
+    [finishTabDrag],
+  );
+
   // Destroy everything on unmount.
   useEffect(() => {
     const instances = instancesRef.current;
@@ -915,16 +1315,52 @@ export const TerminalPanel = memo(function TerminalPanel() {
 
   return (
     <div className={styles.panel}>
-      <div className={styles.tabBar}>
-        {tabs.map((tab) => (
+      <div
+        className={styles.tabBar}
+        data-tab-dragging={draggingTabId !== null || undefined}
+      >
+        {tabs.map((tab) => {
+          const isDragging = draggingTabId === tab.id;
+          const dropBefore =
+            tabDropTarget?.tabId === tab.id && tabDropTarget.placement === "before";
+          const dropAfter =
+            tabDropTarget?.tabId === tab.id && tabDropTarget.placement === "after";
+          return (
           <div
             key={tab.id}
-            className={`${styles.tab} ${activeTerminalTabId === tab.id ? styles.tabActive : ""}`}
-            onClick={() =>
-              selectedWorkspaceId && setActiveTerminalTab(selectedWorkspaceId, tab.id)
-            }
+            data-terminal-tab-id={tab.id}
+            data-drop-before={dropBefore || undefined}
+            data-drop-after={dropAfter || undefined}
+            className={`${styles.tab} ${activeTerminalTabId === tab.id ? styles.tabActive : ""} ${isDragging ? styles.tabDragging : ""}`}
+            onClick={() => {
+              if (tabDragJustEndedRef.current) return;
+              if (selectedWorkspaceId)
+                setActiveTerminalTab(selectedWorkspaceId, tab.id);
+            }}
+            onContextMenu={(e) => handleTabContextMenu(e, tab)}
+            onPointerDown={(e) => handleTabPointerDown(e, tab)}
+            onPointerMove={handleTabPointerMove}
+            onPointerUp={handleTabPointerUp}
+            onPointerCancel={handleTabPointerCancel}
           >
             <span className={styles.tabTitle}>{tab.title}</span>
+            {tab.kind === "agent_task" && tab.task_status && (
+              <span className={styles.tabBadge}>{tab.task_status}</span>
+            )}
+            {tab.kind === "agent_task" &&
+              tab.agent_task_id &&
+              ["starting", "running"].includes((tab.task_status ?? "").toLowerCase()) && (
+                <button
+                  className={styles.tabStop}
+                  title="Stop background task"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void handleStopAgentTask(tab);
+                  }}
+                >
+                  ■
+                </button>
+              )}
             <button
               className={styles.tabClose}
               onClick={(e) => {
@@ -935,7 +1371,8 @@ export const TerminalPanel = memo(function TerminalPanel() {
               ×
             </button>
           </div>
-        ))}
+          );
+        })}
         <button className={styles.addTab} onClick={handleCreateTab}>
           +
         </button>
@@ -967,6 +1404,48 @@ export const TerminalPanel = memo(function TerminalPanel() {
           );
         })}
       </div>
+      {contextMenu && (
+        <AttachmentContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={terminalContextMenuItems}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
+      {dragGhost && draggingTabId !== null && <TabDragGhost ghost={dragGhost} />}
     </div>
   );
 });
+
+function TabDragGhost({
+  ghost,
+}: {
+  ghost: {
+    cursorX: number;
+    cursorY: number;
+    offsetX: number;
+    offsetY: number;
+    width: number;
+    height: number;
+    title: string;
+  };
+}) {
+  // Translate the cursor position from event coords (visual pixels under
+  // html zoom) into layout pixels for `position: fixed` placement, then
+  // anchor the ghost at the same offset within the tab where the user
+  // grabbed it. Without this, dragging mid-tab would teleport the ghost's
+  // top-left to the cursor and jitter on first move.
+  const top = viewportToFixed(0, ghost.cursorY - ghost.offsetY).y;
+  const left = viewportToFixed(ghost.cursorX - ghost.offsetX, 0).x;
+  if (typeof document === "undefined") return null;
+  return createPortal(
+    <div
+      className={styles.tabGhost}
+      style={{ left, top, width: ghost.width, height: ghost.height }}
+      aria-hidden
+    >
+      <span className={styles.tabGhostTitle}>{ghost.title}</span>
+    </div>,
+    document.body,
+  );
+}

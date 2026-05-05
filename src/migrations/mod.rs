@@ -164,4 +164,9 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("20260430030147_pinned_prompts.sql"),
         legacy_version: None,
     },
+    Migration {
+        id: "20260505055527_agent_task_terminal_tabs",
+        sql: include_str!("20260505055527_agent_task_terminal_tabs.sql"),
+        legacy_version: None,
+    },
 ];

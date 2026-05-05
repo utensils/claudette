@@ -15,6 +15,12 @@ use super::binary::resolve_claude_path;
 use super::types::{FileAttachment, StreamEvent, parse_stream_line};
 
 /// Events emitted by an agent turn (stream events + process lifecycle).
+//
+// `Stream` is large (~240 B) and `ProcessExited` is tiny (~8 B), so clippy
+// flags the size gap. Boxing `Stream` would force a heap allocation per
+// streamed event in the hot path while saving stack only on the rare
+// end-of-turn sentinel — a net pessimization. Keep the inline payload.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize)]
 pub enum AgentEvent {
     /// A parsed stream event from stdout.

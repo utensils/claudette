@@ -60,6 +60,20 @@ pub enum StreamEvent {
         subtype: String,
         #[serde(default)]
         session_id: Option<String>,
+        /// Present on `subtype: "task_notification"` events emitted when a
+        /// background task completes or fails.
+        #[serde(default)]
+        task_id: Option<String>,
+        /// Present on `subtype: "task_notification"` events when the
+        /// notification can be tied back to the originating tool use.
+        #[serde(default)]
+        tool_use_id: Option<String>,
+        /// Present on `subtype: "task_notification"` events.
+        #[serde(default)]
+        output_file: Option<String>,
+        /// Present on `subtype: "task_notification"` events.
+        #[serde(default)]
+        summary: Option<String>,
         /// Only present on `subtype: "status"` events. Values observed:
         /// `"requesting"` (normal API call), `"compacting"` (compaction in
         /// flight), or `null` (compaction complete).
@@ -237,6 +251,12 @@ impl Default for UserMessageContent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum UserContentBlock {
+    #[serde(rename = "text")]
+    Text {
+        #[serde(default)]
+        text: String,
+    },
+
     #[serde(rename = "tool_result")]
     ToolResult {
         tool_use_id: String,
@@ -925,6 +945,40 @@ mod compaction_tests {
                 assert_eq!(s, "compacting");
             }
             other => panic!("expected System(status:compacting), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deserializes_task_notification_system_event() {
+        let line = r#"{
+            "type": "system",
+            "subtype": "task_notification",
+            "task_id": "task_123",
+            "tool_use_id": "toolu_1",
+            "status": "completed",
+            "output_file": "/tmp/task_123.output",
+            "summary": "Background command completed",
+            "session_id": "sess-abc"
+        }"#;
+        let ev: StreamEvent = serde_json::from_str(line).unwrap();
+        match ev {
+            StreamEvent::System {
+                subtype,
+                task_id,
+                tool_use_id,
+                status,
+                output_file,
+                summary,
+                ..
+            } => {
+                assert_eq!(subtype, "task_notification");
+                assert_eq!(task_id.as_deref(), Some("task_123"));
+                assert_eq!(tool_use_id.as_deref(), Some("toolu_1"));
+                assert_eq!(status.as_deref(), Some("completed"));
+                assert_eq!(output_file.as_deref(), Some("/tmp/task_123.output"));
+                assert_eq!(summary.as_deref(), Some("Background command completed"));
+            }
+            other => panic!("expected System(task_notification), got {other:?}"),
         }
     }
 

@@ -1,4 +1,5 @@
 mod args;
+pub mod background;
 mod binary;
 mod naming;
 mod process;

@@ -165,6 +165,7 @@ pub fn build_stdin_message(prompt: &str, attachments: &[FileAttachment]) -> Stri
 
     serde_json::json!({
         "type": "user",
+        "uuid": uuid::Uuid::new_v4().to_string(),
         "message": {
             "role": "user",
             "content": content_blocks,
@@ -601,6 +602,11 @@ mod tests {
         let msg = build_stdin_message("hello", &[]);
         let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
         assert_eq!(parsed["type"], "user");
+        assert!(
+            parsed["uuid"]
+                .as_str()
+                .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+        );
         assert_eq!(parsed["parent_tool_use_id"], serde_json::Value::Null);
         let content = parsed["message"]["content"].as_array().unwrap();
         assert_eq!(content.len(), 1);

@@ -93,6 +93,13 @@ pub struct AgentSessionState {
     /// Outstanding `can_use_tool` control requests awaiting a `control_response`,
     /// keyed by tool_use_id. See [`PendingPermission`].
     pub pending_permissions: HashMap<String, PendingPermission>,
+    /// Agent-owned background Bash tasks that are still believed to be running.
+    /// Keys begin as tool_use_id while the task is starting, then switch to the
+    /// CLI task_id once the tool result binds it.
+    pub running_background_tasks: std::collections::HashSet<String>,
+    /// True while Claudette has an internal wake turn queued/running to let
+    /// Claude Code drain task-notification messages for background jobs.
+    pub background_wake_active: bool,
     /// Set when the agent emits `ExitPlanMode` during the current persistent
     /// session. The plan phase is over even if the frontend fails to flip
     /// `plan_mode=false` on the next turn, so we force a teardown regardless
@@ -159,6 +166,10 @@ pub struct PtyHandle {
     /// drops its duplicated master FD and exits before this handle is freed.
     /// `None` on platforms where the tracker is not spawned (Windows).
     pub tracker_cancel: Option<Arc<tokio::sync::Notify>>,
+}
+
+pub struct AgentTaskTailHandle {
+    pub cancel: Arc<tokio::sync::Notify>,
 }
 
 /// State of the embedded claudette-server subprocess.
@@ -318,6 +329,8 @@ pub struct AppState {
     pub agents: RwLock<HashMap<String, AgentSessionState>>,
     /// Active PTY processes keyed by pty_id.
     pub ptys: RwLock<HashMap<u64, PtyHandle>>,
+    /// Active file-tail streams for agent-owned background task terminal tabs.
+    pub agent_task_tailers: RwLock<HashMap<i64, AgentTaskTailHandle>>,
     /// Counter for generating unique PTY IDs.
     pub next_pty_id: AtomicU64,
     /// mDNS-discovered servers on the local network.
@@ -377,6 +390,7 @@ impl AppState {
             worktree_base_dir: RwLock::new(worktree_base_dir),
             agents: RwLock::new(HashMap::new()),
             ptys: RwLock::new(HashMap::new()),
+            agent_task_tailers: RwLock::new(HashMap::new()),
             next_pty_id: AtomicU64::new(1),
             discovered_servers: RwLock::new(Vec::new()),
             local_server: RwLock::new(None),

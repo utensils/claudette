@@ -15,8 +15,17 @@ import {
 } from "../terminalPaneTree";
 import type { AppState } from "../useAppStore";
 
+function orderTerminalTabs(tabs: TerminalTab[]): TerminalTab[] {
+  return [...tabs].sort((a, b) => {
+    const bySortOrder = a.sort_order - b.sort_order;
+    if (bySortOrder !== 0) return bySortOrder;
+    return a.id - b.id;
+  });
+}
+
 export interface TerminalSlice {
   terminalTabs: Record<string, TerminalTab[]>;
+  agentBackgroundTasksBySessionId: Record<string, TerminalTab[]>;
   // Active tab id is workspace-scoped: switching workspaces preserves each
   // workspace's last-active tab independently.
   activeTerminalTabId: Record<string, number | null>;
@@ -30,6 +39,11 @@ export interface TerminalSlice {
   setTerminalTabs: (wsId: string, tabs: TerminalTab[]) => void;
   addTerminalTab: (wsId: string, tab: TerminalTab) => void;
   removeTerminalTab: (wsId: string, tabId: number) => void;
+  upsertAgentTaskTerminalTab: (
+    wsId: string,
+    sessionId: string,
+    tab: TerminalTab,
+  ) => void;
   setActiveTerminalTab: (wsId: string, id: number | null) => void;
   toggleTerminalPanel: () => void;
   setWorkspaceRunningCommand: (
@@ -88,18 +102,19 @@ export const createTerminalSlice: StateCreator<
   TerminalSlice
 > = (set, get) => ({
   terminalTabs: {},
+  agentBackgroundTasksBySessionId: {},
   activeTerminalTabId: {},
   terminalPanelVisible: false,
   workspaceTerminalCommands: {},
   setTerminalTabs: (wsId, tabs) =>
     set((s) => ({
-      terminalTabs: { ...s.terminalTabs, [wsId]: tabs },
+      terminalTabs: { ...s.terminalTabs, [wsId]: orderTerminalTabs(tabs) },
     })),
   addTerminalTab: (wsId, tab) =>
     set((s) => ({
       terminalTabs: {
         ...s.terminalTabs,
-        [wsId]: [...(s.terminalTabs[wsId] || []), tab],
+        [wsId]: orderTerminalTabs([...(s.terminalTabs[wsId] || []), tab]),
       },
       activeTerminalTabId: { ...s.activeTerminalTabId, [wsId]: tab.id },
       terminalPanelVisible: true,
@@ -116,6 +131,14 @@ export const createTerminalSlice: StateCreator<
       delete nextTrees[tabId];
       const nextActivePane = { ...s.activeTerminalPaneId };
       delete nextActivePane[tabId];
+      const nextTasks = Object.fromEntries(
+        Object.entries(s.agentBackgroundTasksBySessionId)
+          .map(([sessionId, sessionTabs]) => [
+            sessionId,
+            sessionTabs.filter((t) => t.id !== tabId),
+          ])
+          .filter(([, sessionTabs]) => sessionTabs.length > 0),
+      );
       // When the user closes the last tab in the currently-selected
       // workspace, collapse the terminal panel — leaving an empty panel
       // mounted looks broken. If they re-open it later the panel's
@@ -124,12 +147,37 @@ export const createTerminalSlice: StateCreator<
         tabs.length === 0 && s.selectedWorkspaceId === wsId;
       return {
         terminalTabs: { ...s.terminalTabs, [wsId]: tabs },
+        agentBackgroundTasksBySessionId: nextTasks,
         activeTerminalTabId: wasActive
           ? { ...s.activeTerminalTabId, [wsId]: tabs[0]?.id ?? null }
           : s.activeTerminalTabId,
         terminalPaneTrees: nextTrees,
         activeTerminalPaneId: nextActivePane,
         terminalPanelVisible: hideBecauseEmpty ? false : s.terminalPanelVisible,
+      };
+    }),
+  upsertAgentTaskTerminalTab: (wsId, sessionId, tab) =>
+    set((s) => {
+      const existingTabs = s.terminalTabs[wsId] ?? [];
+      const sessionTabsPruned = existingTabs.filter(
+        (t) =>
+          !(
+            t.kind === "agent_task" &&
+            t.agent_chat_session_id === sessionId &&
+            t.id !== tab.id
+          ),
+      );
+      const existingIndex = sessionTabsPruned.findIndex((t) => t.id === tab.id);
+      const tabs =
+        existingIndex >= 0
+          ? sessionTabsPruned.map((t) => (t.id === tab.id ? tab : t))
+          : [...sessionTabsPruned, tab];
+      return {
+        terminalTabs: { ...s.terminalTabs, [wsId]: orderTerminalTabs(tabs) },
+        agentBackgroundTasksBySessionId: {
+          ...s.agentBackgroundTasksBySessionId,
+          [sessionId]: [tab],
+        },
       };
     }),
   setActiveTerminalTab: (wsId, id) =>

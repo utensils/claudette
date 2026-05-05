@@ -806,6 +806,8 @@ mod tests {
             session_allowed_tools: Vec::new(),
             session_disable_1m_context: false,
             pending_permissions: HashMap::new(),
+            running_background_tasks: Default::default(),
+            background_wake_active: false,
             session_exited_plan: false,
             session_resolved_env: Default::default(),
             mcp_bridge: None,
@@ -974,6 +976,15 @@ mod tests {
         agents.insert("ws1".to_string(), session(Some(1234), false));
         agents.insert("ws2".to_string(), session(None, false));
         assert!(has_running_agents(&agents));
+    }
+
+    #[test]
+    fn test_has_running_agents_ignores_background_task_without_active_pid() {
+        let mut agents = HashMap::new();
+        let mut s = session(None, false);
+        s.running_background_tasks.insert("task_1".to_string());
+        agents.insert("ws1".to_string(), s);
+        assert!(!has_running_agents(&agents));
     }
 
     #[test]

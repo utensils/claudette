@@ -15,6 +15,12 @@
   flex-shrink: 0;
 }
 
+/* While a tab drag is in progress, force the grabbing cursor everywhere in
+ * the tab bar — the user is committed to the drag until release. */
+.tabBar[data-tab-dragging="true"] {
+  cursor: grabbing;
+}
+
 .tab {
   display: flex;
   align-items: center;
@@ -26,13 +32,25 @@
   position: relative;
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
   transition: color var(--transition-fast), background var(--transition-fast),
-    border-color var(--transition-fast);
+    border-color var(--transition-fast), transform var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
 .tab:hover {
   background: var(--hover-bg);
   color: var(--text-muted);
+}
+
+/* Hover styles on non-target tabs are noisy mid-drag; the drop indicator
+ * is the only relevant feedback while dragging. */
+.tabBar[data-tab-dragging="true"] .tab:hover {
+  background: transparent;
+  color: var(--text-dim);
 }
 
 .tabActive {
@@ -41,13 +59,91 @@
   border-bottom-color: var(--accent-primary);
 }
 
+.tabDragging {
+  opacity: 0.4;
+  cursor: grabbing;
+}
+
+/* Floating clone of the dragged tab — portaled to <body> and pinned to
+ * the cursor by the React handler. Mirrors the tab's resting visuals
+ * (font, padding, border-radius) plus a lift shadow so it reads as
+ * "picked up". `pointer-events: none` keeps elementFromPoint reaching the
+ * tab beneath the ghost, which is essential for the drop hit-test. */
+.tabGhost {
+  position: fixed;
+  z-index: 10003;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  background: var(--sidebar-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--sidebar-border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  font-size: 12px;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  transform: rotate(1deg);
+  transform-origin: top left;
+}
+
+.tabGhostTitle {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+/* Pointer-driven drop indicator: a tall accent bar with a small caret on
+ * the side of the hovered tab where the dragged tab will land on release.
+ * Wider/taller than the previous 2px sliver so the drop edge reads at a
+ * glance even on small tab bars. */
+.tab[data-drop-before="true"]::before,
+.tab[data-drop-after="true"]::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  width: 3px;
+  background: var(--accent-primary);
+  border-radius: 2px;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px rgba(var(--accent-primary-rgb), 0.25);
+}
+
+.tab[data-drop-before="true"]::before {
+  left: -2px;
+}
+
+.tab[data-drop-after="true"]::after {
+  right: -2px;
+}
+
 .tabTitle {
   white-space: nowrap;
   font-family: var(--font-mono);
   font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
 }
 
-.tabClose {
+.tabBadge {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-muted);
+  background: var(--hover-bg-subtle);
+}
+
+.tabClose,
+.tabStop {
   background: none;
   border: none;
   color: var(--text-dim);
@@ -59,9 +155,14 @@
   transition: color var(--transition-fast), background var(--transition-fast);
 }
 
-.tabClose:hover {
+.tabClose:hover,
+.tabStop:hover {
   color: var(--text-primary);
   background: var(--hover-bg);
+}
+
+.tabStop {
+  font-size: 10px;
 }
 
 .addTab {
