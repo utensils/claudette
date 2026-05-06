@@ -125,7 +125,12 @@ export function CliSettings() {
             <button
               className={styles.iconBtn}
               onClick={handleInstall}
-              disabled={busy !== null || status?.bundledPath === null}
+              // status === null: cli_status hasn't resolved yet; don't
+              // let the user click Install before we know whether the
+              // bundled binary even exists.
+              disabled={
+                busy !== null || status === null || status.bundledPath === null
+              }
               title={
                 status?.bundledPath === null
                   ? t("cli_dev_build_warning")

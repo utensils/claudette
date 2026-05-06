@@ -49,9 +49,12 @@ pub struct CliStatus {
 pub struct InstallResult {
     pub target_path: PathBuf,
     pub target_dir_on_path: bool,
-    /// Copy-pasteable shell snippet to add the target dir to PATH if
-    /// it's not already there. `None` on Windows (we already updated
-    /// HKCU\Environment\Path; user just needs to restart their shell).
+    /// Free-form hint to render when the target dir isn't yet effective
+    /// on the user's PATH. On macOS/Linux this is a copy-pasteable
+    /// shell snippet to append `~/.local/bin` to PATH. On Windows the
+    /// registry write already updated `HKCU\Environment\Path`, but new
+    /// shells need a respawn — the hint reminds the user to restart
+    /// their terminal. `None` when the target dir is already on PATH.
     pub path_hint: Option<String>,
 }
 

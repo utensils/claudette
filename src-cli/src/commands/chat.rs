@@ -129,10 +129,12 @@ pub async fn run(action: Action, json: bool) -> Result<(), Box<dyn Error>> {
                 params["model"] = serde_json::json!(m);
             }
             // Tri-state booleans. `--plan` → Some(true), `--no-plan` →
-            // Some(false), neither → None (workspace default applies).
-            // The IPC handler distinguishes "explicitly false" from
-            // "use the default" because Some(false) is sent as a real
-            // JSON `false` while None is omitted from the params object.
+            // Some(false), neither → None (omitted from the params
+            // object). The backend currently substitutes `false` for
+            // any omitted boolean, so for now Some(false) and None
+            // produce the same agent behavior — the tri-state lives in
+            // the wire shape so a future backend change to honour
+            // workspace defaults on omission won't need a CLI bump.
             let resolve = |yes: bool, no: bool| -> Option<bool> {
                 if yes {
                     Some(true)

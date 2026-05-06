@@ -68,14 +68,22 @@ impl AppInfoFile {
             std::fs::create_dir_all(parent)?;
         }
         let bytes = serde_json::to_vec_pretty(info)?;
-        std::fs::write(&path, &bytes)?;
+        // Atomic publish: write to a sibling temp file, fsync the
+        // permissions, then rename into place. A CLI client racing
+        // discovery against a write-in-progress GUI would otherwise see
+        // a half-written file and report a malformed JSON error.
+        // `rename` is atomic on POSIX and on Windows when the target
+        // already exists or doesn't (NTFS ReplaceFile semantics).
+        let tmp_path = path.with_extension("json.tmp");
+        std::fs::write(&tmp_path, &bytes)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&path)?.permissions();
+            let mut perms = std::fs::metadata(&tmp_path)?.permissions();
             perms.set_mode(0o600);
-            std::fs::set_permissions(&path, perms)?;
+            std::fs::set_permissions(&tmp_path, perms)?;
         }
+        std::fs::rename(&tmp_path, &path)?;
         Ok(Self { path })
     }
 }

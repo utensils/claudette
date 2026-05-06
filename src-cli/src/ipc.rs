@@ -15,7 +15,12 @@ use interprocess::local_socket::{GenericFilePath, ToFsName};
 #[cfg(windows)]
 use interprocess::local_socket::{GenericNamespaced, ToNsName};
 use serde::Serialize;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+
+/// Per-response line-length ceiling. Mirrors the server-side cap in
+/// `src-tauri/src/ipc.rs`: a malformed or malicious peer can't drive
+/// unbounded memory growth by streaming bytes without a `\n`.
+const MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
 
 use crate::discovery::AppInfo;
 
@@ -90,10 +95,16 @@ pub async fn call(
         .map_err(|e| CallError::Transport(e.to_string()))?;
 
     let mut line = String::new();
-    reader
+    let n = (&mut reader)
+        .take(MAX_RESPONSE_BYTES + 1)
         .read_line(&mut line)
         .await
         .map_err(|e| CallError::Transport(e.to_string()))?;
+    if n as u64 > MAX_RESPONSE_BYTES {
+        return Err(CallError::Transport(format!(
+            "response exceeds {MAX_RESPONSE_BYTES}-byte limit"
+        )));
+    }
 
     let response: RpcResponse = serde_json::from_str(line.trim())
         .map_err(|e| CallError::Transport(format!("malformed response: {e}")))?;
