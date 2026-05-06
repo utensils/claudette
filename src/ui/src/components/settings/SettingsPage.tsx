@@ -1,4 +1,5 @@
 import { lazy, Suspense } from "react";
+import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { SettingsSidebar } from "./SettingsSidebar";
 import styles from "./Settings.module.css";
@@ -94,26 +95,30 @@ function SectionContent({ section }: { section: string | null }) {
 
 export function SettingsPage() {
   const settingsSection = useAppStore((s) => s.settingsSection);
+  const { t } = useTranslation("settings");
 
   return (
     <div className={styles.container}>
       <div className={styles.dragRegion} data-tauri-drag-region />
       <SettingsSidebar />
-      <div className={styles.content}>
-        <Suspense
-          fallback={
-            <div
-              role="status"
-              aria-live="polite"
-              aria-busy="true"
-              style={{ padding: "1rem", color: "var(--text-dim)" }}
-            >
-              Loading settings…
-            </div>
-          }
-        >
-          <SectionContent section={settingsSection} />
-        </Suspense>
+      <div className={styles.contentArea}>
+        <div className={styles.content}>
+          <Suspense
+            fallback={
+              <div
+                role="status"
+                aria-live="polite"
+                aria-busy="true"
+                style={{ padding: "1rem", color: "var(--text-dim)" }}
+              >
+                Loading settings…
+              </div>
+            }
+          >
+            <SectionContent section={settingsSection} />
+          </Suspense>
+        </div>
+        <div className={styles.attributionBar}>{t("attribution")}</div>
       </div>
     </div>
   );

@@ -47,6 +47,7 @@
   "general_language_pt_br": "ポルトガル語（ブラジル）",
   "general_language_zh_cn": "簡体字中国語",
   "general_update_check_failed": "更新の確認に失敗しました。しばらくしてから再度お試しください。",
+  "attribution": "Claudette は Anthropic とは関係ありません。Claude® および Claude Code® は Anthropic, PBC の商標です。",
   "appearance_title": "外観",
   "appearance_follow_system": "システムに従う",
   "appearance_follow_system_desc": "OS の設定に基づいて自動的にテーマを切り替えます",
