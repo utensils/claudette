@@ -573,6 +573,7 @@ fn main() {
             commands::files::save_attachment_bytes,
             commands::files::open_attachment_in_browser,
             commands::files::open_attachment_with_default_app,
+            commands::files::copy_attachment_file_to_clipboard,
             // Chat
             commands::chat::send::load_chat_history,
             commands::chat::send::load_chat_history_page,

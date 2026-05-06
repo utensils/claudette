@@ -486,6 +486,174 @@ pub fn write_attachment_to_temp_file(
     Ok(path)
 }
 
+#[cfg(target_os = "macos")]
+fn copy_file_path_to_clipboard(path: &Path) -> Result<(), String> {
+    let output = std::process::Command::new("osascript")
+        .args([
+            "-e",
+            "on run argv",
+            "-e",
+            "set the clipboard to POSIX file (item 1 of argv)",
+            "-e",
+            "end run",
+        ])
+        .arg(path)
+        .output()
+        .map_err(|e| format!("failed to run osascript: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("osascript failed: {}", stderr.trim()))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn copy_file_path_to_clipboard(path: &Path) -> Result<(), String> {
+    let uri = url::Url::from_file_path(path)
+        .map_err(|_| format!("failed to create file URI for {}", path.display()))?
+        .to_string();
+    let gnome_files = format!("copy\n{uri}\n");
+    let uri_list = format!("{uri}\n");
+
+    let attempts: [(&str, &[&str], &str); 5] = [
+        (
+            "wl-copy",
+            &["--type", "x-special/gnome-copied-files"],
+            &gnome_files,
+        ),
+        ("wl-copy", &["--type", "text/uri-list"], &uri_list),
+        (
+            "xclip",
+            &[
+                "-selection",
+                "clipboard",
+                "-t",
+                "x-special/gnome-copied-files",
+            ],
+            &gnome_files,
+        ),
+        (
+            "xclip",
+            &["-selection", "clipboard", "-t", "text/uri-list"],
+            &uri_list,
+        ),
+        ("xclip", &["-selection", "clipboard"], &uri),
+    ];
+
+    let mut errors = Vec::new();
+    for (program, args, input) in attempts {
+        match pipe_to_command(program, args, input.as_bytes()) {
+            Ok(()) => return Ok(()),
+            Err(e) => errors.push(format!("{program}: {e}")),
+        }
+    }
+    Err(format!(
+        "copying files requires wl-copy or xclip on Linux ({})",
+        errors.join("; ")
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn pipe_to_command(program: &str, args: &[&str], input: &[u8]) -> Result<(), String> {
+    use std::io::Write as _;
+    use std::process::Stdio;
+
+    let mut child = std::process::Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "failed to open stdin".to_string())?;
+    stdin.write_all(input).map_err(|e| e.to_string())?;
+    drop(stdin);
+    let output = child.wait_with_output().map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+#[cfg(windows)]
+fn copy_file_path_to_clipboard(path: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows_sys::Win32::System::DataExchange::{
+        CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+    };
+    use windows_sys::Win32::System::Memory::{GHND, GlobalAlloc, GlobalLock, GlobalUnlock};
+    use windows_sys::Win32::System::Ole::CF_HDROP;
+    use windows_sys::Win32::UI::Shell::DROPFILES;
+
+    struct ClipboardGuard;
+    impl Drop for ClipboardGuard {
+        fn drop(&mut self) {
+            unsafe {
+                CloseClipboard();
+            }
+        }
+    }
+
+    let mut wide_path: Vec<u16> = path.as_os_str().encode_wide().collect();
+    // CF_HDROP expects one NUL after each path plus one extra NUL to end
+    // the file list.
+    wide_path.push(0);
+    wide_path.push(0);
+
+    let header_size = std::mem::size_of::<DROPFILES>();
+    let bytes_len = header_size + wide_path.len() * std::mem::size_of::<u16>();
+    unsafe {
+        let hmem = GlobalAlloc(GHND, bytes_len);
+        if hmem.is_null() {
+            return Err("GlobalAlloc failed".to_string());
+        }
+        let ptr = GlobalLock(hmem);
+        if ptr.is_null() {
+            return Err("GlobalLock failed".to_string());
+        }
+
+        let header = DROPFILES {
+            pFiles: header_size as u32,
+            pt: std::mem::zeroed(),
+            fNC: 0,
+            fWide: 1,
+        };
+        std::ptr::copy_nonoverlapping(
+            &header as *const DROPFILES as *const u8,
+            ptr as *mut u8,
+            header_size,
+        );
+        std::ptr::copy_nonoverlapping(
+            wide_path.as_ptr() as *const u8,
+            (ptr as *mut u8).add(header_size),
+            wide_path.len() * std::mem::size_of::<u16>(),
+        );
+        GlobalUnlock(hmem);
+
+        if OpenClipboard(std::ptr::null_mut()) == 0 {
+            return Err("OpenClipboard failed".to_string());
+        }
+        let _guard = ClipboardGuard;
+        if EmptyClipboard() == 0 {
+            return Err("EmptyClipboard failed".to_string());
+        }
+        if SetClipboardData(CF_HDROP as u32, hmem).is_null() {
+            return Err("SetClipboardData failed".to_string());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+fn copy_file_path_to_clipboard(_path: &Path) -> Result<(), String> {
+    Err("file clipboard copy is not supported on this platform".to_string())
+}
+
 /// Write `bytes` to `path`, creating the file with restrictive permissions
 /// on Unix (`0o600`). On Windows ACLs handle this differently — a regular
 /// `fs::write` is fine.
@@ -617,6 +785,28 @@ pub async fn open_attachment_with_default_app(
         crate::commands::shell::opener::open(&path.to_string_lossy())
             .map_err(|e| format!("open failed: {e}"))
     })
+}
+
+/// Stage an attachment to a temp file and put that file on the system
+/// clipboard. Used for document-like attachments such as PDFs where the
+/// browser ClipboardItem API either rejects the MIME type or reports success
+/// without producing a useful paste target.
+#[tauri::command]
+pub async fn copy_attachment_file_to_clipboard(
+    bytes: Vec<u8>,
+    filename: String,
+    media_type: String,
+) -> Result<(), String> {
+    let dir = std::env::temp_dir().join("claudette-attachments");
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        create_staging_dir(&dir).map_err(|e| format!("mkdir temp dir: {e}"))?;
+        cleanup_stale_attachments(&dir, std::time::Duration::from_secs(24 * 60 * 60));
+        let path = write_attachment_to_temp_file(&dir, &filename, &media_type, &bytes)
+            .map_err(|e| format!("write attachment: {e}"))?;
+        copy_file_path_to_clipboard(&path)
+    })
+    .await
+    .map_err(|e| format!("join error: {e}"))?
 }
 
 #[cfg(test)]
