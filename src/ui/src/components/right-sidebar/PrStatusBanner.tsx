@@ -1,13 +1,23 @@
-import { memo } from "react";
+import { memo, useMemo, useState } from "react";
 import {
+  Check,
+  ChevronRight,
+  Circle,
   GitPullRequestArrow,
   GitPullRequestDraft,
   GitMerge,
   GitPullRequestClosed,
   ExternalLink,
+  LoaderCircle,
 } from "lucide-react";
 import { openUrl } from "../../services/tauri";
 import { usePrBannerData, type BannerStatus } from "../../hooks/usePrBannerData";
+import type { CiCheck } from "../../types/plugin";
+import {
+  ciCheckStatusLabel,
+  sortCiChecks,
+  summarizeCiChecks,
+} from "../../utils/scmChecks";
 import styles from "./PrStatusBanner.module.css";
 
 const STATUS_CONFIG: Record<
@@ -64,27 +74,108 @@ const STATUS_CONFIG: Record<
 };
 
 export const PrStatusBanner = memo(function PrStatusBanner() {
-  const { pr, status } = usePrBannerData();
+  const { pr, checks, status } = usePrBannerData();
+  const [checksOpen, setChecksOpen] = useState(true);
+  const sortedChecks = useMemo(() => sortCiChecks(checks), [checks]);
+  const checksSummary = useMemo(() => summarizeCiChecks(checks), [checks]);
 
   if (!pr || !status) return null;
 
   const config = STATUS_CONFIG[status];
   const Icon = config.icon;
+  const hasChecks = sortedChecks.length > 0;
 
   return (
     <div className={`${styles.banner} ${config.bannerClass}`}>
-      <button
-        className={`${styles.prPill} ${config.fgClass}`}
-        onClick={() => openUrl(pr.url)}
-        title={`Open PR #${pr.number} in browser`}
-      >
-        <Icon size={14} />
-        <span className={styles.prNumber}>#{pr.number}</span>
-        <ExternalLink size={14} className={styles.externalIcon} />
-      </button>
-      <span className={`${styles.statusText} ${config.fgClass}`}>
-        {config.text}
-      </span>
+      <div className={styles.summaryRow}>
+        <button
+          type="button"
+          className={`${styles.prPill} ${config.fgClass}`}
+          onClick={() => openUrl(pr.url)}
+          title={`Open PR #${pr.number} in browser`}
+        >
+          <Icon size={14} />
+          <span className={styles.prNumber}>PR #{pr.number}</span>
+          <ExternalLink size={14} className={styles.externalIcon} />
+        </button>
+        <span className={`${styles.statusText} ${config.fgClass}`}>
+          {config.text}
+        </span>
+      </div>
+
+      {hasChecks && (
+        <div className={styles.checksPanel}>
+          <button
+            type="button"
+            className={styles.checksToggle}
+            onClick={() => setChecksOpen((open) => !open)}
+            aria-expanded={checksOpen}
+          >
+            <CheckStatusIcon status={checkSummaryStatus(checksSummary)} />
+            <span className={styles.checksTitle}>{checksSummary.title}</span>
+            <span className={styles.checkCount}>{checksSummary.total}</span>
+            <ChevronRight
+              size={14}
+              className={`${styles.chevron} ${checksOpen ? styles.chevronOpen : ""}`}
+              aria-hidden="true"
+            />
+          </button>
+
+          {checksOpen && (
+            <div className={styles.checkList}>
+              {sortedChecks.map((check) => (
+                <CheckRow key={`${check.name}:${check.url ?? ""}`} check={check} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 });
+
+function checkSummaryStatus(summary: ReturnType<typeof summarizeCiChecks>): CiCheck["status"] {
+  if (summary.failed > 0) return "failure";
+  if (summary.pending > 0) return "pending";
+  if (summary.cancelled > 0) return "cancelled";
+  return "success";
+}
+
+function CheckRow({ check }: { check: CiCheck }) {
+  const content = (
+    <>
+      <CheckStatusIcon status={check.status} />
+      <span className={styles.checkName}>{check.name}</span>
+      <span className={styles.checkStatus}>{ciCheckStatusLabel(check.status)}</span>
+      {check.url && <ExternalLink size={12} className={styles.checkExternalIcon} />}
+    </>
+  );
+
+  if (check.url) {
+    return (
+      <button
+        type="button"
+        className={`${styles.checkRow} ${styles.checkRowLink}`}
+        onClick={() => openUrl(check.url!)}
+        title={`Open ${check.name} check details`}
+      >
+        {content}
+      </button>
+    );
+  }
+
+  return <div className={styles.checkRow}>{content}</div>;
+}
+
+function CheckStatusIcon({ status }: { status: CiCheck["status"] }) {
+  switch (status) {
+    case "success":
+      return <Check size={16} className={styles.checkIconSuccess} aria-hidden="true" />;
+    case "failure":
+      return <Circle size={10} className={styles.checkIconFailure} aria-hidden="true" />;
+    case "cancelled":
+      return <Circle size={10} className={styles.checkIconCancelled} aria-hidden="true" />;
+    case "pending":
+      return <LoaderCircle size={14} className={styles.checkIconPending} aria-hidden="true" />;
+  }
+}

@@ -1,8 +1,8 @@
 .banner {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 10px 20px;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 20px 10px;
   /* Pin to the workspace-header row height so this banner's bottom border
    * lines up with WorkspacePanelHeader's bottom border on the chat side.
    * Without it (47px vs 54px), the layout's top horizontal divider goes
@@ -14,6 +14,14 @@
   border-bottom: 1px solid var(--divider);
   box-shadow: var(--shadow-sm);
   animation: fadeIn 0.15s ease;
+}
+
+.summaryRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: calc(var(--workspace-header-h) - 19px);
 }
 
 .bannerReady,
@@ -106,4 +114,139 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.checksPanel {
+  width: 100%;
+  border-top: 1px solid color-mix(in srgb, var(--divider) 72%, transparent);
+  padding-top: 7px;
+}
+
+.checksToggle {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto 16px;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 3px 0;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.checksToggle:hover .checksTitle {
+  color: var(--text-muted);
+}
+
+.checksTitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.checkCount {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.chevron {
+  color: var(--text-dim);
+  transform: rotate(0deg);
+  transition: transform var(--transition-fast), color var(--transition-fast);
+}
+
+.checksToggle:hover .chevron {
+  color: var(--text-muted);
+}
+
+.chevronOpen {
+  transform: rotate(90deg);
+}
+
+.checkList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 5px;
+}
+
+.checkRow {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto 14px;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 27px;
+  padding: 3px 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  text-align: left;
+}
+
+.checkRowLink {
+  cursor: pointer;
+}
+
+.checkRowLink:hover {
+  color: var(--text-primary);
+}
+
+.checkName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.checkStatus {
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.checkExternalIcon {
+  color: var(--text-dim);
+  opacity: 0;
+}
+
+.checkRowLink:hover .checkExternalIcon {
+  opacity: 0.75;
+}
+
+.checkIconSuccess {
+  color: var(--badge-done);
+  justify-self: center;
+}
+
+.checkIconFailure {
+  color: var(--status-stopped);
+  fill: currentColor;
+  justify-self: center;
+}
+
+.checkIconCancelled {
+  color: var(--text-dim);
+  fill: currentColor;
+  justify-self: center;
+}
+
+.checkIconPending {
+  color: var(--badge-ask);
+  justify-self: center;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
