@@ -184,4 +184,9 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("20260506170933_heal_turn_tool_activity_agent_tool_calls_json.sql"),
         legacy_version: None,
     },
+    Migration {
+        id: "20260506220711_workspace_manual_order_modes",
+        sql: include_str!("20260506220711_workspace_manual_order_modes.sql"),
+        legacy_version: None,
+    },
 ];

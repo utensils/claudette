@@ -5,7 +5,7 @@ use serde::Serialize;
 use tauri::State;
 use tokio::sync::Semaphore;
 
-use claudette::db::Database;
+use claudette::db::{Database, WORKSPACE_ORDER_MODE_PREFIX};
 use claudette::git;
 use claudette::model::{ChatMessage, Repository, Workspace};
 
@@ -16,8 +16,6 @@ use crate::state::AppState;
 /// Tuned at 6 — each git probe is short, but on a cold filesystem the
 /// system call cost dominates and unbounded fan-out can wedge slow disks.
 const STARTUP_GIT_PROBE_CONCURRENCY: usize = 6;
-const WORKSPACE_ORDER_MODE_PREFIX: &str = "workspace_order_mode:";
-
 #[derive(Serialize)]
 pub struct InitialData {
     pub repositories: Vec<Repository>,

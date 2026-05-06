@@ -24,6 +24,7 @@ mod checkpoint;
 mod chat;
 
 mod workspace;
+pub use workspace::WORKSPACE_ORDER_MODE_PREFIX;
 
 mod commands;
 
