@@ -14,10 +14,11 @@ import styles from "./HelpMenu.module.css";
 const DOCS_URL = "https://utensils.io/claudette/getting-started/installation/";
 const RELEASE_URL_BASE = "https://github.com/utensils/claudette/releases/tag/v";
 
-// Spacing between the trigger button and the menu's edge, in viewport px.
-// Tight on purpose — the menu reads as "anchored to the ? button" rather
-// than floating in the middle of the sidebar/chat boundary.
-const MENU_GAP = 2;
+// Spacing between the trigger button and the menu's edge, in viewport
+// px (layout — `viewportToFixed` reconciles the rect into this frame).
+// Small enough to read as "docked to the ? button," roomy enough that
+// the rounded corner doesn't kiss the icon's hover halo.
+const MENU_GAP = 6;
 // Safety margin from viewport edges when clamping.
 const VIEWPORT_MARGIN = 8;
 
