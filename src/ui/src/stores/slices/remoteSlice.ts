@@ -50,7 +50,15 @@ export const createRemoteSlice: StateCreator<
   activeRemoteIds: [],
   setRemoteConnections: (conns) => set({ remoteConnections: conns }),
   addRemoteConnection: (conn) =>
-    set((s) => ({ remoteConnections: [...s.remoteConnections, conn] })),
+    set((s) => {
+      const idx = s.remoteConnections.findIndex((c) => c.id === conn.id);
+      if (idx >= 0) {
+        const next = s.remoteConnections.slice();
+        next[idx] = conn;
+        return { remoteConnections: next };
+      }
+      return { remoteConnections: [...s.remoteConnections, conn] };
+    }),
   removeRemoteConnection: (id) =>
     set((s) => ({
       remoteConnections: s.remoteConnections.filter((c) => c.id !== id),

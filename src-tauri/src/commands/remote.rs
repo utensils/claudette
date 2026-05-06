@@ -61,22 +61,47 @@ pub async fn pair_with_server(
         .authenticate_pairing(&pairing_token, &hostname)
         .await?;
 
-    let connection_id = uuid::Uuid::new_v4().to_string();
+    // Pairing must yield a session token; sessions established via session
+    // re-auth (not pairing) wouldn't, but we're on the pairing path here.
+    let session_token = auth
+        .session_token
+        .clone()
+        .ok_or("Server did not return a session token after pairing")?;
 
-    // Persist to DB.
+    // Persist to DB. If we already have a saved connection to this host:port,
+    // refresh it in place so re-pairing doesn't create a duplicate sidebar entry.
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    let db_conn = claudette::model::RemoteConnection {
-        id: connection_id.clone(),
-        name: auth.server_name.clone(),
-        host: host.clone(),
-        port,
-        session_token: auth.session_token.clone(),
-        cert_fingerprint: Some(cert_fingerprint.clone()),
-        auto_connect: false,
-        created_at: String::new(),
+    let connection_id = match db
+        .find_remote_connection_by_host(&host, port)
+        .map_err(|e| e.to_string())?
+    {
+        Some(existing) => {
+            db.update_remote_connection_session(
+                &existing.id,
+                &auth.server_name,
+                &session_token,
+                &cert_fingerprint,
+            )
+            .map_err(|e| e.to_string())?;
+            existing.id
+        }
+        None => {
+            let id = uuid::Uuid::new_v4().to_string();
+            let db_conn = claudette::model::RemoteConnection {
+                id: id.clone(),
+                name: auth.server_name.clone(),
+                host: host.clone(),
+                port,
+                session_token: Some(session_token),
+                cert_fingerprint: Some(cert_fingerprint.clone()),
+                auto_connect: false,
+                created_at: String::new(),
+            };
+            db.insert_remote_connection(&db_conn)
+                .map_err(|e| e.to_string())?;
+            id
+        }
     };
-    db.insert_remote_connection(&db_conn)
-        .map_err(|e| e.to_string())?;
 
     // Re-fetch to get the DB-generated created_at timestamp.
     let saved = db
