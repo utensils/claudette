@@ -101,6 +101,16 @@ describe("closeScopeForTabContext", () => {
     ]);
   });
 
+  it("allows callers to include file-adjacent entries in file-tab close scope", () => {
+    expect(
+      closeScopeForTabContext(
+        entries,
+        "f:a.ts",
+        (entry) => entry.kind === "diff" && entry.key === "d:b.ts",
+      ).map((e) => e.key),
+    ).toEqual(["f:a.ts", "d:b.ts", "f:c.ts"]);
+  });
+
   it("keeps session and diff tab close actions scoped to the full strip", () => {
     expect(closeScopeForTabContext(entries, "s:1").map((e) => e.key)).toEqual(
       entries.map((e) => e.key),

@@ -531,7 +531,13 @@ export function SessionTabs({ workspaceId }: Props) {
     const idx = navEntries.findIndex((e) => e.key === contextMenu.entryKey);
     if (idx < 0) return null;
     const target = navEntries[idx];
-    const closeScope = closeScopeForTabContext(navEntries, target.key);
+    const closeScope = closeScopeForTabContext(
+      navEntries,
+      target.key,
+      (entry) =>
+        entry.kind === "diff" &&
+        statusForOpenFileTab(entry.path, diffStagedFiles) === "Deleted",
+    );
     const scopedIdx = closeScope.findIndex((e) => e.key === target.key);
     const others = closeScope.filter((_, i) => i !== scopedIdx);
     const toRight = closeScope.slice(scopedIdx + 1);
@@ -555,7 +561,7 @@ export function SessionTabs({ workspaceId }: Props) {
       },
       { label: t("tab_close_all"), onSelect: () => void closeEntries(closeScope) },
     ];
-  }, [contextMenu, navEntries, closeEntries, selectEntry, t]);
+  }, [contextMenu, diffStagedFiles, navEntries, closeEntries, selectEntry, t]);
 
   const contextMenuEntry = contextMenu
     ? (navEntryByKey.get(contextMenu.entryKey) ?? null)

@@ -115,9 +115,15 @@ export function computeSessionPersistOrder(
 
 export function closeScopeForTabContext<
   T extends { key: string; kind: UnifiedTabEntry["kind"] },
->(entries: readonly T[], targetKey: string): T[] {
+>(
+  entries: readonly T[],
+  targetKey: string,
+  includeInFileScope: (entry: T) => boolean = () => false,
+): T[] {
   const target = entries.find((entry) => entry.key === targetKey);
   if (!target) return [];
   if (target.kind !== "file") return [...entries];
-  return entries.filter((entry) => entry.kind === "file");
+  return entries.filter(
+    (entry) => entry.kind === "file" || includeInFileScope(entry),
+  );
 }
