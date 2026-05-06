@@ -8,13 +8,16 @@ import { openDevtools, openUrl } from "../../services/tauri";
 import { findHotkeyAction } from "../../hotkeys/actions";
 import { formatBindingParts, getEffectiveBinding } from "../../hotkeys/bindings";
 import { isMacHotkeyPlatform } from "../../hotkeys/platform";
+import { viewportLayoutSize, viewportToFixed } from "../../utils/zoom";
 import styles from "./HelpMenu.module.css";
 
 const DOCS_URL = "https://utensils.io/claudette/getting-started/installation/";
 const RELEASE_URL_BASE = "https://github.com/utensils/claudette/releases/tag/v";
 
 // Spacing between the trigger button and the menu's edge, in viewport px.
-const MENU_GAP = 8;
+// Tight on purpose — the menu reads as "anchored to the ? button" rather
+// than floating in the middle of the sidebar/chat boundary.
+const MENU_GAP = 2;
 // Safety margin from viewport edges when clamping.
 const VIEWPORT_MARGIN = 8;
 
@@ -57,25 +60,35 @@ export function HelpMenu({ buttonClassName, triggerLabel }: HelpMenuProps) {
     const compute = () => {
       const trigger = triggerRef.current;
       if (!trigger) return;
+      // `getBoundingClientRect()` returns visual (post-zoom) pixels, but
+      // `position: fixed; left/top` interprets values as layout (pre-zoom)
+      // pixels — `viewportToFixed` reconciles the two when the html zoom
+      // (set by applyUserFonts) is != 1. `viewportLayoutSize` does the
+      // same for the clamping bounds. AttachmentContextMenu has the same
+      // dance for the same reason.
       const triggerRect = trigger.getBoundingClientRect();
+      const triggerTop = viewportToFixed(triggerRect.left, triggerRect.top);
+      const triggerBottom = viewportToFixed(
+        triggerRect.right,
+        triggerRect.bottom,
+      );
       const menu = menuRef.current;
       // First paint: menu hasn't rendered yet, fall back to a generous
       // estimate so we land roughly correct, then refine on the next
       // tick once we can measure the actual menu.
       const menuWidth = menu?.offsetWidth ?? 240;
       const menuHeight = menu?.offsetHeight ?? 180;
-      const vw = window.innerWidth;
-      const vh = window.innerHeight;
+      const { width: vw, height: vh } = viewportLayoutSize();
       // Anchor: open above the trigger (footer is at bottom of sidebar)
       // with the menu's left edge aligned to the trigger's left edge.
-      let left = triggerRect.left;
-      let top = triggerRect.top - menuHeight - MENU_GAP;
+      let left = triggerTop.x;
+      let top = triggerTop.y - menuHeight - MENU_GAP;
       // Clamp horizontally so the right edge stays inside the viewport.
       left = Math.min(left, vw - menuWidth - VIEWPORT_MARGIN);
       left = Math.max(VIEWPORT_MARGIN, left);
       // If there's not enough room above, drop below the trigger.
       if (top < VIEWPORT_MARGIN) {
-        top = triggerRect.bottom + MENU_GAP;
+        top = triggerBottom.y + MENU_GAP;
       }
       // Final vertical clamp (handles tiny viewports).
       top = Math.min(top, vh - menuHeight - VIEWPORT_MARGIN);
