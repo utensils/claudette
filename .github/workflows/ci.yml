@@ -21,18 +21,22 @@ jobs:
           fetch-depth: 0
       - name: Reject edits to released migrations
         run: |
-          modified="$(
-            git diff --diff-filter=M --name-only "origin/${{ github.base_ref }}...HEAD" -- 'src/migrations/*.sql'
+          changed="$(
+            git diff --find-renames --diff-filter=MDR --name-status "origin/${{ github.base_ref }}...HEAD" -- 'src/migrations/*.sql'
           )"
 
-          if [ -n "$modified" ]; then
-            echo "::error title=Released migration edited::Do not edit released migration SQL files. Add a new forward migration instead. See CLAUDE.md Schema migrations."
-            echo "Modified migration files:" >&2
-            while IFS= read -r file; do
-              [ -n "$file" ] || continue
-              echo "::error file=$file::Released migrations are immutable; add a new migration instead."
-              echo "  - $file" >&2
-            done <<< "$modified"
+          if [ -n "$changed" ]; then
+            echo "::error title=Released migration changed::Released migration files are immutable; do not edit, rename, or delete them. Add a new forward migration instead. See CLAUDE.md Schema migrations."
+            echo "Changed released migration files:" >&2
+            while IFS=$'\t' read -r status path rest; do
+              [ -n "$status" ] || continue
+              echo "::error file=$path::Released migration files are immutable; do not edit, rename, or delete them."
+              if [ -n "$rest" ]; then
+                echo "  - $status $path -> $rest" >&2
+              else
+                echo "  - $status $path" >&2
+              fi
+            done <<< "$changed"
             exit 1
           fi
 
