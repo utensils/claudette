@@ -7,6 +7,7 @@ import { applyTheme, applyUserFonts, loadAllThemes, findTheme, cacheThemePrefere
 import { DEFAULT_THEME_ID, DEFAULT_LIGHT_THEME_ID } from "./styles/themes";
 import type { ThemeDefinition } from "./types/theme";
 import { adjustUiFontSize, resetUiFontSize } from "./utils/fontSettings";
+import { deriveScmCiState } from "./utils/scmChecks";
 import { KEYBINDING_SETTING_PREFIX } from "./hotkeys/bindings";
 import { useMcpStatus } from "./hooks/useMcpStatus";
 import { useViewTogglePersistence } from "./hooks/useViewTogglePersistence";
@@ -98,10 +99,14 @@ function App() {
             typeof (parsed as { state: unknown }).state === "string"
               ? (parsed as import("./types/plugin").PullRequest)
               : null;
+          const parsedChecks: unknown = row.ci_json ? JSON.parse(row.ci_json) : [];
+          const checks = Array.isArray(parsedChecks)
+            ? (parsedChecks as import("./types/plugin").CiCheck[])
+            : [];
           useAppStore.getState().setScmSummary(row.workspace_id, {
             hasPr: pr !== null,
             prState: pr?.state ?? null,
-            ciState: pr?.ci_status ?? null,
+            ciState: pr ? deriveScmCiState(pr.ci_status, checks) : null,
             lastUpdated: new Date(row.fetched_at.replace(" ", "T") + "Z").getTime(),
           });
         } catch {
@@ -411,7 +416,9 @@ function App() {
       store.setScmSummary(detail.workspace_id, {
         hasPr: detail.pull_request !== null,
         prState: detail.pull_request?.state ?? null,
-        ciState: detail.pull_request?.ci_status ?? null,
+        ciState: detail.pull_request
+          ? deriveScmCiState(detail.pull_request.ci_status, detail.ci_checks)
+          : null,
         lastUpdated: Date.now(),
       });
       // Update detail if this is the selected workspace

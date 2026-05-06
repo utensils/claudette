@@ -2,6 +2,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  position: relative;
   padding: 10px 20px;
   /* Pin to the workspace-header row height so this banner's bottom border
    * lines up with WorkspacePanelHeader's bottom border on the chat side.
@@ -19,23 +20,28 @@
 .bannerReady,
 .bannerOpen {
   background: color-mix(in srgb, var(--badge-done) 12%, var(--chat-header-bg));
+  --checks-panel-bg: color-mix(in srgb, var(--badge-done) 10%, var(--chat-header-bg));
 }
 
 .bannerPending {
   background: color-mix(in srgb, var(--badge-ask) 12%, var(--chat-header-bg));
+  --checks-panel-bg: color-mix(in srgb, var(--badge-ask) 10%, var(--chat-header-bg));
 }
 
 .bannerFailed {
   background: var(--error-bg);
+  --checks-panel-bg: color-mix(in srgb, var(--status-stopped) 16%, var(--chat-header-bg));
 }
 
 .bannerMerged {
   background: color-mix(in srgb, var(--badge-plan) 14%, var(--chat-header-bg));
+  --checks-panel-bg: color-mix(in srgb, var(--badge-plan) 10%, var(--chat-header-bg));
 }
 
 .bannerDraft,
 .bannerClosed {
   background: var(--chat-header-bg);
+  --checks-panel-bg: var(--chat-header-bg);
 }
 
 .fgReady,
@@ -102,8 +108,177 @@
 .statusText {
   font-size: 12px;
   font-weight: 500;
+  white-space: nowrap;
+}
+
+.statusButton {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  padding: 3px 0 3px 8px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.statusButton:hover .statusText {
+  color: var(--text-primary);
+}
+
+.statusCount {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 16%, transparent);
+  color: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.statusChevron {
+  color: currentColor;
+  opacity: 0.72;
+  transform: rotate(0deg);
+  transition: transform var(--transition-fast), opacity var(--transition-fast);
+}
+
+.statusButton:hover .statusChevron {
+  opacity: 1;
+}
+
+.statusSolo {
   margin-left: auto;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.checksPanel {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 20px 12px;
+  background: var(--checks-panel-bg, var(--chat-header-bg));
+  border-bottom: 1px solid var(--divider);
+  box-shadow: var(--shadow-md);
+  animation: dropdownIn 0.12s ease;
+}
+
+.checksHeader {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 2px 0 6px;
+  color: var(--text-primary);
+}
+
+.checksTitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chevronOpen {
+  transform: rotate(90deg);
+}
+
+.checkList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 5px;
+}
+
+.checkRow {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto 14px;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 27px;
+  padding: 3px 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  text-align: left;
+}
+
+.checkRowLink {
+  cursor: pointer;
+}
+
+.checkRowLink:hover {
+  color: var(--text-primary);
+}
+
+.checkName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.checkStatus {
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.checkExternalIcon {
+  color: var(--text-dim);
+  opacity: 0;
+}
+
+.checkRowLink:hover .checkExternalIcon {
+  opacity: 0.75;
+}
+
+.checkIconSuccess {
+  color: var(--badge-done);
+  justify-self: center;
+}
+
+.checkIconFailure {
+  color: var(--status-stopped);
+  fill: currentColor;
+  justify-self: center;
+}
+
+.checkIconCancelled {
+  color: var(--text-dim);
+  fill: currentColor;
+  justify-self: center;
+}
+
+.checkIconPending {
+  color: var(--badge-ask);
+  justify-self: center;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes dropdownIn {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: translateY(0); }
 }

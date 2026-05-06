@@ -134,7 +134,7 @@ end
 function M.ci_status(args)
     local ok, data = pcall(gh, {
         "pr", "checks", args.branch,
-        "--json", "name,state,detailsUrl,startedAt",
+        "--json", "name,state,link,startedAt",
     })
     if not ok then
         return {}
@@ -144,7 +144,7 @@ function M.ci_status(args)
         table.insert(checks, {
             name = item.name,
             status = normalize_check_status(item.state),
-            url = item.detailsUrl,
+            url = item.link,
             started_at = item.startedAt,
         })
     end
