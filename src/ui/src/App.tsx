@@ -452,10 +452,10 @@ function App() {
         if (kind === "archived") {
           // Archiving stops the agent process backend-side; mirror that
           // here so a previously-running workspace doesn't keep showing
-          // a Running spinner in the sidebar after the row vanishes.
+          // a Running spinner after the row vanishes.
           store.updateWorkspace(workspace_id, {
-            status: "Archived" as const,
-            agent_status: "Stopped" as const,
+            status: "Archived",
+            agent_status: "Stopped",
           });
         } else {
           loadInitialData()
@@ -465,27 +465,25 @@ function App() {
               // preserves live runtime fields (notably `agent_status`,
               // which `db.list_workspaces` synthesizes as Idle on every
               // read). Wholesale-replacing would reintroduce the
-              // Running→Idle sidebar regression that addWorkspace
-              // already guards against.
-              const fresh = useAppStore.getState().workspaces;
+              // Running→Idle sidebar regression addWorkspace guards
+              // against.
+              const s = useAppStore.getState();
+              const fresh = s.workspaces;
               const incomingIds = new Set(data.workspaces.map((w) => w.id));
               for (const ws of data.workspaces) {
-                useAppStore
-                  .getState()
-                  .addWorkspace({ ...ws, remote_connection_id: null });
+                s.addWorkspace({ ...ws, remote_connection_id: null });
               }
               // Drop any local rows the DB no longer knows about (e.g.
-              // a hard delete that raced with this refresh) so the
-              // sidebar doesn't keep ghost entries around. Skip remote
-              // workspaces — `loadInitialData` only returns local rows,
-              // so a naive removal would also evict every remote-
-              // connection workspace from the store.
+              // a hard delete that raced with this refresh). Skip
+              // remote workspaces — `loadInitialData` only returns
+              // local rows, so a naive removal would evict every
+              // remote-connection workspace.
               for (const local of fresh) {
                 if (
                   local.remote_connection_id === null &&
                   !incomingIds.has(local.id)
                 ) {
-                  useAppStore.getState().removeWorkspace(local.id);
+                  s.removeWorkspace(local.id);
                 }
               }
             })

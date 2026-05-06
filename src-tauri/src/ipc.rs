@@ -445,13 +445,10 @@ pub(crate) struct SendChatParams {
 
 /// Parse the JSON params object the IPC sends. Tolerant of both
 /// `session_id` and `chat_session_id` so older clients (and the WS
-/// server's wire shape) keep working. All agent-setting fields are
-/// optional — omit and `send_chat_message` substitutes `false` for
-/// missing booleans / `None` for missing strings (i.e. omission does
-/// **not** inherit the GUI toolbar's current state for that workspace,
-/// since the toolbar lives in the React store and isn't visible from
-/// the backend dispatch path). Pass the values explicitly if you need a
-/// specific configuration.
+/// server's wire shape) keep working. Omitted agent-setting booleans
+/// default to `false` (the GUI toolbar lives in the React store and is
+/// not visible from this dispatch path); pass them explicitly to
+/// override.
 pub(crate) fn parse_send_chat_params(params: &serde_json::Value) -> Result<SendChatParams, String> {
     let session_id = params
         .get("session_id")

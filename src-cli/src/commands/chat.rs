@@ -24,12 +24,9 @@ pub enum Action {
         include_archived: bool,
     },
     /// Send a message to a chat session, kicking off an agent turn.
-    /// Mirrors every lever the GUI's chat input bar exposes. Each
-    /// boolean flag pair (`--plan` / `--no-plan`, etc.) is forwarded
-    /// over IPC; if you pass neither half of a pair the backend
-    /// substitutes `false` (the same default the GUI's input bar
-    /// initializes to). Pass the flag explicitly if you need it on for
-    /// a turn dispatched outside the GUI.
+    /// Mirrors every lever the GUI's chat input bar exposes. Boolean
+    /// flag pairs (`--plan` / `--no-plan`, etc.) default to `false`
+    /// when omitted — pass the flag explicitly to enable it.
     Send {
         /// Chat session ID. Newly-created workspaces have a default
         /// session id returned in their `create_workspace` response.
