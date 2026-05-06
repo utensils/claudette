@@ -483,6 +483,9 @@ export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> 
       const expanded = s.allFilesExpandedDirsByWorkspace[workspaceId] ?? {};
       const nextExpanded: Record<string, boolean> = {};
       for (const [path, value] of Object.entries(expanded)) {
+        // Expanded directory keys are stored with a trailing slash. Strip before
+        // mapping so containment checks use the same canonical form as file
+        // tabs, then restore the trailing slash for the expanded-dirs map.
         const mapped = mapPathAfterRename(
           stripTrailingSlash(path),
           oldClean,

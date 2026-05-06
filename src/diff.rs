@@ -258,16 +258,35 @@ pub async fn staged_changed_files(
 pub async fn file_tree_git_status(
     worktree_path: &str,
 ) -> Result<HashMap<String, GitStatusEntry>, DiffError> {
+    Ok(file_tree_git_status_with_suppressed(worktree_path)
+        .await?
+        .statuses)
+}
+
+pub struct FileTreeGitStatus {
+    pub statuses: HashMap<String, GitStatusEntry>,
+    pub suppressed_paths: HashSet<String>,
+}
+
+/// Return current index/worktree git status plus paths that should be hidden
+/// from `git ls-files` output, suitable for building the file tree without
+/// per-path filesystem stats.
+pub async fn file_tree_git_status_with_suppressed(
+    worktree_path: &str,
+) -> Result<FileTreeGitStatus, DiffError> {
     let output = run_git(worktree_path, &["status", "--porcelain=v2", "-uall", "-z"]).await?;
     let mut parsed = parse_file_tree_git_status(&output, worktree_path);
-    suppress_unstaged_rename_deletion_ghosts(
+    let suppressed_paths = suppress_unstaged_rename_deletion_ghosts(
         worktree_path,
         &mut parsed.statuses,
         &parsed.unstaged_deleted_head_oids,
         &parsed.untracked_paths,
     )
     .await;
-    Ok(parsed.statuses)
+    Ok(FileTreeGitStatus {
+        statuses: parsed.statuses,
+        suppressed_paths,
+    })
 }
 
 struct FileTreeStatusParse {
@@ -364,9 +383,9 @@ async fn suppress_unstaged_rename_deletion_ghosts(
     statuses: &mut HashMap<String, GitStatusEntry>,
     deleted_head_oids: &HashMap<String, String>,
     untracked_paths: &[String],
-) {
+) -> HashSet<String> {
     if deleted_head_oids.is_empty() || untracked_paths.is_empty() {
-        return;
+        return HashSet::new();
     }
 
     let mut untracked_oids = HashSet::new();
@@ -383,16 +402,19 @@ async fn suppress_unstaged_rename_deletion_ghosts(
     }
 
     if untracked_oids.is_empty() {
-        return;
+        return HashSet::new();
     }
 
     let ghosts: Vec<String> = deleted_head_oids
         .iter()
         .filter_map(|(path, oid)| untracked_oids.contains(oid).then(|| path.clone()))
         .collect();
+    let mut suppressed = HashSet::new();
     for path in ghosts {
         statuses.remove(&path);
+        suppressed.insert(path);
     }
+    suppressed
 }
 
 async fn hash_worktree_file(worktree_path: &str, relative_path: &str) -> Option<String> {
@@ -1885,9 +1907,13 @@ mod integration_tests {
 
         std::fs::rename(dir.join("index.rs"), dir.join("index2.rs")).unwrap();
 
-        let status = file_tree_git_status(dir.to_str().unwrap()).await.unwrap();
+        let status_result = file_tree_git_status_with_suppressed(dir.to_str().unwrap())
+            .await
+            .unwrap();
+        let status = status_result.statuses;
 
         assert!(!status.contains_key("index.rs"));
+        assert!(status_result.suppressed_paths.contains("index.rs"));
         assert_eq!(
             status.get("index2.rs"),
             Some(&GitStatusEntry {

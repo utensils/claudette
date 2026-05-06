@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { createPortal } from "react-dom";
 
 import { viewportLayoutSize, viewportToFixed } from "../../utils/zoom";
@@ -41,6 +48,9 @@ export function ContextMenu({
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const [pendingIndex, setPendingIndex] = useState<number | null>(null);
+  const [measured, setMeasured] = useState<{ width: number; height: number } | null>(
+    null,
+  );
   const itemCount = items.filter((item) => item.type !== "separator").length;
   const separatorCount = items.length - itemCount;
 
@@ -48,7 +58,18 @@ export function ContextMenu({
     () => ({ width: 220, height: itemCount * 34 + separatorCount * 9 + 12 }),
     [itemCount, separatorCount],
   );
-  const clamped = clampToViewport(x, y, estimated.width, estimated.height);
+  const size = measured ?? estimated;
+  const clamped = clampToViewport(x, y, size.width, size.height);
+
+  useLayoutEffect(() => {
+    const rect = menuRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    setMeasured((prev) => {
+      const next = { width: rect.width, height: rect.height };
+      if (prev?.width === next.width && prev.height === next.height) return prev;
+      return next;
+    });
+  }, [items]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {

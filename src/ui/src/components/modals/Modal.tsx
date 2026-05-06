@@ -1,4 +1,4 @@
-import { useEffect, useId, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import styles from "./Modal.module.css";
 
@@ -24,6 +24,13 @@ interface ModalProps {
   bodyScroll?: boolean;
 }
 
+let nextModalId = 1;
+const modalStack: number[] = [];
+
+function topmostModalId(): number | null {
+  return modalStack[modalStack.length - 1] ?? null;
+}
+
 export function Modal({
   title,
   onClose,
@@ -32,6 +39,8 @@ export function Modal({
   bodyScroll,
 }: ModalProps) {
   const titleId = useId();
+  const modalId = useRef<number | null>(null);
+  if (modalId.current === null) modalId.current = nextModalId++;
   const cardClass = [
     styles.card,
     wide && styles.cardWide,
@@ -44,10 +53,22 @@ export function Modal({
     .join(" ");
 
   useEffect(() => {
+    const id = modalId.current;
+    if (id === null) return;
+    modalStack.push(id);
+    return () => {
+      const idx = modalStack.lastIndexOf(id);
+      if (idx >= 0) modalStack.splice(idx, 1);
+    };
+  }, []);
+
+  useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
+      if (topmostModalId() !== modalId.current) return;
       event.preventDefault();
       event.stopPropagation();
+      event.stopImmediatePropagation();
       onClose();
     }
     window.addEventListener("keydown", handleKeyDown, true);

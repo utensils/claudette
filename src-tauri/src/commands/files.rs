@@ -110,9 +110,11 @@ pub async fn list_workspace_files(
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let git_status = claudette::diff::file_tree_git_status(worktree_path)
+    let file_tree_status = claudette::diff::file_tree_git_status_with_suppressed(worktree_path)
         .await
         .map_err(|e| format!("Failed to load git status: {e}"))?;
+    let git_status = file_tree_status.statuses;
+    let suppressed_paths = file_tree_status.suppressed_paths;
 
     // Collect file entries and extract unique directory paths.
     let mut dirs = std::collections::BTreeSet::new();
@@ -122,10 +124,10 @@ pub async fn list_workspace_files(
         .filter(|line| !line.is_empty())
         .take(MAX_FILES)
         .filter_map(|line| {
-            let status = git_status.get(line);
-            if !Path::new(worktree_path).join(line).exists() && status.is_none() {
+            if suppressed_paths.contains(line) {
                 return None;
             }
+            let status = git_status.get(line);
             seen_files.insert(line.to_string());
             // Extract all parent directories from the file path.
             let mut pos = 0;
@@ -344,7 +346,7 @@ pub async fn resolve_workspace_path(
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let worktree_path = resolve_worktree_path(&workspace_id, &state)?;
-    let resolved = resolve_existing_workspace_path(Path::new(&worktree_path), &relative_path)?;
+    let resolved = resolve_existing_workspace_path_blocking(worktree_path, relative_path).await?;
     Ok(resolved.absolute.to_string_lossy().into_owned())
 }
 
@@ -355,7 +357,7 @@ pub async fn open_workspace_path(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let worktree_path = resolve_worktree_path(&workspace_id, &state)?;
-    let resolved = resolve_existing_workspace_path(Path::new(&worktree_path), &relative_path)?;
+    let resolved = resolve_existing_workspace_path_blocking(worktree_path, relative_path).await?;
     crate::commands::shell::opener::open(&resolved.absolute.to_string_lossy())
         .map_err(|e| format!("open failed: {e}"))
 }
@@ -367,7 +369,7 @@ pub async fn reveal_workspace_path(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let worktree_path = resolve_worktree_path(&workspace_id, &state)?;
-    let resolved = resolve_existing_workspace_path(Path::new(&worktree_path), &relative_path)?;
+    let resolved = resolve_existing_workspace_path_blocking(worktree_path, relative_path).await?;
     reveal_path(&resolved.absolute)
 }
 
@@ -379,7 +381,8 @@ pub async fn create_workspace_file(
     state: State<'_, AppState>,
 ) -> Result<WorkspacePathCreateResult, String> {
     let worktree_path = resolve_worktree_path(&workspace_id, &state)?;
-    let target = build_create_file_target(Path::new(&worktree_path), &parent_relative_path, &name)?;
+    let target =
+        build_create_file_target_blocking(worktree_path, parent_relative_path, name).await?;
     let file = tokio::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -400,9 +403,10 @@ pub async fn rename_workspace_path(
     state: State<'_, AppState>,
 ) -> Result<WorkspacePathMoveResult, String> {
     let worktree_path = resolve_worktree_path(&workspace_id, &state)?;
-    let worktree = Path::new(&worktree_path);
-    let resolved = resolve_existing_workspace_path(worktree, &relative_path)?;
-    let rename = build_rename_target(worktree, &resolved.relative, &new_name)?;
+    let resolved =
+        resolve_existing_workspace_path_blocking(worktree_path.clone(), relative_path).await?;
+    let rename =
+        build_rename_target_blocking(worktree_path, resolved.relative.clone(), new_name).await?;
     let from = resolved.absolute;
     let to = rename.absolute;
     let old_path = resolved.relative;
@@ -427,13 +431,15 @@ pub async fn trash_workspace_path(
     state: State<'_, AppState>,
 ) -> Result<WorkspacePathTrashResult, String> {
     let worktree_path = resolve_worktree_path(&workspace_id, &state)?;
-    let resolved = resolve_existing_workspace_path(Path::new(&worktree_path), &relative_path)?;
+    let resolved = resolve_existing_workspace_path_blocking(worktree_path, relative_path).await?;
     let old_path = resolved.relative;
     let is_directory = resolved.is_directory;
     let absolute = resolved.absolute;
 
     #[cfg(target_os = "macos")]
-    let undo_token = trash_path_macos(&absolute)?;
+    let undo_token = tokio::task::spawn_blocking(move || trash_path_macos(&absolute))
+        .await
+        .map_err(|e| format!("join error: {e}"))??;
 
     #[cfg(not(target_os = "macos"))]
     {
@@ -466,28 +472,19 @@ pub async fn restore_workspace_path_from_trash(
     state: State<'_, AppState>,
 ) -> Result<WorkspacePathRestoreResult, String> {
     let worktree_path = resolve_worktree_path(&workspace_id, &state)?;
-    let worktree = Path::new(&worktree_path);
-    let target = resolve_workspace_target_path(worktree, &relative_path)?;
-    if target.absolute.exists() {
-        return Err("restore target already exists".to_string());
-    }
-    let parent = target
-        .absolute
-        .parent()
-        .ok_or_else(|| "restore target has no parent".to_string())?;
-    if !parent.exists() {
-        return Err("restore parent does not exist".to_string());
-    }
+    let target = resolve_workspace_target_path_blocking(worktree_path, relative_path).await?;
+    ensure_restore_target_available_blocking(target.absolute.clone()).await?;
 
     let restored_path = target.relative;
 
     #[cfg(target_os = "macos")]
     {
         let token = undo_token.ok_or_else(|| "missing trash undo token".to_string())?;
-        restore_path_macos(&token, &target.absolute)?;
-        let is_directory = std::fs::metadata(&target.absolute)
-            .map_err(|e| format!("metadata: {e}"))?
-            .is_dir();
+        let target_abs = target.absolute.clone();
+        tokio::task::spawn_blocking(move || restore_path_macos(&token, &target_abs))
+            .await
+            .map_err(|e| format!("join error: {e}"))??;
+        let is_directory = metadata_is_dir_blocking(target.absolute).await?;
         return Ok(WorkspacePathRestoreResult {
             restored_path,
             is_directory,
@@ -513,9 +510,7 @@ pub async fn restore_workspace_path_from_trash(
         })
         .await
         .map_err(|e| format!("join error: {e}"))??;
-        let is_directory = std::fs::metadata(&target.absolute)
-            .map_err(|e| format!("metadata: {e}"))?
-            .is_dir();
+        let is_directory = metadata_is_dir_blocking(target.absolute).await?;
         return Ok(WorkspacePathRestoreResult {
             restored_path,
             is_directory,
@@ -548,6 +543,79 @@ fn resolve_worktree_path(
     ws.worktree_path
         .clone()
         .ok_or_else(|| "Workspace has no worktree".to_string())
+}
+
+async fn resolve_existing_workspace_path_blocking(
+    worktree_path: String,
+    relative_path: String,
+) -> Result<ResolvedWorkspacePath, String> {
+    tokio::task::spawn_blocking(move || {
+        resolve_existing_workspace_path(Path::new(&worktree_path), &relative_path)
+    })
+    .await
+    .map_err(|e| format!("path resolution task failed: {e}"))?
+}
+
+async fn resolve_workspace_target_path_blocking(
+    worktree_path: String,
+    relative_path: String,
+) -> Result<ResolvedWorkspacePath, String> {
+    tokio::task::spawn_blocking(move || {
+        resolve_workspace_target_path(Path::new(&worktree_path), &relative_path)
+    })
+    .await
+    .map_err(|e| format!("path resolution task failed: {e}"))?
+}
+
+async fn build_rename_target_blocking(
+    worktree_path: String,
+    old_relative: String,
+    new_name: String,
+) -> Result<RenameTarget, String> {
+    tokio::task::spawn_blocking(move || {
+        build_rename_target(Path::new(&worktree_path), &old_relative, &new_name)
+    })
+    .await
+    .map_err(|e| format!("path resolution task failed: {e}"))?
+}
+
+async fn build_create_file_target_blocking(
+    worktree_path: String,
+    parent_relative_path: String,
+    name: String,
+) -> Result<RenameTarget, String> {
+    tokio::task::spawn_blocking(move || {
+        build_create_file_target(Path::new(&worktree_path), &parent_relative_path, &name)
+    })
+    .await
+    .map_err(|e| format!("path resolution task failed: {e}"))?
+}
+
+async fn metadata_is_dir_blocking(path: PathBuf) -> Result<bool, String> {
+    tokio::task::spawn_blocking(move || {
+        std::fs::metadata(path)
+            .map(|metadata| metadata.is_dir())
+            .map_err(|e| format!("metadata: {e}"))
+    })
+    .await
+    .map_err(|e| format!("metadata task failed: {e}"))?
+}
+
+async fn ensure_restore_target_available_blocking(path: PathBuf) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        if path.exists() {
+            return Err("restore target already exists".to_string());
+        }
+        let parent = path
+            .parent()
+            .ok_or_else(|| "restore target has no parent".to_string())?;
+        if !parent.exists() {
+            return Err("restore parent does not exist".to_string());
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("path validation task failed: {e}"))?
 }
 
 #[derive(Debug)]
@@ -799,14 +867,77 @@ fn trash_path_macos(path: &Path) -> Result<String, String> {
     if target.exists() {
         return Err("could not choose a unique trash name".to_string());
     }
-    std::fs::rename(path, &target).map_err(|e| format!("move to trash: {e}"))?;
+    move_to_trash_path_macos(path, &target)?;
     Ok(target.to_string_lossy().into_owned())
+}
+
+#[cfg(target_os = "macos")]
+fn move_to_trash_path_macos(path: &Path, target: &Path) -> Result<(), String> {
+    match std::fs::rename(path, target) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::CrossesDevices => {
+            copy_to_trash_path_macos(path, target)?;
+            if path.is_dir() {
+                std::fs::remove_dir_all(path).map_err(|e| format!("remove trashed dir: {e}"))?;
+            } else {
+                std::fs::remove_file(path).map_err(|e| format!("remove trashed file: {e}"))?;
+            }
+            Ok(())
+        }
+        Err(err) => Err(format!("move to trash: {err}")),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn copy_to_trash_path_macos(path: &Path, target: &Path) -> Result<(), String> {
+    let result = if path.is_dir() {
+        copy_dir_all_macos(path, target)
+    } else {
+        std::fs::copy(path, target)
+            .map(|_| ())
+            .map_err(|e| format!("copy to trash: {e}"))
+    };
+    if result.is_err() {
+        let _ = if target.is_dir() {
+            std::fs::remove_dir_all(target)
+        } else {
+            std::fs::remove_file(target)
+        };
+    }
+    result
+}
+
+#[cfg(target_os = "macos")]
+fn copy_dir_all_macos(source: &Path, target: &Path) -> Result<(), String> {
+    std::fs::create_dir(target).map_err(|e| format!("copy trash dir: {e}"))?;
+    for entry in std::fs::read_dir(source).map_err(|e| format!("read dir: {e}"))? {
+        let entry = entry.map_err(|e| format!("read dir entry: {e}"))?;
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        let file_type = entry
+            .file_type()
+            .map_err(|e| format!("read file type: {e}"))?;
+        if file_type.is_dir() {
+            copy_dir_all_macos(&source_path, &target_path)?;
+        } else if file_type.is_file() {
+            std::fs::copy(&source_path, &target_path)
+                .map_err(|e| format!("copy trash file: {e}"))?;
+        } else if file_type.is_symlink() {
+            let link_target =
+                std::fs::read_link(&source_path).map_err(|e| format!("read symlink: {e}"))?;
+            std::os::unix::fs::symlink(link_target, &target_path)
+                .map_err(|e| format!("copy trash symlink: {e}"))?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
 fn restore_path_macos(undo_token: &str, target: &Path) -> Result<(), String> {
     let trash_dir = home_trash_dir()?;
     let trash_path = PathBuf::from(undo_token);
+    // The undo token is a path supplied by the frontend, so canonicalize it and
+    // verify Trash containment before restoring anything from it.
     let trash_canonical =
         std::fs::canonicalize(&trash_path).map_err(|e| format!("trash item not found: {e}"))?;
     let trash_dir_canonical =
@@ -838,6 +969,9 @@ fn find_trash_item_token_for_original(original_path: &Path) -> Option<String> {
             .into_iter()
             .filter(|item| item.original_path() == original)
             .collect();
+        // Some platforms expose coarse deletion timestamps, so two rapid
+        // deletes of the same original path can be ambiguous. Prefer the
+        // newest item as the best available restore token.
         items.sort_by_key(|item| item.time_deleted);
         return items
             .pop()

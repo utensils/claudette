@@ -566,7 +566,7 @@ export function SessionTabs({ workspaceId }: Props) {
         },
         disabled: toRight.length === 0,
       },
-      { label: t("tab_close_all"), onSelect: () => void closeEntries(closeScope) },
+      { label: t("tab_close_all"), onSelect: () => void closeEntries(navEntries) },
     ];
   }, [contextMenu, diffStagedFiles, navEntries, closeEntries, selectEntry, t]);
 
