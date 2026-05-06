@@ -9,6 +9,7 @@ import type { ThemeDefinition } from "./types/theme";
 import { adjustUiFontSize, resetUiFontSize } from "./utils/fontSettings";
 import { deriveScmCiState } from "./utils/scmChecks";
 import { KEYBINDING_SETTING_PREFIX } from "./hotkeys/bindings";
+import type { WorkspaceOrderModeByRepo } from "./utils/workspaceOrdering";
 import { useMcpStatus } from "./hooks/useMcpStatus";
 import { useViewTogglePersistence } from "./hooks/useViewTogglePersistence";
 import { AppLayout } from "./components/layout/AppLayout";
@@ -16,6 +17,16 @@ import { findLeafByPtyId } from "./stores/terminalPaneTree";
 import type { CommandEvent } from "./types";
 import i18n, { isSupportedLanguage } from "./i18n";
 import "./styles/theme.css";
+
+function workspaceOrderModesFromRepoIds(
+  repoIds: readonly string[],
+): WorkspaceOrderModeByRepo {
+  const modes: WorkspaceOrderModeByRepo = {};
+  for (const repoId of repoIds) {
+    modes[repoId] = "manual";
+  }
+  return modes;
+}
 
 function App() {
   const setRepositories = useAppStore((s) => s.setRepositories);
@@ -51,6 +62,9 @@ function App() {
   const setVoiceHoldHotkey = useAppStore((s) => s.setVoiceHoldHotkey);
   const setKeybindings = useAppStore((s) => s.setKeybindings);
   const setAppVersion = useAppStore((s) => s.setAppVersion);
+  const setManualWorkspaceOrderByRepo = useAppStore(
+    (s) => s.setManualWorkspaceOrderByRepo,
+  );
 
   // Cached theme list — populated on initial load, reused by the OS handler.
   const loadedThemesRef = useRef<ThemeDefinition[]>([]);
@@ -76,6 +90,9 @@ function App() {
       );
       setWorkspaces(
         data.workspaces.map((w) => ({ ...w, remote_connection_id: null }))
+      );
+      setManualWorkspaceOrderByRepo(
+        workspaceOrderModesFromRepoIds(data.manual_workspace_order_repo_ids),
       );
       setWorktreeBaseDir(data.worktree_base_dir);
       setDefaultBranches(data.default_branches);
@@ -484,6 +501,11 @@ function App() {
               const s = useAppStore.getState();
               const fresh = s.workspaces;
               const incomingIds = new Set(data.workspaces.map((w) => w.id));
+              s.setManualWorkspaceOrderByRepo(
+                workspaceOrderModesFromRepoIds(
+                  data.manual_workspace_order_repo_ids,
+                ),
+              );
               for (const ws of data.workspaces) {
                 s.addWorkspace({ ...ws, remote_connection_id: null });
               }
@@ -607,7 +629,7 @@ function App() {
       unlistenChatTurnStarted.then((fn) => fn());
       unlistenMissingCli.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setPluginManagementEnabled, setCommunityRegistryEnabled, setEditorGitGutterBase, setEditorMinimapEnabled, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setPluginManagementEnabled, setCommunityRegistryEnabled, setEditorGitGutterBase, setEditorMinimapEnabled, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo]);
 
   // Listen for OS light/dark changes and switch theme when mode is "system".
   useEffect(() => {

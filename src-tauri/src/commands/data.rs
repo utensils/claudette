@@ -5,7 +5,7 @@ use serde::Serialize;
 use tauri::State;
 use tokio::sync::Semaphore;
 
-use claudette::db::Database;
+use claudette::db::{Database, WORKSPACE_ORDER_MODE_PREFIX};
 use claudette::git;
 use claudette::model::{ChatMessage, Repository, Workspace};
 
@@ -16,7 +16,6 @@ use crate::state::AppState;
 /// Tuned at 6 — each git probe is short, but on a cold filesystem the
 /// system call cost dominates and unbounded fan-out can wedge slow disks.
 const STARTUP_GIT_PROBE_CONCURRENCY: usize = 6;
-
 #[derive(Serialize)]
 pub struct InitialData {
     pub repositories: Vec<Repository>,
@@ -27,6 +26,8 @@ pub struct InitialData {
     /// Most recent chat message per workspace (for dashboard display).
     pub last_messages: Vec<ChatMessage>,
     pub scm_cache: Vec<claudette::db::ScmStatusCacheRow>,
+    /// Repository ids whose sidebar workspace order is user-defined.
+    pub manual_workspace_order_repo_ids: Vec<String>,
 }
 
 #[tauri::command]
@@ -181,6 +182,19 @@ pub async fn load_initial_data(state: State<'_, AppState>) -> Result<InitialData
 
     let last_messages = db.last_message_per_workspace().map_err(|e| e.to_string())?;
     let scm_cache = db.load_all_scm_status_cache().map_err(|e| e.to_string())?;
+    let manual_workspace_order_repo_ids = db
+        .list_app_settings_with_prefix(WORKSPACE_ORDER_MODE_PREFIX)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter_map(|(key, value)| {
+            (value == "manual")
+                .then(|| {
+                    key.strip_prefix(WORKSPACE_ORDER_MODE_PREFIX)
+                        .map(str::to_string)
+                })
+                .flatten()
+        })
+        .collect();
 
     Ok(InitialData {
         repositories,
@@ -189,5 +203,6 @@ pub async fn load_initial_data(state: State<'_, AppState>) -> Result<InitialData
         default_branches,
         last_messages,
         scm_cache,
+        manual_workspace_order_repo_ids,
     })
 }

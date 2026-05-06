@@ -18,6 +18,7 @@ export interface UiSlice {
   sidebarGroupBy: "status" | "repo";
   sidebarRepoFilter: string; // repo ID or "all"
   sidebarShowArchived: boolean;
+  manualWorkspaceOrderByRepo: Record<string, "manual">;
   repoCollapsed: Record<string, boolean>;
   statusGroupCollapsed: Record<string, boolean>;
   fuzzyFinderOpen: boolean;
@@ -32,6 +33,11 @@ export interface UiSlice {
   setSidebarGroupBy: (g: "status" | "repo") => void;
   setSidebarRepoFilter: (id: string) => void;
   setSidebarShowArchived: (show: boolean) => void;
+  setManualWorkspaceOrderByRepo: (
+    modes: Record<string, "manual">,
+  ) => void;
+  markWorkspaceOrderManual: (repoId: string) => void;
+  clearManualWorkspaceOrder: (repoId: string) => void;
   toggleRepoCollapsed: (id: string) => void;
   toggleStatusGroupCollapsed: (id: string) => void;
   toggleFuzzyFinder: () => void;
@@ -89,6 +95,7 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
   sidebarGroupBy: "repo",
   sidebarRepoFilter: "all",
   sidebarShowArchived: false,
+  manualWorkspaceOrderByRepo: {},
   repoCollapsed: {},
   statusGroupCollapsed: {},
   fuzzyFinderOpen: false,
@@ -102,6 +109,22 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
   setSidebarGroupBy: (g) => set({ sidebarGroupBy: g }),
   setSidebarRepoFilter: (id) => set({ sidebarRepoFilter: id }),
   setSidebarShowArchived: (show) => set({ sidebarShowArchived: show }),
+  setManualWorkspaceOrderByRepo: (modes) =>
+    set({ manualWorkspaceOrderByRepo: modes }),
+  markWorkspaceOrderManual: (repoId) =>
+    set((s) => ({
+      manualWorkspaceOrderByRepo: {
+        ...s.manualWorkspaceOrderByRepo,
+        [repoId]: "manual",
+      },
+    })),
+  clearManualWorkspaceOrder: (repoId) =>
+    set((s) => {
+      if (!(repoId in s.manualWorkspaceOrderByRepo)) return s;
+      const next = { ...s.manualWorkspaceOrderByRepo };
+      delete next[repoId];
+      return { manualWorkspaceOrderByRepo: next };
+    }),
   toggleRepoCollapsed: (id) =>
     set((s) => ({
       repoCollapsed: {

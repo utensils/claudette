@@ -14,6 +14,8 @@ use crate::model::{Workspace, WorkspaceStatus};
 
 use super::Database;
 
+pub const WORKSPACE_ORDER_MODE_PREFIX: &str = "workspace_order_mode:";
+
 impl Database {
     // --- Workspaces ---
 
@@ -173,6 +175,10 @@ impl Database {
                 stmt.execute(params![i as i32, id, repository_id])?;
             }
         }
+        tx.execute(
+            "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?1, 'manual')",
+            params![format!("{WORKSPACE_ORDER_MODE_PREFIX}{repository_id}")],
+        )?;
         tx.commit()?;
         Ok(())
     }
@@ -639,6 +645,56 @@ mod tests {
         assert_eq!(workspaces.len(), 2);
         assert_eq!(workspaces[0].name, "fix-bug");
         assert_eq!(workspaces[0].status, WorkspaceStatus::Active);
+    }
+
+    #[test]
+    fn test_reorder_workspaces_marks_repo_manual_in_same_write_path() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w1", "r1", "fix-bug"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w2", "r1", "add-feature"))
+            .unwrap();
+
+        db.reorder_workspaces("r1", &["w2".to_string(), "w1".to_string()])
+            .unwrap();
+
+        let mode = db
+            .get_app_setting(&format!("{WORKSPACE_ORDER_MODE_PREFIX}r1"))
+            .unwrap();
+        assert_eq!(mode.as_deref(), Some("manual"));
+    }
+
+    #[test]
+    fn test_workspace_manual_order_mode_migration_backfills_mismatched_sort_order() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1", "/tmp/repo1", "repo1"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w1", "r1", "fix-bug"))
+            .unwrap();
+        db.insert_workspace(&make_workspace("w2", "r1", "add-feature"))
+            .unwrap();
+        db.execute_batch(
+            "
+            UPDATE workspaces SET sort_order = CASE id
+                WHEN 'w1' THEN 1
+                WHEN 'w2' THEN 0
+                ELSE sort_order
+            END;
+            DELETE FROM app_settings WHERE key = 'workspace_order_mode:r1';
+            DELETE FROM schema_migrations
+                WHERE id = '20260506220711_workspace_manual_order_modes';
+            ",
+        )
+        .unwrap();
+
+        db.run_migrations_for_test().unwrap();
+
+        let mode = db
+            .get_app_setting(&format!("{WORKSPACE_ORDER_MODE_PREFIX}r1"))
+            .unwrap();
+        assert_eq!(mode.as_deref(), Some("manual"));
     }
 
     #[test]

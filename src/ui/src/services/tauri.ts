@@ -53,6 +53,7 @@ export interface InitialData {
   default_branches: Record<string, string>;
   last_messages: ChatMessage[];
   scm_cache: ScmStatusCacheRow[];
+  manual_workspace_order_repo_ids: string[];
 }
 
 export function loadInitialData(): Promise<InitialData> {
