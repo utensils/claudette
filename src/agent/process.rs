@@ -106,6 +106,14 @@ pub async fn run_turn(
         cmd.env("CLAUDE_CODE_DISABLE_1M_CONTEXT", "1");
     }
 
+    if let Some(ref bridge) = settings.hook_bridge {
+        cmd.env(
+            crate::agent_mcp::server::ENV_SOCKET_ADDR,
+            &bridge.socket_addr,
+        );
+        cmd.env(crate::agent_mcp::server::ENV_TOKEN, &bridge.token);
+    }
+
     if let Some(env) = ws_env {
         env.apply(&mut cmd);
     }

@@ -61,19 +61,9 @@ pub fn build_claude_args(
     }
 
     // Per-turn settings via --settings JSON.
-    if settings.fast_mode || settings.thinking_enabled {
-        let mut obj = serde_json::Map::new();
-        if settings.fast_mode {
-            obj.insert("fastMode".to_string(), serde_json::Value::Bool(true));
-        }
-        if settings.thinking_enabled {
-            obj.insert(
-                "alwaysThinkingEnabled".to_string(),
-                serde_json::Value::Bool(true),
-            );
-        }
+    if let Some(settings_json) = build_settings_json(settings) {
         args.push("--settings".to_string());
-        args.push(serde_json::Value::Object(obj).to_string());
+        args.push(settings_json);
     }
 
     // Effort level — standalone flag, not part of --settings JSON.
@@ -121,6 +111,51 @@ pub fn build_claude_args(
     }
 
     args
+}
+
+pub(super) fn build_settings_json(settings: &AgentSettings) -> Option<String> {
+    let mut obj = serde_json::Map::new();
+    if settings.fast_mode {
+        obj.insert("fastMode".to_string(), serde_json::Value::Bool(true));
+    }
+    if settings.thinking_enabled {
+        obj.insert(
+            "alwaysThinkingEnabled".to_string(),
+            serde_json::Value::Bool(true),
+        );
+    }
+    if let Some(ref hook_bridge) = settings.hook_bridge {
+        let hook = serde_json::json!({
+            "matcher": "",
+            "hooks": [{
+                "type": "command",
+                "command": hook_bridge.command,
+                "timeout": 5,
+            }],
+        });
+        obj.insert(
+            "hooks".to_string(),
+            serde_json::json!({
+                "SubagentStart": [hook.clone()],
+                "PreToolUse": [hook.clone()],
+                "PostToolUse": [hook.clone()],
+                "PostToolUseFailure": [hook],
+                "SubagentStop": [{
+                    "matcher": "",
+                    "hooks": [{
+                        "type": "command",
+                        "command": hook_bridge.command,
+                        "timeout": 5,
+                    }],
+                }],
+            }),
+        );
+    }
+    if obj.is_empty() {
+        None
+    } else {
+        Some(serde_json::Value::Object(obj).to_string())
+    }
 }
 
 /// Build a single-line JSON payload for stdin when using `--input-format stream-json`.

@@ -595,6 +595,7 @@ async fn handle_send_chat_message(
         chrome_enabled: chrome_enabled.unwrap_or(false),
         mcp_config,
         disable_1m_context: disable_1m_context.unwrap_or(false),
+        hook_bridge: None,
     };
 
     let turn_handle = agent::run_turn(

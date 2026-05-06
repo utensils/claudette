@@ -86,6 +86,13 @@ struct AttachmentEventBody {
     caption: Option<String>,
 }
 
+#[derive(Serialize, Clone)]
+struct AgentHookEvent {
+    workspace_id: String,
+    chat_session_id: String,
+    input: serde_json::Value,
+}
+
 async fn handle_payload(
     app: AppHandle,
     db_path: PathBuf,
@@ -109,6 +116,21 @@ async fn handle_payload(
                 caption,
             )
             .await
+        }
+        BridgePayload::HookEvent { input } => {
+            let _ = app.emit(
+                "agent-hook-event",
+                AgentHookEvent {
+                    workspace_id,
+                    chat_session_id,
+                    input,
+                },
+            );
+            BridgeResponse {
+                ok: true,
+                attachment_id: None,
+                error: None,
+            }
         }
     }
 }

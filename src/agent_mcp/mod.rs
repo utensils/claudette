@@ -10,6 +10,7 @@
 //! - `server` (slice 6) — stdio MCP server loop run by `--agent-mcp`.
 
 pub mod bridge;
+pub mod hook;
 pub mod protocol;
 pub mod server;
 pub mod tools;

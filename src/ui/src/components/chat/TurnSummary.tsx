@@ -1,17 +1,25 @@
 import type { CompletedTurn, ToolActivity } from "../../stores/useAppStore";
 import type { TaskTrackerResult } from "../../hooks/useTaskTracker";
-import { extractToolSummary, relativizePath } from "../../hooks/toolSummary";
+import { relativizePath } from "../../hooks/toolSummary";
 import { HighlightedPlainText } from "./HighlightedPlainText";
 import styles from "./ChatPanel.module.css";
 import { toolColor } from "./chatHelpers";
 import { TurnFooter } from "./TurnFooter";
 import { TaskProgressBar } from "./TaskProgressBar";
+import {
+  activityMatchesSearch,
+  activitySummaryText,
+} from "./agentToolCallRendering";
+import { AgentToolCallGroup } from "./AgentToolCallGroup";
+import { isAgentActivity } from "./toolActivityGroups";
 
 /**
  * Render a single completed turn summary (collapsible tool call list).
  */
 export function TurnSummary({
   turn,
+  activities,
+  showFooter = true,
   collapsed,
   onToggle,
   taskProgress,
@@ -20,8 +28,11 @@ export function TurnSummary({
   onRollback,
   searchQuery,
   worktreePath,
+  label,
 }: {
   turn: CompletedTurn;
+  activities?: ToolActivity[];
+  showFooter?: boolean;
   collapsed: boolean;
   onToggle: () => void;
   taskProgress?: TaskTrackerResult;
@@ -38,14 +49,17 @@ export function TurnSummary({
    *  the query matches inside any of the contained activity summaries. */
   searchQuery: string;
   worktreePath?: string | null;
+  label?: string;
 }) {
+  const visibleActivities = activities ?? turn.activities;
   const hasElapsed = typeof turn.durationMs === "number" && turn.durationMs > 0;
   const hasTokens =
     typeof turn.inputTokens === "number" && typeof turn.outputTokens === "number";
   const hasCopy = assistantText.length > 0;
   const hasFork = !!onFork;
   const hasRollback = !!onRollback;
-  const showFooter = hasElapsed || hasTokens || hasCopy || hasFork || hasRollback;
+  const shouldShowFooter =
+    showFooter && (hasElapsed || hasTokens || hasCopy || hasFork || hasRollback);
 
   // Force-expand if the query matches in any activity summary or the
   // resolved tool-summary fallback. Without this, marks would land in
@@ -56,13 +70,9 @@ export function TurnSummary({
   // visible highlight inside.
   const queryHasMatch =
     !!searchQuery &&
-    turn.activities.some((a) => {
-      const text = relativizePath(
-        a.summary || extractToolSummary(a.toolName, a.inputJson),
-        worktreePath,
-      );
-      return text.toLowerCase().includes(searchQuery.toLowerCase());
-    });
+    visibleActivities.some((activity) =>
+      activityMatchesSearch(activity, searchQuery, worktreePath),
+    );
   const isExpanded = !collapsed || queryHasMatch;
 
   return (
@@ -84,31 +94,42 @@ export function TurnSummary({
             {isExpanded ? "⌄" : "›"}
           </span>
           <span className={styles.turnLabel}>
-            {turn.activities.length} tool call
-            {turn.activities.length !== 1 ? "s" : ""}
-            {turn.messageCount > 0 &&
+            {label ??
+              `${visibleActivities.length} tool call${
+                visibleActivities.length !== 1 ? "s" : ""
+              }`}
+            {showFooter && turn.messageCount > 0 &&
               `, ${turn.messageCount} message${turn.messageCount !== 1 ? "s" : ""}`}
           </span>
         </div>
         {isExpanded && (
           <div className={styles.turnActivities}>
-            {turn.activities.map((act: ToolActivity) => (
-              <div key={act.toolUseId} className={styles.toolActivity}>
-                <div className={styles.toolHeader}>
-                  <span className={styles.toolName} style={{ color: toolColor(act.toolName) }}>
-                    {act.toolName}
-                  </span>
-                  {(act.summary || act.inputJson) && (
-                    <span className={styles.toolSummary}>
-                      <HighlightedPlainText
-                        text={relativizePath(act.summary || extractToolSummary(act.toolName, act.inputJson), worktreePath)}
-                        query={searchQuery}
-                      />
+            {visibleActivities.map((act: ToolActivity) =>
+              isAgentActivity(act) ? (
+                <AgentToolCallGroup
+                  key={act.toolUseId}
+                  activity={act}
+                  searchQuery={searchQuery}
+                  worktreePath={worktreePath}
+                />
+              ) : (
+                <div key={act.toolUseId} className={styles.toolActivity}>
+                  <div className={styles.toolHeader}>
+                    <span className={styles.toolName} style={{ color: toolColor(act.toolName) }}>
+                      {act.toolName}
                     </span>
-                  )}
+                    {activitySummaryText(act) && (
+                      <span className={styles.toolSummary}>
+                        <HighlightedPlainText
+                          text={relativizePath(activitySummaryText(act), worktreePath)}
+                          query={searchQuery}
+                        />
+                      </span>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              ),
+            )}
           </div>
         )}
       </div>
@@ -118,7 +139,7 @@ export function TurnSummary({
           totalCount={taskProgress.totalCount}
         />
       )}
-      {showFooter && (
+      {shouldShowFooter && (
         <TurnFooter
           durationMs={turn.durationMs}
           inputTokens={turn.inputTokens}

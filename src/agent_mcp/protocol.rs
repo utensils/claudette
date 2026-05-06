@@ -103,6 +103,10 @@ pub enum BridgePayload {
         /// Optional caption the agent attached.
         caption: Option<String>,
     },
+    /// Forward a Claude Code hook payload to the parent UI. Tool hooks fired
+    /// inside subagents include `agent_id`, which lets the frontend attach the
+    /// nested tool call to the parent Agent activity.
+    HookEvent { input: serde_json::Value },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -206,6 +210,7 @@ mod tests {
                 assert_eq!(media_type, "image/png");
                 assert_eq!(caption.as_deref(), Some("look"));
             }
+            BridgePayload::HookEvent { .. } => panic!("expected attachment payload"),
         }
     }
 
