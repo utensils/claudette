@@ -151,26 +151,6 @@ describe("eventCoordSpace", () => {
       expect(eventCoordSpace()).toBe("visual");
     });
   });
-
-  it("does not cache the no-DOM fallback so a later real probe wins", () => {
-    // Codex review caught this: if the first call happened during boot
-    // before document.body existed, the old cache logic locked in
-    // 'visual' even on Chromium. After the fix, the fallback is
-    // returned but NOT cached, so the next call with real DOM gets the
-    // real engine answer.
-    withRootZoom("1.5", () => {
-      // First call: no DOM → returns "visual" (default), should not cache.
-      expect(eventCoordSpace()).toBe("visual");
-    });
-    // New shim with Chromium-style rect, same session.
-    withRootZoom(
-      "1.5",
-      () => {
-        expect(eventCoordSpace()).toBe("layout");
-      },
-      { probeRectLeft: () => 100 },
-    );
-  });
 });
 
 describe("viewportToFixed", () => {

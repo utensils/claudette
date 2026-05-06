@@ -32,19 +32,21 @@ export interface PositionTarget {
   style: { left: string; top: string };
 }
 
+// Last position WE wrote to each target. Used to suppress the
+// attribute-mutation feedback loop that re-firing the observer would
+// otherwise cause: when the post-correction values match the last-written
+// pair, we know Monaco hasn't moved the menu and skip.
+const lastApplied = new WeakMap<object, { left: number; top: number }>();
+
 /**
  * Pure function — exported for tests. Reads `style.left/top` off `el`,
- * divides by `zoom`, and writes the corrected pair back. Skips silently
- * when either coordinate is unparseable (Monaco hasn't mounted yet).
+ * divides by `zoom`, and writes the corrected pair back. Skips when:
+ *   - either coordinate is unparseable (Monaco hasn't mounted yet), or
+ *   - the current values match the last pair WE wrote (echo of our own
+ *     write firing the observer).
  *
- * Returns `true` when a write happened, `false` when it was skipped.
- *
- * Note: this function does NOT guard against the observer feedback loop.
- * The runtime caller below disconnects the per-host MutationObserver
- * around its writes — which is more reliable than a value-equality echo
- * guard, because Monaco can legitimately re-position to coordinates that
- * happen to match a previous corrected pair (e.g. raw 200/100 after
- * we just corrected raw 400/200 → 200/100 at zoom 2).
+ * Returns `true` when a write happened, `false` when it was skipped —
+ * the test suite uses this to assert the no-loop guarantee.
  */
 export function correctContextViewPosition(
   el: PositionTarget,
@@ -53,18 +55,32 @@ export function correctContextViewPosition(
   const left = parseFloat(el.style.left);
   const top = parseFloat(el.style.top);
   if (!Number.isFinite(left) || !Number.isFinite(top)) return false;
-  el.style.left = `${left / zoom}px`;
-  el.style.top = `${top / zoom}px`;
+
+  const last = lastApplied.get(el as object);
+  if (
+    last &&
+    Math.abs(last.left - left) < 0.5 &&
+    Math.abs(last.top - top) < 0.5
+  ) {
+    return false;
+  }
+
+  const correctedLeft = left / zoom;
+  const correctedTop = top / zoom;
+  el.style.left = `${correctedLeft}px`;
+  el.style.top = `${correctedTop}px`;
+  lastApplied.set(el as object, { left: correctedLeft, top: correctedTop });
   return true;
 }
 
+// Test-only: clear the WeakMap-backed echo guard so tests don't leak the
+// "last applied" state into the next case.
+export function __resetCorrectionMemoForTests(el: object): void {
+  lastApplied.delete(el);
+}
+
 let installed = false;
-let rootObserver: MutationObserver | null = null;
-// Per-host attribute observers, keyed by the `.context-view` element. A
-// `WeakMap` lets the entry GC with the host if Monaco drops it without
-// going through our removed-nodes path; the explicit dedup keeps a stale
-// observer from stacking when Monaco re-attaches the same node.
-const hostObservers = new WeakMap<HTMLElement, MutationObserver>();
+let observer: MutationObserver | null = null;
 
 function shouldCorrect(): false | number {
   const zoom = getRootZoom();
@@ -73,58 +89,18 @@ function shouldCorrect(): false | number {
   return zoom;
 }
 
-// Disconnect around our own writes so the inner observer never sees them.
-// This is more robust than a value-equality echo guard: at zoom 2, raw
-// 200/100 (which Monaco can legitimately set as a NEW position) cannot be
-// distinguished from the post-correction value of a prior raw 400/200 by
-// equality alone.
-function applyCorrection(host: HTMLElement, zoom: number): void {
-  const inner = hostObservers.get(host);
-  inner?.disconnect();
-  correctContextViewPosition(host, zoom);
-  // Re-attach so future Monaco-driven style writes still trigger us.
-  inner?.observe(host, { attributes: true, attributeFilter: ["style"] });
-}
-
-function attachHostObserver(host: HTMLElement): void {
-  // Dedup: if Monaco re-adds a `.context-view` we've already seen, reuse
-  // the existing observer rather than stacking another one.
-  if (hostObservers.has(host)) return;
+function observeContextView(el: HTMLElement): void {
+  // Monaco re-positions the menu while open in a few cases (resize, submenu
+  // expansion, viewport edge clamping) by setting style.left/top again. An
+  // attribute observer on the host catches each of those.
   const inner = new MutationObserver(() => {
     const zoom = shouldCorrect();
     if (zoom === false) return;
-    applyCorrection(host, zoom);
+    correctContextViewPosition(el, zoom);
   });
-  inner.observe(host, { attributes: true, attributeFilter: ["style"] });
-  hostObservers.set(host, inner);
-}
-
-function detachHostObserver(host: HTMLElement): void {
-  const inner = hostObservers.get(host);
-  if (!inner) return;
-  inner.disconnect();
-  hostObservers.delete(host);
-}
-
-function visitAddedNode(node: Node, zoom: number | false): void {
-  if (!(node instanceof HTMLElement)) return;
-  const hosts = node.classList.contains("context-view")
-    ? [node]
-    : Array.from(node.querySelectorAll<HTMLElement>(".context-view"));
-  for (const host of hosts) {
-    if (zoom !== false) applyCorrection(host, zoom);
-    attachHostObserver(host);
-  }
-}
-
-function visitRemovedNode(node: Node): void {
-  if (!(node instanceof HTMLElement)) return;
-  if (node.classList.contains("context-view")) {
-    detachHostObserver(node);
-  }
-  for (const host of node.querySelectorAll<HTMLElement>(".context-view")) {
-    detachHostObserver(host);
-  }
+  inner.observe(el, { attributes: true, attributeFilter: ["style"] });
+  // The inner observer is GC'd with the element on subtree removal — we
+  // don't track it explicitly. WeakMap entries clear at the same time.
 }
 
 /**
@@ -134,10 +110,9 @@ function visitRemovedNode(node: Node): void {
  * we'll defer until DOM is ready.
  *
  * The observer is a permanent global; there's no uninstall. Cost is one
- * MutationObserver on `document.body` (childList, subtree). The callback
- * early-outs at zoom == 1 before doing any DOM scanning, so the steady-
- * state overhead during chat/terminal streaming is one cheap zoom read
- * per batch of mutation records.
+ * MutationObserver on `document.body` (childList, subtree) plus a small
+ * inner observer per `.context-view` element. Both branches early-out at
+ * zoom == 1 or on Chromium.
  */
 export function installMonacoContextViewFix(): void {
   if (installed) return;
@@ -145,18 +120,28 @@ export function installMonacoContextViewFix(): void {
   installed = true;
 
   const start = () => {
-    rootObserver = new MutationObserver((records) => {
-      // Cheap perf gate: at zoom 1 the fix is unconditionally a no-op, so
-      // skip the per-mutation `querySelectorAll` scan that would otherwise
-      // run on every chat/terminal append.
-      const zoom = getRootZoom() === 1 ? false : shouldCorrect();
+    // `.context-view` is mounted as a direct child of `<body>` (or in some
+    // versions, a child of the editor's overflow container). A subtree
+    // observer covers both.
+    observer = new MutationObserver((records) => {
       for (const r of records) {
         if (r.type !== "childList") continue;
-        r.addedNodes.forEach((n) => visitAddedNode(n, zoom));
-        r.removedNodes.forEach(visitRemovedNode);
+        r.addedNodes.forEach((n) => {
+          if (!(n instanceof HTMLElement)) return;
+          // Match both the host and any nested `.context-view` (Monaco
+          // sometimes wraps submenus in their own context-view).
+          const hosts = n.classList.contains("context-view")
+            ? [n]
+            : Array.from(n.querySelectorAll<HTMLElement>(".context-view"));
+          for (const host of hosts) {
+            const zoom = shouldCorrect();
+            if (zoom !== false) correctContextViewPosition(host, zoom);
+            observeContextView(host);
+          }
+        });
       }
     });
-    rootObserver.observe(document.body, { childList: true, subtree: true });
+    observer.observe(document.body, { childList: true, subtree: true });
   };
 
   if (document.body) {
@@ -168,13 +153,11 @@ export function installMonacoContextViewFix(): void {
   }
 }
 
-// Test-only: tear down the global observer + per-host map between cases.
-// Production code never calls this — the observer is meant to live for
-// the lifetime of the app.
+// Test-only: tear down the global observer between cases. Production code
+// never calls this — the observer is meant to live for the lifetime of the
+// app.
 export function __resetMonacoContextViewFixForTests(): void {
-  rootObserver?.disconnect();
-  rootObserver = null;
+  observer?.disconnect();
+  observer = null;
   installed = false;
-  // WeakMap can't be cleared explicitly — but each test creates fresh
-  // host objects, so previous entries simply get GC'd.
 }
