@@ -26,8 +26,34 @@
   width: var(--sidebar-w);
   background: var(--sidebar-bg);
   border-right: 1px solid var(--sidebar-border);
-  overflow-y: auto;
+  overflow: hidden;
   contain: layout style paint;
+  transition:
+    width var(--transition-slow),
+    opacity var(--transition-normal),
+    border-color var(--transition-normal);
+  will-change: width;
+}
+
+.sidebarContent {
+  width: var(--sidebar-w);
+  height: 100%;
+  transition:
+    opacity var(--transition-normal),
+    transform var(--transition-normal);
+  will-change: opacity, transform;
+}
+
+.sidebarHidden {
+  width: 0;
+  opacity: 0;
+  pointer-events: none;
+  border-right-color: transparent;
+}
+
+.sidebarHidden .sidebarContent {
+  opacity: 0;
+  transform: translateX(-10px);
 }
 
 .center {
@@ -52,6 +78,20 @@
   border-top: 1px solid var(--sidebar-border);
   overflow: hidden;
   contain: layout style paint;
+  transition:
+    height var(--transition-slow),
+    opacity var(--transition-normal),
+    transform var(--transition-normal),
+    border-color var(--transition-normal);
+  will-change: height, opacity, transform;
+}
+
+.terminalHidden {
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(10px);
+  border-top-color: transparent;
 }
 
 .rightSidebar {
@@ -59,8 +99,34 @@
   width: var(--right-sidebar-w);
   background: var(--sidebar-bg);
   border-left: 1px solid var(--sidebar-border);
-  overflow-y: auto;
+  overflow: hidden;
   contain: layout style paint;
+  transition:
+    width var(--transition-slow),
+    opacity var(--transition-normal),
+    border-color var(--transition-normal);
+  will-change: width;
+}
+
+.rightSidebarContent {
+  width: var(--right-sidebar-w);
+  height: 100%;
+  transition:
+    opacity var(--transition-normal),
+    transform var(--transition-normal);
+  will-change: opacity, transform;
+}
+
+.rightSidebarHidden {
+  width: 0;
+  opacity: 0;
+  pointer-events: none;
+  border-left-color: transparent;
+}
+
+.rightSidebarHidden .rightSidebarContent {
+  opacity: 0;
+  transform: translateX(10px);
 }
 
 .empty {
@@ -79,4 +145,14 @@
 */
 .hidden {
   display: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar,
+  .sidebarContent,
+  .terminal,
+  .rightSidebar,
+  .rightSidebarContent {
+    transition: none;
+  }
 }
