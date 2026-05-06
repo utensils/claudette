@@ -1,41 +1,42 @@
 ---
 name: claudette
-description: Drive the running Claudette desktop app from the command line — list and create workspaces, send prompts to chat sessions, fan out batch manifests across many workspaces (sequentially today; parallelism is a follow-up), list pull requests via SCM plugins, invoke arbitrary plugin operations. Use when the user asks to list/create/archive workspaces, send a message to a Claudette session, kick off a phase plan or multi-workspace fan-out, check PRs from a workspace, or otherwise interact with their open Claudette app from outside the GUI.
+description: Drive the running Claudette desktop app from the command line — list and create workspaces, send prompts to chat sessions, fan out batch manifests across many workspaces, list pull requests via SCM plugins, invoke arbitrary plugin operations. Use when the user asks to list/create/archive workspaces, send a message to a Claudette session, kick off a phase plan or multi-workspace fan-out, check PRs from a workspace, or otherwise interact with their open Claudette app from outside the GUI.
 when_to_use: |
   Trigger when the user mentions Claudette workspaces, sessions, batch / phase plans, "send this prompt to N workspaces", "list my workspaces", "what's running in Claudette", "create a workspace for X", "show me the PR for this workspace", or asks to invoke a Claudette SCM/env plugin operation. Also use proactively when the user has Claudette open and asks for operations that would obviously route through it (e.g. "fan out these 8 prompts as separate Claudette workspaces").
-allowed-tools: Bash(/Users/jamesbrink/Projects/utensils/Claudette/target/release/claudette:*)
+allowed-tools: Bash(claudette:*)
 ---
 
 # Claudette CLI
 
 Drive the running Claudette desktop app over a per-user local socket. Every command makes one JSON-RPC call to the GUI, so the GUI's tray rebuilds, notifications, agent spawn flow, and event subscribers fire exactly as if the action came from the UI.
 
-**Binary path:** `/Users/jamesbrink/Projects/utensils/Claudette/target/release/claudette`
+## Prerequisites
 
-The binary discovers the running GUI via `${data_local_dir}/Claudette/app.json`. If Claudette isn't running, every command exits with a clear "open the desktop app first" error — do not try to start the app yourself; ask the user to launch it.
+- The Claudette desktop app must be **open and running**. Every command discovers it via `${state_dir}/Claudette/app.json`. If it isn't running, commands exit with a clear error — do not try to start the app yourself; ask the user to launch it.
+- The `claudette` CLI must be on `PATH`. The cleanest install path: open the desktop app and use **Settings → CLI → Install on PATH** (one click; symlinks on macOS/Linux, copies + per-user PATH update on Windows). On Linux `.deb` installs the CLI is already on `/usr/bin/claudette` automatically. Standalone `claudette-cli-<platform>` release assets are also published per release for headless / CI consumers.
 
 ## Quick start
 
 ```bash
 # Inspect what the GUI exposes
-/Users/jamesbrink/Projects/utensils/Claudette/target/release/claudette version
-/Users/jamesbrink/Projects/utensils/Claudette/target/release/claudette capabilities
+claudette version
+claudette capabilities
 
 # Workspace lifecycle
-/Users/jamesbrink/Projects/utensils/Claudette/target/release/claudette workspace list
-/Users/jamesbrink/Projects/utensils/Claudette/target/release/claudette workspace create <repo-id> my-feature
-/Users/jamesbrink/Projects/utensils/Claudette/target/release/claudette workspace archive <ws-id>
+claudette workspace list
+claudette workspace create <repo-id> my-feature
+claudette workspace archive <ws-id>
 
 # Send a prompt to a chat session (kicks off an agent turn in the GUI)
-/Users/jamesbrink/Projects/utensils/Claudette/target/release/claudette chat send <session-id> "your prompt"
-/Users/jamesbrink/Projects/utensils/Claudette/target/release/claudette chat send <session-id> @prompts/feature.md --model sonnet --plan
+claudette chat send <session-id> "your prompt"
+claudette chat send <session-id> @prompts/feature.md --model sonnet --plan
 ```
 
 ## Top-level commands
 
 | Command | Purpose |
 |---|---|
-| `version` | Print app + protocol version of the running GUI |
+| `version` | Print app + protocol version of the running GUI; warns on CLI/GUI version mismatch |
 | `capabilities` | List the JSON-RPC methods the GUI accepts |
 | `workspace` (alias `ws`) | List / create / archive workspaces |
 | `chat` | List sessions, send messages |
@@ -45,8 +46,6 @@ The binary discovers the running GUI via `${data_local_dir}/Claudette/app.json`.
 | `pr` | Friendly shortcut over the active SCM provider plugin |
 | `rpc` | Raw JSON-RPC escape hatch for methods without a typed wrapper |
 | `completion <shell>` | Generate shell completion script |
-
-Add `--json` to any command for machine-readable output.
 
 ## Common workflows
 
@@ -77,11 +76,32 @@ claudette workspace create <repo-id> phase-0-builtins --json \
 | `claudette chat send SID @path/to/file.md` | Read the prompt from a file (most common for batch use) |
 | `claudette chat send SID -` | Read the prompt from stdin (pipe-friendly) |
 
-Optional flags: `--model {opus,sonnet,…}`, `--plan` (plan mode), `--permission {default,acceptEdits,bypassPermissions}`.
+Per-turn agent settings (each boolean is tri-state — pass `--flag` to force on, `--no-flag` to force off, omit both to defer to the backend default of `false`):
+
+| Flag | Effect |
+|---|---|
+| `--model <name>` | Model override (e.g. `opus`, `sonnet`) |
+| `--plan` / `--no-plan` | Plan mode on/off |
+| `--thinking` / `--no-thinking` | Extended thinking |
+| `--fast` / `--no-fast` | Lower-latency variant when supported |
+| `--chrome` / `--no-chrome` | Chrome browser mode |
+| `--effort <level>` | `low` / `medium` / `high` / `xhigh` / `max` |
+| `--disable-1m-context` / `--no-disable-1m-context` | Suppress / re-enable the Max-plan 1M context auto-upgrade |
+| `--permission <level>` | `default` / `acceptEdits` / `bypassPermissions` |
+
+### Archive a workspace
+
+```bash
+claudette workspace archive <ws-id>
+claudette workspace archive <ws-id> --delete-branch       # force on
+claudette workspace archive <ws-id> --no-delete-branch    # force off
+```
+
+`--delete-branch` is tri-state: omit both halves to defer to the GUI's `git_delete_branch_on_archive` setting; pass either half to override per-call.
 
 ### Fan out N workspaces from a YAML manifest
 
-The killer feature for "send these 8 prompts in parallel." Write a manifest, run it, watch the tray fill in:
+Write a manifest, validate it, run it, watch the sidebar fill in. Workspaces are processed sequentially today (concurrent execution is a follow-up):
 
 ```yaml
 # phase-0-cleanup.claudette.yaml
@@ -103,7 +123,7 @@ claudette batch validate phase-0-cleanup.claudette.yaml   # lint without executi
 claudette batch run      phase-0-cleanup.claudette.yaml
 ```
 
-`prompt_file` paths resolve relative to the manifest. Each entry creates a workspace and dispatches the first prompt; the GUI tab for each workspace lights up as the agent runs.
+`prompt_file` paths resolve relative to the manifest. Validation also enforces workspace-name rules (ASCII alphanumeric + hyphens, no leading/trailing hyphen) so naming bugs surface up front.
 
 ### Pull requests for the current workspace
 
@@ -159,12 +179,13 @@ Inside a Claudette workspace shell these are already set, so `claudette pr list`
 - **"unauthorized" / connection refused** — discovery file present but socket dead; the user likely killed the GUI without a clean shutdown. Ask them to relaunch.
 - **`PluginError: NeedsReconsent` / `CliNotFound`** — surfaced verbatim from the GUI's `PluginRegistry`. Resolve in the GUI's Plugins settings, then retry.
 - **`workspace create` fails with branch-name conflict** — pass a different `name` arg; Claudette derives the branch from it.
+- **CLI/GUI version mismatch warning** — `claudette version` reports both. Reinstall the bundled CLI from Settings → CLI to bring them back in sync; the IPC layer is version-aware so commands keep working but new methods may be missing.
 
 ## Output conventions
 
-- Default output is human-readable (table-ish for list commands, single line `ok` for actions).
-- `--json` returns the raw RPC response; pipe through `jq` for further processing.
-- `rpc` and `capabilities` always print JSON; `--json` is a no-op there.
+- Commands with a human-readable renderer (`workspace list`, `chat list`, `pr list` / `show`, `plugin list`, `repo list`) default to a table-ish format and switch to JSON when `--json` is set.
+- Other commands always emit JSON regardless of `--json` because they don't have a table renderer yet (`capabilities`, `rpc`, `workspace create` / `archive`, `batch run` summary).
+- Pipe `--json` output through `jq` for scripting.
 
 ## When to NOT use this skill
 
