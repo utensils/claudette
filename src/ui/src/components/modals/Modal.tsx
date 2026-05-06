@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { useEffect, useId, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import styles from "./Modal.module.css";
 
 interface ModalProps {
@@ -30,6 +31,7 @@ export function Modal({
   wide,
   bodyScroll,
 }: ModalProps) {
+  const titleId = useId();
   const cardClass = [
     styles.card,
     wide && styles.cardWide,
@@ -40,14 +42,38 @@ export function Modal({
   const bodyClass = [styles.body, bodyScroll && styles.bodyScrollable]
     .filter(Boolean)
     .join(" ");
-  return (
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+    }
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
+  }, [onClose]);
+
+  const modal = (
     <div className={styles.backdrop} onClick={onClose}>
-      <div className={cardClass} onClick={(e) => e.stopPropagation()}>
+      <div
+        className={cardClass}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className={styles.header}>
-          <h3 className={styles.title}>{title}</h3>
+          <h3 id={titleId} className={styles.title}>
+            {title}
+          </h3>
         </div>
         <div className={bodyClass}>{children}</div>
       </div>
     </div>
   );
+
+  return typeof document === "undefined"
+    ? modal
+    : createPortal(modal, document.body);
 }
