@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use claudette::room::{ParticipantInfo, Vote};
+use claudette::room::{ParticipantId, ParticipantInfo, PendingVote, Vote};
 use serde_json::json;
 
 use crate::handler::ConnectionCtx;
@@ -201,13 +201,7 @@ pub async fn handle_vote_plan_approval(
     };
     {
         let mut pending = room.pending_vote.write().await;
-        if let Some(pending) = pending.as_mut()
-            && pending.tool_use_id == tool_use_id
-        {
-            pending
-                .votes
-                .insert(ctx.participant_id.clone(), vote.clone());
-        }
+        record_plan_vote(&mut pending, &ctx.participant_id, tool_use_id, vote.clone())?;
     }
     room.publish(json!({
         "event": "plan-vote-cast",
@@ -219,6 +213,25 @@ pub async fn handle_vote_plan_approval(
         },
     }));
     Ok(json!(null))
+}
+
+fn record_plan_vote(
+    pending: &mut Option<PendingVote>,
+    participant_id: &ParticipantId,
+    tool_use_id: &str,
+    vote: Vote,
+) -> Result<(), String> {
+    let Some(pending) = pending.as_mut() else {
+        return Err("No pending plan approval vote".into());
+    };
+    if pending.tool_use_id != tool_use_id {
+        return Err("Stale plan approval vote".into());
+    }
+    if !pending.required_voters.contains(participant_id) {
+        return Err("Participant is not required for this vote".into());
+    }
+    pending.votes.insert(participant_id.clone(), vote);
+    Ok(())
 }
 
 pub async fn handle_submit_agent_answer(
@@ -288,4 +301,74 @@ fn now_unix_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use claudette::room::{ParticipantId, PendingVote, Vote};
+
+    use super::record_plan_vote;
+
+    fn pending_vote(required: &[&str]) -> Option<PendingVote> {
+        Some(PendingVote::new(
+            "tool-1".to_string(),
+            required
+                .iter()
+                .map(|id| ParticipantId((*id).to_string()))
+                .collect::<HashSet<_>>(),
+            serde_json::json!({}),
+        ))
+    }
+
+    #[test]
+    fn record_plan_vote_rejects_late_joiner() {
+        let mut pending = pending_vote(&["host", "guest-a"]);
+        let late_joiner = ParticipantId("guest-b".to_string());
+
+        let err = record_plan_vote(&mut pending, &late_joiner, "tool-1", Vote::Approve)
+            .expect_err("late joiners are observers");
+
+        assert_eq!(err, "Participant is not required for this vote");
+        assert!(
+            !pending
+                .as_ref()
+                .expect("pending vote")
+                .votes
+                .contains_key(&late_joiner)
+        );
+    }
+
+    #[test]
+    fn record_plan_vote_rejects_stale_tool_use_id() {
+        let voter = ParticipantId("guest-a".to_string());
+        let mut pending = pending_vote(&["guest-a"]);
+
+        let err = record_plan_vote(&mut pending, &voter, "tool-2", Vote::Approve)
+            .expect_err("stale tool id must be rejected");
+
+        assert_eq!(err, "Stale plan approval vote");
+        assert!(
+            !pending
+                .as_ref()
+                .expect("pending vote")
+                .votes
+                .contains_key(&voter)
+        );
+    }
+
+    #[test]
+    fn record_plan_vote_records_required_voter() {
+        let voter = ParticipantId("guest-a".to_string());
+        let mut pending = pending_vote(&["guest-a"]);
+
+        record_plan_vote(&mut pending, &voter, "tool-1", Vote::Approve)
+            .expect("required voter can vote");
+
+        assert_eq!(
+            pending.as_ref().expect("pending vote").votes.get(&voter),
+            Some(&Vote::Approve)
+        );
+    }
 }
