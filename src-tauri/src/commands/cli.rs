@@ -116,17 +116,25 @@ fn dir_on_path(dir: &Path) -> bool {
 pub async fn cli_status() -> Result<CliStatus, String> {
     let bundled = bundled_cli_path();
     let target = target_path()?;
-    let target_dir_on_path = dir_on_path(&target.parent().unwrap_or_else(|| Path::new("/")));
+    let target_dir_on_path = dir_on_path(target.parent().unwrap_or_else(|| Path::new("/")));
 
-    // What does the symlink (or file) at `target` currently resolve to?
-    let resolved = std::fs::canonicalize(&target).ok();
-    let bundled_canon = bundled.as_ref().and_then(|p| std::fs::canonicalize(p).ok());
-
-    let installed_current = matches!(
-        (&resolved, &bundled_canon),
-        (Some(r), Some(b)) if r == b
-    );
-    let installed_stale = resolved.is_some() && !installed_current;
+    // On Unix the install is a symlink, so canonicalize() resolves both
+    // sides to the same bundled path and equality is the right check.
+    // On Windows we *copy* the binary (symlinks need admin / Developer
+    // Mode), so the canonicalized paths intentionally differ — fall
+    // back to a content compare via SHA-256.
+    let target_exists = std::fs::symlink_metadata(&target).is_ok();
+    let installed_current = if !target_exists {
+        false
+    } else if let Some(b) = &bundled {
+        match (std::fs::canonicalize(&target), std::fs::canonicalize(b)) {
+            (Ok(rt), Ok(rb)) if rt == rb => true,
+            _ => files_equal_by_hash(&target, b).unwrap_or(false),
+        }
+    } else {
+        false
+    };
+    let installed_stale = target_exists && !installed_current;
 
     Ok(CliStatus {
         bundled_path: bundled,
@@ -135,6 +143,33 @@ pub async fn cli_status() -> Result<CliStatus, String> {
         installed_stale,
         target_dir_on_path,
     })
+}
+
+/// Return `Some(true)` if both files exist with the same SHA-256
+/// digest. Any IO error returns `None` so the caller can fall through
+/// to a "not current" interpretation rather than masking real errors.
+fn files_equal_by_hash(a: &Path, b: &Path) -> Option<bool> {
+    use sha2::{Digest, Sha256};
+    use std::fs::File;
+    use std::io::{BufReader, Read};
+
+    fn hash(p: &Path) -> std::io::Result<[u8; 32]> {
+        let mut hasher = Sha256::new();
+        let mut reader = BufReader::new(File::open(p)?);
+        let mut buf = [0u8; 64 * 1024];
+        loop {
+            let n = reader.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+        }
+        Ok(hasher.finalize().into())
+    }
+
+    let ah = hash(a).ok()?;
+    let bh = hash(b).ok()?;
+    Some(ah == bh)
 }
 
 #[tauri::command]

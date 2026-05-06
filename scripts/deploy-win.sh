@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build + deploy claudette.exe to a Windows target.
+# Build + deploy claudette-app.exe to a Windows target.
 # Usage: deploy-win.sh {arm64|x64}
 #
 # - arm64: defaults to James's local test VM at 172.16.52.129, OneDrive
@@ -18,11 +18,11 @@ case "${1:-}" in
   arm64)
     TRIPLE=aarch64-pc-windows-msvc
     DEFAULT_HOST="brink@172.16.52.129"
-    DEFAULT_REMOTE="OneDrive/Desktop/claudette.exe"
+    DEFAULT_REMOTE="OneDrive/Desktop/claudette-app.exe"
     ;;
   x64)
     TRIPLE=x86_64-pc-windows-msvc
-    DEFAULT_REMOTE="Desktop/claudette.exe"
+    DEFAULT_REMOTE="Desktop/claudette-app.exe"
     # Auto-discover the AWS host if the caller didn't export one.
     if [ -z "${CLAUDETTE_WIN_HOST:-}" ]; then
       # shellcheck source=_aws-common.sh

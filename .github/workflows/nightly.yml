@@ -260,9 +260,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           BIN="target/${{ matrix.rust-target }}/release/claudette-app.exe"
+          # Bundle the CLI sidecar alongside the GUI exe so the
+          # Settings → CLI "Install on PATH" action can find it via
+          # `current_exe().parent()/"claudette.exe"`. The Windows path
+          # skips tauri-action so externalBin doesn't auto-stage here.
+          CLI="src-tauri/binaries/claudette-${{ matrix.rust-target }}.exe"
           ASSET="claudette-${{ matrix.label }}.zip"
           cp "$BIN" claudette-app.exe
-          powershell -NoProfile -Command "Compress-Archive -Path 'claudette-app.exe' -DestinationPath '$ASSET' -Force"
+          cp "$CLI" claudette.exe
+          powershell -NoProfile -Command "Compress-Archive -Path 'claudette-app.exe','claudette.exe' -DestinationPath '$ASSET' -Force"
           gh release upload nightly-staging "$ASSET" --clobber
 
       - name: Build headless server
