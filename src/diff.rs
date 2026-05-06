@@ -343,10 +343,11 @@ fn parse_file_tree_git_status(output: &str, worktree_path: &str) -> FileTreeStat
                 };
                 let status = status_from_xy(xy, path, None, worktree_path);
                 let layer = layer_from_xy(xy);
-                if status == FileStatus::Deleted && layer == GitFileLayer::Unstaged {
-                    if let Some(head_oid) = head_oid {
-                        unstaged_deleted_head_oids.insert(path.to_string(), head_oid.to_string());
-                    }
+                if status == FileStatus::Deleted
+                    && layer == GitFileLayer::Unstaged
+                    && let Some(head_oid) = head_oid
+                {
+                    unstaged_deleted_head_oids.insert(path.to_string(), head_oid.to_string());
                 }
                 statuses.insert(path.to_string(), GitStatusEntry { status, layer });
             }
