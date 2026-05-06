@@ -47,6 +47,13 @@ describe("userMessageAuthorLabel", () => {
     }, "guest-pid", [host, guest], "You")).toBe("halcyon");
   });
 
+  it("uses the remote host fallback before the participant roster hydrates", () => {
+    expect(userMessageAuthorLabel({
+      author_participant_id: null,
+      author_display_name: null,
+    }, "guest-pid", [], "You", "User", "halcyon")).toBe("halcyon");
+  });
+
   it("keeps unstamped local host messages labeled as You", () => {
     expect(userMessageAuthorLabel({
       author_participant_id: null,

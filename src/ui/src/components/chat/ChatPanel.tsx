@@ -86,6 +86,7 @@ import {
   submitPlanApprovalResponse,
 } from "./submitPlanApprovalResponse";
 import { submitAgentAnswerResponse } from "./submitAgentAnswerResponse";
+import { selfParticipantIdForWorkspace } from "../../hooks/useSelfParticipantId";
 
 const EMPTY_QUEUED_MESSAGES: QueuedMessage[] = [];
 
@@ -843,6 +844,8 @@ export function ChatPanel() {
     content: string,
     attachments?: AttachmentInput[],
   ) => {
+    const state = useAppStore.getState();
+    const authorParticipantId = selfParticipantIdForWorkspace(state, ws.id);
     addChatMessage(sessionId, {
       id: messageId,
       workspace_id: ws.id,
@@ -857,7 +860,7 @@ export function ChatPanel() {
       output_tokens: null,
       cache_read_tokens: null,
       cache_creation_tokens: null,
-      author_participant_id: null,
+      author_participant_id: authorParticipantId,
       author_display_name: null,
     });
     if (attachments?.length) {
@@ -1304,6 +1307,7 @@ export function ChatPanel() {
         );
         await sendRemoteCommand(ws.remote_connection_id, "send_chat_message", {
           chat_session_id: sessionId,
+          message_id: optimisticMsgId,
           content: trimmed,
           mentioned_files: mentionedFilesArray,
           permission_level: permissionLevel,

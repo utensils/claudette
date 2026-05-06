@@ -136,6 +136,14 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   const participants = useAppStore(
     (s) => s.participants[sessionId] ?? EMPTY_PARTICIPANTS,
   );
+  const hostFallbackName = useAppStore((s) => {
+    const workspace = s.workspaces.find((w) => w.id === workspaceId);
+    if (!workspace?.remote_connection_id) return null;
+    return (
+      s.remoteConnections.find((c) => c.id === workspace.remote_connection_id)
+        ?.name ?? null
+    );
+  });
   const toggleCompletedTurn = useAppStore((s) => s.toggleCompletedTurn);
   const collapsedToolGroups = useAppStore(
     (s) => s.collapsedToolGroupsBySession[sessionId],
@@ -773,6 +781,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
                       participants,
                       t("you_label"),
                       t("user_label"),
+                      hostFallbackName,
                     )}
                   </div>
                 )}

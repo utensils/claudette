@@ -7,6 +7,7 @@ export function userMessageAuthorLabel(
   participants: Participant[],
   youLabel: string,
   userLabel = "User",
+  hostFallbackName?: string | null,
 ): string {
   const participantNameById = new Map(
     participants.map((p) => [p.id, p.display_name]),
@@ -26,6 +27,9 @@ export function userMessageAuthorLabel(
   const host = participants.find((p) => p.is_host);
   if (host && selfParticipantId !== host.id) {
     return host.display_name;
+  }
+  if (hostFallbackName && selfParticipantId !== "host") {
+    return hostFallbackName;
   }
 
   return youLabel;

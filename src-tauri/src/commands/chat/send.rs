@@ -1296,6 +1296,12 @@ pub async fn steer_queued_chat_message(
         );
         return Err(e);
     }
+    if let Some(room) = &room_for_user_send {
+        room.publish(serde_json::json!({
+            "event": "chat-message-added",
+            "payload": &prepared_user_send.user_msg,
+        }));
+    }
     Ok(Some(pre_steer_checkpoint))
 }
 

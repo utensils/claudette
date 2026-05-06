@@ -233,11 +233,16 @@ pub async fn handle_request(
                         let mentioned_files: Option<Vec<String>> = params
                             .get("mentioned_files")
                             .and_then(|v| serde_json::from_value(v.clone()).ok());
+                        let message_id = params
+                            .get("message_id")
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
                         handle_send_chat_message(
                             state,
                             writer,
                             ctx,
                             &chat_session_id,
+                            message_id,
                             &content,
                             permission_level.as_deref(),
                             model,
@@ -876,6 +881,7 @@ async fn handle_send_chat_message(
     writer: &Arc<Writer>,
     ctx: &ConnectionCtx,
     chat_session_id: &str,
+    message_id: Option<String>,
     content: &str,
     permission_level: Option<&str>,
     model: Option<String>,
@@ -910,7 +916,7 @@ async fn handle_send_chat_message(
 
     // Save user message.
     let user_msg = ChatMessage {
-        id: uuid::Uuid::new_v4().to_string(),
+        id: message_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         workspace_id: workspace_id.clone(),
         chat_session_id: chat_session_id.clone(),
         role: ChatRole::User,
