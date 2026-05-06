@@ -114,6 +114,7 @@ export const FileTree = memo(function FileTree({
   }, [visible, selected]);
   const focusedPath =
     focusedIndex >= 0 ? visible[focusedIndex].node.path : null;
+  const previousRenamingPathRef = useRef<string | null>(null);
 
   // Keep the focused row in view, and re-focus it programmatically when the
   // selection changes — but only when focus is already inside the tree. The
@@ -129,6 +130,17 @@ export const FileTree = memo(function FileTree({
       el.focus();
     }
   }, [focusedPath]);
+
+  useEffect(() => {
+    const previous = previousRenamingPathRef.current;
+    previousRenamingPathRef.current = renamingPath;
+    if (previous === null || renamingPath !== null) return;
+    const selectedPath = selected ?? focusedPath;
+    if (!selectedPath) return;
+    requestAnimationFrame(() => {
+      rowRefsRef.current.get(selectedPath)?.focus();
+    });
+  }, [focusedPath, renamingPath, selected]);
 
   const findVisibleIndex = useCallback(
     (path: string | null) =>
@@ -438,10 +450,18 @@ function Row({
       // children (or could). Omit it on file rows entirely so screen
       // readers don't announce a misleading collapsed/expanded state.
       aria-expanded={isDir ? expanded : undefined}
-      onClick={renaming ? undefined : onClick}
+      onClick={
+        renaming
+          ? undefined
+          : (event) => {
+              event.currentTarget.focus();
+              onClick();
+            }
+      }
       onContextMenu={(event) => {
         event.preventDefault();
         if (renaming) return;
+        event.currentTarget.focus();
         onContextMenu(event.clientX, event.clientY);
       }}
     >

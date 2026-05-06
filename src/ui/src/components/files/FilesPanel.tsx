@@ -1,6 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import { listWorkspaceFiles, type FileEntry } from "../../services/tauri";
+import { resolveHotkeyAction } from "../../hotkeys/bindings";
 import { isAgentBusy } from "../../utils/agentStatus";
 import type { DiffLayer } from "../../types/diff";
 import { FilePathContextMenu } from "./FilePathContextMenu";
@@ -21,6 +28,7 @@ export function FilesPanel() {
   const openDiffTab = useAppStore((s) => s.openDiffTab);
   const setDiffSelectedCommitHash = useAppStore((s) => s.setDiffSelectedCommitHash);
   const setAllFilesDirExpanded = useAppStore((s) => s.setAllFilesDirExpanded);
+  const keybindings = useAppStore((s) => s.keybindings);
 
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -115,12 +123,33 @@ export function FilesPanel() {
     [selectedWorkspaceId, openDiffTab, setDiffSelectedCommitHash],
   );
 
+  const handlePanelKeyDownCapture = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (!selectedWorkspaceId || event.repeat) return;
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      if (tag === "input" || tag === "textarea" || target?.isContentEditable) {
+        return;
+      }
+      if (
+        resolveHotkeyAction(event.nativeEvent, "file-viewer", keybindings) !==
+        "file-viewer.undo-file-operation"
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      void filePathActions.undoLastFilePathOperation();
+    },
+    [filePathActions, keybindings, selectedWorkspaceId],
+  );
+
   if (!selectedWorkspaceId) {
     return <div className={styles.empty}>No workspace selected</div>;
   }
 
   return (
-    <div className={styles.panel}>
+    <div className={styles.panel} onKeyDownCapture={handlePanelKeyDownCapture}>
       {loading ? (
         <div className={styles.empty}>Loading…</div>
       ) : error ? (
