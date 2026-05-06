@@ -180,6 +180,8 @@
   "keyboard_category_editor": "Editor",
   "keyboard_category_voice": "Voice",
   "keyboard_category_chat": "Chat",
+  "keyboard_category_help": "Help",
+  "keyboard_action_show_shortcuts": "Show keyboard shortcuts",
   "keyboard_press_key": "Press keys…",
   "keyboard_cancel": "Cancel",
   "keyboard_rebind": "Rebind",
@@ -387,5 +389,26 @@
   "pinned_prompts_keep": "Keep",
   "pinned_prompts_delete_prompt": "Delete prompt",
   "pinned_prompts_confirm_delete_title": "Delete this prompt?",
-  "pinned_prompts_confirm_delete_subtitle": "This action cannot be undone."
+  "pinned_prompts_confirm_delete_subtitle": "This action cannot be undone.",
+
+  "nav_help": "Help",
+  "help_title": "Help",
+  "help_version_label": "Version",
+  "help_view_changelog": "What's new",
+  "help_shortcuts_label": "Keyboard shortcuts",
+  "help_shortcuts_description": "Browse every shortcut in a searchable viewer.",
+  "help_shortcuts_button": "Show shortcuts",
+  "help_docs_label": "Documentation",
+  "help_docs_description": "Open the Claudette docs in your browser.",
+  "help_docs_button": "Open docs",
+  "help_issues_label": "Report an issue",
+  "help_issues_description": "File a bug or feature request on GitHub.",
+  "help_issues_button": "Open tracker",
+  "shortcuts_modal_title": "Keyboard shortcuts",
+
+  "help_menu_keyboard_shortcuts": "Keyboard shortcuts",
+  "help_menu_docs": "Docs",
+  "help_menu_changelog": "Changelog",
+  "help_menu_issues": "Submit issue",
+  "help_menu_devtools": "Open dev tools"
 }

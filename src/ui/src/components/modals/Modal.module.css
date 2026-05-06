@@ -33,3 +33,28 @@
 .body {
   padding: var(--space-4) var(--space-5) var(--space-5);
 }
+
+/* ── Modifiers (opt-in via Modal props) ── */
+
+/* Wider card for list-style modals (e.g. KeyboardShortcutsModal). The
+ * `92vw` cap keeps the modal usable on narrow windows. Defined after
+ * `.card` so the wider width wins when both classes are applied. */
+.cardWide {
+  width: 640px;
+  max-width: 92vw;
+}
+
+/* Move overflow from the card to the body so the title stays sticky
+ * when the body content scrolls. The card becomes a flex column so the
+ * body fills remaining height; the body itself scrolls (see
+ * `.bodyScrollable`). */
+.cardScrollable {
+  display: flex;
+  flex-direction: column;
+  overflow-y: visible;
+}
+
+.bodyScrollable {
+  overflow-y: auto;
+  flex: 1 1 auto;
+}

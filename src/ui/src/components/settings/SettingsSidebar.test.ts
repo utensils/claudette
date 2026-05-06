@@ -38,6 +38,13 @@ describe("getAppSections", () => {
     );
   });
 
+  it("always shows the Help section, regardless of plugin/community flags", () => {
+    // Help is always-on (no experimental gate) — it surfaces the
+    // shortcuts viewer + changelog link for any user.
+    expect(getAppSections(false, false).map((s) => s.id)).toContain("help");
+    expect(getAppSections(true, true).map((s) => s.id)).toContain("help");
+  });
+
   it("places the Editor section between Notifications and Git", () => {
     // The Editor section is where the git-gutter base preference lives
     // — it must sit alongside the other "how the app behaves" settings,

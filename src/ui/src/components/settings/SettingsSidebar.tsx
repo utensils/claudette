@@ -12,6 +12,7 @@ import {
   Globe,
   Keyboard,
   Terminal,
+  HelpCircle,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
@@ -39,6 +40,7 @@ export function getAppSections(
     ...(pluginManagementEnabled
       ? [{ id: "claude-code-plugins", icon: Puzzle }]
       : []),
+    { id: "help", icon: HelpCircle },
   ] as const;
 }
 
@@ -67,6 +69,7 @@ export function SettingsSidebar() {
     if (id === "claude-code-plugins") return t("settings:nav_claude_code_plugins");
     if (id === "community") return t("settings:nav_community");
     if (id === "pinned-prompts") return t("settings:nav_pinned_prompts");
+    if (id === "help") return t("settings:nav_help");
     return id;
   };
 

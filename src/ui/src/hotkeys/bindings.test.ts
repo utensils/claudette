@@ -138,6 +138,33 @@ describe("resolveHotkeyAction with conflict updates", () => {
   });
 });
 
+describe("global.show-keyboard-shortcuts default binding", () => {
+  // Locks the Help shortcut to Cmd/Ctrl+/ so the macOS Help-menu
+  // accelerator (`CmdOrCtrl+Slash` in src-tauri/src/main.rs) and the
+  // in-app hotkey can never silently drift apart.
+  it("resolves Cmd+/ on macOS", () => {
+    expect(
+      resolveHotkeyAction(
+        macKey({ key: "/", metaKey: true }),
+        "global",
+        {},
+        "mac",
+      ),
+    ).toBe("global.show-keyboard-shortcuts");
+  });
+
+  it("resolves Ctrl+/ on Linux/Windows", () => {
+    expect(
+      resolveHotkeyAction(
+        macKey({ key: "/", ctrlKey: true }),
+        "global",
+        {},
+        "linux",
+      ),
+    ).toBe("global.show-keyboard-shortcuts");
+  });
+});
+
 describe("bindingMatchesEvent — modifier-only codes", () => {
   // Regression: hold-to-talk on Right Alt was bound to `code:AltRight`,
   // but pressing Alt asserts e.altKey, which the matcher used to reject

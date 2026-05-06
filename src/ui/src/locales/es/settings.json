@@ -8,6 +8,7 @@
   "nav_claude_code_plugins": "Complementos de Claude Code",
   "nav_community": "Comunidad",
   "nav_pinned_prompts": "Prompts fijados",
+  "nav_help": "Ayuda",
   "nav_experimental": "Experimental",
   "nav_usage": "Uso",
   "group_more": "Más",
@@ -344,5 +345,27 @@
   "keyboard_action_voice_toggle": "Toggle voice input",
   "keyboard_action_voice_hold": "Push to talk",
   "keyboard_reset_all": "Reset all defaults",
-  "keyboard_disabled_binding": "Shortcut disabled"
+  "keyboard_disabled_binding": "Shortcut disabled",
+  "keyboard_category_help": "Ayuda",
+  "keyboard_action_show_shortcuts": "Mostrar atajos de teclado",
+
+  "help_title": "Ayuda",
+  "help_version_label": "Versión",
+  "help_view_changelog": "Novedades",
+  "help_shortcuts_label": "Atajos de teclado",
+  "help_shortcuts_description": "Explora todos los atajos en un visor con búsqueda.",
+  "help_shortcuts_button": "Ver atajos",
+  "help_docs_label": "Documentación",
+  "help_docs_description": "Abre la documentación de Claudette en tu navegador.",
+  "help_docs_button": "Abrir documentación",
+  "help_issues_label": "Informar un problema",
+  "help_issues_description": "Envía un reporte de error o solicitud de función en GitHub.",
+  "help_issues_button": "Abrir GitHub",
+  "shortcuts_modal_title": "Atajos de teclado",
+
+  "help_menu_keyboard_shortcuts": "Atajos de teclado",
+  "help_menu_docs": "Documentación",
+  "help_menu_changelog": "Cambios",
+  "help_menu_issues": "Informar problema",
+  "help_menu_devtools": "Abrir herramientas de desarrollo"
 }
