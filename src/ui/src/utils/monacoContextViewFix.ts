@@ -15,8 +15,9 @@
 //     Monaco's math is already correct.
 //
 // `fixedOverflowWidgets` is an editor option that lifts widgets to body —
-// but it never applied to the context view (microsoft/monaco-editor#1203,
-// open since 2018), so we can't fix this through Monaco's options. The
+// but it never applied to the context view (see Monaco issue 1203,
+// https://github.com/microsoft/monaco-editor/issues/1203 — open since
+// 2018), so we can't fix this through Monaco's options. The
 // recommended workaround is to leave the menu where Monaco mounts it and
 // correct its position after the fact. That's what this module does:
 // observe `.context-view` mounts, divide `style.left/top` by zoom on
