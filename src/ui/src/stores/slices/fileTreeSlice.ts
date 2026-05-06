@@ -1,5 +1,6 @@
 import type { StateCreator } from "zustand";
 import type { AppState } from "../useAppStore";
+import type { UnifiedTabEntry } from "../../components/chat/sessionTabsLogic";
 
 export type FileViewerPreviewMode = "source" | "preview";
 
@@ -25,6 +26,30 @@ export interface FileBufferState {
   loadError: string | null;
   preview: FileViewerPreviewMode;
 }
+
+export interface RemovedFilePathSnapshot {
+  tabs: string[];
+  active: string | null;
+  buffers: Record<string, FileBufferState>;
+  selected: string | null;
+  expanded: Record<string, boolean>;
+  tabOrderEntries: UnifiedTabEntry[];
+}
+
+export type FilePathUndoOperation =
+  | {
+      kind: "rename";
+      oldPath: string;
+      newPath: string;
+      isDirectory: boolean;
+    }
+  | {
+      kind: "trash";
+      oldPath: string;
+      isDirectory: boolean;
+      undoToken: string | null;
+      snapshot: RemovedFilePathSnapshot;
+    };
 
 /** Compose the buffer-state map key. Workspace-scoped because two
  *  workspaces can both have a `src/main.rs` and we don't want to share
@@ -107,6 +132,7 @@ export interface FileTreeSlice {
 
   /** Per-`${wsId}:${path}` buffer + UI state for every open file tab. */
   fileBuffers: Record<string, FileBufferState>;
+  filePathUndoStackByWorkspace: Record<string, FilePathUndoOperation[]>;
 
   // Tree (scoped per workspace)
   toggleAllFilesDir: (workspaceId: string, path: string) => void;
@@ -186,6 +212,15 @@ export interface FileTreeSlice {
     path: string,
     isDirectory: boolean,
   ) => void;
+  restoreRemovedFilePathInWorkspace: (
+    workspaceId: string,
+    snapshot: RemovedFilePathSnapshot,
+  ) => void;
+  pushFilePathUndoOperation: (
+    workspaceId: string,
+    operation: FilePathUndoOperation,
+  ) => void;
+  popFilePathUndoOperation: (workspaceId: string) => void;
 }
 
 export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> = (
@@ -197,6 +232,7 @@ export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> 
   fileTabsByWorkspace: {},
   activeFileTabByWorkspace: {},
   fileBuffers: {},
+  filePathUndoStackByWorkspace: {},
 
   toggleAllFilesDir: (workspaceId, path) =>
     set((s) => {
@@ -564,7 +600,131 @@ export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> 
         },
       };
     }),
+
+  restoreRemovedFilePathInWorkspace: (workspaceId, snapshot) =>
+    set((s) => {
+      const existingTabs = s.fileTabsByWorkspace[workspaceId] ?? [];
+      const existingTabSet = new Set(existingTabs);
+      const restoredTabs = snapshot.tabs.filter((path) => !existingTabSet.has(path));
+      const currentOrder = s.tabOrderByWorkspace[workspaceId] ?? [];
+      const currentOrderKeys = new Set(
+        currentOrder.map((entry) =>
+          entry.kind === "file"
+            ? `file:${entry.path}`
+            : entry.kind === "diff"
+              ? `diff:${entry.path}:${entry.layer ?? ""}`
+              : `session:${entry.sessionId}`,
+        ),
+      );
+      const restoredOrder = snapshot.tabOrderEntries.filter((entry) => {
+        const key =
+          entry.kind === "file"
+            ? `file:${entry.path}`
+            : entry.kind === "diff"
+              ? `diff:${entry.path}:${entry.layer ?? ""}`
+              : `session:${entry.sessionId}`;
+        return !currentOrderKeys.has(key);
+      });
+      return {
+        fileTabsByWorkspace: {
+          ...s.fileTabsByWorkspace,
+          [workspaceId]: [...existingTabs, ...restoredTabs],
+        },
+        activeFileTabByWorkspace: {
+          ...s.activeFileTabByWorkspace,
+          [workspaceId]: snapshot.active ?? s.activeFileTabByWorkspace[workspaceId] ?? null,
+        },
+        fileBuffers: {
+          ...s.fileBuffers,
+          ...snapshot.buffers,
+        },
+        allFilesSelectedPathByWorkspace: {
+          ...s.allFilesSelectedPathByWorkspace,
+          [workspaceId]:
+            snapshot.selected ?? s.allFilesSelectedPathByWorkspace[workspaceId] ?? null,
+        },
+        allFilesExpandedDirsByWorkspace: {
+          ...s.allFilesExpandedDirsByWorkspace,
+          [workspaceId]: {
+            ...(s.allFilesExpandedDirsByWorkspace[workspaceId] ?? {}),
+            ...snapshot.expanded,
+          },
+        },
+        tabOrderByWorkspace: {
+          ...s.tabOrderByWorkspace,
+          [workspaceId]: [...currentOrder, ...restoredOrder],
+        },
+      };
+    }),
+
+  pushFilePathUndoOperation: (workspaceId, operation) =>
+    set((s) => ({
+      filePathUndoStackByWorkspace: {
+        ...s.filePathUndoStackByWorkspace,
+        [workspaceId]: [
+          ...(s.filePathUndoStackByWorkspace[workspaceId] ?? []),
+          operation,
+        ].slice(-50),
+      },
+    })),
+
+  popFilePathUndoOperation: (workspaceId) =>
+    set((s) => {
+      const stack = s.filePathUndoStackByWorkspace[workspaceId] ?? [];
+      if (stack.length === 0) return s;
+      return {
+        filePathUndoStackByWorkspace: {
+          ...s.filePathUndoStackByWorkspace,
+          [workspaceId]: stack.slice(0, -1),
+        },
+      };
+    }),
 });
+
+export function snapshotRemovedFilePath(
+  state: AppState,
+  workspaceId: string,
+  path: string,
+  isDirectory: boolean,
+): RemovedFilePathSnapshot {
+  const target = stripTrailingSlash(path);
+  const tabs = (state.fileTabsByWorkspace[workspaceId] ?? []).filter((tabPath) =>
+    pathMatchesTarget(tabPath, target, isDirectory),
+  );
+  const active = state.activeFileTabByWorkspace[workspaceId] ?? null;
+  const buffers: Record<string, FileBufferState> = {};
+  const prefix = `${workspaceId}:`;
+  for (const [key, value] of Object.entries(state.fileBuffers)) {
+    if (!key.startsWith(prefix)) continue;
+    const bufferPath = key.slice(prefix.length);
+    if (pathMatchesTarget(bufferPath, target, isDirectory)) {
+      buffers[key] = value;
+    }
+  }
+  const selected = state.allFilesSelectedPathByWorkspace[workspaceId] ?? null;
+  const expanded = state.allFilesExpandedDirsByWorkspace[workspaceId] ?? {};
+  return {
+    tabs,
+    active:
+      active !== null && pathMatchesTarget(active, target, isDirectory)
+        ? active
+        : null,
+    buffers,
+    selected:
+      selected !== null && pathMatchesTarget(selected, target, isDirectory)
+        ? selected
+        : null,
+    expanded: Object.fromEntries(
+      Object.entries(expanded).filter(([dir]) =>
+        pathMatchesTarget(dir, target, isDirectory),
+      ),
+    ),
+    tabOrderEntries: (state.tabOrderByWorkspace[workspaceId] ?? []).filter(
+      (entry) =>
+        entry.kind === "file" && pathMatchesTarget(entry.path, target, isDirectory),
+    ),
+  };
+}
 
 /** True when the tab's buffer differs from its last-saved baseline. */
 export function isFileTabDirty(

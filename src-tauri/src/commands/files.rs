@@ -51,6 +51,13 @@ pub struct WorkspacePathMoveResult {
 pub struct WorkspacePathTrashResult {
     pub old_path: String,
     pub is_directory: bool,
+    pub undo_token: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct WorkspacePathRestoreResult {
+    pub restored_path: String,
+    pub is_directory: bool,
 }
 
 /// Hard cap for raw-bytes reads (e.g. image previews). Larger than the
@@ -395,15 +402,105 @@ pub async fn trash_workspace_path(
     let is_directory = resolved.is_directory;
     let absolute = resolved.absolute;
 
-    tokio::task::spawn_blocking(move || trash::delete(&absolute))
-        .await
-        .map_err(|e| format!("join error: {e}"))?
-        .map_err(|e| format!("move to trash: {e}"))?;
+    #[cfg(target_os = "macos")]
+    let undo_token = trash_path_macos(&absolute)?;
 
+    #[cfg(not(target_os = "macos"))]
+    {
+        let absolute_for_token = absolute.clone();
+        tokio::task::spawn_blocking(move || trash::delete(&absolute))
+            .await
+            .map_err(|e| format!("join error: {e}"))?
+            .map_err(|e| format!("move to trash: {e}"))?;
+        let undo_token = find_trash_item_token_for_original(&absolute_for_token);
+        return Ok(WorkspacePathTrashResult {
+            old_path,
+            is_directory,
+            undo_token,
+        });
+    }
+
+    #[cfg(target_os = "macos")]
     Ok(WorkspacePathTrashResult {
         old_path,
         is_directory,
+        undo_token: Some(undo_token),
     })
+}
+
+#[tauri::command]
+pub async fn restore_workspace_path_from_trash(
+    workspace_id: String,
+    relative_path: String,
+    undo_token: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<WorkspacePathRestoreResult, String> {
+    let worktree_path = resolve_worktree_path(&workspace_id, &state)?;
+    let worktree = Path::new(&worktree_path);
+    let target = resolve_workspace_target_path(worktree, &relative_path)?;
+    if target.absolute.exists() {
+        return Err("restore target already exists".to_string());
+    }
+    let parent = target
+        .absolute
+        .parent()
+        .ok_or_else(|| "restore target has no parent".to_string())?;
+    if !parent.exists() {
+        return Err("restore parent does not exist".to_string());
+    }
+
+    let restored_path = target.relative;
+
+    #[cfg(target_os = "macos")]
+    {
+        let token = undo_token.ok_or_else(|| "missing trash undo token".to_string())?;
+        restore_path_macos(&token, &target.absolute)?;
+        let is_directory = std::fs::metadata(&target.absolute)
+            .map_err(|e| format!("metadata: {e}"))?
+            .is_dir();
+        return Ok(WorkspacePathRestoreResult {
+            restored_path,
+            is_directory,
+        });
+    }
+
+    #[cfg(any(
+        target_os = "windows",
+        all(
+            unix,
+            not(target_os = "macos"),
+            not(target_os = "ios"),
+            not(target_os = "android")
+        )
+    ))]
+    {
+        let target_abs = target.absolute.clone();
+        tokio::task::spawn_blocking(move || {
+            let items = trash::os_limited::list().map_err(|e| format!("list trash: {e}"))?;
+            let item = select_trash_item(items, &target_abs, undo_token.as_deref())
+                .ok_or_else(|| "trash item not found".to_string())?;
+            trash::os_limited::restore_all(vec![item]).map_err(|e| format!("restore: {e}"))
+        })
+        .await
+        .map_err(|e| format!("join error: {e}"))??;
+        let is_directory = std::fs::metadata(&target.absolute)
+            .map_err(|e| format!("metadata: {e}"))?
+            .is_dir();
+        return Ok(WorkspacePathRestoreResult {
+            restored_path,
+            is_directory,
+        });
+    }
+
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "windows",
+        all(unix, not(target_os = "ios"), not(target_os = "android"))
+    )))]
+    {
+        let _ = undo_token;
+        Err("trash restore is not supported on this platform".to_string())
+    }
 }
 
 /// Resolve `workspace_id` to its worktree path, returning a string error
@@ -481,6 +578,33 @@ fn resolve_existing_workspace_path(
         relative: relative_path_string(&relative)?,
         absolute,
         is_directory: metadata.is_dir(),
+    })
+}
+
+fn resolve_workspace_target_path(
+    worktree_path: &Path,
+    relative_path: &str,
+) -> Result<ResolvedWorkspacePath, String> {
+    let relative = normalize_relative_path(relative_path)?;
+    let worktree_canonical =
+        std::fs::canonicalize(worktree_path).map_err(|e| format!("canonicalize worktree: {e}"))?;
+    let parent_relative = relative.parent().unwrap_or_else(|| Path::new(""));
+    let parent_abs = if parent_relative.as_os_str().is_empty() {
+        worktree_canonical.clone()
+    } else {
+        std::fs::canonicalize(worktree_path.join(parent_relative))
+            .map_err(|e| format!("canonicalize parent: {e}"))?
+    };
+    if !parent_abs.starts_with(&worktree_canonical) {
+        return Err("path escapes worktree".to_string());
+    }
+    let file_name = relative
+        .file_name()
+        .ok_or_else(|| "path has no file name".to_string())?;
+    Ok(ResolvedWorkspacePath {
+        relative: relative_path_string(&relative)?,
+        absolute: parent_abs.join(file_name),
+        is_directory: false,
     })
 }
 
@@ -580,6 +704,114 @@ fn reveal_path(path: &Path) -> Result<(), String> {
         crate::commands::shell::opener::open(&target.to_string_lossy())
             .map_err(|e| format!("open failed: {e}"))
     }
+}
+
+#[cfg(target_os = "macos")]
+fn trash_path_macos(path: &Path) -> Result<String, String> {
+    let trash_dir = home_trash_dir()?;
+    std::fs::create_dir_all(&trash_dir).map_err(|e| format!("create trash dir: {e}"))?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| "path has no file name".to_string())?;
+    let mut target = trash_dir.join(file_name);
+    if target.exists() {
+        let stem = path.file_stem().unwrap_or(file_name).to_string_lossy();
+        let ext = path.extension().map(|ext| ext.to_string_lossy());
+        for idx in 1..10_000 {
+            let candidate_name = match &ext {
+                Some(ext) if !ext.is_empty() => format!("{stem} {idx}.{ext}"),
+                _ => format!("{stem} {idx}"),
+            };
+            let candidate = trash_dir.join(candidate_name);
+            if !candidate.exists() {
+                target = candidate;
+                break;
+            }
+        }
+    }
+    if target.exists() {
+        return Err("could not choose a unique trash name".to_string());
+    }
+    std::fs::rename(path, &target).map_err(|e| format!("move to trash: {e}"))?;
+    Ok(target.to_string_lossy().into_owned())
+}
+
+#[cfg(target_os = "macos")]
+fn restore_path_macos(undo_token: &str, target: &Path) -> Result<(), String> {
+    let trash_dir = home_trash_dir()?;
+    let trash_path = PathBuf::from(undo_token);
+    let trash_canonical =
+        std::fs::canonicalize(&trash_path).map_err(|e| format!("trash item not found: {e}"))?;
+    let trash_dir_canonical =
+        std::fs::canonicalize(&trash_dir).map_err(|e| format!("canonicalize trash dir: {e}"))?;
+    if !trash_canonical.starts_with(&trash_dir_canonical) {
+        return Err("trash undo token is outside the Trash".to_string());
+    }
+    std::fs::rename(&trash_canonical, target).map_err(|e| format!("restore from trash: {e}"))
+}
+
+#[cfg(target_os = "macos")]
+fn home_trash_dir() -> Result<PathBuf, String> {
+    let home = std::env::var_os("HOME").ok_or_else(|| "HOME is not set".to_string())?;
+    Ok(PathBuf::from(home).join(".Trash"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn find_trash_item_token_for_original(original_path: &Path) -> Option<String> {
+    #[cfg(any(
+        target_os = "windows",
+        all(unix, not(target_os = "ios"), not(target_os = "android"))
+    ))]
+    {
+        let original = original_path
+            .canonicalize()
+            .unwrap_or_else(|_| original_path.to_path_buf());
+        let mut items: Vec<_> = trash::os_limited::list()
+            .ok()?
+            .into_iter()
+            .filter(|item| item.original_path() == original)
+            .collect();
+        items.sort_by_key(|item| item.time_deleted);
+        return items
+            .pop()
+            .map(|item| item.id.to_string_lossy().into_owned());
+    }
+
+    #[cfg(not(any(
+        target_os = "windows",
+        all(unix, not(target_os = "ios"), not(target_os = "android"))
+    )))]
+    {
+        let _ = original_path;
+        None
+    }
+}
+
+#[cfg(any(
+    target_os = "windows",
+    all(
+        unix,
+        not(target_os = "macos"),
+        not(target_os = "ios"),
+        not(target_os = "android")
+    )
+))]
+fn select_trash_item(
+    items: Vec<trash::TrashItem>,
+    original_path: &Path,
+    undo_token: Option<&str>,
+) -> Option<trash::TrashItem> {
+    let mut matches: Vec<_> = items
+        .into_iter()
+        .filter(|item| {
+            let token_matches = undo_token
+                .map(|token| item.id.to_string_lossy() == token)
+                .unwrap_or(false);
+            token_matches || item.original_path() == original_path
+        })
+        .collect();
+    matches.sort_by_key(|item| item.time_deleted);
+    matches.pop()
 }
 
 /// Write raw bytes to a filesystem path chosen by the user via a save dialog.
@@ -1404,5 +1636,32 @@ mod tests {
             resolved.absolute,
             dir.path().join("sub").canonicalize().unwrap()
         );
+    }
+
+    #[test]
+    fn resolve_workspace_target_path_allows_missing_leaf() {
+        let dir = tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+
+        let resolved = resolve_workspace_target_path(dir.path(), "sub/restored.txt").unwrap();
+
+        assert_eq!(resolved.relative, "sub/restored.txt");
+        assert_eq!(
+            resolved.absolute,
+            dir.path()
+                .join("sub")
+                .canonicalize()
+                .unwrap()
+                .join("restored.txt")
+        );
+    }
+
+    #[test]
+    fn resolve_workspace_target_path_rejects_missing_parent() {
+        let dir = tempdir().unwrap();
+
+        let err = resolve_workspace_target_path(dir.path(), "missing/restored.txt").unwrap_err();
+
+        assert!(err.contains("canonicalize parent"), "got: {err}");
     }
 }

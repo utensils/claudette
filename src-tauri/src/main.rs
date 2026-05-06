@@ -617,6 +617,7 @@ fn main() {
             commands::files::reveal_workspace_path,
             commands::files::rename_workspace_path,
             commands::files::trash_workspace_path,
+            commands::files::restore_workspace_path_from_trash,
             commands::files::save_attachment_bytes,
             commands::files::open_attachment_in_browser,
             commands::files::open_attachment_with_default_app,

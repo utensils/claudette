@@ -864,6 +864,12 @@ export interface WorkspacePathMoveResult {
 export interface WorkspacePathTrashResult {
   old_path: string;
   is_directory: boolean;
+  undo_token: string | null;
+}
+
+export interface WorkspacePathRestoreResult {
+  restored_path: string;
+  is_directory: boolean;
 }
 
 export function resolveWorkspacePath(
@@ -904,6 +910,18 @@ export function trashWorkspacePath(
   relativePath: string,
 ): Promise<WorkspacePathTrashResult> {
   return invoke("trash_workspace_path", { workspaceId, relativePath });
+}
+
+export function restoreWorkspacePathFromTrash(
+  workspaceId: string,
+  relativePath: string,
+  undoToken: string | null,
+): Promise<WorkspacePathRestoreResult> {
+  return invoke("restore_workspace_path_from_trash", {
+    workspaceId,
+    relativePath,
+    undoToken,
+  });
 }
 
 export function discardFile(

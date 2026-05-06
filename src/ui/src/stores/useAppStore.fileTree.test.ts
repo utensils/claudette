@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { useAppStore } from "./useAppStore";
+import { snapshotRemovedFilePath } from "./slices/fileTreeSlice";
 
 const WS = "workspace-a";
 
@@ -11,6 +12,7 @@ function reset() {
     allFilesExpandedDirsByWorkspace: {},
     allFilesSelectedPathByWorkspace: {},
     tabOrderByWorkspace: {},
+    filePathUndoStackByWorkspace: {},
   });
 }
 
@@ -112,5 +114,69 @@ describe("file path store updates", () => {
     expect(state.tabOrderByWorkspace[WS]).toEqual([
       { kind: "file", path: "src/App.tsx" },
     ]);
+  });
+
+  it("restores removed file tabs and buffers from a delete snapshot", () => {
+    openLoadedFile("src/components/Button.tsx", "button");
+    openLoadedFile("src/components/Card.tsx", "card");
+    openLoadedFile("src/App.tsx", "app");
+    useAppStore.getState().setFileBufferContent(
+      WS,
+      "src/components/Button.tsx",
+      "dirty button",
+    );
+    useAppStore.setState({
+      allFilesExpandedDirsByWorkspace: { [WS]: { "src/components/": true } },
+      allFilesSelectedPathByWorkspace: { [WS]: "src/components/Button.tsx" },
+      tabOrderByWorkspace: {
+        [WS]: [
+          { kind: "file", path: "src/components/Button.tsx" },
+          { kind: "file", path: "src/App.tsx" },
+        ],
+      },
+    });
+    const snapshot = snapshotRemovedFilePath(
+      useAppStore.getState(),
+      WS,
+      "src/components",
+      true,
+    );
+
+    useAppStore.getState().removeFilePathFromWorkspace(WS, "src/components", true);
+    useAppStore.getState().restoreRemovedFilePathInWorkspace(WS, snapshot);
+
+    const state = useAppStore.getState();
+    expect(state.fileTabsByWorkspace[WS]).toEqual([
+      "src/App.tsx",
+      "src/components/Button.tsx",
+      "src/components/Card.tsx",
+    ]);
+    expect(state.activeFileTabByWorkspace[WS]).toBe("src/App.tsx");
+    expect(state.fileBuffers[`${WS}:src/components/Button.tsx`].buffer).toBe(
+      "dirty button",
+    );
+    expect(state.allFilesSelectedPathByWorkspace[WS]).toBe(
+      "src/components/Button.tsx",
+    );
+    expect(state.allFilesExpandedDirsByWorkspace[WS]).toEqual({
+      "src/components/": true,
+    });
+    expect(state.tabOrderByWorkspace[WS]).toEqual([
+      { kind: "file", path: "src/App.tsx" },
+      { kind: "file", path: "src/components/Button.tsx" },
+    ]);
+  });
+
+  it("pushes and pops file operation undo entries", () => {
+    useAppStore.getState().pushFilePathUndoOperation(WS, {
+      kind: "rename",
+      oldPath: "a.ts",
+      newPath: "b.ts",
+      isDirectory: false,
+    });
+
+    expect(useAppStore.getState().filePathUndoStackByWorkspace[WS]).toHaveLength(1);
+    useAppStore.getState().popFilePathUndoOperation(WS);
+    expect(useAppStore.getState().filePathUndoStackByWorkspace[WS]).toEqual([]);
   });
 });

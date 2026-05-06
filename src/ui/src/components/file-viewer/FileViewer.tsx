@@ -36,6 +36,7 @@ import { SessionTabs } from "../chat/SessionTabs";
 import { MessageMarkdown } from "../chat/MessageMarkdown";
 import { MarkdownImageBaseProvider } from "../chat/MarkdownImage";
 import { imageMediaType, isImagePath } from "../../utils/fileIcons";
+import { useFilePathActions } from "../files/useFilePathActions";
 import styles from "./FileViewer.module.css";
 
 const MonacoEditor = lazy(() =>
@@ -82,9 +83,11 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
   const requestFileTreeRefresh = useAppStore((s) => s.requestFileTreeRefresh);
   const addToast = useAppStore((s) => s.addToast);
   const keybindings = useAppStore((s) => s.keybindings);
+  const { undoLastFilePathOperation } = useFilePathActions(workspaceId);
 
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const saving = savingKey === bufferKey;
+  const viewerRef = useRef<HTMLDivElement | null>(null);
 
   const isMarkdown = MARKDOWN_EXT.test(path);
   const isImage = isImagePath(path);
@@ -297,6 +300,36 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
     return () => window.removeEventListener("keydown", handler);
   }, [showMarkdownToggle, togglePreview]);
 
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.repeat) return;
+      const state = useAppStore.getState();
+      if (
+        resolveHotkeyAction(e, "file-viewer", state.keybindings) !==
+        "file-viewer.undo-file-operation"
+      ) {
+        return;
+      }
+      if (
+        state.settingsOpen ||
+        state.activeModal ||
+        state.commandPaletteOpen ||
+        state.fuzzyFinderOpen
+      ) {
+        return;
+      }
+      const el = document.activeElement as HTMLElement | null;
+      if (!el || !viewerRef.current?.contains(el)) return;
+      if (el.closest(".monaco-editor")) return;
+      const tag = el.tagName?.toLowerCase();
+      if (tag === "input" || tag === "textarea" || el.isContentEditable) return;
+      e.preventDefault();
+      void undoLastFilePathOperation();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [undoLastFilePathOperation]);
+
   const previewShortcutHint = formatBinding(
     getEffectiveBindingById(
       "file-viewer.toggle-markdown-preview",
@@ -315,7 +348,22 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
   }, [workspaceId, path]);
 
   return (
-    <div className={styles.viewer}>
+    <div
+      ref={viewerRef}
+      className={styles.viewer}
+      tabIndex={-1}
+      onPointerDownCapture={(event) => {
+        const target = event.target as HTMLElement | null;
+        if (
+          target?.closest(
+            "button,input,textarea,a,[contenteditable='true'],.monaco-editor",
+          )
+        ) {
+          return;
+        }
+        viewerRef.current?.focus({ preventScroll: true });
+      }}
+    >
       <WorkspacePanelHeader />
       <SessionTabs workspaceId={workspaceId} />
       <PaneToolbar

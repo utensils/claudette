@@ -2,9 +2,14 @@ import { useCallback } from "react";
 import {
   loadDiffFiles,
   renameWorkspacePath,
+  restoreWorkspacePathFromTrash,
   trashWorkspacePath,
 } from "../../services/tauri";
 import { useAppStore } from "../../stores/useAppStore";
+import {
+  snapshotRemovedFilePath,
+  type FilePathUndoOperation,
+} from "../../stores/slices/fileTreeSlice";
 import type { FileContextTarget } from "./fileContextMenu";
 
 export function useFilePathActions(workspaceId: string) {
@@ -17,6 +22,10 @@ export function useFilePathActions(workspaceId: string) {
   const requestFileTreeRefresh = useAppStore((s) => s.requestFileTreeRefresh);
   const setDiffFiles = useAppStore((s) => s.setDiffFiles);
   const addToast = useAppStore((s) => s.addToast);
+  const pushFilePathUndoOperation = useAppStore(
+    (s) => s.pushFilePathUndoOperation,
+  );
+  const popFilePathUndoOperation = useAppStore((s) => s.popFilePathUndoOperation);
 
   const refreshWorkspaceFiles = useCallback(async () => {
     requestFileTreeRefresh(workspaceId);
@@ -44,27 +53,117 @@ export function useFilePathActions(workspaceId: string) {
         result.new_path,
         result.is_directory,
       );
+      pushFilePathUndoOperation(workspaceId, {
+        kind: "rename",
+        oldPath: result.old_path,
+        newPath: result.new_path,
+        isDirectory: result.is_directory,
+      });
       await refreshWorkspaceFiles();
       addToast("Renamed");
       return result;
     },
-    [addToast, refreshWorkspaceFiles, renameFilePathInWorkspace, workspaceId],
+    [
+      addToast,
+      pushFilePathUndoOperation,
+      refreshWorkspaceFiles,
+      renameFilePathInWorkspace,
+      workspaceId,
+    ],
   );
 
   const trashPath = useCallback(
     async (target: FileContextTarget) => {
+      const snapshot = snapshotRemovedFilePath(
+        useAppStore.getState(),
+        workspaceId,
+        target.path,
+        target.isDirectory,
+      );
       const result = await trashWorkspacePath(workspaceId, target.path);
       removeFilePathFromWorkspace(
         workspaceId,
         result.old_path,
         result.is_directory,
       );
+      pushFilePathUndoOperation(workspaceId, {
+        kind: "trash",
+        oldPath: result.old_path,
+        isDirectory: result.is_directory,
+        undoToken: result.undo_token,
+        snapshot,
+      });
       await refreshWorkspaceFiles();
       addToast("Moved to Trash");
       return result;
     },
-    [addToast, refreshWorkspaceFiles, removeFilePathFromWorkspace, workspaceId],
+    [
+      addToast,
+      pushFilePathUndoOperation,
+      refreshWorkspaceFiles,
+      removeFilePathFromWorkspace,
+      workspaceId,
+    ],
   );
 
-  return { renamePath, trashPath };
+  const undoLastFilePathOperation = useCallback(async (): Promise<boolean> => {
+    const stack =
+      useAppStore.getState().filePathUndoStackByWorkspace[workspaceId] ?? [];
+    const operation = stack.at(-1);
+    if (!operation) {
+      addToast("Nothing to undo");
+      return false;
+    }
+
+    try {
+      await runUndoFilePathOperation(workspaceId, operation);
+      popFilePathUndoOperation(workspaceId);
+      await refreshWorkspaceFiles();
+      addToast("Undone");
+      return true;
+    } catch (err) {
+      console.error("Failed to undo file operation:", err);
+      addToast(`Undo failed: ${String(err)}`);
+      return false;
+    }
+  }, [
+    addToast,
+    popFilePathUndoOperation,
+    refreshWorkspaceFiles,
+    workspaceId,
+  ]);
+
+  return { renamePath, trashPath, undoLastFilePathOperation };
+}
+
+async function runUndoFilePathOperation(
+  workspaceId: string,
+  operation: FilePathUndoOperation,
+): Promise<void> {
+  if (operation.kind === "rename") {
+    const oldName = operation.oldPath.split("/").pop() ?? operation.oldPath;
+    const result = await renameWorkspacePath(
+      workspaceId,
+      operation.newPath,
+      oldName,
+    );
+    useAppStore
+      .getState()
+      .renameFilePathInWorkspace(
+        workspaceId,
+        result.old_path,
+        result.new_path,
+        result.is_directory,
+      );
+    return;
+  }
+
+  await restoreWorkspacePathFromTrash(
+    workspaceId,
+    operation.oldPath,
+    operation.undoToken,
+  );
+  useAppStore
+    .getState()
+    .restoreRemovedFilePathInWorkspace(workspaceId, operation.snapshot);
 }

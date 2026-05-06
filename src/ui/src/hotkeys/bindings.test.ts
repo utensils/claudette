@@ -136,6 +136,14 @@ describe("resolveHotkeyAction with conflict updates", () => {
     expect(getEffectiveBindingById("global.toggle-right-sidebar", updates, "mac"))
       .toBeNull();
   });
+
+  it("resolves the file viewer undo operation in file-viewer scope only", () => {
+    const event = macKey({ key: "z", metaKey: true });
+    expect(resolveHotkeyAction(event, "file-viewer", {}, "mac")).toBe(
+      "file-viewer.undo-file-operation",
+    );
+    expect(resolveHotkeyAction(event, "global", {}, "mac")).toBeNull();
+  });
 });
 
 describe("global.show-keyboard-shortcuts default binding", () => {
