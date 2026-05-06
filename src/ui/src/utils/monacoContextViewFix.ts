@@ -139,6 +139,15 @@ function watchShadowRoot(root: ShadowRoot, zoom: number | false): void {
     if (zoom !== false) correctContextViewPosition(host, zoom);
     attachHostObserver(host);
   }
+  // Recursive: if this shadow root contains FURTHER shadow hosts, we'd
+  // miss their roots otherwise — `MutationObserver` doesn't pierce
+  // boundaries, so we have to walk explicitly. Monaco doesn't currently
+  // nest shadow DOM, but defending against it is cheap (one extra
+  // querySelectorAll on a freshly observed root) and prevents the
+  // class of bug codex's review flagged.
+  for (const el of root.querySelectorAll<HTMLElement>("*")) {
+    if (el.shadowRoot) watchShadowRoot(el.shadowRoot, zoom);
+  }
   // And subscribe so future additions are caught.
   const inner = new MutationObserver((records) => {
     const innerZoom = shouldCorrect();
@@ -153,7 +162,11 @@ function watchShadowRoot(root: ShadowRoot, zoom: number | false): void {
 
 function visitAddedNode(node: Node, zoom: number | false): void {
   if (!(node instanceof HTMLElement)) return;
-  // 1. Direct/descendant `.context-view` in the light DOM.
+  // 1. Direct/descendant `.context-view` in the light DOM. We always
+  //    attach the per-host attribute observer here even at zoom == 1 —
+  //    if the user later bumps `uiFontSize` to a non-default value, the
+  //    inner observer is already in place and the very first menu show
+  //    after that will be corrected on the next style write.
   const hosts = node.classList.contains("context-view")
     ? [node]
     : Array.from(node.querySelectorAll<HTMLElement>(".context-view"));
@@ -190,12 +203,20 @@ function visitRemovedNode(node: Node): void {
  * second call is a no-op. Safe to call before `document.body` exists —
  * we'll defer until DOM is ready.
  *
- * The observer is a permanent global; there's no uninstall. Cost is one
- * MutationObserver on `document.body` (childList, subtree) plus a small
- * inner observer per `.context-view` element. The root callback
- * early-outs at zoom == 1 before doing any DOM scanning, so the
- * steady-state overhead during chat/terminal streaming is one cheap
- * zoom read per batch of mutation records.
+ * The observer is a permanent global; there's no uninstall. Steady-state
+ * cost on a busy app is dominated by the per-batch DOM scan in
+ * `visitAddedNode`: for every added subtree we run two `querySelectorAll`
+ * passes (one for `.context-view`, one for `*` to discover shadow hosts).
+ * The `*` pass is the expensive one — it scans the entire added subtree.
+ *
+ * That cost is paid even at zoom == 1, because we want the per-host
+ * attribute observers attached and shadow roots tracked BEFORE the user
+ * ever bumps their UI font size; otherwise the first menu show after a
+ * zoom change would land uncorrected. In practice this is fine: chat /
+ * terminal mutations are small subtrees, and Monaco menus are not
+ * created on hot paths. If profiling ever surfaces this, the fastest
+ * win is to gate `*` traversal behind a "have we ever observed a shadow
+ * root before" flag, since shadow DOM is rare in this app.
  */
 export function installMonacoContextViewFix(): void {
   if (installed) return;
@@ -204,10 +225,11 @@ export function installMonacoContextViewFix(): void {
 
   const start = () => {
     rootObserver = new MutationObserver((records) => {
-      // Cheap perf gate: at zoom 1 the fix is unconditionally a no-op, so
-      // skip the per-mutation `querySelectorAll` scan that would otherwise
-      // run on every chat/terminal append.
-      const zoom = getRootZoom() === 1 ? false : shouldCorrect();
+      // Skip only the zoom-dependent CORRECTION when zoom == 1. We still
+      // run `visitAddedNode` so per-host attribute observers and shadow
+      // roots are tracked — that's what lets a later zoom change take
+      // effect immediately on the next menu show.
+      const zoom = shouldCorrect();
       for (const r of records) {
         if (r.type !== "childList") continue;
         r.addedNodes.forEach((n) => visitAddedNode(n, zoom));
@@ -239,6 +261,12 @@ export function __resetMonacoContextViewFixForTests(): void {
   rootObserver?.disconnect();
   rootObserver = null;
   installed = false;
-  // WeakMap can't be cleared explicitly — but each test creates fresh
-  // host objects, so previous entries simply get GC'd.
+  // WeakMap / WeakSet can't be cleared explicitly — but each test
+  // creates fresh host objects, so previous entries simply get GC'd.
+  // The shadow-root attribute observers we created via `watchShadowRoot`
+  // aren't tracked in a list (they live in closure scope), but they're
+  // unreachable once the host element is GC'd, so they don't leak across
+  // tests in practice. If a future test hangs onto a shadow host across
+  // cases, replace the WeakSet here with a Map<ShadowRoot, MutationObserver>
+  // and disconnect explicitly.
 }

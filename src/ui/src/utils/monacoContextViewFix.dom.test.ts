@@ -287,6 +287,135 @@ describe("installMonacoContextViewFix — integration", () => {
       expect(parseFloat(cv.style.top)).toBeCloseTo(200, 1);
       restore();
     });
+
+    it("re-corrects when a shadow-rooted `.context-view` is repositioned after first show", async () => {
+      // Codex test gap #1: the initial correction is covered, but
+      // Monaco re-positions the menu (resize, submenu expansion, edge
+      // clamping) by writing left/top again. The per-host inner
+      // observer attached inside the shadow root must catch those
+      // subsequent writes the same way it does in light DOM.
+      const restore = stubProbe("webkit", 1.5);
+      setRootZoom(1.5);
+      installMonacoContextViewFix();
+
+      const shadowHost = document.createElement("div");
+      shadowHost.className = "shadow-root-host";
+      const shadowRoot = shadowHost.attachShadow({ mode: "open" });
+      document.body.appendChild(shadowHost);
+      const cv = document.createElement("div");
+      cv.className = "context-view";
+      cv.style.position = "fixed";
+      cv.style.left = "300px";
+      cv.style.top = "150px";
+      shadowRoot.appendChild(cv);
+      await flushMutations();
+
+      expect(parseFloat(cv.style.left)).toBeCloseTo(200, 1);
+      // Monaco repositions: e.g. submenu expansion clamps the host
+      // back inside the viewport.
+      cv.style.left = "600px";
+      cv.style.top = "300px";
+      await flushMutations();
+      expect(parseFloat(cv.style.left)).toBeCloseTo(400, 1);
+      expect(parseFloat(cv.style.top)).toBeCloseTo(200, 1);
+      restore();
+    });
+
+    it("cleans up per-host observer when a shadow-rooted `.context-view` is removed and re-added", async () => {
+      // Codex test gap #2: removed-node handling. If the per-host
+      // observer leaked across remove + re-add of the same node, we'd
+      // end up with stacked observers and (under the WeakMap echo
+      // guard) silent skips. The dedup in attachHostObserver +
+      // detachHostObserver on visitRemovedNode prevents that.
+      const restore = stubProbe("webkit", 2);
+      setRootZoom(2);
+      installMonacoContextViewFix();
+
+      const shadowHost = document.createElement("div");
+      shadowHost.className = "shadow-root-host";
+      const shadowRoot = shadowHost.attachShadow({ mode: "open" });
+      document.body.appendChild(shadowHost);
+      const cv = document.createElement("div");
+      cv.className = "context-view";
+      cv.style.position = "fixed";
+      cv.style.left = "400px";
+      cv.style.top = "200px";
+      shadowRoot.appendChild(cv);
+      await flushMutations();
+      expect(parseFloat(cv.style.left)).toBeCloseTo(200, 1);
+
+      // Remove the same node and re-attach with fresh raw values.
+      shadowRoot.removeChild(cv);
+      await flushMutations();
+      cv.style.left = "800px";
+      cv.style.top = "400px";
+      shadowRoot.appendChild(cv);
+      await flushMutations();
+      expect(parseFloat(cv.style.left)).toBeCloseTo(400, 1);
+      expect(parseFloat(cv.style.top)).toBeCloseTo(200, 1);
+      restore();
+    });
+
+    it("corrects when an already-populated shadow host is appended to body after install", async () => {
+      // Codex test gap #3: the host may be constructed offline, get a
+      // `.context-view` populated inside its shadow root, and only then
+      // be inserted into the document. The root observer fires for the
+      // host's insertion; visitAddedNode discovers the shadow root and
+      // watchShadowRoot picks up the pre-existing `.context-view` before
+      // the next observer tick.
+      const restore = stubProbe("webkit", 1.5);
+      setRootZoom(1.5);
+      installMonacoContextViewFix();
+
+      const shadowHost = document.createElement("div");
+      shadowHost.className = "shadow-root-host";
+      const shadowRoot = shadowHost.attachShadow({ mode: "open" });
+      const cv = document.createElement("div");
+      cv.className = "context-view";
+      cv.style.position = "fixed";
+      cv.style.left = "300px";
+      cv.style.top = "150px";
+      shadowRoot.appendChild(cv);
+
+      // Now attach the (already-populated) shadow host to the document.
+      document.body.appendChild(shadowHost);
+      await flushMutations();
+
+      expect(parseFloat(cv.style.left)).toBeCloseTo(200, 1);
+      expect(parseFloat(cv.style.top)).toBeCloseTo(100, 1);
+      restore();
+    });
+
+    it("discovers nested shadow roots that exist inside a watched shadow root", async () => {
+      // Codex MINOR #1: watchShadowRoot now walks its own subtree for
+      // further shadow hosts. This test exercises that path: shadow
+      // root A contains a host with shadow root B containing a
+      // `.context-view`.
+      const restore = stubProbe("webkit", 1.5);
+      setRootZoom(1.5);
+
+      const outerHost = document.createElement("div");
+      outerHost.className = "shadow-root-host";
+      const outerRoot = outerHost.attachShadow({ mode: "open" });
+      const innerHost = document.createElement("div");
+      innerHost.className = "nested-shadow-host";
+      const innerRoot = innerHost.attachShadow({ mode: "open" });
+      const cv = document.createElement("div");
+      cv.className = "context-view";
+      cv.style.position = "fixed";
+      cv.style.left = "450px";
+      cv.style.top = "300px";
+      innerRoot.appendChild(cv);
+      outerRoot.appendChild(innerHost);
+      document.body.appendChild(outerHost);
+
+      installMonacoContextViewFix();
+      await flushMutations();
+
+      expect(parseFloat(cv.style.left)).toBeCloseTo(300, 1);
+      expect(parseFloat(cv.style.top)).toBeCloseTo(200, 1);
+      restore();
+    });
   });
 
   describe("nested submenus", () => {
