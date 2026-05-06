@@ -11,6 +11,7 @@ import { McpSelectionModal } from "./McpSelectionModal";
 import { ImportWorktreesModal } from "./ImportWorktreesModal";
 import { ConfirmNightlyChannelModal } from "./ConfirmNightlyChannelModal";
 import { MissingCliModal } from "./MissingCliModal";
+import { KeyboardShortcutsModal } from "./KeyboardShortcutsModal";
 
 export function ModalRouter() {
   const activeModal = useAppStore((s) => s.activeModal);
@@ -40,6 +41,8 @@ export function ModalRouter() {
       return <ConfirmNightlyChannelModal />;
     case "missingCli":
       return <MissingCliModal />;
+    case "keyboard-shortcuts":
+      return <KeyboardShortcutsModal />;
     default:
       return null;
   }

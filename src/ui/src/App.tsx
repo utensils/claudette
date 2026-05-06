@@ -391,6 +391,13 @@ function App() {
       useAppStore.getState().openSettings();
     });
 
+    // Listen for "Help → Keyboard Shortcuts…" menu clicks. The menu lives
+    // in Rust (src-tauri/src/main.rs) but the modal is React, so the menu
+    // emits this event and the frontend opens the modal in response.
+    const unlistenShortcuts = listen("menu://show-keyboard-shortcuts", () => {
+      useAppStore.getState().openModal("keyboard-shortcuts");
+    });
+
     // Listen for zoom events from the View menu.
     const unlistenZoomIn = listen("zoom-in", () => adjustUiFontSize(+1));
     const unlistenZoomOut = listen("zoom-out", () => adjustUiFontSize(-1));
@@ -582,6 +589,7 @@ function App() {
       });
       unlistenTray.then((fn) => fn());
       unlistenSettings.then((fn) => fn());
+      unlistenShortcuts.then((fn) => fn());
       unlistenZoomIn.then((fn) => fn());
       unlistenZoomOut.then((fn) => fn());
       unlistenResetZoom.then((fn) => fn());

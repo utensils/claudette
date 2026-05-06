@@ -1,0 +1,142 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay-bg-heavy);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  animation: fadeIn 0.15s ease;
+}
+
+.card {
+  background: var(--app-bg);
+  border: 1px solid var(--sidebar-border);
+  border-radius: var(--radius-xl);
+  width: 640px;
+  max-width: 92vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow-lg);
+  animation: scaleIn 0.2s ease;
+}
+
+.header {
+  padding: var(--space-4) var(--space-5) 0;
+}
+
+.title {
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-semibold);
+  margin: 0 0 var(--space-3);
+}
+
+.body {
+  padding: 0 var(--space-5) var(--space-5);
+  overflow-y: auto;
+  flex: 1 1 auto;
+}
+
+.search {
+  width: 100%;
+  padding: 8px 10px;
+  margin-bottom: 12px;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+}
+
+.search:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.empty {
+  padding: 24px 0;
+  color: var(--text-dim);
+  font-size: 13px;
+  text-align: center;
+}
+
+.group {
+  padding: 8px 0 12px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.group:last-child {
+  border-bottom: none;
+}
+
+.groupLabel {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 6px;
+  color: var(--text-dim);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+}
+
+.label {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.binding {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+
+.keycap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--divider);
+  border-radius: 4px;
+  background: var(--selected-bg);
+  box-shadow: inset 0 -1px 0 var(--hover-bg);
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.unbound {
+  color: var(--text-dim);
+  font-size: 12px;
+  font-style: italic;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    transform: scale(0.96);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}

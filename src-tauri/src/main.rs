@@ -232,7 +232,23 @@ fn main() {
     #[cfg(target_os = "macos")]
     {
         builder = builder.on_menu_event(|app, event| {
-            if event.id().as_ref() == "help-open-docs" {
+            if event.id().as_ref() == "help-keyboard-shortcuts" {
+                // Bring the window forward and emit a frontend-handled event;
+                // the modal lives in React so we can't open it directly here.
+                tray::show_and_focus(app);
+                let _ = app.emit("menu://show-keyboard-shortcuts", ());
+            } else if event.id().as_ref() == "help-changelog" {
+                // Deep-link to the GitHub Release page for the running
+                // version. Stable URL — doesn't depend on CHANGELOG.md
+                // anchor formatting (which embeds the release date).
+                let url = format!(
+                    "https://github.com/utensils/claudette/releases/tag/v{}",
+                    env!("CARGO_PKG_VERSION"),
+                );
+                if let Err(e) = commands::shell::opener::open(&url) {
+                    eprintln!("[help] Failed to open changelog URL: {e}");
+                }
+            } else if event.id().as_ref() == "help-open-docs" {
                 // Open the Claudette docs root in the system browser.
                 // Root URL (not a deeper page) so the link survives
                 // doc-site reorganization.
@@ -382,7 +398,22 @@ fn main() {
                 // attached via `tauri::Builder::menu(...)`; here we go
                 // the `set_menu` route from setup, which skips that.
                 // (Compare to ../aethon/src-tauri/src/commands/extensions.rs.)
+                // The "What's New" item label embeds the running version
+                // so users can see which release the link will open before
+                // clicking. Built from `CARGO_PKG_VERSION` at compile time
+                // so it tracks `Cargo.toml` (release-please source of truth).
+                let whats_new_label = format!("What's New (v{})", env!("CARGO_PKG_VERSION"));
                 let help_menu = SubmenuBuilder::new(app_handle, "Help")
+                    .item(
+                        &MenuItemBuilder::with_id("help-keyboard-shortcuts", "Keyboard Shortcuts…")
+                            .accelerator("CmdOrCtrl+Slash")
+                            .build(app_handle)?,
+                    )
+                    .item(
+                        &MenuItemBuilder::with_id("help-changelog", whats_new_label.as_str())
+                            .build(app_handle)?,
+                    )
+                    .separator()
                     .item(
                         &MenuItemBuilder::with_id("help-open-docs", "Claudette Documentation")
                             .build(app_handle)?,
@@ -525,6 +556,8 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            // Devtools (webview inspector — Help → Open dev tools)
+            commands::devtools::open_devtools,
             // Data
             commands::data::load_initial_data,
             // Repository

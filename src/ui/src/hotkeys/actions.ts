@@ -333,6 +333,22 @@ export const HOTKEY_ACTIONS = [
     holdMode: true,
     suppressUnderOverlay: true,
   },
+  {
+    // Default `mod+/` matches `Cmd+/` on macOS and `Ctrl+/` elsewhere.
+    // The binding is the literal "/" — `parseBinding` splits on "+" and
+    // takes the trailing piece, and `normalizeKey("/")` returns "/" (no
+    // alias to "slash"). The macOS Help-menu accelerator in
+    // src-tauri/src/main.rs uses Tauri's separate accelerator format
+    // (`CmdOrCtrl+Slash`), and bindings.test.ts locks the two together.
+    id: "global.show-keyboard-shortcuts",
+    scope: "global",
+    category: "keyboard_category_help",
+    description: "keyboard_action_show_shortcuts",
+    defaultBinding: allPlatforms("mod+/"),
+    match: "key",
+    rebindable: true,
+    suppressUnderOverlay: false,
+  },
 ] as const satisfies readonly HotkeyAction[];
 
 export type HotkeyActionId = (typeof HOTKEY_ACTIONS)[number]["id"];

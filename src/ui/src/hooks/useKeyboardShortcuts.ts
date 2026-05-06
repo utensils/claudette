@@ -18,6 +18,7 @@ export function useKeyboardShortcuts() {
   const toggleFuzzyFinder = useAppStore((s) => s.toggleFuzzyFinder);
   const toggleCommandPalette = useAppStore((s) => s.toggleCommandPalette);
   const openCommandPaletteFileMode = useAppStore((s) => s.openCommandPaletteFileMode);
+  const openModal = useAppStore((s) => s.openModal);
   const closeModal = useAppStore((s) => s.closeModal);
   const activeModal = useAppStore((s) => s.activeModal);
   const fuzzyFinderOpen = useAppStore((s) => s.fuzzyFinderOpen);
@@ -104,7 +105,8 @@ export function useKeyboardShortcuts() {
         overlayOpen &&
         action !== "global.open-settings" &&
         action !== "global.toggle-command-palette" &&
-        action !== "global.toggle-fuzzy-finder"
+        action !== "global.toggle-fuzzy-finder" &&
+        action !== "global.show-keyboard-shortcuts"
       ) return;
       if (action === "global.toggle-plan-mode" && (!activeSessionId || isInteractive)) return;
 
@@ -204,6 +206,11 @@ export function useKeyboardShortcuts() {
             else store.openSettings();
             return;
           }
+          case "global.show-keyboard-shortcuts":
+            // Idempotent when already open: openModal sets the same id.
+            // Esc closes it via the global.dismiss-or-stop branch above.
+            openModal("keyboard-shortcuts");
+            return;
           default:
             return;
         }
@@ -262,6 +269,7 @@ export function useKeyboardShortcuts() {
     toggleFuzzyFinder,
     toggleCommandPalette,
     openCommandPaletteFileMode,
+    openModal,
     closeModal,
     activeModal,
     fuzzyFinderOpen,
