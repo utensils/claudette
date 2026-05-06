@@ -20,6 +20,7 @@ export function FilesPanel() {
   const openFileTab = useAppStore((s) => s.openFileTab);
   const openDiffTab = useAppStore((s) => s.openDiffTab);
   const setDiffSelectedCommitHash = useAppStore((s) => s.setDiffSelectedCommitHash);
+  const setAllFilesDirExpanded = useAppStore((s) => s.setAllFilesDirExpanded);
 
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -30,6 +31,9 @@ export function FilesPanel() {
     y: number;
   } | null>(null);
   const [renamingTarget, setRenamingTarget] = useState<FileContextTarget | null>(
+    null,
+  );
+  const [creatingParentPath, setCreatingParentPath] = useState<string | null>(
     null,
   );
   const loadVersionRef = useRef(0);
@@ -128,6 +132,19 @@ export function FilesPanel() {
           onActivateFile={handleActivateFile}
           onActivateDiff={handleActivateDiff}
           onContextMenu={(target, x, y) => setContextMenu({ target, x, y })}
+          creatingParentPath={creatingParentPath}
+          onCreateCommit={async (parentPath, name) => {
+            try {
+              await filePathActions.createFile(parentPath, name);
+              setCreatingParentPath(null);
+              return true;
+            } catch (err) {
+              console.error("Failed to create file:", err);
+              useAppStore.getState().addToast(`Create file failed: ${String(err)}`);
+              return false;
+            }
+          }}
+          onCreateCancel={() => setCreatingParentPath(null)}
           renamingPath={renamingTarget?.path ?? null}
           onRenameCommit={async (target, newName) => {
             try {
@@ -149,6 +166,13 @@ export function FilesPanel() {
           target={contextMenu.target}
           x={contextMenu.x}
           y={contextMenu.y}
+          onCreateFileRequest={(parentPath) => {
+            const clean = parentPath.replace(/\/+$/g, "");
+            if (clean) {
+              setAllFilesDirExpanded(selectedWorkspaceId, clean, true);
+            }
+            setCreatingParentPath(clean);
+          }}
           onRenameRequest={(target) => setRenamingTarget(target)}
           onClose={() => setContextMenu(null)}
         />

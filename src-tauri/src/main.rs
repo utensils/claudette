@@ -615,6 +615,7 @@ fn main() {
             commands::files::resolve_workspace_path,
             commands::files::open_workspace_path,
             commands::files::reveal_workspace_path,
+            commands::files::create_workspace_file,
             commands::files::rename_workspace_path,
             commands::files::trash_workspace_path,
             commands::files::restore_workspace_path_from_trash,

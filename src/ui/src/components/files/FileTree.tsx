@@ -1,5 +1,6 @@
 import {
   memo,
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -37,6 +38,9 @@ interface FileTreeProps {
   onActivateFile: (path: string) => void;
   onActivateDiff: (path: string, layer: DiffLayer | null) => void;
   onContextMenu: (target: FileContextTarget, x: number, y: number) => void;
+  creatingParentPath: string | null;
+  onCreateCommit: (parentPath: string, name: string) => Promise<boolean>;
+  onCreateCancel: () => void;
   renamingPath: string | null;
   onRenameCommit: (
     target: FileContextTarget,
@@ -53,6 +57,9 @@ export const FileTree = memo(function FileTree({
   onActivateFile,
   onActivateDiff,
   onContextMenu,
+  creatingParentPath,
+  onCreateCommit,
+  onCreateCancel,
   renamingPath,
   onRenameCommit,
   onRenameCancel,
@@ -222,9 +229,19 @@ export const FileTree = memo(function FileTree({
     [],
   );
 
-  if (entries.length === 0) {
+  if (entries.length === 0 && creatingParentPath === null) {
     return <div className={styles.empty}>No files</div>;
   }
+
+  const createParentClean =
+    creatingParentPath === null ? null : stripTrailingSlash(creatingParentPath);
+  const createRowIndex =
+    createParentClean === null || createParentClean === ""
+      ? 0
+      : visible.findIndex(
+          ({ node }) =>
+            node.kind === "dir" && stripTrailingSlash(node.path) === createParentClean,
+        ) + 1;
 
   return (
     <div
@@ -234,66 +251,126 @@ export const FileTree = memo(function FileTree({
       aria-label="Project files"
       onKeyDown={handleKeyDown}
     >
-      {visible.map(({ node, depth }, idx) => (
-        <Row
-          key={node.path}
-          node={node}
-          depth={depth}
-          expanded={node.kind === "dir" ? !!expanded[node.path] : false}
-          selected={selected === node.path}
-          renaming={renamingPath === node.path}
-          // Roving tabindex: exactly one row in the tree is in the tab
-          // order at any time. Tab moves focus into the tree (or out of
-          // it); arrow keys move within.
-          tabbable={idx === focusedIndex}
-          rowRef={registerRowRef(node.path)}
-          onClick={() => {
-            setSelected(node.path);
-            if (node.kind === "dir") {
-              toggleDir(node.path);
-            } else {
-              const activation = resolveFileTreeActivation(node);
-              if (activation.kind === "diff") {
-                onActivateDiff(activation.path, activation.layer);
-              } else {
-                onActivateFile(activation.path);
-              }
-            }
-          }}
-          onContextMenu={(x, y) => {
-            setSelected(node.path);
-            onContextMenu(
-              {
-                path: node.path,
-                isDirectory: node.kind === "dir",
-                exists:
-                  node.kind === "dir" ||
-                  node.git_status == null ||
-                  node.git_status !== "Deleted",
-              },
-              x,
-              y,
-            );
-          }}
-          onRenameCommit={(name) =>
-            onRenameCommit(
-              {
-                path: node.path,
-                isDirectory: node.kind === "dir",
-                exists:
-                  node.kind === "dir" ||
-                  node.git_status == null ||
-                  node.git_status !== "Deleted",
-              },
-              name,
-            )
-          }
-          onRenameCancel={onRenameCancel}
+      {creatingParentPath !== null && createRowIndex === 0 && (
+        <CreateRow
+          depth={0}
+          parentPath={creatingParentPath}
+          onCreateCommit={onCreateCommit}
+          onCreateCancel={onCreateCancel}
         />
-      ))}
+      )}
+      {visible.map(({ node, depth }, idx) => {
+        const showCreateAfter =
+          creatingParentPath !== null && createRowIndex === idx + 1;
+        return (
+          <Fragment key={node.path}>
+            <Row
+              node={node}
+              depth={depth}
+              expanded={node.kind === "dir" ? !!expanded[node.path] : false}
+              selected={selected === node.path}
+              renaming={renamingPath === node.path}
+              // Roving tabindex: exactly one row in the tree is in the tab
+              // order at any time. Tab moves focus into the tree (or out of
+              // it); arrow keys move within.
+              tabbable={idx === focusedIndex}
+              rowRef={registerRowRef(node.path)}
+              onClick={() => {
+                setSelected(node.path);
+                if (node.kind === "dir") {
+                  toggleDir(node.path);
+                } else {
+                  const activation = resolveFileTreeActivation(node);
+                  if (activation.kind === "diff") {
+                    onActivateDiff(activation.path, activation.layer);
+                  } else {
+                    onActivateFile(activation.path);
+                  }
+                }
+              }}
+              onContextMenu={(x, y) => {
+                setSelected(node.path);
+                onContextMenu(
+                  {
+                    path: node.path,
+                    isDirectory: node.kind === "dir",
+                    exists:
+                      node.kind === "dir" ||
+                      node.git_status == null ||
+                      node.git_status !== "Deleted",
+                  },
+                  x,
+                  y,
+                );
+              }}
+              onRenameCommit={(name) =>
+                onRenameCommit(
+                  {
+                    path: node.path,
+                    isDirectory: node.kind === "dir",
+                    exists:
+                      node.kind === "dir" ||
+                      node.git_status == null ||
+                      node.git_status !== "Deleted",
+                  },
+                  name,
+                )
+              }
+              onRenameCancel={onRenameCancel}
+            />
+            {showCreateAfter && (
+              <CreateRow
+                depth={depth + 1}
+                parentPath={creatingParentPath}
+                onCreateCommit={onCreateCommit}
+                onCreateCancel={onCreateCancel}
+              />
+            )}
+          </Fragment>
+        );
+      })}
     </div>
   );
 });
+
+function stripTrailingSlash(path: string): string {
+  return path.replace(/\/+$/g, "");
+}
+
+interface CreateRowProps {
+  depth: number;
+  parentPath: string;
+  onCreateCommit: (parentPath: string, name: string) => Promise<boolean>;
+  onCreateCancel: () => void;
+}
+
+function CreateRow({
+  depth,
+  parentPath,
+  onCreateCommit,
+  onCreateCancel,
+}: CreateRowProps) {
+  const Icon = getFileIcon("untitled");
+  return (
+    <div
+      className={styles.row}
+      style={{ ["--depth" as string]: depth }}
+      role="treeitem"
+      aria-level={depth + 1}
+    >
+      <span className={styles.chevron} style={{ width: 12, height: 12 }} />
+      {/* eslint-disable-next-line react-hooks/static-components -- fileIcons returns stable module-level lucide components. */}
+      <Icon size={14} className={styles.icon} aria-hidden="true" />
+      <InlineRenameInput
+        name="untitled"
+        className={styles.renameInput}
+        ariaLabel="New file name"
+        onCommit={(name) => onCreateCommit(parentPath, name)}
+        onCancel={onCreateCancel}
+      />
+    </div>
+  );
+}
 
 interface RowProps {
   node: FileTreeNode;

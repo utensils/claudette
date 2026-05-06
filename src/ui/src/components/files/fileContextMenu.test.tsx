@@ -39,6 +39,24 @@ describe("buildFileContextMenuItems", () => {
     ]);
   });
 
+  it("includes new file when the caller supports creation", () => {
+    const noop = vi.fn();
+    const labels = buildFileContextMenuItems(
+      { path: "src/app.ts", isDirectory: false, exists: true },
+      {
+        newFile: noop,
+        open: noop,
+        reveal: noop,
+        copyPath: noop,
+        copyRelativePath: noop,
+        rename: noop,
+        delete: noop,
+      },
+    ).flatMap((item) => (item.type === "separator" ? [] : [item.label]));
+
+    expect(labels[0]).toBe("New File");
+  });
+
   it("labels directory open distinctly", () => {
     expect(
       labelsFor({ path: "src/components/", isDirectory: true, exists: true })[0],

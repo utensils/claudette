@@ -38,6 +38,10 @@ export interface RemovedFilePathSnapshot {
 
 export type FilePathUndoOperation =
   | {
+      kind: "create";
+      path: string;
+    }
+  | {
       kind: "rename";
       oldPath: string;
       newPath: string;

@@ -132,6 +132,16 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
         })
         .catch((e) => {
           if (version !== loadVersionRef.current) return;
+          if (isMissingWorkspaceFileError(e)) {
+            setFileBufferLoaded(workspaceId, path, {
+              baseline: "",
+              isBinary: false,
+              sizeBytes: 0,
+              truncated: false,
+              imageBytesB64: null,
+            });
+            return;
+          }
           setFileBufferLoadError(workspaceId, path, String(e));
         });
     }
@@ -467,6 +477,10 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
       </div>
     </div>
   );
+}
+
+function isMissingWorkspaceFileError(error: unknown): boolean {
+  return String(error).includes("File not found or path escapes worktree");
 }
 
 interface ImageViewProps {

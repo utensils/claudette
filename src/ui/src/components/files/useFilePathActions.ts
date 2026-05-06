@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import {
+  createWorkspaceFile,
   loadDiffFiles,
   renameWorkspacePath,
   restoreWorkspacePathFromTrash,
@@ -16,6 +17,8 @@ export function useFilePathActions(workspaceId: string) {
   const renameFilePathInWorkspace = useAppStore(
     (s) => s.renameFilePathInWorkspace,
   );
+  const openFileTab = useAppStore((s) => s.openFileTab);
+  const setFileBufferLoaded = useAppStore((s) => s.setFileBufferLoaded);
   const removeFilePathFromWorkspace = useAppStore(
     (s) => s.removeFilePathFromWorkspace,
   );
@@ -68,6 +71,35 @@ export function useFilePathActions(workspaceId: string) {
       pushFilePathUndoOperation,
       refreshWorkspaceFiles,
       renameFilePathInWorkspace,
+      workspaceId,
+    ],
+  );
+
+  const createFile = useCallback(
+    async (parentPath: string, name: string) => {
+      const result = await createWorkspaceFile(workspaceId, parentPath, name);
+      openFileTab(workspaceId, result.path);
+      setFileBufferLoaded(workspaceId, result.path, {
+        baseline: "",
+        isBinary: false,
+        sizeBytes: 0,
+        truncated: false,
+        imageBytesB64: null,
+      });
+      pushFilePathUndoOperation(workspaceId, {
+        kind: "create",
+        path: result.path,
+      });
+      await refreshWorkspaceFiles();
+      addToast("Created file");
+      return result;
+    },
+    [
+      addToast,
+      openFileTab,
+      pushFilePathUndoOperation,
+      refreshWorkspaceFiles,
+      setFileBufferLoaded,
       workspaceId,
     ],
   );
@@ -133,13 +165,25 @@ export function useFilePathActions(workspaceId: string) {
     workspaceId,
   ]);
 
-  return { renamePath, trashPath, undoLastFilePathOperation };
+  return { createFile, renamePath, trashPath, undoLastFilePathOperation };
 }
 
 async function runUndoFilePathOperation(
   workspaceId: string,
   operation: FilePathUndoOperation,
 ): Promise<void> {
+  if (operation.kind === "create") {
+    const result = await trashWorkspacePath(workspaceId, operation.path);
+    useAppStore
+      .getState()
+      .removeFilePathFromWorkspace(
+        workspaceId,
+        result.old_path,
+        result.is_directory,
+      );
+    return;
+  }
+
   if (operation.kind === "rename") {
     const oldName = operation.oldPath.split("/").pop() ?? operation.oldPath;
     const result = await renameWorkspacePath(

@@ -21,6 +21,7 @@ interface FilePathContextMenuProps {
   x: number;
   y: number;
   beforeItems?: ContextMenuItem[];
+  onCreateFileRequest?: (parentPath: string) => void;
   onRenameRequest: (target: FileContextTarget) => void;
   onClose: () => void;
 }
@@ -47,6 +48,7 @@ export function FilePathContextMenu({
   x,
   y,
   beforeItems,
+  onCreateFileRequest,
   onRenameRequest,
   onClose,
 }: FilePathContextMenuProps) {
@@ -66,6 +68,13 @@ export function FilePathContextMenu({
 
   const items = useMemo<ContextMenuItem[]>(() => {
     const fileItems = buildFileContextMenuItems(target, {
+      newFile: onCreateFileRequest
+        ? () => {
+            setOperationError(null);
+            onCreateFileRequest(parentPathForNewFile(target));
+            onClose();
+          }
+        : undefined,
       open: () => {
         if (target.isDirectory) {
           return openWorkspacePath(workspaceId, target.path);
@@ -95,7 +104,16 @@ export function FilePathContextMenu({
     });
     if (!beforeItems || beforeItems.length === 0) return fileItems;
     return [...beforeItems, { type: "separator" }, ...fileItems];
-  }, [addToast, beforeItems, onClose, onRenameRequest, openFileTab, target, workspaceId]);
+  }, [
+    addToast,
+    beforeItems,
+    onClose,
+    onCreateFileRequest,
+    onRenameRequest,
+    openFileTab,
+    target,
+    workspaceId,
+  ]);
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
@@ -140,4 +158,11 @@ export function FilePathContextMenu({
       )}
     </>
   );
+}
+
+function parentPathForNewFile(target: FileContextTarget): string {
+  const clean = target.path.replace(/\/+$/g, "");
+  if (target.isDirectory) return clean;
+  const slash = clean.lastIndexOf("/");
+  return slash === -1 ? "" : clean.slice(0, slash);
 }

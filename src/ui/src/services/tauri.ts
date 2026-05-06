@@ -867,6 +867,10 @@ export interface WorkspacePathTrashResult {
   undo_token: string | null;
 }
 
+export interface WorkspacePathCreateResult {
+  path: string;
+}
+
 export interface WorkspacePathRestoreResult {
   restored_path: string;
   is_directory: boolean;
@@ -891,6 +895,18 @@ export function revealWorkspacePath(
   relativePath: string,
 ): Promise<void> {
   return invoke("reveal_workspace_path", { workspaceId, relativePath });
+}
+
+export function createWorkspaceFile(
+  workspaceId: string,
+  parentRelativePath: string,
+  name: string,
+): Promise<WorkspacePathCreateResult> {
+  return invoke("create_workspace_file", {
+    workspaceId,
+    parentRelativePath,
+    name,
+  });
 }
 
 export function renameWorkspacePath(

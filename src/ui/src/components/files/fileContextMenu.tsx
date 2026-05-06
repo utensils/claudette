@@ -1,6 +1,7 @@
 import {
   Copy,
   ExternalLink,
+  FilePlus,
   FilePenLine,
   FolderOpen,
   Trash2,
@@ -14,6 +15,7 @@ export interface FileContextTarget {
 }
 
 export interface FileContextMenuCallbacks {
+  newFile?: () => void;
   open: () => void | Promise<void>;
   reveal: () => void | Promise<void>;
   copyPath: () => void | Promise<void>;
@@ -43,6 +45,17 @@ export function buildFileContextMenuItems(
 ): ContextMenuItem[] {
   const missing = !target.exists;
   return [
+    ...(callbacks.newFile
+      ? [
+          {
+            label: "New File",
+            icon: <FilePlus size={14} aria-hidden="true" />,
+            onSelect: callbacks.newFile,
+            closeOnSelect: false,
+          } satisfies ContextMenuItem,
+          { type: "separator" } satisfies ContextMenuItem,
+        ]
+      : []),
     {
       label: target.isDirectory ? "Open Folder" : "Open",
       icon: <ExternalLink size={14} aria-hidden="true" />,

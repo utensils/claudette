@@ -55,6 +55,11 @@ pub struct WorkspacePathTrashResult {
 }
 
 #[derive(Clone, Serialize)]
+pub struct WorkspacePathCreateResult {
+    pub path: String,
+}
+
+#[derive(Clone, Serialize)]
 pub struct WorkspacePathRestoreResult {
     pub restored_path: String,
     pub is_directory: bool,
@@ -363,6 +368,27 @@ pub async fn reveal_workspace_path(
 }
 
 #[tauri::command]
+pub async fn create_workspace_file(
+    workspace_id: String,
+    parent_relative_path: String,
+    name: String,
+    state: State<'_, AppState>,
+) -> Result<WorkspacePathCreateResult, String> {
+    let worktree_path = resolve_worktree_path(&workspace_id, &state)?;
+    let target = build_create_file_target(Path::new(&worktree_path), &parent_relative_path, &name)?;
+    let file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&target.absolute)
+        .await
+        .map_err(|e| format!("create file: {e}"))?;
+    drop(file);
+    Ok(WorkspacePathCreateResult {
+        path: target.relative,
+    })
+}
+
+#[tauri::command]
 pub async fn rename_workspace_path(
     workspace_id: String,
     relative_path: String,
@@ -654,6 +680,43 @@ fn build_rename_target(
 
     Ok(RenameTarget {
         relative: relative_path_string(&new_relative_path)?,
+        absolute,
+    })
+}
+
+fn build_create_file_target(
+    worktree_path: &Path,
+    parent_relative_path: &str,
+    name: &str,
+) -> Result<RenameTarget, String> {
+    let parent_trimmed = parent_relative_path.trim().trim_end_matches(['/', '\\']);
+    let parent_relative = if parent_trimmed.is_empty() {
+        PathBuf::new()
+    } else {
+        normalize_relative_path(parent_trimmed)?
+    };
+    let name = validate_rename_name(name)?;
+    let worktree_canonical =
+        std::fs::canonicalize(worktree_path).map_err(|e| format!("canonicalize worktree: {e}"))?;
+    let parent_abs = if parent_relative.as_os_str().is_empty() {
+        worktree_canonical.clone()
+    } else {
+        std::fs::canonicalize(worktree_path.join(&parent_relative))
+            .map_err(|e| format!("canonicalize parent: {e}"))?
+    };
+    if !parent_abs.starts_with(&worktree_canonical) {
+        return Err("path escapes worktree".to_string());
+    }
+    if !parent_abs.is_dir() {
+        return Err("parent is not a directory".to_string());
+    }
+    let relative = parent_relative.join(name);
+    let absolute = parent_abs.join(name);
+    if absolute.exists() {
+        return Err("target already exists".to_string());
+    }
+    Ok(RenameTarget {
+        relative: relative_path_string(&relative)?,
         absolute,
     })
 }
@@ -1621,6 +1684,41 @@ mod tests {
             target.absolute,
             dir.path().canonicalize().unwrap().join("renamed")
         );
+    }
+
+    #[test]
+    fn create_file_target_allows_root_parent() {
+        let dir = tempdir().unwrap();
+
+        let target = build_create_file_target(dir.path(), "", "new.txt").unwrap();
+
+        assert_eq!(target.relative, "new.txt");
+        assert_eq!(
+            target.absolute,
+            dir.path().canonicalize().unwrap().join("new.txt")
+        );
+    }
+
+    #[test]
+    fn create_file_target_rejects_collisions_and_nested_names() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("existing.txt"), "hello").unwrap();
+
+        let collision = build_create_file_target(dir.path(), "", "existing.txt").unwrap_err();
+        assert!(collision.contains("already exists"), "got: {collision}");
+
+        let nested = build_create_file_target(dir.path(), "", "nested/file.txt").unwrap_err();
+        assert!(nested.contains("separators"), "got: {nested}");
+    }
+
+    #[test]
+    fn create_file_target_requires_existing_directory_parent() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("file.txt"), "hello").unwrap();
+
+        let err = build_create_file_target(dir.path(), "file.txt", "child.txt").unwrap_err();
+
+        assert!(err.contains("parent is not a directory"), "got: {err}");
     }
 
     #[test]
