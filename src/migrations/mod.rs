@@ -179,4 +179,9 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("20260505214219_turn_tool_activity_chronology.sql"),
         legacy_version: None,
     },
+    Migration {
+        id: "20260506170933_heal_turn_tool_activity_agent_tool_calls_json",
+        sql: include_str!("20260506170933_heal_turn_tool_activity_agent_tool_calls_json.sql"),
+        legacy_version: None,
+    },
 ];

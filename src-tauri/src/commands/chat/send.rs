@@ -194,6 +194,7 @@ fn should_defer_persistent_restart_for_state(
     has_persistent_session && has_running_background_tasks
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn apply_task_notification_status(
     app: &AppHandle,
     db_path: &std::path::Path,
@@ -568,13 +569,11 @@ fn schedule_background_task_wake(
                 duration_ms,
                 ..
             }) = &event
+                && let Ok(db) = Database::open(&db_path)
+                && let (Some(cost), Some(dur)) = (total_cost_usd, duration_ms)
+                && let Some(ref msg_id) = last_assistant_msg_id
             {
-                if let Ok(db) = Database::open(&db_path)
-                    && let (Some(cost), Some(dur)) = (total_cost_usd, duration_ms)
-                    && let Some(ref msg_id) = last_assistant_msg_id
-                {
-                    let _ = db.update_chat_message_cost(msg_id, *cost, *dur);
-                }
+                let _ = db.update_chat_message_cost(msg_id, *cost, *dur);
             }
 
             let is_done = matches!(
@@ -1999,29 +1998,28 @@ pub async fn send_chat_message(
                     &chat_session_id_for_stream,
                 )
                 .is_some()
+                    && let Ok(db) = Database::open(&db_path)
                 {
-                    if let Ok(db) = Database::open(&db_path) {
-                        let _ = db.update_agent_shell_terminal_tab_status(
+                    let _ = db.update_agent_shell_terminal_tab_status(
+                        &chat_session_id_for_stream,
+                        None,
+                        if start.run_in_background {
+                            "running"
+                        } else {
+                            "starting"
+                        },
+                        command,
+                    );
+                    if let Ok(Some(tab)) =
+                        db.get_agent_shell_terminal_tab(&chat_session_id_for_stream)
+                    {
+                        emit_agent_background_task_event(
+                            &app,
+                            AgentBackgroundTaskEventKind::Starting,
+                            &ws_id,
                             &chat_session_id_for_stream,
-                            None,
-                            if start.run_in_background {
-                                "running"
-                            } else {
-                                "starting"
-                            },
-                            command,
+                            tab,
                         );
-                        if let Ok(Some(tab)) =
-                            db.get_agent_shell_terminal_tab(&chat_session_id_for_stream)
-                        {
-                            emit_agent_background_task_event(
-                                &app,
-                                AgentBackgroundTaskEventKind::Starting,
-                                &ws_id,
-                                &chat_session_id_for_stream,
-                                tab,
-                            );
-                        }
                     }
                 }
             }

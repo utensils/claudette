@@ -1,8 +1,8 @@
 ---
 name: claudette
-description: Drive the running Claudette desktop app from the command line — list and create workspaces, send prompts to chat sessions, fan out batch manifests across many workspaces, list pull requests via SCM plugins, invoke arbitrary plugin operations. Use when the user asks to list/create/archive workspaces, send a message to a Claudette session, kick off a phase plan or multi-workspace fan-out, check PRs from a workspace, or otherwise interact with their open Claudette app from outside the GUI.
+description: Drive the running Claudette desktop app from the command line — list and create workspaces, inspect chat transcripts/tool turns/attachments, answer or approve pending agent controls, send or steer prompts to chat sessions, fan out batch manifests across many workspaces, list pull requests via SCM plugins, invoke arbitrary plugin operations. Use when the user asks to list/create/archive workspaces, inspect or control Claudette chat sessions, send a message to a Claudette session, kick off a phase plan or multi-workspace fan-out, check PRs from a workspace, or otherwise interact with their open Claudette app from outside the GUI.
 when_to_use: |
-  Trigger when the user mentions Claudette workspaces, sessions, batch / phase plans, "send this prompt to N workspaces", "list my workspaces", "what's running in Claudette", "create a workspace for X", "show me the PR for this workspace", or asks to invoke a Claudette SCM/env plugin operation. Also use proactively when the user has Claudette open and asks for operations that would obviously route through it (e.g. "fan out these 8 prompts as separate Claudette workspaces").
+  Trigger when the user mentions Claudette workspaces, sessions, chat transcripts, pending agent questions, plan approvals, completed turns, batch / phase plans, "send this prompt to N workspaces", "get feedback from the other agents", "list my workspaces", "what's running in Claudette", "create a workspace for X", "show me the PR for this workspace", or asks to invoke a Claudette SCM/env plugin operation. Also use proactively when the user has Claudette open and asks for operations that would obviously route through it (e.g. "fan out these 8 prompts as separate Claudette workspaces").
 allowed-tools: Bash(claudette:*)
 ---
 
@@ -30,6 +30,16 @@ claudette workspace archive <ws-id>
 # Send a prompt to a chat session (kicks off an agent turn in the GUI)
 claudette chat send <session-id> "your prompt"
 claudette chat send <session-id> @prompts/feature.md --model sonnet --plan
+
+# Orchestrate a running chat session
+claudette chat list <workspace-id>
+claudette chat show <session-id> --limit 50
+claudette chat turns <session-id>
+claudette chat answer <session-id> <tool-use-id> --answers-json '{"Question?":"Answer"}'
+claudette chat approve-plan <session-id> <tool-use-id>
+claudette chat deny-plan <session-id> <tool-use-id> "revise the plan first"
+claudette chat steer <session-id> @prompts/followup.md
+claudette chat stop <session-id>
 ```
 
 ## Top-level commands
@@ -39,7 +49,7 @@ claudette chat send <session-id> @prompts/feature.md --model sonnet --plan
 | `version` | Print app + protocol version of the running GUI; warns on CLI/GUI version mismatch |
 | `capabilities` | List the JSON-RPC methods the GUI accepts |
 | `workspace` (alias `ws`) | List / create / archive workspaces |
-| `chat` | List sessions, send messages |
+| `chat` | List, inspect, send, steer, and control chat sessions |
 | `repo` | List repositories registered with the GUI |
 | `batch` | Run / validate a batch manifest (multi-workspace fan-out) |
 | `plugin` | List loaded plugins, invoke any operation directly |
@@ -88,6 +98,41 @@ Per-turn agent settings (each boolean is tri-state — pass `--flag` to force on
 | `--effort <level>` | `low` / `medium` / `high` / `xhigh` / `max` |
 | `--disable-1m-context` / `--no-disable-1m-context` | Suppress / re-enable the Max-plan 1M context auto-upgrade |
 | `--permission <level>` | `default` / `acceptEdits` / `bypassPermissions` |
+
+### Inspect and orchestrate chat sessions
+
+Use `chat show` as the primary orchestration read. It returns one bounded JSON snapshot with hydrated session metadata, recent messages, metadata-safe attachments, completed tool activity, live pending controls, and pagination fields:
+
+```bash
+claudette chat list <workspace-id>
+claudette chat show <session-id> --limit 50
+claudette chat show <session-id> --limit 50 --before <message-id>
+```
+
+`pending_controls` contains live agent controls such as `ask_user_question` and `exit_plan_mode`. Use the `tool_use_id` from that array to answer questions or approve/deny a plan:
+
+```bash
+claudette chat answer <session-id> <tool-use-id> --answers-json '{"Which branch?":"main"}'
+claudette chat approve-plan <session-id> <tool-use-id>
+claudette chat deny-plan <session-id> <tool-use-id> "Please split migration and UI work."
+claudette chat clear-attention <session-id>
+```
+
+Other chat inspection and control commands:
+
+| Command | Behavior |
+|---|---|
+| `claudette chat turns <session-id>` | Return completed turn/tool activity for the session |
+| `claudette chat attachments <session-id>` | Return attachment metadata and safe inline text snippets |
+| `claudette chat attachment-data <attachment-id>` | Fetch a full attachment body explicitly |
+| `claudette chat create <workspace-id>` | Create a new chat session in a workspace |
+| `claudette chat rename <session-id> <name>` | Rename a session |
+| `claudette chat archive <session-id>` | Archive a session |
+| `claudette chat steer <session-id> <prompt\|@file\|->` | Steer the queued message for a running session |
+| `claudette chat stop <session-id>` | Stop the live agent process |
+| `claudette chat reset <session-id>` | Reset the live agent session |
+
+Snapshots and attachment lists intentionally omit large base64 bodies so they stay under the IPC response cap. Fetch full bodies only with `attachment-data`.
 
 ### Archive a workspace
 
@@ -159,6 +204,7 @@ For methods that don't have a typed subcommand yet (or for debugging):
 ```bash
 claudette rpc list_workspaces
 claudette rpc list_chat_sessions '{"workspace_id":"<ws-id>"}'
+claudette rpc get_chat_snapshot '{"session_id":"<session-id>","limit":50}'
 ```
 
 `claudette capabilities` prints every method the running GUI accepts.
@@ -184,7 +230,7 @@ Inside a Claudette workspace shell these are already set, so `claudette pr list`
 ## Output conventions
 
 - Commands with a human-readable renderer (`workspace list`, `repo list`, `pr list`, `plugin list`) default to a table-ish format and switch to JSON when `--json` is set.
-- Other commands always emit JSON regardless of `--json` because they don't have a table renderer yet (`capabilities`, `rpc`, `chat list`, `pr show`, `workspace create` / `archive`, `batch run` summary).
+- Other commands always emit JSON regardless of `--json` because they don't have a table renderer yet (`capabilities`, `rpc`, `chat list`, `chat show`, chat control commands, `pr show`, `workspace create` / `archive`, `batch run` summary).
 - Pipe `--json` output through `jq` for scripting.
 
 ## When to NOT use this skill

@@ -554,6 +554,52 @@ mod tests {
         assert!(!present);
     }
 
+    /// Regression: dev DBs that ran migration `20260505214219` before
+    /// commit `2fc1b316` amended its SQL recorded the migration id as
+    /// applied without ever picking up the late-added
+    /// `agent_tool_calls_json` column. The follow-up healing migration
+    /// `20260506170933_heal_turn_tool_activity_agent_tool_calls_json`
+    /// restores the column on those DBs and is a no-op (via the
+    /// runner's "already exists" leniency) on clean installs.
+    #[test]
+    fn test_heal_migration_restores_missing_agent_tool_calls_json_column() {
+        let db = Database::open_in_memory().unwrap();
+
+        // Simulate the broken state: drop the column that the amended
+        // migration was supposed to add, and forget that the healing
+        // migration ever ran so the runner replays it.
+        db.execute_batch("ALTER TABLE turn_tool_activities DROP COLUMN agent_tool_calls_json;")
+            .unwrap();
+        db.conn()
+            .execute(
+                "DELETE FROM schema_migrations WHERE id = ?1",
+                params!["20260506170933_heal_turn_tool_activity_agent_tool_calls_json"],
+            )
+            .unwrap();
+        let column_exists = |name: &str| -> bool {
+            db.conn()
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('turn_tool_activities') WHERE name = ?1",
+                    params![name],
+                    |r| r.get::<_, i64>(0),
+                )
+                .unwrap()
+                > 0
+        };
+        assert!(!column_exists("agent_tool_calls_json"));
+
+        // Re-running the canonical migrations should now heal the DB.
+        db.run_migrations_for_test()
+            .expect("healing migration must apply cleanly");
+        assert!(column_exists("agent_tool_calls_json"));
+
+        // And running it a second time on a healed DB must remain a
+        // no-op via the runner's duplicate-column leniency.
+        db.run_migrations_for_test()
+            .expect("healing migration must be idempotent");
+        assert!(column_exists("agent_tool_calls_json"));
+    }
+
     #[test]
     fn test_is_already_exists_error_classifier() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();

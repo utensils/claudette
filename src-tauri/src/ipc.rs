@@ -23,7 +23,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use claudette::base64_encode;
 use claudette::db::Database;
+use claudette::model::{
+    AgentStatus, Attachment, AttachmentOrigin, ChatMessage, ChatRole, ChatSession,
+    CompletedTurnData,
+};
 use claudette::plugin_runtime::host_api::WorkspaceInfo;
 use claudette::rpc::{Capabilities, RpcRequest, RpcResponse};
 use claudette::scm::detect;
@@ -34,8 +39,9 @@ use interprocess::local_socket::{GenericFilePath, ToFsName};
 use interprocess::local_socket::{GenericNamespaced, ToNsName};
 use interprocess::local_socket::{ListenerOptions, Name};
 use rand::RngCore;
+use serde::Serialize;
 use serde_json::json;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, State};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -58,13 +64,77 @@ const METHODS: &[&str] = &[
     "list_repositories",
     "list_workspaces",
     "list_chat_sessions",
+    "get_chat_session",
+    "get_chat_snapshot",
+    "load_completed_turns",
+    "load_attachments_for_session",
+    "load_attachment_data",
+    "create_chat_session",
+    "rename_chat_session",
+    "archive_chat_session",
     "create_workspace",
     "archive_workspace",
     "send_chat_message",
+    "steer_queued_chat_message",
+    "stop_agent",
+    "reset_agent_session",
+    "clear_attention",
+    "submit_agent_answer",
+    "submit_plan_approval",
     "plugin.list",
     "plugin.invoke",
     "scm.detect_provider",
 ];
+
+const DEFAULT_CHAT_SNAPSHOT_LIMIT: i64 = 50;
+const MAX_CHAT_SNAPSHOT_LIMIT: i64 = 200;
+// Attachment lists are preview surfaces; full bytes are fetched explicitly
+// through `load_attachment_data` so JSON-RPC responses stay bounded.
+const MAX_TEXT_ATTACHMENT_INLINE_BYTES: usize = 16 * 1024;
+const MAX_ATTACHMENT_INLINE_BYTES_PER_RESPONSE: usize = 512 * 1024;
+
+#[derive(Debug, Clone, Serialize)]
+struct ChatSnapshot {
+    session: ChatSession,
+    messages: Vec<ChatMessage>,
+    attachments: Vec<IpcAttachment>,
+    completed_turns: Vec<CompletedTurnData>,
+    pending_controls: Vec<PendingAgentControl>,
+    has_more: bool,
+    total_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct IpcAttachment {
+    id: String,
+    message_id: String,
+    filename: String,
+    media_type: String,
+    text_content: Option<String>,
+    width: Option<i32>,
+    height: Option<i32>,
+    size_bytes: i64,
+    created_at: String,
+    origin: AttachmentOrigin,
+    tool_use_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+struct PendingAgentControl {
+    tool_use_id: String,
+    tool_name: String,
+    input: serde_json::Value,
+    kind: PendingAgentControlKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum PendingAgentControlKind {
+    AskUserQuestion,
+    ExitPlanMode,
+    /// Forward-compatible bucket for future Claude tool-control kinds.
+    Unknown,
+}
 
 /// Live IPC server. Drop to tear down the listener and remove the socket
 /// file (Unix) — same RAII model as `agent_mcp::bridge::McpBridgeSession`.
@@ -322,10 +392,24 @@ async fn dispatch(app: &AppHandle, req: RpcRequest) -> RpcResponse {
                 .map(|v| serde_json::to_value(v).unwrap_or_default())
                 .map_err(|e| e.to_string())
         }),
-        "list_chat_sessions" => handle_list_chat_sessions(app, &req.params),
+        "list_chat_sessions" => handle_list_chat_sessions(app, &req.params).await,
+        "get_chat_session" => handle_get_chat_session(app, &req.params).await,
+        "get_chat_snapshot" => handle_get_chat_snapshot(app, &req.params).await,
+        "load_completed_turns" => handle_load_completed_turns(app, &req.params),
+        "load_attachments_for_session" => handle_load_attachments_for_session(app, &req.params),
+        "load_attachment_data" => handle_load_attachment_data(app, &req.params),
+        "create_chat_session" => handle_create_chat_session(app, &req.params).await,
+        "rename_chat_session" => handle_rename_chat_session(app, &req.params).await,
+        "archive_chat_session" => handle_archive_chat_session(app, &req.params).await,
         "create_workspace" => handle_create_workspace(app, &req.params).await,
         "archive_workspace" => handle_archive_workspace(app, &req.params).await,
         "send_chat_message" => handle_send_chat_message(app, &req.params).await,
+        "steer_queued_chat_message" => handle_steer_queued_chat_message(app, &req.params).await,
+        "stop_agent" => handle_stop_agent(app, &req.params).await,
+        "reset_agent_session" => handle_reset_agent_session(app, &req.params).await,
+        "clear_attention" => handle_clear_attention(app, &req.params).await,
+        "submit_agent_answer" => handle_submit_agent_answer(app, &req.params).await,
+        "submit_plan_approval" => handle_submit_plan_approval(app, &req.params).await,
         "plugin.list" => handle_plugin_list(app).await,
         "plugin.invoke" => handle_plugin_invoke(app, &req.params).await,
         "scm.detect_provider" => handle_scm_detect_provider(app, &req.params).await,
@@ -343,11 +427,14 @@ fn with_db<F>(app: &AppHandle, f: F) -> Result<serde_json::Value, String>
 where
     F: FnOnce(&Database) -> Result<serde_json::Value, String>,
 {
-    let state = app
-        .try_state::<AppState>()
-        .ok_or_else(|| "AppState not initialised".to_string())?;
+    let state = app_state(app)?;
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     f(&db)
+}
+
+fn app_state(app: &AppHandle) -> Result<State<'_, AppState>, String> {
+    app.try_state::<AppState>()
+        .ok_or_else(|| "AppState not initialised".to_string())
 }
 
 /// Delegates to the shared `commands::workspace::create_workspace_inner`
@@ -371,9 +458,7 @@ async fn handle_create_workspace(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    let state = app
-        .try_state::<AppState>()
-        .ok_or_else(|| "AppState not initialised".to_string())?;
+    let state = app_state(app)?;
 
     let result =
         crate::commands::workspace::create_workspace_inner(repo_id, name, skip_setup, app, &state)
@@ -386,10 +471,201 @@ async fn handle_create_workspace(
     }))
 }
 
+fn param_chat_session_id(params: &serde_json::Value) -> Result<String, String> {
+    params
+        .get("chat_session_id")
+        .or_else(|| params.get("session_id"))
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .ok_or_else(|| "missing session_id".to_string())
+}
+
+fn hydrate_session(
+    mut session: ChatSession,
+    agents: &std::collections::HashMap<String, crate::state::AgentSessionState>,
+) -> ChatSession {
+    if let Some(agent) = agents.get(&session.id) {
+        session.agent_status = if agent.active_pid.is_some() {
+            AgentStatus::Running
+        } else if !agent.running_background_tasks.is_empty() {
+            AgentStatus::IdleWithBackground
+        } else {
+            AgentStatus::Idle
+        };
+        session.needs_attention = agent.needs_attention;
+        session.attention_kind = agent.attention_kind.map(|k| match k {
+            crate::state::AttentionKind::Ask => claudette::model::AttentionKind::Ask,
+            crate::state::AttentionKind::Plan => claudette::model::AttentionKind::Plan,
+        });
+    }
+    session
+}
+
+fn pending_controls_for_session(
+    agent: Option<&crate::state::AgentSessionState>,
+) -> Vec<PendingAgentControl> {
+    let Some(agent) = agent else {
+        return Vec::new();
+    };
+    let mut out: Vec<PendingAgentControl> = agent
+        .pending_permissions
+        .iter()
+        .map(|(tool_use_id, pending)| PendingAgentControl {
+            tool_use_id: tool_use_id.clone(),
+            tool_name: pending.tool_name.clone(),
+            input: pending.original_input.clone(),
+            kind: match pending.tool_name.as_str() {
+                "AskUserQuestion" => PendingAgentControlKind::AskUserQuestion,
+                "ExitPlanMode" => PendingAgentControlKind::ExitPlanMode,
+                _ => PendingAgentControlKind::Unknown,
+            },
+        })
+        .collect();
+    out.sort_by(|a, b| a.tool_use_id.cmp(&b.tool_use_id));
+    out
+}
+
+fn safe_attachment(att: Attachment, remaining_inline_bytes: &mut usize) -> IpcAttachment {
+    let can_inline = is_text_attachment(&att.media_type)
+        && att.data.len() <= MAX_TEXT_ATTACHMENT_INLINE_BYTES
+        && att.data.len() <= *remaining_inline_bytes;
+    let text_content = if can_inline {
+        *remaining_inline_bytes = remaining_inline_bytes.saturating_sub(att.data.len());
+        std::str::from_utf8(&att.data).ok().map(str::to_owned)
+    } else {
+        None
+    };
+    IpcAttachment {
+        id: att.id,
+        message_id: att.message_id,
+        filename: att.filename,
+        media_type: att.media_type,
+        text_content,
+        width: att.width,
+        height: att.height,
+        size_bytes: att.size_bytes,
+        created_at: att.created_at,
+        origin: att.origin,
+        tool_use_id: att.tool_use_id,
+    }
+}
+
+fn is_text_attachment(media_type: &str) -> bool {
+    matches!(
+        media_type,
+        "text/plain" | "text/csv" | "text/markdown" | "application/json"
+    )
+}
+
+fn clamp_snapshot_limit(params: &serde_json::Value) -> i64 {
+    params
+        .get("limit")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(DEFAULT_CHAT_SNAPSHOT_LIMIT)
+        .clamp(1, MAX_CHAT_SNAPSHOT_LIMIT)
+}
+
+fn parse_optional_param<T>(params: &serde_json::Value, keys: &[&str]) -> Result<Option<T>, String>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let Some((key, value)) = keys
+        .iter()
+        .find_map(|key| params.get(key).map(|value| (*key, value)))
+    else {
+        return Ok(None);
+    };
+    serde_json::from_value(value.clone())
+        .map(Some)
+        .map_err(|e| format!("invalid {key}: {e}"))
+}
+
+fn load_safe_attachments_for_message_ids(
+    db: &Database,
+    message_ids: &[String],
+    carry_over_user_id: Option<&str>,
+) -> Result<Vec<IpcAttachment>, String> {
+    let message_order: std::collections::HashMap<&str, usize> = message_ids
+        .iter()
+        .enumerate()
+        .map(|(idx, id)| (id.as_str(), idx))
+        .collect();
+    let att_map = db
+        .list_attachments_for_messages(message_ids)
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    let mut remaining_inline_bytes = MAX_ATTACHMENT_INLINE_BYTES_PER_RESPONSE;
+    for (msg_id, atts) in att_map {
+        let is_carry_over = carry_over_user_id == Some(msg_id.as_str());
+        for att in atts {
+            if is_carry_over && att.origin != AttachmentOrigin::Agent {
+                continue;
+            }
+            out.push(safe_attachment(att, &mut remaining_inline_bytes));
+        }
+    }
+    out.sort_by(|a, b| {
+        message_order
+            .get(a.message_id.as_str())
+            .cmp(&message_order.get(b.message_id.as_str()))
+            .then_with(|| a.created_at.cmp(&b.created_at))
+            .then_with(|| a.filename.cmp(&b.filename))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    Ok(out)
+}
+
+fn build_chat_snapshot(
+    db: &Database,
+    session: ChatSession,
+    messages: Vec<ChatMessage>,
+    has_more: bool,
+    pending_controls: Vec<PendingAgentControl>,
+) -> Result<ChatSnapshot, String> {
+    let total_count = db
+        .count_chat_messages_for_session(&session.id)
+        .map_err(|e| e.to_string())?;
+
+    let mut message_ids: Vec<String> = messages.iter().map(|m| m.id.clone()).collect();
+    let mut carry_over_user_id: Option<String> = None;
+    if let Some(first) = messages.first()
+        && first.role != ChatRole::User
+        && let Some(prev_user) = db
+            .previous_user_message_id(&session.id, &first.id)
+            .map_err(|e| e.to_string())?
+    {
+        message_ids.push(prev_user.clone());
+        carry_over_user_id = Some(prev_user);
+    }
+
+    let attachments =
+        load_safe_attachments_for_message_ids(db, &message_ids, carry_over_user_id.as_deref())?;
+    let completed_turns = db
+        .list_completed_turns_for_session(&session.id)
+        .map_err(|e| e.to_string())?;
+
+    Ok(ChatSnapshot {
+        session,
+        messages,
+        attachments,
+        completed_turns,
+        pending_controls,
+        has_more,
+        total_count,
+    })
+}
+
+fn trim_peeked_message_page(messages: &mut Vec<ChatMessage>, limit: i64) -> bool {
+    let has_more = messages.len() as i64 > limit;
+    if has_more {
+        messages.remove(0);
+    }
+    has_more
+}
+
 /// `list_chat_sessions` IPC method — read-only DB query for a single
-/// workspace's sessions. CLI callers always have a workspace context
-/// (CLI is workspace-scoped by convention), so we require `workspace_id`.
-fn handle_list_chat_sessions(
+/// workspace's sessions, overlaid with live agent state.
+async fn handle_list_chat_sessions(
     app: &AppHandle,
     params: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
@@ -402,11 +678,149 @@ fn handle_list_chat_sessions(
         .get("include_archived")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let state = app_state(app)?;
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let sessions = db
+        .list_chat_sessions_for_workspace(&workspace_id, include_archived)
+        .map_err(|e| e.to_string())?;
+    let agents = state.agents.read().await;
+    let hydrated: Vec<ChatSession> = sessions
+        .into_iter()
+        .map(|s| hydrate_session(s, &agents))
+        .collect();
+    serde_json::to_value(hydrated).map_err(|e| e.to_string())
+}
+
+async fn handle_get_chat_session(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let chat_session_id = param_chat_session_id(params)?;
+    let state = app_state(app)?;
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let session = db
+        .get_chat_session(&chat_session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Session not found")?;
+    let agents = state.agents.read().await;
+    serde_json::to_value(hydrate_session(session, &agents)).map_err(|e| e.to_string())
+}
+
+async fn handle_get_chat_snapshot(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let chat_session_id = param_chat_session_id(params)?;
+    let limit = clamp_snapshot_limit(params);
+    let before_message_id = params
+        .get("before_message_id")
+        .or_else(|| params.get("beforeMessageId"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    let state = app_state(app)?;
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let session = db
+        .get_chat_session(&chat_session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Session not found")?;
+    let mut messages = db
+        .list_chat_messages_page(&chat_session_id, limit + 1, before_message_id.as_deref())
+        .map_err(|e| e.to_string())?;
+    let has_more = trim_peeked_message_page(&mut messages, limit);
+    let agents = state.agents.read().await;
+    let pending_controls = pending_controls_for_session(agents.get(&chat_session_id));
+    let session = hydrate_session(session, &agents);
+    drop(agents);
+
+    let snapshot = build_chat_snapshot(&db, session, messages, has_more, pending_controls)?;
+    serde_json::to_value(snapshot).map_err(|e| e.to_string())
+}
+
+fn handle_load_completed_turns(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let chat_session_id = param_chat_session_id(params)?;
     with_db(app, |db| {
-        db.list_chat_sessions_for_workspace(&workspace_id, include_archived)
+        db.list_completed_turns_for_session(&chat_session_id)
             .map(|v| serde_json::to_value(v).unwrap_or_default())
             .map_err(|e| e.to_string())
     })
+}
+
+fn handle_load_attachments_for_session(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let chat_session_id = param_chat_session_id(params)?;
+    with_db(app, |db| {
+        let messages = db
+            .list_chat_messages_for_session(&chat_session_id)
+            .map_err(|e| e.to_string())?;
+        let message_ids: Vec<String> = messages.iter().map(|m| m.id.clone()).collect();
+        let attachments = load_safe_attachments_for_message_ids(db, &message_ids, None)?;
+        serde_json::to_value(attachments).map_err(|e| e.to_string())
+    })
+}
+
+fn handle_load_attachment_data(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let attachment_id = params
+        .get("attachment_id")
+        .or_else(|| params.get("attachmentId"))
+        .and_then(|v| v.as_str())
+        .ok_or("missing attachment_id")?;
+    with_db(app, |db| {
+        let att = db
+            .get_attachment(attachment_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("Attachment not found")?;
+        Ok(json!(base64_encode(&att.data)))
+    })
+}
+
+async fn handle_create_chat_session(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let workspace_id = params
+        .get("workspace_id")
+        .and_then(|v| v.as_str())
+        .ok_or("missing workspace_id")?
+        .to_string();
+    let state = app_state(app)?;
+    let session = crate::commands::chat::session::create_chat_session(workspace_id, state).await?;
+    serde_json::to_value(session).map_err(|e| e.to_string())
+}
+
+async fn handle_rename_chat_session(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let chat_session_id = param_chat_session_id(params)?;
+    let name = params
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or("missing name")?
+        .to_string();
+    let state = app_state(app)?;
+    crate::commands::chat::session::rename_chat_session(chat_session_id, name, state).await?;
+    Ok(json!({ "ok": true }))
+}
+
+async fn handle_archive_chat_session(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let chat_session_id = param_chat_session_id(params)?;
+    let state = app_state(app)?;
+    let fresh =
+        crate::commands::chat::session::archive_chat_session(app.clone(), chat_session_id, state)
+            .await?;
+    serde_json::to_value(fresh).map_err(|e| e.to_string())
 }
 
 /// `send_chat_message` IPC method — delegates to the existing Tauri
@@ -424,12 +838,12 @@ async fn handle_send_chat_message(
 ) -> Result<serde_json::Value, String> {
     let parsed = parse_send_chat_params(params)?;
 
-    let state: tauri::State<'_, AppState> = app.state::<AppState>();
+    let state = app_state(app)?;
     crate::commands::chat::send::send_chat_message(
         parsed.session_id,
-        None,
+        parsed.message_id,
         parsed.content,
-        None,
+        parsed.mentioned_files,
         parsed.permission_level,
         parsed.model,
         parsed.fast_mode,
@@ -438,7 +852,7 @@ async fn handle_send_chat_message(
         parsed.effort,
         parsed.chrome_enabled,
         parsed.disable_1m_context,
-        None,
+        parsed.attachments,
         app.clone(),
         state,
     )
@@ -450,10 +864,12 @@ async fn handle_send_chat_message(
 /// so the IPC surface (and therefore the `claudette` CLI) can drive a
 /// turn with the same fidelity as the GUI's "Send" button. Mirrors
 /// `AgentSettings` 1:1 — a new field there should grow a field here.
-#[derive(Debug, Default, PartialEq)]
+#[derive(Default)]
 pub(crate) struct SendChatParams {
     pub session_id: String,
+    pub message_id: Option<String>,
     pub content: String,
+    pub mentioned_files: Option<Vec<String>>,
     pub model: Option<String>,
     pub fast_mode: Option<bool>,
     pub thinking_enabled: Option<bool>,
@@ -462,6 +878,7 @@ pub(crate) struct SendChatParams {
     pub chrome_enabled: Option<bool>,
     pub disable_1m_context: Option<bool>,
     pub permission_level: Option<String>,
+    pub attachments: Option<Vec<crate::commands::chat::AttachmentInput>>,
 }
 
 /// Parse the JSON params object the IPC sends. Tolerant of both
@@ -486,7 +903,9 @@ pub(crate) fn parse_send_chat_params(params: &serde_json::Value) -> Result<SendC
     let bool_param = |key: &str| params.get(key).and_then(|v| v.as_bool());
     Ok(SendChatParams {
         session_id,
+        message_id: str_param("message_id").or_else(|| str_param("messageId")),
         content,
+        mentioned_files: parse_optional_param(params, &["mentioned_files", "mentionedFiles"])?,
         model: str_param("model"),
         fast_mode: bool_param("fast_mode"),
         thinking_enabled: bool_param("thinking_enabled"),
@@ -495,7 +914,130 @@ pub(crate) fn parse_send_chat_params(params: &serde_json::Value) -> Result<SendC
         chrome_enabled: bool_param("chrome_enabled"),
         disable_1m_context: bool_param("disable_1m_context"),
         permission_level: str_param("permission_level"),
+        attachments: parse_optional_param(params, &["attachments"])?,
     })
+}
+
+async fn handle_steer_queued_chat_message(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let chat_session_id = param_chat_session_id(params)?;
+    let content = params
+        .get("content")
+        .and_then(|v| v.as_str())
+        .ok_or("missing content")?
+        .to_string();
+    let message_id = params
+        .get("message_id")
+        .or_else(|| params.get("messageId"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let mentioned_files = parse_optional_param(params, &["mentioned_files", "mentionedFiles"])?;
+    let attachments = parse_optional_param(params, &["attachments"])?;
+    let state = app_state(app)?;
+    let checkpoint = crate::commands::chat::send::steer_queued_chat_message(
+        chat_session_id,
+        message_id,
+        content,
+        mentioned_files,
+        attachments,
+        state,
+    )
+    .await?;
+    serde_json::to_value(checkpoint).map_err(|e| e.to_string())
+}
+
+async fn handle_stop_agent(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let chat_session_id = param_chat_session_id(params)?;
+    let state = app_state(app)?;
+    crate::commands::chat::lifecycle::stop_agent(chat_session_id, app.clone(), state).await?;
+    Ok(json!({ "ok": true }))
+}
+
+async fn handle_reset_agent_session(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let chat_session_id = param_chat_session_id(params)?;
+    let state = app_state(app)?;
+    crate::commands::chat::lifecycle::reset_agent_session(chat_session_id, app.clone(), state)
+        .await?;
+    Ok(json!({ "ok": true }))
+}
+
+async fn handle_clear_attention(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let chat_session_id = param_chat_session_id(params)?;
+    let state = app_state(app)?;
+    crate::commands::chat::interaction::clear_attention(chat_session_id, app.clone(), state)
+        .await?;
+    Ok(json!({ "ok": true }))
+}
+
+async fn handle_submit_agent_answer(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let chat_session_id = param_chat_session_id(params)?;
+    let tool_use_id = params
+        .get("tool_use_id")
+        .or_else(|| params.get("toolUseId"))
+        .and_then(|v| v.as_str())
+        .ok_or("missing tool_use_id")?
+        .to_string();
+    let answers: std::collections::HashMap<String, String> = params
+        .get("answers")
+        .cloned()
+        .ok_or_else(|| "missing answers".to_string())
+        .and_then(|v| serde_json::from_value(v).map_err(|e| e.to_string()))?;
+    let annotations = params.get("annotations").cloned();
+    let state = app_state(app)?;
+    crate::commands::chat::interaction::submit_agent_answer(
+        chat_session_id,
+        tool_use_id,
+        answers,
+        annotations,
+        state,
+    )
+    .await?;
+    Ok(json!({ "ok": true }))
+}
+
+async fn handle_submit_plan_approval(
+    app: &AppHandle,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let chat_session_id = param_chat_session_id(params)?;
+    let tool_use_id = params
+        .get("tool_use_id")
+        .or_else(|| params.get("toolUseId"))
+        .and_then(|v| v.as_str())
+        .ok_or("missing tool_use_id")?
+        .to_string();
+    let approved = params
+        .get("approved")
+        .and_then(|v| v.as_bool())
+        .ok_or("missing approved")?;
+    let reason = params
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let state = app_state(app)?;
+    crate::commands::chat::interaction::submit_plan_approval(
+        chat_session_id,
+        tool_use_id,
+        approved,
+        reason,
+        state,
+    )
+    .await?;
+    Ok(json!({ "ok": true }))
 }
 
 /// Delegates to the shared `commands::workspace::archive_workspace_inner`
@@ -515,9 +1057,7 @@ async fn handle_archive_workspace(
         .ok_or("missing workspace_id")?;
     let delete_branch_override = params.get("delete_branch").and_then(|v| v.as_bool());
 
-    let state = app
-        .try_state::<AppState>()
-        .ok_or_else(|| "AppState not initialised".to_string())?;
+    let state = app_state(app)?;
     let supervisor = app
         .try_state::<Arc<claudette::mcp_supervisor::McpSupervisor>>()
         .ok_or_else(|| "McpSupervisor not initialised".to_string())?;
@@ -545,9 +1085,7 @@ async fn handle_archive_workspace(
 /// `plugin invoke` tab-completion hints and to surface friendly per-kind
 /// shortcuts (`claudette pr …`) only when a matching provider is loaded.
 async fn handle_plugin_list(app: &AppHandle) -> Result<serde_json::Value, String> {
-    let state = app
-        .try_state::<AppState>()
-        .ok_or_else(|| "AppState not initialised".to_string())?;
+    let state = app_state(app)?;
     let registry = state.plugins.read().await;
     let mut out: Vec<serde_json::Value> = registry
         .plugins
@@ -606,9 +1144,7 @@ async fn handle_plugin_invoke(
         .to_string();
     let args = params.get("args").cloned().unwrap_or(json!({}));
 
-    let state = app
-        .try_state::<AppState>()
-        .ok_or_else(|| "AppState not initialised".to_string())?;
+    let state = app_state(app)?;
 
     let ws_info = build_workspace_info(&state.db_path, &workspace_id)?;
     let registry = state.plugins.read().await;
@@ -636,9 +1172,7 @@ async fn handle_scm_detect_provider(
         .ok_or("missing repo_id")?
         .to_string();
 
-    let state = app
-        .try_state::<AppState>()
-        .ok_or_else(|| "AppState not initialised".to_string())?;
+    let state = app_state(app)?;
 
     let (manual_override, repo_path, default_remote) = {
         let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
@@ -704,7 +1238,322 @@ fn build_workspace_info(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use claudette::model::{Repository, Workspace, WorkspaceStatus};
     use serde_json::json;
+    use std::collections::HashMap;
+
+    fn make_repo(id: &str) -> Repository {
+        Repository {
+            id: id.into(),
+            path: format!("/tmp/{id}"),
+            name: id.into(),
+            path_slug: id.into(),
+            icon: None,
+            created_at: String::new(),
+            setup_script: None,
+            custom_instructions: None,
+            sort_order: 0,
+            branch_rename_preferences: None,
+            setup_script_auto_run: false,
+            base_branch: None,
+            default_remote: None,
+            path_valid: true,
+        }
+    }
+
+    fn make_workspace(id: &str, repo_id: &str) -> Workspace {
+        Workspace {
+            id: id.into(),
+            repository_id: repo_id.into(),
+            name: id.into(),
+            branch_name: format!("claudette/{id}"),
+            worktree_path: Some(format!("/tmp/{id}")),
+            status: WorkspaceStatus::Active,
+            agent_status: AgentStatus::Idle,
+            status_line: String::new(),
+            created_at: String::new(),
+            sort_order: 0,
+        }
+    }
+
+    fn make_chat_msg(
+        id: &str,
+        workspace_id: &str,
+        chat_session_id: &str,
+        role: ChatRole,
+        content: &str,
+    ) -> ChatMessage {
+        ChatMessage {
+            id: id.into(),
+            workspace_id: workspace_id.into(),
+            chat_session_id: chat_session_id.into(),
+            role,
+            content: content.into(),
+            cost_usd: None,
+            duration_ms: None,
+            created_at: String::new(),
+            thinking: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+        }
+    }
+
+    fn make_attachment(id: &str, message_id: &str, media_type: &str, data: &[u8]) -> Attachment {
+        Attachment {
+            id: id.into(),
+            message_id: message_id.into(),
+            filename: format!("{id}.dat"),
+            media_type: media_type.into(),
+            data: data.to_vec(),
+            width: None,
+            height: None,
+            size_bytes: data.len() as i64,
+            created_at: String::new(),
+            origin: AttachmentOrigin::User,
+            tool_use_id: None,
+        }
+    }
+
+    fn fresh_agent_state(
+        session_id: &str,
+        active_pid: Option<u32>,
+    ) -> crate::state::AgentSessionState {
+        crate::state::AgentSessionState {
+            workspace_id: "w1".into(),
+            session_id: session_id.into(),
+            turn_count: 1,
+            active_pid,
+            custom_instructions: None,
+            needs_attention: false,
+            attention_kind: None,
+            attention_notification_sent: false,
+            persistent_session: None,
+            mcp_config_dirty: false,
+            session_plan_mode: false,
+            session_allowed_tools: Vec::new(),
+            session_disable_1m_context: false,
+            pending_permissions: HashMap::new(),
+            running_background_tasks: Default::default(),
+            background_wake_active: false,
+            session_exited_plan: false,
+            session_resolved_env: Default::default(),
+            mcp_bridge: None,
+            last_user_msg_id: None,
+            posted_env_trust_warning: false,
+        }
+    }
+
+    #[test]
+    fn capabilities_methods_include_chat_orchestration_surface() {
+        for method in [
+            "get_chat_session",
+            "get_chat_snapshot",
+            "load_completed_turns",
+            "load_attachments_for_session",
+            "load_attachment_data",
+            "create_chat_session",
+            "rename_chat_session",
+            "archive_chat_session",
+            "stop_agent",
+            "reset_agent_session",
+            "clear_attention",
+            "submit_agent_answer",
+            "submit_plan_approval",
+            "steer_queued_chat_message",
+        ] {
+            assert!(METHODS.contains(&method), "{method} missing from METHODS");
+        }
+    }
+
+    #[test]
+    fn build_chat_snapshot_returns_paginated_messages_and_safe_attachments() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1")).unwrap();
+        db.insert_workspace(&make_workspace("w1", "r1")).unwrap();
+        let session_id = db.default_session_id_for_workspace("w1").unwrap().unwrap();
+
+        db.insert_chat_message(&make_chat_msg(
+            "m1",
+            "w1",
+            &session_id,
+            ChatRole::User,
+            "first",
+        ))
+        .unwrap();
+        db.insert_chat_message(&make_chat_msg(
+            "m2",
+            "w1",
+            &session_id,
+            ChatRole::Assistant,
+            "second",
+        ))
+        .unwrap();
+        db.insert_chat_message(&make_chat_msg(
+            "m3",
+            "w1",
+            &session_id,
+            ChatRole::User,
+            "third",
+        ))
+        .unwrap();
+        db.insert_attachment(&make_attachment("a-text", "m3", "text/plain", b"hello"))
+            .unwrap();
+        db.insert_attachment(&make_attachment("a-image", "m3", "image/png", b"\x89PNG"))
+            .unwrap();
+
+        let session = db.get_chat_session(&session_id).unwrap().unwrap();
+        let messages = db.list_chat_messages_page(&session_id, 2, None).unwrap();
+        let snapshot = build_chat_snapshot(&db, session, messages, true, Vec::new()).unwrap();
+
+        assert_eq!(snapshot.total_count, 3);
+        assert!(snapshot.has_more);
+        assert_eq!(
+            snapshot
+                .messages
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["m2", "m3"]
+        );
+        let text = snapshot
+            .attachments
+            .iter()
+            .find(|a| a.id == "a-text")
+            .unwrap();
+        assert_eq!(text.text_content.as_deref(), Some("hello"));
+        let image = snapshot
+            .attachments
+            .iter()
+            .find(|a| a.id == "a-image")
+            .unwrap();
+        assert!(image.text_content.is_none());
+    }
+
+    #[test]
+    fn peeked_message_page_has_exact_has_more() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1")).unwrap();
+        db.insert_workspace(&make_workspace("w1", "r1")).unwrap();
+        let session_id = db.default_session_id_for_workspace("w1").unwrap().unwrap();
+
+        for id in ["m1", "m2", "m3"] {
+            db.insert_chat_message(&make_chat_msg(id, "w1", &session_id, ChatRole::User, id))
+                .unwrap();
+        }
+
+        let mut newest = db.list_chat_messages_page(&session_id, 3, None).unwrap();
+        assert!(trim_peeked_message_page(&mut newest, 2));
+        assert_eq!(
+            newest.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            vec!["m2", "m3"]
+        );
+
+        let mut older = db
+            .list_chat_messages_page(&session_id, 3, Some("m3"))
+            .unwrap();
+        assert!(!trim_peeked_message_page(&mut older, 2));
+        assert_eq!(
+            older.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            vec!["m1", "m2"]
+        );
+    }
+
+    #[test]
+    fn safe_attachments_keep_message_order_and_cap_inline_text() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&make_repo("r1")).unwrap();
+        db.insert_workspace(&make_workspace("w1", "r1")).unwrap();
+        let session_id = db.default_session_id_for_workspace("w1").unwrap().unwrap();
+
+        for id in ["m1", "m2"] {
+            db.insert_chat_message(&make_chat_msg(id, "w1", &session_id, ChatRole::User, id))
+                .unwrap();
+        }
+        db.insert_attachment(&make_attachment("a1", "m1", "text/plain", b"first"))
+            .unwrap();
+        db.insert_attachment(&make_attachment("a2", "m2", "text/plain", b"second"))
+            .unwrap();
+        db.insert_attachment(&make_attachment(
+            "a-big",
+            "m2",
+            "text/plain",
+            &vec![b'x'; MAX_TEXT_ATTACHMENT_INLINE_BYTES + 1],
+        ))
+        .unwrap();
+
+        let ids = vec!["m2".to_string(), "m1".to_string()];
+        let attachments = load_safe_attachments_for_message_ids(&db, &ids, None).unwrap();
+        assert_eq!(
+            attachments
+                .iter()
+                .map(|a| a.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a-big", "a2", "a1"]
+        );
+        assert!(attachments[0].text_content.is_none());
+        assert_eq!(attachments[1].text_content.as_deref(), Some("second"));
+    }
+
+    #[test]
+    fn hydrate_session_overlays_live_agent_status_and_attention() {
+        let mut session = ChatSession {
+            id: "s1".into(),
+            workspace_id: "w1".into(),
+            session_id: None,
+            name: "New chat".into(),
+            name_edited: false,
+            turn_count: 0,
+            sort_order: 0,
+            status: claudette::model::SessionStatus::Active,
+            created_at: String::new(),
+            archived_at: None,
+            agent_status: AgentStatus::Idle,
+            needs_attention: false,
+            attention_kind: None,
+        };
+        let mut agent = fresh_agent_state("claude-s1", Some(123));
+        agent.needs_attention = true;
+        agent.attention_kind = Some(crate::state::AttentionKind::Ask);
+        let agents = HashMap::from([(session.id.clone(), agent)]);
+
+        session = hydrate_session(session, &agents);
+        assert_eq!(session.agent_status, AgentStatus::Running);
+        assert!(session.needs_attention);
+        assert_eq!(
+            session.attention_kind,
+            Some(claudette::model::AttentionKind::Ask)
+        );
+    }
+
+    #[test]
+    fn pending_controls_serialize_input_and_kind() {
+        let mut agent = fresh_agent_state("claude-s1", None);
+        agent.pending_permissions.insert(
+            "toolu_ask".into(),
+            crate::state::PendingPermission {
+                request_id: "req-1".into(),
+                tool_name: "AskUserQuestion".into(),
+                original_input: json!({"questions": [{"question": "Proceed?"}]}),
+            },
+        );
+        agent.pending_permissions.insert(
+            "toolu_plan".into(),
+            crate::state::PendingPermission {
+                request_id: "req-2".into(),
+                tool_name: "ExitPlanMode".into(),
+                original_input: json!({"plan": "Do it"}),
+            },
+        );
+
+        let controls = pending_controls_for_session(Some(&agent));
+        assert_eq!(controls.len(), 2);
+        assert_eq!(controls[0].tool_use_id, "toolu_ask");
+        assert_eq!(controls[0].kind, PendingAgentControlKind::AskUserQuestion);
+        assert_eq!(controls[0].input["questions"][0]["question"], "Proceed?");
+        assert_eq!(controls[1].kind, PendingAgentControlKind::ExitPlanMode);
+    }
 
     /// Regression: the IPC handler historically dropped every agent-
     /// setting flag except model / plan_mode / permission_level. CLI
@@ -724,6 +1573,13 @@ mod tests {
             "chrome_enabled": true,
             "disable_1m_context": true,
             "permission_level": "acceptEdits",
+            "mentioned_files": ["/tmp/a.rs"],
+            "attachments": [{
+                "filename": "note.txt",
+                "media_type": "text/plain",
+                "data_base64": "aGVsbG8=",
+                "text_content": "hello"
+            }],
         }))
         .expect("must parse");
         assert_eq!(parsed.session_id, "sess-1");
@@ -736,6 +1592,11 @@ mod tests {
         assert_eq!(parsed.chrome_enabled, Some(true));
         assert_eq!(parsed.disable_1m_context, Some(true));
         assert_eq!(parsed.permission_level.as_deref(), Some("acceptEdits"));
+        assert_eq!(
+            parsed.mentioned_files.as_ref().unwrap(),
+            &vec!["/tmp/a.rs".to_string()]
+        );
+        assert_eq!(parsed.attachments.as_ref().map(Vec::len), Some(1));
     }
 
     #[test]
@@ -772,6 +1633,26 @@ mod tests {
     fn parse_send_chat_params_rejects_missing_required_fields() {
         assert!(parse_send_chat_params(&json!({"content": "x"})).is_err());
         assert!(parse_send_chat_params(&json!({"session_id": "x"})).is_err());
+    }
+
+    #[test]
+    fn parse_send_chat_params_rejects_malformed_collections() {
+        assert!(
+            parse_send_chat_params(&json!({
+                "session_id": "sess-1",
+                "content": "hi",
+                "mentioned_files": [1],
+            }))
+            .is_err()
+        );
+        assert!(
+            parse_send_chat_params(&json!({
+                "session_id": "sess-1",
+                "content": "hi",
+                "attachments": [{"filename": "note.txt"}],
+            }))
+            .is_err()
+        );
     }
 
     /// Wrong types should drop to None for booleans and strings, not
