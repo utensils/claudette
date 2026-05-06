@@ -12,21 +12,21 @@ export function getRootZoom(): number {
 // left/top` used-value live in **visual** (post-zoom) or **layout** (pre-zoom)
 // pixels:
 //
-//   - WebKit (WKWebView on macOS, WebKitGTK on Linux) reports event coords
-//     and rects in visual pixels, while CSS `left/top` are interpreted in
-//     layout pixels. To place a `position: fixed` element under the cursor
-//     the click coords must be divided by the zoom factor.
+//   - WebKit (WKWebView, WebKitGTK) reports event coords and rects in visual
+//     pixels, while CSS `left/top` are interpreted in layout pixels. To place
+//     a `position: fixed` element under the cursor the click coords must be
+//     divided by the zoom factor.
 //
-//   - Chromium (WebView2 on Windows) applies zoom uniformly: event coords,
-//     rects, and CSS used-values all live in the same (layout) frame. No
-//     compensation is needed; dividing would over-correct and shift the
-//     element toward the top-left.
+//   - Chromium (WebView2) applies zoom uniformly: event coords, rects, and
+//     CSS used-values all live in the same (layout) frame. No compensation
+//     is needed; dividing would over-correct and shift the element toward
+//     the top-left.
 //
 // We pick the right branch with a behavior probe — render a fixed element at
 // a known offset and read back its rect. If the engine reports the rect in
 // the layout frame, `clientX` is in the layout frame too (no divide). If it
 // reports in the visual frame, divide. The answer is engine-stable, so we
-// cache it once we've seen a zoom != 1 the probe can actually distinguish.
+// cache it once we've actually measured a real rect.
 type CoordSpace = "visual" | "layout";
 
 let cachedCoordSpace: CoordSpace | null = null;
@@ -37,12 +37,14 @@ export function resetCoordSpaceCache(): void {
   cachedCoordSpace = null;
 }
 
-function probeCoordSpace(): CoordSpace {
-  if (typeof document === "undefined" || !document.body) return "visual";
+// Returns the measured coord space, or `null` when we couldn't actually run
+// the probe (no DOM yet, or zoom == 1 so the two frames coincide and the
+// measurement can't distinguish them). Callers must NOT cache `null` — the
+// next call may have real DOM and a non-trivial zoom available.
+function probeCoordSpace(): CoordSpace | null {
+  if (typeof document === "undefined" || !document.body) return null;
   const z = getRootZoom();
-  // At zoom == 1 the two frames coincide, so the probe can't distinguish.
-  // Caller falls back to the WebKit-style answer; we just don't cache it.
-  if (z === 1) return "visual";
+  if (z === 1) return null;
   const probe = document.createElement("div");
   // Hidden 100px-wide marker placed at a non-zero offset. `pointer-events:
   // none` and `visibility: hidden` keep it from interfering with anything
@@ -65,17 +67,15 @@ function probeCoordSpace(): CoordSpace {
 }
 
 // Returns which frame `MouseEvent.clientX/Y` live in for the current engine.
-// Cached after the first zoom != 1 call.
+// Cached after the first successful probe (zoom != 1, document.body present).
+// Falls back to `"visual"` when we can't measure yet — but does NOT cache
+// that fallback, so a later call with real DOM gets a real answer.
 export function eventCoordSpace(): CoordSpace {
   if (cachedCoordSpace !== null) return cachedCoordSpace;
-  const result = probeCoordSpace();
-  // Only lock in the answer once the probe could actually distinguish the
-  // two frames. At zoom=1 it returns "visual" by convention; we don't want
-  // to bake that in before the user ever bumps `uiFontSize`.
-  if (typeof document !== "undefined" && getRootZoom() !== 1) {
-    cachedCoordSpace = result;
-  }
-  return result;
+  const measured = probeCoordSpace();
+  if (measured === null) return "visual";
+  cachedCoordSpace = measured;
+  return measured;
 }
 
 // Translate event clientX/Y into the frame `position: fixed; left/top` uses,
