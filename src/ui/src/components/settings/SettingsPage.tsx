@@ -96,6 +96,7 @@ function SectionContent({ section }: { section: string | null }) {
 export function SettingsPage() {
   const settingsSection = useAppStore((s) => s.settingsSection);
   const { t } = useTranslation("settings");
+  const { t: tCommon } = useTranslation("common");
 
   return (
     <div className={styles.container}>
@@ -111,7 +112,7 @@ export function SettingsPage() {
                 aria-busy="true"
                 style={{ padding: "1rem", color: "var(--text-dim)" }}
               >
-                Loading settings…
+                {tCommon("loading")}
               </div>
             }
           >
