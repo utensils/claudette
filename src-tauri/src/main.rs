@@ -58,6 +58,14 @@ use claudette::db::Database;
 #[cfg(target_os = "macos")]
 const MACOS_CLOSE_WINDOW_ACCELERATOR: &str = "CmdOrCtrl+Shift+W";
 
+// Docs deep-link target for every Help surface (sidebar Help menu,
+// Settings → Help, macOS Help submenu). The TS side mirrors this in
+// `src/ui/src/helpUrls.ts` — keep both in sync. Pointing a deep page
+// rather than the docs root so users land on something actionable;
+// when the docs IA shifts, update here and in the TS file together.
+#[cfg(target_os = "macos")]
+const HELP_DOCS_URL: &str = "https://utensils.io/claudette/getting-started/installation/";
+
 fn main() {
     // Install the rustls crypto provider before any TLS usage. Both
     // aws-lc-rs and ring are active (tauri-plugin-updater pulls in ring),
@@ -249,10 +257,12 @@ fn main() {
                     eprintln!("[help] Failed to open changelog URL: {e}");
                 }
             } else if event.id().as_ref() == "help-open-docs" {
-                // Open the Claudette docs root in the system browser.
-                // Root URL (not a deeper page) so the link survives
-                // doc-site reorganization.
-                if let Err(e) = commands::shell::opener::open("https://utensils.io/claudette/") {
+                // Deep-link into the Getting Started page so all three
+                // Help surfaces (sidebar, Settings, macOS menu) land
+                // users in the same place. Single source of truth for
+                // the URL is `HELP_DOCS_URL` (mirrored in TS at
+                // `src/ui/src/helpUrls.ts`).
+                if let Err(e) = commands::shell::opener::open(HELP_DOCS_URL) {
                     eprintln!("[help] Failed to open docs URL: {e}");
                 }
             } else if event.id().as_ref() == "help-report-issue" {

@@ -4,9 +4,9 @@ import { getVersion } from "@tauri-apps/api/app";
 import { Keyboard, ExternalLink, FileText, Bug } from "lucide-react";
 import { useAppStore } from "../../../stores/useAppStore";
 import { openUrl } from "../../../services/tauri";
+import { HELP_DOCS_URL } from "../../../helpUrls";
 import styles from "../Settings.module.css";
 
-const DOCS_URL = "https://utensils.io/claudette/";
 const ISSUES_URL = "https://github.com/utensils/claudette/issues/new";
 const RELEASE_URL_BASE = "https://github.com/utensils/claudette/releases/tag/v";
 
@@ -75,7 +75,7 @@ export function HelpSettings() {
         <div className={styles.settingControl}>
           <button
             className={styles.iconBtn}
-            onClick={() => void openUrl(DOCS_URL).catch(() => {})}
+            onClick={() => void openUrl(HELP_DOCS_URL).catch(() => {})}
           >
             <FileText size={14} />
             {t("help_docs_button")}

@@ -8,9 +8,9 @@ import { openDevtools, openUrl } from "../../services/tauri";
 import { findHotkeyAction } from "../../hotkeys/actions";
 import { formatBindingParts, getEffectiveBinding } from "../../hotkeys/bindings";
 import { isMacHotkeyPlatform } from "../../hotkeys/platform";
+import { HELP_DOCS_URL } from "../../helpUrls";
 import styles from "./HelpMenu.module.css";
 
-const DOCS_URL = "https://utensils.io/claudette/getting-started/installation/";
 const RELEASE_URL_BASE = "https://github.com/utensils/claudette/releases/tag/v";
 
 // Spacing between the trigger button's top edge and the menu's bottom
@@ -105,11 +105,19 @@ export function HelpMenu({ buttonClassName, triggerLabel }: HelpMenuProps) {
   // Close on Escape and outside click. The trigger and the portaled menu
   // both count as "inside" — without that, clicking the menu's items
   // would race the outside-click handler and unmount before onClick ran.
+  //
+  // The Escape listener runs in capture phase and calls stopPropagation
+  // to keep the global Esc handler in `useKeyboardShortcuts` from also
+  // firing — its `global.dismiss-or-stop` cascade would otherwise stop
+  // a running agent if one's busy when the user dismisses the menu.
+  // (HelpMenu's `open` state lives in component state, not the Zustand
+  // store, so the global handler can't tell the menu is open.)
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
+        e.stopPropagation();
         setOpen(false);
       }
     };
@@ -119,10 +127,10 @@ export function HelpMenu({ buttonClassName, triggerLabel }: HelpMenuProps) {
       if (menuRef.current?.contains(target)) return;
       setOpen(false);
     };
-    window.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
     document.addEventListener("mousedown", onClick);
     return () => {
-      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, true);
       document.removeEventListener("mousedown", onClick);
     };
   }, [open]);
@@ -140,7 +148,7 @@ export function HelpMenu({ buttonClassName, triggerLabel }: HelpMenuProps) {
 
   const handleDocs = () => {
     setOpen(false);
-    void openUrl(DOCS_URL).catch(() => {});
+    void openUrl(HELP_DOCS_URL).catch(() => {});
   };
 
   const handleChangelog = () => {
