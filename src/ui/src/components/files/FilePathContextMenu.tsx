@@ -1,22 +1,19 @@
-import { useCallback, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { writeText as clipboardWriteText } from "@tauri-apps/plugin-clipboard-manager";
 import {
-  loadDiffFiles,
   openWorkspacePath,
-  renameWorkspacePath,
   resolveWorkspacePath,
   revealWorkspacePath,
-  trashWorkspacePath,
 } from "../../services/tauri";
 import { useAppStore } from "../../stores/useAppStore";
 import { pathMatchesTarget } from "../../stores/slices/fileTreeSlice";
 import { ContextMenu, type ContextMenuItem } from "../shared/ContextMenu";
 import { DeletePathConfirm } from "./DeletePathConfirm";
-import { RenamePathDialog } from "./RenamePathDialog";
 import {
   buildFileContextMenuItems,
   type FileContextTarget,
 } from "./fileContextMenu";
+import { useFilePathActions } from "./useFilePathActions";
 
 interface FilePathContextMenuProps {
   workspaceId: string;
@@ -24,6 +21,7 @@ interface FilePathContextMenuProps {
   x: number;
   y: number;
   beforeItems?: ContextMenuItem[];
+  onRenameRequest: (target: FileContextTarget) => void;
   onClose: () => void;
 }
 
@@ -49,40 +47,21 @@ export function FilePathContextMenu({
   x,
   y,
   beforeItems,
+  onRenameRequest,
   onClose,
 }: FilePathContextMenuProps) {
   const openFileTab = useAppStore((s) => s.openFileTab);
-  const renameFilePathInWorkspace = useAppStore((s) => s.renameFilePathInWorkspace);
-  const removeFilePathFromWorkspace = useAppStore((s) => s.removeFilePathFromWorkspace);
-  const requestFileTreeRefresh = useAppStore((s) => s.requestFileTreeRefresh);
-  const setDiffFiles = useAppStore((s) => s.setDiffFiles);
   const addToast = useAppStore((s) => s.addToast);
-  const [renameTarget, setRenameTarget] = useState<FileContextTarget | null>(null);
+  const { trashPath } = useFilePathActions(workspaceId);
   const [deleteTarget, setDeleteTarget] = useState<FileContextTarget | null>(null);
   const [menuVisible, setMenuVisible] = useState(true);
   const [operationError, setOperationError] = useState<string | null>(null);
   const [operationLoading, setOperationLoading] = useState(false);
 
-  const refreshWorkspaceFiles = useCallback(async () => {
-    requestFileTreeRefresh(workspaceId);
-    try {
-      const result = await loadDiffFiles(workspaceId);
-      if (useAppStore.getState().selectedWorkspaceId === workspaceId) {
-        setDiffFiles(result.files, result.merge_base, result.staged_files, result.commits);
-      }
-    } catch (err) {
-      console.error("Failed to refresh diff after file operation:", err);
-    }
-  }, [requestFileTreeRefresh, setDiffFiles, workspaceId]);
-
   const dirtyCount = useMemo(
     () =>
-      renameTarget
-        ? countDirtyAffectedFiles(workspaceId, renameTarget)
-        : deleteTarget
-          ? countDirtyAffectedFiles(workspaceId, deleteTarget)
-          : 0,
-    [deleteTarget, renameTarget, workspaceId],
+      deleteTarget ? countDirtyAffectedFiles(workspaceId, deleteTarget) : 0,
+    [deleteTarget, workspaceId],
   );
 
   const items = useMemo<ContextMenuItem[]>(() => {
@@ -105,8 +84,8 @@ export function FilePathContextMenu({
       },
       rename: () => {
         setOperationError(null);
-        setMenuVisible(false);
-        setRenameTarget(target);
+        onRenameRequest(target);
+        onClose();
       },
       delete: () => {
         setOperationError(null);
@@ -116,40 +95,14 @@ export function FilePathContextMenu({
     });
     if (!beforeItems || beforeItems.length === 0) return fileItems;
     return [...beforeItems, { type: "separator" }, ...fileItems];
-  }, [addToast, beforeItems, openFileTab, target, workspaceId]);
-
-  const handleRename = async (name: string) => {
-    if (!renameTarget) return;
-    setOperationLoading(true);
-    setOperationError(null);
-    try {
-      const result = await renameWorkspacePath(workspaceId, renameTarget.path, name);
-      renameFilePathInWorkspace(
-        workspaceId,
-        result.old_path,
-        result.new_path,
-        result.is_directory,
-      );
-      await refreshWorkspaceFiles();
-      addToast("Renamed");
-      setRenameTarget(null);
-      onClose();
-    } catch (err) {
-      setOperationError(String(err));
-    } finally {
-      setOperationLoading(false);
-    }
-  };
+  }, [addToast, beforeItems, onClose, onRenameRequest, openFileTab, target, workspaceId]);
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
     setOperationLoading(true);
     setOperationError(null);
     try {
-      const result = await trashWorkspacePath(workspaceId, deleteTarget.path);
-      removeFilePathFromWorkspace(workspaceId, result.old_path, result.is_directory);
-      await refreshWorkspaceFiles();
-      addToast("Moved to Trash");
+      await trashPath(deleteTarget);
       setDeleteTarget(null);
       onClose();
     } catch (err) {
@@ -168,21 +121,6 @@ export function FilePathContextMenu({
           items={items}
           onClose={onClose}
           dataTestId="file-context-menu"
-        />
-      )}
-      {renameTarget && (
-        <RenamePathDialog
-          target={renameTarget}
-          dirtyCount={dirtyCount}
-          loading={operationLoading}
-          error={operationError}
-          onConfirm={handleRename}
-          onClose={() => {
-            if (operationLoading) return;
-            setRenameTarget(null);
-            setOperationError(null);
-            onClose();
-          }}
         />
       )}
       {deleteTarget && (

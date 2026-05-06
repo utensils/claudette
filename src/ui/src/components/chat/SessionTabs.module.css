@@ -133,6 +133,10 @@
   color: var(--text-primary);
 }
 
+.nameInput[aria-invalid="true"] {
+  outline-color: var(--status-error);
+}
+
 .closeBtn {
   display: flex;
   align-items: center;

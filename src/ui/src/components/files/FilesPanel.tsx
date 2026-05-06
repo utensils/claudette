@@ -6,6 +6,7 @@ import type { DiffLayer } from "../../types/diff";
 import { FilePathContextMenu } from "./FilePathContextMenu";
 import type { FileContextTarget } from "./fileContextMenu";
 import { FileTree } from "./FileTree";
+import { useFilePathActions } from "./useFilePathActions";
 import styles from "./FilesPanel.module.css";
 
 export function FilesPanel() {
@@ -28,10 +29,14 @@ export function FilesPanel() {
     x: number;
     y: number;
   } | null>(null);
+  const [renamingTarget, setRenamingTarget] = useState<FileContextTarget | null>(
+    null,
+  );
   const loadVersionRef = useRef(0);
   const prevIsRunning = useRef(false);
   const ws = workspaces.find((w) => w.id === selectedWorkspaceId);
   const isRunning = isAgentBusy(ws?.agent_status);
+  const filePathActions = useFilePathActions(selectedWorkspaceId ?? "");
 
   const loadFiles = useCallback(
     async (workspaceId: string, showLoading: boolean) => {
@@ -123,6 +128,19 @@ export function FilesPanel() {
           onActivateFile={handleActivateFile}
           onActivateDiff={handleActivateDiff}
           onContextMenu={(target, x, y) => setContextMenu({ target, x, y })}
+          renamingPath={renamingTarget?.path ?? null}
+          onRenameCommit={async (target, newName) => {
+            try {
+              await filePathActions.renamePath(target, newName);
+              setRenamingTarget(null);
+              return true;
+            } catch (err) {
+              console.error("Failed to rename file:", err);
+              useAppStore.getState().addToast(`Rename failed: ${String(err)}`);
+              return false;
+            }
+          }}
+          onRenameCancel={() => setRenamingTarget(null)}
         />
       )}
       {contextMenu && (
@@ -131,6 +149,7 @@ export function FilesPanel() {
           target={contextMenu.target}
           x={contextMenu.x}
           y={contextMenu.y}
+          onRenameRequest={(target) => setRenamingTarget(target)}
           onClose={() => setContextMenu(null)}
         />
       )}

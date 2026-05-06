@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildFileContextMenuItems,
   displayNameForPath,
+  validatePathName,
   type FileContextTarget,
 } from "./fileContextMenu";
 
@@ -62,5 +63,25 @@ describe("buildFileContextMenuItems", () => {
     expect(items.find((item) => item.label === "Copy Relative Path")?.disabled).toBeFalsy();
     expect(items.find((item) => item.label === "Rename…")?.disabled).toBe(true);
     expect(items.find((item) => item.label === "Delete")?.disabled).toBe(true);
+  });
+});
+
+describe("validatePathName", () => {
+  it("accepts simple file and folder names", () => {
+    expect(validatePathName("app.ts")).toBeNull();
+    expect(validatePathName("components")).toBeNull();
+  });
+
+  it("rejects empty, reserved, and nested names", () => {
+    expect(validatePathName("")).toBe("Name is required.");
+    expect(validatePathName("   ")).toBe("Name is required.");
+    expect(validatePathName(".")).toBe("That name is reserved.");
+    expect(validatePathName("..")).toBe("That name is reserved.");
+    expect(validatePathName("src/app.ts")).toBe(
+      "Name cannot contain path separators.",
+    );
+    expect(validatePathName("src\\app.ts")).toBe(
+      "Name cannot contain path separators.",
+    );
   });
 });

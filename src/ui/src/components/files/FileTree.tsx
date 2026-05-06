@@ -17,6 +17,7 @@ import { getFileIcon, getFolderIcon } from "../../utils/fileIcons";
 import type { FileEntry } from "../../services/tauri";
 import type { DiffLayer } from "../../types/diff";
 import type { FileContextTarget } from "./fileContextMenu";
+import { InlineRenameInput } from "./InlineRenameInput";
 import {
   resolveFileTreeActivation,
   statusColor,
@@ -36,6 +37,12 @@ interface FileTreeProps {
   onActivateFile: (path: string) => void;
   onActivateDiff: (path: string, layer: DiffLayer | null) => void;
   onContextMenu: (target: FileContextTarget, x: number, y: number) => void;
+  renamingPath: string | null;
+  onRenameCommit: (
+    target: FileContextTarget,
+    newName: string,
+  ) => Promise<boolean>;
+  onRenameCancel: () => void;
 }
 
 const EMPTY_EXPANDED: Record<string, boolean> = {};
@@ -46,6 +53,9 @@ export const FileTree = memo(function FileTree({
   onActivateFile,
   onActivateDiff,
   onContextMenu,
+  renamingPath,
+  onRenameCommit,
+  onRenameCancel,
 }: FileTreeProps) {
   const expanded = useAppStore(
     (s) => s.allFilesExpandedDirsByWorkspace[workspaceId] ?? EMPTY_EXPANDED,
@@ -231,6 +241,7 @@ export const FileTree = memo(function FileTree({
           depth={depth}
           expanded={node.kind === "dir" ? !!expanded[node.path] : false}
           selected={selected === node.path}
+          renaming={renamingPath === node.path}
           // Roving tabindex: exactly one row in the tree is in the tab
           // order at any time. Tab moves focus into the tree (or out of
           // it); arrow keys move within.
@@ -264,6 +275,20 @@ export const FileTree = memo(function FileTree({
               y,
             );
           }}
+          onRenameCommit={(name) =>
+            onRenameCommit(
+              {
+                path: node.path,
+                isDirectory: node.kind === "dir",
+                exists:
+                  node.kind === "dir" ||
+                  node.git_status == null ||
+                  node.git_status !== "Deleted",
+              },
+              name,
+            )
+          }
+          onRenameCancel={onRenameCancel}
         />
       ))}
     </div>
@@ -275,10 +300,13 @@ interface RowProps {
   depth: number;
   expanded: boolean;
   selected: boolean;
+  renaming: boolean;
   tabbable: boolean;
   rowRef: (el: HTMLDivElement | null) => void;
   onClick: () => void;
   onContextMenu: (x: number, y: number) => void;
+  onRenameCommit: (name: string) => Promise<boolean>;
+  onRenameCancel: () => void;
 }
 
 function Row({
@@ -286,10 +314,13 @@ function Row({
   depth,
   expanded,
   selected,
+  renaming,
   tabbable,
   rowRef,
   onClick,
   onContextMenu,
+  onRenameCommit,
+  onRenameCancel,
 }: RowProps) {
   const isDir = node.kind === "dir";
   const ChevronIcon = isDir
@@ -329,9 +360,10 @@ function Row({
       // children (or could). Omit it on file rows entirely so screen
       // readers don't announce a misleading collapsed/expanded state.
       aria-expanded={isDir ? expanded : undefined}
-      onClick={onClick}
+      onClick={renaming ? undefined : onClick}
       onContextMenu={(event) => {
         event.preventDefault();
+        if (renaming) return;
         onContextMenu(event.clientX, event.clientY);
       }}
     >
@@ -343,7 +375,17 @@ function Row({
       )}
       {/* eslint-disable-next-line react-hooks/static-components -- fileIcons returns stable module-level lucide components. */}
       <Icon size={14} className={styles.icon} aria-hidden="true" />
-      <span className={styles.name}>{node.name}</span>
+      {renaming ? (
+        <InlineRenameInput
+          name={node.name}
+          className={styles.renameInput}
+          ariaLabel={`Rename ${node.name}`}
+          onCommit={onRenameCommit}
+          onCancel={onRenameCancel}
+        />
+      ) : (
+        <span className={styles.name}>{node.name}</span>
+      )}
       {node.kind === "dir" && node.statusCount > 0 && (
         <span
           className={styles.dirStatus}
