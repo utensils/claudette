@@ -47,6 +47,7 @@
   "general_language_ja": "日本語",
   "general_language_zh_cn": "简体中文",
   "general_update_check_failed": "检查更新失败。请稍后再试。",
+  "attribution": "Claudette 与 Anthropic 无关联。Claude® 和 Claude Code® 是 Anthropic, PBC 的商标。",
   "appearance_title": "外观",
   "appearance_follow_system": "跟随系统",
   "appearance_follow_system_desc": "根据操作系统设置自动切换主题",

@@ -48,6 +48,7 @@
   "general_language_ja": "日本語",
   "general_language_zh_cn": "简体中文",
   "general_update_check_failed": "Update check failed. Please try again later.",
+  "attribution": "Claudette is not affiliated with Anthropic. Claude® and Claude Code® are trademarks of Anthropic, PBC.",
 
   "appearance_title": "Appearance",
   "appearance_follow_system": "Follow system",
