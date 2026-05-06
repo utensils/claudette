@@ -7,25 +7,98 @@ export function getRootZoom(): number {
   return Number.isFinite(z) && z > 0 ? z : 1;
 }
 
-// WebKit on macOS (used by Tauri's WKWebView) reports `clientX/Y` in event
-// handlers in *visual* (post-zoom) pixels, while CSS `position: fixed; left/top`
-// interpret their values in *layout* (pre-zoom) pixels. Without compensation
-// a fixed element placed at the click coords renders shifted by the zoom
-// factor — visibly off when zoom != 1. Divide event coords by zoom to land
-// the element at the cursor.
+// CSS `zoom` is non-standard, and engines disagree about whether
+// `MouseEvent.clientX/Y`, `getBoundingClientRect()`, and the `position: fixed;
+// left/top` used-value live in **visual** (post-zoom) or **layout** (pre-zoom)
+// pixels:
+//
+//   - WebKit (WKWebView, WebKitGTK) reports event coords and rects in visual
+//     pixels, while CSS `left/top` are interpreted in layout pixels. To place
+//     a `position: fixed` element under the cursor the click coords must be
+//     divided by the zoom factor.
+//
+//   - Chromium (WebView2) applies zoom uniformly: event coords, rects, and
+//     CSS used-values all live in the same (layout) frame. No compensation
+//     is needed; dividing would over-correct and shift the element toward
+//     the top-left.
+//
+// We pick the right branch with a behavior probe — render a fixed element at
+// a known offset and read back its rect. If the engine reports the rect in
+// the layout frame, `clientX` is in the layout frame too (no divide). If it
+// reports in the visual frame, divide. The answer is engine-stable, so we
+// cache it once we've actually measured a real rect.
+type CoordSpace = "visual" | "layout";
+
+let cachedCoordSpace: CoordSpace | null = null;
+
+// Exposed so dev tooling / tests that mutate root zoom at runtime can force
+// a re-probe. Production code never calls this — the answer is engine-stable.
+export function resetCoordSpaceCache(): void {
+  cachedCoordSpace = null;
+}
+
+// Returns the measured coord space, or `null` when we couldn't actually run
+// the probe (no DOM yet, or zoom == 1 so the two frames coincide and the
+// measurement can't distinguish them). Callers must NOT cache `null` — the
+// next call may have real DOM and a non-trivial zoom available.
+function probeCoordSpace(): CoordSpace | null {
+  if (typeof document === "undefined" || !document.body) return null;
+  const z = getRootZoom();
+  if (z === 1) return null;
+  const probe = document.createElement("div");
+  // Hidden 100px-wide marker placed at a non-zero offset. `pointer-events:
+  // none` and `visibility: hidden` keep it from interfering with anything
+  // already on screen during the few microseconds it lives.
+  probe.style.cssText =
+    "position:fixed;left:100px;top:0;width:100px;height:1px;" +
+    "pointer-events:none;visibility:hidden;contain:strict;";
+  document.body.appendChild(probe);
+  const rect = probe.getBoundingClientRect();
+  document.body.removeChild(probe);
+  // WebKit returns rect.left ≈ 100 * z (rect is visual-frame). Chromium
+  // returns rect.left ≈ 100 (rect is layout-frame). Pick whichever the
+  // measured value is closer to so sub-pixel rounding doesn't tip the
+  // answer.
+  const visual = 100 * z;
+  const layout = 100;
+  return Math.abs(rect.left - visual) < Math.abs(rect.left - layout)
+    ? "visual"
+    : "layout";
+}
+
+// Returns which frame `MouseEvent.clientX/Y` live in for the current engine.
+// Cached after the first successful probe (zoom != 1, document.body present).
+// Falls back to `"visual"` when we can't measure yet — but does NOT cache
+// that fallback, so a later call with real DOM gets a real answer.
+export function eventCoordSpace(): CoordSpace {
+  if (cachedCoordSpace !== null) return cachedCoordSpace;
+  const measured = probeCoordSpace();
+  if (measured === null) return "visual";
+  cachedCoordSpace = measured;
+  return measured;
+}
+
+// Translate event clientX/Y into the frame `position: fixed; left/top` uses,
+// so a fixed element placed at the result lands under the cursor. On engines
+// where the two frames already coincide, this is a no-op — see
+// `eventCoordSpace` for the engine matrix.
 export function viewportToFixed(x: number, y: number) {
   const z = getRootZoom();
   if (z === 1) return { x, y };
+  if (eventCoordSpace() === "layout") return { x, y };
   return { x: x / z, y: y / z };
 }
 
-// Visual viewport size in layout pixels — the right reference for clamping
-// a fixed-positioned element since fixed `left/top` are layout pixels too.
-// `window.innerWidth/innerHeight` return visual pixels under html zoom, so
-// we divide back into the same frame the placement is in.
+// Visual viewport size translated into the layout frame — the right reference
+// for clamping a fixed-positioned element since fixed `left/top` are layout
+// pixels under WebKit. On Chromium `window.innerWidth/innerHeight` already
+// live in the layout frame, so we leave them alone.
 export function viewportLayoutSize() {
   if (typeof window === "undefined") return { width: 0, height: 0 };
   const z = getRootZoom();
+  if (z === 1 || eventCoordSpace() === "layout") {
+    return { width: window.innerWidth, height: window.innerHeight };
+  }
   return {
     width: window.innerWidth / z,
     height: window.innerHeight / z,

@@ -1,0 +1,459 @@
+/**
+ * Integration tests for the Monaco `.context-view` positioning patch. These
+ * exercise the real MutationObserver wiring under happy-dom — what the
+ * pure-function tests in monacoContextViewFix.test.ts deliberately don't
+ * cover.
+ *
+ * Why this file exists: the first pass of this fix shipped a refactor
+ * (disconnect-around-write + per-host observer dedup) that the pure-math
+ * tests passed but that visibly broke the menu in the running app. The
+ * gap was that no test exercised the actual Monaco-side flow — element
+ * appended → observer fires → correction applied → potential re-write
+ * from observer feedback. Adding these tests is how we keep that gap
+ * closed.
+ */
+
+// @vitest-environment happy-dom
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { resetCoordSpaceCache } from "./zoom";
+import {
+  __resetMonacoContextViewFixForTests,
+  installMonacoContextViewFix,
+} from "./monacoContextViewFix";
+
+// The engine probe in zoom.ts decides whether we divide by zoom by placing
+// a hidden 100px-wide marker and reading back its rect. happy-dom's layout
+// engine doesn't actually compute `style.left = 100px` into a non-zero
+// rect, so we patch `getBoundingClientRect` on the probe element to
+// simulate the chosen engine.
+//
+// Capture the truly-original `getBoundingClientRect` ONCE at module load,
+// and always restore to that. This way:
+//   - A test that throws before calling its `restore()` cannot leak the
+//     prototype patch into the next test (codex flagged this risk).
+//   - Two consecutive `stubProbe()` calls without intervening restore
+//     don't compound the patch — each one re-applies on top of the
+//     original.
+// `afterEach` below also runs an unconditional restore so explicit
+// `restore()` calls become belt-and-suspenders rather than load-bearing.
+const ORIGINAL_GET_BOUNDING_CLIENT_RECT =
+  HTMLElement.prototype.getBoundingClientRect;
+
+function restorePrototype(): void {
+  HTMLElement.prototype.getBoundingClientRect =
+    ORIGINAL_GET_BOUNDING_CLIENT_RECT;
+}
+
+function stubProbe(engine: "webkit" | "chromium", zoom: number): () => void {
+  HTMLElement.prototype.getBoundingClientRect = function (
+    this: HTMLElement,
+  ): DOMRect {
+    const looksLikeProbe =
+      this.style.position === "fixed" &&
+      this.style.left === "100px" &&
+      this.style.width === "100px" &&
+      this.style.visibility === "hidden";
+    if (looksLikeProbe) {
+      const left = engine === "webkit" ? 100 * zoom : 100;
+      return new DOMRect(left, 0, 100, 1);
+    }
+    return new DOMRect(0, 0, 0, 0);
+  };
+  return restorePrototype;
+}
+
+function setRootZoom(z: number | null): void {
+  if (z === null) document.documentElement.style.removeProperty("zoom");
+  else document.documentElement.style.zoom = String(z);
+}
+
+// Append a `.context-view` to body with its position pre-set, mimicking
+// Monaco's pattern: the style is set synchronously, then the element is
+// attached. The MutationObserver callback runs as a microtask — flush
+// twice to allow chained microtasks (root observer → attach inner →
+// inner fires) to settle.
+async function spawnContextView(left: number, top: number): Promise<HTMLElement> {
+  const el = document.createElement("div");
+  el.className = "context-view";
+  el.style.position = "fixed";
+  el.style.left = `${left}px`;
+  el.style.top = `${top}px`;
+  document.body.appendChild(el);
+  await flushMutations();
+  return el;
+}
+
+async function flushMutations(): Promise<void> {
+  // Two microtask flushes: one for the root observer, one for any inner
+  // observer it spawned that itself queued a write.
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+describe("installMonacoContextViewFix — integration", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+    setRootZoom(null);
+    resetCoordSpaceCache();
+    __resetMonacoContextViewFixForTests();
+  });
+
+  afterEach(() => {
+    document.body.innerHTML = "";
+    setRootZoom(null);
+    resetCoordSpaceCache();
+    __resetMonacoContextViewFixForTests();
+    // Unconditional prototype restore: even if a test threw before its
+    // own `restore()` call, this guarantees the patched
+    // `getBoundingClientRect` doesn't leak into the next test.
+    restorePrototype();
+  });
+
+  describe("baseline correction (webkit, zoom != 1)", () => {
+    it("divides the initial left/top of a newly attached context-view by zoom", async () => {
+      const restore = stubProbe("webkit", 1.5);
+      setRootZoom(1.5);
+      installMonacoContextViewFix();
+      const el = await spawnContextView(300, 150);
+      expect(parseFloat(el.style.left)).toBeCloseTo(200, 1);
+      expect(parseFloat(el.style.top)).toBeCloseTo(100, 1);
+      restore();
+    });
+
+    it("re-corrects when Monaco moves the menu after first show (re-position)", async () => {
+      const restore = stubProbe("webkit", 1.5);
+      setRootZoom(1.5);
+      installMonacoContextViewFix();
+      const el = await spawnContextView(300, 150);
+      // Monaco repositions the menu (e.g. submenu expansion clamping).
+      // Both writes happen in the same synchronous block — observer
+      // delivers one callback with two records.
+      el.style.left = "600px";
+      el.style.top = "300px";
+      await flushMutations();
+      expect(parseFloat(el.style.left)).toBeCloseTo(400, 1);
+      expect(parseFloat(el.style.top)).toBeCloseTo(200, 1);
+      restore();
+    });
+
+    it("does NOT loop: observer doesn't keep re-dividing its own write", async () => {
+      const restore = stubProbe("webkit", 2);
+      setRootZoom(2);
+      installMonacoContextViewFix();
+      const el = await spawnContextView(400, 200);
+      // First correction: 400/2 = 200, 200/2 = 100.
+      expect(parseFloat(el.style.left)).toBeCloseTo(200, 1);
+      // Multiple flush cycles — if the observer were looping, we'd see
+      // 200 → 100 → 50 → 25 etc.
+      await flushMutations();
+      await flushMutations();
+      await flushMutations();
+      expect(parseFloat(el.style.left)).toBeCloseTo(200, 1);
+      expect(parseFloat(el.style.top)).toBeCloseTo(100, 1);
+      restore();
+    });
+  });
+
+  describe("no-op branches", () => {
+    it("leaves left/top alone on Chromium (event coords already in layout frame)", async () => {
+      const restore = stubProbe("chromium", 1.5);
+      setRootZoom(1.5);
+      installMonacoContextViewFix();
+      const el = await spawnContextView(300, 150);
+      expect(parseFloat(el.style.left)).toBe(300);
+      expect(parseFloat(el.style.top)).toBe(150);
+      restore();
+    });
+
+    it("leaves left/top alone at zoom == 1", async () => {
+      setRootZoom(null);
+      installMonacoContextViewFix();
+      const el = await spawnContextView(300, 150);
+      expect(parseFloat(el.style.left)).toBe(300);
+      expect(parseFloat(el.style.top)).toBe(150);
+    });
+  });
+
+  describe("known limitation: WeakMap echo guard false-skip", () => {
+    // Codex's review (MAJOR finding #1) flagged this case. We accept it
+    // as a known limitation rather than fix it, because the alternative
+    // (disconnect-around-write) broke the menu in WKWebView when Monaco
+    // delivers `style.top` and `style.left` writes as separate observer
+    // callbacks — the disconnect window between them caused the first
+    // callback to read a half-updated state and the second callback to
+    // re-divide an already-corrected coordinate. Keeping the echo guard
+    // means a synthetic edge case (Monaco intentionally repositioning
+    // to coordinates that exactly equal a previous correction) is left
+    // uncorrected; in exchange the common path is solid. This test
+    // documents the trade-off.
+    it("does NOT correct raw 200/100 after a prior raw 400/200 → 200/100 correction at zoom 2", async () => {
+      const restore = stubProbe("webkit", 2);
+      setRootZoom(2);
+      installMonacoContextViewFix();
+      const el = await spawnContextView(400, 200);
+      expect(parseFloat(el.style.left)).toBeCloseTo(200, 1);
+      // Same values: echo guard treats it as our own write, skips.
+      el.style.left = "200px";
+      el.style.top = "100px";
+      await flushMutations();
+      expect(parseFloat(el.style.left)).toBeCloseTo(200, 1);
+      expect(parseFloat(el.style.top)).toBeCloseTo(100, 1);
+      restore();
+    });
+  });
+
+  describe("codex finding #2 — re-attached `.context-view` doesn't stack inner observers", () => {
+    it("re-correcting after a remove + re-add still produces one write per Monaco move", async () => {
+      const restore = stubProbe("webkit", 2);
+      setRootZoom(2);
+      installMonacoContextViewFix();
+      // First mount + correction.
+      const el = await spawnContextView(400, 200);
+      expect(parseFloat(el.style.left)).toBeCloseTo(200, 1);
+      // Monaco-style remove + re-add of the SAME node.
+      document.body.removeChild(el);
+      el.style.left = "400px";
+      el.style.top = "200px";
+      document.body.appendChild(el);
+      await flushMutations();
+      expect(parseFloat(el.style.left)).toBeCloseTo(200, 1);
+      // Move it again — we should see a single 200→100 correction, not
+      // 200→100→50→… from stacked observers re-firing on the same write.
+      el.style.left = "400px";
+      el.style.top = "200px";
+      await flushMutations();
+      expect(parseFloat(el.style.left)).toBeCloseTo(200, 1);
+      expect(parseFloat(el.style.top)).toBeCloseTo(100, 1);
+      restore();
+    });
+  });
+
+  // Note: there is NO test here for "Monaco writes top and left in
+  // separate microtask checkpoints." Per the MutationObserver spec they
+  // should coalesce when written sequentially in the same synchronous
+  // block, and in practice WKWebView delivers Monaco's
+  // `doLayout()` writes as a single callback — the running-app
+  // verification at uiFontSize 16 confirms this. If we forced a split
+  // in a test (e.g. `await` between writes), neither the WeakMap echo
+  // guard nor the previously-tried disconnect-around-write handles it
+  // cleanly — the second callback would re-divide the already-corrected
+  // first coordinate. We don't simulate that pattern because it isn't
+  // how the bug presents in production. If a future Monaco refactor
+  // changes the timing, the manual QA matrix in the PR description
+  // should catch it before any user does.
+
+  describe("shadow DOM (Monaco's shadow-root-host pattern)", () => {
+    // Monaco's StandaloneContextViewService can mount the context view
+    // inside a shadow DOM (`<div class="shadow-root-host">` +
+    // `attachShadow({mode: 'open'})`). MutationObserver does NOT pierce
+    // shadow boundaries by default, so a body-only observer misses
+    // every menu open in this code path — exactly the regression we
+    // chased through this branch's earlier commits. The test below
+    // proves the shadow-root subtree is observed correctly.
+    it("corrects a `.context-view` mounted inside a shadow root attached to a new host", async () => {
+      const restore = stubProbe("webkit", 1.5);
+      setRootZoom(1.5);
+      installMonacoContextViewFix();
+
+      // Mimic Monaco's flow: create a shadow host, attach it to body,
+      // then append a `.context-view` inside its shadow root.
+      const shadowHost = document.createElement("div");
+      shadowHost.className = "shadow-root-host";
+      const shadowRoot = shadowHost.attachShadow({ mode: "open" });
+      document.body.appendChild(shadowHost);
+      // Microtask: rootObserver picks up the added shadow host and
+      // subscribes to its shadow root.
+      await flushMutations();
+
+      const cv = document.createElement("div");
+      cv.className = "context-view";
+      cv.style.position = "fixed";
+      cv.style.left = "300px";
+      cv.style.top = "150px";
+      shadowRoot.appendChild(cv);
+      // Microtask: shadow-root observer fires, attaches inner observer
+      // and runs the initial correction.
+      await flushMutations();
+
+      expect(parseFloat(cv.style.left)).toBeCloseTo(200, 1);
+      expect(parseFloat(cv.style.top)).toBeCloseTo(100, 1);
+      restore();
+    });
+
+    it("seeds existing `.context-view` inside a pre-existing shadow root at install time", async () => {
+      const restore = stubProbe("webkit", 1.5);
+      setRootZoom(1.5);
+
+      // Set up the shadow-DOM scenario BEFORE installing the fix —
+      // mirrors Monaco mounting before our utility ran.
+      const shadowHost = document.createElement("div");
+      shadowHost.className = "shadow-root-host";
+      const shadowRoot = shadowHost.attachShadow({ mode: "open" });
+      document.body.appendChild(shadowHost);
+      const cv = document.createElement("div");
+      cv.className = "context-view";
+      cv.style.position = "fixed";
+      cv.style.left = "450px";
+      cv.style.top = "300px";
+      shadowRoot.appendChild(cv);
+
+      // Now install — should seed the existing shadow-rooted
+      // `.context-view` and correct it on first scan.
+      installMonacoContextViewFix();
+      await flushMutations();
+
+      expect(parseFloat(cv.style.left)).toBeCloseTo(300, 1);
+      expect(parseFloat(cv.style.top)).toBeCloseTo(200, 1);
+      restore();
+    });
+
+    it("re-corrects when a shadow-rooted `.context-view` is repositioned after first show", async () => {
+      // Codex test gap #1: the initial correction is covered, but
+      // Monaco re-positions the menu (resize, submenu expansion, edge
+      // clamping) by writing left/top again. The per-host inner
+      // observer attached inside the shadow root must catch those
+      // subsequent writes the same way it does in light DOM.
+      const restore = stubProbe("webkit", 1.5);
+      setRootZoom(1.5);
+      installMonacoContextViewFix();
+
+      const shadowHost = document.createElement("div");
+      shadowHost.className = "shadow-root-host";
+      const shadowRoot = shadowHost.attachShadow({ mode: "open" });
+      document.body.appendChild(shadowHost);
+      const cv = document.createElement("div");
+      cv.className = "context-view";
+      cv.style.position = "fixed";
+      cv.style.left = "300px";
+      cv.style.top = "150px";
+      shadowRoot.appendChild(cv);
+      await flushMutations();
+
+      expect(parseFloat(cv.style.left)).toBeCloseTo(200, 1);
+      // Monaco repositions: e.g. submenu expansion clamps the host
+      // back inside the viewport.
+      cv.style.left = "600px";
+      cv.style.top = "300px";
+      await flushMutations();
+      expect(parseFloat(cv.style.left)).toBeCloseTo(400, 1);
+      expect(parseFloat(cv.style.top)).toBeCloseTo(200, 1);
+      restore();
+    });
+
+    it("cleans up per-host observer when a shadow-rooted `.context-view` is removed and re-added", async () => {
+      // Codex test gap #2: removed-node handling. If the per-host
+      // observer leaked across remove + re-add of the same node, we'd
+      // end up with stacked observers and (under the WeakMap echo
+      // guard) silent skips. The dedup in attachHostObserver +
+      // detachHostObserver on visitRemovedNode prevents that.
+      const restore = stubProbe("webkit", 2);
+      setRootZoom(2);
+      installMonacoContextViewFix();
+
+      const shadowHost = document.createElement("div");
+      shadowHost.className = "shadow-root-host";
+      const shadowRoot = shadowHost.attachShadow({ mode: "open" });
+      document.body.appendChild(shadowHost);
+      const cv = document.createElement("div");
+      cv.className = "context-view";
+      cv.style.position = "fixed";
+      cv.style.left = "400px";
+      cv.style.top = "200px";
+      shadowRoot.appendChild(cv);
+      await flushMutations();
+      expect(parseFloat(cv.style.left)).toBeCloseTo(200, 1);
+
+      // Remove the same node and re-attach with fresh raw values.
+      shadowRoot.removeChild(cv);
+      await flushMutations();
+      cv.style.left = "800px";
+      cv.style.top = "400px";
+      shadowRoot.appendChild(cv);
+      await flushMutations();
+      expect(parseFloat(cv.style.left)).toBeCloseTo(400, 1);
+      expect(parseFloat(cv.style.top)).toBeCloseTo(200, 1);
+      restore();
+    });
+
+    it("corrects when an already-populated shadow host is appended to body after install", async () => {
+      // Codex test gap #3: the host may be constructed offline, get a
+      // `.context-view` populated inside its shadow root, and only then
+      // be inserted into the document. The root observer fires for the
+      // host's insertion; visitAddedNode discovers the shadow root and
+      // watchShadowRoot picks up the pre-existing `.context-view` before
+      // the next observer tick.
+      const restore = stubProbe("webkit", 1.5);
+      setRootZoom(1.5);
+      installMonacoContextViewFix();
+
+      const shadowHost = document.createElement("div");
+      shadowHost.className = "shadow-root-host";
+      const shadowRoot = shadowHost.attachShadow({ mode: "open" });
+      const cv = document.createElement("div");
+      cv.className = "context-view";
+      cv.style.position = "fixed";
+      cv.style.left = "300px";
+      cv.style.top = "150px";
+      shadowRoot.appendChild(cv);
+
+      // Now attach the (already-populated) shadow host to the document.
+      document.body.appendChild(shadowHost);
+      await flushMutations();
+
+      expect(parseFloat(cv.style.left)).toBeCloseTo(200, 1);
+      expect(parseFloat(cv.style.top)).toBeCloseTo(100, 1);
+      restore();
+    });
+
+    it("discovers nested shadow roots that exist inside a watched shadow root", async () => {
+      // Codex MINOR #1: watchShadowRoot now walks its own subtree for
+      // further shadow hosts. This test exercises that path: shadow
+      // root A contains a host with shadow root B containing a
+      // `.context-view`.
+      const restore = stubProbe("webkit", 1.5);
+      setRootZoom(1.5);
+
+      const outerHost = document.createElement("div");
+      outerHost.className = "shadow-root-host";
+      const outerRoot = outerHost.attachShadow({ mode: "open" });
+      const innerHost = document.createElement("div");
+      innerHost.className = "nested-shadow-host";
+      const innerRoot = innerHost.attachShadow({ mode: "open" });
+      const cv = document.createElement("div");
+      cv.className = "context-view";
+      cv.style.position = "fixed";
+      cv.style.left = "450px";
+      cv.style.top = "300px";
+      innerRoot.appendChild(cv);
+      outerRoot.appendChild(innerHost);
+      document.body.appendChild(outerHost);
+
+      installMonacoContextViewFix();
+      await flushMutations();
+
+      expect(parseFloat(cv.style.left)).toBeCloseTo(300, 1);
+      expect(parseFloat(cv.style.top)).toBeCloseTo(200, 1);
+      restore();
+    });
+  });
+
+  describe("nested submenus", () => {
+    it("corrects a `.context-view` attached as a descendant (Monaco submenu pattern)", async () => {
+      const restore = stubProbe("webkit", 1.5);
+      setRootZoom(1.5);
+      installMonacoContextViewFix();
+      const wrapper = document.createElement("div");
+      const submenu = document.createElement("div");
+      submenu.className = "context-view";
+      submenu.style.position = "fixed";
+      submenu.style.left = "300px";
+      submenu.style.top = "150px";
+      wrapper.appendChild(submenu);
+      document.body.appendChild(wrapper);
+      await flushMutations();
+      expect(parseFloat(submenu.style.left)).toBeCloseTo(200, 1);
+      expect(parseFloat(submenu.style.top)).toBeCloseTo(100, 1);
+      restore();
+    });
+  });
+});

@@ -25,6 +25,7 @@ import cssWorker from "monaco-editor/esm/vs/language/css/css.worker?worker";
 import htmlWorker from "monaco-editor/esm/vs/language/html/html.worker?worker";
 import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
 import { applyGrammarsToMonaco } from "../../utils/grammarRegistry";
+import { installMonacoContextViewFix } from "../../utils/monacoContextViewFix";
 
 // Monaco reads `globalThis.MonacoEnvironment.getWorker` whenever it needs
 // to instantiate a language-service worker — that happens lazily, when an
@@ -63,6 +64,11 @@ self.MonacoEnvironment = {
 };
 
 loader.config({ monaco });
+
+// Patch `.context-view` positioning on WebKit under html zoom. No-op on
+// Chromium and at zoom == 1 — see utils/monacoContextViewFix.ts for the
+// engine matrix and why Monaco's built-in math is wrong here.
+installMonacoContextViewFix();
 
 // Register plugin-contributed languages and bind Shiki tokenization.
 // Awaits the grammar registry bootstrap internally — safe to call
