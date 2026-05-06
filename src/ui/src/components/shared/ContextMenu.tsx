@@ -8,6 +8,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
+import { useAppStore } from "../../stores/useAppStore";
 import { viewportLayoutSize, viewportToFixed } from "../../utils/zoom";
 import { clampMenuToViewport } from "./contextMenuUtils";
 import styles from "./ContextMenu.module.css";
@@ -121,6 +122,11 @@ export function ContextMenu({
                 setPendingIndex(i);
                 await item.onSelect();
                 if (item.closeOnSelect !== false) onClose();
+              } catch (err) {
+                console.error("Context menu action failed:", err);
+                useAppStore
+                  .getState()
+                  .addToast(`Action failed: ${String(err)}`);
               } finally {
                 setPendingIndex(null);
               }

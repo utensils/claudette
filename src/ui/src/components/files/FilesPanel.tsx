@@ -211,7 +211,7 @@ export function FilesPanel() {
           onCreateFileRequest={(parentPath) => {
             const clean = parentPath.replace(/\/+$/g, "");
             if (clean) {
-              setAllFilesDirExpanded(selectedWorkspaceId, clean, true);
+              setAllFilesDirExpanded(selectedWorkspaceId, `${clean}/`, true);
             }
             setCreatingParentPath(clean);
           }}

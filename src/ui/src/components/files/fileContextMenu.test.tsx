@@ -101,5 +101,8 @@ describe("validatePathName", () => {
     expect(validatePathName("src\\app.ts")).toBe(
       "Name cannot contain path separators.",
     );
+    expect(validatePathName("bad\0name")).toBe(
+      "Name cannot contain null bytes.",
+    );
   });
 });

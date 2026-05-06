@@ -33,6 +33,7 @@ export function validatePathName(name: string): string | null {
   const trimmed = name.trim();
   if (!trimmed) return "Name is required.";
   if (trimmed === "." || trimmed === "..") return "That name is reserved.";
+  if (trimmed.includes("\0")) return "Name cannot contain null bytes.";
   if (trimmed.includes("/") || trimmed.includes("\\")) {
     return "Name cannot contain path separators.";
   }

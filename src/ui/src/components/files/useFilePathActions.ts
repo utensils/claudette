@@ -149,7 +149,7 @@ export function useFilePathActions(workspaceId: string) {
 
     try {
       await runUndoFilePathOperation(workspaceId, operation);
-      popFilePathUndoOperation(workspaceId);
+      popFilePathUndoOperation(workspaceId, operation);
       await refreshWorkspaceFiles();
       addToast("Undone");
       return true;

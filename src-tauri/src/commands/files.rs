@@ -225,14 +225,26 @@ pub async fn read_workspace_file_for_viewer(
     state: State<'_, AppState>,
 ) -> Result<FileContent, String> {
     let worktree_path = resolve_worktree_path(&workspace_id, &state)?;
+    let target =
+        resolve_workspace_target_path_blocking(worktree_path.clone(), relative_path.clone())
+            .await?;
 
     let read = file_expand::read_worktree_file_with_limit(
         std::path::Path::new(&worktree_path),
         &relative_path,
         MAX_VIEWER_FILE_SIZE,
     )
-    .await
-    .ok_or("File not found or path escapes worktree")?;
+    .await;
+
+    let Some(read) = read else {
+        if !tokio::fs::try_exists(&target.absolute)
+            .await
+            .map_err(|e| format!("check file exists: {e}"))?
+        {
+            return Err("WORKSPACE_FILE_NOT_FOUND".to_string());
+        }
+        return Err("File not readable or path escapes worktree".to_string());
+    };
 
     Ok(FileContent {
         path: relative_path,

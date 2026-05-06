@@ -510,7 +510,7 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
 }
 
 function isMissingWorkspaceFileError(error: unknown): boolean {
-  return String(error).includes("File not found or path escapes worktree");
+  return String(error) === "WORKSPACE_FILE_NOT_FOUND";
 }
 
 interface ImageViewProps {

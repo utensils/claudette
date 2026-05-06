@@ -224,7 +224,10 @@ export interface FileTreeSlice {
     workspaceId: string,
     operation: FilePathUndoOperation,
   ) => void;
-  popFilePathUndoOperation: (workspaceId: string) => void;
+  popFilePathUndoOperation: (
+    workspaceId: string,
+    operation?: FilePathUndoOperation,
+  ) => void;
 }
 
 export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> = (
@@ -675,10 +678,11 @@ export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> 
       },
     })),
 
-  popFilePathUndoOperation: (workspaceId) =>
+  popFilePathUndoOperation: (workspaceId, operation) =>
     set((s) => {
       const stack = s.filePathUndoStackByWorkspace[workspaceId] ?? [];
       if (stack.length === 0) return s;
+      if (operation && stack.at(-1) !== operation) return s;
       return {
         filePathUndoStackByWorkspace: {
           ...s.filePathUndoStackByWorkspace,

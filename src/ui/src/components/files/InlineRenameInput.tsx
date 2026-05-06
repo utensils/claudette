@@ -46,8 +46,14 @@ export function InlineRenameInput({
       return;
     }
     commitInFlightRef.current = true;
-    const ok = await onCommit(next);
-    commitInFlightRef.current = false;
+    let ok = false;
+    try {
+      ok = await onCommit(next);
+    } catch (err) {
+      console.error("Failed to commit inline file name:", err);
+    } finally {
+      commitInFlightRef.current = false;
+    }
     if (!ok) {
       inputRef.current?.focus();
       inputRef.current?.select();

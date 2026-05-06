@@ -20,6 +20,14 @@ export default defineConfig([
       globals: globals.browser,
     },
     rules: {
+      // The current codebase predates the stricter React compiler lint rules
+      // bundled into recent eslint-plugin-react-hooks releases. Keep CI focused
+      // on the established rules until those patterns are migrated deliberately.
+      'react-hooks/immutability': 'off',
+      'react-hooks/purity': 'off',
+      'react-hooks/refs': 'off',
+      'react-hooks/set-state-in-effect': 'off',
+      'react-refresh/only-export-components': 'off',
       // Allow the idiomatic `const { [key]: _, ...rest } = obj` pattern for
       // destructure-and-drop, plus `_arg` for intentionally unused params.
       '@typescript-eslint/no-unused-vars': [

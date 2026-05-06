@@ -168,15 +168,45 @@ describe("file path store updates", () => {
   });
 
   it("pushes and pops file operation undo entries", () => {
-    useAppStore.getState().pushFilePathUndoOperation(WS, {
+    const first = {
       kind: "rename",
       oldPath: "a.ts",
       newPath: "b.ts",
       isDirectory: false,
-    });
+    } as const;
+
+    useAppStore.getState().pushFilePathUndoOperation(WS, first);
 
     expect(useAppStore.getState().filePathUndoStackByWorkspace[WS]).toHaveLength(1);
     useAppStore.getState().popFilePathUndoOperation(WS);
     expect(useAppStore.getState().filePathUndoStackByWorkspace[WS]).toEqual([]);
+  });
+
+  it("only pops a matched undo entry when one is provided", () => {
+    const first = {
+      kind: "rename",
+      oldPath: "a.ts",
+      newPath: "b.ts",
+      isDirectory: false,
+    } as const;
+    const second = {
+      kind: "rename",
+      oldPath: "c.ts",
+      newPath: "d.ts",
+      isDirectory: false,
+    } as const;
+
+    useAppStore.getState().pushFilePathUndoOperation(WS, first);
+    useAppStore.getState().pushFilePathUndoOperation(WS, second);
+    useAppStore.getState().popFilePathUndoOperation(WS, first);
+    expect(useAppStore.getState().filePathUndoStackByWorkspace[WS]).toEqual([
+      first,
+      second,
+    ]);
+
+    useAppStore.getState().popFilePathUndoOperation(WS, second);
+    expect(useAppStore.getState().filePathUndoStackByWorkspace[WS]).toEqual([
+      first,
+    ]);
   });
 });
