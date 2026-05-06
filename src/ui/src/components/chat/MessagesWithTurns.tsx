@@ -25,6 +25,7 @@ import {
   buildPlainTurnFooters,
   findTriggeringUserIndex,
 } from "../../utils/chatTurnFooter";
+import { parseChatTimestamp } from "../../utils/parseChatTimestamp";
 import {
   parseCompactionSentinel,
   parseSyntheticSummarySentinel,
@@ -290,10 +291,10 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
 
   const liveToolActivityPosition = useMemo(() => {
     if (!liveToolActivityStartedAt || !liveToolActivityNode) return null;
-    const startedAtMs = Date.parse(liveToolActivityStartedAt);
+    const startedAtMs = parseChatTimestamp(liveToolActivityStartedAt);
     if (!Number.isFinite(startedAtMs)) return globalOffset + messages.length;
     const laterIndex = messages.findIndex((msg) => {
-      const createdAtMs = Date.parse(msg.created_at);
+      const createdAtMs = parseChatTimestamp(msg.created_at);
       return Number.isFinite(createdAtMs) && createdAtMs > startedAtMs;
     });
     return laterIndex === -1

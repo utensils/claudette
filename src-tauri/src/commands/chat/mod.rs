@@ -125,12 +125,39 @@ pub(crate) fn build_agent_hook_bridge(
 fn shell_quote(value: &str) -> String {
     if value
         .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | ':'))
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '\\' | '.' | '_' | '-' | ':'))
     {
         value.to_string()
+    } else if cfg!(windows) {
+        windows_command_arg_quote(value)
     } else {
         format!("'{}'", value.replace('\'', "'\\''"))
     }
+}
+
+fn windows_command_arg_quote(value: &str) -> String {
+    let mut quoted = String::from("\"");
+    let mut backslashes = 0;
+
+    for ch in value.chars() {
+        match ch {
+            '\\' => backslashes += 1,
+            '"' => {
+                quoted.push_str(&"\\".repeat(backslashes * 2 + 1));
+                quoted.push('"');
+                backslashes = 0;
+            }
+            _ => {
+                quoted.push_str(&"\\".repeat(backslashes));
+                backslashes = 0;
+                quoted.push(ch);
+            }
+        }
+    }
+
+    quoted.push_str(&"\\".repeat(backslashes * 2));
+    quoted.push('"');
+    quoted
 }
 
 fn inject_claudette_mcp_entry(
@@ -214,7 +241,7 @@ pub(crate) fn now_iso() -> String {
 
 #[cfg(test)]
 mod mcp_inject_tests {
-    use super::inject_claudette_mcp_entry;
+    use super::{inject_claudette_mcp_entry, shell_quote, windows_command_arg_quote};
     use claudette::agent_mcp::bridge::BridgeHandle;
 
     fn handle() -> BridgeHandle {
@@ -280,5 +307,25 @@ mod mcp_inject_tests {
     fn inject_rejects_malformed_base_json() {
         let res = inject_claudette_mcp_entry(Some("not-json".into()), &handle());
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn shell_quote_leaves_safe_paths_unquoted() {
+        assert_eq!(
+            shell_quote("/Applications/Claudette.app"),
+            "/Applications/Claudette.app"
+        );
+        assert_eq!(
+            shell_quote(r"C:\Tools\claudette.exe"),
+            r"C:\Tools\claudette.exe"
+        );
+    }
+
+    #[test]
+    fn windows_command_arg_quote_escapes_spaces_quotes_and_trailing_slashes() {
+        assert_eq!(
+            windows_command_arg_quote(r#"C:\Program Files\Claudette "Dev"\"#),
+            r#""C:\Program Files\Claudette \"Dev\"\\""#,
+        );
     }
 }

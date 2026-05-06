@@ -35,94 +35,98 @@ export const ToolActivitiesSection = memo(function ToolActivitiesSection({
   const activities = useAppStore(
     (s) => s.toolActivities[sessionId] ?? EMPTY_ACTIVITIES,
   );
-  const [collapsed, setCollapsed] = useState(true);
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(
+    {},
+  );
 
   // Auto-collapse when a new turn starts (activities goes from 0 to non-zero)
   const prevLengthRef = useRef(0);
   useEffect(() => {
     if (isRunning && activities.length > 0 && prevLengthRef.current === 0) {
-      setCollapsed(true);
+      setCollapsedGroups({});
     }
     prevLengthRef.current = activities.length;
   }, [isRunning, activities.length]);
 
   if (activities.length === 0) return null;
 
-  // Force-expand when the active search query matches inside any of this
-  // section's activity summaries — otherwise marks would be silently
-  // hidden behind the collapsed header and the user would see a non-zero
-  // counter with no visible highlight. Match against the same relativized
-  // text we render, not the raw summary.
-  const queryHasMatch =
-    !!searchQuery &&
-    activities.some((activity) =>
-      activityMatchesSearch(activity, searchQuery, worktreePath),
-    );
-  const isExpanded = !collapsed || queryHasMatch;
   const groups = groupToolActivitiesForDisplay(activities);
 
   return (
     <div className={styles.toolActivities} aria-live="polite" aria-atomic="true">
-      {groups.map((group) => (
-        <div key={group.key} className={styles.turnSummary}>
-          <div
-            className={styles.turnHeader}
-            role="button"
-            tabIndex={0}
-            onClick={() => setCollapsed(!collapsed)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                setCollapsed(!collapsed);
-              }
-            }}
-          >
-            <span className={styles.toolChevron}>{isExpanded ? "⌄" : "›"}</span>
-            <span className={styles.turnLabel}>
-              {group.label}
-              {groupHasRunningActivity(group.activities, isRunning) && (
-                <span className={styles.inProgressNote}> in progress</span>
-              )}
-            </span>
-          </div>
-          {isExpanded && (
-            <div className={styles.turnActivities}>
-              {group.activities.map((act: ToolActivity) =>
-                isAgentActivity(act) ? (
-                  <AgentToolCallGroup
-                    key={act.toolUseId}
-                    activity={act}
-                    searchQuery={searchQuery}
-                    worktreePath={worktreePath}
-                  />
-                ) : (
-                  <div key={act.toolUseId} className={styles.toolActivity}>
-                    <div className={styles.toolHeader}>
-                      <span
-                        className={styles.toolName}
-                        style={{ color: toolColor(act.toolName) }}
-                      >
-                        {act.toolName}
-                      </span>
-                      {activitySummaryText(act) && (
-                        <span className={styles.toolSummary}>
-                          <HighlightedPlainText
-                            text={relativizePath(
-                              activitySummaryText(act),
-                              worktreePath,
-                            )}
-                            query={searchQuery}
-                          />
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                ),
-              )}
+      {groups.map((group) => {
+        const groupHasMatch =
+          !!searchQuery &&
+          group.activities.some((activity) =>
+            activityMatchesSearch(activity, searchQuery, worktreePath),
+          );
+        const isExpanded = !(collapsedGroups[group.key] ?? true) || groupHasMatch;
+        const toggleGroup = () =>
+          setCollapsedGroups((current) => ({
+            ...current,
+            [group.key]: !(current[group.key] ?? true),
+          }));
+        return (
+          <div key={group.key} className={styles.turnSummary}>
+            <div
+              className={styles.turnHeader}
+              role="button"
+              tabIndex={0}
+              onClick={toggleGroup}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  toggleGroup();
+                }
+              }}
+            >
+              <span className={styles.toolChevron}>{isExpanded ? "⌄" : "›"}</span>
+              <span className={styles.turnLabel}>
+                {group.label}
+                {groupHasRunningActivity(group.activities, isRunning) && (
+                  <span className={styles.inProgressNote}> in progress</span>
+                )}
+              </span>
             </div>
-          )}
-        </div>
-      ))}
+            {isExpanded && (
+              <div className={styles.turnActivities}>
+                {group.activities.map((act: ToolActivity) =>
+                  isAgentActivity(act) ? (
+                    <AgentToolCallGroup
+                      key={act.toolUseId}
+                      activity={act}
+                      searchQuery={searchQuery}
+                      worktreePath={worktreePath}
+                    />
+                  ) : (
+                    <div key={act.toolUseId} className={styles.toolActivity}>
+                      <div className={styles.toolHeader}>
+                        <span
+                          className={styles.toolName}
+                          style={{ color: toolColor(act.toolName) }}
+                        >
+                          {act.toolName}
+                        </span>
+                        {activitySummaryText(act) && (
+                          <span className={styles.toolSummary}>
+                            <HighlightedPlainText
+                              text={relativizePath(
+                                activitySummaryText(act),
+                                worktreePath,
+                              )}
+                              query={searchQuery}
+                            />
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ),
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 });
