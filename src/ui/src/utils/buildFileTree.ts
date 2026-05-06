@@ -1,4 +1,5 @@
 import type { FileEntry } from "../services/tauri";
+import type { FileStatus, GitFileLayer } from "../types/diff";
 
 export type FileTreeNode =
   | {
@@ -6,6 +7,7 @@ export type FileTreeNode =
       /** Full path including trailing slash, e.g. `src/components/`. */
       path: string;
       name: string;
+      statusCount: number;
       children: FileTreeNode[];
     }
   | {
@@ -13,6 +15,8 @@ export type FileTreeNode =
       /** Full relative path, e.g. `src/components/Button.tsx`. */
       path: string;
       name: string;
+      git_status: FileStatus | null;
+      git_layer: GitFileLayer | null;
     };
 
 /** Build a hierarchical tree from the flat `FileEntry[]` returned by
@@ -42,6 +46,7 @@ export function buildFileTree(entries: FileEntry[]): FileTreeNode[] {
           kind: "dir",
           path: currentPath,
           name: segment,
+          statusCount: 0,
           children: [],
         };
         dirNodes.set(currentPath, dir);
@@ -49,11 +54,31 @@ export function buildFileTree(entries: FileEntry[]): FileTreeNode[] {
       }
       currentChildren = dir.children;
     }
-    currentChildren.push({ kind: "file", path: entry.path, name: fileName });
+    currentChildren.push({
+      kind: "file",
+      path: entry.path,
+      name: fileName,
+      git_status: entry.git_status ?? null,
+      git_layer: entry.git_layer ?? null,
+    });
   }
 
+  computeStatusCounts(root);
   sortNodes(root);
   return root;
+}
+
+function computeStatusCounts(nodes: FileTreeNode[]): number {
+  let count = 0;
+  for (const node of nodes) {
+    if (node.kind === "file") {
+      if (node.git_status) count += 1;
+    } else {
+      node.statusCount = computeStatusCounts(node.children);
+      count += node.statusCount;
+    }
+  }
+  return count;
 }
 
 function sortNodes(nodes: FileTreeNode[]): void {

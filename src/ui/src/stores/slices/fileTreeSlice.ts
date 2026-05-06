@@ -57,6 +57,8 @@ export interface FileTreeSlice {
   allFilesExpandedDirsByWorkspace: Record<string, Record<string, boolean>>;
   /** Per-workspace path of the row focused in the tree (file or folder). */
   allFilesSelectedPathByWorkspace: Record<string, string | null>;
+  /** Monotonic per-workspace refresh signal for mounted Files panels. */
+  fileTreeRefreshNonceByWorkspace: Record<string, number>;
 
   /** Per-workspace ordered list of open file-tab paths. Tabs are rendered
    *  in this order in the tab strip. */
@@ -80,6 +82,7 @@ export interface FileTreeSlice {
     workspaceId: string,
     path: string | null,
   ) => void;
+  requestFileTreeRefresh: (workspaceId: string) => void;
 
   // Tab management
   /** Replace the entire ordered list of file tabs for a workspace. Used by
@@ -142,6 +145,7 @@ export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> 
 ) => ({
   allFilesExpandedDirsByWorkspace: {},
   allFilesSelectedPathByWorkspace: {},
+  fileTreeRefreshNonceByWorkspace: {},
   fileTabsByWorkspace: {},
   activeFileTabByWorkspace: {},
   fileBuffers: {},
@@ -177,6 +181,13 @@ export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> 
       allFilesSelectedPathByWorkspace: {
         ...s.allFilesSelectedPathByWorkspace,
         [workspaceId]: path,
+      },
+    })),
+  requestFileTreeRefresh: (workspaceId) =>
+    set((s) => ({
+      fileTreeRefreshNonceByWorkspace: {
+        ...s.fileTreeRefreshNonceByWorkspace,
+        [workspaceId]: (s.fileTreeRefreshNonceByWorkspace[workspaceId] ?? 0) + 1,
       },
     })),
 

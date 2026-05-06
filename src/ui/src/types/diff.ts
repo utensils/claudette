@@ -12,6 +12,7 @@ export interface DiffFile {
 }
 
 export type DiffLayer = "committed" | "staged" | "unstaged" | "untracked";
+export type GitFileLayer = "staged" | "unstaged" | "untracked" | "mixed";
 
 export interface DiffFileTab {
   path: string;

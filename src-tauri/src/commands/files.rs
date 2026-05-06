@@ -6,6 +6,7 @@ use tokio::process::Command;
 
 use claudette::db::Database;
 use claudette::file_expand;
+use claudette::model::diff::{FileStatus, GitFileLayer};
 
 use crate::state::AppState;
 use claudette::process::CommandWindowExt as _;
@@ -16,6 +17,8 @@ const MAX_FILES: usize = 10_000;
 pub struct FileEntry {
     pub path: String,
     pub is_directory: bool,
+    pub git_status: Option<FileStatus>,
+    pub git_layer: Option<GitFileLayer>,
 }
 
 #[derive(Clone, Serialize)]
@@ -82,14 +85,19 @@ pub async fn list_workspace_files(
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let git_status = claudette::diff::file_tree_git_status(worktree_path)
+        .await
+        .map_err(|e| format!("Failed to load git status: {e}"))?;
 
     // Collect file entries and extract unique directory paths.
     let mut dirs = std::collections::BTreeSet::new();
+    let mut seen_files = std::collections::BTreeSet::new();
     let mut entries: Vec<FileEntry> = stdout
         .lines()
         .filter(|line| !line.is_empty())
         .take(MAX_FILES)
         .map(|line| {
+            seen_files.insert(line.to_string());
             // Extract all parent directories from the file path.
             let mut pos = 0;
             while let Some(slash) = line[pos..].find('/') {
@@ -100,9 +108,30 @@ pub async fn list_workspace_files(
             FileEntry {
                 path: line.to_string(),
                 is_directory: false,
+                git_status: git_status.get(line).map(|s| s.status.clone()),
+                git_layer: git_status.get(line).map(|s| s.layer),
             }
         })
         .collect();
+
+    for (path, status) in &git_status {
+        if entries.len() >= MAX_FILES || seen_files.contains(path) {
+            continue;
+        }
+        let mut pos = 0;
+        while let Some(slash) = path[pos..].find('/') {
+            let dir_end = pos + slash;
+            dirs.insert(path[..=dir_end].to_string());
+            pos = dir_end + 1;
+        }
+        seen_files.insert(path.clone());
+        entries.push(FileEntry {
+            path: path.clone(),
+            is_directory: false,
+            git_status: Some(status.status.clone()),
+            git_layer: Some(status.layer),
+        });
+    }
 
     // Prepend directory entries (sorted alphabetically by BTreeSet).
     let dir_entries: Vec<FileEntry> = dirs
@@ -110,6 +139,8 @@ pub async fn list_workspace_files(
         .map(|path| FileEntry {
             path,
             is_directory: true,
+            git_status: None,
+            git_layer: None,
         })
         .collect();
     entries.splice(0..0, dir_entries);

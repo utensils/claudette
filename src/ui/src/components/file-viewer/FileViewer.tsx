@@ -77,6 +77,7 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
   const setFileBufferContent = useAppStore((s) => s.setFileBufferContent);
   const setFileBufferSaved = useAppStore((s) => s.setFileBufferSaved);
   const setFileTabPreview = useAppStore((s) => s.setFileTabPreview);
+  const requestFileTreeRefresh = useAppStore((s) => s.requestFileTreeRefresh);
   const addToast = useAppStore((s) => s.addToast);
   const keybindings = useAppStore((s) => s.keybindings);
 
@@ -186,6 +187,7 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
       // a different tab/workspace to avoid confusing the user about which
       // file saved.
       setFileBufferSaved(requestedWorkspaceId, requestedPath, snapshot);
+      requestFileTreeRefresh(requestedWorkspaceId);
       const state = useAppStore.getState();
       if (
         state.selectedWorkspaceId === requestedWorkspaceId &&
@@ -209,7 +211,17 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
     } finally {
       setSaving(false);
     }
-  }, [bufferState, dirty, saving, workspaceId, path, setFileBufferSaved, addToast, t]);
+  }, [
+    bufferState,
+    dirty,
+    saving,
+    workspaceId,
+    path,
+    setFileBufferSaved,
+    requestFileTreeRefresh,
+    addToast,
+    t,
+  ]);
 
   const showMarkdownToggle = isMarkdown && !editDisabled;
   const showMarkdownPreview =

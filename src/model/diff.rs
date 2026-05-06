@@ -8,6 +8,21 @@ pub enum FileStatus {
     Renamed { from: String },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GitFileLayer {
+    Staged,
+    Unstaged,
+    Untracked,
+    Mixed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct GitStatusEntry {
+    pub status: FileStatus,
+    pub layer: GitFileLayer,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct DiffFile {
     pub path: String,

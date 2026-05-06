@@ -46,6 +46,16 @@
   color: var(--text-primary);
 }
 
+.rowDeleted .name {
+  color: var(--text-dim);
+  text-decoration: line-through;
+  text-decoration-color: var(--diff-removed-text);
+}
+
+.rowDirChanged .icon {
+  color: var(--tool-task);
+}
+
 .chevron {
   flex-shrink: 0;
   color: var(--text-dim);
@@ -65,6 +75,42 @@
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.status {
+  width: 14px;
+  flex-shrink: 0;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+}
+
+.dirStatus {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  flex-shrink: 0;
+  border: 1px solid color-mix(in srgb, var(--tool-task) 30%, transparent);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--tool-task) 12%, transparent);
+  color: var(--tool-task);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+}
+
+.dirStatus:empty {
+  width: 8px;
+  min-width: 8px;
+  height: 8px;
+  padding: 0;
+  border-color: var(--tool-task);
+  background: var(--tool-task);
 }
 
 .empty {

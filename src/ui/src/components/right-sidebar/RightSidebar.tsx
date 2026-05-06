@@ -45,6 +45,7 @@ export const RightSidebar = memo(function RightSidebar() {
   const openDiffTab = useAppStore((s) => s.openDiffTab);
   const openFileTab = useAppStore((s) => s.openFileTab);
   const setDiffLoading = useAppStore((s) => s.setDiffLoading);
+  const requestFileTreeRefresh = useAppStore((s) => s.requestFileTreeRefresh);
   const commitHistory = useAppStore((s) => s.commitHistory);
   const diffSelectedCommitHash = useAppStore((s) => s.diffSelectedCommitHash);
   const setDiffSelectedCommitHash = useAppStore((s) => s.setDiffSelectedCommitHash);
@@ -363,12 +364,20 @@ export const RightSidebar = memo(function RightSidebar() {
         const result = await loadDiff(selectedWorkspaceId);
         if (useAppStore.getState().selectedWorkspaceId === selectedWorkspaceId) {
           applyDiffResult(result);
+          requestFileTreeRefresh(selectedWorkspaceId);
         }
       } finally {
         setGitOpInFlight(false);
       }
     },
-    [worktreePath, selectedWorkspaceId, loadDiff, applyDiffResult, gitOpInFlight],
+    [
+      worktreePath,
+      selectedWorkspaceId,
+      loadDiff,
+      applyDiffResult,
+      requestFileTreeRefresh,
+      gitOpInFlight,
+    ],
   );
 
   // Clear the diff selection when the currently-selected row is about to
