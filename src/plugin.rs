@@ -356,19 +356,31 @@ pub async fn run_claude_plugin_command(
     repo_path: Option<&Path>,
     args: &[String],
 ) -> Result<String, String> {
-    // Resolve claude up front. If it genuinely isn't on the enriched PATH,
-    // return the structured `MISSING_CLI:claude` sentinel so the Tauri/UI
-    // layer can render the install-CTA modal (see `crate::missing_cli`)
-    // instead of leaking a bare `os error 2` (issue #641).
+    // Resolve claude using the same multi-step lookup as the rest of the
+    // app (process PATH → login-shell PATH → well-known install locations →
+    // bare `"claude"` fallback). This matches `agent::run_turn` and friends
+    // so a working main-app install also works for the plugin marketplace
+    // page (issue #641: GUI launches on macOS don't inherit the shell PATH,
+    // and `which_in_enriched_path` skips the well-known fallbacks that
+    // `resolve_claude_path` checks).
     //
-    // Only `CannotFindBinaryPath` means "binary not found" — other variants
-    // (`CannotGetCurrentDirAndPathListEmpty`, `CannotCanonicalize`) signal
-    // real I/O / cwd issues that the user shouldn't be told to "install
-    // claude" to fix. Surface those with their original message instead.
-    let claude_path = crate::env::which_in_enriched_path("claude").map_err(|e| match e {
-        which::Error::CannotFindBinaryPath => crate::missing_cli::format_err("claude"),
-        other => format!("Failed to resolve `claude` on PATH: {other}"),
-    })?;
+    // If `resolve_claude_path` falls through to the bare-name fallback and
+    // that fails to spawn with ENOENT, `map_spawn_err` converts it to the
+    // `MISSING_CLI:claude` sentinel so the UI can render the install-CTA
+    // modal instead of leaking a bare `os error 2`.
+    let claude_path = crate::agent::resolve_claude_path().await;
+    // Defensive guard: if resolution fell through to the bare-name fallback
+    // (no absolute install found anywhere on PATH or in well-known
+    // locations), surface the install-CTA modal directly instead of
+    // spawning. A bare `Command::new("claude")` would still go through the
+    // OS PATH search at exec time, and a misconfigured PATH containing a
+    // relative entry like `.` could in principle resolve to an unintended
+    // binary. The agent spawn paths tolerate the bare fallback (the spawn
+    // is wrapped in `map_spawn_err` and ENOENT is converted to MISSING_CLI
+    // anyway), but the marketplace surface has no such retry value.
+    if !Path::new(&claude_path).is_absolute() {
+        return Err(crate::missing_cli::format_err("claude"));
+    }
     let current_dir = plugin_command_cwd(repo_path);
 
     let output = tokio::process::Command::new(&claude_path)
