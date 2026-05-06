@@ -22,6 +22,7 @@ import {
   downloadAttachment,
   openAttachmentInBrowser,
   openAttachmentWithDefaultApp,
+  copyAttachmentFileToClipboard,
   copyAttachmentToClipboard,
   shareAttachment,
   isShareSupported,
@@ -146,6 +147,25 @@ describe("openAttachmentWithDefaultApp", () => {
   });
 });
 
+describe("copyAttachmentFileToClipboard", () => {
+  it("invokes copy_attachment_file_to_clipboard with decoded bytes", async () => {
+    const invoke = vi.fn().mockResolvedValue(undefined);
+    const pdf: DownloadableAttachment = {
+      filename: "doc.pdf",
+      media_type: "application/pdf",
+      data_base64: "JVBERi0=", // %PDF-
+    };
+
+    await copyAttachmentFileToClipboard(pdf, { invoke });
+
+    expect(invoke).toHaveBeenCalledWith("copy_attachment_file_to_clipboard", {
+      bytes: [37, 80, 68, 70, 45],
+      filename: "doc.pdf",
+      mediaType: "application/pdf",
+    });
+  });
+});
+
 describe("copyAttachmentToClipboard", () => {
   it("writes a ClipboardItem via navigator.clipboard.write", async () => {
     const write = vi.fn().mockResolvedValue(undefined);
@@ -171,6 +191,64 @@ describe("copyAttachmentToClipboard", () => {
         clipboard: { write } as unknown as Clipboard,
       }),
     ).rejects.toThrow("denied");
+  });
+
+  it("routes PDF attachments through the backend file clipboard command", async () => {
+    const write = vi.fn().mockResolvedValue(undefined);
+    const invoke = vi.fn().mockResolvedValue(undefined);
+    const pdfFixture: DownloadableAttachment = {
+      filename: "doc.pdf",
+      data_base64: "JVBERi0=", // %PDF-
+      media_type: "application/pdf",
+    };
+
+    await copyAttachmentToClipboard(pdfFixture, {
+      clipboard: { write } as unknown as Clipboard,
+      invoke,
+    });
+
+    expect(invoke).toHaveBeenCalledWith("copy_attachment_file_to_clipboard", {
+      bytes: [37, 80, 68, 70, 45],
+      filename: "doc.pdf",
+      mediaType: "application/pdf",
+    });
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("writes CSV attachments as text via the injected writeText", async () => {
+    const write = vi.fn().mockResolvedValue(undefined);
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const csvFixture: DownloadableAttachment = {
+      filename: "people.csv",
+      data_base64: "aWQsbmFtZQoxLEFkYQo=", // base64 of 'id,name\n1,Ada\n'
+      media_type: "text/csv",
+    };
+
+    await copyAttachmentToClipboard(csvFixture, {
+      clipboard: { write } as unknown as Clipboard,
+      writeText,
+    });
+
+    expect(writeText).toHaveBeenCalledWith("id,name\n1,Ada\n");
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("writes JSON attachments as text via the injected writeText", async () => {
+    const write = vi.fn().mockResolvedValue(undefined);
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const jsonFixture: DownloadableAttachment = {
+      filename: "data.json",
+      data_base64: "eyJvayI6dHJ1ZX0=", // base64 of '{"ok":true}'
+      media_type: "application/json",
+    };
+
+    await copyAttachmentToClipboard(jsonFixture, {
+      clipboard: { write } as unknown as Clipboard,
+      writeText,
+    });
+
+    expect(writeText).toHaveBeenCalledWith('{"ok":true}');
+    expect(write).not.toHaveBeenCalled();
   });
 
   // WebKit silently drops image/svg+xml ClipboardItems, so a copied SVG
