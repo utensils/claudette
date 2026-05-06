@@ -213,6 +213,20 @@
   border-color: var(--accent-primary);
 }
 
+.body :where(img) {
+  max-width: 100%;
+  height: auto;
+}
+
+/* WebKit can report no intrinsic size for SVGs that rely only on a viewBox
+   when they are loaded through an <img>. Give those markdown previews a
+   visible floor while still letting normal width/height attributes win. */
+.body :global(img.cc-markdown-image-svg) {
+  min-width: min(480px, 100%);
+  min-height: min(240px, 50vh);
+  object-fit: contain;
+}
+
 /* Horizontal rules */
 .body :where(hr) {
   border: none;
