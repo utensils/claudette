@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { openUrl } from "../../services/tauri";
 import { Modal } from "./Modal";
+import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import shared from "./shared.module.css";
 import styles from "./MissingCliModal.module.css";
 
@@ -54,39 +54,11 @@ export function MissingCliModal() {
   const { t: tCommon } = useTranslation("common");
   const closeModal = useAppStore((s) => s.closeModal);
   const modalData = useAppStore((s) => s.modalData);
-  const [copied, setCopied] = useState<number | null>(null);
-  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(
-    () => () => {
-      if (copyTimerRef.current !== null) {
-        clearTimeout(copyTimerRef.current);
-        copyTimerRef.current = null;
-      }
-    },
-    [],
-  );
 
   const data = isMissingCliData(modalData) ? modalData : null;
   if (!data) return null;
 
   const platformLabel = PLATFORM_LABEL[data.platform] ?? data.platform;
-
-  const handleCopy = async (cmd: string, idx: number) => {
-    try {
-      await navigator.clipboard.writeText(cmd);
-      setCopied(idx);
-      if (copyTimerRef.current !== null) {
-        clearTimeout(copyTimerRef.current);
-      }
-      copyTimerRef.current = setTimeout(() => {
-        copyTimerRef.current = null;
-        setCopied((c) => (c === idx ? null : c));
-      }, 1500);
-    } catch {
-      // Clipboard API can reject in some sandboxes — silently ignore.
-    }
-  };
 
   const handleOpen = (url: string) => {
     void openUrl(url).catch(() => {});
@@ -106,13 +78,11 @@ export function MissingCliModal() {
               {opt.command && (
                 <div className={styles.commandRow}>
                   <code className={styles.code}>{opt.command}</code>
-                  <button
-                    type="button"
-                    className={shared.btn}
-                    onClick={() => void handleCopy(opt.command!, idx)}
-                  >
-                    {copied === idx ? t("missing_cli_copied") : tCommon("copy")}
-                  </button>
+                  <CommandCopyButton
+                    command={opt.command}
+                    copyLabel={tCommon("copy")}
+                    copiedLabel={t("missing_cli_copied")}
+                  />
                 </div>
               )}
               {opt.url && (
@@ -138,5 +108,26 @@ export function MissingCliModal() {
         </button>
       </div>
     </Modal>
+  );
+}
+
+function CommandCopyButton({
+  command,
+  copyLabel,
+  copiedLabel,
+}: {
+  command: string;
+  copyLabel: string;
+  copiedLabel: string;
+}) {
+  const { copied, copy } = useCopyToClipboard();
+  return (
+    <button
+      type="button"
+      className={shared.btn}
+      onClick={() => void copy(command)}
+    >
+      {copied ? copiedLabel : copyLabel}
+    </button>
   );
 }

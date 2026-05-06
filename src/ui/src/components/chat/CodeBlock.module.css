@@ -38,6 +38,7 @@ pre:hover > .copyButton:hover {
   opacity: 1;
 }
 
-.copied {
+.copyButton[data-state="copied"] {
   color: var(--accent-primary);
+  opacity: 1;
 }

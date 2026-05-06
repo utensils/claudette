@@ -1,13 +1,18 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { AlignJustify, Check, Columns2, Copy, Eye, FilePenLine, GitCompare } from "lucide-react";
-import { writeText as clipboardWriteText } from "@tauri-apps/plugin-clipboard-manager";
+import { AlignJustify, Columns2, Eye, FilePenLine, GitCompare } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
-import { loadCommitFileDiff, loadFileDiff, readWorkspaceFile } from "../../services/tauri";
+import {
+  loadCommitFileDiff,
+  loadFileDiff,
+  readWorkspaceFile,
+  readWorkspaceFileForViewer,
+} from "../../services/tauri";
 import { WorkspacePanelHeader } from "../shared/WorkspacePanelHeader";
 import { PaneToolbar } from "../shared/PaneToolbar";
 import { SegmentedControl } from "../shared/SegmentedControl";
 import { IconButton } from "../shared/IconButton";
+import { CopyButton } from "../shared/CopyButton";
 import { SessionTabs } from "../chat/SessionTabs";
 import { MessageMarkdown } from "../chat/MessageMarkdown";
 import { getCachedHighlight, highlightCode } from "../../utils/highlight";
@@ -118,48 +123,19 @@ export function DiffViewer() {
   const isMarkdown = !!diffSelectedFile && MARKDOWN_EXT.test(diffSelectedFile);
   const showRendered = isMarkdown && diffPreviewMode === "rendered";
 
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
-  const copyResetRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    setCopyState("idle");
-    if (copyResetRef.current !== null) {
-      window.clearTimeout(copyResetRef.current);
-      copyResetRef.current = null;
-    }
-  }, [diffSelectedFile]);
-
-  useEffect(() => {
-    return () => {
-      if (copyResetRef.current !== null) window.clearTimeout(copyResetRef.current);
-    };
-  }, []);
-
-  const handleCopyContents = useCallback(async () => {
-    if (!selectedWorkspaceId || !diffSelectedFile) return;
+  const fetchFileForCopy = useCallback(async (): Promise<string | null> => {
+    if (!selectedWorkspaceId || !diffSelectedFile) return null;
     // Capture path at invocation; if the user switches files before the
-    // async work resolves we bail so the copy result doesn't apply to a
-    // different file's button (would show a stale checkmark).
+    // async work resolves we drop the result so the copy doesn't land on
+    // a different file's clipboard.
     const requestedFile = diffSelectedFile;
-    let nextState: "copied" | "error";
-    try {
-      const file = await readWorkspaceFile(selectedWorkspaceId, requestedFile);
-      // The backend caps reads at 100 KB. Copying a truncated prefix would
-      // silently mislead the user — treat truncation as a copy failure.
-      if (file.is_binary || file.content === null || file.truncated) {
-        nextState = "error";
-      } else {
-        await clipboardWriteText(file.content);
-        nextState = "copied";
-      }
-    } catch (e) {
-      console.error("Copy file contents failed:", e);
-      nextState = "error";
-    }
-    if (useAppStore.getState().diffSelectedFile !== requestedFile) return;
-    setCopyState(nextState);
-    if (copyResetRef.current !== null) window.clearTimeout(copyResetRef.current);
-    copyResetRef.current = window.setTimeout(() => setCopyState("idle"), 1500);
+    const file = await readWorkspaceFileForViewer(
+      selectedWorkspaceId,
+      requestedFile,
+    );
+    if (useAppStore.getState().diffSelectedFile !== requestedFile) return null;
+    if (file.is_binary || file.content === null || file.truncated) return null;
+    return file.content;
   }, [selectedWorkspaceId, diffSelectedFile]);
 
   // Monotonic version token: each new fetch bumps it so a stale in-flight
@@ -314,23 +290,21 @@ export function DiffViewer() {
           path={diffSelectedFile}
           actions={
             <>
-              <IconButton
-                onClick={handleCopyContents}
-                tooltip={
-                  copyState === "copied"
-                    ? t("diff_tooltip_copied")
-                    : copyState === "error"
-                      ? t("diff_tooltip_copy_failed")
-                      : t("diff_tooltip_copy_contents")
-                }
-                aria-live="polite"
-              >
-                {copyState === "copied" ? (
-                  <Check size={14} aria-hidden="true" />
-                ) : (
-                  <Copy size={14} aria-hidden="true" />
-                )}
-              </IconButton>
+              <CopyButton
+                // Force a fresh CopyButton (and a fresh hook state) on each
+                // file switch. Without this, a stale in-flight read from
+                // the previous file could resolve to `null` (race-guarded
+                // by `fetchFileForCopy`) and flip the new file's button
+                // into the error state. Remount makes the late `setState`
+                // land on an unmounted fiber, which React silently drops.
+                key={diffSelectedFile}
+                source={fetchFileForCopy}
+                tooltip={{
+                  copy: t("diff_tooltip_copy_contents"),
+                  copied: t("diff_tooltip_copied"),
+                  failed: t("diff_tooltip_copy_failed"),
+                }}
+              />
               {selectedWorkspaceId && diffSelectedFile && (
                 <IconButton
                   onClick={() => openFileTab(selectedWorkspaceId, diffSelectedFile)}

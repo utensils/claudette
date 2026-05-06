@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { writeText as clipboardWriteText } from "@tauri-apps/plugin-clipboard-manager";
 import { MessageMarkdown } from "./MessageMarkdown";
 import type { PlanApproval } from "../../stores/useAppStore";
 import { readPlanFile, sendRemoteCommand } from "../../services/tauri";
+import { CopyButton } from "../shared/CopyButton";
 import styles from "./PlanApprovalCard.module.css";
 
 interface PlanApprovalCardProps {
@@ -28,31 +28,32 @@ export function PlanApprovalCard({
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [feedback, setFeedback] = useState("");
-  const [copied, setCopied] = useState(false);
-  const [copying, setCopying] = useState(false);
-  const copyTimeoutRef = useRef<number | null>(null);
+  // Memoize an in-flight read so concurrent callers (e.g. user clicks
+  // Copy and View Plan in quick succession) share a single network call
+  // instead of issuing duplicate `readPlanFile` / `sendRemoteCommand`
+  // requests. Cleared in a `finally` so a failed fetch can be retried.
+  const inFlightFetchRef = useRef<Promise<string> | null>(null);
 
-  useEffect(() => {
-    return () => {
-      if (copyTimeoutRef.current !== null) {
-        window.clearTimeout(copyTimeoutRef.current);
-      }
-    };
-  }, []);
-
-  const fetchPlanContent = async (): Promise<string> => {
-    if (planContent !== null) return planContent;
-    if (!approval.planFilePath) throw new Error("No plan file path");
-    let content: string;
-    if (remoteConnectionId) {
-      content = (await sendRemoteCommand(remoteConnectionId, "read_plan_file", {
-        path: approval.planFilePath,
-      })) as string;
-    } else {
-      content = await readPlanFile(approval.planFilePath);
+  const fetchPlanContent = (): Promise<string> => {
+    if (planContent !== null) return Promise.resolve(planContent);
+    if (inFlightFetchRef.current) return inFlightFetchRef.current;
+    if (!approval.planFilePath) {
+      return Promise.reject(new Error("No plan file path"));
     }
-    setPlanContent(content);
-    return content;
+    const planFilePath = approval.planFilePath;
+    const promise = (async () => {
+      const content = remoteConnectionId
+        ? ((await sendRemoteCommand(remoteConnectionId, "read_plan_file", {
+            path: planFilePath,
+          })) as string)
+        : await readPlanFile(planFilePath);
+      setPlanContent(content);
+      return content;
+    })().finally(() => {
+      inFlightFetchRef.current = null;
+    });
+    inFlightFetchRef.current = promise;
+    return promise;
   };
 
   const handleViewPlan = async () => {
@@ -75,26 +76,6 @@ export function PlanApprovalCard({
     }
   };
 
-  const handleCopyPlan = async () => {
-    if (!approval.planFilePath) return;
-    setLoadError(null);
-    setCopying(true);
-    try {
-      const content = await fetchPlanContent();
-      await clipboardWriteText(content);
-      setCopied(true);
-      if (copyTimeoutRef.current !== null) {
-        window.clearTimeout(copyTimeoutRef.current);
-      }
-      copyTimeoutRef.current = window.setTimeout(() => setCopied(false), 1200);
-    } catch (e) {
-      console.error("Failed to copy plan:", e);
-      setLoadError(t("plan_approval_failed_read"));
-    } finally {
-      setCopying(false);
-    }
-  };
-
   return (
     <div className={styles.card}>
       <div className={styles.label}>{t("plan_approval_label")}</div>
@@ -108,7 +89,7 @@ export function PlanApprovalCard({
           <button
             className={styles.planLink}
             onClick={handleViewPlan}
-            disabled={loading || copying}
+            disabled={loading}
           >
             {loading
               ? t("plan_approval_loading")
@@ -118,25 +99,20 @@ export function PlanApprovalCard({
             {" \u2014 "}
             {approval.planFilePath.split("/").slice(-2).join("/")}
           </button>
-          <button
-            type="button"
+          <CopyButton
+            variant="bare"
             className={styles.copyBtn}
-            onClick={handleCopyPlan}
-            disabled={loading || copying}
-            title={copied ? t("plan_approval_copied") : t("plan_approval_copy")}
-            aria-label={copied ? t("plan_approval_copied") : t("plan_approval_copy")}
-          >
-            {copied ? (
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="20 6 9 17 4 12"></polyline>
-              </svg>
-            ) : (
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-              </svg>
-            )}
-          </button>
+            source={fetchPlanContent}
+            tooltip={{
+              copy: t("plan_approval_copy"),
+              copied: t("plan_approval_copied"),
+            }}
+            disabled={loading}
+            onError={(e) => {
+              console.error("Failed to copy plan:", e);
+              setLoadError(t("plan_approval_failed_read"));
+            }}
+          />
         </div>
       )}
 
