@@ -8,6 +8,7 @@ import {
 } from "../../hotkeys/bindings";
 import { isMacHotkeyPlatform } from "../../hotkeys/platform";
 import { shortcutMatchesQuery } from "../settings/sections/keyboardSearch";
+import { Modal } from "./Modal";
 import styles from "./KeyboardShortcutsModal.module.css";
 
 export function KeyboardShortcutsModal() {
@@ -47,64 +48,56 @@ export function KeyboardShortcutsModal() {
   }, [search, keybindings, isMac, t]);
 
   return (
-    <div className={styles.backdrop} onClick={closeModal}>
-      <div
-        className={styles.card}
-        role="dialog"
-        aria-modal="true"
-        aria-label={t("shortcuts_modal_title")}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className={styles.header}>
-          <h3 className={styles.title}>{t("shortcuts_modal_title")}</h3>
-        </div>
-        <div className={styles.body}>
-          <input
-            type="search"
-            className={styles.search}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder={t("keyboard_search_placeholder")}
-            aria-label={t("keyboard_search_placeholder")}
-            autoFocus
-          />
+    <Modal
+      title={t("shortcuts_modal_title")}
+      onClose={closeModal}
+      wide
+      bodyScroll
+    >
+      <input
+        type="search"
+        className={styles.search}
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder={t("keyboard_search_placeholder")}
+        aria-label={t("keyboard_search_placeholder")}
+        autoFocus
+      />
 
-          {groupedActions.length === 0 ? (
-            <div className={styles.empty}>{t("keyboard_no_results")}</div>
-          ) : null}
+      {groupedActions.length === 0 ? (
+        <div className={styles.empty}>{t("keyboard_no_results")}</div>
+      ) : null}
 
-          {groupedActions.map(([category, actions]) => (
-            <div className={styles.group} key={category}>
-              <div className={styles.groupLabel}>{tx(category)}</div>
-              {actions.map((action) => {
-                const effective = getEffectiveBinding(action, keybindings);
-                const parts = formatBindingParts(effective, isMac);
-                return (
-                  <div className={styles.row} key={action.id}>
-                    <div className={styles.label}>{tx(action.description)}</div>
-                    <div className={styles.binding}>
-                      {effective === null ? (
-                        <span className={styles.unbound}>
-                          {t("keyboard_disabled_binding")}
-                        </span>
-                      ) : (
-                        parts.map((part, index) => (
-                          <span
-                            className={styles.keycap}
-                            key={`${part}-${index}`}
-                          >
-                            {part}
-                          </span>
-                        ))
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          ))}
+      {groupedActions.map(([category, actions]) => (
+        <div className={styles.group} key={category}>
+          <div className={styles.groupLabel}>{tx(category)}</div>
+          {actions.map((action) => {
+            const effective = getEffectiveBinding(action, keybindings);
+            const parts = formatBindingParts(effective, isMac);
+            return (
+              <div className={styles.row} key={action.id}>
+                <div className={styles.label}>{tx(action.description)}</div>
+                <div className={styles.binding}>
+                  {effective === null ? (
+                    <span className={styles.unbound}>
+                      {t("keyboard_disabled_binding")}
+                    </span>
+                  ) : (
+                    parts.map((part, index) => (
+                      <span
+                        className={styles.keycap}
+                        key={`${part}-${index}`}
+                      >
+                        {part}
+                      </span>
+                    ))
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
-      </div>
-    </div>
+      ))}
+    </Modal>
   );
 }

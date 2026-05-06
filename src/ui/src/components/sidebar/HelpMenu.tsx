@@ -8,10 +8,8 @@ import { openDevtools, openUrl } from "../../services/tauri";
 import { findHotkeyAction } from "../../hotkeys/actions";
 import { formatBindingParts, getEffectiveBinding } from "../../hotkeys/bindings";
 import { isMacHotkeyPlatform } from "../../hotkeys/platform";
-import { HELP_DOCS_URL } from "../../helpUrls";
+import { HELP_DOCS_URL, HELP_RELEASE_URL_BASE } from "../../helpUrls";
 import styles from "./HelpMenu.module.css";
-
-const RELEASE_URL_BASE = "https://github.com/utensils/claudette/releases/tag/v";
 
 // Spacing between the trigger button's top edge and the menu's bottom
 // edge, in CSS px. `getBoundingClientRect()` and `position: fixed; top`
@@ -161,7 +159,7 @@ export function HelpMenu({ buttonClassName, triggerLabel }: HelpMenuProps) {
   const handleChangelog = () => {
     setOpen(false);
     if (!appVersion) return;
-    void openUrl(`${RELEASE_URL_BASE}${appVersion}`).catch(() => {});
+    void openUrl(`${HELP_RELEASE_URL_BASE}${appVersion}`).catch(() => {});
   };
 
   const handleDevtools = () => {

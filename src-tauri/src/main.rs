@@ -58,13 +58,16 @@ use claudette::db::Database;
 #[cfg(target_os = "macos")]
 const MACOS_CLOSE_WINDOW_ACCELERATOR: &str = "CmdOrCtrl+Shift+W";
 
-// Docs deep-link target for every Help surface (sidebar Help menu,
-// Settings → Help, macOS Help submenu). The TS side mirrors this in
-// `src/ui/src/helpUrls.ts` — keep both in sync. Pointing a deep page
-// rather than the docs root so users land on something actionable;
-// when the docs IA shifts, update here and in the TS file together.
+// URLs for the macOS Help submenu — mirrored from the TS side's single
+// source of truth at `src/ui/src/helpUrls.ts`. Update both together
+// when any of these change. The frontend Help menu and Settings → Help
+// section import the matching constants from that file.
 #[cfg(target_os = "macos")]
 const HELP_DOCS_URL: &str = "https://utensils.io/claudette/getting-started/installation/";
+#[cfg(target_os = "macos")]
+const HELP_RELEASE_URL_BASE: &str = "https://github.com/utensils/claudette/releases/tag/v";
+#[cfg(target_os = "macos")]
+const HELP_ISSUES_URL: &str = "https://github.com/utensils/claudette/issues/new";
 
 fn main() {
     // Install the rustls crypto provider before any TLS usage. Both
@@ -249,10 +252,7 @@ fn main() {
                 // Deep-link to the GitHub Release page for the running
                 // version. Stable URL — doesn't depend on CHANGELOG.md
                 // anchor formatting (which embeds the release date).
-                let url = format!(
-                    "https://github.com/utensils/claudette/releases/tag/v{}",
-                    env!("CARGO_PKG_VERSION"),
-                );
+                let url = format!("{}{}", HELP_RELEASE_URL_BASE, env!("CARGO_PKG_VERSION"));
                 if let Err(e) = commands::shell::opener::open(&url) {
                     eprintln!("[help] Failed to open changelog URL: {e}");
                 }
@@ -269,9 +269,7 @@ fn main() {
                 // GitHub issue tracker. Mirrors Aethon's "Report an
                 // Issue…" item — gives users a one-click path to file a
                 // bug report.
-                if let Err(e) = commands::shell::opener::open(
-                    "https://github.com/utensils/claudette/issues/new",
-                ) {
+                if let Err(e) = commands::shell::opener::open(HELP_ISSUES_URL) {
                     eprintln!("[help] Failed to open issues URL: {e}");
                 }
             } else if event.id().as_ref() == "zoom-in" {

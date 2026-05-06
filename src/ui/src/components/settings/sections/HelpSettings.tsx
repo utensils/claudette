@@ -4,11 +4,12 @@ import { getVersion } from "@tauri-apps/api/app";
 import { Keyboard, ExternalLink, FileText, Bug } from "lucide-react";
 import { useAppStore } from "../../../stores/useAppStore";
 import { openUrl } from "../../../services/tauri";
-import { HELP_DOCS_URL } from "../../../helpUrls";
+import {
+  HELP_DOCS_URL,
+  HELP_ISSUES_URL,
+  HELP_RELEASE_URL_BASE,
+} from "../../../helpUrls";
 import styles from "../Settings.module.css";
-
-const ISSUES_URL = "https://github.com/utensils/claudette/issues/new";
-const RELEASE_URL_BASE = "https://github.com/utensils/claudette/releases/tag/v";
 
 export function HelpSettings() {
   const { t } = useTranslation("settings");
@@ -21,7 +22,7 @@ export function HelpSettings() {
 
   const openChangelog = () => {
     if (!appVersion) return;
-    void openUrl(`${RELEASE_URL_BASE}${appVersion}`).catch(() => {});
+    void openUrl(`${HELP_RELEASE_URL_BASE}${appVersion}`).catch(() => {});
   };
 
   return (
@@ -93,7 +94,7 @@ export function HelpSettings() {
         <div className={styles.settingControl}>
           <button
             className={styles.iconBtn}
-            onClick={() => void openUrl(ISSUES_URL).catch(() => {})}
+            onClick={() => void openUrl(HELP_ISSUES_URL).catch(() => {})}
           >
             <Bug size={14} />
             {t("help_issues_button")}
