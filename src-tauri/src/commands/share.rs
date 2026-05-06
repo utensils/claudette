@@ -153,15 +153,22 @@ pub async fn list_shares(state: State<'_, AppState>) -> Result<Vec<ShareSummary>
 
     #[cfg(feature = "server")]
     {
-        let Some(cfg_arc) = state.share_server_config.read().await.clone() else {
+        if let Some(cfg_arc) = state.share_server_config.read().await.clone() {
+            let cfg = cfg_arc.lock().await;
+            return Ok(share_summaries_from_config(&cfg));
+        }
+
+        // Startup share hydration is kicked off asynchronously during Tauri
+        // setup. If the frontend asks for the count before that task has
+        // populated `share_server_config`, read the persisted config directly
+        // so the sidebar share indicator is still reliable on first paint.
+        let cfg_path = claudette_server::default_config_path();
+        if !cfg_path.exists() {
             return Ok(Vec::new());
-        };
-        let cfg = cfg_arc.lock().await;
-        Ok(cfg
-            .list_shares()
-            .iter()
-            .map(|e| share_summary_from_entry(e, cfg.server.port))
-            .collect())
+        }
+        let cfg = claudette_server::auth::ServerConfig::load_or_create(&cfg_path)
+            .map_err(|e| format!("Failed to load server config: {e}"))?;
+        Ok(share_summaries_from_config(&cfg))
     }
 }
 
@@ -178,6 +185,15 @@ fn share_summary_from_entry(entry: &claudette_server::auth::ShareEntry, port: u1
         session_count: entry.sessions.len(),
         connection_string: format!("claudette://{}:{}/{}", host, port, entry.pairing_token),
     }
+}
+
+#[cfg(feature = "server")]
+fn share_summaries_from_config(config: &claudette_server::auth::ServerConfig) -> Vec<ShareSummary> {
+    config
+        .list_shares()
+        .iter()
+        .map(|e| share_summary_from_entry(e, config.server.port))
+        .collect()
 }
 
 #[cfg(feature = "server")]

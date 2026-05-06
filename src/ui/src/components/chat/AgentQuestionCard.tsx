@@ -38,7 +38,10 @@ export function AgentQuestionCard({
           .map((part) => part.trim())
           .includes(answer);
       })
-      .map(([participantId]) => voterName(participantId));
+      .map(([participantId]) => ({
+        participantId,
+        name: voterName(participantId),
+      }));
 
   const freeformVotes = (
     questionText: string,
@@ -57,13 +60,15 @@ export function AgentQuestionCard({
           : [{ participantId, name: voterName(participantId), answer: value }];
       });
 
-  const renderBadges = (names: string[]) => {
-    if (names.length === 0) return null;
+  const renderBadges = (
+    voters: Array<{ participantId: string; name: string }>,
+  ) => {
+    if (voters.length === 0) return null;
     return (
       <span className={styles.voteBadges}>
-        {names.map((name) => (
-          <span key={name} className={styles.voteBadge}>
-            {name}
+        {voters.map((voter) => (
+          <span key={voter.participantId} className={styles.voteBadge}>
+            {voter.name}
           </span>
         ))}
       </span>
