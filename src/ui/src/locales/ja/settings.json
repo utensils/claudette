@@ -366,5 +366,6 @@
   "help_menu_keyboard_shortcuts": "キーボードショートカット",
   "help_menu_docs": "ドキュメント",
   "help_menu_changelog": "変更履歴",
+  "help_menu_issues": "問題を報告",
   "help_menu_devtools": "開発者ツールを開く"
 }

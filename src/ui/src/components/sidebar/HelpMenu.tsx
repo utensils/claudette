@@ -2,13 +2,17 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { getVersion } from "@tauri-apps/api/app";
-import { CircleHelp, Keyboard, BookOpen, FileText, ArrowUpRight, Wrench } from "lucide-react";
+import { CircleHelp, Keyboard, BookOpen, FileText, ArrowUpRight, Wrench, Bug } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import { openDevtools, openUrl } from "../../services/tauri";
 import { findHotkeyAction } from "../../hotkeys/actions";
 import { formatBindingParts, getEffectiveBinding } from "../../hotkeys/bindings";
 import { isMacHotkeyPlatform } from "../../hotkeys/platform";
-import { HELP_DOCS_URL, HELP_RELEASE_URL_BASE } from "../../helpUrls";
+import {
+  HELP_DOCS_URL,
+  HELP_ISSUES_URL,
+  HELP_RELEASE_URL_BASE,
+} from "../../helpUrls";
 import styles from "./HelpMenu.module.css";
 
 // Spacing between the trigger button's top edge and the menu's bottom
@@ -162,6 +166,11 @@ export function HelpMenu({ buttonClassName, triggerLabel }: HelpMenuProps) {
     void openUrl(`${HELP_RELEASE_URL_BASE}${appVersion}`).catch(() => {});
   };
 
+  const handleIssue = () => {
+    setOpen(false);
+    void openUrl(HELP_ISSUES_URL).catch(() => {});
+  };
+
   const handleDevtools = () => {
     setOpen(false);
     void openDevtools().catch((err) =>
@@ -226,6 +235,18 @@ export function HelpMenu({ buttonClassName, triggerLabel }: HelpMenuProps) {
         <span className={styles.itemLeft}>
           <FileText size={14} className={styles.itemIcon} />
           <span className={styles.itemLabel}>{t("help_menu_changelog")}</span>
+        </span>
+        <ArrowUpRight size={12} className={styles.externalIcon} />
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        className={styles.item}
+        onClick={handleIssue}
+      >
+        <span className={styles.itemLeft}>
+          <Bug size={14} className={styles.itemIcon} />
+          <span className={styles.itemLabel}>{t("help_menu_issues")}</span>
         </span>
         <ArrowUpRight size={12} className={styles.externalIcon} />
       </button>

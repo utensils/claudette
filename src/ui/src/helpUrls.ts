@@ -14,6 +14,9 @@ export const HELP_DOCS_URL =
 export const HELP_RELEASE_URL_BASE =
   "https://github.com/utensils/claudette/releases/tag/v";
 
-/** GitHub "new issue" entry point — bug reports / feature requests. */
+/** GitHub "new issue" entry point — bug reports / feature requests.
+ * The `?template=bug_report.md` query param pre-selects the bug-report
+ * template so users land in a structured form rather than a blank
+ * issue body. */
 export const HELP_ISSUES_URL =
-  "https://github.com/utensils/claudette/issues/new";
+  "https://github.com/utensils/claudette/issues/new?template=bug_report.md";

@@ -366,5 +366,6 @@
   "help_menu_keyboard_shortcuts": "键盘快捷键",
   "help_menu_docs": "文档",
   "help_menu_changelog": "更新日志",
+  "help_menu_issues": "反馈问题",
   "help_menu_devtools": "打开开发者工具"
 }

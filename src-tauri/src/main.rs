@@ -67,7 +67,8 @@ const HELP_DOCS_URL: &str = "https://utensils.io/claudette/getting-started/insta
 #[cfg(target_os = "macos")]
 const HELP_RELEASE_URL_BASE: &str = "https://github.com/utensils/claudette/releases/tag/v";
 #[cfg(target_os = "macos")]
-const HELP_ISSUES_URL: &str = "https://github.com/utensils/claudette/issues/new";
+const HELP_ISSUES_URL: &str =
+    "https://github.com/utensils/claudette/issues/new?template=bug_report.md";
 
 fn main() {
     // Install the rustls crypto provider before any TLS usage. Both

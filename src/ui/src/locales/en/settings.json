@@ -409,5 +409,6 @@
   "help_menu_keyboard_shortcuts": "Keyboard shortcuts",
   "help_menu_docs": "Docs",
   "help_menu_changelog": "Changelog",
+  "help_menu_issues": "Submit issue",
   "help_menu_devtools": "Open dev tools"
 }

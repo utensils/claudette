@@ -366,5 +366,6 @@
   "help_menu_keyboard_shortcuts": "Atalhos de teclado",
   "help_menu_docs": "Documentação",
   "help_menu_changelog": "Mudanças",
+  "help_menu_issues": "Relatar problema",
   "help_menu_devtools": "Abrir ferramentas de desenvolvimento"
 }
