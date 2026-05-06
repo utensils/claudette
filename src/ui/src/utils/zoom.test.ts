@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  eventCoordSpace,
   getRootZoom,
+  resetCoordSpaceCache,
   viewportLayoutSize,
   viewportToFixed,
 } from "./zoom";
@@ -9,21 +11,63 @@ import {
 // minimal `document.documentElement` and `window` surface that mirrors
 // what the helpers actually touch. Same pattern as focusTargets.test.ts.
 
+type ProbeNode = {
+  style: { cssText: string };
+  getBoundingClientRect?: () => { left: number };
+};
+
 type GlobalShim = {
-  document?: { documentElement: { style: { zoom: string } } };
+  document?: {
+    documentElement: { style: { zoom: string } };
+    body?: {
+      appendChild: (node: ProbeNode) => void;
+      removeChild: (node: ProbeNode) => void;
+    };
+    createElement?: (tag: string) => ProbeNode;
+  };
   window?: { innerWidth: number; innerHeight: number };
 };
 
-function withRootZoom(zoom: string | undefined, fn: () => void) {
+interface RootOpts {
+  // When set, attach a fake `body` + `createElement` so the engine probe
+  // can run. The factory receives the cssText that the probe assigned to
+  // the element and returns the `rect.left` it should report — this is
+  // how each test simulates a particular engine.
+  probeRectLeft?: (cssText: string) => number;
+}
+
+function withRootZoom(
+  zoom: string | undefined,
+  fn: () => void,
+  opts: RootOpts = {},
+) {
   const g = globalThis as unknown as GlobalShim;
   const prevDoc = g.document;
-  g.document = {
+  const doc: NonNullable<GlobalShim["document"]> = {
     documentElement: { style: { zoom: zoom ?? "" } },
   };
+  if (opts.probeRectLeft) {
+    const rectFor = opts.probeRectLeft;
+    doc.createElement = () => {
+      const node: ProbeNode = { style: { cssText: "" } };
+      node.getBoundingClientRect = () => ({ left: rectFor(node.style.cssText) });
+      return node;
+    };
+    doc.body = {
+      appendChild: () => {},
+      removeChild: () => {},
+    };
+  }
+  g.document = doc;
+  // The probe answer is cached at module scope to avoid re-measuring on
+  // every menu open. Reset between tests so each one exercises the branch
+  // it intends to.
+  resetCoordSpaceCache();
   try {
     fn();
   } finally {
     g.document = prevDoc;
+    resetCoordSpaceCache();
   }
 }
 
@@ -44,6 +88,7 @@ afterEach(() => {
   const g = globalThis as unknown as GlobalShim;
   delete g.document;
   delete g.window;
+  resetCoordSpaceCache();
 });
 
 describe("getRootZoom", () => {
@@ -75,6 +120,39 @@ describe("getRootZoom", () => {
   });
 });
 
+describe("eventCoordSpace", () => {
+  // The probe places a fixed-positioned 100px-wide marker and reads back
+  // its rect.left. WebKit reports rect.left ≈ 100 * zoom (the rect is in
+  // the visual frame); Chromium reports rect.left ≈ 100 (layout frame).
+  it("detects WebKit when the rect is reported in the visual frame", () => {
+    withRootZoom(
+      "1.5",
+      () => {
+        expect(eventCoordSpace()).toBe("visual");
+      },
+      { probeRectLeft: () => 150 },
+    );
+  });
+
+  it("detects Chromium when the rect is reported in the layout frame", () => {
+    withRootZoom(
+      "1.5",
+      () => {
+        expect(eventCoordSpace()).toBe("layout");
+      },
+      { probeRectLeft: () => 100 },
+    );
+  });
+
+  it("falls back to 'visual' when there's no DOM to probe", () => {
+    // No probeRectLeft → no body / createElement, mirroring the SSR / very
+    // early bootstrap window before <body> is attached.
+    withRootZoom("1.5", () => {
+      expect(eventCoordSpace()).toBe("visual");
+    });
+  });
+});
+
 describe("viewportToFixed", () => {
   it("passes coords through unchanged at zoom=1", () => {
     withRootZoom("", () => {
@@ -82,16 +160,33 @@ describe("viewportToFixed", () => {
     });
   });
 
-  it("divides coords by the zoom factor so `position: fixed; left: x` lands at the cursor", () => {
-    // WebKit on macOS reports event clientX/Y in visual pixels but
-    // `position: fixed; left/top` interprets values as layout pixels —
-    // so visual / zoom = layout for a fixed element to render at the
-    // visual click point.
-    withRootZoom("1.5", () => {
-      const { x, y } = viewportToFixed(300, 150);
-      expect(x).toBeCloseTo(200, 6);
-      expect(y).toBeCloseTo(100, 6);
-    });
+  it("divides coords by zoom on WebKit (event clientX is visual px)", () => {
+    // WebKit reports clientX/Y in visual pixels but `position: fixed;
+    // left/top` interpret values in layout pixels — so visual / zoom =
+    // layout for the fixed element to render at the visual click point.
+    withRootZoom(
+      "1.5",
+      () => {
+        const { x, y } = viewportToFixed(300, 150);
+        expect(x).toBeCloseTo(200, 6);
+        expect(y).toBeCloseTo(100, 6);
+      },
+      { probeRectLeft: () => 150 },
+    );
+  });
+
+  it("passes coords through on Chromium (event clientX is already layout px)", () => {
+    // Chromium applies zoom uniformly: event coords, rects, and the fixed
+    // used-value all share one frame. Dividing here would over-correct and
+    // shift the element toward the top-left — which is the offset that
+    // Windows devs reported before this branch existed.
+    withRootZoom(
+      "1.5",
+      () => {
+        expect(viewportToFixed(300, 150)).toEqual({ x: 300, y: 150 });
+      },
+      { probeRectLeft: () => 100 },
+    );
   });
 });
 
@@ -104,15 +199,34 @@ describe("viewportLayoutSize", () => {
     });
   });
 
-  it("converts visual viewport size into layout pixels under zoom", () => {
+  it("converts visual viewport size into layout pixels under WebKit zoom", () => {
     // Same frame as `viewportToFixed`: layout = visual / zoom. Clamping
     // a fixed-positioned element wants layout-pixel bounds, not visual.
-    withRootZoom("1.5", () => {
-      withViewport(1920, 1080, () => {
-        const { width, height } = viewportLayoutSize();
-        expect(width).toBeCloseTo(1280, 6);
-        expect(height).toBeCloseTo(720, 6);
-      });
-    });
+    withRootZoom(
+      "1.5",
+      () => {
+        withViewport(1920, 1080, () => {
+          const { width, height } = viewportLayoutSize();
+          expect(width).toBeCloseTo(1280, 6);
+          expect(height).toBeCloseTo(720, 6);
+        });
+      },
+      { probeRectLeft: () => 150 },
+    );
+  });
+
+  it("returns innerWidth/innerHeight verbatim under Chromium zoom", () => {
+    // Chromium's innerWidth/Height already live in the layout frame, so
+    // dividing would shrink the clamp bounds and let the menu drift off
+    // the right/bottom edges.
+    withRootZoom(
+      "1.5",
+      () => {
+        withViewport(1920, 1080, () => {
+          expect(viewportLayoutSize()).toEqual({ width: 1920, height: 1080 });
+        });
+      },
+      { probeRectLeft: () => 100 },
+    );
   });
 });
