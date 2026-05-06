@@ -455,12 +455,13 @@ pub async fn trash_workspace_path(
 
     #[cfg(not(target_os = "macos"))]
     {
-        let absolute_for_token = absolute.clone();
-        tokio::task::spawn_blocking(move || trash::delete(&absolute))
-            .await
-            .map_err(|e| format!("join error: {e}"))?
-            .map_err(|e| format!("move to trash: {e}"))?;
-        let undo_token = find_trash_item_token_for_original(&absolute_for_token);
+        let undo_token = tokio::task::spawn_blocking(move || {
+            let absolute_for_token = absolute.clone();
+            trash::delete(&absolute).map_err(|e| format!("move to trash: {e}"))?;
+            Ok::<Option<String>, String>(find_trash_item_token_for_original(&absolute_for_token))
+        })
+        .await
+        .map_err(|e| format!("join error: {e}"))??;
         return Ok(WorkspacePathTrashResult {
             old_path,
             is_directory,

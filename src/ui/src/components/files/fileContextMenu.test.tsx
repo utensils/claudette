@@ -31,7 +31,7 @@ describe("buildFileContextMenuItems", () => {
       labelsFor({ path: "src/app.ts", isDirectory: false, exists: true }),
     ).toEqual([
       "Open",
-      "Reveal in Finder",
+      "Reveal in File Manager",
       "Copy Path",
       "Copy Relative Path",
       "Rename…",

@@ -64,7 +64,7 @@ export function buildFileContextMenuItems(
       disabled: missing,
     },
     {
-      label: "Reveal in Finder",
+      label: "Reveal in File Manager",
       icon: <FolderOpen size={14} aria-hidden="true" />,
       onSelect: callbacks.reveal,
       disabled: missing,

@@ -48,6 +48,7 @@ export function ContextMenu({
   dataTestId,
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
+  const mountedRef = useRef(true);
   const [pendingIndex, setPendingIndex] = useState<number | null>(null);
   const [measured, setMeasured] = useState<{ width: number; height: number } | null>(
     null,
@@ -61,6 +62,13 @@ export function ContextMenu({
   );
   const size = measured ?? estimated;
   const clamped = clampToViewport(x, y, size.width, size.height);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useLayoutEffect(() => {
     const rect = menuRef.current?.getBoundingClientRect();
@@ -128,7 +136,9 @@ export function ContextMenu({
                   .getState()
                   .addToast(`Action failed: ${String(err)}`);
               } finally {
-                setPendingIndex(null);
+                if (mountedRef.current) {
+                  setPendingIndex(null);
+                }
               }
             }}
           >
