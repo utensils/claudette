@@ -3,6 +3,8 @@ import { useAppStore } from "../../stores/useAppStore";
 import { listWorkspaceFiles, type FileEntry } from "../../services/tauri";
 import { isAgentBusy } from "../../utils/agentStatus";
 import type { DiffLayer } from "../../types/diff";
+import { FilePathContextMenu } from "./FilePathContextMenu";
+import type { FileContextTarget } from "./fileContextMenu";
 import { FileTree } from "./FileTree";
 import styles from "./FilesPanel.module.css";
 
@@ -21,6 +23,11 @@ export function FilesPanel() {
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    target: FileContextTarget;
+    x: number;
+    y: number;
+  } | null>(null);
   const loadVersionRef = useRef(0);
   const prevIsRunning = useRef(false);
   const ws = workspaces.find((w) => w.id === selectedWorkspaceId);
@@ -115,6 +122,16 @@ export function FilesPanel() {
           entries={entries}
           onActivateFile={handleActivateFile}
           onActivateDiff={handleActivateDiff}
+          onContextMenu={(target, x, y) => setContextMenu({ target, x, y })}
+        />
+      )}
+      {contextMenu && (
+        <FilePathContextMenu
+          workspaceId={selectedWorkspaceId}
+          target={contextMenu.target}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={() => setContextMenu(null)}
         />
       )}
     </div>

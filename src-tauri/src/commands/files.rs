@@ -40,6 +40,19 @@ pub struct FileBytesContent {
     pub truncated: bool,
 }
 
+#[derive(Clone, Serialize)]
+pub struct WorkspacePathMoveResult {
+    pub old_path: String,
+    pub new_path: String,
+    pub is_directory: bool,
+}
+
+#[derive(Clone, Serialize)]
+pub struct WorkspacePathTrashResult {
+    pub old_path: String,
+    pub is_directory: bool,
+}
+
 /// Hard cap for raw-bytes reads (e.g. image previews). Larger than the
 /// editor cap because image files frequently exceed 5 MB but we still
 /// want to bound memory pressure on a single open.
@@ -308,6 +321,91 @@ pub async fn write_workspace_file(
     .await
 }
 
+#[tauri::command]
+pub async fn resolve_workspace_path(
+    workspace_id: String,
+    relative_path: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let worktree_path = resolve_worktree_path(&workspace_id, &state)?;
+    let resolved = resolve_existing_workspace_path(Path::new(&worktree_path), &relative_path)?;
+    Ok(resolved.absolute.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub async fn open_workspace_path(
+    workspace_id: String,
+    relative_path: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let worktree_path = resolve_worktree_path(&workspace_id, &state)?;
+    let resolved = resolve_existing_workspace_path(Path::new(&worktree_path), &relative_path)?;
+    crate::commands::shell::opener::open(&resolved.absolute.to_string_lossy())
+        .map_err(|e| format!("open failed: {e}"))
+}
+
+#[tauri::command]
+pub async fn reveal_workspace_path(
+    workspace_id: String,
+    relative_path: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let worktree_path = resolve_worktree_path(&workspace_id, &state)?;
+    let resolved = resolve_existing_workspace_path(Path::new(&worktree_path), &relative_path)?;
+    reveal_path(&resolved.absolute)
+}
+
+#[tauri::command]
+pub async fn rename_workspace_path(
+    workspace_id: String,
+    relative_path: String,
+    new_name: String,
+    state: State<'_, AppState>,
+) -> Result<WorkspacePathMoveResult, String> {
+    let worktree_path = resolve_worktree_path(&workspace_id, &state)?;
+    let worktree = Path::new(&worktree_path);
+    let resolved = resolve_existing_workspace_path(worktree, &relative_path)?;
+    let rename = build_rename_target(worktree, &resolved.relative, &new_name)?;
+    let from = resolved.absolute;
+    let to = rename.absolute;
+    let old_path = resolved.relative;
+    let new_path = rename.relative;
+    let is_directory = resolved.is_directory;
+
+    tokio::fs::rename(&from, &to)
+        .await
+        .map_err(|e| format!("rename: {e}"))?;
+
+    Ok(WorkspacePathMoveResult {
+        old_path,
+        new_path,
+        is_directory,
+    })
+}
+
+#[tauri::command]
+pub async fn trash_workspace_path(
+    workspace_id: String,
+    relative_path: String,
+    state: State<'_, AppState>,
+) -> Result<WorkspacePathTrashResult, String> {
+    let worktree_path = resolve_worktree_path(&workspace_id, &state)?;
+    let resolved = resolve_existing_workspace_path(Path::new(&worktree_path), &relative_path)?;
+    let old_path = resolved.relative;
+    let is_directory = resolved.is_directory;
+    let absolute = resolved.absolute;
+
+    tokio::task::spawn_blocking(move || trash::delete(&absolute))
+        .await
+        .map_err(|e| format!("join error: {e}"))?
+        .map_err(|e| format!("move to trash: {e}"))?;
+
+    Ok(WorkspacePathTrashResult {
+        old_path,
+        is_directory,
+    })
+}
+
 /// Resolve `workspace_id` to its worktree path, returning a string error
 /// if the workspace is missing or has no worktree configured.
 fn resolve_worktree_path(
@@ -323,6 +421,165 @@ fn resolve_worktree_path(
     ws.worktree_path
         .clone()
         .ok_or_else(|| "Workspace has no worktree".to_string())
+}
+
+#[derive(Debug)]
+struct ResolvedWorkspacePath {
+    relative: String,
+    absolute: PathBuf,
+    is_directory: bool,
+}
+
+#[derive(Debug)]
+struct RenameTarget {
+    relative: String,
+    absolute: PathBuf,
+}
+
+fn normalize_relative_path(relative_path: &str) -> Result<PathBuf, String> {
+    let trimmed = relative_path.trim().trim_end_matches(['/', '\\']);
+    if trimmed.is_empty() {
+        return Err("path is empty".to_string());
+    }
+    let path = Path::new(trimmed);
+    if path.is_absolute() {
+        return Err("absolute paths are not allowed".to_string());
+    }
+    if path.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::ParentDir
+                | std::path::Component::RootDir
+                | std::path::Component::Prefix(_)
+        )
+    }) {
+        return Err("path escapes worktree".to_string());
+    }
+    Ok(path.to_path_buf())
+}
+
+fn relative_path_string(path: &Path) -> Result<String, String> {
+    path.to_str()
+        .map(|s| s.replace('\\', "/"))
+        .ok_or_else(|| "path is not valid UTF-8".to_string())
+}
+
+fn resolve_existing_workspace_path(
+    worktree_path: &Path,
+    relative_path: &str,
+) -> Result<ResolvedWorkspacePath, String> {
+    let relative = normalize_relative_path(relative_path)?;
+    let worktree_canonical =
+        std::fs::canonicalize(worktree_path).map_err(|e| format!("canonicalize worktree: {e}"))?;
+    let absolute = std::fs::canonicalize(worktree_path.join(&relative))
+        .map_err(|e| format!("path not found: {e}"))?;
+    if !absolute.starts_with(&worktree_canonical) {
+        return Err("path escapes worktree".to_string());
+    }
+    let metadata = std::fs::metadata(&absolute).map_err(|e| format!("metadata: {e}"))?;
+    Ok(ResolvedWorkspacePath {
+        relative: relative_path_string(&relative)?,
+        absolute,
+        is_directory: metadata.is_dir(),
+    })
+}
+
+fn validate_rename_name(new_name: &str) -> Result<&str, String> {
+    let trimmed = new_name.trim();
+    if trimmed.is_empty() {
+        return Err("name is empty".to_string());
+    }
+    if trimmed == "." || trimmed == ".." {
+        return Err("name is reserved".to_string());
+    }
+    if trimmed.contains('/') || trimmed.contains('\\') {
+        return Err("name cannot contain path separators".to_string());
+    }
+    if trimmed.contains('\0') {
+        return Err("name cannot contain null bytes".to_string());
+    }
+    Ok(trimmed)
+}
+
+fn build_rename_target(
+    worktree_path: &Path,
+    old_relative: &str,
+    new_name: &str,
+) -> Result<RenameTarget, String> {
+    let old_relative_path = normalize_relative_path(old_relative)?;
+    let parent_relative = old_relative_path.parent().unwrap_or_else(|| Path::new(""));
+    let name = validate_rename_name(new_name)?;
+    let new_relative_path = parent_relative.join(name);
+
+    let worktree_canonical =
+        std::fs::canonicalize(worktree_path).map_err(|e| format!("canonicalize worktree: {e}"))?;
+    let parent_abs = if parent_relative.as_os_str().is_empty() {
+        worktree_canonical.clone()
+    } else {
+        std::fs::canonicalize(worktree_path.join(parent_relative))
+            .map_err(|e| format!("canonicalize parent: {e}"))?
+    };
+    if !parent_abs.starts_with(&worktree_canonical) {
+        return Err("path escapes worktree".to_string());
+    }
+
+    let absolute = parent_abs.join(name);
+    if absolute.exists() {
+        return Err("target already exists".to_string());
+    }
+
+    Ok(RenameTarget {
+        relative: relative_path_string(&new_relative_path)?,
+        absolute,
+    })
+}
+
+fn reveal_path(path: &Path) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("open")
+            .no_console_window()
+            .arg("-R")
+            .arg(path)
+            .output()
+            .map_err(|e| format!("failed to run open: {e}"))?;
+        if output.status.success() {
+            return Ok(());
+        }
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .no_console_window()
+            .arg(format!("/select,{}", path.to_string_lossy()))
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("failed to run explorer: {e}"))
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let target = if path.is_dir() {
+            path
+        } else {
+            path.parent().unwrap_or(path)
+        };
+        crate::commands::shell::opener::open(&target.to_string_lossy())
+            .map_err(|e| format!("open failed: {e}"))
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        let target = if path.is_dir() {
+            path
+        } else {
+            path.parent().unwrap_or(path)
+        };
+        crate::commands::shell::opener::open(&target.to_string_lossy())
+            .map_err(|e| format!("open failed: {e}"))
+    }
 }
 
 /// Write raw bytes to a filesystem path chosen by the user via a save dialog.
@@ -1064,5 +1321,88 @@ mod tests {
         create_staging_dir(&target).unwrap();
         let mode = std::fs::metadata(&target).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700, "expected 0o700, got {mode:o}");
+    }
+
+    #[test]
+    fn rename_target_rejects_invalid_names() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("file.txt"), "hello").unwrap();
+
+        for name in ["", "   ", ".", "..", "a/b", r"a\b"] {
+            let err = build_rename_target(dir.path(), "file.txt", name).unwrap_err();
+            assert!(!err.is_empty());
+        }
+    }
+
+    #[test]
+    fn rename_target_rejects_path_escape() {
+        let dir = tempdir().unwrap();
+        let err = build_rename_target(dir.path(), "../file.txt", "next.txt").unwrap_err();
+        assert!(err.contains("escapes worktree"), "got: {err}");
+    }
+
+    #[test]
+    fn rename_target_rejects_absolute_source_paths() {
+        let dir = tempdir().unwrap();
+        let err = build_rename_target(dir.path(), "/file.txt", "next.txt").unwrap_err();
+        assert!(err.contains("absolute paths"), "got: {err}");
+    }
+
+    #[test]
+    fn rename_target_rejects_collisions() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("file.txt"), "hello").unwrap();
+        std::fs::write(dir.path().join("other.txt"), "world").unwrap();
+
+        let err = build_rename_target(dir.path(), "file.txt", "other.txt").unwrap_err();
+        assert!(err.contains("already exists"), "got: {err}");
+    }
+
+    #[test]
+    fn rename_target_keeps_file_in_same_parent() {
+        let dir = tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub").join("file.txt"), "hello").unwrap();
+
+        let target = build_rename_target(dir.path(), "sub/file.txt", "other.txt").unwrap();
+
+        assert_eq!(target.relative, "sub/other.txt");
+        assert_eq!(
+            target.absolute,
+            dir.path()
+                .join("sub")
+                .canonicalize()
+                .unwrap()
+                .join("other.txt")
+        );
+    }
+
+    #[test]
+    fn rename_target_handles_directory_paths_with_trailing_slash() {
+        let dir = tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+
+        let target = build_rename_target(dir.path(), "sub/", "renamed").unwrap();
+
+        assert_eq!(target.relative, "renamed");
+        assert_eq!(
+            target.absolute,
+            dir.path().canonicalize().unwrap().join("renamed")
+        );
+    }
+
+    #[test]
+    fn resolve_existing_workspace_path_identifies_directories() {
+        let dir = tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+
+        let resolved = resolve_existing_workspace_path(dir.path(), "sub/").unwrap();
+
+        assert_eq!(resolved.relative, "sub");
+        assert!(resolved.is_directory);
+        assert_eq!(
+            resolved.absolute,
+            dir.path().join("sub").canonicalize().unwrap()
+        );
     }
 }

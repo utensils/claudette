@@ -49,6 +49,43 @@ export function makeUnloadedBuffer(): FileBufferState {
   };
 }
 
+function stripTrailingSlash(path: string): string {
+  return path.replace(/\/+$/g, "");
+}
+
+function withTrailingSlash(path: string): string {
+  const stripped = stripTrailingSlash(path);
+  return stripped === "" ? "" : `${stripped}/`;
+}
+
+export function mapPathAfterRename(
+  path: string,
+  oldPath: string,
+  newPath: string,
+  isDirectory: boolean,
+): string {
+  const oldClean = stripTrailingSlash(oldPath);
+  const newClean = stripTrailingSlash(newPath);
+  if (!isDirectory) return path === oldClean ? newClean : path;
+  const oldPrefix = `${oldClean}/`;
+  if (path === oldClean) return newClean;
+  if (path.startsWith(oldPrefix)) {
+    return `${newClean}/${path.slice(oldPrefix.length)}`;
+  }
+  return path;
+}
+
+export function pathMatchesTarget(
+  path: string,
+  targetPath: string,
+  isDirectory: boolean,
+): boolean {
+  const cleanPath = stripTrailingSlash(path);
+  const cleanTarget = stripTrailingSlash(targetPath);
+  if (!isDirectory) return cleanPath === cleanTarget;
+  return cleanPath === cleanTarget || cleanPath.startsWith(`${cleanTarget}/`);
+}
+
 export interface FileTreeSlice {
   /** Per-workspace map of folder paths (with trailing "/") that are
    *  expanded in the All-Files tree. Scoped per workspace so two repos
@@ -137,6 +174,17 @@ export interface FileTreeSlice {
     workspaceId: string,
     path: string,
     preview: FileViewerPreviewMode,
+  ) => void;
+  renameFilePathInWorkspace: (
+    workspaceId: string,
+    oldPath: string,
+    newPath: string,
+    isDirectory: boolean,
+  ) => void;
+  removeFilePathFromWorkspace: (
+    workspaceId: string,
+    path: string,
+    isDirectory: boolean,
   ) => void;
 }
 
@@ -351,6 +399,168 @@ export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> 
         fileBuffers: {
           ...s.fileBuffers,
           [key]: { ...prev, preview },
+        },
+      };
+    }),
+
+  renameFilePathInWorkspace: (workspaceId, oldPath, newPath, isDirectory) =>
+    set((s) => {
+      const oldClean = stripTrailingSlash(oldPath);
+      const newClean = stripTrailingSlash(newPath);
+      const existingTabs = s.fileTabsByWorkspace[workspaceId] ?? [];
+      const nextWsTabs = existingTabs.map((path) =>
+        mapPathAfterRename(path, oldClean, newClean, isDirectory),
+      );
+      const active = s.activeFileTabByWorkspace[workspaceId] ?? null;
+      const nextActive =
+        active === null
+          ? null
+          : mapPathAfterRename(active, oldClean, newClean, isDirectory);
+
+      const nextBuffers: Record<string, FileBufferState> = {};
+      for (const [key, value] of Object.entries(s.fileBuffers)) {
+        const prefix = `${workspaceId}:`;
+        if (!key.startsWith(prefix)) {
+          nextBuffers[key] = value;
+          continue;
+        }
+        const path = key.slice(prefix.length);
+        const mapped = mapPathAfterRename(path, oldClean, newClean, isDirectory);
+        nextBuffers[fileBufferKey(workspaceId, mapped)] = value;
+      }
+
+      const selected = s.allFilesSelectedPathByWorkspace[workspaceId] ?? null;
+      const nextSelected =
+        selected === null
+          ? null
+          : mapPathAfterRename(
+              stripTrailingSlash(selected),
+              oldClean,
+              newClean,
+              isDirectory,
+            ) + (selected.endsWith("/") ? "/" : "");
+
+      const expanded = s.allFilesExpandedDirsByWorkspace[workspaceId] ?? {};
+      const nextExpanded: Record<string, boolean> = {};
+      for (const [path, value] of Object.entries(expanded)) {
+        const mapped = mapPathAfterRename(
+          stripTrailingSlash(path),
+          oldClean,
+          newClean,
+          isDirectory,
+        );
+        nextExpanded[withTrailingSlash(mapped)] = value;
+      }
+
+      return {
+        fileTabsByWorkspace: {
+          ...s.fileTabsByWorkspace,
+          [workspaceId]: nextWsTabs,
+        },
+        activeFileTabByWorkspace: {
+          ...s.activeFileTabByWorkspace,
+          [workspaceId]: nextActive,
+        },
+        fileBuffers: nextBuffers,
+        allFilesSelectedPathByWorkspace: {
+          ...s.allFilesSelectedPathByWorkspace,
+          [workspaceId]: nextSelected,
+        },
+        allFilesExpandedDirsByWorkspace: {
+          ...s.allFilesExpandedDirsByWorkspace,
+          [workspaceId]: nextExpanded,
+        },
+        tabOrderByWorkspace: {
+          ...s.tabOrderByWorkspace,
+          [workspaceId]: (s.tabOrderByWorkspace[workspaceId] ?? []).map((entry) =>
+            entry.kind === "file"
+              ? {
+                  ...entry,
+                  path: mapPathAfterRename(
+                    entry.path,
+                    oldClean,
+                    newClean,
+                    isDirectory,
+                  ),
+                }
+              : entry,
+          ),
+        },
+      };
+    }),
+
+  removeFilePathFromWorkspace: (workspaceId, path, isDirectory) =>
+    set((s) => {
+      const target = stripTrailingSlash(path);
+      const existingTabs = s.fileTabsByWorkspace[workspaceId] ?? [];
+      const firstRemovedIndex = existingTabs.findIndex((tabPath) =>
+        pathMatchesTarget(tabPath, target, isDirectory),
+      );
+      const nextWsTabs = existingTabs.filter(
+        (tabPath) => !pathMatchesTarget(tabPath, target, isDirectory),
+      );
+      const active = s.activeFileTabByWorkspace[workspaceId] ?? null;
+      let nextActive = active;
+      if (active !== null && pathMatchesTarget(active, target, isDirectory)) {
+        if (nextWsTabs.length === 0) {
+          nextActive = null;
+        } else if (firstRemovedIndex > 0) {
+          nextActive = nextWsTabs[Math.min(firstRemovedIndex - 1, nextWsTabs.length - 1)];
+        } else {
+          nextActive = nextWsTabs[0];
+        }
+      }
+
+      const nextBuffers: Record<string, FileBufferState> = {};
+      for (const [key, value] of Object.entries(s.fileBuffers)) {
+        const prefix = `${workspaceId}:`;
+        if (!key.startsWith(prefix)) {
+          nextBuffers[key] = value;
+          continue;
+        }
+        const bufferPath = key.slice(prefix.length);
+        if (!pathMatchesTarget(bufferPath, target, isDirectory)) {
+          nextBuffers[key] = value;
+        }
+      }
+
+      const selected = s.allFilesSelectedPathByWorkspace[workspaceId] ?? null;
+      const nextSelected =
+        selected !== null && pathMatchesTarget(selected, target, isDirectory)
+          ? null
+          : selected;
+      const expanded = s.allFilesExpandedDirsByWorkspace[workspaceId] ?? {};
+      const nextExpanded = Object.fromEntries(
+        Object.entries(expanded).filter(
+          ([dir]) => !pathMatchesTarget(dir, target, isDirectory),
+        ),
+      );
+
+      return {
+        fileTabsByWorkspace: {
+          ...s.fileTabsByWorkspace,
+          [workspaceId]: nextWsTabs,
+        },
+        activeFileTabByWorkspace: {
+          ...s.activeFileTabByWorkspace,
+          [workspaceId]: nextActive,
+        },
+        fileBuffers: nextBuffers,
+        allFilesSelectedPathByWorkspace: {
+          ...s.allFilesSelectedPathByWorkspace,
+          [workspaceId]: nextSelected,
+        },
+        allFilesExpandedDirsByWorkspace: {
+          ...s.allFilesExpandedDirsByWorkspace,
+          [workspaceId]: nextExpanded,
+        },
+        tabOrderByWorkspace: {
+          ...s.tabOrderByWorkspace,
+          [workspaceId]: (s.tabOrderByWorkspace[workspaceId] ?? []).filter(
+            (entry) =>
+              entry.kind !== "file" ||
+              !pathMatchesTarget(entry.path, target, isDirectory),
+          ),
         },
       };
     }),

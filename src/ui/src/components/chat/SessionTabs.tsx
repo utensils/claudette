@@ -29,6 +29,7 @@ import {
   type AttachmentContextMenuItem,
 } from "./AttachmentContextMenu";
 import { DiscardUnsavedChangesConfirm } from "../files/DiscardUnsavedChangesConfirm";
+import { FilePathContextMenu } from "../files/FilePathContextMenu";
 import { getFileIcon } from "../../utils/fileIcons";
 import { createSerialGate } from "../../utils/serialGate";
 import {
@@ -550,6 +551,10 @@ export function SessionTabs({ workspaceId }: Props) {
     ];
   }, [contextMenu, navEntries, closeEntries, selectEntry, t]);
 
+  const contextMenuEntry = contextMenu
+    ? (navEntryByKey.get(contextMenu.entryKey) ?? null)
+    : null;
+
   // Convenience helper that builds the drag-reorder slice of props each
   // sub-tab needs. Avoids repeating `tabReorder.getTabHandlers(...)` and the
   // drop-indicator booleans three times in the render block below.
@@ -674,7 +679,21 @@ export function SessionTabs({ workspaceId }: Props) {
         <Plus size={14} />
       </button>
       {/* eslint-disable-next-line react-hooks/refs -- contextMenu is React state; this is a compiler false positive around memoized menu actions. */}
-      {contextMenu && contextMenuItems && (
+      {contextMenu && contextMenuItems && contextMenuEntry?.kind === "file" && (
+        <FilePathContextMenu
+          workspaceId={workspaceId}
+          target={{
+            path: contextMenuEntry.path,
+            isDirectory: false,
+            exists: statusForOpenFileTab(contextMenuEntry.path, diffStagedFiles) !== "Deleted",
+          }}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          beforeItems={contextMenuItems}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
+      {contextMenu && contextMenuItems && contextMenuEntry?.kind !== "file" && (
         <AttachmentContextMenu
           x={contextMenu.x}
           y={contextMenu.y}

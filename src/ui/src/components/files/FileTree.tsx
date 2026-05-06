@@ -16,6 +16,7 @@ import {
 import { getFileIcon, getFolderIcon } from "../../utils/fileIcons";
 import type { FileEntry } from "../../services/tauri";
 import type { DiffLayer } from "../../types/diff";
+import type { FileContextTarget } from "./fileContextMenu";
 import {
   resolveFileTreeActivation,
   statusColor,
@@ -34,6 +35,7 @@ interface FileTreeProps {
    *  discard-changes modal first if there are unsaved changes). */
   onActivateFile: (path: string) => void;
   onActivateDiff: (path: string, layer: DiffLayer | null) => void;
+  onContextMenu: (target: FileContextTarget, x: number, y: number) => void;
 }
 
 const EMPTY_EXPANDED: Record<string, boolean> = {};
@@ -43,6 +45,7 @@ export const FileTree = memo(function FileTree({
   entries,
   onActivateFile,
   onActivateDiff,
+  onContextMenu,
 }: FileTreeProps) {
   const expanded = useAppStore(
     (s) => s.allFilesExpandedDirsByWorkspace[workspaceId] ?? EMPTY_EXPANDED,
@@ -246,6 +249,21 @@ export const FileTree = memo(function FileTree({
               }
             }
           }}
+          onContextMenu={(x, y) => {
+            setSelected(node.path);
+            onContextMenu(
+              {
+                path: node.path,
+                isDirectory: node.kind === "dir",
+                exists:
+                  node.kind === "dir" ||
+                  node.git_status == null ||
+                  node.git_status !== "Deleted",
+              },
+              x,
+              y,
+            );
+          }}
         />
       ))}
     </div>
@@ -260,9 +278,19 @@ interface RowProps {
   tabbable: boolean;
   rowRef: (el: HTMLDivElement | null) => void;
   onClick: () => void;
+  onContextMenu: (x: number, y: number) => void;
 }
 
-function Row({ node, depth, expanded, selected, tabbable, rowRef, onClick }: RowProps) {
+function Row({
+  node,
+  depth,
+  expanded,
+  selected,
+  tabbable,
+  rowRef,
+  onClick,
+  onContextMenu,
+}: RowProps) {
   const isDir = node.kind === "dir";
   const ChevronIcon = isDir
     ? expanded
@@ -302,6 +330,10 @@ function Row({ node, depth, expanded, selected, tabbable, rowRef, onClick }: Row
       // readers don't announce a misleading collapsed/expanded state.
       aria-expanded={isDir ? expanded : undefined}
       onClick={onClick}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        onContextMenu(event.clientX, event.clientY);
+      }}
     >
       {ChevronIcon ? (
         <ChevronIcon size={12} className={styles.chevron} aria-hidden="true" />

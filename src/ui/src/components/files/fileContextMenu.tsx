@@ -1,0 +1,77 @@
+import {
+  Copy,
+  ExternalLink,
+  FilePenLine,
+  FolderOpen,
+  Trash2,
+} from "lucide-react";
+import type { ContextMenuItem } from "../shared/ContextMenu";
+
+export interface FileContextTarget {
+  path: string;
+  isDirectory: boolean;
+  exists: boolean;
+}
+
+export interface FileContextMenuCallbacks {
+  open: () => void | Promise<void>;
+  reveal: () => void | Promise<void>;
+  copyPath: () => void | Promise<void>;
+  copyRelativePath: () => void | Promise<void>;
+  rename: () => void;
+  delete: () => void;
+}
+
+export function displayNameForPath(path: string): string {
+  const stripped = path.replace(/\/+$/g, "");
+  return stripped.split("/").pop() || stripped || path;
+}
+
+export function buildFileContextMenuItems(
+  target: FileContextTarget,
+  callbacks: FileContextMenuCallbacks,
+): ContextMenuItem[] {
+  const missing = !target.exists;
+  return [
+    {
+      label: target.isDirectory ? "Open Folder" : "Open",
+      icon: <ExternalLink size={14} aria-hidden="true" />,
+      onSelect: callbacks.open,
+      disabled: missing,
+    },
+    {
+      label: "Reveal in Finder",
+      icon: <FolderOpen size={14} aria-hidden="true" />,
+      onSelect: callbacks.reveal,
+      disabled: missing,
+    },
+    { type: "separator" },
+    {
+      label: "Copy Path",
+      icon: <Copy size={14} aria-hidden="true" />,
+      onSelect: callbacks.copyPath,
+      disabled: missing,
+    },
+    {
+      label: "Copy Relative Path",
+      icon: <Copy size={14} aria-hidden="true" />,
+      onSelect: callbacks.copyRelativePath,
+    },
+    { type: "separator" },
+    {
+      label: "Rename…",
+      icon: <FilePenLine size={14} aria-hidden="true" />,
+      onSelect: callbacks.rename,
+      disabled: missing,
+      closeOnSelect: false,
+    },
+    {
+      label: "Delete",
+      icon: <Trash2 size={14} aria-hidden="true" />,
+      onSelect: callbacks.delete,
+      disabled: missing,
+      variant: "danger",
+      closeOnSelect: false,
+    },
+  ];
+}
