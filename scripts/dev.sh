@@ -75,6 +75,8 @@ echo "▸ Vite dev server:  http://localhost:$vite_port"
 echo "▸ Debug eval port:  $debug_port"
 echo "▸ Discovery file:   $discovery_file"
 
+"$repo_root/scripts/stage-cli-sidecar.sh" --profile debug
+
 (cd src/ui && bun install)
 
 features="${CARGO_TAURI_FEATURES:-devtools,server,voice}"
