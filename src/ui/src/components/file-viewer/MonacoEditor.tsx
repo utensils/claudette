@@ -3,6 +3,7 @@ import Editor, { type BeforeMount, type OnMount } from "@monaco-editor/react";
 import "./monacoSetup";
 import { applyMonacoTheme, initMonacoThemeSync } from "./monacoTheme";
 import { DEFAULT_MONO_STACK } from "../../styles/fonts";
+import { useAppStore } from "../../stores/useAppStore";
 import {
   useGitGutter,
   type DecorationsCollection,
@@ -67,12 +68,18 @@ export const MonacoEditor = memo(function MonacoEditor({
   // remounts via `key={path}` on file switches so the seed stays correct.
   const [currentBuffer, setCurrentBuffer] = useState(initialValue);
 
+  const minimapEnabled = useAppStore((s) => s.editorMinimapEnabled);
+
   // Reflect readOnly changes into the editor without remounting. Monaco's
   // `updateOptions` is the explicit runtime API for this; with CodeMirror
   // we had to recreate EditorState, but here it's a one-liner.
   useEffect(() => {
     editorRef.current?.updateOptions({ readOnly });
   }, [readOnly]);
+
+  useEffect(() => {
+    editorRef.current?.updateOptions({ minimap: { enabled: minimapEnabled } });
+  }, [minimapEnabled]);
 
   // Disconnect the theme observer and clear the gutter collection when
   // the editor unmounts. The collection is owned by Monaco's editor
@@ -134,7 +141,7 @@ export const MonacoEditor = memo(function MonacoEditor({
         onChange={handleEditorChange}
         options={{
           readOnly,
-          minimap: { enabled: false },
+          minimap: { enabled: minimapEnabled },
           wordWrap: "on",
           lineNumbers: "on",
           scrollBeyondLastLine: false,

@@ -44,6 +44,7 @@ function App() {
     (s) => s.setCommunityRegistryEnabled,
   );
   const setEditorGitGutterBase = useAppStore((s) => s.setEditorGitGutterBase);
+  const setEditorMinimapEnabled = useAppStore((s) => s.setEditorMinimapEnabled);
   const setDisable1mContext = useAppStore((s) => s.setDisable1mContext);
   const setVoiceToggleHotkey = useAppStore((s) => s.setVoiceToggleHotkey);
   const setVoiceHoldHotkey = useAppStore((s) => s.setVoiceHoldHotkey);
@@ -222,6 +223,9 @@ function App() {
       .then((val) => {
         if (val === "merge_base") setEditorGitGutterBase("merge_base");
       })
+      .catch(() => {});
+    getAppSetting("editor_minimap_enabled")
+      .then((val) => { if (val === "true") setEditorMinimapEnabled(true); })
       .catch(() => {});
     Promise.all([
       listAppSettingsWithPrefix(KEYBINDING_SETTING_PREFIX),
@@ -458,7 +462,7 @@ function App() {
       unlistenAutoArchived.then((fn) => fn());
       unlistenMissingCli.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setPluginManagementEnabled, setCommunityRegistryEnabled, setEditorGitGutterBase, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setPluginManagementEnabled, setCommunityRegistryEnabled, setEditorGitGutterBase, setEditorMinimapEnabled, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings]);
 
   // Listen for OS light/dark changes and switch theme when mode is "system".
   useEffect(() => {

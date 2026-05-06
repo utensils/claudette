@@ -53,6 +53,8 @@ export interface SettingsSlice {
   /// from the repo's base branch (matches the Changes panel).
   editorGitGutterBase: "head" | "merge_base";
   setEditorGitGutterBase: (value: "head" | "merge_base") => void;
+  editorMinimapEnabled: boolean;
+  setEditorMinimapEnabled: (enabled: boolean) => void;
   keybindings: Record<string, string | null>;
   setKeybinding: (actionId: string, binding: string | null) => void;
   resetKeybinding: (actionId: string) => void;
@@ -128,6 +130,8 @@ export const createSettingsSlice: StateCreator<
   setDisable1mContext: (v) => set({ disable1mContext: v }),
   editorGitGutterBase: "head",
   setEditorGitGutterBase: (value) => set({ editorGitGutterBase: value }),
+  editorMinimapEnabled: false,
+  setEditorMinimapEnabled: (enabled) => set({ editorMinimapEnabled: enabled }),
   keybindings: {},
   setKeybinding: (actionId, binding) =>
     set((state) => ({ keybindings: { ...state.keybindings, [actionId]: binding } })),

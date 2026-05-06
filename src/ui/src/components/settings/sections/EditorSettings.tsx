@@ -10,6 +10,8 @@ export function EditorSettings() {
   const { t } = useTranslation("settings");
   const editorGitGutterBase = useAppStore((s) => s.editorGitGutterBase);
   const setEditorGitGutterBase = useAppStore((s) => s.setEditorGitGutterBase);
+  const minimapEnabled = useAppStore((s) => s.editorMinimapEnabled);
+  const setMinimapEnabled = useAppStore((s) => s.setEditorMinimapEnabled);
   const [error, setError] = useState<string | null>(null);
   // Lock the radios while a persistence write is in flight. Without this,
   // a rapid head→merge_base→head sequence whose first two writes both
@@ -31,6 +33,18 @@ export function EditorSettings() {
       setError(String(e));
     } finally {
       setPending(false);
+    }
+  };
+
+  const handleMinimapToggle = async () => {
+    const next = !minimapEnabled;
+    setMinimapEnabled(next);
+    try {
+      setError(null);
+      await setAppSetting("editor_minimap_enabled", next ? "true" : "false");
+    } catch (e) {
+      setMinimapEnabled(!next);
+      setError(String(e));
     }
   };
 
@@ -77,6 +91,27 @@ export function EditorSettings() {
             </div>
           </div>
         </label>
+      </div>
+
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>{t("editor_minimap_label")}</div>
+          <div className={styles.settingDescription}>
+            {t("editor_minimap_desc")}
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          <button
+            className={styles.toggle}
+            role="switch"
+            aria-checked={minimapEnabled}
+            aria-label={t("editor_minimap_label")}
+            data-checked={minimapEnabled}
+            onClick={handleMinimapToggle}
+          >
+            <div className={styles.toggleKnob} />
+          </button>
+        </div>
       </div>
     </div>
   );
