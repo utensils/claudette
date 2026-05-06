@@ -32,11 +32,11 @@ use crate::commands::{
 )]
 struct Cli {
     /// Print machine-readable JSON for commands that have a
-    /// human-readable renderer (today: `workspace list`, `chat list`,
-    /// `pr list`/`show`, `plugin list`). Other commands always emit
-    /// JSON regardless of this flag (`capabilities`, `rpc`, `workspace
-    /// create`, `workspace archive`, etc. — they have no table-style
-    /// renderer yet).
+    /// human-readable renderer (today: `workspace list`, `repo list`,
+    /// `pr list`, `plugin list`). Other commands always emit JSON
+    /// regardless of this flag (`capabilities`, `rpc`, `chat list`,
+    /// `pr show`, `workspace create`, `workspace archive`, etc. —
+    /// they have no table-style renderer yet).
     #[arg(long, global = true)]
     json: bool,
 

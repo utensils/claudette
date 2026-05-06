@@ -1,9 +1,10 @@
 //! Output helpers shared across subcommands. Some commands have a
 //! human-readable table renderer that's the default and switches to
-//! JSON when `--json` is set (`workspace list`, `chat list`, `pr
-//! list`/`show`, `plugin list`). Other commands always emit JSON
-//! regardless of `--json` because they don't have a table renderer
-//! yet (`capabilities`, `rpc`, `workspace create`/`archive`, etc.).
+//! JSON when `--json` is set (`workspace list`, `repo list`, `pr
+//! list`, `plugin list`). Other commands always emit JSON regardless
+//! of `--json` because they don't have a table renderer yet
+//! (`capabilities`, `rpc`, `chat list`, `pr show`, `workspace
+//! create`/`archive`, etc.).
 
 use std::error::Error;
 

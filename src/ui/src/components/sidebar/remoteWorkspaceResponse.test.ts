@@ -19,6 +19,7 @@ describe("extractRemoteWorkspace", () => {
         agent_status: "Idle",
         status_line: "",
         created_at: "1700000000",
+        sort_order: 0,
       },
       default_session_id: "sess-1",
       setup_result: null,
@@ -40,6 +41,7 @@ describe("extractRemoteWorkspace", () => {
       agent_status: "Idle",
       status_line: "",
       created_at: "1700000001",
+      sort_order: 0,
     };
     const got = extractRemoteWorkspace(payload);
     expect(got?.id).toBe("ws-2");
@@ -67,6 +69,28 @@ describe("extractRemoteWorkspace", () => {
     expect(
       extractRemoteWorkspace({ id: "ws-x", repository_id: "r", name: "n" }),
     ).toBeNull();
+  });
+
+  it("returns null when fields the dashboard sort relies on are missing", () => {
+    // Dashboard does `ws.created_at.localeCompare(...)` and the
+    // reorder slice does numeric arithmetic on `sort_order`, so a
+    // payload that satisfies the basic id/name/status check but omits
+    // these would crash downstream — the guard rejects it up front.
+    const almost = {
+      id: "ws-y",
+      repository_id: "r",
+      name: "n",
+      branch_name: "b",
+      worktree_path: "/tmp/n",
+      status: "Active",
+      agent_status: "Idle",
+      status_line: "",
+      // missing: created_at, sort_order
+    };
+    expect(extractRemoteWorkspace(almost)).toBeNull();
+    expect(
+      extractRemoteWorkspace({ ...almost, created_at: "1700000002" }),
+    ).toBeNull(); // still missing sort_order
   });
 
   it("returns null for a primitive", () => {

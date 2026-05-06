@@ -41,13 +41,24 @@ export function extractRemoteWorkspace(
 // row. We don't validate the full type — the parser is intentionally
 // tolerant of forward/back compat — but missing any of these would let
 // downstream code dereference `undefined` (e.g. `ws.repository_id` in
-// repo-grouped sidebar lists, `ws.name` in tab labels).
+// repo-grouped sidebar lists, `ws.created_at.localeCompare(...)` in
+// the dashboard sort, `ws.sort_order` in the reorder slice, `ws.name`
+// in tab labels).
 function looksLikeWorkspace(o: Record<string, unknown>): boolean {
   return (
     typeof o.id === "string" &&
     typeof o.repository_id === "string" &&
     typeof o.name === "string" &&
     typeof o.branch_name === "string" &&
-    typeof o.status === "string"
+    typeof o.status === "string" &&
+    typeof o.status_line === "string" &&
+    typeof o.created_at === "string" &&
+    typeof o.sort_order === "number" &&
+    // `worktree_path` is `string | null`, `agent_status` is a string
+    // literal union OR an `{Error: string}` object, so we allow both
+    // shapes rather than requiring `typeof === "string"`.
+    (o.worktree_path === null || typeof o.worktree_path === "string") &&
+    (typeof o.agent_status === "string" ||
+      (typeof o.agent_status === "object" && o.agent_status !== null))
   );
 }

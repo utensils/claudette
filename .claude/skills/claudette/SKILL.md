@@ -183,8 +183,8 @@ Inside a Claudette workspace shell these are already set, so `claudette pr list`
 
 ## Output conventions
 
-- Commands with a human-readable renderer (`workspace list`, `chat list`, `pr list` / `show`, `plugin list`, `repo list`) default to a table-ish format and switch to JSON when `--json` is set.
-- Other commands always emit JSON regardless of `--json` because they don't have a table renderer yet (`capabilities`, `rpc`, `workspace create` / `archive`, `batch run` summary).
+- Commands with a human-readable renderer (`workspace list`, `repo list`, `pr list`, `plugin list`) default to a table-ish format and switch to JSON when `--json` is set.
+- Other commands always emit JSON regardless of `--json` because they don't have a table renderer yet (`capabilities`, `rpc`, `chat list`, `pr show`, `workspace create` / `archive`, `batch run` summary).
 - Pipe `--json` output through `jq` for scripting.
 
 ## When to NOT use this skill
