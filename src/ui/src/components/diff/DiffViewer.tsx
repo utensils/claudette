@@ -291,6 +291,13 @@ export function DiffViewer() {
           actions={
             <>
               <CopyButton
+                // Force a fresh CopyButton (and a fresh hook state) on each
+                // file switch. Without this, a stale in-flight read from
+                // the previous file could resolve to `null` (race-guarded
+                // by `fetchFileForCopy`) and flip the new file's button
+                // into the error state. Remount makes the late `setState`
+                // land on an unmounted fiber, which React silently drops.
+                key={diffSelectedFile}
                 source={fetchFileForCopy}
                 tooltip={{
                   copy: t("diff_tooltip_copy_contents"),

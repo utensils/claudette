@@ -87,7 +87,11 @@ export function CopyButton({
       className={`${styles.copyButton} ${className ?? ""}`}
       onClick={handleClick}
       title={tooltipText}
-      aria-label={ariaLabel ?? tooltip.copy}
+      // Default to the state-aware tooltipText so screen readers announce
+      // the same "Copied!" / "Copy failed" feedback the sighted user gets.
+      // Callers that want a static label (e.g. "Copy message") can pass an
+      // explicit `ariaLabel` to opt out.
+      aria-label={ariaLabel ?? tooltipText}
       aria-live="polite"
       disabled={disabled}
       data-state={state}

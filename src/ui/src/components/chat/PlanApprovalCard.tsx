@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MessageMarkdown } from "./MessageMarkdown";
 import type { PlanApproval } from "../../stores/useAppStore";
@@ -28,20 +28,32 @@ export function PlanApprovalCard({
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [feedback, setFeedback] = useState("");
+  // Memoize an in-flight read so concurrent callers (e.g. user clicks
+  // Copy and View Plan in quick succession) share a single network call
+  // instead of issuing duplicate `readPlanFile` / `sendRemoteCommand`
+  // requests. Cleared in a `finally` so a failed fetch can be retried.
+  const inFlightFetchRef = useRef<Promise<string> | null>(null);
 
-  const fetchPlanContent = async (): Promise<string> => {
-    if (planContent !== null) return planContent;
-    if (!approval.planFilePath) throw new Error("No plan file path");
-    let content: string;
-    if (remoteConnectionId) {
-      content = (await sendRemoteCommand(remoteConnectionId, "read_plan_file", {
-        path: approval.planFilePath,
-      })) as string;
-    } else {
-      content = await readPlanFile(approval.planFilePath);
+  const fetchPlanContent = (): Promise<string> => {
+    if (planContent !== null) return Promise.resolve(planContent);
+    if (inFlightFetchRef.current) return inFlightFetchRef.current;
+    if (!approval.planFilePath) {
+      return Promise.reject(new Error("No plan file path"));
     }
-    setPlanContent(content);
-    return content;
+    const planFilePath = approval.planFilePath;
+    const promise = (async () => {
+      const content = remoteConnectionId
+        ? ((await sendRemoteCommand(remoteConnectionId, "read_plan_file", {
+            path: planFilePath,
+          })) as string)
+        : await readPlanFile(planFilePath);
+      setPlanContent(content);
+      return content;
+    })().finally(() => {
+      inFlightFetchRef.current = null;
+    });
+    inFlightFetchRef.current = promise;
+    return promise;
   };
 
   const handleViewPlan = async () => {

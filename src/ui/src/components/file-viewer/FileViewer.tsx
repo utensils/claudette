@@ -301,6 +301,10 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
         actions={
           <>
             <CopyButton
+              // Same rationale as DiffViewer: remount on tab switch so a
+              // late clipboard write from the previous tab can't flash a
+              // checkmark/error on the new tab's button.
+              key={`${workspaceId}/${path}`}
               source={copySource}
               tooltip={{
                 copy: t("diff_tooltip_copy_contents"),
