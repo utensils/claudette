@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { CiCheck } from "../types/plugin";
-import { ciCheckStatusLabel, sortCiChecks, summarizeCiChecks } from "./scmChecks";
+import {
+  ciCheckStatusLabel,
+  deriveScmCiState,
+  sortCiChecks,
+  summarizeCiChecks,
+} from "./scmChecks";
 
 function check(name: string, status: CiCheck["status"]): CiCheck {
   return {
@@ -49,5 +54,16 @@ describe("scmChecks", () => {
     expect(ciCheckStatusLabel("failure")).toBe("Failing");
     expect(ciCheckStatusLabel("pending")).toBe("Running");
     expect(ciCheckStatusLabel("cancelled")).toBe("Cancelled");
+  });
+
+  it("derives sidebar CI state from checks when the aggregate status is absent", () => {
+    expect(deriveScmCiState(null, [check("Lint", "failure")])).toBe("failure");
+    expect(deriveScmCiState(null, [check("Test", "pending")])).toBe("pending");
+    expect(deriveScmCiState(null, [check("Build", "success")])).toBe("success");
+    expect(deriveScmCiState(null, [check("Build", "cancelled")])).toBeNull();
+  });
+
+  it("prefers the aggregate PR CI status over checks", () => {
+    expect(deriveScmCiState("success", [check("Lint", "failure")])).toBe("success");
   });
 });

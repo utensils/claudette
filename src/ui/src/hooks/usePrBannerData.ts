@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { useAppStore } from "../stores/useAppStore";
 import { loadScmDetail } from "../services/tauri";
 import type { CiCheck, PullRequest } from "../types/plugin";
-import { summarizeCiChecks } from "../utils/scmChecks";
+import { deriveScmCiState } from "../utils/scmChecks";
 
 export type BannerStatus =
   | "ready"
@@ -21,13 +21,10 @@ export function deriveBannerStatus(
   if (pr.state === "merged") return "merged";
   if (pr.state === "closed") return "closed";
   // pr.state === "open"
-  if (pr.ci_status === "success") return "ready";
-  if (pr.ci_status === "pending") return "ci-pending";
-  if (pr.ci_status === "failure") return "ci-failed";
-  const checkSummary = summarizeCiChecks(checks);
-  if (checkSummary.failed > 0) return "ci-failed";
-  if (checkSummary.pending > 0) return "ci-pending";
-  if (checkSummary.total > 0 && checkSummary.cancelled === 0) return "ready";
+  const ciState = deriveScmCiState(pr.ci_status, checks);
+  if (ciState === "success") return "ready";
+  if (ciState === "pending") return "ci-pending";
+  if (ciState === "failure") return "ci-failed";
   return "open";
 }
 
@@ -67,7 +64,7 @@ export function usePrBannerData(): {
           setScmSummary(selectedWorkspaceId, {
             hasPr: true,
             prState: detail.pull_request.state,
-            ciState: detail.pull_request.ci_status,
+            ciState: deriveScmCiState(detail.pull_request.ci_status, detail.ci_checks),
             lastUpdated: Date.now(),
           });
         } else {

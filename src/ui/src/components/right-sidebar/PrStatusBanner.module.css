@@ -20,23 +20,28 @@
 .bannerReady,
 .bannerOpen {
   background: color-mix(in srgb, var(--badge-done) 12%, var(--chat-header-bg));
+  --checks-panel-bg: color-mix(in srgb, var(--badge-done) 10%, var(--chat-header-bg));
 }
 
 .bannerPending {
   background: color-mix(in srgb, var(--badge-ask) 12%, var(--chat-header-bg));
+  --checks-panel-bg: color-mix(in srgb, var(--badge-ask) 10%, var(--chat-header-bg));
 }
 
 .bannerFailed {
   background: var(--error-bg);
+  --checks-panel-bg: color-mix(in srgb, var(--status-stopped) 16%, var(--chat-header-bg));
 }
 
 .bannerMerged {
   background: color-mix(in srgb, var(--badge-plan) 14%, var(--chat-header-bg));
+  --checks-panel-bg: color-mix(in srgb, var(--badge-plan) 10%, var(--chat-header-bg));
 }
 
 .bannerDraft,
 .bannerClosed {
   background: var(--chat-header-bg);
+  --checks-panel-bg: var(--chat-header-bg);
 }
 
 .fgReady,
@@ -164,7 +169,7 @@
   width: 100%;
   box-sizing: border-box;
   padding: 10px 20px 12px;
-  background: color-mix(in srgb, var(--chat-header-bg) 88%, var(--error-bg));
+  background: var(--checks-panel-bg, var(--chat-header-bg));
   border-bottom: 1px solid var(--divider);
   box-shadow: var(--shadow-md);
   animation: dropdownIn 0.12s ease;

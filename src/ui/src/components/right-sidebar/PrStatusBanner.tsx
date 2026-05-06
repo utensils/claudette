@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from "react";
+import { memo, useId, useMemo, useState } from "react";
 import {
   Check,
   ChevronRight,
@@ -76,6 +76,7 @@ const STATUS_CONFIG: Record<
 export const PrStatusBanner = memo(function PrStatusBanner() {
   const { pr, checks, status } = usePrBannerData();
   const [checksOpen, setChecksOpen] = useState(false);
+  const checksPanelId = useId();
   const sortedChecks = useMemo(() => sortCiChecks(checks), [checks]);
   const checksSummary = useMemo(() => summarizeCiChecks(checks), [checks]);
 
@@ -104,6 +105,8 @@ export const PrStatusBanner = memo(function PrStatusBanner() {
           className={`${styles.statusButton} ${config.fgClass}`}
           onClick={() => setChecksOpen((open) => !open)}
           aria-expanded={checksOpen}
+          aria-controls={checksPanelId}
+          aria-haspopup="dialog"
           title={checksSummary.title}
         >
           <span className={styles.statusText}>{config.text}</span>
@@ -121,7 +124,12 @@ export const PrStatusBanner = memo(function PrStatusBanner() {
       )}
 
       {hasChecks && checksOpen && (
-        <div className={styles.checksPanel}>
+        <div
+          id={checksPanelId}
+          className={styles.checksPanel}
+          role="dialog"
+          aria-label={checksSummary.title}
+        >
           <div className={styles.checksHeader}>
             <CheckStatusIcon status={checkSummaryStatus(checksSummary)} />
             <span className={styles.checksTitle}>{checksSummary.title}</span>

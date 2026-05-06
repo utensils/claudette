@@ -1,4 +1,4 @@
-import type { CiCheck } from "../types/plugin";
+import type { CiCheck, PullRequest, ScmSummary } from "../types/plugin";
 
 export type CiCheckTone = "success" | "failure" | "pending" | "cancelled";
 
@@ -56,6 +56,19 @@ export function summarizeCiChecks(checks: readonly CiCheck[]): CiCheckSummary {
     cancelled,
     passed,
   };
+}
+
+export function deriveScmCiState(
+  ciStatus: PullRequest["ci_status"],
+  checks: readonly CiCheck[],
+): ScmSummary["ciState"] {
+  if (ciStatus) return ciStatus;
+
+  const summary = summarizeCiChecks(checks);
+  if (summary.failed > 0) return "failure";
+  if (summary.pending > 0) return "pending";
+  if (summary.total > 0 && summary.cancelled === 0) return "success";
+  return null;
 }
 
 export function sortCiChecks(checks: readonly CiCheck[]): CiCheck[] {
