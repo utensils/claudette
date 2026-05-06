@@ -19,6 +19,7 @@ import { getCachedHighlight, highlightCode } from "../../utils/highlight";
 import { languageForFile } from "../../utils/languageForFile";
 import { bootstrapGrammarRegistry } from "../../utils/grammarRegistry";
 import type { DiffLine } from "../../types/diff";
+import { oldSideTextFromDiff } from "./diffCopy";
 import styles from "./DiffViewer.module.css";
 
 const MARKDOWN_EXT = /\.(md|markdown)$/i;
@@ -129,14 +130,17 @@ export function DiffViewer() {
     // async work resolves we drop the result so the copy doesn't land on
     // a different file's clipboard.
     const requestedFile = diffSelectedFile;
-    const file = await readWorkspaceFileForViewer(
-      selectedWorkspaceId,
-      requestedFile,
-    );
+    let file;
+    try {
+      file = await readWorkspaceFileForViewer(selectedWorkspaceId, requestedFile);
+    } catch {
+      if (useAppStore.getState().diffSelectedFile !== requestedFile) return null;
+      return oldSideTextFromDiff(diffContent);
+    }
     if (useAppStore.getState().diffSelectedFile !== requestedFile) return null;
     if (file.is_binary || file.content === null || file.truncated) return null;
     return file.content;
-  }, [selectedWorkspaceId, diffSelectedFile]);
+  }, [selectedWorkspaceId, diffSelectedFile, diffContent]);
 
   // Monotonic version token: each new fetch bumps it so a stale in-flight
   // response (e.g. user already switched diff tabs) gets dropped instead of
