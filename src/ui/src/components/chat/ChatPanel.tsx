@@ -83,6 +83,7 @@ export function ChatPanel() {
   const setChatMessages = useAppStore((s) => s.setChatMessages);
   const hydrateCompletedTurns = useAppStore((s) => s.hydrateCompletedTurns);
   const addChatMessage = useAppStore((s) => s.addChatMessage);
+  const enqueueTerminalCommand = useAppStore((s) => s.enqueueTerminalCommand);
   const setChatPagination = useAppStore((s) => s.setChatPagination);
   const chatPaginationState = useAppStore((s) =>
     activeSessionId ? s.chatPagination[activeSessionId] : undefined,
@@ -767,7 +768,7 @@ export function ChatPanel() {
 
   const handleSteerQueuedMessage = async () => {
     if (!activeSessionId || !queuedMessage || isSteeringQueued) return;
-    if (ws.remote_connection_id) {
+    if (ws?.remote_connection_id) {
       setError("Mid-turn steering is not yet supported for remote workspaces");
       return;
     }
@@ -807,6 +808,16 @@ export function ChatPanel() {
     } finally {
       setIsSteeringQueued(false);
     }
+  };
+
+  const handleRunShellCommand = async (command: string) => {
+    if (!selectedWorkspaceId) return;
+    if (ws?.remote_connection_id) {
+      setError("Shell commands are not yet supported for remote workspaces");
+      return;
+    }
+    setError(null);
+    enqueueTerminalCommand(selectedWorkspaceId, command);
   };
 
   const handleSend = async (
@@ -1349,6 +1360,7 @@ export function ChatPanel() {
       <ChatInputArea
         onSend={handleSend}
         onSendSteer={handleSendSteer}
+        onRunShellCommand={handleRunShellCommand}
         onStop={handleStop}
         isRunning={isRunning}
         isRemote={!!ws?.remote_connection_id}

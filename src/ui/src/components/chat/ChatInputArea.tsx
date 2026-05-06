@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertCircle, FileText, LoaderCircle, Mic, Plus, Send, Square, X } from "lucide-react";
+import { AlertCircle, FileText, LoaderCircle, Mic, Plus, Send, Square, Terminal as TerminalIcon, X } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { VoiceMeter } from "./VoiceMeter";
 import { useAppStore } from "../../stores/useAppStore";
@@ -42,6 +42,18 @@ import { SlashCommandPicker, filterSlashCommands } from "./SlashCommandPicker";
 import { describeSlashQuery } from "./nativeSlashCommands";
 import { hasUltrathink, renderUltrathinkText } from "./ultrathink";
 import styles from "./ChatPanel.module.css";
+
+type ComposerMode = "prompt" | "shell";
+
+function parseComposerDraft(value: string): { mode: ComposerMode; text: string } {
+  return value.startsWith("!")
+    ? { mode: "shell", text: value.slice(1) }
+    : { mode: "prompt", text: value };
+}
+
+function serializeComposerDraft(mode: ComposerMode, text: string): string {
+  return mode === "shell" ? `!${text}` : text;
+}
 
 /** Extract the @-query based on cursor position in the textarea. */
 function extractMentionQuery(text: string, cursorPos: number): string | null {
@@ -91,6 +103,7 @@ function fileToBase64(file: Blob): Promise<string> {
 export function ChatInputArea({
   onSend,
   onSendSteer,
+  onRunShellCommand,
   onStop,
   isRunning,
   isRemote,
@@ -118,6 +131,7 @@ export function ChatInputArea({
     mentionedFiles?: Set<string>,
     attachments?: AttachmentInput[],
   ) => void | Promise<void>;
+  onRunShellCommand: (command: string) => void | Promise<void>;
   onStop: () => void | Promise<void>;
   isRunning: boolean;
   isRemote: boolean;
@@ -139,9 +153,13 @@ export function ChatInputArea({
 }) {
   // Lazy-init from the store so a saved draft is restored on mount (e.g. when
   // returning to a session after the component unmounted via workspace switch).
-  const [chatInput, setChatInput] = useState(
-    () => useAppStore.getState().chatDrafts[sessionId] ?? "",
+  const initialDraft = parseComposerDraft(
+    useAppStore.getState().chatDrafts[sessionId] ?? "",
   );
+  const [composerMode, setComposerMode] = useState<ComposerMode>(
+    initialDraft.mode,
+  );
+  const [chatInput, setChatInput] = useState(initialDraft.text);
   const [cursorPos, setCursorPos] = useState(0);
   const [inputScrollTop, setInputScrollTop] = useState(0);
   const [slashPickerIndex, setSlashPickerIndex] = useState(0);
@@ -279,6 +297,7 @@ export function ChatInputArea({
               }))
             : undefined;
         onSend(pin.prompt, files, attachmentPayload);
+        setComposerMode("prompt");
         setChatInput("");
         for (const a of pendingAttachments) {
           if (a.preview_url.startsWith("blob:"))
@@ -288,6 +307,7 @@ export function ChatInputArea({
         mentionedFilesRef.current = new Set();
         return;
       }
+      setComposerMode("prompt");
       setChatInput((prev) => pin.prompt + (prev ? " " + prev : ""));
       textareaRef.current?.focus();
     },
@@ -299,15 +319,21 @@ export function ChatInputArea({
   // selector subscription would re-render this component on every keystroke
   // in *any* session.
   const setChatDraft = useAppStore((s) => s.setChatDraft);
-  const chatInputRef = useRef(chatInput);
-  chatInputRef.current = chatInput;
+  const draftSnapshotRef = useRef(serializeComposerDraft(composerMode, chatInput));
+  useEffect(() => {
+    draftSnapshotRef.current = serializeComposerDraft(composerMode, chatInput);
+  }, [composerMode, chatInput]);
 
   const prevSessionRef = useRef(sessionId);
   useEffect(() => {
     const prev = prevSessionRef.current;
     if (prev !== sessionId) {
-      setChatDraft(prev, chatInput);
-      setChatInput(useAppStore.getState().chatDrafts[sessionId] ?? "");
+      setChatDraft(prev, serializeComposerDraft(composerMode, chatInput));
+      const nextDraft = parseComposerDraft(
+        useAppStore.getState().chatDrafts[sessionId] ?? "",
+      );
+      setComposerMode(nextDraft.mode);
+      setChatInput(nextDraft.text);
       prevSessionRef.current = sessionId;
       setFilesLoaded(false);
       setWorkspaceFiles([]);
@@ -324,7 +350,7 @@ export function ChatInputArea({
 
   useEffect(() => {
     return () => {
-      setChatDraft(sessionId, chatInputRef.current);
+      setChatDraft(sessionId, draftSnapshotRef.current);
     };
   }, [sessionId, setChatDraft]);
 
@@ -338,15 +364,19 @@ export function ChatInputArea({
   const setChatInputPrefill = useAppStore((s) => s.setChatInputPrefill);
   useEffect(() => {
     if (chatInputPrefill) {
-      setChatInput(chatInputPrefill);
+      const next = parseComposerDraft(chatInputPrefill);
       setChatInputPrefill(null);
       // Focus and move cursor to end after React re-renders.
       requestAnimationFrame(() => {
-        const ta = textareaRef.current;
-        if (ta) {
-          ta.focus();
-          ta.selectionStart = ta.selectionEnd = ta.value.length;
-        }
+        setComposerMode(next.mode);
+        setChatInput(next.text);
+        requestAnimationFrame(() => {
+          const ta = textareaRef.current;
+          if (ta) {
+            ta.focus();
+            ta.selectionStart = ta.selectionEnd = ta.value.length;
+          }
+        });
       });
     }
   }, [chatInputPrefill, setChatInputPrefill]);
@@ -372,7 +402,7 @@ export function ChatInputArea({
   // Filter by the command-name token (text before the first whitespace) so the
   // picker stays open while the user types arguments. This keeps the argument
   // hint visible for native commands like `/plugin install …`.
-  const slashQuery = describeSlashQuery(chatInput);
+  const slashQuery = composerMode === "prompt" ? describeSlashQuery(chatInput) : null;
   const slashQueryToken = slashQuery?.token ?? null;
   const slashHasArgs = slashQuery?.hasArgs ?? false;
   const slashResults = useMemo(
@@ -404,7 +434,8 @@ export function ChatInputArea({
     }
   }, [selectedWorkspaceId]);
 
-  const mentionQuery = extractMentionQuery(chatInput, cursorPos);
+  const mentionQuery =
+    composerMode === "prompt" ? extractMentionQuery(chatInput, cursorPos) : null;
   const mentionResults = useMemo(
     () => (mentionQuery === null ? [] : matchFiles(workspaceFiles, mentionQuery)),
     [workspaceFiles, mentionQuery],
@@ -739,6 +770,7 @@ export function ChatInputArea({
           }))
         : undefined;
     const content = chatInput;
+    setComposerMode("prompt");
     setChatInput("");
     // Revoke blob URLs to free memory (data: URLs don't need cleanup).
     for (const a of pendingAttachments) {
@@ -750,6 +782,18 @@ export function ChatInputArea({
   };
 
   const handleSend = () => {
+    if (composerMode === "shell") {
+      const command = chatInput.trim();
+      if (!command) return;
+      const { content } = consumeComposer();
+      const trimmedCommand = content.trim();
+      const history = (historyRef.current[sessionId] ??= []);
+      history.push(`!${trimmedCommand}`);
+      historyIndexRef.current = -1;
+      draftRef.current = "";
+      void onRunShellCommand(trimmedCommand);
+      return;
+    }
     const { content, files, attachmentPayload } = consumeComposer();
     onSend(content, files, attachmentPayload);
   };
@@ -786,6 +830,18 @@ export function ChatInputArea({
     if (e.key === "Escape" && voice.state === "recording") {
       e.preventDefault();
       voice.cancel();
+      return;
+    }
+
+    if (composerMode === "shell" && e.key === "Escape") {
+      e.preventDefault();
+      setComposerMode("prompt");
+      return;
+    }
+
+    if (composerMode === "shell" && e.key === "Backspace" && chatInput.length === 0) {
+      e.preventDefault();
+      setComposerMode("prompt");
       return;
     }
 
@@ -889,7 +945,8 @@ export function ChatInputArea({
       const pressed = eventToBinding(e.nativeEvent, "key");
       if (pressed && pressed === steerBinding) {
         e.preventDefault();
-        handleSendSteer();
+        if (composerMode === "shell") handleSend();
+        else handleSendSteer();
         return;
       }
     }
@@ -907,30 +964,38 @@ export function ChatInputArea({
     if (e.key === "ArrowUp" && e.shiftKey) {
       e.preventDefault();
       if (historyIndexRef.current === -1) {
-        draftRef.current = chatInput;
+        draftRef.current = serializeComposerDraft(composerMode, chatInput);
         historyIndexRef.current = history.length - 1;
       } else if (historyIndexRef.current > 0) {
         historyIndexRef.current -= 1;
       }
-      setChatInput(history[historyIndexRef.current]);
+      const next = parseComposerDraft(history[historyIndexRef.current]);
+      setComposerMode(next.mode);
+      setChatInput(next.text);
     } else if (e.key === "ArrowDown" && e.shiftKey) {
       e.preventDefault();
       if (historyIndexRef.current === -1) return;
       if (historyIndexRef.current < history.length - 1) {
         historyIndexRef.current += 1;
-        setChatInput(history[historyIndexRef.current]);
+        const next = parseComposerDraft(history[historyIndexRef.current]);
+        setComposerMode(next.mode);
+        setChatInput(next.text);
       } else {
         historyIndexRef.current = -1;
-        setChatInput(draftRef.current);
+        const next = parseComposerDraft(draftRef.current);
+        setComposerMode(next.mode);
+        setChatInput(next.text);
       }
     }
   };
 
-  const showUltrathinkOverlay = hasUltrathink(chatInput);
+  const showUltrathinkOverlay = composerMode === "prompt" && hasUltrathink(chatInput);
 
   return (
     <div
-      className={`${styles.inputArea}${dragActive ? ` ${styles.inputDragActive}` : ""}`}
+      className={`${styles.inputArea}${dragActive ? ` ${styles.inputDragActive}` : ""}${
+        composerMode === "shell" ? ` ${styles.inputAreaShell}` : ""
+      }`}
     >
       {showFilePicker && (
         <FileMentionPicker
@@ -1014,7 +1079,11 @@ export function ChatInputArea({
         repoId={repoId}
         onUsePinnedPrompt={handleUsePinnedPrompt}
       />
-      <div className={styles.inputTextWrap}>
+      <div
+        className={`${styles.inputTextWrap}${
+          composerMode === "shell" ? ` ${styles.inputTextWrapShell}` : ""
+        }`}
+      >
         {showUltrathinkOverlay && (
           <div className={styles.inputHighlight} aria-hidden="true">
             <div style={{ transform: `translateY(-${inputScrollTop}px)` }}>
@@ -1028,6 +1097,13 @@ export function ChatInputArea({
             </div>
           </div>
         )}
+        {composerMode === "shell" && (
+          <div className={styles.inputModePrefix} aria-hidden="true">
+            <TerminalIcon size={13} />
+            <span className={styles.inputModeBang}>!</span>
+            <span>{t("shell_mode_label")}</span>
+          </div>
+        )}
         <textarea
           ref={textareaRef}
           // data-chat-input is the stable selector used by the global focus
@@ -1036,11 +1112,20 @@ export function ChatInputArea({
           data-chat-input
           className={`${styles.input}${planMode ? ` ${styles.inputPlanMode}` : ""}${
             showUltrathinkOverlay ? ` ${styles.inputWithHighlight}` : ""
+          }${composerMode === "shell" ? ` ${styles.inputShellMode}` : ""
           }`}
           value={chatInput}
           onChange={(e) => {
-            setChatInput(e.target.value);
-            setCursorPos(e.target.selectionStart ?? 0);
+            const nextValue = e.target.value;
+            const nextCursor = e.target.selectionStart ?? 0;
+            if (composerMode === "prompt" && nextValue.startsWith("!")) {
+              setComposerMode("shell");
+              setChatInput(nextValue.slice(1));
+              setCursorPos(Math.max(0, nextCursor - 1));
+              return;
+            }
+            setChatInput(nextValue);
+            setCursorPos(nextCursor);
             setInputScrollTop(e.target.scrollTop);
           }}
           onSelect={(e) => {
@@ -1051,7 +1136,13 @@ export function ChatInputArea({
           }}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          placeholder={isRunning ? t("composer_placeholder_queued") : t("composer_placeholder_idle")}
+          placeholder={
+            composerMode === "shell"
+              ? t("composer_placeholder_shell")
+              : isRunning
+                ? t("composer_placeholder_queued")
+                : t("composer_placeholder_idle")
+          }
         />
       </div>
       <div className={styles.inputControls}>
@@ -1183,8 +1274,20 @@ export function ChatInputArea({
             className={`${styles.sendBtn} ${isRunning ? styles.sendBtnStop : ""}`}
             onClick={isRunning ? onStop : handleSend}
             disabled={!isRunning && !chatInput.trim() && pendingAttachments.length === 0}
-            title={isRunning ? t("stop_agent") : t("send_message")}
-            aria-label={isRunning ? t("stop_agent") : t("send_message")}
+            title={
+              isRunning
+                ? t("stop_agent")
+                : composerMode === "shell"
+                  ? t("run_shell_command")
+                  : t("send_message")
+            }
+            aria-label={
+              isRunning
+                ? t("stop_agent")
+                : composerMode === "shell"
+                  ? t("run_shell_command")
+                  : t("send_message")
+            }
           >
             {isRunning ? <Square size={16} /> : <Send size={16} />}
           </button>

@@ -549,6 +549,39 @@ describe("workspace running-command map", () => {
   });
 });
 
+describe("terminal command queue", () => {
+  beforeEach(() => {
+    useAppStore.setState({
+      pendingTerminalCommands: [],
+      terminalPanelVisible: false,
+    });
+  });
+
+  it("enqueueTerminalCommand opens the panel and queues a command", () => {
+    useAppStore.getState().enqueueTerminalCommand(WS_A, "git status");
+
+    const state = useAppStore.getState();
+    expect(state.terminalPanelVisible).toBe(true);
+    expect(state.pendingTerminalCommands).toHaveLength(1);
+    expect(state.pendingTerminalCommands[0]).toMatchObject({
+      workspaceId: WS_A,
+      command: "git status",
+    });
+  });
+
+  it("completeTerminalCommand removes only the matching command", () => {
+    useAppStore.getState().enqueueTerminalCommand(WS_A, "one");
+    useAppStore.getState().enqueueTerminalCommand(WS_A, "two");
+    const firstId = useAppStore.getState().pendingTerminalCommands[0]?.id;
+
+    expect(firstId).toBeTruthy();
+    useAppStore.getState().completeTerminalCommand(firstId!);
+
+    expect(useAppStore.getState().pendingTerminalCommands).toHaveLength(1);
+    expect(useAppStore.getState().pendingTerminalCommands[0]?.command).toBe("two");
+  });
+});
+
 describe("showSidebarRunningCommands setting", () => {
   beforeEach(() => {
     useAppStore.setState({ showSidebarRunningCommands: false });

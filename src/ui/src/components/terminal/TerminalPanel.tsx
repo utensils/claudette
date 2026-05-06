@@ -39,6 +39,7 @@ import {
 } from "./terminalShortcuts";
 import {
   countLeaves,
+  findLeaf,
   neighborLeaf,
   shouldFocusLeaf,
 } from "../../stores/terminalPaneTree";
@@ -86,6 +87,12 @@ interface AgentTaskOutputPayload {
 
 const terminalInputEncoder = new TextEncoder();
 const terminalContextMenuOptions = { capture: true };
+
+function encodeTerminalCommand(command: string): number[] {
+  const normalized = command.replace(/\r?\n/g, "\r");
+  const withReturn = normalized.endsWith("\r") ? normalized : `${normalized}\r`;
+  return Array.from(terminalInputEncoder.encode(withReturn));
+}
 
 // Per-leaf xterm + PTY handle. The container is a detached <div> that we
 // appendChild into whichever target div the pane tree currently emits for
@@ -335,11 +342,13 @@ export const TerminalPanel = memo(function TerminalPanel() {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const workspaces = useAppStore((s) => s.workspaces);
   const terminalTabs = useAppStore((s) => s.terminalTabs);
+  const pendingTerminalCommands = useAppStore((s) => s.pendingTerminalCommands);
   const activeTerminalTabId = useAppStore((s) =>
     s.selectedWorkspaceId ? s.activeTerminalTabId[s.selectedWorkspaceId] ?? null : null,
   );
   const setTerminalTabs = useAppStore((s) => s.setTerminalTabs);
   const addTerminalTab = useAppStore((s) => s.addTerminalTab);
+  const completeTerminalCommand = useAppStore((s) => s.completeTerminalCommand);
   const removeTerminalTab = useAppStore((s) => s.removeTerminalTab);
   const setActiveTerminalTab = useAppStore((s) => s.setActiveTerminalTab);
   const toggleTerminalPanel = useAppStore((s) => s.toggleTerminalPanel);
@@ -420,6 +429,8 @@ export const TerminalPanel = memo(function TerminalPanel() {
   useEffect(() => {
     terminalTabsRef.current = terminalTabs;
   }, [terminalTabs]);
+  const dispatchingTerminalCommandRef = useRef(false);
+  const [terminalCommandDrainTick, setTerminalCommandDrainTick] = useState(0);
   const selectedWorkspaceIdRef = useRef(selectedWorkspaceId);
   useEffect(() => {
     selectedWorkspaceIdRef.current = selectedWorkspaceId;
@@ -474,6 +485,93 @@ export const TerminalPanel = memo(function TerminalPanel() {
     },
     [selectedWorkspaceId, removeTerminalTab],
   );
+
+  const dispatchTerminalCommand = useCallback(
+    async (queued: { id: string; workspaceId: string; command: string }) => {
+      let tabs = useAppStore.getState().terminalTabs[queued.workspaceId] ?? null;
+      if (!tabs) {
+        tabs = await listTerminalTabs(queued.workspaceId);
+        setTerminalTabs(queued.workspaceId, tabs);
+      }
+
+      const activeTabId = useAppStore.getState().activeTerminalTabId[queued.workspaceId];
+      const ptyTabs = tabs.filter((tab) => tab.kind !== "agent_task");
+      let target =
+        ptyTabs.find((tab) => tab.id === activeTabId) ??
+        ptyTabs[0];
+      if (!target) {
+        target = await createTerminalTab(queued.workspaceId);
+        addTerminalTab(queued.workspaceId, target);
+      } else {
+        setActiveTerminalTab(queued.workspaceId, target.id);
+      }
+
+      ensurePaneTree(target.id);
+
+      for (let attempt = 0; attempt < 80; attempt += 1) {
+        const state = useAppStore.getState();
+        const tree = state.terminalPaneTrees[target.id];
+        if (tree) {
+          const activePaneId = state.activeTerminalPaneId[target.id];
+          const leaf =
+            (activePaneId ? findLeaf(tree, activePaneId) : null) ??
+            (tree.kind === "leaf" ? tree : null);
+          if (leaf?.ptyId != null) {
+            await writePty(leaf.ptyId, encodeTerminalCommand(queued.command));
+            completeTerminalCommand(queued.id);
+            if (state.selectedWorkspaceId === queued.workspaceId) {
+              requestAnimationFrame(() => focusActiveTerminal());
+            }
+            return;
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+
+      completeTerminalCommand(queued.id);
+      console.error("Timed out waiting for terminal PTY to run command:", queued.command);
+    },
+    [
+      addTerminalTab,
+      completeTerminalCommand,
+      ensurePaneTree,
+      setActiveTerminalTab,
+      setTerminalTabs,
+    ],
+  );
+
+  useEffect(() => {
+    if (dispatchingTerminalCommandRef.current) return;
+    if (pendingTerminalCommands.length === 0) return;
+
+    dispatchingTerminalCommandRef.current = true;
+    (async () => {
+      while (true) {
+        const queued = useAppStore.getState().pendingTerminalCommands[0];
+        if (!queued) break;
+        try {
+          await dispatchTerminalCommand(queued);
+        } catch (err) {
+          completeTerminalCommand(queued.id);
+          console.error("Failed to run terminal command:", err);
+        }
+      }
+    })()
+      .finally(() => {
+        dispatchingTerminalCommandRef.current = false;
+        if (useAppStore.getState().pendingTerminalCommands.length > 0) {
+          requestAnimationFrame(() => {
+            setTerminalCommandDrainTick((tick) => tick + 1);
+          });
+        }
+      })
+      .catch((err) => console.error("Failed to drain terminal commands:", err));
+  }, [
+    completeTerminalCommand,
+    dispatchTerminalCommand,
+    pendingTerminalCommands,
+    terminalCommandDrainTick,
+  ]);
 
   const handleStopAgentTask = useCallback(async (tab: TerminalTab) => {
     if (!tab.agent_chat_session_id || !tab.agent_task_id) return;
