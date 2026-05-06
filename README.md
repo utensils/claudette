@@ -223,6 +223,13 @@ claudette workspace list
 claudette workspace create <repo-id> my-task
 claudette chat send <session-id> @./prompts/task.md
 
+# Inspect and orchestrate active chat sessions
+claudette chat list <workspace-id>
+claudette chat show <session-id> --limit 50
+claudette chat turns <session-id>
+claudette chat send <other-session-id> "Can you review this approach?"
+claudette chat stop <session-id>
+
 # Fan out N workspaces from a YAML manifest
 claudette batch validate plan.yaml
 claudette batch run plan.yaml
@@ -244,6 +251,8 @@ workspaces:
 ```
 
 The CLI requires the desktop app to be running — every operation flows through the GUI's own command core, so tray icons, notifications, and the workspace list update live as the CLI works. Run `claudette --help` for the full subcommand list, or `claudette completion zsh > ~/.zsh/completions/_claudette` to install shell tab completion.
+
+Main-agent orchestration uses the same IPC surface: `claudette chat show` returns session metadata, recent transcript messages, completed tool activity, attachment metadata, and pending AskUserQuestion / ExitPlanMode controls. Use `claudette chat answer <session-id> <tool-use-id> --answers-json '{"Question?":"Answer"}'`, `claudette chat approve-plan`, or `claudette chat deny-plan` to resolve pending controls from a terminal or another agent.
 
 ## Remote access
 
