@@ -369,6 +369,18 @@ pub async fn run_claude_plugin_command(
     // `MISSING_CLI:claude` sentinel so the UI can render the install-CTA
     // modal instead of leaking a bare `os error 2`.
     let claude_path = crate::agent::resolve_claude_path().await;
+    // Defensive guard: if resolution fell through to the bare-name fallback
+    // (no absolute install found anywhere on PATH or in well-known
+    // locations), surface the install-CTA modal directly instead of
+    // spawning. A bare `Command::new("claude")` would still go through the
+    // OS PATH search at exec time, and a misconfigured PATH containing a
+    // relative entry like `.` could in principle resolve to an unintended
+    // binary. The agent spawn paths tolerate the bare fallback (the spawn
+    // is wrapped in `map_spawn_err` and ENOENT is converted to MISSING_CLI
+    // anyway), but the marketplace surface has no such retry value.
+    if !Path::new(&claude_path).is_absolute() {
+        return Err(crate::missing_cli::format_err("claude"));
+    }
     let current_dir = plugin_command_cwd(repo_path);
 
     let output = tokio::process::Command::new(&claude_path)
