@@ -5,6 +5,10 @@ import { applyMonacoTheme, initMonacoThemeSync } from "./monacoTheme";
 import { DEFAULT_MONO_STACK } from "../../styles/fonts";
 import { useAppStore } from "../../stores/useAppStore";
 import {
+  AttachmentContextMenu,
+  type AttachmentContextMenuItem,
+} from "../chat/AttachmentContextMenu";
+import {
   useGitGutter,
   type DecorationsCollection,
 } from "./useGitGutter";
@@ -68,6 +72,15 @@ export const MonacoEditor = memo(function MonacoEditor({
   // remounts via `key={path}` on file switches so the seed stays correct.
   const [currentBuffer, setCurrentBuffer] = useState(initialValue);
 
+  // Right-click position for our portal context menu. Monaco's built-in menu
+  // ignores html `zoom` and lands offset from the cursor; we disable it via
+  // the `contextmenu: false` option below and route right-clicks through
+  // `AttachmentContextMenu`, which already compensates for engine-specific
+  // event-coord semantics. See utils/zoom.ts for the engine probe.
+  const [editorMenu, setEditorMenu] = useState<{ x: number; y: number } | null>(
+    null,
+  );
+
   const minimapEnabled = useAppStore((s) => s.editorMinimapEnabled);
 
   // Reflect readOnly changes into the editor without remounting. Monaco's
@@ -119,6 +132,39 @@ export const MonacoEditor = memo(function MonacoEditor({
       monacoInstance.KeyMod.CtrlCmd | monacoInstance.KeyCode.KeyS,
       () => onSaveRef.current?.(),
     );
+    // Replace Monaco's built-in context menu with our portal-mounted one.
+    // The DOM listener has to live on the editor's outer node so it fires
+    // for clicks anywhere inside (gutter included) — capture-phase to win
+    // against any inner handler. Monaco still owns the actions; we just
+    // own the chrome.
+    const dom = editor.getDomNode();
+    if (dom) {
+      const onContext = (e: MouseEvent) => {
+        // Drive selection from the click before opening the menu, mirroring
+        // what Monaco's own menu does. Without this, "Cut" / "Copy" would
+        // run against whatever was selected before — surprising on a fresh
+        // right-click into empty whitespace.
+        const target = editor.getTargetAtClientPoint(e.clientX, e.clientY);
+        if (target?.position) {
+          const sel = editor.getSelection();
+          const inSel =
+            sel && !sel.isEmpty() && sel.containsPosition(target.position);
+          if (!inSel) {
+            editor.setPosition(target.position);
+            editor.focus();
+          }
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        setEditorMenu({ x: e.clientX, y: e.clientY });
+      };
+      dom.addEventListener("contextmenu", onContext, true);
+      // Stash the cleanup on the editor instance via a disposable so the
+      // existing unmount path tears it down without a separate ref.
+      editor.onDidDispose(() => {
+        dom.removeEventListener("contextmenu", onContext, true);
+      });
+    }
   };
 
   const handleEditorChange = useCallback((value: string | undefined) => {
@@ -128,6 +174,71 @@ export const MonacoEditor = memo(function MonacoEditor({
   }, []);
 
   useGitGutter(monacoRef, gutterCollectionRef, workspaceId, filename, currentBuffer);
+
+  // Build the menu items off the live editor instance so we only show
+  // actions Monaco actually exposes — clipboard action IDs are documented
+  // to be missing in some Monaco builds, so each entry is null-checked
+  // before being added (see microsoft/monaco-editor#2598).
+  const buildEditorMenuItems = useCallback((): AttachmentContextMenuItem[] => {
+    const editor = editorRef.current;
+    if (!editor) return [];
+    const run = (id: string) => {
+      const action = editor.getAction(id);
+      if (action) void action.run();
+    };
+    const has = (id: string) => editor.getAction(id) != null;
+    const sel = editor.getSelection();
+    const hasSelection = !!sel && !sel.isEmpty();
+    const items: AttachmentContextMenuItem[] = [];
+    if (has("editor.action.goToDeclaration")) {
+      items.push({
+        label: "Go to Definition",
+        onSelect: () => run("editor.action.goToDeclaration"),
+      });
+    }
+    if (has("editor.action.changeAll")) {
+      items.push({
+        label: "Change All Occurrences",
+        onSelect: () => run("editor.action.changeAll"),
+        disabled: readOnly,
+      });
+    }
+    if (has("editor.action.formatDocument")) {
+      items.push({
+        label: "Format Document",
+        onSelect: () => run("editor.action.formatDocument"),
+        disabled: readOnly,
+      });
+    }
+    if (has("editor.action.clipboardCutAction")) {
+      items.push({
+        label: "Cut",
+        onSelect: () => run("editor.action.clipboardCutAction"),
+        disabled: readOnly || !hasSelection,
+      });
+    }
+    if (has("editor.action.clipboardCopyAction")) {
+      items.push({
+        label: "Copy",
+        onSelect: () => run("editor.action.clipboardCopyAction"),
+        disabled: !hasSelection,
+      });
+    }
+    if (has("editor.action.clipboardPasteAction")) {
+      items.push({
+        label: "Paste",
+        onSelect: () => run("editor.action.clipboardPasteAction"),
+        disabled: readOnly,
+      });
+    }
+    if (has("editor.action.quickCommand")) {
+      items.push({
+        label: "Command Palette",
+        onSelect: () => run("editor.action.quickCommand"),
+      });
+    }
+    return items;
+  }, [readOnly]);
 
   return (
     <div className={styles.host}>
@@ -150,6 +261,13 @@ export const MonacoEditor = memo(function MonacoEditor({
           renderWhitespace: "selection",
           stickyScroll: { enabled: false },
           automaticLayout: true,
+          // Monaco's built-in context menu ignores html `zoom` and lands
+          // offset from the cursor under non-default UI font sizes. We
+          // suppress it and render `AttachmentContextMenu` instead, which
+          // compensates for engine-specific clientX semantics. See
+          // utils/zoom.ts for the engine probe and microsoft/monaco-editor#1203
+          // (still open) for upstream's tracking issue.
+          contextmenu: false,
           // Literal stack rather than `var(--font-mono)`: Monaco computes
           // character widths via `canvas.measureText`, which does not
           // resolve CSS variables. Mismatched widths cause cursor and
@@ -162,6 +280,14 @@ export const MonacoEditor = memo(function MonacoEditor({
           fontSize: 13,
         }}
       />
+      {editorMenu ? (
+        <AttachmentContextMenu
+          x={editorMenu.x}
+          y={editorMenu.y}
+          items={buildEditorMenuItems()}
+          onClose={() => setEditorMenu(null)}
+        />
+      ) : null}
     </div>
   );
 });
