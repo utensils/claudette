@@ -1,6 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  __resetCorrectionMemoForTests,
   correctContextViewPosition,
   type PositionTarget,
 } from "./monacoContextViewFix";
@@ -10,15 +9,18 @@ import {
 // against a stub. End-to-end MutationObserver coverage lives in manual
 // QA against the running app: see the verification steps in the PR
 // description.
+//
+// The runtime feedback-loop guard is *not* in this pure function —
+// codex's review pointed out that an equality-based echo guard can
+// false-skip a real Monaco reposition (raw 200/100 at zoom 2 looks
+// identical to the post-correction of raw 400/200). The guard now lives
+// at the observer layer: each per-host MutationObserver is disconnected
+// around our write, so the loop is structurally impossible. That's
+// covered by manual QA, not these tests.
 
 function makeTarget(left: string, top: string): PositionTarget {
   return { style: { left, top } };
 }
-
-afterEach(() => {
-  // Each test creates fresh targets, but defensive in case a future test
-  // reuses an object reference across describe blocks.
-});
 
 describe("correctContextViewPosition", () => {
   it("divides left/top by zoom and writes them back", () => {
@@ -36,50 +38,30 @@ describe("correctContextViewPosition", () => {
     expect(el.style.top).toBe("");
   });
 
-  it("skips the echo of our own write to break the observer feedback loop", () => {
+  it("re-corrects unconditionally when called twice — no false skip", () => {
+    // The pathological case codex flagged: at zoom 2, a previous correction
+    // of raw 400/200 → 200/100 used to make the guard skip a *new* Monaco
+    // reposition that happens to write raw 200/100. With no value-equality
+    // guard in this layer, both calls correct.
     const el = makeTarget("400px", "200px");
-    expect(correctContextViewPosition(el, 2)).toBe(true);
-    // Echo: same values, no Monaco move. Should be a no-op.
-    expect(correctContextViewPosition(el, 2)).toBe(false);
+    correctContextViewPosition(el, 2);
     expect(parseFloat(el.style.left)).toBeCloseTo(200, 6);
-    expect(parseFloat(el.style.top)).toBeCloseTo(100, 6);
+    // Monaco-driven reposition to raw 200/100. The pure function corrects
+    // it to 100/50; the runtime observer-disconnect-around-write strategy
+    // ensures the recursive write-from-write is impossible at the call
+    // site. (Without that, the function would still correct here — the
+    // bug under the old guard was the *skip*, not the recursion.)
+    el.style.left = "200px";
+    el.style.top = "100px";
+    correctContextViewPosition(el, 2);
+    expect(parseFloat(el.style.left)).toBeCloseTo(100, 6);
+    expect(parseFloat(el.style.top)).toBeCloseTo(50, 6);
   });
 
-  it("re-corrects when Monaco moves the menu to a new uncorrected position", () => {
+  it("handles non-integer zoom factors without drift", () => {
     const el = makeTarget("500px", "250px");
     correctContextViewPosition(el, 1.25);
     expect(parseFloat(el.style.left)).toBeCloseTo(400, 6);
     expect(parseFloat(el.style.top)).toBeCloseTo(200, 6);
-    // Monaco moves the menu (e.g. submenu expansion clamps it).
-    el.style.left = "1000px";
-    el.style.top = "500px";
-    const wrote = correctContextViewPosition(el, 1.25);
-    expect(wrote).toBe(true);
-    expect(parseFloat(el.style.left)).toBeCloseTo(800, 6);
-    expect(parseFloat(el.style.top)).toBeCloseTo(400, 6);
-  });
-
-  it("treats sub-pixel deltas (<0.5px) as echo", () => {
-    // After we write 200/100, browser style serialization can round to
-    // "200px"/"100px"; if Monaco then re-writes the *same logical* values,
-    // the serialized string may differ by a sub-pixel amount. We accept
-    // any delta < 0.5px as an echo so we don't oscillate.
-    const el = makeTarget("400.2px", "200px");
-    correctContextViewPosition(el, 2);
-    el.style.left = "200.1px";
-    el.style.top = "100px";
-    expect(correctContextViewPosition(el, 2)).toBe(false);
-  });
-
-  it("forgets memo across distinct elements (per-target weak ref)", () => {
-    const a = makeTarget("400px", "200px");
-    const b = makeTarget("400px", "200px");
-    correctContextViewPosition(a, 2);
-    // `b` is a different object; its memo is empty so the same input is
-    // corrected, not skipped.
-    expect(correctContextViewPosition(b, 2)).toBe(true);
-    expect(parseFloat(b.style.left)).toBeCloseTo(200, 6);
-    __resetCorrectionMemoForTests(a);
-    __resetCorrectionMemoForTests(b);
   });
 });
