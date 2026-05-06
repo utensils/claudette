@@ -37,9 +37,16 @@ import { createSerialGate } from "../../utils/serialGate";
 import {
   statusColor,
   statusForOpenFileTab,
+  statusLayerForOpenFileTab,
   statusLabel,
 } from "../files/fileTreeStatus";
-import type { ChatSession, DiffFileTab, DiffLayer, FileStatus } from "../../types";
+import type {
+  ChatSession,
+  DiffFileTab,
+  DiffLayer,
+  FileStatus,
+  GitFileLayer,
+} from "../../types";
 import styles from "./SessionTabs.module.css";
 
 type NavDirection = "prev" | "next" | "first" | "last";
@@ -660,12 +667,14 @@ export function SessionTabs({ workspaceId }: Props) {
         // entry.kind === "file"
         const isActive = activeFileTab === entry.path;
         const gitStatus = statusForOpenFileTab(entry.path, diffStagedFiles);
+        const gitLayer = statusLayerForOpenFileTab(entry.path, diffStagedFiles);
         return (
           <FileTab
             key={navKey}
             workspaceId={workspaceId}
             path={entry.path}
             gitStatus={gitStatus}
+            gitLayer={gitLayer}
             isActive={isActive}
             onSelect={() => selectFileTab(workspaceId, entry.path)}
             onClose={() => requestCloseFileTab(entry.path)}
@@ -928,6 +937,7 @@ interface FileTabProps {
   workspaceId: string;
   path: string;
   gitStatus: FileStatus | null;
+  gitLayer: GitFileLayer | null;
   isActive: boolean;
   onSelect: () => void;
   onClose: () => void;
@@ -944,6 +954,7 @@ function FileTab({
   workspaceId,
   path,
   gitStatus,
+  gitLayer,
   isActive,
   onSelect,
   onClose,
@@ -1049,7 +1060,7 @@ function FileTab({
           title={statusTitle ?? undefined}
           aria-label={statusTitle ?? undefined}
         >
-          {statusLabel(gitStatus)}
+          {statusLabel(gitStatus, gitLayer)}
         </span>
       )}
       <button

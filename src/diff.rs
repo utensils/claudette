@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::Path;
 
@@ -259,14 +259,27 @@ pub async fn file_tree_git_status(
     worktree_path: &str,
 ) -> Result<HashMap<String, GitStatusEntry>, DiffError> {
     let output = run_git(worktree_path, &["status", "--porcelain=v2", "-uall", "-z"]).await?;
-    Ok(parse_file_tree_git_status(&output, worktree_path))
+    let mut parsed = parse_file_tree_git_status(&output, worktree_path);
+    suppress_unstaged_rename_deletion_ghosts(
+        worktree_path,
+        &mut parsed.statuses,
+        &parsed.unstaged_deleted_head_oids,
+        &parsed.untracked_paths,
+    )
+    .await;
+    Ok(parsed.statuses)
 }
 
-fn parse_file_tree_git_status(
-    output: &str,
-    worktree_path: &str,
-) -> HashMap<String, GitStatusEntry> {
+struct FileTreeStatusParse {
+    statuses: HashMap<String, GitStatusEntry>,
+    unstaged_deleted_head_oids: HashMap<String, String>,
+    untracked_paths: Vec<String>,
+}
+
+fn parse_file_tree_git_status(output: &str, worktree_path: &str) -> FileTreeStatusParse {
     let mut statuses = HashMap::new();
+    let mut unstaged_deleted_head_oids = HashMap::new();
+    let mut untracked_paths = Vec::new();
     let mut records = output.split('\0');
 
     while let Some(record) = records.next() {
@@ -275,6 +288,7 @@ fn parse_file_tree_git_status(
         }
 
         if let Some(path) = record.strip_prefix("? ") {
+            untracked_paths.push(path.to_string());
             statuses.insert(
                 path.to_string(),
                 GitStatusEntry {
@@ -295,19 +309,23 @@ fn parse_file_tree_git_status(
                 let Some(xy) = fields.next() else {
                     continue;
                 };
-                for _ in 0..6 {
-                    let _ = fields.next();
-                }
+                let _sub = fields.next();
+                let _mode_head = fields.next();
+                let _mode_index = fields.next();
+                let _mode_worktree = fields.next();
+                let head_oid = fields.next();
+                let _index_oid = fields.next();
                 let Some(path) = fields.next() else {
                     continue;
                 };
-                statuses.insert(
-                    path.to_string(),
-                    GitStatusEntry {
-                        status: status_from_xy(xy, path, None, worktree_path),
-                        layer: layer_from_xy(xy),
-                    },
-                );
+                let status = status_from_xy(xy, path, None, worktree_path);
+                let layer = layer_from_xy(xy);
+                if status == FileStatus::Deleted && layer == GitFileLayer::Unstaged {
+                    if let Some(head_oid) = head_oid {
+                        unstaged_deleted_head_oids.insert(path.to_string(), head_oid.to_string());
+                    }
+                }
+                statuses.insert(path.to_string(), GitStatusEntry { status, layer });
             }
             b'2' => {
                 let mut fields = record.splitn(10, ' ');
@@ -334,7 +352,66 @@ fn parse_file_tree_git_status(
         }
     }
 
-    statuses
+    FileTreeStatusParse {
+        statuses,
+        unstaged_deleted_head_oids,
+        untracked_paths,
+    }
+}
+
+async fn suppress_unstaged_rename_deletion_ghosts(
+    worktree_path: &str,
+    statuses: &mut HashMap<String, GitStatusEntry>,
+    deleted_head_oids: &HashMap<String, String>,
+    untracked_paths: &[String],
+) {
+    if deleted_head_oids.is_empty() || untracked_paths.is_empty() {
+        return;
+    }
+
+    let mut untracked_oids = HashSet::new();
+    for path in untracked_paths {
+        let Some(status) = statuses.get(path) else {
+            continue;
+        };
+        if status.status != FileStatus::Added || status.layer != GitFileLayer::Untracked {
+            continue;
+        }
+        if let Some(oid) = hash_worktree_file(worktree_path, path).await {
+            untracked_oids.insert(oid);
+        }
+    }
+
+    if untracked_oids.is_empty() {
+        return;
+    }
+
+    let ghosts: Vec<String> = deleted_head_oids
+        .iter()
+        .filter_map(|(path, oid)| untracked_oids.contains(oid).then(|| path.clone()))
+        .collect();
+    for path in ghosts {
+        statuses.remove(&path);
+    }
+}
+
+async fn hash_worktree_file(worktree_path: &str, relative_path: &str) -> Option<String> {
+    let output = Command::new(crate::git::resolve_git_path_blocking())
+        .no_console_window()
+        .args(["-C", worktree_path])
+        .arg("hash-object")
+        .arg(format!("--path={relative_path}"))
+        .arg("--")
+        .arg(relative_path)
+        .output()
+        .await
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+    let oid = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!oid.is_empty()).then_some(oid)
 }
 
 fn layer_from_xy(xy: &str) -> GitFileLayer {
@@ -1789,6 +1866,33 @@ mod integration_tests {
             Some(&GitStatusEntry {
                 status: FileStatus::Modified,
                 layer: GitFileLayer::Mixed,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_file_tree_git_status_hides_unstaged_rename_deleted_ghost() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        git_cmd(dir, &["init", "-b", "main"]);
+        git_cmd(dir, &["config", "user.email", "test@test.com"]);
+        git_cmd(dir, &["config", "user.name", "Test"]);
+        git_cmd(dir, &["config", "core.autocrlf", "false"]);
+        std::fs::write(dir.join("index.rs"), "fn main() {}\n").unwrap();
+        git_cmd(dir, &["add", "."]);
+        git_cmd(dir, &["commit", "-m", "initial"]);
+
+        std::fs::rename(dir.join("index.rs"), dir.join("index2.rs")).unwrap();
+
+        let status = file_tree_git_status(dir.to_str().unwrap()).await.unwrap();
+
+        assert!(!status.contains_key("index.rs"));
+        assert_eq!(
+            status.get("index2.rs"),
+            Some(&GitStatusEntry {
+                status: FileStatus::Added,
+                layer: GitFileLayer::Untracked,
             })
         );
     }

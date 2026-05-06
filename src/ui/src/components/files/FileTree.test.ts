@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { resolveFileTreeActivation, statusForOpenFileTab } from "./fileTreeStatus";
+import {
+  resolveFileTreeActivation,
+  statusForOpenFileTab,
+  statusLabel,
+  statusLayerForOpenFileTab,
+} from "./fileTreeStatus";
 import type { FileTreeNode } from "../../utils/buildFileTree";
 
 describe("resolveFileTreeActivation", () => {
@@ -98,5 +103,28 @@ describe("statusForOpenFileTab", () => {
         untracked: [],
       }),
     ).toBe("Deleted");
+  });
+});
+
+describe("statusLabel", () => {
+  it("labels untracked additions as U", () => {
+    expect(statusLabel("Added", "untracked")).toBe("U");
+  });
+
+  it("labels staged additions as A", () => {
+    expect(statusLabel("Added", "staged")).toBe("A");
+  });
+});
+
+describe("statusLayerForOpenFileTab", () => {
+  it("returns untracked layer for untracked open files", () => {
+    expect(
+      statusLayerForOpenFileTab("src/app.ts", {
+        committed: [],
+        staged: [],
+        unstaged: [],
+        untracked: [{ path: "src/app.ts", status: "Added" }],
+      }),
+    ).toBe("untracked");
   });
 });

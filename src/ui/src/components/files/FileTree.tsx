@@ -407,6 +407,7 @@ function Row({
     : null;
   const Icon = isDir ? getFolderIcon(expanded) : getFileIcon(node.name);
   const status = node.kind === "file" ? node.git_status : null;
+  const statusLayer = node.kind === "file" ? node.git_layer : null;
   const dirChanged = node.kind === "dir" && node.statusCount > 0;
   const statusTitle =
     status == null
@@ -479,7 +480,7 @@ function Row({
           title={statusTitle ?? undefined}
           aria-label={statusTitle ?? undefined}
         >
-          {statusLabel(status)}
+          {statusLabel(status, statusLayer)}
         </span>
       )}
     </div>

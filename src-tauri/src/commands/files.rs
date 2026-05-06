@@ -121,7 +121,11 @@ pub async fn list_workspace_files(
         .lines()
         .filter(|line| !line.is_empty())
         .take(MAX_FILES)
-        .map(|line| {
+        .filter_map(|line| {
+            let status = git_status.get(line);
+            if !Path::new(worktree_path).join(line).exists() && status.is_none() {
+                return None;
+            }
             seen_files.insert(line.to_string());
             // Extract all parent directories from the file path.
             let mut pos = 0;
@@ -130,12 +134,12 @@ pub async fn list_workspace_files(
                 dirs.insert(line[..=dir_end].to_string());
                 pos = dir_end + 1;
             }
-            FileEntry {
+            Some(FileEntry {
                 path: line.to_string(),
                 is_directory: false,
-                git_status: git_status.get(line).map(|s| s.status.clone()),
-                git_layer: git_status.get(line).map(|s| s.layer),
-            }
+                git_status: status.map(|s| s.status.clone()),
+                git_layer: status.map(|s| s.layer),
+            })
         })
         .collect();
 
