@@ -78,6 +78,20 @@ fn main() {
         return;
     }
 
+    // Claude Code command hooks run as short-lived child processes. Forward
+    // their JSON stdin to the parent bridge so nested subagent tool activity
+    // can be displayed in the chat timeline.
+    if std::env::args().any(|a| a == "--agent-hook") {
+        let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+        rt.block_on(async {
+            if let Err(e) = claudette::agent_mcp::hook::run_stdin().await {
+                eprintln!("agent-hook error: {e}");
+                std::process::exit(1);
+            }
+        });
+        return;
+    }
+
     // Windows only: if the WebView2 Runtime is missing, Tauri's webview
     // initialization would fail with a generic system error dialog and exit.
     // Probe the runtime registry up-front and show a native MessageBox with

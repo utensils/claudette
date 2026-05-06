@@ -534,6 +534,69 @@
   color: var(--text-faint);
 }
 
+.agentToolProgress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 4px 8px;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.agentToolStatus {
+  color: var(--text-dim);
+}
+
+.agentToolGroup {
+  border-top: 1px solid var(--divider);
+}
+
+.agentToolGroupHeader {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 6px 8px 2px 8px;
+  min-width: 0;
+}
+
+.agentToolCallList {
+  display: grid;
+  gap: 2px;
+  padding: 0 8px 6px 24px;
+}
+
+.agentToolCall {
+  display: flex;
+  min-width: 0;
+  gap: 8px;
+  align-items: center;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.agentToolCallName {
+  flex: 0 0 auto;
+}
+
+.agentToolCallSummary {
+  min-width: 0;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agentToolCallSummary::before {
+  content: " ";
+}
+
+.agentToolCallStatus {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+}
+
 .toolContent {
   padding: 10px 12px;
   font-size: 12px;

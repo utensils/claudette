@@ -47,4 +47,15 @@ pub struct AgentSettings {
     /// selected model runs at its 200k window. Derived frontend-side from
     /// the model registry's `contextWindowTokens`.
     pub disable_1m_context: bool,
+    /// Optional bridge used by Claude Code hooks. When present, args inject
+    /// command hooks and process env points those hook children back at the
+    /// parent-side bridge.
+    pub hook_bridge: Option<AgentHookBridge>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentHookBridge {
+    pub command: String,
+    pub socket_addr: String,
+    pub token: String,
 }

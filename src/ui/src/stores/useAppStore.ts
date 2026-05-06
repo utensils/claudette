@@ -14,6 +14,7 @@ import {
 import {
   createChatSlice,
   type ChatSlice,
+  type AgentToolCall,
   type CompletedTurn,
   type ToolActivity,
   type TurnUsage,
@@ -69,6 +70,7 @@ import {
 export type {
   AgentQuestion,
   AgentQuestionItem,
+  AgentToolCall,
   ChatSearchState,
   CompletedTurn,
   PermissionLevel,

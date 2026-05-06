@@ -11,6 +11,27 @@ export interface ToolActivity {
   resultText: string;
   collapsed: boolean;
   summary: string;
+  startedAt?: string;
+  assistantMessageOrdinal?: number;
+  agentTaskId?: string | null;
+  agentDescription?: string | null;
+  agentLastToolName?: string | null;
+  agentToolUseCount?: number | null;
+  agentStatus?: string | null;
+  agentToolCalls?: AgentToolCall[];
+}
+
+export interface AgentToolCall {
+  toolUseId: string;
+  toolName: string;
+  agentId: string;
+  agentType?: string | null;
+  input?: unknown;
+  response?: unknown;
+  error?: string | null;
+  status: "running" | "completed" | "failed";
+  startedAt: string;
+  completedAt?: string | null;
 }
 
 export interface CompletedTurn {
@@ -138,6 +159,11 @@ export interface ChatSlice {
     toolUseId: string,
     updates: Partial<ToolActivity>,
   ) => void;
+  upsertAgentToolCall: (
+    sessionId: string,
+    agentId: string,
+    call: AgentToolCall,
+  ) => boolean;
   toggleToolActivityCollapsed: (sessionId: string, index: number) => void;
   finalizeTurn: (
     sessionId: string,
@@ -339,6 +365,38 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
         ),
       },
     })),
+  upsertAgentToolCall: (sessionId, agentId, call) => {
+    let matched = false;
+    set((s) => {
+      const activities = s.toolActivities[sessionId] || [];
+      const nextActivities = activities.map((activity) => {
+        if (activity.agentTaskId !== agentId) return activity;
+        matched = true;
+        const calls = activity.agentToolCalls || [];
+        const existing = calls.find((item) => item.toolUseId === call.toolUseId);
+        const nextCalls = existing
+          ? calls.map((item) =>
+              item.toolUseId === call.toolUseId
+                ? { ...item, ...call, startedAt: item.startedAt }
+                : item,
+            )
+          : [...calls, call];
+        return {
+          ...activity,
+          agentToolCalls: nextCalls,
+          agentLastToolName: call.toolName,
+          agentToolUseCount: Math.max(
+            activity.agentToolUseCount ?? 0,
+            nextCalls.length,
+          ),
+        };
+      });
+      return matched
+        ? { toolActivities: { ...s.toolActivities, [sessionId]: nextActivities } }
+        : {};
+    });
+    return matched;
+  },
   toggleToolActivityCollapsed: (sessionId, index) =>
     set((s) => ({
       toolActivities: {
@@ -405,6 +463,14 @@ export const createChatSlice: StateCreator<AppState, [], [], ChatSlice> = (
           resultText: a.resultText,
           collapsed: true,
           summary: a.summary,
+          startedAt: a.startedAt,
+          assistantMessageOrdinal: a.assistantMessageOrdinal,
+          agentTaskId: a.agentTaskId,
+          agentDescription: a.agentDescription,
+          agentLastToolName: a.agentLastToolName,
+          agentToolUseCount: a.agentToolUseCount,
+          agentStatus: a.agentStatus,
+          agentToolCalls: a.agentToolCalls,
         })),
         messageCount,
         collapsed: true,

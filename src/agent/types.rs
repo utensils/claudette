@@ -51,6 +51,16 @@ pub struct CompactMetadata {
     pub duration_ms: u64,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct TaskUsage {
+    #[serde(default)]
+    pub total_tokens: Option<u64>,
+    #[serde(default)]
+    pub tool_uses: Option<u64>,
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
+}
+
 /// Top-level JSON line from Claude CLI stdout.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -74,6 +84,16 @@ pub enum StreamEvent {
         /// Present on `subtype: "task_notification"` events.
         #[serde(default)]
         summary: Option<String>,
+        /// Present on `task_started` / `task_progress` events emitted by
+        /// Claude Code for subagent progress.
+        #[serde(default)]
+        description: Option<String>,
+        /// Present on `task_progress` with the most recent subagent tool name.
+        #[serde(default)]
+        last_tool_name: Option<String>,
+        /// Present on `task_progress` / `task_notification`.
+        #[serde(default)]
+        usage: Option<TaskUsage>,
         /// Only present on `subtype: "status"` events. Values observed:
         /// `"requesting"` (normal API call), `"compacting"` (compaction in
         /// flight), or `null` (compaction complete).

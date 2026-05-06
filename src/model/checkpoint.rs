@@ -35,6 +35,15 @@ pub struct TurnToolActivity {
     pub result_text: String,
     pub summary: String,
     pub sort_order: i32,
+    /// Number of assistant text messages in this turn after which the tool
+    /// activity should render. Zero means before the first assistant message.
+    pub assistant_message_ordinal: i32,
+    pub agent_task_id: Option<String>,
+    pub agent_description: Option<String>,
+    pub agent_last_tool_name: Option<String>,
+    pub agent_tool_use_count: Option<i32>,
+    pub agent_status: Option<String>,
+    pub agent_tool_calls_json: String,
 }
 
 /// Grouped checkpoint + activities for loading completed turns.

@@ -85,6 +85,13 @@ export function reconstructCompletedTurns(
         resultText: a.result_text,
         collapsed: true,
         summary: a.summary,
+        assistantMessageOrdinal: a.assistant_message_ordinal,
+        agentTaskId: a.agent_task_id,
+        agentDescription: a.agent_description,
+        agentLastToolName: a.agent_last_tool_name,
+        agentToolUseCount: a.agent_tool_use_count,
+        agentStatus: a.agent_status,
+        agentToolCalls: parseAgentToolCalls(a.agent_tool_calls_json),
       })),
       messageCount: td.message_count,
       collapsed: true,
@@ -97,4 +104,14 @@ export function reconstructCompletedTurns(
       cacheCreationTokens,
     };
   });
+}
+
+function parseAgentToolCalls(value: string | null | undefined) {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }

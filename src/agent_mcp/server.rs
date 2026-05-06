@@ -286,7 +286,10 @@ fn tool_error_result(id: Value, message: &str) -> JsonRpcResponse {
 /// Open a fresh connection to the parent for a single round trip. The
 /// per-call connection is intentional — keeps state simple and means a
 /// flaky parent doesn't poison subsequent calls.
-async fn send_to_bridge(socket_addr: &str, req: &BridgeRequest) -> io::Result<BridgeResponse> {
+pub(crate) async fn send_to_bridge(
+    socket_addr: &str,
+    req: &BridgeRequest,
+) -> io::Result<BridgeResponse> {
     let name = name_for(socket_addr).map_err(io::Error::other)?;
     let conn = Stream::connect(name).await?;
     let mut reader = BufReader::new(&conn);

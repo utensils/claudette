@@ -208,6 +208,15 @@ export function ChatPanel() {
   const activitiesCount = useAppStore(
     (s) => (activeSessionId ? (s.toolActivities[activeSessionId] || []).length : 0)
   );
+  const firstToolActivityStartedAt = useAppStore((s) => {
+    if (!activeSessionId) return null;
+    return (
+      (s.toolActivities[activeSessionId] || [])
+        .map((activity) => activity.startedAt)
+        .filter((startedAt): startedAt is string => !!startedAt)
+        .sort()[0] ?? null
+    );
+  });
   const completedTurnsCount = useAppStore(
     (s) => (activeSessionId ? (s.completedTurns[activeSessionId] || []).length : 0)
   );
@@ -1210,6 +1219,24 @@ export function ChatPanel() {
                   onAttachmentClick={openLightbox}
                   searchQuery={searchQuery}
                   globalOffset={globalOffset}
+                  liveToolActivityStartedAt={
+                    activitiesCount > 0 ? firstToolActivityStartedAt : null
+                  }
+                  liveToolActivityNode={
+                    activitiesCount > 0 ? (
+                      <ToolActivitiesSection
+                        sessionId={activeSessionId}
+                        isRunning={isRunning ?? false}
+                        searchQuery={searchQuery}
+                        worktreePath={ws?.worktree_path}
+                      />
+                    ) : null
+                  }
+                  liveTaskProgressNode={
+                    activitiesCount > 0 ? (
+                      <CurrentTurnTaskProgress sessionId={activeSessionId} />
+                    ) : null
+                  }
                 />
               )}
 
@@ -1227,19 +1254,6 @@ export function ChatPanel() {
                   isStreaming={isRunning ?? false}
                   searchQuery={searchQuery}
                 />
-              )}
-
-              {activeSessionId && activitiesCount > 0 && (
-                <ToolActivitiesSection
-                  sessionId={activeSessionId}
-                  isRunning={isRunning ?? false}
-                  searchQuery={searchQuery}
-                  worktreePath={ws?.worktree_path}
-                />
-              )}
-
-              {activeSessionId && (
-                <CurrentTurnTaskProgress sessionId={activeSessionId} />
               )}
 
               {pendingQuestion && (
