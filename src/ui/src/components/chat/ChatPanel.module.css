@@ -722,6 +722,15 @@
   border-color: rgba(var(--accent-primary-rgb), 0.5);
 }
 
+.inputAreaShell {
+  border-color: color-mix(in srgb, var(--status-running) 50%, transparent);
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--status-running) 12%, transparent);
+}
+
+.inputAreaShell:focus-within {
+  border-color: color-mix(in srgb, var(--status-running) 72%, transparent);
+}
+
 .inputControls {
   display: flex;
   align-items: center;
@@ -748,6 +757,34 @@
 
 .inputTextWrap {
   position: relative;
+}
+
+.inputTextWrapShell {
+  background: color-mix(in srgb, var(--status-running) 4%, transparent);
+}
+
+.inputModePrefix {
+  position: absolute;
+  top: 12px;
+  left: 14px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid color-mix(in srgb, var(--status-running) 35%, transparent);
+  border-radius: var(--radius-md);
+  background: var(--chat-input-bg);
+  color: var(--status-running);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.inputModeBang {
+  font-family: var(--font-mono);
+  font-weight: 700;
 }
 
 .inputHighlight {
@@ -786,6 +823,11 @@
 .inputWithHighlight {
   color: transparent;
   caret-color: var(--text-primary);
+}
+
+.inputShellMode {
+  padding-left: 104px;
+  font-family: var(--font-mono);
 }
 
 .input:focus-visible {

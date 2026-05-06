@@ -26,6 +26,11 @@ function orderTerminalTabs(tabs: TerminalTab[]): TerminalTab[] {
 export interface TerminalSlice {
   terminalTabs: Record<string, TerminalTab[]>;
   agentBackgroundTasksBySessionId: Record<string, TerminalTab[]>;
+  pendingTerminalCommands: Array<{
+    id: string;
+    workspaceId: string;
+    command: string;
+  }>;
   // Active tab id is workspace-scoped: switching workspaces preserves each
   // workspace's last-active tab independently.
   activeTerminalTabId: Record<string, number | null>;
@@ -52,6 +57,8 @@ export interface TerminalSlice {
     command: string | null,
   ) => void;
   clearWorkspaceRunningCommand: (wsId: string, ptyId: number) => void;
+  enqueueTerminalCommand: (wsId: string, command: string) => void;
+  completeTerminalCommand: (id: string) => void;
 
   // Per-tab split-pane layout (ephemeral — not persisted). Keyed by tab id.
   terminalPaneTrees: Record<number, TerminalPaneNode>;
@@ -103,6 +110,7 @@ export const createTerminalSlice: StateCreator<
 > = (set, get) => ({
   terminalTabs: {},
   agentBackgroundTasksBySessionId: {},
+  pendingTerminalCommands: [],
   activeTerminalTabId: {},
   terminalPanelVisible: false,
   workspaceTerminalCommands: {},
@@ -211,6 +219,18 @@ export const createTerminalSlice: StateCreator<
       }
       return { workspaceTerminalCommands: nextOuter };
     }),
+  enqueueTerminalCommand: (wsId, command) =>
+    set((s) => ({
+      pendingTerminalCommands: [
+        ...s.pendingTerminalCommands,
+        { id: crypto.randomUUID(), workspaceId: wsId, command },
+      ],
+      terminalPanelVisible: true,
+    })),
+  completeTerminalCommand: (id) =>
+    set((s) => ({
+      pendingTerminalCommands: s.pendingTerminalCommands.filter((cmd) => cmd.id !== id),
+    })),
 
   // Pane-tree slice. State is ephemeral: if the app restarts, every tab
   // comes back as a single-leaf tree. See `terminalPaneTree.ts` for the

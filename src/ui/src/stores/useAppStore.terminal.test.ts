@@ -354,6 +354,10 @@ describe("workspace removal cascades to terminal state", () => {
       workspaceTerminalCommands: {
         [WS_A]: { 1: "cargo test" },
       },
+      pendingTerminalCommands: [
+        { id: "cmd-a", workspaceId: WS_A, command: "cargo test" },
+        { id: "cmd-b", workspaceId: WS_B, command: "git status" },
+      ],
     });
 
     useAppStore.getState().removeWorkspace(WS_A);
@@ -361,6 +365,9 @@ describe("workspace removal cascades to terminal state", () => {
     expect(useAppStore.getState().terminalTabs[WS_A]).toBeUndefined();
     expect(useAppStore.getState().activeTerminalTabId[WS_A]).toBeUndefined();
     expect(useAppStore.getState().workspaceTerminalCommands[WS_A]).toBeUndefined();
+    expect(useAppStore.getState().pendingTerminalCommands).toEqual([
+      { id: "cmd-b", workspaceId: WS_B, command: "git status" },
+    ]);
   });
 
   it("removeRepository cascades through its workspaces' terminal state", () => {
@@ -546,6 +553,39 @@ describe("workspace running-command map", () => {
     expect(useAppStore.getState().workspaceTerminalCommands[WS_A]).toEqual({
       1: "second",
     });
+  });
+});
+
+describe("terminal command queue", () => {
+  beforeEach(() => {
+    useAppStore.setState({
+      pendingTerminalCommands: [],
+      terminalPanelVisible: false,
+    });
+  });
+
+  it("enqueueTerminalCommand opens the panel and queues a command", () => {
+    useAppStore.getState().enqueueTerminalCommand(WS_A, "git status");
+
+    const state = useAppStore.getState();
+    expect(state.terminalPanelVisible).toBe(true);
+    expect(state.pendingTerminalCommands).toHaveLength(1);
+    expect(state.pendingTerminalCommands[0]).toMatchObject({
+      workspaceId: WS_A,
+      command: "git status",
+    });
+  });
+
+  it("completeTerminalCommand removes only the matching command", () => {
+    useAppStore.getState().enqueueTerminalCommand(WS_A, "one");
+    useAppStore.getState().enqueueTerminalCommand(WS_A, "two");
+    const firstId = useAppStore.getState().pendingTerminalCommands[0]?.id;
+
+    expect(firstId).toBeTruthy();
+    useAppStore.getState().completeTerminalCommand(firstId!);
+
+    expect(useAppStore.getState().pendingTerminalCommands).toHaveLength(1);
+    expect(useAppStore.getState().pendingTerminalCommands[0]?.command).toBe("two");
   });
 });
 
