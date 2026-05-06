@@ -145,6 +145,8 @@
   "editor_gutter_base_head_desc": "Show only changes you haven't committed yet. Default.",
   "editor_gutter_base_merge_base": "Workspace branch base",
   "editor_gutter_base_merge_base_desc": "Show every change made on this workspace's branch since it diverged from the repository's base branch. Matches the Changes panel.",
+  "editor_minimap_label": "Show minimap",
+  "editor_minimap_desc": "Display Monaco's scaled-down overview of the file along the right edge of the editor.",
   "git_title": "Git",
   "git_branch_prefix": "Prefixo do nome da branch",
   "git_branch_prefix_desc": "Prefixo para nomes de branch de novos workspaces.",
