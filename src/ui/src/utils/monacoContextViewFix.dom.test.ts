@@ -26,8 +26,25 @@ import {
 // engine doesn't actually compute `style.left = 100px` into a non-zero
 // rect, so we patch `getBoundingClientRect` on the probe element to
 // simulate the chosen engine.
+//
+// Capture the truly-original `getBoundingClientRect` ONCE at module load,
+// and always restore to that. This way:
+//   - A test that throws before calling its `restore()` cannot leak the
+//     prototype patch into the next test (codex flagged this risk).
+//   - Two consecutive `stubProbe()` calls without intervening restore
+//     don't compound the patch — each one re-applies on top of the
+//     original.
+// `afterEach` below also runs an unconditional restore so explicit
+// `restore()` calls become belt-and-suspenders rather than load-bearing.
+const ORIGINAL_GET_BOUNDING_CLIENT_RECT =
+  HTMLElement.prototype.getBoundingClientRect;
+
+function restorePrototype(): void {
+  HTMLElement.prototype.getBoundingClientRect =
+    ORIGINAL_GET_BOUNDING_CLIENT_RECT;
+}
+
 function stubProbe(engine: "webkit" | "chromium", zoom: number): () => void {
-  const original = HTMLElement.prototype.getBoundingClientRect;
   HTMLElement.prototype.getBoundingClientRect = function (
     this: HTMLElement,
   ): DOMRect {
@@ -42,9 +59,7 @@ function stubProbe(engine: "webkit" | "chromium", zoom: number): () => void {
     }
     return new DOMRect(0, 0, 0, 0);
   };
-  return () => {
-    HTMLElement.prototype.getBoundingClientRect = original;
-  };
+  return restorePrototype;
 }
 
 function setRootZoom(z: number | null): void {
@@ -88,6 +103,10 @@ describe("installMonacoContextViewFix — integration", () => {
     setRootZoom(null);
     resetCoordSpaceCache();
     __resetMonacoContextViewFixForTests();
+    // Unconditional prototype restore: even if a test threw before its
+    // own `restore()` call, this guarantees the patched
+    // `getBoundingClientRect` doesn't leak into the next test.
+    restorePrototype();
   });
 
   describe("baseline correction (webkit, zoom != 1)", () => {
