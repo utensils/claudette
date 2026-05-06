@@ -57,6 +57,18 @@ describe("extractRemoteWorkspace", () => {
     expect(extractRemoteWorkspace({ workspace: { name: "x" } })).toBeNull();
   });
 
+  it("returns null when workspace is missing required fields beyond id", () => {
+    // A future-server response containing just `id` (or a malformed
+    // legacy row) would have previously cast through and produced
+    // runtime undefined for downstream code reading repository_id /
+    // branch_name / status / name. The looksLikeWorkspace guard
+    // rejects partial shapes up front.
+    expect(extractRemoteWorkspace({ id: "ws-x" })).toBeNull();
+    expect(
+      extractRemoteWorkspace({ id: "ws-x", repository_id: "r", name: "n" }),
+    ).toBeNull();
+  });
+
   it("returns null for a primitive", () => {
     expect(extractRemoteWorkspace("ws-1")).toBeNull();
     expect(extractRemoteWorkspace(42)).toBeNull();

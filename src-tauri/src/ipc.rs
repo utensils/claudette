@@ -36,7 +36,7 @@ use interprocess::local_socket::{ListenerOptions, Name};
 use rand::RngCore;
 use serde_json::json;
 use tauri::{AppHandle, Manager};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
@@ -227,6 +227,13 @@ async fn run_listener(
     }
 }
 
+/// Per-request line-length ceiling. Even on a 0700/0600 uid-scoped
+/// socket, an unbounded `read_line` lets any same-uid process drive
+/// memory growth by streaming bytes without a `\n`. 1 MiB is well above
+/// any legitimate request shape (largest in flight today is a chat
+/// `content` body, capped well below this client-side).
+const MAX_REQUEST_BYTES: u64 = 1024 * 1024;
+
 async fn handle_connection(
     conn: Stream,
     expected_token: String,
@@ -238,9 +245,23 @@ async fn handle_connection(
 
     loop {
         line.clear();
-        let n = reader.read_line(&mut line).await?;
+        let n = (&mut reader)
+            .take(MAX_REQUEST_BYTES + 1)
+            .read_line(&mut line)
+            .await?;
         if n == 0 {
             return Ok(()); // peer closed
+        }
+        if n as u64 > MAX_REQUEST_BYTES {
+            let resp = RpcResponse::err(
+                serde_json::Value::Null,
+                format!("request exceeds {MAX_REQUEST_BYTES}-byte limit"),
+            );
+            let mut bytes = serde_json::to_vec(&resp).unwrap_or_else(|_| b"{}".to_vec());
+            bytes.push(b'\n');
+            let _ = writer.write_all(&bytes).await;
+            let _ = writer.flush().await;
+            return Ok(());
         }
 
         let response = match serde_json::from_str::<TokenedRequest>(line.trim()) {

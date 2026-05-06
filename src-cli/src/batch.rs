@@ -98,6 +98,13 @@ pub fn validate(manifest: &Manifest, manifest_path: &Path) -> Result<(), Box<dyn
 
     let mut seen = HashSet::new();
     for spec in &manifest.workspaces {
+        if !claudette::workspace_alloc::is_valid_workspace_name(&spec.name) {
+            return Err(format!(
+                "workspace name '{}' is invalid (must be non-empty ASCII alphanumeric + hyphens, with no leading/trailing hyphen)",
+                spec.name
+            )
+            .into());
+        }
         if !seen.insert(spec.name.as_str()) {
             return Err(format!("duplicate workspace name: '{}'", spec.name).into());
         }

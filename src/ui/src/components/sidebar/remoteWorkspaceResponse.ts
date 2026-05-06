@@ -23,16 +23,31 @@ export function extractRemoteWorkspace(
 
   // New shape: { workspace, default_session_id, ... }
   if ("workspace" in obj && obj.workspace && typeof obj.workspace === "object") {
-    const wrapped = obj.workspace as Record<string, unknown>;
-    if ("id" in wrapped) {
-      return wrapped as unknown as Omit<Workspace, "remote_connection_id">;
+    const candidate = obj.workspace as Record<string, unknown>;
+    if (looksLikeWorkspace(candidate)) {
+      return candidate as unknown as Omit<Workspace, "remote_connection_id">;
     }
   }
 
   // Legacy shape: bare Workspace row.
-  if ("id" in obj) {
+  if (looksLikeWorkspace(obj)) {
     return obj as unknown as Omit<Workspace, "remote_connection_id">;
   }
 
   return null;
+}
+
+// Minimum field set the rest of the UI assumes present on a Workspace
+// row. We don't validate the full type — the parser is intentionally
+// tolerant of forward/back compat — but missing any of these would let
+// downstream code dereference `undefined` (e.g. `ws.repository_id` in
+// repo-grouped sidebar lists, `ws.name` in tab labels).
+function looksLikeWorkspace(o: Record<string, unknown>): boolean {
+  return (
+    typeof o.id === "string" &&
+    typeof o.repository_id === "string" &&
+    typeof o.name === "string" &&
+    typeof o.branch_name === "string" &&
+    typeof o.status === "string"
+  );
 }
