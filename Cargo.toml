@@ -1,5 +1,5 @@
 [workspace]
-members = ["src-tauri", "src-server"]
+members = ["src-tauri", "src-server", "src-cli"]
 resolver = "2"
 
 [package]
@@ -51,6 +51,12 @@ interprocess = { version = "2", features = ["tokio"] }
 # PATH updates made after claudette started (winget/installer edits) without
 # forcing the user to log out and back in.
 winreg = "0.55"
+
+[target.'cfg(unix)'.dependencies]
+# Used by `ops::workspace` to SIGKILL the process group of a setup script
+# whose 5-minute deadline elapses, so grandchild processes (`npm install`,
+# build helpers) don't survive the kill of the immediate `sh -c` parent.
+libc = "0.2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

@@ -21,7 +21,42 @@ export const createWorkspacesSlice: StateCreator<
   workspaces: [],
   selectedWorkspaceId: null,
   setWorkspaces: (workspaces) => set({ workspaces }),
-  addWorkspace: (ws) => set((s) => ({ workspaces: [...s.workspaces, ws] })),
+  // Idempotent by id: workspace creates can race between the Tauri
+  // command's response (Sidebar calls `addWorkspace` after the await
+  // resolves) and the `workspaces-changed` event the IPC hook emits.
+  // Whichever fires first wins; the other becomes a merge-update so
+  // the row never doubles in the sidebar.
+  //
+  // The merge preserves the existing `agent_status` ONLY when the
+  // incoming row's lifecycle `status` matches the existing one. That
+  // field isn't a database column — `db::list_workspaces` synthesizes
+  // Idle (or Stopped for archived) on every read. The authoritative
+  // value is normally the one already in the React store, set by
+  // `useAgentStream` / `ChatPanel` from live agent events. Letting an
+  // incoming row's synthetic Idle clobber a live "Running" leaves the
+  // sidebar showing inactive for workspaces with active agents.
+  //
+  // BUT a `status` transition (Active→Archived, Archived→Active) is a
+  // real lifecycle event whose synthetic agent_status IS authoritative —
+  // an archive really does stop the agent (we kill the process inline
+  // in `archive_workspace_inner`), so the incoming Stopped must win or
+  // the sidebar lies about the row still being busy. Same logic in
+  // reverse for restore. `updateWorkspace` remains the explicit-setter
+  // path for callers that want to override agent_status directly.
+  addWorkspace: (ws) =>
+    set((s) => {
+      const idx = s.workspaces.findIndex((w) => w.id === ws.id);
+      if (idx === -1) {
+        return { workspaces: [...s.workspaces, ws] };
+      }
+      const merged = [...s.workspaces];
+      const existing = merged[idx];
+      const statusChanged = existing.status !== ws.status;
+      merged[idx] = statusChanged
+        ? { ...existing, ...ws }
+        : { ...existing, ...ws, agent_status: existing.agent_status };
+      return { workspaces: merged };
+    }),
   updateWorkspace: (id, updates) =>
     set((s) => ({
       workspaces: s.workspaces.map((w) =>

@@ -38,10 +38,10 @@ pub(crate) async fn try_auto_rename(
             Ok(db) => db,
             Err(_) => return,
         };
-        let (mode, custom) = crate::commands::workspace::read_branch_prefix_settings(&db);
+        let (mode, custom) = claudette::ops::workspace::read_branch_prefix_settings(&db);
         // Drop db before the async call (Database is not Sync).
         drop(db);
-        crate::commands::workspace::resolve_branch_prefix(&mode, &custom).await
+        claudette::ops::workspace::resolve_branch_prefix(&mode, &custom).await
     };
 
     // Try the slug, then slug-2, slug-3 on name collision.

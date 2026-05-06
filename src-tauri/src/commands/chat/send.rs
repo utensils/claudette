@@ -632,6 +632,27 @@ fn tool_result_content_text(content: &serde_json::Value) -> String {
     content.to_string()
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatTurnSettingsPayload<'a> {
+    workspace_id: &'a str,
+    chat_session_id: &'a str,
+    model: Option<&'a str>,
+    fast_mode: bool,
+    thinking_enabled: bool,
+    plan_mode: bool,
+    effort: Option<&'a str>,
+    chrome_enabled: bool,
+    disable_1m_context: bool,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatTurnStartedPayload<'a> {
+    workspace_id: &'a str,
+    chat_session_id: &'a str,
+}
+
 #[tauri::command]
 pub async fn load_chat_history(
     session_id: String,
@@ -1284,6 +1305,24 @@ pub async fn send_chat_message(
         hook_bridge: None,
     };
 
+    // Tell the frontend toolbar what this turn is actually using so the input
+    // bar reflects reality — matters when a turn arrives from a non-GUI surface
+    // (CLI, IPC) whose flags don't pass through the toolbar slice setters.
+    let _ = app.emit(
+        "chat-turn-settings",
+        &ChatTurnSettingsPayload {
+            workspace_id: &workspace_id,
+            chat_session_id: &chat_session_id,
+            model: agent_settings.model.as_deref(),
+            fast_mode: agent_settings.fast_mode,
+            thinking_enabled: agent_settings.thinking_enabled,
+            plan_mode: agent_settings.plan_mode,
+            effort: agent_settings.effort.as_deref(),
+            chrome_enabled: agent_settings.chrome_enabled,
+            disable_1m_context: agent_settings.disable_1m_context,
+        },
+    );
+
     // `--permission-mode` and `--allowedTools` are baked into the persistent
     // `claude` process at spawn — subsequent stdin turns cannot change them.
     // If the caller's requested values no longer match what the current
@@ -1723,6 +1762,20 @@ pub async fn send_chat_message(
         let _ = db.insert_agent_session(&session.session_id, &workspace_id, &ws.repository_id);
         let _ = db.reopen_agent_session(&session.session_id);
         let _ = db.update_agent_session_turn(&session.session_id, session.turn_count);
+        // The canonical "turn is now running" moment — every dispatch path
+        // (fresh spawn, persistent reuse, drift-respawn) converges here.
+        // Tell the frontend so the sidebar status icon flips to the running
+        // spinner immediately, even for CLI- and IPC-dispatched turns that
+        // bypass ChatPanel's optimistic Running setter. The matching Idle/
+        // Stopped transition is already handled by useAgentStream's
+        // ProcessExited path on the frontend.
+        let _ = app.emit(
+            "chat-turn-started",
+            &ChatTurnStartedPayload {
+                workspace_id: &workspace_id,
+                chat_session_id: &chat_session_id,
+            },
+        );
         if db
             .get_app_setting("first_session_at")
             .ok()

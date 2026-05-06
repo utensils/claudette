@@ -145,6 +145,16 @@ jobs:
         shell: bash
         run: npx @tauri-apps/cli icon assets/logo.png
 
+      # Build the `claudette` CLI for the current matrix target and stage
+      # it where `bundle.externalBin` expects (`src-tauri/binaries/
+      # claudette-<TARGET_TRIPLE>`). Tauri's bundler copies it next to
+      # the GUI binary in every artifact (.app, .deb, AppImage, Windows
+      # zip), so the GUI's "Install on PATH" action can symlink to a
+      # known on-disk location without downloading anything.
+      - name: Build and stage CLI sidecar
+        shell: bash
+        run: scripts/stage-cli-sidecar.sh ${{ matrix.rust-target }}
+
       # ---- macOS + Linux: tauri-action drives the bundled build ------------
       - name: Build and upload desktop app (non-Windows)
         if: ${{ !startsWith(matrix.platform, 'windows') }}
@@ -194,10 +204,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          BIN="target/${{ matrix.rust-target }}/release/claudette.exe"
+          BIN="target/${{ matrix.rust-target }}/release/claudette-app.exe"
+          # Bundle the CLI sidecar alongside the GUI exe so the
+          # Settings → CLI "Install on PATH" action can find it via
+          # `current_exe().parent()/"claudette.exe"`. The Windows path
+          # skips tauri-action so externalBin doesn't auto-stage here.
+          CLI="src-tauri/binaries/claudette-${{ matrix.rust-target }}.exe"
           ASSET="claudette-${{ matrix.label }}.zip"
-          cp "$BIN" claudette.exe
-          powershell -NoProfile -Command "Compress-Archive -Path 'claudette.exe' -DestinationPath '$ASSET' -Force"
+          cp "$BIN" claudette-app.exe
+          cp "$CLI" claudette.exe
+          powershell -NoProfile -Command "Compress-Archive -Path 'claudette-app.exe','claudette.exe' -DestinationPath '$ASSET' -Force"
           gh release upload "${{ needs.resolve-tag.outputs.tag }}" "$ASSET" --clobber
 
       - name: Build headless server
@@ -224,6 +240,31 @@ jobs:
           ASSET="claudette-server-${{ matrix.label }}.zip"
           cp "$BIN" claudette-server.exe
           powershell -NoProfile -Command "Compress-Archive -Path 'claudette-server.exe' -DestinationPath '$ASSET' -Force"
+          gh release upload "${{ needs.resolve-tag.outputs.tag }}" "$ASSET" --clobber
+
+      # Standalone CLI asset for users who only want the CLI (CI bots,
+      # headless servers). The same binary already ships inside the app
+      # artifacts above; this is just an extra distribution channel.
+      - name: Upload standalone CLI (non-Windows)
+        if: ${{ !startsWith(matrix.platform, 'windows') }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BIN="target/${{ matrix.rust-target }}/release/claudette"
+          ASSET="claudette-cli-${{ matrix.label }}"
+          cp "$BIN" "$ASSET"
+          gh release upload "${{ needs.resolve-tag.outputs.tag }}" "$ASSET" --clobber
+
+      - name: Upload standalone CLI (Windows)
+        if: startsWith(matrix.platform, 'windows')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BIN="target/${{ matrix.rust-target }}/release/claudette.exe"
+          ASSET="claudette-cli-${{ matrix.label }}.zip"
+          cp "$BIN" claudette.exe
+          powershell -NoProfile -Command "Compress-Archive -Path 'claudette.exe' -DestinationPath '$ASSET' -Force"
           gh release upload "${{ needs.resolve-tag.outputs.tag }}" "$ASSET" --clobber
 
   publish:

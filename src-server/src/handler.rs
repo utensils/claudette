@@ -6,15 +6,13 @@ use claudette::chat::{
     extract_assistant_text, extract_event_thinking,
 };
 use claudette::db::Database;
-use claudette::model::{ChatMessage, ChatRole, Workspace, WorkspaceStatus};
+use claudette::model::{ChatMessage, ChatRole};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde_json::json;
 
 use crate::ws::{AgentSessionState, PtyHandle, ServerState, Writer, send_message};
 
 use claudette::permissions::tools_for_level;
-
-const CREATE_WORKTREE_ALLOCATION_ATTEMPTS: usize = 5;
 
 /// Dispatch a JSON-RPC request and return a JSON-RPC response.
 pub async fn handle_request(
@@ -794,95 +792,64 @@ async fn handle_create_workspace(
     repository_id: &str,
     name: &str,
 ) -> Result<serde_json::Value, String> {
-    if !claudette::workspace_alloc::is_valid_workspace_name(name) {
-        return Err(format!("Invalid workspace name: '{name}'"));
-    }
+    use claudette::ops::{NoopHooks, workspace as ops_workspace};
 
-    let db = open_db(state)?;
+    let mut db = open_db(state)?;
     let repo = db
         .get_repository(repository_id)
         .map_err(|e| e.to_string())?
         .ok_or("Repository not found")?;
 
     let worktree_base_dir = state.worktree_base_dir.read().await.clone();
+    // Server uses the repo's path_slug as the prefix — historical behavior
+    // that survives the refactor unchanged. The GUI resolves a per-user
+    // prefix from app settings; harmonizing the two is a follow-up.
     let branch_prefix = format!("{}/", repo.path_slug);
-    let (allocation, actual_path) = {
-        let mut last_collision: Option<claudette::git::GitError> = None;
-        let mut created = None;
 
-        for _ in 0..CREATE_WORKTREE_ALLOCATION_ATTEMPTS {
-            let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
-            let allocation = claudette::workspace_alloc::allocate_workspace_name(
-                &repo,
-                &workspaces,
-                name,
-                &branch_prefix,
-                worktree_base_dir.as_path(),
-            )
-            .await
-            .map_err(|e| e.to_string())?;
-            let worktree_path_str = allocation.worktree_path.to_string_lossy().to_string();
+    let out = ops_workspace::create(
+        &mut db,
+        &NoopHooks,
+        worktree_base_dir.as_path(),
+        ops_workspace::CreateParams {
+            repo_id: repository_id,
+            name,
+            branch_prefix: &branch_prefix,
+        },
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
-            match claudette::git::create_worktree(
-                &repo.path,
-                &allocation.branch_name,
-                &worktree_path_str,
-                repo.base_branch.as_deref(),
-                repo.default_remote.as_deref(),
-            )
-            .await
-            {
-                Ok(actual_path) => {
-                    created = Some((allocation, actual_path));
-                    break;
-                }
-                Err(err) if claudette::git::is_worktree_create_collision_error(&err) => {
-                    last_collision = Some(err);
-                }
-                Err(err) => return Err(err.to_string()),
-            }
-        }
+    // Run the setup script (if configured) for parity with the GUI path.
+    // The server has no plugin registry, so env-provider stack is not
+    // applied — adding that requires loading plugins server-side.
+    let setup_result = ops_workspace::resolve_and_run_setup(
+        &out.workspace,
+        std::path::Path::new(&repo.path),
+        std::path::Path::new(&out.worktree_path),
+        repo.setup_script.as_deref(),
+        repo.base_branch.as_deref(),
+        repo.default_remote.as_deref(),
+        None,
+    )
+    .await;
 
-        created.ok_or_else(|| {
-            last_collision
-                .map(|err| err.to_string())
-                .unwrap_or_else(|| "Could not allocate a unique workspace name".to_string())
-        })?
-    };
-
-    let mut workspace = Workspace {
-        id: uuid::Uuid::new_v4().to_string(),
-        repository_id: repository_id.to_string(),
-        name: allocation.name,
-        branch_name: allocation.branch_name,
-        worktree_path: Some(actual_path.clone()),
-        status: WorkspaceStatus::Active,
-        agent_status: claudette::model::AgentStatus::Idle,
-        status_line: String::new(),
-        created_at: now_iso(),
-        sort_order: 0,
-    };
-    if let Err(e) = db.insert_workspace(&workspace) {
-        let _ = claudette::git::remove_worktree(&repo.path, &actual_path, true).await;
-        let _ = claudette::git::branch_delete(&repo.path, &workspace.branch_name).await;
-        return Err(e.to_string());
-    }
-    // Patch sort_order to the value the DB assigned so the remote client
-    // sees the new workspace at the right position in the sidebar (Codex P2).
-    if let Ok(Some(o)) = db.lookup_workspace_sort_order(&workspace.id) {
-        workspace.sort_order = o;
-    }
-
-    Ok(serde_json::to_value(&workspace).unwrap_or_default())
+    Ok(json!({
+        "workspace": out.workspace,
+        "default_session_id": out.default_session_id,
+        "setup_result": setup_result,
+    }))
 }
 
 async fn handle_archive_workspace(
     state: &ServerState,
     workspace_id: &str,
 ) -> Result<serde_json::Value, String> {
+    use claudette::ops::{NoopHooks, workspace as ops_workspace};
+
     // Stop any running agents for sessions in this workspace. Collect the
     // PIDs to stop under the lock, then drop the lock before awaiting any
-    // process teardowns to avoid blocking unrelated requests.
+    // process teardowns to avoid blocking unrelated requests. Agent state
+    // is per-process; this part can't move into the shared op.
     let pids_to_stop: Vec<u32> = {
         let mut agents = state.agents.write().await;
         let to_remove: Vec<String> = agents
@@ -899,22 +866,20 @@ async fn handle_archive_workspace(
         let _ = agent::stop_agent(pid).await;
     }
 
-    let db = open_db(state)?;
-    db.update_workspace_status(workspace_id, &WorkspaceStatus::Archived, None)
-        .map_err(|e| e.to_string())?;
-
-    // Remove worktree.
-    let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
-    if let Some(ws) = workspaces.iter().find(|w| w.id == workspace_id)
-        && let Some(ref path) = ws.worktree_path
-    {
-        let repo = db
-            .get_repository(&ws.repository_id)
-            .map_err(|e| e.to_string())?;
-        if let Some(repo) = repo {
-            let _ = claudette::git::remove_worktree(&repo.path, path, false).await;
-        }
-    }
+    let mut db = open_db(state)?;
+    let _ = ops_workspace::archive(
+        &mut db,
+        &NoopHooks,
+        ops_workspace::ArchiveParams {
+            workspace_id,
+            // The server doesn't surface a delete-branch toggle today;
+            // archive without branch deletion mirrors prior behavior so
+            // remote clients can still restore archived workspaces.
+            delete_branch: false,
+        },
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
     Ok(json!(null))
 }

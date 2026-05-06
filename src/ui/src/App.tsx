@@ -425,6 +425,133 @@ function App() {
 
     // Listen for workspace auto-archived events (e.g. PR merged with archive_on_merge).
     // When `deleted` is true the workspace record was fully removed; otherwise it moved to Archived.
+    // CLI- and remote-driven workspace mutations emit this event so the
+    // store stays in sync without a manual reload. The full workspace
+    // row rides on the payload so we can `addWorkspace` / `updateWorkspace`
+    // in one shot — see `src-tauri/src/ops_hooks.rs`.
+    const unlistenWorkspacesChanged = listen<{
+      kind: "created" | "archived" | "restored" | "deleted" | "renamed";
+      workspace_id: string;
+      workspace: import("./types/workspace").Workspace | null;
+    }>("workspaces-changed", (event) => {
+      const { kind, workspace_id, workspace } = event.payload;
+      const store = useAppStore.getState();
+      if (kind === "deleted") {
+        store.removeWorkspace(workspace_id);
+        if (store.selectedWorkspaceId === workspace_id) store.selectWorkspace(null);
+        return;
+      }
+      if (workspace === null) {
+        // Backend couldn't fetch the fresh row (rare — DB read race or
+        // workspace removed between event and read). For "archived" we
+        // know enough to apply a partial update and stay live; for
+        // every other lifecycle kind a targeted refresh of the workspace
+        // list keeps the sidebar consistent without losing per-workspace
+        // runtime state (chat sessions, terminals, etc.) the way a full
+        // page reload would.
+        if (kind === "archived") {
+          // Archiving stops the agent process backend-side; mirror that
+          // here so a previously-running workspace doesn't keep showing
+          // a Running spinner after the row vanishes.
+          store.updateWorkspace(workspace_id, {
+            status: "Archived",
+            agent_status: "Stopped",
+          });
+        } else {
+          loadInitialData()
+            .then((data) => {
+              // Merge each refreshed row through `addWorkspace` rather
+              // than `setWorkspaces` so the slice's status-aware merge
+              // preserves live runtime fields (notably `agent_status`,
+              // which `db.list_workspaces` synthesizes as Idle on every
+              // read). Wholesale-replacing would reintroduce the
+              // Running→Idle sidebar regression addWorkspace guards
+              // against.
+              const s = useAppStore.getState();
+              const fresh = s.workspaces;
+              const incomingIds = new Set(data.workspaces.map((w) => w.id));
+              for (const ws of data.workspaces) {
+                s.addWorkspace({ ...ws, remote_connection_id: null });
+              }
+              // Drop any local rows the DB no longer knows about (e.g.
+              // a hard delete that raced with this refresh). Skip
+              // remote workspaces — `loadInitialData` only returns
+              // local rows, so a naive removal would evict every
+              // remote-connection workspace.
+              for (const local of fresh) {
+                if (
+                  local.remote_connection_id === null &&
+                  !incomingIds.has(local.id)
+                ) {
+                  s.removeWorkspace(local.id);
+                }
+              }
+            })
+            .catch((err) =>
+              console.warn(
+                `workspaces-changed (kind=${kind}) for ${workspace_id} arrived with workspace=null and refresh failed:`,
+                err,
+              ),
+            );
+        }
+        return;
+      }
+      // The Rust `claudette::model::Workspace` doesn't include the
+      // UI-only `remote_connection_id` field. Stamp it as `null` here so
+      // downstream code that strict-checks `=== null` (rather than
+      // `!= null` or truthy) doesn't trip on `undefined`. All
+      // `workspaces-changed` events come from local ops by definition
+      // (the WS server doesn't emit them), so null is correct.
+      // `addWorkspace` is idempotent by id, so this safely handles both
+      // new workspaces and re-emitted updates without duplicating.
+      store.addWorkspace({ ...workspace, remote_connection_id: null });
+    });
+
+    // Reflect what the agent actually used into the input bar after every
+    // turn. Without this, a turn dispatched from the CLI / IPC (or a remote
+    // surface that bypasses the toolbar slice) leaves the toolbar showing
+    // stale defaults — misleading because the *next* manual send would then
+    // diverge from the displayed flags.
+    const unlistenChatTurnSettings = listen<{
+      workspaceId: string;
+      chatSessionId: string;
+      model: string | null;
+      fastMode: boolean;
+      thinkingEnabled: boolean;
+      planMode: boolean;
+      effort: string | null;
+      chromeEnabled: boolean;
+      disable1mContext: boolean;
+    }>("chat-turn-settings", (event) => {
+      useAppStore.getState().applyChatTurnSettings({
+        chatSessionId: event.payload.chatSessionId,
+        model: event.payload.model,
+        fastMode: event.payload.fastMode,
+        thinkingEnabled: event.payload.thinkingEnabled,
+        planMode: event.payload.planMode,
+        effort: event.payload.effort,
+        chromeEnabled: event.payload.chromeEnabled,
+      });
+    });
+
+    // Flip per-session AND per-workspace `agent_status` to `Running` the
+    // moment the backend has actually spawned (or fed) an agent process.
+    // For GUI manual sends, ChatPanel sets this optimistically before
+    // dispatch — but CLI- and IPC-dispatched turns bypass ChatPanel
+    // entirely, leaving the sidebar status icon stuck on Idle until the
+    // agent finishes. The matching Idle/Stopped transition is handled by
+    // useAgentStream's ProcessExited / result handlers, which already
+    // work correctly.
+    const unlistenChatTurnStarted = listen<{
+      workspaceId: string;
+      chatSessionId: string;
+    }>("chat-turn-started", (event) => {
+      const { workspaceId, chatSessionId } = event.payload;
+      const store = useAppStore.getState();
+      store.updateChatSession(chatSessionId, { agent_status: "Running" });
+      store.updateWorkspace(workspaceId, { agent_status: "Running" });
+    });
+
     const unlistenAutoArchived = listen<{ workspace_id: string; workspace_name: string; pr_number?: number; deleted?: boolean }>("workspace-auto-archived", (event) => {
       const { workspace_id, workspace_name, pr_number, deleted } = event.payload;
       const store = useAppStore.getState();
@@ -460,6 +587,9 @@ function App() {
       unlistenResetZoom.then((fn) => fn());
       unlistenScmUpdate.then((fn) => fn());
       unlistenAutoArchived.then((fn) => fn());
+      unlistenWorkspacesChanged.then((fn) => fn());
+      unlistenChatTurnSettings.then((fn) => fn());
+      unlistenChatTurnStarted.then((fn) => fn());
       unlistenMissingCli.then((fn) => fn());
     };
   }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setPluginManagementEnabled, setCommunityRegistryEnabled, setEditorGitGutterBase, setEditorMinimapEnabled, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings]);

@@ -70,3 +70,8 @@ tags
 
 # Claudette devshell runtime state (aws-win-* sidecars, etc.)
 /.claudette/
+
+# CLI sidecars staged for `tauri build`'s `bundle.externalBin` to
+# consume. Built per-target by CI (and by scripts/stage-cli-sidecar.sh
+# locally) before each bundle; never checked in.
+/src-tauri/binaries/

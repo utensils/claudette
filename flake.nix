@@ -560,7 +560,7 @@
               {
                 name = "dev";
                 command = "exec ./scripts/dev.sh";
-                help = "Start Tauri dev mode with hot-reload (auto-selects free Vite + debug ports)";
+                help = "Start Tauri dev mode with hot-reload, voice, and auto-selected Vite/debug ports";
                 category = "development";
               }
               {
@@ -577,6 +577,12 @@
                 name = "build-app";
                 command = "cargo tauri icon assets/logo.png && cargo tauri build --features server";
                 help = "Build release app bundle (.app / .deb) with embedded server";
+                category = "development";
+              }
+              {
+                name = "claudette";
+                command = ''exec cargo run --quiet -p claudette-cli --bin claudette -- "$@"'';
+                help = "Run the claudette CLI against the running GUI (e.g. `claudette ws list`, `claudette pr list`)";
                 category = "development";
               }
               {

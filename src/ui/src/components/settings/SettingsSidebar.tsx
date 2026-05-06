@@ -11,6 +11,7 @@ import {
   Bookmark,
   Globe,
   Keyboard,
+  Terminal,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
@@ -29,6 +30,7 @@ export function getAppSections(
     { id: "editor", icon: FileCode },
     { id: "git", icon: GitBranch },
     { id: "keyboard", icon: Keyboard },
+    { id: "cli", icon: Terminal },
     { id: "pinned-prompts", icon: Bookmark },
     { id: "plugins", icon: Puzzle },
     ...(communityRegistryEnabled
@@ -60,6 +62,7 @@ export function SettingsSidebar() {
     if (id === "editor") return t("settings:nav_editor");
     if (id === "git") return t("settings:nav_git");
     if (id === "keyboard") return t("settings:nav_keyboard");
+    if (id === "cli") return t("settings:nav_cli");
     if (id === "plugins") return t("settings:nav_plugins");
     if (id === "claude-code-plugins") return t("settings:nav_claude_code_plugins");
     if (id === "community") return t("settings:nav_community");

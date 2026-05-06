@@ -22,6 +22,14 @@ local function join(dir, name)
     return dir .. "/" .. name
 end
 
+-- The env-provider dispatcher historically injects `args.worktree`
+-- into every call. Other callers (e.g. `claudette plugin invoke`)
+-- don't, so prefer the always-populated `host.workspace()` and only
+-- fall back to `args.worktree` for backwards compat.
+local function worktree_of(args)
+    return (args and args.worktree) or host.workspace().worktree_path
+end
+
 local function trim(s)
     return (s:gsub("^%s+", ""):gsub("%s+$", ""))
 end
@@ -58,11 +66,11 @@ function M._parse(text)
 end
 
 function M.detect(args)
-    return host.file_exists(join(args.worktree, ".env"))
+    return host.file_exists(join(worktree_of(args), ".env"))
 end
 
 function M.export(args)
-    local path = join(args.worktree, ".env")
+    local path = join(worktree_of(args), ".env")
     local contents = host.read_file(path)
     return {
         env = M._parse(contents),

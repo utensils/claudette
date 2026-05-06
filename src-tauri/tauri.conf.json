@@ -1,5 +1,6 @@
 {
   "productName": "Claudette",
+  "mainBinaryName": "claudette-app",
   "identifier": "com.claudette.app",
   "build": {
     "beforeDevCommand": { "script": "bun install && bun run dev", "cwd": "../src/ui" },
@@ -45,6 +46,7 @@
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
+    "externalBin": ["binaries/claudette"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

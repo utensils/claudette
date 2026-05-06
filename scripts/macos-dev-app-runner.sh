@@ -85,9 +85,9 @@ else
   fi
 
   if [ -n "$target_triple" ]; then
-    binary="$target_dir/$target_triple/$profile/claudette"
+    binary="$target_dir/$target_triple/$profile/claudette-app"
   else
-    binary="$target_dir/$profile/claudette"
+    binary="$target_dir/$profile/claudette-app"
   fi
 fi
 
@@ -101,7 +101,7 @@ bundle_dir="${CLAUDETTE_DEV_APP_BUNDLE:-$binary_dir/Claudette Dev.app}"
 contents_dir="$bundle_dir/Contents"
 macos_dir="$contents_dir/MacOS"
 resources_dir="$contents_dir/Resources"
-bundle_executable="$macos_dir/claudette"
+bundle_executable="$macos_dir/claudette-app"
 
 mkdir -p "$macos_dir" "$resources_dir"
 rm -f "$bundle_executable"
@@ -116,7 +116,7 @@ cat >"$contents_dir/Info.plist" <<'PLIST'
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleExecutable</key>
-  <string>claudette</string>
+  <string>claudette-app</string>
   <key>CFBundleIdentifier</key>
   <string>com.claudette.app.dev</string>
   <key>CFBundleInfoDictionaryVersion</key>
@@ -186,11 +186,24 @@ echo "▸ Launching $bundle_dir via Launch Services"
 # Services may otherwise activate an already-running Claudette Dev instance
 # and return immediately. That makes cargo-tauri tear down Vite, which Bun
 # reports as exit 143.
-open -n -W -a "$bundle_dir" \
-  --stdout "$stdout_fifo" \
-  --stderr "$stderr_fifo" \
-  "${env_args[@]}" \
-  --args "${app_args[@]}" &
+#
+# Build the open(1) argv incrementally rather than relying on
+# `${arr[@]+"${arr[@]}"}` parameter-substitution tricks. Two reasons:
+# (1) `set -u` makes naked `"${empty[@]}"` an "unbound variable" error
+#     on bash 3 (still the default /bin/bash on macOS without nix/brew),
+#     so we can't just leave the arrays inline.
+# (2) Building the array explicitly is unambiguous to the next reader —
+#     each element is properly quoted, no mental model of expansion
+#     required, and adding a future flag is just an `+=` append.
+open_argv=(open -n -W -a "$bundle_dir" --stdout "$stdout_fifo" --stderr "$stderr_fifo")
+if [ "${#env_args[@]}" -gt 0 ]; then
+  open_argv+=("${env_args[@]}")
+fi
+open_argv+=(--args)
+if [ "${#app_args[@]}" -gt 0 ]; then
+  open_argv+=("${app_args[@]}")
+fi
+"${open_argv[@]}" &
 open_pid=$!
 
 wait "$open_pid"

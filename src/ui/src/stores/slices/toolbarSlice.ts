@@ -1,6 +1,20 @@
 import type { StateCreator } from "zustand";
 import type { AppState } from "../useAppStore";
 
+export interface ChatTurnSettings {
+  // Keyed by chat session id, matching every existing consumer
+  // (ChatToolbar, ComposerToolbar, ChatPanel, ChatInputArea). The slice's
+  // record name says "workspace" historically but the real key is the
+  // session — toolbar state is per-conversation, not per-worktree.
+  chatSessionId: string;
+  model: string | null;
+  fastMode: boolean;
+  thinkingEnabled: boolean;
+  planMode: boolean;
+  effort: string | null;
+  chromeEnabled: boolean;
+}
+
 export interface ToolbarSlice {
   selectedModel: Record<string, string>;
   fastMode: Record<string, boolean>;
@@ -16,6 +30,7 @@ export interface ToolbarSlice {
   setEffortLevel: (wsId: string, level: string) => void;
   setChromeEnabled: (wsId: string, enabled: boolean) => void;
   setModelSelectorOpen: (open: boolean) => void;
+  applyChatTurnSettings: (settings: ChatTurnSettings) => void;
 }
 
 export const createToolbarSlice: StateCreator<
@@ -56,4 +71,34 @@ export const createToolbarSlice: StateCreator<
       chromeEnabled: { ...s.chromeEnabled, [wsId]: enabled },
     })),
   setModelSelectorOpen: (open) => set({ modelSelectorOpen: open }),
+  // Apply settings reported by the backend after a turn lands. Booleans are
+  // always part of the resolved AgentSettings (false ≠ "unset"), so they
+  // always overwrite. `model` and `effort` are optional overrides — if null,
+  // the agent fell back to a workspace/global default we don't know here, so
+  // we leave the existing toolbar selection alone rather than pretending the
+  // user picked the default.
+  applyChatTurnSettings: ({
+    chatSessionId,
+    model,
+    fastMode,
+    thinkingEnabled,
+    planMode,
+    effort,
+    chromeEnabled,
+  }) =>
+    set((s) => {
+      const next: Partial<ToolbarSlice> = {
+        fastMode: { ...s.fastMode, [chatSessionId]: fastMode },
+        thinkingEnabled: { ...s.thinkingEnabled, [chatSessionId]: thinkingEnabled },
+        planMode: { ...s.planMode, [chatSessionId]: planMode },
+        chromeEnabled: { ...s.chromeEnabled, [chatSessionId]: chromeEnabled },
+      };
+      if (model !== null) {
+        next.selectedModel = { ...s.selectedModel, [chatSessionId]: model };
+      }
+      if (effort !== null) {
+        next.effortLevel = { ...s.effortLevel, [chatSessionId]: effort };
+      }
+      return next;
+    }),
 });

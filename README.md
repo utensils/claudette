@@ -207,6 +207,44 @@ end
 
 After adding the snippet, restart your terminal or run `source ~/.zshrc` (or `~/.bashrc`/`~/.config/fish/config.fish`). Commands will now appear in the sidebar.
 
+## Command-line client
+
+The `claudette` CLI drives the running desktop app over a local IPC socket. Use it to script workspace creation, send prompts to chat sessions, or fan out a phase-of-work plan across many workspaces at once.
+
+```bash
+# Discover what's available
+claudette capabilities
+
+# List repos and workspaces
+claudette repo list
+claudette workspace list
+
+# Create a workspace and dispatch a prompt
+claudette workspace create <repo-id> my-task
+claudette chat send <session-id> @./prompts/task.md
+
+# Fan out N workspaces from a YAML manifest
+claudette batch validate plan.yaml
+claudette batch run plan.yaml
+```
+
+A batch manifest declares one repository, optional defaults, and a list of workspaces with prompts:
+
+```yaml
+repository: my-repo
+defaults:
+  model: sonnet
+workspaces:
+  - name: builtins-tsx
+    prompt_file: ./prompts/43-builtins.md
+  - name: shell-rs
+    prompt: |
+      Implement issue #42 ...
+    model: opus
+```
+
+The CLI requires the desktop app to be running — every operation flows through the GUI's own command core, so tray icons, notifications, and the workspace list update live as the CLI works. Run `claudette --help` for the full subcommand list, or `claudette completion zsh > ~/.zsh/completions/_claudette` to install shell tab completion.
+
 ## Remote access
 
 Claudette can connect to workspaces on another machine over an encrypted WebSocket connection. The local app discovers or connects to a remote server and displays remote repos, agents, and terminals alongside local ones.

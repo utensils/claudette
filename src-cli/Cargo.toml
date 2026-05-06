@@ -1,0 +1,28 @@
+[package]
+name = "claudette-cli"
+version = "0.23.0"
+edition = "2024"
+license = "MIT"
+description = "Command-line client for the Claudette desktop app"
+
+[[bin]]
+# `cargo build` produces `target/release/claudette` — the user-facing
+# binary name. The Tauri GUI's main binary was renamed to
+# `claudette-app` in the same change to clear the way.
+name = "claudette"
+path = "src/main.rs"
+
+[dependencies]
+claudette = { path = ".." }
+clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4"
+dirs = "6"
+interprocess = { version = "2", features = ["tokio"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net"] }
+
+[target.'cfg(unix)'.dependencies]
+# `kill(pid, 0)` to detect stale discovery files.
+libc = "0.2"

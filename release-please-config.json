@@ -12,7 +12,8 @@
     ".": {
       "include-component-in-tag": false,
       "extra-files": [
-        "src-tauri/Cargo.toml"
+        "src-tauri/Cargo.toml",
+        "src-cli/Cargo.toml"
       ]
     }
   }

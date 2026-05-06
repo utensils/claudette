@@ -5,7 +5,11 @@ edition = "2024"
 license = "MIT"
 
 [[bin]]
-name = "claudette"
+# Renamed from "claudette" to "claudette-app" so the new `claudette-cli`
+# crate can claim the user-facing `claudette` binary name. The .app
+# bundle is still called Claudette.app via tauri.conf.json's
+# productName + mainBinaryName.
+name = "claudette-app"
 path = "src/main.rs"
 
 [dependencies]
@@ -16,6 +20,11 @@ tauri-plugin-dialog = "2"
 base64 = "0.22"
 
 tauri-plugin-clipboard-manager = "2"
+# Local IPC server for the `claudette` CLI — same crate the lib uses for
+# the `agent_mcp` bridge, so we reuse the established socket/pipe pattern.
+interprocess = { version = "2", features = ["tokio"] }
+# Token generation for IPC client auth.
+rand = "0.8"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-notification = "2"
