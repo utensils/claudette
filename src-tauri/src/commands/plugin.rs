@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use claudette::db::Database;
 use claudette::plugin::{
@@ -12,31 +12,48 @@ use serde_json::Value;
 
 use crate::state::AppState;
 
+/// Translate a `claudette::plugin::*` error into a user-facing string,
+/// emitting the missing-dependency event when the underlying cause is a
+/// missing CLI (issue #641). Mirrors the pattern in `repository.rs` /
+/// `scm.rs`.
+fn map_plugin_err(app: &AppHandle, err: String) -> String {
+    crate::missing_cli::handle_err(app, &err).unwrap_or(err)
+}
+
 #[tauri::command]
 pub async fn list_plugins(
     repo_id: Option<String>,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Vec<InstalledPlugin>, String> {
     let repo_path = resolve_optional_repo_path(&state, repo_id.as_deref())?;
-    plugin::list_installed_plugins(repo_path.as_deref()).await
+    plugin::list_installed_plugins(repo_path.as_deref())
+        .await
+        .map_err(|e| map_plugin_err(&app, e))
 }
 
 #[tauri::command]
 pub async fn list_plugin_catalog(
     repo_id: Option<String>,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<PluginCatalog, String> {
     let repo_path = resolve_optional_repo_path(&state, repo_id.as_deref())?;
-    plugin::list_plugin_catalog(repo_path.as_deref()).await
+    plugin::list_plugin_catalog(repo_path.as_deref())
+        .await
+        .map_err(|e| map_plugin_err(&app, e))
 }
 
 #[tauri::command]
 pub async fn list_plugin_marketplaces(
     repo_id: Option<String>,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Vec<PluginMarketplace>, String> {
     let repo_path = resolve_optional_repo_path(&state, repo_id.as_deref())?;
-    plugin::list_marketplaces(repo_path.as_deref()).await
+    plugin::list_marketplaces(repo_path.as_deref())
+        .await
+        .map_err(|e| map_plugin_err(&app, e))
 }
 
 #[tauri::command]
@@ -44,6 +61,7 @@ pub async fn install_plugin(
     target: String,
     scope: PluginScope,
     repo_id: Option<String>,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     require_non_managed_scope(scope)?;
@@ -52,7 +70,8 @@ pub async fn install_plugin(
         repo_path.as_deref(),
         &build_install_args(&target, scope),
     )
-    .await?;
+    .await
+    .map_err(|e| map_plugin_err(&app, e))?;
     mark_plugin_sessions_dirty(&state, repo_id.as_deref(), scope).await?;
     Ok(output)
 }
@@ -63,6 +82,7 @@ pub async fn uninstall_plugin(
     scope: PluginScope,
     keep_data: Option<bool>,
     repo_id: Option<String>,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     require_non_managed_scope(scope)?;
@@ -71,7 +91,8 @@ pub async fn uninstall_plugin(
         repo_path.as_deref(),
         &build_uninstall_args(&plugin_id, scope, keep_data.unwrap_or(false)),
     )
-    .await?;
+    .await
+    .map_err(|e| map_plugin_err(&app, e))?;
     plugin::cleanup_plugin_configuration_if_not_installed(&plugin_id)?;
     mark_plugin_sessions_dirty(&state, repo_id.as_deref(), scope).await?;
     Ok(output)
@@ -82,6 +103,7 @@ pub async fn enable_plugin(
     plugin_id: String,
     scope: PluginScope,
     repo_id: Option<String>,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     require_non_managed_scope(scope)?;
@@ -90,7 +112,8 @@ pub async fn enable_plugin(
         repo_path.as_deref(),
         &build_enable_args(&plugin_id, scope),
     )
-    .await?;
+    .await
+    .map_err(|e| map_plugin_err(&app, e))?;
     mark_plugin_sessions_dirty(&state, repo_id.as_deref(), scope).await?;
     Ok(output)
 }
@@ -100,6 +123,7 @@ pub async fn disable_plugin(
     plugin_id: String,
     scope: PluginScope,
     repo_id: Option<String>,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     require_non_managed_scope(scope)?;
@@ -108,7 +132,8 @@ pub async fn disable_plugin(
         repo_path.as_deref(),
         &build_disable_args(&plugin_id, scope),
     )
-    .await?;
+    .await
+    .map_err(|e| map_plugin_err(&app, e))?;
     mark_plugin_sessions_dirty(&state, repo_id.as_deref(), scope).await?;
     Ok(output)
 }
@@ -118,6 +143,7 @@ pub async fn update_plugin(
     plugin_id: String,
     scope: PluginScope,
     repo_id: Option<String>,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let repo_path = resolve_scope_repo_path(&state, repo_id.as_deref(), scope)?;
@@ -125,7 +151,8 @@ pub async fn update_plugin(
         repo_path.as_deref(),
         &build_update_args(&plugin_id, scope),
     )
-    .await?;
+    .await
+    .map_err(|e| map_plugin_err(&app, e))?;
     mark_plugin_sessions_dirty(&state, repo_id.as_deref(), scope).await?;
     Ok(output)
 }
@@ -133,15 +160,22 @@ pub async fn update_plugin(
 #[tauri::command]
 pub async fn update_all_plugins(
     repo_id: Option<String>,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<BulkPluginUpdateResult, String> {
     let repo_path = resolve_optional_repo_path(&state, repo_id.as_deref())?;
-    let installed = plugin::list_installed_plugins(repo_path.as_deref()).await?;
+    let installed = plugin::list_installed_plugins(repo_path.as_deref())
+        .await
+        .map_err(|e| map_plugin_err(&app, e))?;
     let update_targets = plugin_entries_for_bulk_update(&installed);
 
     let mut failed = Vec::new();
     let mut succeeded = 0;
-
+    // Per-plugin spawn failures might also be `MISSING_CLI:claude` — route
+    // each one through `map_plugin_err` so the missing-dependency event
+    // fires (and the sentinel becomes a user-facing string in the bulk
+    // result). `handle_err` is cheap and the modal only opens once even if
+    // we emit the event multiple times, so we don't need to dedupe here.
     for plugin_entry in &update_targets {
         match plugin::run_claude_plugin_command(
             repo_path.as_deref(),
@@ -154,7 +188,7 @@ pub async fn update_all_plugins(
                 "{} ({}) — {}",
                 plugin_entry.plugin_id,
                 plugin_entry.scope.as_cli_arg(),
-                error
+                map_plugin_err(&app, error)
             )),
         }
     }
@@ -187,6 +221,7 @@ pub async fn add_plugin_marketplace(
     source: String,
     scope: PluginScope,
     repo_id: Option<String>,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     require_non_managed_scope(scope)?;
@@ -196,23 +231,27 @@ pub async fn add_plugin_marketplace(
         &build_marketplace_add_args(&source, scope),
     )
     .await
+    .map_err(|e| map_plugin_err(&app, e))
 }
 
 #[tauri::command]
 pub async fn remove_plugin_marketplace(
     name: String,
     repo_id: Option<String>,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let repo_path = resolve_optional_repo_path(&state, repo_id.as_deref())?;
     plugin::run_claude_plugin_command(repo_path.as_deref(), &build_marketplace_remove_args(&name))
         .await
+        .map_err(|e| map_plugin_err(&app, e))
 }
 
 #[tauri::command]
 pub async fn update_plugin_marketplace(
     name: Option<String>,
     repo_id: Option<String>,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let repo_path = resolve_optional_repo_path(&state, repo_id.as_deref())?;
@@ -221,6 +260,7 @@ pub async fn update_plugin_marketplace(
         &build_marketplace_update_args(name.as_deref()),
     )
     .await
+    .map_err(|e| map_plugin_err(&app, e))
 }
 
 #[tauri::command]
