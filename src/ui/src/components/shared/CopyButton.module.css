@@ -1,0 +1,11 @@
+/* Shared visual hooks for the copy button across both variants.
+   The bare variant inherits font/color/border from its parent
+   (chat surfaces apply their own .copyButton styles); we only
+   contribute the error-state tint here. */
+.copyButton {
+  transition: color var(--transition-fast);
+}
+
+.copyButton[data-state="error"] {
+  color: var(--status-stopped);
+}

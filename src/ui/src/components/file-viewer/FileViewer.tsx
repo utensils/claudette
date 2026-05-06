@@ -9,8 +9,7 @@ import {
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { BookOpen, Check, Code, Copy, Save } from "lucide-react";
-import { writeText as clipboardWriteText } from "@tauri-apps/plugin-clipboard-manager";
+import { BookOpen, Code, Save } from "lucide-react";
 import {
   selectActiveFileTabPath,
   useAppStore,
@@ -31,6 +30,7 @@ import { WorkspacePanelHeader } from "../shared/WorkspacePanelHeader";
 import { PaneToolbar } from "../shared/PaneToolbar";
 import { SegmentedControl } from "../shared/SegmentedControl";
 import { IconButton } from "../shared/IconButton";
+import { CopyButton } from "../shared/CopyButton";
 import { SessionTabs } from "../chat/SessionTabs";
 import { MessageMarkdown } from "../chat/MessageMarkdown";
 import { MarkdownImageBaseProvider } from "../chat/MarkdownImage";
@@ -80,29 +80,14 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
   const addToast = useAppStore((s) => s.addToast);
   const keybindings = useAppStore((s) => s.keybindings);
 
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">(
-    "idle",
-  );
   const [saving, setSaving] = useState(false);
-  const copyResetRef = useRef<number | null>(null);
 
   // Reset transient per-tab UI state when the active tab/workspace changes
-  // so an in-flight save/copy on a previous tab can't leak its disabled state
-  // or pending callbacks into the newly mounted view.
+  // so an in-flight save on a previous tab can't leak its disabled state
+  // into the newly mounted view.
   useEffect(() => {
-    setCopyState("idle");
     setSaving(false);
-    if (copyResetRef.current !== null) {
-      window.clearTimeout(copyResetRef.current);
-      copyResetRef.current = null;
-    }
   }, [workspaceId, path]);
-
-  useEffect(() => {
-    return () => {
-      if (copyResetRef.current !== null) window.clearTimeout(copyResetRef.current);
-    };
-  }, []);
 
   const isMarkdown = MARKDOWN_EXT.test(path);
   const isImage = isImagePath(path);
@@ -182,35 +167,10 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
     [workspaceId, path, setFileBufferContent],
   );
 
-  const handleCopy = useCallback(async () => {
-    if (!bufferState) return;
-    const requestedWorkspaceId = workspaceId;
-    const requestedPath = path;
-    let nextState: "copied" | "error";
-    try {
-      if (isImage || bufferState.isBinary) {
-        nextState = "error";
-      } else {
-        await clipboardWriteText(bufferState.buffer);
-        nextState = "copied";
-      }
-    } catch (e) {
-      console.error("Copy file contents failed:", e);
-      nextState = "error";
-    }
-    // Bail if the user switched tabs (or workspaces) mid-async — otherwise a
-    // late completion would flip copy state on a different file.
-    const state = useAppStore.getState();
-    if (
-      state.selectedWorkspaceId !== requestedWorkspaceId ||
-      selectActiveFileTabPath(state) !== requestedPath
-    ) {
-      return;
-    }
-    setCopyState(nextState);
-    if (copyResetRef.current !== null) window.clearTimeout(copyResetRef.current);
-    copyResetRef.current = window.setTimeout(() => setCopyState("idle"), 1500);
-  }, [bufferState, isImage, workspaceId, path]);
+  const copySource = useCallback((): string | null => {
+    if (!bufferState || isImage || bufferState.isBinary) return null;
+    return bufferState.buffer;
+  }, [bufferState, isImage]);
 
   const handleSave = useCallback(async () => {
     if (!bufferState || !dirty || saving) return;
@@ -340,24 +300,15 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
         dirty={dirty}
         actions={
           <>
-            <IconButton
-              onClick={handleCopy}
-              tooltip={
-                copyState === "copied"
-                  ? t("diff_tooltip_copied")
-                  : copyState === "error"
-                    ? t("diff_tooltip_copy_failed")
-                    : t("diff_tooltip_copy_contents")
-              }
-              aria-live="polite"
+            <CopyButton
+              source={copySource}
+              tooltip={{
+                copy: t("diff_tooltip_copy_contents"),
+                copied: t("diff_tooltip_copied"),
+                failed: t("diff_tooltip_copy_failed"),
+              }}
               disabled={isImage || !bufferState?.loaded || bufferState?.isBinary}
-            >
-              {copyState === "copied" ? (
-                <Check size={14} aria-hidden="true" />
-              ) : (
-                <Copy size={14} aria-hidden="true" />
-              )}
-            </IconButton>
+            />
             {showMarkdownToggle && (
               <SegmentedControl
                 ariaLabel={t("file_markdown_view_mode_aria")}
