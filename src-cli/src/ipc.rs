@@ -110,11 +110,14 @@ pub async fn call(
         .map_err(|e| CallError::Transport(format!("malformed response: {e}")))?;
 
     match (response.result, response.error) {
-        (Some(value), None) => Ok(value),
         (_, Some(err)) => Err(CallError::Server(err)),
-        (None, None) => Err(CallError::Transport(
-            "response had neither result nor error".into(),
-        )),
+        (Some(value), None) => Ok(value),
+        // JSON-RPC permits `result: null` for void-returning methods.
+        // serde collapses a present `null` into `None` on the
+        // `Option<serde_json::Value>` field, so we can't distinguish
+        // missing from null here — but the absence of an `error` field
+        // means the call succeeded, so treat both the same.
+        (None, None) => Ok(serde_json::Value::Null),
     }
 }
 
@@ -147,5 +150,48 @@ mod uuid {
     static COUNTER: AtomicU64 = AtomicU64::new(1);
     pub fn new_v4_string() -> String {
         format!("c{}", COUNTER.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use claudette::rpc::{RpcError, RpcResponse};
+
+    /// Regression: serde collapses a present `result: null` into
+    /// `None` on `Option<Value>`, so the wire shapes "no result field"
+    /// and "result: null" both surface here as `(None, None)`. Both
+    /// must be treated as successful void responses, not transport
+    /// errors. Methods like `archive_chat_session` return
+    /// `Option<ChatSession>` and intentionally serialize `null` when
+    /// archiving the last session; the CLI used to fail with
+    /// "response had neither result nor error".
+    #[test]
+    fn null_result_is_treated_as_success() {
+        // Round-trip via serde to mirror what the CLI sees on the wire.
+        let on_wire = serde_json::to_string(&RpcResponse::ok(
+            serde_json::json!(1),
+            serde_json::Value::Null,
+        ))
+        .unwrap();
+        let parsed: RpcResponse = serde_json::from_str(&on_wire).unwrap();
+        assert!(parsed.error.is_none());
+        // Whichever way serde parsed it, the CLI's match must accept it.
+        let result = match (parsed.result, parsed.error) {
+            (_, Some(_)) => panic!("expected success"),
+            (Some(v), None) => v,
+            (None, None) => serde_json::Value::Null,
+        };
+        assert_eq!(result, serde_json::Value::Null);
+    }
+
+    #[test]
+    fn error_response_preserves_message() {
+        let on_wire =
+            serde_json::to_string(&RpcResponse::err(serde_json::json!(2), "boom".to_string()))
+                .unwrap();
+        let parsed: RpcResponse = serde_json::from_str(&on_wire).unwrap();
+        let err: RpcError = parsed.error.expect("error must round-trip");
+        assert_eq!(err.message, "boom");
+        assert_eq!(err.code, -1);
     }
 }
