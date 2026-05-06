@@ -41,6 +41,7 @@ import { TurnSummary } from "./TurnSummary";
 import { TurnFooter } from "./TurnFooter";
 import { PdfThumbnail } from "./PdfThumbnail";
 import { MessageCopyButton } from "./MessageCopyButton";
+import { groupToolActivitiesForDisplay } from "./toolActivityGroups";
 import {
   EMPTY_ATTACHMENTS,
   EMPTY_CHECKPOINTS,
@@ -213,6 +214,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
         turn: CompletedTurn;
         globalIdx: number;
         activities: CompletedTurn["activities"];
+        label: string;
         showFooter: boolean;
       }>
     > = {};
@@ -257,13 +259,18 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
       let hasFinalGroup = false;
       for (const [position, activities] of activitiesByPosition) {
         positions.add(position);
-        const showFooter = position === turn.afterMessageIndex;
-        hasFinalGroup ||= showFooter;
-        (groupsByPosition[position] ??= []).push({
-          turn,
-          globalIdx,
-          activities,
-          showFooter,
+        const displayGroups = groupToolActivitiesForDisplay(activities);
+        const finalGroupIndex =
+          position === turn.afterMessageIndex ? displayGroups.length - 1 : -1;
+        hasFinalGroup ||= finalGroupIndex >= 0;
+        displayGroups.forEach((group, groupIndex) => {
+          (groupsByPosition[position] ??= []).push({
+            turn,
+            globalIdx,
+            activities: group.activities,
+            label: group.label,
+            showFooter: groupIndex === finalGroupIndex,
+          });
         });
       }
 
@@ -478,11 +485,12 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
     if (groupEntries.length === 0 && footerEntries.length === 0) return null;
     return (
       <>
-        {groupEntries.map(({ turn, globalIdx, activities, showFooter }) => (
+        {groupEntries.map(({ turn, globalIdx, activities, label, showFooter }) => (
           <TurnSummary
-            key={`${turn.id}:${position}`}
+            key={`${turn.id}:${position}:${label}:${activities[0]?.toolUseId ?? "empty"}`}
             turn={turn}
             activities={activities}
+            label={label}
             showFooter={showFooter}
             collapsed={turn.collapsed}
             onToggle={() => toggleCompletedTurn(sessionId, globalIdx)}

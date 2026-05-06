@@ -7,11 +7,15 @@ import styles from "./ChatPanel.module.css";
 import { toolColor } from "./chatHelpers";
 import { EMPTY_ACTIVITIES } from "./chatConstants";
 import {
-  activityHasAgentToolCalls,
   activityMatchesSearch,
   activitySummaryText,
 } from "./agentToolCallRendering";
 import { AgentToolCallGroup } from "./AgentToolCallGroup";
+import {
+  groupHasRunningActivity,
+  groupToolActivitiesForDisplay,
+  isAgentActivity,
+} from "./toolActivityGroups";
 
 /**
  * Current tool activities section — subscribes to toolActivities for this workspace.
@@ -55,56 +59,70 @@ export const ToolActivitiesSection = memo(function ToolActivitiesSection({
       activityMatchesSearch(activity, searchQuery, worktreePath),
     );
   const isExpanded = !collapsed || queryHasMatch;
+  const groups = groupToolActivitiesForDisplay(activities);
 
   return (
     <div className={styles.toolActivities} aria-live="polite" aria-atomic="true">
-      <div className={styles.turnSummary}>
-        <div
-          className={styles.turnHeader}
-          role="button"
-          tabIndex={0}
-          onClick={() => setCollapsed(!collapsed)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              setCollapsed(!collapsed);
-            }
-          }}
-        >
-          <span className={styles.toolChevron}>
-            {isExpanded ? "⌄" : "›"}
-          </span>
-          <span className={styles.turnLabel}>
-            {activities.length} tool call{activities.length !== 1 ? "s" : ""}
-            {isRunning && <span className={styles.inProgressNote}> in progress</span>}
-          </span>
-        </div>
-        {isExpanded && (
-          <div className={styles.turnActivities}>
-            {activities.map((act: ToolActivity) =>
-              activityHasAgentToolCalls(act) ? (
-                <AgentToolCallGroup
-                  key={act.toolUseId}
-                  activity={act}
-                  searchQuery={searchQuery}
-                  worktreePath={worktreePath}
-                />
-              ) : (
-                <div key={act.toolUseId} className={styles.toolActivity}>
-                  <div className={styles.toolHeader}>
-                    <span className={styles.toolName} style={{ color: toolColor(act.toolName) }}>{act.toolName}</span>
-                    {activitySummaryText(act) && (
-                      <span className={styles.toolSummary}>
-                        <HighlightedPlainText text={relativizePath(activitySummaryText(act), worktreePath)} query={searchQuery} />
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ),
-            )}
+      {groups.map((group) => (
+        <div key={group.key} className={styles.turnSummary}>
+          <div
+            className={styles.turnHeader}
+            role="button"
+            tabIndex={0}
+            onClick={() => setCollapsed(!collapsed)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                setCollapsed(!collapsed);
+              }
+            }}
+          >
+            <span className={styles.toolChevron}>{isExpanded ? "⌄" : "›"}</span>
+            <span className={styles.turnLabel}>
+              {group.label}
+              {groupHasRunningActivity(group.activities, isRunning) && (
+                <span className={styles.inProgressNote}> in progress</span>
+              )}
+            </span>
           </div>
-        )}
-      </div>
+          {isExpanded && (
+            <div className={styles.turnActivities}>
+              {group.activities.map((act: ToolActivity) =>
+                isAgentActivity(act) ? (
+                  <AgentToolCallGroup
+                    key={act.toolUseId}
+                    activity={act}
+                    searchQuery={searchQuery}
+                    worktreePath={worktreePath}
+                  />
+                ) : (
+                  <div key={act.toolUseId} className={styles.toolActivity}>
+                    <div className={styles.toolHeader}>
+                      <span
+                        className={styles.toolName}
+                        style={{ color: toolColor(act.toolName) }}
+                      >
+                        {act.toolName}
+                      </span>
+                      {activitySummaryText(act) && (
+                        <span className={styles.toolSummary}>
+                          <HighlightedPlainText
+                            text={relativizePath(
+                              activitySummaryText(act),
+                              worktreePath,
+                            )}
+                            query={searchQuery}
+                          />
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ),
+              )}
+            </div>
+          )}
+        </div>
+      ))}
     </div>
   );
 });

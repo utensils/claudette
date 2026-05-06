@@ -7,11 +7,11 @@ import { toolColor } from "./chatHelpers";
 import { TurnFooter } from "./TurnFooter";
 import { TaskProgressBar } from "./TaskProgressBar";
 import {
-  activityHasAgentToolCalls,
   activityMatchesSearch,
   activitySummaryText,
 } from "./agentToolCallRendering";
 import { AgentToolCallGroup } from "./AgentToolCallGroup";
+import { isAgentActivity } from "./toolActivityGroups";
 
 /**
  * Render a single completed turn summary (collapsible tool call list).
@@ -28,6 +28,7 @@ export function TurnSummary({
   onRollback,
   searchQuery,
   worktreePath,
+  label,
 }: {
   turn: CompletedTurn;
   activities?: ToolActivity[];
@@ -48,6 +49,7 @@ export function TurnSummary({
    *  the query matches inside any of the contained activity summaries. */
   searchQuery: string;
   worktreePath?: string | null;
+  label?: string;
 }) {
   const visibleActivities = activities ?? turn.activities;
   const hasElapsed = typeof turn.durationMs === "number" && turn.durationMs > 0;
@@ -92,16 +94,18 @@ export function TurnSummary({
             {isExpanded ? "⌄" : "›"}
           </span>
           <span className={styles.turnLabel}>
-            {visibleActivities.length} tool call
-            {visibleActivities.length !== 1 ? "s" : ""}
-            {turn.messageCount > 0 &&
+            {label ??
+              `${visibleActivities.length} tool call${
+                visibleActivities.length !== 1 ? "s" : ""
+              }`}
+            {showFooter && turn.messageCount > 0 &&
               `, ${turn.messageCount} message${turn.messageCount !== 1 ? "s" : ""}`}
           </span>
         </div>
         {isExpanded && (
           <div className={styles.turnActivities}>
             {visibleActivities.map((act: ToolActivity) =>
-              activityHasAgentToolCalls(act) ? (
+              isAgentActivity(act) ? (
                 <AgentToolCallGroup
                   key={act.toolUseId}
                   activity={act}
