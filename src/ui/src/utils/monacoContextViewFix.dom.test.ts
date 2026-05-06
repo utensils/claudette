@@ -223,6 +223,72 @@ describe("installMonacoContextViewFix — integration", () => {
   // changes the timing, the manual QA matrix in the PR description
   // should catch it before any user does.
 
+  describe("shadow DOM (Monaco's shadow-root-host pattern)", () => {
+    // Monaco's StandaloneContextViewService can mount the context view
+    // inside a shadow DOM (`<div class="shadow-root-host">` +
+    // `attachShadow({mode: 'open'})`). MutationObserver does NOT pierce
+    // shadow boundaries by default, so a body-only observer misses
+    // every menu open in this code path — exactly the regression we
+    // chased through this branch's earlier commits. The test below
+    // proves the shadow-root subtree is observed correctly.
+    it("corrects a `.context-view` mounted inside a shadow root attached to a new host", async () => {
+      const restore = stubProbe("webkit", 1.5);
+      setRootZoom(1.5);
+      installMonacoContextViewFix();
+
+      // Mimic Monaco's flow: create a shadow host, attach it to body,
+      // then append a `.context-view` inside its shadow root.
+      const shadowHost = document.createElement("div");
+      shadowHost.className = "shadow-root-host";
+      const shadowRoot = shadowHost.attachShadow({ mode: "open" });
+      document.body.appendChild(shadowHost);
+      // Microtask: rootObserver picks up the added shadow host and
+      // subscribes to its shadow root.
+      await flushMutations();
+
+      const cv = document.createElement("div");
+      cv.className = "context-view";
+      cv.style.position = "fixed";
+      cv.style.left = "300px";
+      cv.style.top = "150px";
+      shadowRoot.appendChild(cv);
+      // Microtask: shadow-root observer fires, attaches inner observer
+      // and runs the initial correction.
+      await flushMutations();
+
+      expect(parseFloat(cv.style.left)).toBeCloseTo(200, 1);
+      expect(parseFloat(cv.style.top)).toBeCloseTo(100, 1);
+      restore();
+    });
+
+    it("seeds existing `.context-view` inside a pre-existing shadow root at install time", async () => {
+      const restore = stubProbe("webkit", 1.5);
+      setRootZoom(1.5);
+
+      // Set up the shadow-DOM scenario BEFORE installing the fix —
+      // mirrors Monaco mounting before our utility ran.
+      const shadowHost = document.createElement("div");
+      shadowHost.className = "shadow-root-host";
+      const shadowRoot = shadowHost.attachShadow({ mode: "open" });
+      document.body.appendChild(shadowHost);
+      const cv = document.createElement("div");
+      cv.className = "context-view";
+      cv.style.position = "fixed";
+      cv.style.left = "450px";
+      cv.style.top = "300px";
+      shadowRoot.appendChild(cv);
+
+      // Now install — should seed the existing shadow-rooted
+      // `.context-view` and correct it on first scan.
+      installMonacoContextViewFix();
+      await flushMutations();
+
+      expect(parseFloat(cv.style.left)).toBeCloseTo(300, 1);
+      expect(parseFloat(cv.style.top)).toBeCloseTo(200, 1);
+      restore();
+    });
+  });
+
   describe("nested submenus", () => {
     it("corrects a `.context-view` attached as a descendant (Monaco submenu pattern)", async () => {
       const restore = stubProbe("webkit", 1.5);

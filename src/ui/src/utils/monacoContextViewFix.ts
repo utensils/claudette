@@ -126,14 +126,51 @@ function detachHostObserver(host: HTMLElement): void {
   hostObservers.delete(host);
 }
 
+// Track shadow roots we've observed so we don't double-attach on
+// re-entry. Also a WeakSet because the shadow-root-host element is a
+// regular DOM node that can be removed.
+const observedShadowRoots = new WeakSet<ShadowRoot>();
+
+function watchShadowRoot(root: ShadowRoot, zoom: number | false): void {
+  if (observedShadowRoots.has(root)) return;
+  observedShadowRoots.add(root);
+  // Pick up any `.context-view` already inside.
+  for (const host of root.querySelectorAll<HTMLElement>(".context-view")) {
+    if (zoom !== false) correctContextViewPosition(host, zoom);
+    attachHostObserver(host);
+  }
+  // And subscribe so future additions are caught.
+  const inner = new MutationObserver((records) => {
+    const innerZoom = shouldCorrect();
+    for (const r of records) {
+      if (r.type !== "childList") continue;
+      r.addedNodes.forEach((n) => visitAddedNode(n, innerZoom));
+      r.removedNodes.forEach(visitRemovedNode);
+    }
+  });
+  inner.observe(root, { childList: true, subtree: true });
+}
+
 function visitAddedNode(node: Node, zoom: number | false): void {
   if (!(node instanceof HTMLElement)) return;
+  // 1. Direct/descendant `.context-view` in the light DOM.
   const hosts = node.classList.contains("context-view")
     ? [node]
     : Array.from(node.querySelectorAll<HTMLElement>(".context-view"));
   for (const host of hosts) {
     if (zoom !== false) correctContextViewPosition(host, zoom);
     attachHostObserver(host);
+  }
+  // 2. Shadow roots: Monaco's StandaloneContextViewService can mount the
+  //    context view INSIDE a shadow DOM (`<div class="shadow-root-host">`
+  //    + `attachShadow({mode: 'open'})`), and MutationObserver does not
+  //    pierce shadow boundaries. Attach a separate observer to each
+  //    shadow root we encounter so the fix reaches the menu Monaco is
+  //    actually rendering. Walk the subtree here because the shadow host
+  //    can be a deep descendant of an added node.
+  if (node.shadowRoot) watchShadowRoot(node.shadowRoot, zoom);
+  for (const el of node.querySelectorAll<HTMLElement>("*")) {
+    if (el.shadowRoot) watchShadowRoot(el.shadowRoot, zoom);
   }
 }
 
@@ -178,6 +215,12 @@ export function installMonacoContextViewFix(): void {
       }
     });
     rootObserver.observe(document.body, { childList: true, subtree: true });
+    // Seed: scan once for any `.context-view` and shadow roots that
+    // already exist at install time. Monaco's StandaloneContextViewService
+    // creates its persistent host element when the editor mounts, which
+    // typically happens BEFORE this install runs.
+    const seedZoom = shouldCorrect();
+    visitAddedNode(document.body, seedZoom);
   };
 
   if (document.body) {
