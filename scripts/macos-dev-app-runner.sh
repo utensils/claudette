@@ -102,6 +102,78 @@ contents_dir="$bundle_dir/Contents"
 macos_dir="$contents_dir/MacOS"
 resources_dir="$contents_dir/Resources"
 bundle_executable="$macos_dir/claudette-app"
+managed_app_pids=()
+
+launched_app_pids() {
+  ps -axo pid=,command= | while read -r pid command; do
+    if [ -z "$pid" ] || [ "$pid" = "$$" ]; then
+      continue
+    fi
+
+    case "$command" in
+      *"$bundle_executable"*) printf '%s\n' "$pid" ;;
+    esac
+  done
+}
+
+terminate_launched_app() {
+  local pids=()
+  local pid
+
+  while IFS= read -r pid; do
+    [ -n "$pid" ] && pids+=("$pid")
+  done < <(launched_app_pids)
+
+  if [ "${#pids[@]}" -gt 0 ]; then
+    terminate_app_pids "${pids[@]}"
+  fi
+}
+
+# shellcheck disable=SC2329 # Invoked by cleanup, which runs from traps.
+terminate_managed_app() {
+  if [ "${#managed_app_pids[@]}" -gt 0 ]; then
+    terminate_app_pids "${managed_app_pids[@]}"
+  else
+    terminate_launched_app
+  fi
+}
+
+terminate_app_pids() {
+  if [ "$#" -eq 0 ]; then
+    return 0
+  fi
+
+  local pids=("$@")
+  local remaining=()
+  local pid
+  local _
+
+  kill "${pids[@]}" 2>/dev/null || true
+
+  for _ in {1..50}; do
+    remaining=()
+    for pid in "${pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        remaining+=("$pid")
+      fi
+    done
+
+    if [ "${#remaining[@]}" -eq 0 ]; then
+      return 0
+    fi
+
+    sleep 0.1
+  done
+
+  if [ "${#remaining[@]}" -gt 0 ]; then
+    kill -9 "${remaining[@]}" 2>/dev/null || true
+  fi
+}
+
+# If a prior runner was killed during a Tauri rebuild, `open -W` may have
+# died while the launched app kept running. Clear that stale copy before the
+# next launch so dev hot reload has one backend process.
+terminate_launched_app
 
 mkdir -p "$macos_dir" "$resources_dir"
 rm -f "$bundle_executable"
@@ -160,14 +232,16 @@ stdout_fifo="$log_dir/stdout"
 stderr_fifo="$log_dir/stderr"
 mkfifo "$stdout_fifo" "$stderr_fifo"
 
+# shellcheck disable=SC2329 # Invoked by the EXIT/INT/TERM traps below.
 cleanup() {
+  terminate_managed_app
   rm -rf "$log_dir"
   if [ -n "${open_pid:-}" ] && kill -0 "$open_pid" 2>/dev/null; then
     kill "$open_pid" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT
-trap 'kill $open_pid 2>/dev/null || true; exit 130' INT TERM
+trap 'cleanup; exit 130' INT TERM
 
 cat "$stdout_fifo" &
 cat_stdout_pid=$!
@@ -205,6 +279,30 @@ if [ "${#app_args[@]}" -gt 0 ]; then
 fi
 "${open_argv[@]}" &
 open_pid=$!
+
+for _ in {1..50}; do
+  while IFS= read -r pid; do
+    already_managed=false
+    if [ "${#managed_app_pids[@]}" -gt 0 ]; then
+      for managed_pid in "${managed_app_pids[@]}"; do
+        if [ "$managed_pid" = "$pid" ]; then
+          already_managed=true
+          break
+        fi
+      done
+    fi
+
+    if [ "$already_managed" = false ]; then
+      managed_app_pids+=("$pid")
+    fi
+  done < <(launched_app_pids)
+
+  if [ "${#managed_app_pids[@]}" -gt 0 ] || ! kill -0 "$open_pid" 2>/dev/null; then
+    break
+  fi
+
+  sleep 0.1
+done
 
 wait "$open_pid"
 exit_code=$?
