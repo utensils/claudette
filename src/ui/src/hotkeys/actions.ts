@@ -288,6 +288,16 @@ export const HOTKEY_ACTIONS = [
     rebindable: true,
   })),
   {
+    id: "file-viewer.close-file-tab",
+    scope: "file-viewer",
+    category: "keyboard_category_editor",
+    description: "keyboard_action_file_close_tab",
+    defaultBinding: allPlatforms("mod+w"),
+    match: "key",
+    rebindable: true,
+    suppressUnderOverlay: true,
+  },
+  {
     id: "file-viewer.undo-file-operation",
     scope: "file-viewer",
     category: "keyboard_category_editor",

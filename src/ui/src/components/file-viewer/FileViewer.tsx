@@ -35,6 +35,7 @@ import { CopyButton } from "../shared/CopyButton";
 import { SessionTabs } from "../chat/SessionTabs";
 import { MessageMarkdown } from "../chat/MessageMarkdown";
 import { MarkdownImageBaseProvider } from "../chat/MarkdownImage";
+import { DiscardUnsavedChangesConfirm } from "../files/DiscardUnsavedChangesConfirm";
 import { imageMediaType, isImagePath } from "../../utils/fileIcons";
 import { useFilePathActions } from "../files/useFilePathActions";
 import styles from "./FileViewer.module.css";
@@ -80,12 +81,14 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
   const setFileBufferSaved = useAppStore((s) => s.setFileBufferSaved);
   const setDiffFiles = useAppStore((s) => s.setDiffFiles);
   const setFileTabPreview = useAppStore((s) => s.setFileTabPreview);
+  const closeFileTab = useAppStore((s) => s.closeFileTab);
   const requestFileTreeRefresh = useAppStore((s) => s.requestFileTreeRefresh);
   const addToast = useAppStore((s) => s.addToast);
   const keybindings = useAppStore((s) => s.keybindings);
   const { undoLastFilePathOperation } = useFilePathActions(workspaceId);
 
   const [savingKey, setSavingKey] = useState<string | null>(null);
+  const [closePending, setClosePending] = useState(false);
   const saving = savingKey === bufferKey;
   const viewerRef = useRef<HTMLDivElement | null>(null);
 
@@ -155,6 +158,14 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
   ]);
 
   const dirty = !!bufferState && bufferState.buffer !== bufferState.baseline;
+
+  const requestCloseFileTab = useCallback(() => {
+    if (dirty) {
+      setClosePending(true);
+    } else {
+      closeFileTab(workspaceId, path);
+    }
+  }, [closeFileTab, dirty, path, workspaceId]);
 
   // Files we render in the editor but won't let the user mutate. The
   // truncated banner below the editor explains the truncated case; the
@@ -314,9 +325,10 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
     const handler = (e: KeyboardEvent) => {
       if (e.repeat) return;
       const state = useAppStore.getState();
+      const action = resolveHotkeyAction(e, "file-viewer", state.keybindings);
       if (
-        resolveHotkeyAction(e, "file-viewer", state.keybindings) !==
-        "file-viewer.undo-file-operation"
+        action !== "file-viewer.undo-file-operation" &&
+        action !== "file-viewer.close-file-tab"
       ) {
         return;
       }
@@ -330,15 +342,22 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
       }
       const el = document.activeElement as HTMLElement | null;
       if (!el || !viewerRef.current?.contains(el)) return;
-      if (el.closest(".monaco-editor")) return;
       const tag = el.tagName?.toLowerCase();
-      if (tag === "input" || tag === "textarea" || el.isContentEditable) return;
+      const inMonaco = !!el.closest(".monaco-editor");
+      if (action === "file-viewer.undo-file-operation" && inMonaco) return;
+      if ((tag === "input" || tag === "textarea" || el.isContentEditable) && !inMonaco) {
+        return;
+      }
       e.preventDefault();
-      void undoLastFilePathOperation();
+      if (action === "file-viewer.undo-file-operation") {
+        void undoLastFilePathOperation();
+      } else {
+        requestCloseFileTab();
+      }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [undoLastFilePathOperation]);
+  }, [requestCloseFileTab, undoLastFilePathOperation]);
 
   const previewShortcutHint = formatBinding(
     getEffectiveBindingById(
@@ -475,6 +494,15 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
           </div>
         )}
       </div>
+      {closePending && (
+        <DiscardUnsavedChangesConfirm
+          onConfirm={() => {
+            setClosePending(false);
+            closeFileTab(workspaceId, path);
+          }}
+          onClose={() => setClosePending(false)}
+        />
+      )}
     </div>
   );
 }

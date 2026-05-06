@@ -144,6 +144,27 @@ describe("resolveHotkeyAction with conflict updates", () => {
     );
     expect(resolveHotkeyAction(event, "global", {}, "mac")).toBeNull();
   });
+
+  it("resolves close file tab with platform mod in file-viewer scope", () => {
+    expect(
+      resolveHotkeyAction(
+        macKey({ key: "w", metaKey: true }),
+        "file-viewer",
+        {},
+        "mac",
+      ),
+    ).toBe("file-viewer.close-file-tab");
+    expect(
+      resolveHotkeyAction(
+        macKey({ key: "w", ctrlKey: true }),
+        "file-viewer",
+        {},
+        "linux",
+      ),
+    ).toBe("file-viewer.close-file-tab");
+    expect(resolveHotkeyAction(macKey({ key: "w", metaKey: true }), "global", {}, "mac"))
+      .toBeNull();
+  });
 });
 
 describe("global.show-keyboard-shortcuts default binding", () => {
