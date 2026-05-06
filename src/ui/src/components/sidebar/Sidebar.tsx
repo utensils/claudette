@@ -5,6 +5,7 @@ import { isAgentBusy } from "../../utils/agentStatus";
 import {
   archiveWorkspace,
   reorderRepositories,
+  reorderWorkspaces,
   renameWorkspace,
   restoreWorkspace,
   generateWorkspaceName,
@@ -23,10 +24,12 @@ import { RepoIcon } from "../shared/RepoIcon";
 import { extractRemoteWorkspace } from "./remoteWorkspaceResponse";
 import { HelpMenu } from "./HelpMenu";
 import { UpdateBanner } from "../layout/UpdateBanner";
-import { getScmSortPriority } from "../../utils/scmSortPriority";
 import { useTabDragReorder } from "../../hooks/useTabDragReorder";
 import { TabDragGhost } from "../shared/TabDragGhost";
-import { reorderWorkspaces } from "../../services/tauri";
+import {
+  isManualWorkspaceOrder,
+  orderRepoWorkspaces,
+} from "../../utils/workspaceOrdering";
 import styles from "./Sidebar.module.css";
 
 type StatusBucketKey = "in-progress" | "in-review" | "draft" | "merged" | "closed" | "archived";
@@ -63,6 +66,12 @@ export const Sidebar = memo(function Sidebar() {
   const scmSummary = useAppStore((s) => s.scmSummary);
   const setRepositories = useAppStore((s) => s.setRepositories);
   const setWorkspaces = useAppStore((s) => s.setWorkspaces);
+  const manualWorkspaceOrderByRepo = useAppStore(
+    (s) => s.manualWorkspaceOrderByRepo,
+  );
+  const markWorkspaceOrderManual = useAppStore(
+    (s) => s.markWorkspaceOrderManual,
+  );
   const metaKeyHeld = useAppStore((s) => s.metaKeyHeld);
   const isMac = navigator.platform.startsWith("Mac");
   const { t } = useTranslation("sidebar");
@@ -222,27 +231,19 @@ export const Sidebar = memo(function Sidebar() {
     [workspaces, sidebarShowArchived, sidebarRepoFilter]
   );
 
-  // Workspaces in the order the sidebar actually renders them: each repo
-  // group sorted by `sort_order` (with SCM priority as tiebreaker for legacy
-  // pre-migration rows where every workspace shares sort_order=0). The drag
-  // hook needs this visual sequence so reorderById's "from"/"to" positions
-  // match what the user sees — without it, a second drag in the same repo
-  // would compute against the unsorted DB order and persist the wrong
-  // sequence (P2 finding from the Codex peer review on this branch).
+  // Workspaces in the order the sidebar actually renders them. Repos default
+  // to the original auto-sort (SCM priority), and only switch to sort_order
+  // after the user manually drags a workspace in that repo.
   const visuallyOrderedWorkspaces = useMemo(() => {
     const localRepos = repositories.filter((r) => !r.remote_connection_id);
     const repoIndex = new Map(localRepos.map((r, i) => [r.id, i]));
     const out: typeof workspaces = [];
     for (const repo of localRepos) {
-      const repoWs = filteredWorkspaces
-        .filter((ws) => ws.repository_id === repo.id)
-        .sort((a, b) => {
-          if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
-          return (
-            getScmSortPriority(scmSummary[a.id]) -
-            getScmSortPriority(scmSummary[b.id])
-          );
-        });
+      const repoWs = orderRepoWorkspaces(
+        filteredWorkspaces.filter((ws) => ws.repository_id === repo.id),
+        scmSummary,
+        isManualWorkspaceOrder(manualWorkspaceOrderByRepo, repo.id),
+      );
       out.push(...repoWs);
     }
     // Also include any workspaces whose repo isn't in `localRepos` (shouldn't
@@ -253,7 +254,7 @@ export const Sidebar = memo(function Sidebar() {
       if (!repoIndex.has(ws.repository_id) && !out.includes(ws)) out.push(ws);
     }
     return out;
-  }, [filteredWorkspaces, repositories, scmSummary]);
+  }, [filteredWorkspaces, repositories, scmSummary, manualWorkspaceOrderByRepo]);
 
   const statusBuckets = useMemo(() => {
     const buckets = new Map<StatusBucketKey, typeof workspaces>();
@@ -418,6 +419,7 @@ export const Sidebar = memo(function Sidebar() {
         return w;
       });
       setWorkspaces(optimistic);
+      markWorkspaceOrderManual(moved.repository_id);
       void reorderWorkspaces(moved.repository_id, repoIds).catch((err) =>
         console.error("[Sidebar] Failed to persist workspace order:", err),
       );
@@ -832,16 +834,11 @@ export const Sidebar = memo(function Sidebar() {
           .filter((r) => sidebarRepoFilter === "all" || r.id === sidebarRepoFilter)
           .map((repo, repoIdx) => {
           const collapsed = repoCollapsed[repo.id];
-          // Sort by user-defined order (sort_order) as authoritative; fall
-          // back to SCM priority only as a tiebreaker so workspaces seeded
-          // with the same sort_order value (legacy DBs pre-migration) keep
-          // their previous "by PR state" arrangement.
-          const repoWorkspaces = filteredWorkspaces
-            .filter((ws) => ws.repository_id === repo.id)
-            .sort((a, b) => {
-              if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
-              return getScmSortPriority(scmSummary[a.id]) - getScmSortPriority(scmSummary[b.id]);
-            });
+          const repoWorkspaces = orderRepoWorkspaces(
+            filteredWorkspaces.filter((ws) => ws.repository_id === repo.id),
+            scmSummary,
+            isManualWorkspaceOrder(manualWorkspaceOrderByRepo, repo.id),
+          );
           const runningCount = repoWorkspaces.filter(
             (ws) => isAgentBusy(ws.agent_status)
           ).length;

@@ -16,6 +16,8 @@ use claudette::process::CommandWindowExt as _;
 use crate::ops_hooks::TauriHooks;
 use crate::state::AppState;
 
+const WORKSPACE_ORDER_MODE_PREFIX: &str = "workspace_order_mode:";
+
 #[derive(Serialize)]
 pub struct CreateWorkspaceResult {
     pub workspace: Workspace,
@@ -536,7 +538,12 @@ pub async fn reorder_workspaces(
 ) -> Result<(), String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     db.reorder_workspaces(&repository_id, &workspace_ids)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    db.set_app_setting(
+        &format!("{WORKSPACE_ORDER_MODE_PREFIX}{repository_id}"),
+        "manual",
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Re-read the current branch for every active workspace. Returns one
