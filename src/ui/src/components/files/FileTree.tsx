@@ -41,6 +41,7 @@ interface FileTreeProps {
   creatingParentPath: string | null;
   onCreateCommit: (parentPath: string, name: string) => Promise<boolean>;
   onCreateCancel: () => void;
+  focusRequest: number;
   renamingPath: string | null;
   onRenameCommit: (
     target: FileContextTarget,
@@ -60,6 +61,7 @@ export const FileTree = memo(function FileTree({
   creatingParentPath,
   onCreateCommit,
   onCreateCancel,
+  focusRequest,
   renamingPath,
   onRenameCommit,
   onRenameCancel,
@@ -141,6 +143,18 @@ export const FileTree = memo(function FileTree({
       rowRefsRef.current.get(selectedPath)?.focus();
     });
   }, [focusedPath, renamingPath, selected]);
+
+  useEffect(() => {
+    if (focusRequest === 0) return;
+    const focusPath = selected ?? focusedPath;
+    requestAnimationFrame(() => {
+      if (focusPath) {
+        rowRefsRef.current.get(focusPath)?.focus();
+      } else {
+        rowRefsRef.current.values().next().value?.focus();
+      }
+    });
+  }, [focusedPath, focusRequest, selected]);
 
   const findVisibleIndex = useCallback(
     (path: string | null) =>

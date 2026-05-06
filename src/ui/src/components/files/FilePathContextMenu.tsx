@@ -23,6 +23,7 @@ interface FilePathContextMenuProps {
   beforeItems?: ContextMenuItem[];
   onCreateFileRequest?: (parentPath: string) => void;
   onRenameRequest: (target: FileContextTarget) => void;
+  onOperationComplete?: () => void;
   onClose: () => void;
 }
 
@@ -50,6 +51,7 @@ export function FilePathContextMenu({
   beforeItems,
   onCreateFileRequest,
   onRenameRequest,
+  onOperationComplete,
   onClose,
 }: FilePathContextMenuProps) {
   const openFileTab = useAppStore((s) => s.openFileTab);
@@ -77,19 +79,27 @@ export function FilePathContextMenu({
         : undefined,
       open: () => {
         if (target.isDirectory) {
-          return openWorkspacePath(workspaceId, target.path);
+          return openWorkspacePath(workspaceId, target.path).finally(() =>
+            onOperationComplete?.(),
+          );
         }
         openFileTab(workspaceId, target.path);
+        onOperationComplete?.();
       },
-      reveal: () => revealWorkspacePath(workspaceId, target.path),
+      reveal: () =>
+        revealWorkspacePath(workspaceId, target.path).finally(() =>
+          onOperationComplete?.(),
+        ),
       copyPath: async () => {
         const absolute = await resolveWorkspacePath(workspaceId, target.path);
         await clipboardWriteText(absolute);
         addToast("Copied path");
+        onOperationComplete?.();
       },
       copyRelativePath: async () => {
         await clipboardWriteText(target.path.replace(/\/+$/g, ""));
         addToast("Copied relative path");
+        onOperationComplete?.();
       },
       rename: () => {
         setOperationError(null);
@@ -109,6 +119,7 @@ export function FilePathContextMenu({
     beforeItems,
     onClose,
     onCreateFileRequest,
+    onOperationComplete,
     onRenameRequest,
     openFileTab,
     target,
@@ -123,6 +134,7 @@ export function FilePathContextMenu({
       await trashPath(deleteTarget);
       setDeleteTarget(null);
       onClose();
+      onOperationComplete?.();
     } catch (err) {
       setOperationError(String(err));
     } finally {
@@ -153,6 +165,7 @@ export function FilePathContextMenu({
             setDeleteTarget(null);
             setOperationError(null);
             onClose();
+            onOperationComplete?.();
           }}
         />
       )}

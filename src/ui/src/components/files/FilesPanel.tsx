@@ -44,11 +44,15 @@ export function FilesPanel() {
   const [creatingParentPath, setCreatingParentPath] = useState<string | null>(
     null,
   );
+  const [focusRequest, setFocusRequest] = useState(0);
   const loadVersionRef = useRef(0);
   const prevIsRunning = useRef(false);
   const ws = workspaces.find((w) => w.id === selectedWorkspaceId);
   const isRunning = isAgentBusy(ws?.agent_status);
   const filePathActions = useFilePathActions(selectedWorkspaceId ?? "");
+  const refocusExplorer = useCallback(() => {
+    setFocusRequest((request) => request + 1);
+  }, []);
 
   const loadFiles = useCallback(
     async (workspaceId: string, showLoading: boolean) => {
@@ -162,10 +166,12 @@ export function FilesPanel() {
           onActivateDiff={handleActivateDiff}
           onContextMenu={(target, x, y) => setContextMenu({ target, x, y })}
           creatingParentPath={creatingParentPath}
+          focusRequest={focusRequest}
           onCreateCommit={async (parentPath, name) => {
             try {
               await filePathActions.createFile(parentPath, name);
               setCreatingParentPath(null);
+              refocusExplorer();
               return true;
             } catch (err) {
               console.error("Failed to create file:", err);
@@ -173,12 +179,16 @@ export function FilesPanel() {
               return false;
             }
           }}
-          onCreateCancel={() => setCreatingParentPath(null)}
+          onCreateCancel={() => {
+            setCreatingParentPath(null);
+            refocusExplorer();
+          }}
           renamingPath={renamingTarget?.path ?? null}
           onRenameCommit={async (target, newName) => {
             try {
               await filePathActions.renamePath(target, newName);
               setRenamingTarget(null);
+              refocusExplorer();
               return true;
             } catch (err) {
               console.error("Failed to rename file:", err);
@@ -186,7 +196,10 @@ export function FilesPanel() {
               return false;
             }
           }}
-          onRenameCancel={() => setRenamingTarget(null)}
+          onRenameCancel={() => {
+            setRenamingTarget(null);
+            refocusExplorer();
+          }}
         />
       )}
       {contextMenu && (
@@ -203,6 +216,7 @@ export function FilesPanel() {
             setCreatingParentPath(clean);
           }}
           onRenameRequest={(target) => setRenamingTarget(target)}
+          onOperationComplete={refocusExplorer}
           onClose={() => setContextMenu(null)}
         />
       )}
