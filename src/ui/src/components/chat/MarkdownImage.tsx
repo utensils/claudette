@@ -84,8 +84,56 @@ function dataUrlIsSvg(src: string): boolean {
   return /^data:image\/svg\+xml(?:[;,]|$)/i.test(src);
 }
 
-function firstSrcSetUrl(srcSet: string): string {
-  return srcSet.trim().split(/\s+/)[0] ?? "";
+function parseSrcSetCandidate(candidate: string): {
+  src: string;
+  descriptor: string;
+} | null {
+  const trimmed = candidate.trim();
+  if (!trimmed) return null;
+  const match = trimmed.match(/^(\S+)(?:\s+(.+))?$/);
+  if (!match) return null;
+  return {
+    src: match[1],
+    descriptor: match[2]?.trim() ?? "",
+  };
+}
+
+function isPassThroughSrc(src: string): boolean {
+  return ABSOLUTE_HREF.test(src) || src.startsWith("data:") || src.startsWith("blob:");
+}
+
+async function resolveWorkspaceImageSrc(
+  base: MarkdownImageBase,
+  src: string,
+): Promise<string> {
+  const path = joinRelative(base.dir, src);
+  const res = await readWorkspaceFileBytes(base.workspaceId, path);
+  const mime = imageMediaType(path) ?? "image/png";
+  return imageDataUrl(mime, res.bytes_b64);
+}
+
+async function resolveWorkspaceSrcSet(
+  base: MarkdownImageBase,
+  srcSet: string,
+): Promise<string> {
+  const candidates = srcSet
+    .split(",")
+    .map(parseSrcSetCandidate)
+    .filter((candidate): candidate is NonNullable<typeof candidate> =>
+      candidate !== null,
+    );
+  if (candidates.length === 0) return srcSet;
+
+  const resolvedCandidates = await Promise.all(
+    candidates.map(async ({ src, descriptor }) => {
+      const resolvedSrc = isPassThroughSrc(src)
+        ? src
+        : await resolveWorkspaceImageSrc(base, src);
+      return descriptor ? `${resolvedSrc} ${descriptor}` : resolvedSrc;
+    }),
+  );
+
+  return resolvedCandidates.join(", ");
 }
 
 /**
@@ -110,7 +158,7 @@ export const MarkdownImage = memo(function MarkdownImage(
       setResolved(null);
       return;
     }
-    if (ABSOLUTE_HREF.test(src) || src.startsWith("data:") || src.startsWith("blob:")) {
+    if (isPassThroughSrc(src)) {
       setResolved(src);
       return;
     }
@@ -120,17 +168,16 @@ export const MarkdownImage = memo(function MarkdownImage(
       setResolved(src);
       return;
     }
-    const path = joinRelative(base.dir, src);
+    setResolved(null);
     let cancelled = false;
-    readWorkspaceFileBytes(base.workspaceId, path)
-      .then((res) => {
+    resolveWorkspaceImageSrc(base, src)
+      .then((dataUrl) => {
         if (cancelled) return;
-        const mime = imageMediaType(path) ?? "image/png";
-        setResolved(imageDataUrl(mime, res.bytes_b64));
+        setResolved(dataUrl);
       })
       .catch((err) => {
         if (cancelled) return;
-        console.warn("Failed to load markdown image:", path, err);
+        console.warn("Failed to load markdown image:", src, err);
         setErrored(true);
       });
     return () => {
@@ -182,13 +229,16 @@ export const MarkdownPictureSource = memo(function MarkdownPictureSource(
       setResolved(null);
       return;
     }
-    const src = firstSrcSetUrl(srcSet);
     if (
-      !src ||
-      ABSOLUTE_HREF.test(src) ||
-      src.startsWith("data:") ||
-      src.startsWith("blob:")
+      srcSet.trimStart().startsWith("data:") ||
+      srcSet.trimStart().startsWith("blob:")
     ) {
+      setResolved(srcSet);
+      return;
+    }
+    const firstCandidate = parseSrcSetCandidate(srcSet.split(",")[0] ?? "");
+    const src = firstCandidate?.src ?? "";
+    if (!src) {
       setResolved(srcSet);
       return;
     }
@@ -197,19 +247,16 @@ export const MarkdownPictureSource = memo(function MarkdownPictureSource(
       return;
     }
 
-    const path = joinRelative(base.dir, src);
+    setResolved(null);
     let cancelled = false;
-    readWorkspaceFileBytes(base.workspaceId, path)
-      .then((res) => {
+    resolveWorkspaceSrcSet(base, srcSet)
+      .then((resolvedSrcSet) => {
         if (cancelled) return;
-        const mime = imageMediaType(path) ?? "image/png";
-        const dataUrl = imageDataUrl(mime, res.bytes_b64);
-        const descriptor = srcSet.trim().slice(src.length).trim();
-        setResolved(descriptor ? `${dataUrl} ${descriptor}` : dataUrl);
+        setResolved(resolvedSrcSet);
       })
       .catch((err) => {
         if (cancelled) return;
-        console.warn("Failed to load markdown picture source:", path, err);
+        console.warn("Failed to load markdown picture source:", srcSet, err);
         setResolved(null);
       });
     return () => {

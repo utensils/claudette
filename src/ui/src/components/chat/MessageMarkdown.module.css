@@ -215,6 +215,9 @@
 
 .body :where(img) {
   max-width: 100%;
+}
+
+.body :where(img:not([height])) {
   height: auto;
 }
 
