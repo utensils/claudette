@@ -86,15 +86,56 @@ impl Database {
             .optional()
     }
 
-    pub fn update_remote_connection_session(
+    /// Look up a saved connection by (host, port). Used by the pairing
+    /// flow to detect "this is a re-pair against a host we already
+    /// know" and refresh the existing row instead of inserting a
+    /// duplicate sidebar entry.
+    pub fn find_remote_connection_by_host_port(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> Result<Option<RemoteConnection>, rusqlite::Error> {
+        self.conn
+            .query_row(
+                "SELECT id, name, host, port, session_token, cert_fingerprint, auto_connect, created_at
+                 FROM remote_connections WHERE host = ?1 AND port = ?2
+                 ORDER BY created_at LIMIT 1",
+                params![host, port as i32],
+                |row| {
+                    let auto_connect_int: i32 = row.get(6)?;
+                    Ok(RemoteConnection {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        host: row.get(2)?,
+                        port: Self::parse_port(row, 3)?,
+                        session_token: row.get(4)?,
+                        cert_fingerprint: row.get(5)?,
+                        auto_connect: auto_connect_int != 0,
+                        created_at: row.get(7)?,
+                    })
+                },
+            )
+            .optional()
+    }
+
+    /// Refresh the volatile fields of an existing connection after a
+    /// successful re-pair: the host's display name (it may have been
+    /// renamed), the freshly-issued session token, and the cert
+    /// fingerprint observed during the new TLS handshake. The id and
+    /// `created_at` are preserved so the sidebar entry keeps its
+    /// stable identity across re-pairs.
+    pub fn update_remote_connection_pairing(
         &self,
         id: &str,
+        name: &str,
         session_token: &str,
         cert_fingerprint: &str,
     ) -> Result<(), rusqlite::Error> {
         self.conn.execute(
-            "UPDATE remote_connections SET session_token = ?1, cert_fingerprint = ?2 WHERE id = ?3",
-            params![session_token, cert_fingerprint, id],
+            "UPDATE remote_connections
+             SET name = ?1, session_token = ?2, cert_fingerprint = ?3
+             WHERE id = ?4",
+            params![name, session_token, cert_fingerprint, id],
         )?;
         Ok(())
     }
@@ -156,15 +197,48 @@ mod tests {
     }
 
     #[test]
-    fn test_update_remote_connection_session() {
+    fn test_update_remote_connection_pairing() {
         let db = Database::open_in_memory().unwrap();
         db.insert_remote_connection(&make_remote_conn("rc1", "Server A", "host-a.local", 7683))
             .unwrap();
-        db.update_remote_connection_session("rc1", "tok-123", "fp-abc")
+        let original_created_at = db.get_remote_connection("rc1").unwrap().unwrap().created_at;
+        db.update_remote_connection_pairing("rc1", "Server A v2", "tok-123", "fp-abc")
             .unwrap();
         let conn = db.get_remote_connection("rc1").unwrap().unwrap();
+        assert_eq!(conn.name, "Server A v2");
         assert_eq!(conn.session_token.as_deref(), Some("tok-123"));
         assert_eq!(conn.cert_fingerprint.as_deref(), Some("fp-abc"));
+        // Stable identity: id + created_at survive a re-pair so the sidebar
+        // entry doesn't shift position or lose its provenance.
+        assert_eq!(conn.id, "rc1");
+        assert_eq!(conn.created_at, original_created_at);
+    }
+
+    #[test]
+    fn test_find_remote_connection_by_host_port() {
+        let db = Database::open_in_memory().unwrap();
+        db.insert_remote_connection(&make_remote_conn("rc1", "Server A", "host-a.local", 7683))
+            .unwrap();
+        db.insert_remote_connection(&make_remote_conn("rc2", "Server B", "host-b.local", 9000))
+            .unwrap();
+
+        let hit = db
+            .find_remote_connection_by_host_port("host-a.local", 7683)
+            .unwrap()
+            .expect("expected to find host-a");
+        assert_eq!(hit.id, "rc1");
+
+        // Different port on the same host is treated as a distinct server.
+        let miss_port = db
+            .find_remote_connection_by_host_port("host-a.local", 9999)
+            .unwrap();
+        assert!(miss_port.is_none());
+
+        // Different host: also a miss.
+        let miss_host = db
+            .find_remote_connection_by_host_port("host-c.local", 7683)
+            .unwrap();
+        assert!(miss_host.is_none());
     }
 
     #[test]

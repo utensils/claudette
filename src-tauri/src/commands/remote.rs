@@ -109,28 +109,47 @@ pub async fn pair_with_server(
         .authenticate_pairing(&pairing_token, &hostname)
         .await?;
 
-    let connection_id = uuid::Uuid::new_v4().to_string();
-
-    // Persist to DB.
+    // Persist to DB. If we already have a row for this host:port,
+    // refresh it in place rather than inserting a duplicate. Re-pairing
+    // against the same nearby server, or pasting another connection
+    // string from a host we already know, otherwise produces a second
+    // sidebar entry while the first is left holding a dead session
+    // token (the user-visible "stale, unusable connection" symptom).
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
-    let db_conn = claudette::model::RemoteConnection {
-        id: connection_id.clone(),
-        name: auth.server_name.clone(),
-        host: host.clone(),
-        port,
-        session_token: auth.session_token.clone(),
-        cert_fingerprint: Some(cert_fingerprint.clone()),
-        auto_connect: false,
-        created_at: String::new(),
-    };
-    db.insert_remote_connection(&db_conn)
-        .map_err(|e| e.to_string())?;
-
-    // Re-fetch to get the DB-generated created_at timestamp.
-    let saved = db
-        .get_remote_connection(&connection_id)
+    let session_token_str = auth.session_token.clone().unwrap_or_default();
+    let saved = if let Some(existing) = db
+        .find_remote_connection_by_host_port(&host, port)
         .map_err(|e| e.to_string())?
-        .ok_or("Failed to re-read saved connection")?;
+    {
+        db.update_remote_connection_pairing(
+            &existing.id,
+            &auth.server_name,
+            &session_token_str,
+            &cert_fingerprint,
+        )
+        .map_err(|e| e.to_string())?;
+        db.get_remote_connection(&existing.id)
+            .map_err(|e| e.to_string())?
+            .ok_or("Failed to re-read updated connection")?
+    } else {
+        let connection_id = uuid::Uuid::new_v4().to_string();
+        let db_conn = claudette::model::RemoteConnection {
+            id: connection_id.clone(),
+            name: auth.server_name.clone(),
+            host: host.clone(),
+            port,
+            session_token: auth.session_token.clone(),
+            cert_fingerprint: Some(cert_fingerprint.clone()),
+            auto_connect: false,
+            created_at: String::new(),
+        };
+        db.insert_remote_connection(&db_conn)
+            .map_err(|e| e.to_string())?;
+        // Re-fetch to get the DB-generated created_at timestamp.
+        db.get_remote_connection(&connection_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("Failed to re-read saved connection")?
+    };
 
     let info = RemoteConnectionInfo {
         id: saved.id,

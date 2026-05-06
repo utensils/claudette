@@ -57,8 +57,20 @@ export const createRemoteSlice: StateCreator<
   discoveredServers: [],
   activeRemoteIds: [],
   setRemoteConnections: (conns) => set({ remoteConnections: conns }),
+  // Upsert by id. The pairing flow now refreshes an existing row in
+  // place when re-pairing the same host:port, returning the original
+  // connection id; an unconditional append would leave the old entry
+  // shadowing the refreshed one in the sidebar.
   addRemoteConnection: (conn) =>
-    set((s) => ({ remoteConnections: [...s.remoteConnections, conn] })),
+    set((s) => {
+      const idx = s.remoteConnections.findIndex((c) => c.id === conn.id);
+      if (idx === -1) {
+        return { remoteConnections: [...s.remoteConnections, conn] };
+      }
+      const merged = [...s.remoteConnections];
+      merged[idx] = conn;
+      return { remoteConnections: merged };
+    }),
   removeRemoteConnection: (id) =>
     set((s) => ({
       remoteConnections: s.remoteConnections.filter((c) => c.id !== id),
