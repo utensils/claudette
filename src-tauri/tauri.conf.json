@@ -3,7 +3,7 @@
   "mainBinaryName": "claudette-app",
   "identifier": "com.claudette.app",
   "build": {
-    "beforeDevCommand": { "script": "bun install && bun run dev", "cwd": "../src/ui" },
+    "beforeDevCommand": { "script": "../../scripts/stage-cli-sidecar.sh --profile debug && bun install && bun run dev", "cwd": "../src/ui" },
     "beforeBuildCommand": { "script": "bun install && bun run build", "cwd": "../src/ui" },
     "devUrl": "http://localhost:14253",
     "frontendDist": "../src/ui/dist"
