@@ -271,6 +271,10 @@ pub struct FileTreeGitStatus {
 /// Return current index/worktree git status plus paths that should be hidden
 /// from `git ls-files` output, suitable for building the file tree without
 /// per-path filesystem stats.
+///
+/// `suppressed_paths` is intentionally narrow: today it contains only tracked
+/// deletion entries that Git reports for an unstaged same-content rename, where
+/// the new path is still untracked. It is not a general-purpose ignore channel.
 pub async fn file_tree_git_status_with_suppressed(
     worktree_path: &str,
 ) -> Result<FileTreeGitStatus, DiffError> {
@@ -1914,6 +1918,44 @@ mod integration_tests {
 
         assert!(!status.contains_key("index.rs"));
         assert!(status_result.suppressed_paths.contains("index.rs"));
+        assert_eq!(
+            status.get("index2.rs"),
+            Some(&GitStatusEntry {
+                status: FileStatus::Added,
+                layer: GitFileLayer::Untracked,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_file_tree_git_status_keeps_deleted_when_untracked_content_differs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        git_cmd(dir, &["init", "-b", "main"]);
+        git_cmd(dir, &["config", "user.email", "test@test.com"]);
+        git_cmd(dir, &["config", "user.name", "Test"]);
+        git_cmd(dir, &["config", "core.autocrlf", "false"]);
+        std::fs::write(dir.join("index.rs"), "fn main() {}\n").unwrap();
+        git_cmd(dir, &["add", "."]);
+        git_cmd(dir, &["commit", "-m", "initial"]);
+
+        std::fs::rename(dir.join("index.rs"), dir.join("index2.rs")).unwrap();
+        std::fs::write(dir.join("index2.rs"), "fn changed() {}\n").unwrap();
+
+        let status_result = file_tree_git_status_with_suppressed(dir.to_str().unwrap())
+            .await
+            .unwrap();
+        let status = status_result.statuses;
+
+        assert!(status_result.suppressed_paths.is_empty());
+        assert_eq!(
+            status.get("index.rs"),
+            Some(&GitStatusEntry {
+                status: FileStatus::Deleted,
+                layer: GitFileLayer::Unstaged,
+            })
+        );
         assert_eq!(
             status.get("index2.rs"),
             Some(&GitStatusEntry {

@@ -348,6 +348,8 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
       if ((tag === "input" || tag === "textarea" || el.isContentEditable) && !inMonaco) {
         return;
       }
+      // File-tab close is a viewer-level command; it intentionally wins while
+      // focus is inside Monaco so mod+w behaves like the tab strip shortcut.
       e.preventDefault();
       if (action === "file-viewer.undo-file-operation") {
         void undoLastFilePathOperation();

@@ -877,10 +877,14 @@ fn move_to_trash_path_macos(path: &Path, target: &Path) -> Result<(), String> {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == std::io::ErrorKind::CrossesDevices => {
             copy_to_trash_path_macos(path, target)?;
-            if path.is_dir() {
-                std::fs::remove_dir_all(path).map_err(|e| format!("remove trashed dir: {e}"))?;
+            let remove_result = if path.is_dir() {
+                std::fs::remove_dir_all(path).map_err(|e| format!("remove trashed dir: {e}"))
             } else {
-                std::fs::remove_file(path).map_err(|e| format!("remove trashed file: {e}"))?;
+                std::fs::remove_file(path).map_err(|e| format!("remove trashed file: {e}"))
+            };
+            if let Err(err) = remove_result {
+                cleanup_trash_copy_macos(target);
+                return Err(err);
             }
             Ok(())
         }
@@ -908,6 +912,18 @@ fn copy_to_trash_path_macos(path: &Path, target: &Path) -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
+fn cleanup_trash_copy_macos(target: &Path) {
+    let Ok(metadata) = std::fs::symlink_metadata(target) else {
+        return;
+    };
+    let _ = if metadata.is_dir() {
+        std::fs::remove_dir_all(target)
+    } else {
+        std::fs::remove_file(target)
+    };
+}
+
+#[cfg(target_os = "macos")]
 fn copy_dir_all_macos(source: &Path, target: &Path) -> Result<(), String> {
     std::fs::create_dir(target).map_err(|e| format!("copy trash dir: {e}"))?;
     for entry in std::fs::read_dir(source).map_err(|e| format!("read dir: {e}"))? {
@@ -927,6 +943,11 @@ fn copy_dir_all_macos(source: &Path, target: &Path) -> Result<(), String> {
                 std::fs::read_link(&source_path).map_err(|e| format!("read symlink: {e}"))?;
             std::os::unix::fs::symlink(link_target, &target_path)
                 .map_err(|e| format!("copy trash symlink: {e}"))?;
+        } else {
+            return Err(format!(
+                "unsupported file type at {}",
+                source_path.display()
+            ));
         }
     }
     Ok(())

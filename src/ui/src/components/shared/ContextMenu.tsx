@@ -65,7 +65,10 @@ export function ContextMenu({
     const rect = menuRef.current?.getBoundingClientRect();
     if (!rect) return;
     setMeasured((prev) => {
-      const next = { width: rect.width, height: rect.height };
+      const next = {
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      };
       if (prev?.width === next.width && prev.height === next.height) return prev;
       return next;
     });

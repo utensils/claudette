@@ -188,6 +188,9 @@ async function runUndoFilePathOperation(
     // The backend rename command currently accepts names only, not paths, so
     // undo can restore the old sibling name without storing a full move target.
     const oldName = operation.oldPath.split("/").pop() ?? operation.oldPath;
+    if (oldName.includes("/") || oldName.includes("\\")) {
+      throw new Error("Cannot undo rename with a nested target name");
+    }
     const result = await renameWorkspacePath(
       workspaceId,
       operation.newPath,
