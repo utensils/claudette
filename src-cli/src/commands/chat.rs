@@ -432,7 +432,8 @@ fn build_answer_params(
     tool_use_id: &str,
     answers_json: &str,
 ) -> Result<serde_json::Value, Box<dyn Error>> {
-    let answers: serde_json::Value = serde_json::from_str(answers_json)
+    let raw_answers = resolve_prompt(answers_json)?;
+    let answers: serde_json::Value = serde_json::from_str(&raw_answers)
         .map_err(|e| format!("answers-json must be a JSON object: {e}"))?;
     if !answers.is_object() {
         return Err("answers-json must be a JSON object".into());
@@ -527,6 +528,20 @@ mod tests {
         assert_eq!(ok["answers"]["Question?"], "Answer");
         assert!(build_answer_params("s1", "toolu_1", "[]").is_err());
         assert!(build_answer_params("s1", "toolu_1", "not json").is_err());
+    }
+
+    #[test]
+    fn build_answer_params_reads_json_from_file() {
+        let path = std::env::temp_dir().join(format!(
+            "claudette-cli-chat-test-{}-answers.json",
+            std::process::id()
+        ));
+        let mut file = std::fs::File::create(&path).unwrap();
+        file.write_all(br#"{"Question?":"From file"}"#).unwrap();
+
+        let params = build_answer_params("s1", "toolu_1", &format!("@{}", path.display())).unwrap();
+        assert_eq!(params["answers"]["Question?"], "From file");
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
