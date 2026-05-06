@@ -105,20 +105,23 @@ export function AppLayout() {
           </div>
         )}
         <div className={`${styles.viewPanel} ${settingsOpen ? styles.hidden : ""}`}>
+          <div
+            className={`${styles.sidebar} ${sidebarVisible ? "" : styles.sidebarHidden}`}
+            aria-hidden={!sidebarVisible}
+          >
+            <div className={styles.sidebarContent}>
+              <Sidebar />
+            </div>
+          </div>
           {sidebarVisible && (
-            <>
-              <div className={styles.sidebar}>
-                <Sidebar />
-              </div>
-              <ResizeHandle
-                direction="horizontal"
-                targetRef={mainRef}
-                cssVar="--sidebar-w"
-                min={150}
-                max={600}
-                onResizeEnd={handleLeftResizeEnd}
-              />
-            </>
+            <ResizeHandle
+              direction="horizontal"
+              targetRef={mainRef}
+              cssVar="--sidebar-w"
+              min={150}
+              max={600}
+              onResizeEnd={handleLeftResizeEnd}
+            />
           )}
           <div className={styles.center}>
             <div className={styles.content}>
@@ -155,25 +158,33 @@ export function AppLayout() {
             )}
             {selectedWorkspaceId && (
               <div
-                className={`${styles.terminal} ${terminalPanelVisible ? "" : styles.hidden}`}
+                className={`${styles.terminal} ${terminalPanelVisible ? "" : styles.terminalHidden}`}
+                aria-hidden={!terminalPanelVisible}
               >
                 <TerminalPanel />
               </div>
             )}
           </div>
-          {rightSidebarVisible && selectedWorkspaceId && (
+          {selectedWorkspaceId && (
             <>
-              <ResizeHandle
-                direction="horizontal"
-                targetRef={mainRef}
-                cssVar="--right-sidebar-w"
-                min={150}
-                max={600}
-                invert
-                onResizeEnd={handleRightResizeEnd}
-              />
-              <div className={styles.rightSidebar}>
-                <RightSidebar />
+              {rightSidebarVisible && (
+                <ResizeHandle
+                  direction="horizontal"
+                  targetRef={mainRef}
+                  cssVar="--right-sidebar-w"
+                  min={150}
+                  max={600}
+                  invert
+                  onResizeEnd={handleRightResizeEnd}
+                />
+              )}
+              <div
+                className={`${styles.rightSidebar} ${rightSidebarVisible ? "" : styles.rightSidebarHidden}`}
+                aria-hidden={!rightSidebarVisible}
+              >
+                <div className={styles.rightSidebarContent}>
+                  <RightSidebar />
+                </div>
               </div>
             </>
           )}
