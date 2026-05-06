@@ -18,7 +18,12 @@ const RELEASE_URL_BASE = "https://github.com/utensils/claudette/releases/tag/v";
 // are both in CSS pixels and scale together under html zoom — no
 // conversion needed. (`AttachmentContextMenu`'s `viewportToFixed`
 // conversion is for `MouseEvent.clientX/Y`, which is a different beast.)
-const MENU_GAP = 6;
+//
+// 10 matches the visual breathing room of `ReasoningPill`'s dropdown
+// (`bottom: calc(100% + 8px)` plus its slightly larger button padding)
+// — enough that the trigger icon stays clear of the menu's rounded
+// bottom-left corner without floating off into the sidebar gap.
+const MENU_GAP = 10;
 // Safety margin from viewport edges when clamping.
 const VIEWPORT_MARGIN = 8;
 
