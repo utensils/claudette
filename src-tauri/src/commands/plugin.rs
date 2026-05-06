@@ -171,7 +171,11 @@ pub async fn update_all_plugins(
 
     let mut failed = Vec::new();
     let mut succeeded = 0;
-
+    // Per-plugin spawn failures might also be `MISSING_CLI:claude` — route
+    // each one through `map_plugin_err` so the missing-dependency event
+    // fires (and the sentinel becomes a user-facing string in the bulk
+    // result). `handle_err` is cheap and the modal only opens once even if
+    // we emit the event multiple times, so we don't need to dedupe here.
     for plugin_entry in &update_targets {
         match plugin::run_claude_plugin_command(
             repo_path.as_deref(),
@@ -184,7 +188,7 @@ pub async fn update_all_plugins(
                 "{} ({}) — {}",
                 plugin_entry.plugin_id,
                 plugin_entry.scope.as_cli_arg(),
-                error
+                map_plugin_err(&app, error)
             )),
         }
     }

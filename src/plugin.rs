@@ -356,12 +356,19 @@ pub async fn run_claude_plugin_command(
     repo_path: Option<&Path>,
     args: &[String],
 ) -> Result<String, String> {
-    // Resolve claude up front. If it isn't on the enriched PATH, return the
-    // structured `MISSING_CLI:claude` sentinel so the Tauri/UI layer can render
-    // the install-CTA modal (see `crate::missing_cli`) instead of leaking a
-    // bare `os error 2` (issue #641).
-    let claude_path = crate::env::which_in_enriched_path("claude")
-        .map_err(|_| crate::missing_cli::format_err("claude"))?;
+    // Resolve claude up front. If it genuinely isn't on the enriched PATH,
+    // return the structured `MISSING_CLI:claude` sentinel so the Tauri/UI
+    // layer can render the install-CTA modal (see `crate::missing_cli`)
+    // instead of leaking a bare `os error 2` (issue #641).
+    //
+    // Only `CannotFindBinaryPath` means "binary not found" — other variants
+    // (`CannotGetCurrentDirAndPathListEmpty`, `CannotCanonicalize`) signal
+    // real I/O / cwd issues that the user shouldn't be told to "install
+    // claude" to fix. Surface those with their original message instead.
+    let claude_path = crate::env::which_in_enriched_path("claude").map_err(|e| match e {
+        which::Error::CannotFindBinaryPath => crate::missing_cli::format_err("claude"),
+        other => format!("Failed to resolve `claude` on PATH: {other}"),
+    })?;
     let current_dir = plugin_command_cwd(repo_path);
 
     let output = tokio::process::Command::new(&claude_path)
