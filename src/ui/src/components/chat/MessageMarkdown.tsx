@@ -8,7 +8,7 @@ import {
   REMARK_PLUGINS,
   safeUrlTransform,
 } from "../../utils/markdown";
-import { MarkdownImage } from "./MarkdownImage";
+import { MarkdownImage, MarkdownPictureSource } from "./MarkdownImage";
 import styles from "./MessageMarkdown.module.css";
 
 // Single shared component map. `MARKDOWN_COMPONENTS` covers `<a>`, `<pre>`,
@@ -19,6 +19,7 @@ import styles from "./MessageMarkdown.module.css";
 const COMPONENTS: Components = {
   ...MARKDOWN_COMPONENTS,
   img: MarkdownImage,
+  source: MarkdownPictureSource,
 };
 
 /**

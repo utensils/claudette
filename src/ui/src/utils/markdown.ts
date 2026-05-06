@@ -115,6 +115,18 @@ export const SANITIZE_SCHEMA = {
       ),
       "className",
     ],
+    img: [
+      ...(defaultSchema.attributes?.img ?? []),
+      "alt",
+      "height",
+      "width",
+    ],
+    source: [
+      ...(defaultSchema.attributes?.source ?? []),
+      "media",
+      "sizes",
+      "type",
+    ],
     "*": [...(defaultSchema.attributes?.["*"] ?? []), "class"],
   },
   protocols: {
@@ -124,6 +136,18 @@ export const SANITIZE_SCHEMA = {
       // The trailing colon is *not* part of the scheme name in the
       // hast-util-sanitize allow-list — strip it.
       FILE_PATH_SCHEME.replace(/:$/, ""),
+    ],
+    src: [
+      ...(defaultSchema.protocols?.src ?? []),
+      // Markdown image previews may embed workspace SVG bytes as
+      // `data:image/svg+xml...` after resolving a relative repo path.
+      // `safeUrlTransform` below still restricts `data:` to image `src`
+      // attributes only; link hrefs keep the stricter default allow-list.
+      "data",
+    ],
+    srcSet: [
+      ...(defaultSchema.protocols?.srcSet ?? []),
+      "data",
     ],
   },
 };
@@ -154,8 +178,28 @@ export const EXTERNAL_SCHEMES = /^https?:|^mailto:/i;
  * `claudettepath:` autolinker scheme. This wrapper preserves the default
  * safe-list and lets our scheme through; everything else still goes
  * through the same protocol gate as upstream. */
-export function safeUrlTransform(value: string): string {
+export function safeUrlTransform(
+  value: string,
+  key?: string,
+  node?: { tagName?: string },
+): string {
   if (value.startsWith(FILE_PATH_SCHEME)) return value;
+  if (
+    key === "src" &&
+    node?.tagName === "img" &&
+    /^data:image\/(?:png|jpe?g|gif|webp|svg\+xml|x-icon|bmp|avif|apng)(?:[;,]|$)/i
+      .test(value)
+  ) {
+    return value;
+  }
+  if (
+    key === "srcSet" &&
+    node?.tagName === "source" &&
+    /^data:image\/(?:png|jpe?g|gif|webp|svg\+xml|x-icon|bmp|avif|apng)(?:[;,]|$)/i
+      .test(value)
+  ) {
+    return value;
+  }
   // Inline copy of react-markdown's defaultUrlTransform logic so we don't
   // have to import an internal export. Behavior mirrors upstream so the
   // upgrade story stays simple.

@@ -8,7 +8,13 @@ vi.mock("./highlight", () => ({
   highlightCode: vi.fn(),
 }));
 
-import { EXTERNAL_SCHEMES, MARKDOWN_COMPONENTS, HighlightedCode } from "./markdown";
+import {
+  EXTERNAL_SCHEMES,
+  MARKDOWN_COMPONENTS,
+  SANITIZE_SCHEMA,
+  HighlightedCode,
+  safeUrlTransform,
+} from "./markdown";
 import { getCachedHighlight, highlightCode } from "./highlight";
 
 describe("EXTERNAL_SCHEMES", () => {
@@ -81,6 +87,40 @@ describe("MARKDOWN_COMPONENTS.code wiring", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const props = (el as unknown as { props: any }).props;
     expect(props.node).toBeUndefined();
+  });
+});
+
+describe("safeUrlTransform", () => {
+  it("allows SVG data URLs only for image src/srcSet attributes", () => {
+    const svg = "data:image/svg+xml;charset=utf-8,%3Csvg%2F%3E";
+
+    expect(safeUrlTransform(svg, "src", { tagName: "img" })).toBe(svg);
+    expect(safeUrlTransform(svg, "srcSet", { tagName: "source" })).toBe(svg);
+    expect(safeUrlTransform(svg, "href", { tagName: "a" })).toBe("");
+    expect(safeUrlTransform(svg)).toBe("");
+  });
+
+  it("rejects non-image data URLs for image src attributes", () => {
+    expect(
+      safeUrlTransform("data:text/html,<script>alert(1)</script>", "src", {
+        tagName: "img",
+      }),
+    ).toBe("");
+  });
+
+  it("keeps data protocol sanitization scoped to image src", () => {
+    expect(SANITIZE_SCHEMA.protocols.src).toContain("data");
+    expect(SANITIZE_SCHEMA.protocols.srcSet).toContain("data");
+    expect(SANITIZE_SCHEMA.protocols.href).not.toContain("data");
+  });
+
+  it("preserves GitHub-style picture attributes", () => {
+    expect(SANITIZE_SCHEMA.attributes.img).toEqual(
+      expect.arrayContaining(["src", "alt", "width", "height"]),
+    );
+    expect(SANITIZE_SCHEMA.attributes.source).toEqual(
+      expect.arrayContaining(["srcSet", "media"]),
+    );
   });
 });
 
