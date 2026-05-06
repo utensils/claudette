@@ -31,10 +31,12 @@ use crate::commands::{
                   See `claudette capabilities` for available methods."
 )]
 struct Cli {
-    /// Print machine-readable JSON instead of a human-readable table.
-    /// Currently a no-op for commands that already speak JSON
-    /// (`capabilities`, `rpc`); future table-rendering commands will
-    /// honour this flag.
+    /// Print machine-readable JSON for commands that have a
+    /// human-readable renderer (today: `workspace list`, `chat list`,
+    /// `pr list`/`show`, `plugin list`). Other commands always emit
+    /// JSON regardless of this flag (`capabilities`, `rpc`, `workspace
+    /// create`, `workspace archive`, etc. — they have no table-style
+    /// renderer yet).
     #[arg(long, global = true)]
     json: bool,
 

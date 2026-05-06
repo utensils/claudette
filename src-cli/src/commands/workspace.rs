@@ -26,10 +26,18 @@ pub enum Action {
     Archive {
         /// Workspace ID.
         id: String,
-        /// Also delete the workspace's branch (matches the GUI's
-        /// `git_delete_branch_on_archive` setting).
-        #[arg(long)]
+        /// Force delete the workspace's branch on archive (overrides the
+        /// GUI's `git_delete_branch_on_archive` setting). Pair: pass
+        /// `--no-delete-branch` to force the branch to stay even when
+        /// the GUI setting is on. Omit both to defer to the GUI setting.
+        #[arg(long, overrides_with = "no_delete_branch")]
         delete_branch: bool,
+        #[arg(
+            long = "no-delete-branch",
+            overrides_with = "delete_branch",
+            hide = true
+        )]
+        no_delete_branch: bool,
     },
 }
 
@@ -53,16 +61,27 @@ pub async fn run(action: Action, json: bool) -> Result<(), Box<dyn Error>> {
             .await?;
             output::print_json(&value)?;
         }
-        Action::Archive { id, delete_branch } => {
-            let value = ipc::call(
-                &info,
-                "archive_workspace",
-                serde_json::json!({
-                    "workspace_id": id,
-                    "delete_branch": delete_branch,
-                }),
-            )
-            .await?;
+        Action::Archive {
+            id,
+            delete_branch,
+            no_delete_branch,
+        } => {
+            // Tri-state: only forward an override when the user
+            // explicitly asked. The IPC handler treats presence as an
+            // override of `git_delete_branch_on_archive`, so omitting
+            // the field defers to the GUI setting.
+            let override_value = if delete_branch {
+                Some(true)
+            } else if no_delete_branch {
+                Some(false)
+            } else {
+                None
+            };
+            let mut params = serde_json::json!({ "workspace_id": id });
+            if let Some(v) = override_value {
+                params["delete_branch"] = serde_json::Value::Bool(v);
+            }
+            let value = ipc::call(&info, "archive_workspace", params).await?;
             output::print_json(&value)?;
         }
     }
