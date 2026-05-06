@@ -75,7 +75,7 @@ const STATUS_CONFIG: Record<
 
 export const PrStatusBanner = memo(function PrStatusBanner() {
   const { pr, checks, status } = usePrBannerData();
-  const [checksOpen, setChecksOpen] = useState(true);
+  const [checksOpen, setChecksOpen] = useState(false);
   const sortedChecks = useMemo(() => sortCiChecks(checks), [checks]);
   const checksSummary = useMemo(() => summarizeCiChecks(checks), [checks]);
 
@@ -87,47 +87,51 @@ export const PrStatusBanner = memo(function PrStatusBanner() {
 
   return (
     <div className={`${styles.banner} ${config.bannerClass}`}>
-      <div className={styles.summaryRow}>
+      <button
+        type="button"
+        className={`${styles.prPill} ${config.fgClass}`}
+        onClick={() => openUrl(pr.url)}
+        title={`Open PR #${pr.number} in browser`}
+      >
+        <Icon size={14} />
+        <span className={styles.prNumber}>PR #{pr.number}</span>
+        <ExternalLink size={14} className={styles.externalIcon} />
+      </button>
+
+      {hasChecks ? (
         <button
           type="button"
-          className={`${styles.prPill} ${config.fgClass}`}
-          onClick={() => openUrl(pr.url)}
-          title={`Open PR #${pr.number} in browser`}
+          className={`${styles.statusButton} ${config.fgClass}`}
+          onClick={() => setChecksOpen((open) => !open)}
+          aria-expanded={checksOpen}
+          title={checksSummary.title}
         >
-          <Icon size={14} />
-          <span className={styles.prNumber}>PR #{pr.number}</span>
-          <ExternalLink size={14} className={styles.externalIcon} />
+          <span className={styles.statusText}>{config.text}</span>
+          <span className={styles.statusCount}>{checksSummary.total}</span>
+          <ChevronRight
+            size={14}
+            className={`${styles.statusChevron} ${checksOpen ? styles.chevronOpen : ""}`}
+            aria-hidden="true"
+          />
         </button>
-        <span className={`${styles.statusText} ${config.fgClass}`}>
+      ) : (
+        <span className={`${styles.statusText} ${styles.statusSolo} ${config.fgClass}`}>
           {config.text}
         </span>
-      </div>
+      )}
 
-      {hasChecks && (
+      {hasChecks && checksOpen && (
         <div className={styles.checksPanel}>
-          <button
-            type="button"
-            className={styles.checksToggle}
-            onClick={() => setChecksOpen((open) => !open)}
-            aria-expanded={checksOpen}
-          >
+          <div className={styles.checksHeader}>
             <CheckStatusIcon status={checkSummaryStatus(checksSummary)} />
             <span className={styles.checksTitle}>{checksSummary.title}</span>
-            <span className={styles.checkCount}>{checksSummary.total}</span>
-            <ChevronRight
-              size={14}
-              className={`${styles.chevron} ${checksOpen ? styles.chevronOpen : ""}`}
-              aria-hidden="true"
-            />
-          </button>
+          </div>
 
-          {checksOpen && (
-            <div className={styles.checkList}>
-              {sortedChecks.map((check) => (
-                <CheckRow key={`${check.name}:${check.url ?? ""}`} check={check} />
-              ))}
-            </div>
-          )}
+          <div className={styles.checkList}>
+            {sortedChecks.map((check) => (
+              <CheckRow key={`${check.name}:${check.url ?? ""}`} check={check} />
+            ))}
+          </div>
         </div>
       )}
     </div>
