@@ -57,6 +57,9 @@ const KeyboardSettings = lazy(() =>
     default: m.KeyboardSettings,
   })),
 );
+const CliSettings = lazy(() =>
+  import("./sections/CliSettings").then((m) => ({ default: m.CliSettings })),
+);
 
 function SectionContent({ section }: { section: string | null }) {
   const pluginManagementEnabled = useAppStore((s) => s.pluginManagementEnabled);
@@ -71,6 +74,7 @@ function SectionContent({ section }: { section: string | null }) {
   if (section === "editor") return <EditorSettings />;
   if (section === "git") return <GitSettings />;
   if (section === "keyboard") return <KeyboardSettings />;
+  if (section === "cli") return <CliSettings />;
   if (section === "pinned-prompts") return <PinnedPromptsSettings />;
   if (section === "plugins") return <PluginsSettings />;
   if (section === "claude-code-plugins") {

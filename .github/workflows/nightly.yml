@@ -198,6 +198,17 @@ jobs:
         shell: bash
         run: npx @tauri-apps/cli icon assets/logo.png
 
+      # Build the `claudette` CLI for the current matrix target and stage
+      # it where `bundle.externalBin` expects (`src-tauri/binaries/
+      # claudette-<TARGET_TRIPLE>`). Tauri's bundler picks it up and
+      # places it next to the GUI binary in the resulting artifact:
+      # `Claudette.app/Contents/MacOS/claudette` on macOS, `/usr/bin/
+      # claudette` in the .deb (auto-on-PATH for apt installs), and
+      # alongside `claudette-app` for AppImage / Windows zip.
+      - name: Build and stage CLI sidecar
+        shell: bash
+        run: scripts/stage-cli-sidecar.sh ${{ matrix.rust-target }}
+
       # ---- macOS + Linux: tauri-action drives the bundled build ------------
       - name: Build and upload desktop app (non-Windows)
         if: ${{ !startsWith(matrix.platform, 'windows') }}
@@ -278,6 +289,32 @@ jobs:
           ASSET="claudette-server-${{ matrix.label }}.zip"
           cp "$BIN" claudette-server.exe
           powershell -NoProfile -Command "Compress-Archive -Path 'claudette-server.exe' -DestinationPath '$ASSET' -Force"
+          gh release upload nightly-staging "$ASSET" --clobber
+
+      # Also publish the CLI as a standalone release asset for users who
+      # want it without installing the full desktop app (CI bots, headless
+      # servers, etc.). The same binary already ships inside the app
+      # artifacts above; this is just an extra distribution channel.
+      - name: Upload standalone CLI (non-Windows)
+        if: ${{ !startsWith(matrix.platform, 'windows') }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BIN="target/${{ matrix.rust-target }}/release/claudette"
+          ASSET="claudette-cli-${{ matrix.label }}"
+          cp "$BIN" "$ASSET"
+          gh release upload nightly-staging "$ASSET" --clobber
+
+      - name: Upload standalone CLI (Windows)
+        if: startsWith(matrix.platform, 'windows')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BIN="target/${{ matrix.rust-target }}/release/claudette.exe"
+          ASSET="claudette-cli-${{ matrix.label }}.zip"
+          cp "$BIN" claudette.exe
+          powershell -NoProfile -Command "Compress-Archive -Path 'claudette.exe' -DestinationPath '$ASSET' -Force"
           gh release upload nightly-staging "$ASSET" --clobber
 
   # Nightly builds are not announced to Discord — too noisy. Stable releases only.

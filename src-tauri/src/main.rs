@@ -631,6 +631,10 @@ fn main() {
             pty::close_pty,
             pty::detect_shell,
             // Settings
+            // CLI install/uninstall (Settings → CLI)
+            commands::cli::cli_status,
+            commands::cli::install_cli_on_path,
+            commands::cli::uninstall_cli_from_path,
             commands::settings::get_app_setting,
             commands::settings::set_app_setting,
             commands::settings::delete_app_setting,
