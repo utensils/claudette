@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import styles from "./Modal.module.css";
 
 interface ModalProps {
@@ -23,6 +24,13 @@ interface ModalProps {
   bodyScroll?: boolean;
 }
 
+let nextModalId = 1;
+const modalStack: number[] = [];
+
+function topmostModalId(): number | null {
+  return modalStack[modalStack.length - 1] ?? null;
+}
+
 export function Modal({
   title,
   onClose,
@@ -30,6 +38,9 @@ export function Modal({
   wide,
   bodyScroll,
 }: ModalProps) {
+  const titleId = useId();
+  const modalId = useRef<number | null>(null);
+  if (modalId.current === null) modalId.current = nextModalId++;
   const cardClass = [
     styles.card,
     wide && styles.cardWide,
@@ -40,14 +51,50 @@ export function Modal({
   const bodyClass = [styles.body, bodyScroll && styles.bodyScrollable]
     .filter(Boolean)
     .join(" ");
-  return (
+
+  useEffect(() => {
+    const id = modalId.current;
+    if (id === null) return;
+    modalStack.push(id);
+    return () => {
+      const idx = modalStack.lastIndexOf(id);
+      if (idx >= 0) modalStack.splice(idx, 1);
+    };
+  }, []);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      if (topmostModalId() !== modalId.current) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      onClose();
+    }
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
+  }, [onClose]);
+
+  const modal = (
     <div className={styles.backdrop} onClick={onClose}>
-      <div className={cardClass} onClick={(e) => e.stopPropagation()}>
+      <div
+        className={cardClass}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className={styles.header}>
-          <h3 className={styles.title}>{title}</h3>
+          <h3 id={titleId} className={styles.title}>
+            {title}
+          </h3>
         </div>
         <div className={bodyClass}>{children}</div>
       </div>
     </div>
   );
+
+  return typeof document === "undefined"
+    ? modal
+    : createPortal(modal, document.body);
 }

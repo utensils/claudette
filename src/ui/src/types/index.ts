@@ -21,6 +21,7 @@ export type {
   DiffFile,
   DiffFileTab,
   DiffLayer,
+  GitFileLayer,
   FileStatus,
   DiffViewMode,
   FileDiff,

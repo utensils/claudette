@@ -2,8 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   attachmentNounFor,
   buildAttachmentMenuLabels,
-  clampMenuToViewport,
-} from "./AttachmentContextMenu";
+} from "./attachmentContextMenuLabels";
+import { clampMenuToViewport } from "../shared/contextMenuUtils";
 
 // The component itself is thin wiring around a few DOM listeners and a
 // portal; its integration is verified manually in the running app. The

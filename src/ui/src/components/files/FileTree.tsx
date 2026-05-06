@@ -1,5 +1,6 @@
 import {
   memo,
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -16,6 +17,8 @@ import {
 import { getFileIcon, getFolderIcon } from "../../utils/fileIcons";
 import type { FileEntry } from "../../services/tauri";
 import type { DiffLayer } from "../../types/diff";
+import type { FileContextTarget } from "./fileContextMenu";
+import { InlineRenameInput } from "./InlineRenameInput";
 import {
   resolveFileTreeActivation,
   statusColor,
@@ -34,6 +37,17 @@ interface FileTreeProps {
    *  discard-changes modal first if there are unsaved changes). */
   onActivateFile: (path: string) => void;
   onActivateDiff: (path: string, layer: DiffLayer | null) => void;
+  onContextMenu: (target: FileContextTarget, x: number, y: number) => void;
+  creatingParentPath: string | null;
+  onCreateCommit: (parentPath: string, name: string) => Promise<boolean>;
+  onCreateCancel: () => void;
+  focusRequest: number;
+  renamingPath: string | null;
+  onRenameCommit: (
+    target: FileContextTarget,
+    newName: string,
+  ) => Promise<boolean>;
+  onRenameCancel: () => void;
 }
 
 const EMPTY_EXPANDED: Record<string, boolean> = {};
@@ -43,6 +57,14 @@ export const FileTree = memo(function FileTree({
   entries,
   onActivateFile,
   onActivateDiff,
+  onContextMenu,
+  creatingParentPath,
+  onCreateCommit,
+  onCreateCancel,
+  focusRequest,
+  renamingPath,
+  onRenameCommit,
+  onRenameCancel,
 }: FileTreeProps) {
   const expanded = useAppStore(
     (s) => s.allFilesExpandedDirsByWorkspace[workspaceId] ?? EMPTY_EXPANDED,
@@ -94,6 +116,7 @@ export const FileTree = memo(function FileTree({
   }, [visible, selected]);
   const focusedPath =
     focusedIndex >= 0 ? visible[focusedIndex].node.path : null;
+  const previousRenamingPathRef = useRef<string | null>(null);
 
   // Keep the focused row in view, and re-focus it programmatically when the
   // selection changes — but only when focus is already inside the tree. The
@@ -109,6 +132,29 @@ export const FileTree = memo(function FileTree({
       el.focus();
     }
   }, [focusedPath]);
+
+  useEffect(() => {
+    const previous = previousRenamingPathRef.current;
+    previousRenamingPathRef.current = renamingPath;
+    if (previous === null || renamingPath !== null) return;
+    const selectedPath = selected ?? focusedPath;
+    if (!selectedPath) return;
+    requestAnimationFrame(() => {
+      rowRefsRef.current.get(selectedPath)?.focus();
+    });
+  }, [focusedPath, renamingPath, selected]);
+
+  useEffect(() => {
+    if (focusRequest === 0) return;
+    const focusPath = selected ?? focusedPath;
+    requestAnimationFrame(() => {
+      if (focusPath) {
+        rowRefsRef.current.get(focusPath)?.focus();
+      } else {
+        rowRefsRef.current.values().next().value?.focus();
+      }
+    });
+  }, [focusedPath, focusRequest, selected]);
 
   const findVisibleIndex = useCallback(
     (path: string | null) =>
@@ -209,9 +255,19 @@ export const FileTree = memo(function FileTree({
     [],
   );
 
-  if (entries.length === 0) {
+  if (entries.length === 0 && creatingParentPath === null) {
     return <div className={styles.empty}>No files</div>;
   }
+
+  const createParentClean =
+    creatingParentPath === null ? null : stripTrailingSlash(creatingParentPath);
+  const createRowIndex =
+    createParentClean === null || createParentClean === ""
+      ? 0
+      : visible.findIndex(
+          ({ node }) =>
+            node.kind === "dir" && stripTrailingSlash(node.path) === createParentClean,
+        ) + 1;
 
   return (
     <div
@@ -221,48 +277,154 @@ export const FileTree = memo(function FileTree({
       aria-label="Project files"
       onKeyDown={handleKeyDown}
     >
-      {visible.map(({ node, depth }, idx) => (
-        <Row
-          key={node.path}
-          node={node}
-          depth={depth}
-          expanded={node.kind === "dir" ? !!expanded[node.path] : false}
-          selected={selected === node.path}
-          // Roving tabindex: exactly one row in the tree is in the tab
-          // order at any time. Tab moves focus into the tree (or out of
-          // it); arrow keys move within.
-          tabbable={idx === focusedIndex}
-          rowRef={registerRowRef(node.path)}
-          onClick={() => {
-            setSelected(node.path);
-            if (node.kind === "dir") {
-              toggleDir(node.path);
-            } else {
-              const activation = resolveFileTreeActivation(node);
-              if (activation.kind === "diff") {
-                onActivateDiff(activation.path, activation.layer);
-              } else {
-                onActivateFile(activation.path);
-              }
-            }
-          }}
+      {creatingParentPath !== null && createRowIndex === 0 && (
+        <CreateRow
+          depth={0}
+          parentPath={creatingParentPath}
+          onCreateCommit={onCreateCommit}
+          onCreateCancel={onCreateCancel}
         />
-      ))}
+      )}
+      {visible.map(({ node, depth }, idx) => {
+        const showCreateAfter =
+          creatingParentPath !== null && createRowIndex === idx + 1;
+        return (
+          <Fragment key={node.path}>
+            <Row
+              node={node}
+              depth={depth}
+              expanded={node.kind === "dir" ? !!expanded[node.path] : false}
+              selected={selected === node.path}
+              renaming={renamingPath === node.path}
+              // Roving tabindex: exactly one row in the tree is in the tab
+              // order at any time. Tab moves focus into the tree (or out of
+              // it); arrow keys move within.
+              tabbable={idx === focusedIndex}
+              rowRef={registerRowRef(node.path)}
+              onClick={() => {
+                setSelected(node.path);
+                if (node.kind === "dir") {
+                  toggleDir(node.path);
+                } else {
+                  const activation = resolveFileTreeActivation(node);
+                  if (activation.kind === "diff") {
+                    onActivateDiff(activation.path, activation.layer);
+                  } else {
+                    onActivateFile(activation.path);
+                  }
+                }
+              }}
+              onContextMenu={(x, y) => {
+                setSelected(node.path);
+                onContextMenu(
+                  {
+                    path: node.path,
+                    isDirectory: node.kind === "dir",
+                    exists:
+                      node.kind === "dir" ||
+                      node.git_status == null ||
+                      node.git_status !== "Deleted",
+                  },
+                  x,
+                  y,
+                );
+              }}
+              onRenameCommit={(name) =>
+                onRenameCommit(
+                  {
+                    path: node.path,
+                    isDirectory: node.kind === "dir",
+                    exists:
+                      node.kind === "dir" ||
+                      node.git_status == null ||
+                      node.git_status !== "Deleted",
+                  },
+                  name,
+                )
+              }
+              onRenameCancel={onRenameCancel}
+            />
+            {showCreateAfter && (
+              <CreateRow
+                depth={depth + 1}
+                parentPath={creatingParentPath}
+                onCreateCommit={onCreateCommit}
+                onCreateCancel={onCreateCancel}
+              />
+            )}
+          </Fragment>
+        );
+      })}
     </div>
   );
 });
+
+function stripTrailingSlash(path: string): string {
+  return path.replace(/\/+$/g, "");
+}
+
+interface CreateRowProps {
+  depth: number;
+  parentPath: string;
+  onCreateCommit: (parentPath: string, name: string) => Promise<boolean>;
+  onCreateCancel: () => void;
+}
+
+function CreateRow({
+  depth,
+  parentPath,
+  onCreateCommit,
+  onCreateCancel,
+}: CreateRowProps) {
+  const Icon = getFileIcon("untitled");
+  return (
+    <div
+      className={styles.row}
+      style={{ ["--depth" as string]: depth }}
+      role="treeitem"
+      aria-level={depth + 1}
+    >
+      <span className={styles.chevron} style={{ width: 12, height: 12 }} />
+      {/* eslint-disable-next-line react-hooks/static-components -- fileIcons returns stable module-level lucide components. */}
+      <Icon size={14} className={styles.icon} aria-hidden="true" />
+      <InlineRenameInput
+        name="untitled"
+        className={styles.renameInput}
+        ariaLabel="New file name"
+        onCommit={(name) => onCreateCommit(parentPath, name)}
+        onCancel={onCreateCancel}
+      />
+    </div>
+  );
+}
 
 interface RowProps {
   node: FileTreeNode;
   depth: number;
   expanded: boolean;
   selected: boolean;
+  renaming: boolean;
   tabbable: boolean;
   rowRef: (el: HTMLDivElement | null) => void;
   onClick: () => void;
+  onContextMenu: (x: number, y: number) => void;
+  onRenameCommit: (name: string) => Promise<boolean>;
+  onRenameCancel: () => void;
 }
 
-function Row({ node, depth, expanded, selected, tabbable, rowRef, onClick }: RowProps) {
+function Row({
+  node,
+  depth,
+  expanded,
+  selected,
+  renaming,
+  tabbable,
+  rowRef,
+  onClick,
+  onContextMenu,
+  onRenameCommit,
+  onRenameCancel,
+}: RowProps) {
   const isDir = node.kind === "dir";
   const ChevronIcon = isDir
     ? expanded
@@ -271,6 +433,7 @@ function Row({ node, depth, expanded, selected, tabbable, rowRef, onClick }: Row
     : null;
   const Icon = isDir ? getFolderIcon(expanded) : getFileIcon(node.name);
   const status = node.kind === "file" ? node.git_status : null;
+  const statusLayer = node.kind === "file" ? node.git_layer : null;
   const dirChanged = node.kind === "dir" && node.statusCount > 0;
   const statusTitle =
     status == null
@@ -301,7 +464,20 @@ function Row({ node, depth, expanded, selected, tabbable, rowRef, onClick }: Row
       // children (or could). Omit it on file rows entirely so screen
       // readers don't announce a misleading collapsed/expanded state.
       aria-expanded={isDir ? expanded : undefined}
-      onClick={onClick}
+      onClick={
+        renaming
+          ? undefined
+          : (event) => {
+              event.currentTarget.focus();
+              onClick();
+            }
+      }
+      onContextMenu={(event) => {
+        event.preventDefault();
+        if (renaming) return;
+        event.currentTarget.focus();
+        onContextMenu(event.clientX, event.clientY);
+      }}
     >
       {ChevronIcon ? (
         <ChevronIcon size={12} className={styles.chevron} aria-hidden="true" />
@@ -311,7 +487,17 @@ function Row({ node, depth, expanded, selected, tabbable, rowRef, onClick }: Row
       )}
       {/* eslint-disable-next-line react-hooks/static-components -- fileIcons returns stable module-level lucide components. */}
       <Icon size={14} className={styles.icon} aria-hidden="true" />
-      <span className={styles.name}>{node.name}</span>
+      {renaming ? (
+        <InlineRenameInput
+          name={node.name}
+          className={styles.renameInput}
+          ariaLabel={`Rename ${node.name}`}
+          onCommit={onRenameCommit}
+          onCancel={onRenameCancel}
+        />
+      ) : (
+        <span className={styles.name}>{node.name}</span>
+      )}
       {node.kind === "dir" && node.statusCount > 0 && (
         <span
           className={styles.dirStatus}
@@ -328,7 +514,7 @@ function Row({ node, depth, expanded, selected, tabbable, rowRef, onClick }: Row
           title={statusTitle ?? undefined}
           aria-label={statusTitle ?? undefined}
         >
-          {statusLabel(status)}
+          {statusLabel(status, statusLayer)}
         </span>
       )}
     </div>

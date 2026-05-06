@@ -11,11 +11,14 @@ export type FileTreeActivation =
   | { kind: "file"; path: string }
   | { kind: "diff"; path: string; layer: DiffLayer | null };
 
-export function statusLabel(status: FileStatus): string {
+export function statusLabel(
+  status: FileStatus,
+  layer: GitFileLayer | null = null,
+): string {
   if (typeof status === "string") {
     switch (status) {
       case "Added":
-        return "A";
+        return layer === "untracked" ? "U" : "A";
       case "Modified":
         return "M";
       case "Deleted":
@@ -36,6 +39,23 @@ export function statusColor(status: FileStatus): string {
         : "var(--diff-removed-text)";
   }
   return "var(--diff-hunk-header)";
+}
+
+export function statusLayerForOpenFileTab(
+  path: string,
+  stagedFiles: StagedDiffFiles | null,
+): GitFileLayer | null {
+  if (!stagedFiles) return null;
+  if (stagedFiles.untracked.some((file) => file.path === path)) {
+    return "untracked";
+  }
+  if (stagedFiles.staged.some((file) => file.path === path)) {
+    return "staged";
+  }
+  if (stagedFiles.unstaged.some((file) => file.path === path)) {
+    return "unstaged";
+  }
+  return null;
 }
 
 function diffLayerForGitLayer(layer: GitFileLayer | null): DiffLayer | null {

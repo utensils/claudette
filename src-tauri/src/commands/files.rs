@@ -40,6 +40,31 @@ pub struct FileBytesContent {
     pub truncated: bool,
 }
 
+#[derive(Clone, Serialize)]
+pub struct WorkspacePathMoveResult {
+    pub old_path: String,
+    pub new_path: String,
+    pub is_directory: bool,
+}
+
+#[derive(Clone, Serialize)]
+pub struct WorkspacePathTrashResult {
+    pub old_path: String,
+    pub is_directory: bool,
+    pub undo_token: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct WorkspacePathCreateResult {
+    pub path: String,
+}
+
+#[derive(Clone, Serialize)]
+pub struct WorkspacePathRestoreResult {
+    pub restored_path: String,
+    pub is_directory: bool,
+}
+
 /// Hard cap for raw-bytes reads (e.g. image previews). Larger than the
 /// editor cap because image files frequently exceed 5 MB but we still
 /// want to bound memory pressure on a single open.
@@ -85,9 +110,11 @@ pub async fn list_workspace_files(
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let git_status = claudette::diff::file_tree_git_status(worktree_path)
+    let file_tree_status = claudette::diff::file_tree_git_status_with_suppressed(worktree_path)
         .await
         .map_err(|e| format!("Failed to load git status: {e}"))?;
+    let git_status = file_tree_status.statuses;
+    let suppressed_paths = file_tree_status.suppressed_paths;
 
     // Collect file entries and extract unique directory paths.
     let mut dirs = std::collections::BTreeSet::new();
@@ -96,7 +123,11 @@ pub async fn list_workspace_files(
         .lines()
         .filter(|line| !line.is_empty())
         .take(MAX_FILES)
-        .map(|line| {
+        .filter_map(|line| {
+            if suppressed_paths.contains(line) {
+                return None;
+            }
+            let status = git_status.get(line);
             seen_files.insert(line.to_string());
             // Extract all parent directories from the file path.
             let mut pos = 0;
@@ -105,12 +136,12 @@ pub async fn list_workspace_files(
                 dirs.insert(line[..=dir_end].to_string());
                 pos = dir_end + 1;
             }
-            FileEntry {
+            Some(FileEntry {
                 path: line.to_string(),
                 is_directory: false,
-                git_status: git_status.get(line).map(|s| s.status.clone()),
-                git_layer: git_status.get(line).map(|s| s.layer),
-            }
+                git_status: status.map(|s| s.status.clone()),
+                git_layer: status.map(|s| s.layer),
+            })
         })
         .collect();
 
@@ -194,14 +225,26 @@ pub async fn read_workspace_file_for_viewer(
     state: State<'_, AppState>,
 ) -> Result<FileContent, String> {
     let worktree_path = resolve_worktree_path(&workspace_id, &state)?;
+    let target =
+        resolve_workspace_target_path_blocking(worktree_path.clone(), relative_path.clone())
+            .await?;
 
     let read = file_expand::read_worktree_file_with_limit(
         std::path::Path::new(&worktree_path),
         &relative_path,
         MAX_VIEWER_FILE_SIZE,
     )
-    .await
-    .ok_or("File not found or path escapes worktree")?;
+    .await;
+
+    let Some(read) = read else {
+        if !tokio::fs::try_exists(&target.absolute)
+            .await
+            .map_err(|e| format!("check file exists: {e}"))?
+        {
+            return Err("WORKSPACE_FILE_NOT_FOUND".to_string());
+        }
+        return Err("File not readable or path escapes worktree".to_string());
+    };
 
     Ok(FileContent {
         path: relative_path,
@@ -308,6 +351,196 @@ pub async fn write_workspace_file(
     .await
 }
 
+#[tauri::command]
+pub async fn resolve_workspace_path(
+    workspace_id: String,
+    relative_path: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let worktree_path = resolve_worktree_path(&workspace_id, &state)?;
+    let resolved = resolve_existing_workspace_path_blocking(worktree_path, relative_path).await?;
+    Ok(resolved.absolute.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub async fn open_workspace_path(
+    workspace_id: String,
+    relative_path: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let worktree_path = resolve_worktree_path(&workspace_id, &state)?;
+    let resolved = resolve_existing_workspace_path_blocking(worktree_path, relative_path).await?;
+    crate::commands::shell::opener::open(&resolved.absolute.to_string_lossy())
+        .map_err(|e| format!("open failed: {e}"))
+}
+
+#[tauri::command]
+pub async fn reveal_workspace_path(
+    workspace_id: String,
+    relative_path: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let worktree_path = resolve_worktree_path(&workspace_id, &state)?;
+    let resolved = resolve_existing_workspace_path_blocking(worktree_path, relative_path).await?;
+    reveal_path(&resolved.absolute)
+}
+
+#[tauri::command]
+pub async fn create_workspace_file(
+    workspace_id: String,
+    parent_relative_path: String,
+    name: String,
+    state: State<'_, AppState>,
+) -> Result<WorkspacePathCreateResult, String> {
+    let worktree_path = resolve_worktree_path(&workspace_id, &state)?;
+    let target =
+        build_create_file_target_blocking(worktree_path, parent_relative_path, name).await?;
+    let file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&target.absolute)
+        .await
+        .map_err(|e| format!("create file: {e}"))?;
+    drop(file);
+    Ok(WorkspacePathCreateResult {
+        path: target.relative,
+    })
+}
+
+#[tauri::command]
+pub async fn rename_workspace_path(
+    workspace_id: String,
+    relative_path: String,
+    new_name: String,
+    state: State<'_, AppState>,
+) -> Result<WorkspacePathMoveResult, String> {
+    let worktree_path = resolve_worktree_path(&workspace_id, &state)?;
+    let resolved =
+        resolve_existing_workspace_path_blocking(worktree_path.clone(), relative_path).await?;
+    let rename =
+        build_rename_target_blocking(worktree_path, resolved.relative.clone(), new_name).await?;
+    let from = resolved.absolute;
+    let to = rename.absolute;
+    let old_path = resolved.relative;
+    let new_path = rename.relative;
+    let is_directory = resolved.is_directory;
+
+    tokio::fs::rename(&from, &to)
+        .await
+        .map_err(|e| format!("rename: {e}"))?;
+
+    Ok(WorkspacePathMoveResult {
+        old_path,
+        new_path,
+        is_directory,
+    })
+}
+
+#[tauri::command]
+pub async fn trash_workspace_path(
+    workspace_id: String,
+    relative_path: String,
+    state: State<'_, AppState>,
+) -> Result<WorkspacePathTrashResult, String> {
+    let worktree_path = resolve_worktree_path(&workspace_id, &state)?;
+    let resolved = resolve_existing_workspace_path_blocking(worktree_path, relative_path).await?;
+    let old_path = resolved.relative;
+    let is_directory = resolved.is_directory;
+    let absolute = resolved.absolute;
+
+    #[cfg(target_os = "macos")]
+    let undo_token = tokio::task::spawn_blocking(move || trash_path_macos(&absolute))
+        .await
+        .map_err(|e| format!("join error: {e}"))??;
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let undo_token = tokio::task::spawn_blocking(move || {
+            let absolute_for_token = absolute.clone();
+            trash::delete(&absolute).map_err(|e| format!("move to trash: {e}"))?;
+            Ok::<Option<String>, String>(find_trash_item_token_for_original(&absolute_for_token))
+        })
+        .await
+        .map_err(|e| format!("join error: {e}"))??;
+        return Ok(WorkspacePathTrashResult {
+            old_path,
+            is_directory,
+            undo_token,
+        });
+    }
+
+    #[cfg(target_os = "macos")]
+    Ok(WorkspacePathTrashResult {
+        old_path,
+        is_directory,
+        undo_token: Some(undo_token),
+    })
+}
+
+#[tauri::command]
+pub async fn restore_workspace_path_from_trash(
+    workspace_id: String,
+    relative_path: String,
+    undo_token: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<WorkspacePathRestoreResult, String> {
+    let worktree_path = resolve_worktree_path(&workspace_id, &state)?;
+    let target = resolve_workspace_target_path_blocking(worktree_path, relative_path).await?;
+    ensure_restore_target_available_blocking(target.absolute.clone()).await?;
+
+    let restored_path = target.relative;
+
+    #[cfg(target_os = "macos")]
+    {
+        let token = undo_token.ok_or_else(|| "missing trash undo token".to_string())?;
+        let target_abs = target.absolute.clone();
+        tokio::task::spawn_blocking(move || restore_path_macos(&token, &target_abs))
+            .await
+            .map_err(|e| format!("join error: {e}"))??;
+        let is_directory = metadata_is_dir_blocking(target.absolute).await?;
+        return Ok(WorkspacePathRestoreResult {
+            restored_path,
+            is_directory,
+        });
+    }
+
+    #[cfg(any(
+        target_os = "windows",
+        all(
+            unix,
+            not(target_os = "macos"),
+            not(target_os = "ios"),
+            not(target_os = "android")
+        )
+    ))]
+    {
+        let target_abs = target.absolute.clone();
+        tokio::task::spawn_blocking(move || {
+            let items = trash::os_limited::list().map_err(|e| format!("list trash: {e}"))?;
+            let item = select_trash_item(items, &target_abs, undo_token.as_deref())
+                .ok_or_else(|| "trash item not found".to_string())?;
+            trash::os_limited::restore_all(vec![item]).map_err(|e| format!("restore: {e}"))
+        })
+        .await
+        .map_err(|e| format!("join error: {e}"))??;
+        let is_directory = metadata_is_dir_blocking(target.absolute).await?;
+        return Ok(WorkspacePathRestoreResult {
+            restored_path,
+            is_directory,
+        });
+    }
+
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "windows",
+        all(unix, not(target_os = "ios"), not(target_os = "android"))
+    )))]
+    {
+        let _ = undo_token;
+        Err("trash restore is not supported on this platform".to_string())
+    }
+}
+
 /// Resolve `workspace_id` to its worktree path, returning a string error
 /// if the workspace is missing or has no worktree configured.
 fn resolve_worktree_path(
@@ -323,6 +556,497 @@ fn resolve_worktree_path(
     ws.worktree_path
         .clone()
         .ok_or_else(|| "Workspace has no worktree".to_string())
+}
+
+async fn resolve_existing_workspace_path_blocking(
+    worktree_path: String,
+    relative_path: String,
+) -> Result<ResolvedWorkspacePath, String> {
+    tokio::task::spawn_blocking(move || {
+        resolve_existing_workspace_path(Path::new(&worktree_path), &relative_path)
+    })
+    .await
+    .map_err(|e| format!("path resolution task failed: {e}"))?
+}
+
+async fn resolve_workspace_target_path_blocking(
+    worktree_path: String,
+    relative_path: String,
+) -> Result<ResolvedWorkspacePath, String> {
+    tokio::task::spawn_blocking(move || {
+        resolve_workspace_target_path(Path::new(&worktree_path), &relative_path)
+    })
+    .await
+    .map_err(|e| format!("path resolution task failed: {e}"))?
+}
+
+async fn build_rename_target_blocking(
+    worktree_path: String,
+    old_relative: String,
+    new_name: String,
+) -> Result<RenameTarget, String> {
+    tokio::task::spawn_blocking(move || {
+        build_rename_target(Path::new(&worktree_path), &old_relative, &new_name)
+    })
+    .await
+    .map_err(|e| format!("path resolution task failed: {e}"))?
+}
+
+async fn build_create_file_target_blocking(
+    worktree_path: String,
+    parent_relative_path: String,
+    name: String,
+) -> Result<RenameTarget, String> {
+    tokio::task::spawn_blocking(move || {
+        build_create_file_target(Path::new(&worktree_path), &parent_relative_path, &name)
+    })
+    .await
+    .map_err(|e| format!("path resolution task failed: {e}"))?
+}
+
+async fn metadata_is_dir_blocking(path: PathBuf) -> Result<bool, String> {
+    tokio::task::spawn_blocking(move || {
+        std::fs::metadata(path)
+            .map(|metadata| metadata.is_dir())
+            .map_err(|e| format!("metadata: {e}"))
+    })
+    .await
+    .map_err(|e| format!("metadata task failed: {e}"))?
+}
+
+async fn ensure_restore_target_available_blocking(path: PathBuf) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        if path.exists() {
+            return Err("restore target already exists".to_string());
+        }
+        let parent = path
+            .parent()
+            .ok_or_else(|| "restore target has no parent".to_string())?;
+        if !parent.exists() {
+            return Err("restore parent does not exist".to_string());
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("path validation task failed: {e}"))?
+}
+
+#[derive(Debug)]
+struct ResolvedWorkspacePath {
+    relative: String,
+    absolute: PathBuf,
+    is_directory: bool,
+}
+
+#[derive(Debug)]
+struct RenameTarget {
+    relative: String,
+    absolute: PathBuf,
+}
+
+fn normalize_relative_path(relative_path: &str) -> Result<PathBuf, String> {
+    let trimmed = relative_path.trim().trim_end_matches(['/', '\\']);
+    if trimmed.is_empty() {
+        return Err("path is empty".to_string());
+    }
+    let path = Path::new(trimmed);
+    if path.is_absolute() {
+        return Err("absolute paths are not allowed".to_string());
+    }
+    if path.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::ParentDir
+                | std::path::Component::RootDir
+                | std::path::Component::Prefix(_)
+        )
+    }) {
+        return Err("path escapes worktree".to_string());
+    }
+    Ok(path.to_path_buf())
+}
+
+fn relative_path_string(path: &Path) -> Result<String, String> {
+    path.to_str()
+        .map(|s| s.replace('\\', "/"))
+        .ok_or_else(|| "path is not valid UTF-8".to_string())
+}
+
+fn resolve_existing_workspace_path(
+    worktree_path: &Path,
+    relative_path: &str,
+) -> Result<ResolvedWorkspacePath, String> {
+    let relative = normalize_relative_path(relative_path)?;
+    let worktree_canonical =
+        std::fs::canonicalize(worktree_path).map_err(|e| format!("canonicalize worktree: {e}"))?;
+    let absolute = std::fs::canonicalize(worktree_path.join(&relative))
+        .map_err(|e| format!("path not found: {e}"))?;
+    if !absolute.starts_with(&worktree_canonical) {
+        return Err("path escapes worktree".to_string());
+    }
+    let metadata = std::fs::metadata(&absolute).map_err(|e| format!("metadata: {e}"))?;
+    Ok(ResolvedWorkspacePath {
+        relative: relative_path_string(&relative)?,
+        absolute,
+        is_directory: metadata.is_dir(),
+    })
+}
+
+fn resolve_workspace_target_path(
+    worktree_path: &Path,
+    relative_path: &str,
+) -> Result<ResolvedWorkspacePath, String> {
+    let relative = normalize_relative_path(relative_path)?;
+    let worktree_canonical =
+        std::fs::canonicalize(worktree_path).map_err(|e| format!("canonicalize worktree: {e}"))?;
+    let parent_relative = relative.parent().unwrap_or_else(|| Path::new(""));
+    let parent_abs = if parent_relative.as_os_str().is_empty() {
+        worktree_canonical.clone()
+    } else {
+        std::fs::canonicalize(worktree_path.join(parent_relative))
+            .map_err(|e| format!("canonicalize parent: {e}"))?
+    };
+    if !parent_abs.starts_with(&worktree_canonical) {
+        return Err("path escapes worktree".to_string());
+    }
+    let file_name = relative
+        .file_name()
+        .ok_or_else(|| "path has no file name".to_string())?;
+    Ok(ResolvedWorkspacePath {
+        relative: relative_path_string(&relative)?,
+        absolute: parent_abs.join(file_name),
+        is_directory: false,
+    })
+}
+
+fn validate_rename_name(new_name: &str) -> Result<&str, String> {
+    let trimmed = new_name.trim();
+    if trimmed.is_empty() {
+        return Err("name is empty".to_string());
+    }
+    if trimmed == "." || trimmed == ".." {
+        return Err("name is reserved".to_string());
+    }
+    if trimmed.contains('/') || trimmed.contains('\\') {
+        return Err("name cannot contain path separators".to_string());
+    }
+    if trimmed.contains('\0') {
+        return Err("name cannot contain null bytes".to_string());
+    }
+    Ok(trimmed)
+}
+
+fn build_rename_target(
+    worktree_path: &Path,
+    old_relative: &str,
+    new_name: &str,
+) -> Result<RenameTarget, String> {
+    let old_relative_path = normalize_relative_path(old_relative)?;
+    let parent_relative = old_relative_path.parent().unwrap_or_else(|| Path::new(""));
+    let name = validate_rename_name(new_name)?;
+    let new_relative_path = parent_relative.join(name);
+
+    let worktree_canonical =
+        std::fs::canonicalize(worktree_path).map_err(|e| format!("canonicalize worktree: {e}"))?;
+    let parent_abs = if parent_relative.as_os_str().is_empty() {
+        worktree_canonical.clone()
+    } else {
+        std::fs::canonicalize(worktree_path.join(parent_relative))
+            .map_err(|e| format!("canonicalize parent: {e}"))?
+    };
+    if !parent_abs.starts_with(&worktree_canonical) {
+        return Err("path escapes worktree".to_string());
+    }
+
+    let absolute = parent_abs.join(name);
+    if absolute.exists() {
+        return Err("target already exists".to_string());
+    }
+
+    Ok(RenameTarget {
+        relative: relative_path_string(&new_relative_path)?,
+        absolute,
+    })
+}
+
+fn build_create_file_target(
+    worktree_path: &Path,
+    parent_relative_path: &str,
+    name: &str,
+) -> Result<RenameTarget, String> {
+    let parent_trimmed = parent_relative_path.trim().trim_end_matches(['/', '\\']);
+    let parent_relative = if parent_trimmed.is_empty() {
+        PathBuf::new()
+    } else {
+        normalize_relative_path(parent_trimmed)?
+    };
+    let name = validate_rename_name(name)?;
+    let worktree_canonical =
+        std::fs::canonicalize(worktree_path).map_err(|e| format!("canonicalize worktree: {e}"))?;
+    let parent_abs = if parent_relative.as_os_str().is_empty() {
+        worktree_canonical.clone()
+    } else {
+        std::fs::canonicalize(worktree_path.join(&parent_relative))
+            .map_err(|e| format!("canonicalize parent: {e}"))?
+    };
+    if !parent_abs.starts_with(&worktree_canonical) {
+        return Err("path escapes worktree".to_string());
+    }
+    if !parent_abs.is_dir() {
+        return Err("parent is not a directory".to_string());
+    }
+    let relative = parent_relative.join(name);
+    let absolute = parent_abs.join(name);
+    if absolute.exists() {
+        return Err("target already exists".to_string());
+    }
+    Ok(RenameTarget {
+        relative: relative_path_string(&relative)?,
+        absolute,
+    })
+}
+
+fn reveal_path(path: &Path) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("open")
+            .no_console_window()
+            .arg("-R")
+            .arg(path)
+            .output()
+            .map_err(|e| format!("failed to run open: {e}"))?;
+        if output.status.success() {
+            return Ok(());
+        }
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .no_console_window()
+            .arg(format!("/select,{}", path.to_string_lossy()))
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("failed to run explorer: {e}"))
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let target = if path.is_dir() {
+            path
+        } else {
+            path.parent().unwrap_or(path)
+        };
+        crate::commands::shell::opener::open(&target.to_string_lossy())
+            .map_err(|e| format!("open failed: {e}"))
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        let target = if path.is_dir() {
+            path
+        } else {
+            path.parent().unwrap_or(path)
+        };
+        crate::commands::shell::opener::open(&target.to_string_lossy())
+            .map_err(|e| format!("open failed: {e}"))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn trash_path_macos(path: &Path) -> Result<String, String> {
+    let trash_dir = home_trash_dir()?;
+    std::fs::create_dir_all(&trash_dir).map_err(|e| format!("create trash dir: {e}"))?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| "path has no file name".to_string())?;
+    let mut target = trash_dir.join(file_name);
+    if target.exists() {
+        let stem = path.file_stem().unwrap_or(file_name).to_string_lossy();
+        let ext = path.extension().map(|ext| ext.to_string_lossy());
+        for idx in 1..10_000 {
+            let candidate_name = match &ext {
+                Some(ext) if !ext.is_empty() => format!("{stem} {idx}.{ext}"),
+                _ => format!("{stem} {idx}"),
+            };
+            let candidate = trash_dir.join(candidate_name);
+            if !candidate.exists() {
+                target = candidate;
+                break;
+            }
+        }
+    }
+    if target.exists() {
+        return Err("could not choose a unique trash name".to_string());
+    }
+    move_to_trash_path_macos(path, &target)?;
+    Ok(target.to_string_lossy().into_owned())
+}
+
+#[cfg(target_os = "macos")]
+fn move_to_trash_path_macos(path: &Path, target: &Path) -> Result<(), String> {
+    match std::fs::rename(path, target) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::CrossesDevices => {
+            copy_to_trash_path_macos(path, target)?;
+            let remove_result = if path.is_dir() {
+                std::fs::remove_dir_all(path).map_err(|e| format!("remove trashed dir: {e}"))
+            } else {
+                std::fs::remove_file(path).map_err(|e| format!("remove trashed file: {e}"))
+            };
+            if let Err(err) = remove_result {
+                cleanup_trash_copy_macos(target);
+                return Err(err);
+            }
+            Ok(())
+        }
+        Err(err) => Err(format!("move to trash: {err}")),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn copy_to_trash_path_macos(path: &Path, target: &Path) -> Result<(), String> {
+    let result = if path.is_dir() {
+        copy_dir_all_macos(path, target)
+    } else {
+        std::fs::copy(path, target)
+            .map(|_| ())
+            .map_err(|e| format!("copy to trash: {e}"))
+    };
+    if result.is_err() {
+        let _ = if target.is_dir() {
+            std::fs::remove_dir_all(target)
+        } else {
+            std::fs::remove_file(target)
+        };
+    }
+    result
+}
+
+#[cfg(target_os = "macos")]
+fn cleanup_trash_copy_macos(target: &Path) {
+    let Ok(metadata) = std::fs::symlink_metadata(target) else {
+        return;
+    };
+    let _ = if metadata.is_dir() {
+        std::fs::remove_dir_all(target)
+    } else {
+        std::fs::remove_file(target)
+    };
+}
+
+#[cfg(target_os = "macos")]
+fn copy_dir_all_macos(source: &Path, target: &Path) -> Result<(), String> {
+    std::fs::create_dir(target).map_err(|e| format!("copy trash dir: {e}"))?;
+    for entry in std::fs::read_dir(source).map_err(|e| format!("read dir: {e}"))? {
+        let entry = entry.map_err(|e| format!("read dir entry: {e}"))?;
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        let file_type = entry
+            .file_type()
+            .map_err(|e| format!("read file type: {e}"))?;
+        if file_type.is_dir() {
+            copy_dir_all_macos(&source_path, &target_path)?;
+        } else if file_type.is_file() {
+            std::fs::copy(&source_path, &target_path)
+                .map_err(|e| format!("copy trash file: {e}"))?;
+        } else if file_type.is_symlink() {
+            let link_target =
+                std::fs::read_link(&source_path).map_err(|e| format!("read symlink: {e}"))?;
+            std::os::unix::fs::symlink(link_target, &target_path)
+                .map_err(|e| format!("copy trash symlink: {e}"))?;
+        } else {
+            return Err(format!(
+                "unsupported file type at {}",
+                source_path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn restore_path_macos(undo_token: &str, target: &Path) -> Result<(), String> {
+    let trash_dir = home_trash_dir()?;
+    let trash_path = PathBuf::from(undo_token);
+    // The undo token is a path supplied by the frontend, so canonicalize it and
+    // verify Trash containment before restoring anything from it.
+    let trash_canonical =
+        std::fs::canonicalize(&trash_path).map_err(|e| format!("trash item not found: {e}"))?;
+    let trash_dir_canonical =
+        std::fs::canonicalize(&trash_dir).map_err(|e| format!("canonicalize trash dir: {e}"))?;
+    if !trash_canonical.starts_with(&trash_dir_canonical) {
+        return Err("trash undo token is outside the Trash".to_string());
+    }
+    std::fs::rename(&trash_canonical, target).map_err(|e| format!("restore from trash: {e}"))
+}
+
+#[cfg(target_os = "macos")]
+fn home_trash_dir() -> Result<PathBuf, String> {
+    let home = std::env::var_os("HOME").ok_or_else(|| "HOME is not set".to_string())?;
+    Ok(PathBuf::from(home).join(".Trash"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn find_trash_item_token_for_original(original_path: &Path) -> Option<String> {
+    #[cfg(any(
+        target_os = "windows",
+        all(unix, not(target_os = "ios"), not(target_os = "android"))
+    ))]
+    {
+        let original = original_path
+            .canonicalize()
+            .unwrap_or_else(|_| original_path.to_path_buf());
+        let mut items: Vec<_> = trash::os_limited::list()
+            .ok()?
+            .into_iter()
+            .filter(|item| item.original_path() == original)
+            .collect();
+        // Some platforms expose coarse deletion timestamps, so two rapid
+        // deletes of the same original path can be ambiguous. Prefer the
+        // newest item as the best available restore token.
+        items.sort_by_key(|item| item.time_deleted);
+        return items
+            .pop()
+            .map(|item| item.id.to_string_lossy().into_owned());
+    }
+
+    #[cfg(not(any(
+        target_os = "windows",
+        all(unix, not(target_os = "ios"), not(target_os = "android"))
+    )))]
+    {
+        let _ = original_path;
+        None
+    }
+}
+
+#[cfg(any(
+    target_os = "windows",
+    all(
+        unix,
+        not(target_os = "macos"),
+        not(target_os = "ios"),
+        not(target_os = "android")
+    )
+))]
+fn select_trash_item(
+    items: Vec<trash::TrashItem>,
+    original_path: &Path,
+    undo_token: Option<&str>,
+) -> Option<trash::TrashItem> {
+    let mut matches: Vec<_> = items
+        .into_iter()
+        .filter(|item| {
+            let token_matches = undo_token
+                .map(|token| item.id.to_string_lossy() == token)
+                .unwrap_or(false);
+            token_matches || item.original_path() == original_path
+        })
+        .collect();
+    matches.sort_by_key(|item| item.time_deleted);
+    matches.pop()
 }
 
 /// Write raw bytes to a filesystem path chosen by the user via a save dialog.
@@ -1064,5 +1788,150 @@ mod tests {
         create_staging_dir(&target).unwrap();
         let mode = std::fs::metadata(&target).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700, "expected 0o700, got {mode:o}");
+    }
+
+    #[test]
+    fn rename_target_rejects_invalid_names() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("file.txt"), "hello").unwrap();
+
+        for name in ["", "   ", ".", "..", "a/b", r"a\b"] {
+            let err = build_rename_target(dir.path(), "file.txt", name).unwrap_err();
+            assert!(!err.is_empty());
+        }
+    }
+
+    #[test]
+    fn rename_target_rejects_path_escape() {
+        let dir = tempdir().unwrap();
+        let err = build_rename_target(dir.path(), "../file.txt", "next.txt").unwrap_err();
+        assert!(err.contains("escapes worktree"), "got: {err}");
+    }
+
+    #[test]
+    fn rename_target_rejects_absolute_source_paths() {
+        let dir = tempdir().unwrap();
+        let err = build_rename_target(dir.path(), "/file.txt", "next.txt").unwrap_err();
+        assert!(err.contains("absolute paths"), "got: {err}");
+    }
+
+    #[test]
+    fn rename_target_rejects_collisions() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("file.txt"), "hello").unwrap();
+        std::fs::write(dir.path().join("other.txt"), "world").unwrap();
+
+        let err = build_rename_target(dir.path(), "file.txt", "other.txt").unwrap_err();
+        assert!(err.contains("already exists"), "got: {err}");
+    }
+
+    #[test]
+    fn rename_target_keeps_file_in_same_parent() {
+        let dir = tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub").join("file.txt"), "hello").unwrap();
+
+        let target = build_rename_target(dir.path(), "sub/file.txt", "other.txt").unwrap();
+
+        assert_eq!(target.relative, "sub/other.txt");
+        assert_eq!(
+            target.absolute,
+            dir.path()
+                .join("sub")
+                .canonicalize()
+                .unwrap()
+                .join("other.txt")
+        );
+    }
+
+    #[test]
+    fn rename_target_handles_directory_paths_with_trailing_slash() {
+        let dir = tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+
+        let target = build_rename_target(dir.path(), "sub/", "renamed").unwrap();
+
+        assert_eq!(target.relative, "renamed");
+        assert_eq!(
+            target.absolute,
+            dir.path().canonicalize().unwrap().join("renamed")
+        );
+    }
+
+    #[test]
+    fn create_file_target_allows_root_parent() {
+        let dir = tempdir().unwrap();
+
+        let target = build_create_file_target(dir.path(), "", "new.txt").unwrap();
+
+        assert_eq!(target.relative, "new.txt");
+        assert_eq!(
+            target.absolute,
+            dir.path().canonicalize().unwrap().join("new.txt")
+        );
+    }
+
+    #[test]
+    fn create_file_target_rejects_collisions_and_nested_names() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("existing.txt"), "hello").unwrap();
+
+        let collision = build_create_file_target(dir.path(), "", "existing.txt").unwrap_err();
+        assert!(collision.contains("already exists"), "got: {collision}");
+
+        let nested = build_create_file_target(dir.path(), "", "nested/file.txt").unwrap_err();
+        assert!(nested.contains("separators"), "got: {nested}");
+    }
+
+    #[test]
+    fn create_file_target_requires_existing_directory_parent() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("file.txt"), "hello").unwrap();
+
+        let err = build_create_file_target(dir.path(), "file.txt", "child.txt").unwrap_err();
+
+        assert!(err.contains("parent is not a directory"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_existing_workspace_path_identifies_directories() {
+        let dir = tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+
+        let resolved = resolve_existing_workspace_path(dir.path(), "sub/").unwrap();
+
+        assert_eq!(resolved.relative, "sub");
+        assert!(resolved.is_directory);
+        assert_eq!(
+            resolved.absolute,
+            dir.path().join("sub").canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn resolve_workspace_target_path_allows_missing_leaf() {
+        let dir = tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+
+        let resolved = resolve_workspace_target_path(dir.path(), "sub/restored.txt").unwrap();
+
+        assert_eq!(resolved.relative, "sub/restored.txt");
+        assert_eq!(
+            resolved.absolute,
+            dir.path()
+                .join("sub")
+                .canonicalize()
+                .unwrap()
+                .join("restored.txt")
+        );
+    }
+
+    #[test]
+    fn resolve_workspace_target_path_rejects_missing_parent() {
+        let dir = tempdir().unwrap();
+
+        let err = resolve_workspace_target_path(dir.path(), "missing/restored.txt").unwrap_err();
+
+        assert!(err.contains("canonicalize parent"), "got: {err}");
     }
 }

@@ -1,9 +1,19 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import { listWorkspaceFiles, type FileEntry } from "../../services/tauri";
+import { resolveHotkeyAction } from "../../hotkeys/bindings";
 import { isAgentBusy } from "../../utils/agentStatus";
 import type { DiffLayer } from "../../types/diff";
+import { FilePathContextMenu } from "./FilePathContextMenu";
+import type { FileContextTarget } from "./fileContextMenu";
 import { FileTree } from "./FileTree";
+import { useFilePathActions } from "./useFilePathActions";
 import styles from "./FilesPanel.module.css";
 
 export function FilesPanel() {
@@ -17,14 +27,32 @@ export function FilesPanel() {
   const openFileTab = useAppStore((s) => s.openFileTab);
   const openDiffTab = useAppStore((s) => s.openDiffTab);
   const setDiffSelectedCommitHash = useAppStore((s) => s.setDiffSelectedCommitHash);
+  const setAllFilesDirExpanded = useAppStore((s) => s.setAllFilesDirExpanded);
+  const keybindings = useAppStore((s) => s.keybindings);
 
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    target: FileContextTarget;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [renamingTarget, setRenamingTarget] = useState<FileContextTarget | null>(
+    null,
+  );
+  const [creatingParentPath, setCreatingParentPath] = useState<string | null>(
+    null,
+  );
+  const [focusRequest, setFocusRequest] = useState(0);
   const loadVersionRef = useRef(0);
   const prevIsRunning = useRef(false);
   const ws = workspaces.find((w) => w.id === selectedWorkspaceId);
   const isRunning = isAgentBusy(ws?.agent_status);
+  const filePathActions = useFilePathActions(selectedWorkspaceId ?? "");
+  const refocusExplorer = useCallback(() => {
+    setFocusRequest((request) => request + 1);
+  }, []);
 
   const loadFiles = useCallback(
     async (workspaceId: string, showLoading: boolean) => {
@@ -99,12 +127,33 @@ export function FilesPanel() {
     [selectedWorkspaceId, openDiffTab, setDiffSelectedCommitHash],
   );
 
+  const handlePanelKeyDownCapture = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (!selectedWorkspaceId || event.repeat) return;
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      if (tag === "input" || tag === "textarea" || target?.isContentEditable) {
+        return;
+      }
+      if (
+        resolveHotkeyAction(event.nativeEvent, "file-viewer", keybindings) !==
+        "file-viewer.undo-file-operation"
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      void filePathActions.undoLastFilePathOperation();
+    },
+    [filePathActions, keybindings, selectedWorkspaceId],
+  );
+
   if (!selectedWorkspaceId) {
     return <div className={styles.empty}>No workspace selected</div>;
   }
 
   return (
-    <div className={styles.panel}>
+    <div className={styles.panel} onKeyDownCapture={handlePanelKeyDownCapture}>
       {loading ? (
         <div className={styles.empty}>Loading…</div>
       ) : error ? (
@@ -115,6 +164,60 @@ export function FilesPanel() {
           entries={entries}
           onActivateFile={handleActivateFile}
           onActivateDiff={handleActivateDiff}
+          onContextMenu={(target, x, y) => setContextMenu({ target, x, y })}
+          creatingParentPath={creatingParentPath}
+          focusRequest={focusRequest}
+          onCreateCommit={async (parentPath, name) => {
+            try {
+              await filePathActions.createFile(parentPath, name);
+              setCreatingParentPath(null);
+              refocusExplorer();
+              return true;
+            } catch (err) {
+              console.error("Failed to create file:", err);
+              useAppStore.getState().addToast(`Create file failed: ${String(err)}`);
+              return false;
+            }
+          }}
+          onCreateCancel={() => {
+            setCreatingParentPath(null);
+            refocusExplorer();
+          }}
+          renamingPath={renamingTarget?.path ?? null}
+          onRenameCommit={async (target, newName) => {
+            try {
+              await filePathActions.renamePath(target, newName);
+              setRenamingTarget(null);
+              refocusExplorer();
+              return true;
+            } catch (err) {
+              console.error("Failed to rename file:", err);
+              useAppStore.getState().addToast(`Rename failed: ${String(err)}`);
+              return false;
+            }
+          }}
+          onRenameCancel={() => {
+            setRenamingTarget(null);
+            refocusExplorer();
+          }}
+        />
+      )}
+      {contextMenu && (
+        <FilePathContextMenu
+          workspaceId={selectedWorkspaceId}
+          target={contextMenu.target}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onCreateFileRequest={(parentPath) => {
+            const clean = parentPath.replace(/\/+$/g, "");
+            if (clean) {
+              setAllFilesDirExpanded(selectedWorkspaceId, `${clean}/`, true);
+            }
+            setCreatingParentPath(clean);
+          }}
+          onRenameRequest={(target) => setRenamingTarget(target)}
+          onOperationComplete={refocusExplorer}
+          onClose={() => setContextMenu(null)}
         />
       )}
     </div>

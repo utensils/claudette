@@ -33,10 +33,8 @@ import { reconstructCompletedTurns } from "../../utils/reconstructTurns";
 import { extractLatestCallUsage } from "../../utils/extractLatestCallUsage";
 import type { AttachmentInput, ChatMessage } from "../../types/chat";
 import { debugChat } from "../../utils/chatDebug";
-import {
-  AttachmentContextMenu,
-  buildAttachmentMenuLabels,
-} from "./AttachmentContextMenu";
+import { AttachmentContextMenu } from "./AttachmentContextMenu";
+import { buildAttachmentMenuLabels } from "./attachmentContextMenuLabels";
 import { AttachmentLightbox } from "./AttachmentLightbox";
 import {
   downloadAttachment,

@@ -56,7 +56,7 @@ const PATH_REGEX =
  * another path, hyphenated word). Mirrors the old lookbehind's character
  * class: word chars, colon, dot, both slash kinds, hyphen.
  */
-const FORBIDDEN_PREV_CHAR_REGEX = /[\w:.\\/\-]/;
+const FORBIDDEN_PREV_CHAR_REGEX = /[\w:.\\/-]/;
 
 /**
  * Sentence-final characters that tend to follow a path in prose but are

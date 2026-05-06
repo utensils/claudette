@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  closeScopeForTabContext,
   computeSessionPersistOrder,
   splitUnifiedTabOrder,
   type UnifiedTabEntry,
@@ -82,5 +83,40 @@ describe("splitUnifiedTabOrder", () => {
     );
     expect(split.sessions.map((s) => s.id)).toEqual(["s1"]);
     expect(split.sessionPersistIds).toEqual(["s-missing", "s1"]);
+  });
+});
+
+describe("closeScopeForTabContext", () => {
+  const entries = [
+    { key: "s:1", kind: "session" as const },
+    { key: "f:a.ts", kind: "file" as const },
+    { key: "d:b.ts", kind: "diff" as const },
+    { key: "f:c.ts", kind: "file" as const },
+  ];
+
+  it("scopes file-tab close actions to file tabs only", () => {
+    expect(closeScopeForTabContext(entries, "f:a.ts").map((e) => e.key)).toEqual([
+      "f:a.ts",
+      "f:c.ts",
+    ]);
+  });
+
+  it("allows callers to include file-adjacent entries in file-tab close scope", () => {
+    expect(
+      closeScopeForTabContext(
+        entries,
+        "f:a.ts",
+        (entry) => entry.kind === "diff" && entry.key === "d:b.ts",
+      ).map((e) => e.key),
+    ).toEqual(["f:a.ts", "d:b.ts", "f:c.ts"]);
+  });
+
+  it("keeps session and diff tab close actions scoped to the full strip", () => {
+    expect(closeScopeForTabContext(entries, "s:1").map((e) => e.key)).toEqual(
+      entries.map((e) => e.key),
+    );
+    expect(closeScopeForTabContext(entries, "d:b.ts").map((e) => e.key)).toEqual(
+      entries.map((e) => e.key),
+    );
   });
 });

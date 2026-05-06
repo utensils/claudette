@@ -136,6 +136,35 @@ describe("resolveHotkeyAction with conflict updates", () => {
     expect(getEffectiveBindingById("global.toggle-right-sidebar", updates, "mac"))
       .toBeNull();
   });
+
+  it("resolves the file viewer undo operation in file-viewer scope only", () => {
+    const event = macKey({ key: "z", metaKey: true });
+    expect(resolveHotkeyAction(event, "file-viewer", {}, "mac")).toBe(
+      "file-viewer.undo-file-operation",
+    );
+    expect(resolveHotkeyAction(event, "global", {}, "mac")).toBeNull();
+  });
+
+  it("resolves close file tab with platform mod in file-viewer scope", () => {
+    expect(
+      resolveHotkeyAction(
+        macKey({ key: "w", metaKey: true }),
+        "file-viewer",
+        {},
+        "mac",
+      ),
+    ).toBe("file-viewer.close-file-tab");
+    expect(
+      resolveHotkeyAction(
+        macKey({ key: "w", ctrlKey: true }),
+        "file-viewer",
+        {},
+        "linux",
+      ),
+    ).toBe("file-viewer.close-file-tab");
+    expect(resolveHotkeyAction(macKey({ key: "w", metaKey: true }), "global", {}, "mac"))
+      .toBeNull();
+  });
 });
 
 describe("global.show-keyboard-shortcuts default binding", () => {

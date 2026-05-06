@@ -855,6 +855,91 @@ export function writeWorkspaceFile(
   });
 }
 
+export interface WorkspacePathMoveResult {
+  old_path: string;
+  new_path: string;
+  is_directory: boolean;
+}
+
+export interface WorkspacePathTrashResult {
+  old_path: string;
+  is_directory: boolean;
+  undo_token: string | null;
+}
+
+export interface WorkspacePathCreateResult {
+  path: string;
+}
+
+export interface WorkspacePathRestoreResult {
+  restored_path: string;
+  is_directory: boolean;
+}
+
+export function resolveWorkspacePath(
+  workspaceId: string,
+  relativePath: string,
+): Promise<string> {
+  return invoke("resolve_workspace_path", { workspaceId, relativePath });
+}
+
+export function openWorkspacePath(
+  workspaceId: string,
+  relativePath: string,
+): Promise<void> {
+  return invoke("open_workspace_path", { workspaceId, relativePath });
+}
+
+export function revealWorkspacePath(
+  workspaceId: string,
+  relativePath: string,
+): Promise<void> {
+  return invoke("reveal_workspace_path", { workspaceId, relativePath });
+}
+
+export function createWorkspaceFile(
+  workspaceId: string,
+  parentRelativePath: string,
+  name: string,
+): Promise<WorkspacePathCreateResult> {
+  return invoke("create_workspace_file", {
+    workspaceId,
+    parentRelativePath,
+    name,
+  });
+}
+
+export function renameWorkspacePath(
+  workspaceId: string,
+  relativePath: string,
+  newName: string,
+): Promise<WorkspacePathMoveResult> {
+  return invoke("rename_workspace_path", {
+    workspaceId,
+    relativePath,
+    newName,
+  });
+}
+
+export function trashWorkspacePath(
+  workspaceId: string,
+  relativePath: string,
+): Promise<WorkspacePathTrashResult> {
+  return invoke("trash_workspace_path", { workspaceId, relativePath });
+}
+
+export function restoreWorkspacePathFromTrash(
+  workspaceId: string,
+  relativePath: string,
+  undoToken: string | null,
+): Promise<WorkspacePathRestoreResult> {
+  return invoke("restore_workspace_path_from_trash", {
+    workspaceId,
+    relativePath,
+    undoToken,
+  });
+}
+
 export function discardFile(
   worktreePath: string,
   filePath: string,

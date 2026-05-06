@@ -35,7 +35,9 @@ import { CopyButton } from "../shared/CopyButton";
 import { SessionTabs } from "../chat/SessionTabs";
 import { MessageMarkdown } from "../chat/MessageMarkdown";
 import { MarkdownImageBaseProvider } from "../chat/MarkdownImage";
+import { DiscardUnsavedChangesConfirm } from "../files/DiscardUnsavedChangesConfirm";
 import { imageMediaType, isImagePath } from "../../utils/fileIcons";
+import { useFilePathActions } from "../files/useFilePathActions";
 import styles from "./FileViewer.module.css";
 
 const MonacoEditor = lazy(() =>
@@ -79,12 +81,16 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
   const setFileBufferSaved = useAppStore((s) => s.setFileBufferSaved);
   const setDiffFiles = useAppStore((s) => s.setDiffFiles);
   const setFileTabPreview = useAppStore((s) => s.setFileTabPreview);
+  const closeFileTab = useAppStore((s) => s.closeFileTab);
   const requestFileTreeRefresh = useAppStore((s) => s.requestFileTreeRefresh);
   const addToast = useAppStore((s) => s.addToast);
   const keybindings = useAppStore((s) => s.keybindings);
+  const { undoLastFilePathOperation } = useFilePathActions(workspaceId);
 
   const [savingKey, setSavingKey] = useState<string | null>(null);
+  const [closePending, setClosePending] = useState(false);
   const saving = savingKey === bufferKey;
+  const viewerRef = useRef<HTMLDivElement | null>(null);
 
   const isMarkdown = MARKDOWN_EXT.test(path);
   const isImage = isImagePath(path);
@@ -129,6 +135,16 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
         })
         .catch((e) => {
           if (version !== loadVersionRef.current) return;
+          if (isMissingWorkspaceFileError(e)) {
+            setFileBufferLoaded(workspaceId, path, {
+              baseline: "",
+              isBinary: false,
+              sizeBytes: 0,
+              truncated: false,
+              imageBytesB64: null,
+            });
+            return;
+          }
           setFileBufferLoadError(workspaceId, path, String(e));
         });
     }
@@ -142,6 +158,14 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
   ]);
 
   const dirty = !!bufferState && bufferState.buffer !== bufferState.baseline;
+
+  const requestCloseFileTab = useCallback(() => {
+    if (dirty) {
+      setClosePending(true);
+    } else {
+      closeFileTab(workspaceId, path);
+    }
+  }, [closeFileTab, dirty, path, workspaceId]);
 
   // Files we render in the editor but won't let the user mutate. The
   // truncated banner below the editor explains the truncated case; the
@@ -297,6 +321,46 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
     return () => window.removeEventListener("keydown", handler);
   }, [showMarkdownToggle, togglePreview]);
 
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.repeat) return;
+      const state = useAppStore.getState();
+      const action = resolveHotkeyAction(e, "file-viewer", state.keybindings);
+      if (
+        action !== "file-viewer.undo-file-operation" &&
+        action !== "file-viewer.close-file-tab"
+      ) {
+        return;
+      }
+      if (
+        state.settingsOpen ||
+        state.activeModal ||
+        state.commandPaletteOpen ||
+        state.fuzzyFinderOpen
+      ) {
+        return;
+      }
+      const el = document.activeElement as HTMLElement | null;
+      if (!el || !viewerRef.current?.contains(el)) return;
+      const tag = el.tagName?.toLowerCase();
+      const inMonaco = !!el.closest(".monaco-editor");
+      if (action === "file-viewer.undo-file-operation" && inMonaco) return;
+      if ((tag === "input" || tag === "textarea" || el.isContentEditable) && !inMonaco) {
+        return;
+      }
+      // File-tab close is a viewer-level command; it intentionally wins while
+      // focus is inside Monaco so mod+w behaves like the tab strip shortcut.
+      e.preventDefault();
+      if (action === "file-viewer.undo-file-operation") {
+        void undoLastFilePathOperation();
+      } else {
+        requestCloseFileTab();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [requestCloseFileTab, undoLastFilePathOperation]);
+
   const previewShortcutHint = formatBinding(
     getEffectiveBindingById(
       "file-viewer.toggle-markdown-preview",
@@ -315,7 +379,22 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
   }, [workspaceId, path]);
 
   return (
-    <div className={styles.viewer}>
+    <div
+      ref={viewerRef}
+      className={styles.viewer}
+      tabIndex={-1}
+      onPointerDownCapture={(event) => {
+        const target = event.target as HTMLElement | null;
+        if (
+          target?.closest(
+            "button,input,textarea,a,[contenteditable='true'],.monaco-editor",
+          )
+        ) {
+          return;
+        }
+        viewerRef.current?.focus({ preventScroll: true });
+      }}
+    >
       <WorkspacePanelHeader />
       <SessionTabs workspaceId={workspaceId} />
       <PaneToolbar
@@ -417,8 +496,21 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
           </div>
         )}
       </div>
+      {closePending && (
+        <DiscardUnsavedChangesConfirm
+          onConfirm={() => {
+            setClosePending(false);
+            closeFileTab(workspaceId, path);
+          }}
+          onClose={() => setClosePending(false)}
+        />
+      )}
     </div>
   );
+}
+
+function isMissingWorkspaceFileError(error: unknown): boolean {
+  return String(error) === "WORKSPACE_FILE_NOT_FOUND";
 }
 
 interface ImageViewProps {

@@ -18,6 +18,7 @@ claudette-server = { path = "../src-server", optional = true }
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-dialog = "2"
 base64 = "0.22"
+trash = "5"
 
 tauri-plugin-clipboard-manager = "2"
 # Local IPC server for the `claudette` CLI — same crate the lib uses for

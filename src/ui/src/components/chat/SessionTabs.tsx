@@ -22,21 +22,31 @@ import {
 } from "../../services/tauri";
 import { useTabDragReorder } from "../../hooks/useTabDragReorder";
 import { TabDragGhost } from "../shared/TabDragGhost";
-import { splitUnifiedTabOrder } from "./sessionTabsLogic";
+import { closeScopeForTabContext, splitUnifiedTabOrder } from "./sessionTabsLogic";
 import { SessionStatusIcon, type SessionStatusKind } from "../shared/SessionStatusIcon";
 import {
   AttachmentContextMenu,
   type AttachmentContextMenuItem,
 } from "./AttachmentContextMenu";
 import { DiscardUnsavedChangesConfirm } from "../files/DiscardUnsavedChangesConfirm";
+import { FilePathContextMenu } from "../files/FilePathContextMenu";
+import { useFilePathActions } from "../files/useFilePathActions";
+import { InlineRenameInput } from "../files/InlineRenameInput";
 import { getFileIcon } from "../../utils/fileIcons";
 import { createSerialGate } from "../../utils/serialGate";
 import {
   statusColor,
   statusForOpenFileTab,
+  statusLayerForOpenFileTab,
   statusLabel,
 } from "../files/fileTreeStatus";
-import type { ChatSession, DiffFileTab, DiffLayer, FileStatus } from "../../types";
+import type {
+  ChatSession,
+  DiffFileTab,
+  DiffLayer,
+  FileStatus,
+  GitFileLayer,
+} from "../../types";
 import styles from "./SessionTabs.module.css";
 
 type NavDirection = "prev" | "next" | "first" | "last";
@@ -130,6 +140,8 @@ export function SessionTabs({ workspaceId }: Props) {
   // instead of overwriting the slot per iteration. Confirming closes the
   // whole batch; cancelling leaves the tabs intact.
   const [pendingClosePaths, setPendingClosePaths] = useState<string[]>([]);
+  const [renamingFilePath, setRenamingFilePath] = useState<string | null>(null);
+  const filePathActions = useFilePathActions(workspaceId);
 
   // Monotonic version token: each local mutation (create/archive) bumps this so
   // an in-flight `listChatSessions` response can detect it's stale and skip the
@@ -526,8 +538,16 @@ export function SessionTabs({ workspaceId }: Props) {
     const idx = navEntries.findIndex((e) => e.key === contextMenu.entryKey);
     if (idx < 0) return null;
     const target = navEntries[idx];
-    const others = navEntries.filter((_, i) => i !== idx);
-    const toRight = navEntries.slice(idx + 1);
+    const closeScope = closeScopeForTabContext(
+      navEntries,
+      target.key,
+      (entry) =>
+        entry.kind === "diff" &&
+        statusForOpenFileTab(entry.path, diffStagedFiles) === "Deleted",
+    );
+    const scopedIdx = closeScope.findIndex((e) => e.key === target.key);
+    const others = closeScope.filter((_, i) => i !== scopedIdx);
+    const toRight = closeScope.slice(scopedIdx + 1);
     return [
       { label: t("tab_close"), onSelect: () => void closeEntries([target]) },
       {
@@ -548,7 +568,11 @@ export function SessionTabs({ workspaceId }: Props) {
       },
       { label: t("tab_close_all"), onSelect: () => void closeEntries(navEntries) },
     ];
-  }, [contextMenu, navEntries, closeEntries, selectEntry, t]);
+  }, [contextMenu, diffStagedFiles, navEntries, closeEntries, selectEntry, t]);
+
+  const contextMenuEntry = contextMenu
+    ? (navEntryByKey.get(contextMenu.entryKey) ?? null)
+    : null;
 
   // Convenience helper that builds the drag-reorder slice of props each
   // sub-tab needs. Avoids repeating `tabReorder.getTabHandlers(...)` and the
@@ -643,17 +667,35 @@ export function SessionTabs({ workspaceId }: Props) {
         // entry.kind === "file"
         const isActive = activeFileTab === entry.path;
         const gitStatus = statusForOpenFileTab(entry.path, diffStagedFiles);
+        const gitLayer = statusLayerForOpenFileTab(entry.path, diffStagedFiles);
         return (
           <FileTab
             key={navKey}
             workspaceId={workspaceId}
             path={entry.path}
             gitStatus={gitStatus}
+            gitLayer={gitLayer}
             isActive={isActive}
             onSelect={() => selectFileTab(workspaceId, entry.path)}
             onClose={() => requestCloseFileTab(entry.path)}
             onNavigate={(direction) => navigateTabs(navKey, direction)}
             onContextMenu={(x, y) => openContextMenu(navKey, x, y)}
+            renaming={renamingFilePath === entry.path}
+            onRenameCommit={async (newName) => {
+              try {
+                await filePathActions.renamePath(
+                  { path: entry.path, isDirectory: false, exists: true },
+                  newName,
+                );
+                setRenamingFilePath(null);
+                return true;
+              } catch (err) {
+                console.error("[SessionTabs] Failed to rename file:", err);
+                useAppStore.getState().addToast(`Rename failed: ${String(err)}`);
+                return false;
+              }
+            }}
+            onRenameCancel={() => setRenamingFilePath(null)}
             tabRef={(el) => {
               if (el) tabRefs.current.set(navKey, el);
               else tabRefs.current.delete(navKey);
@@ -674,7 +716,23 @@ export function SessionTabs({ workspaceId }: Props) {
         <Plus size={14} />
       </button>
       {/* eslint-disable-next-line react-hooks/refs -- contextMenu is React state; this is a compiler false positive around memoized menu actions. */}
-      {contextMenu && contextMenuItems && (
+      {contextMenu && contextMenuItems && contextMenuEntry?.kind === "file" && (
+        <FilePathContextMenu
+          workspaceId={workspaceId}
+          target={{
+            path: contextMenuEntry.path,
+            isDirectory: false,
+            exists: statusForOpenFileTab(contextMenuEntry.path, diffStagedFiles) !== "Deleted",
+          }}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          beforeItems={contextMenuItems}
+          onRenameRequest={(target) => setRenamingFilePath(target.path)}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
+      {/* eslint-disable-next-line react-hooks/refs -- contextMenu is React state; this is a compiler false positive around memoized menu actions. */}
+      {contextMenu && contextMenuItems && contextMenuEntry?.kind !== "file" && (
         <AttachmentContextMenu
           x={contextMenu.x}
           y={contextMenu.y}
@@ -879,11 +937,15 @@ interface FileTabProps {
   workspaceId: string;
   path: string;
   gitStatus: FileStatus | null;
+  gitLayer: GitFileLayer | null;
   isActive: boolean;
   onSelect: () => void;
   onClose: () => void;
   onNavigate: (direction: NavDirection) => void;
   onContextMenu: (x: number, y: number) => void;
+  renaming: boolean;
+  onRenameCommit: (newName: string) => Promise<boolean>;
+  onRenameCancel: () => void;
   tabRef: (el: HTMLDivElement | null) => void;
   drag: TabDragProps | null;
 }
@@ -892,11 +954,15 @@ function FileTab({
   workspaceId,
   path,
   gitStatus,
+  gitLayer,
   isActive,
   onSelect,
   onClose,
   onNavigate,
   onContextMenu,
+  renaming,
+  onRenameCommit,
+  onRenameCancel,
   tabRef,
   drag,
 }: FileTabProps) {
@@ -918,6 +984,7 @@ function FileTab({
       : typeof gitStatus === "string"
         ? gitStatus
         : `Renamed from ${gitStatus.Renamed.from}`;
+
   return (
     <div
       ref={tabRef}
@@ -928,17 +995,20 @@ function FileTab({
       className={`${styles.tab} ${isActive ? styles.active : ""} ${drag?.isDragging ? styles.dragging : ""}`}
       onClick={() => {
         if (drag?.isClickSuppressed()) return;
+        if (renaming) return;
         onSelect();
       }}
       onContextMenu={(e) => {
+        if (renaming) return;
         e.preventDefault();
         onContextMenu(e.clientX, e.clientY);
       }}
-      onPointerDown={drag?.handlers.onPointerDown}
-      onPointerMove={drag?.handlers.onPointerMove}
-      onPointerUp={drag?.handlers.onPointerUp}
-      onPointerCancel={drag?.handlers.onPointerCancel}
+      onPointerDown={renaming ? undefined : drag?.handlers.onPointerDown}
+      onPointerMove={renaming ? undefined : drag?.handlers.onPointerMove}
+      onPointerUp={renaming ? undefined : drag?.handlers.onPointerUp}
+      onPointerCancel={renaming ? undefined : drag?.handlers.onPointerCancel}
       onKeyDown={(e) => {
+        if (renaming) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           onSelect();
@@ -967,12 +1037,22 @@ function FileTab({
         {/* eslint-disable-next-line react-hooks/static-components -- fileIcons returns stable module-level lucide components. */}
         <Icon size={12} />
       </span>
-      <span className={styles.name} title={path}>
-        {basename}
-        {dirty && (
-          <span className={styles.dirtyDot} aria-label={t("file_dirty_aria")} />
-        )}
-      </span>
+      {renaming ? (
+        <InlineRenameInput
+          name={basename}
+          className={styles.nameInput}
+          ariaLabel={`Rename ${basename}`}
+          onCommit={onRenameCommit}
+          onCancel={onRenameCancel}
+        />
+      ) : (
+        <span className={styles.name} title={path}>
+          {basename}
+          {dirty && (
+            <span className={styles.dirtyDot} aria-label={t("file_dirty_aria")} />
+          )}
+        </span>
+      )}
       {gitStatus && (
         <span
           className={styles.fileStatus}
@@ -980,7 +1060,7 @@ function FileTab({
           title={statusTitle ?? undefined}
           aria-label={statusTitle ?? undefined}
         >
-          {statusLabel(gitStatus)}
+          {statusLabel(gitStatus, gitLayer)}
         </span>
       )}
       <button

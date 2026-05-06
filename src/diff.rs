@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::Path;
 
@@ -258,15 +258,51 @@ pub async fn staged_changed_files(
 pub async fn file_tree_git_status(
     worktree_path: &str,
 ) -> Result<HashMap<String, GitStatusEntry>, DiffError> {
-    let output = run_git(worktree_path, &["status", "--porcelain=v2", "-uall", "-z"]).await?;
-    Ok(parse_file_tree_git_status(&output, worktree_path))
+    Ok(file_tree_git_status_with_suppressed(worktree_path)
+        .await?
+        .statuses)
 }
 
-fn parse_file_tree_git_status(
-    output: &str,
+pub struct FileTreeGitStatus {
+    pub statuses: HashMap<String, GitStatusEntry>,
+    pub suppressed_paths: HashSet<String>,
+}
+
+/// Return current index/worktree git status plus paths that should be hidden
+/// from `git ls-files` output, suitable for building the file tree without
+/// per-path filesystem stats.
+///
+/// `suppressed_paths` is intentionally narrow: today it contains only tracked
+/// deletion entries that Git reports for an unstaged same-content rename, where
+/// the new path is still untracked. It is not a general-purpose ignore channel.
+pub async fn file_tree_git_status_with_suppressed(
     worktree_path: &str,
-) -> HashMap<String, GitStatusEntry> {
+) -> Result<FileTreeGitStatus, DiffError> {
+    let output = run_git(worktree_path, &["status", "--porcelain=v2", "-uall", "-z"]).await?;
+    let mut parsed = parse_file_tree_git_status(&output, worktree_path);
+    let suppressed_paths = suppress_unstaged_rename_deletion_ghosts(
+        worktree_path,
+        &mut parsed.statuses,
+        &parsed.unstaged_deleted_head_oids,
+        &parsed.untracked_paths,
+    )
+    .await;
+    Ok(FileTreeGitStatus {
+        statuses: parsed.statuses,
+        suppressed_paths,
+    })
+}
+
+struct FileTreeStatusParse {
+    statuses: HashMap<String, GitStatusEntry>,
+    unstaged_deleted_head_oids: HashMap<String, String>,
+    untracked_paths: Vec<String>,
+}
+
+fn parse_file_tree_git_status(output: &str, worktree_path: &str) -> FileTreeStatusParse {
     let mut statuses = HashMap::new();
+    let mut unstaged_deleted_head_oids = HashMap::new();
+    let mut untracked_paths = Vec::new();
     let mut records = output.split('\0');
 
     while let Some(record) = records.next() {
@@ -275,6 +311,7 @@ fn parse_file_tree_git_status(
         }
 
         if let Some(path) = record.strip_prefix("? ") {
+            untracked_paths.push(path.to_string());
             statuses.insert(
                 path.to_string(),
                 GitStatusEntry {
@@ -295,19 +332,24 @@ fn parse_file_tree_git_status(
                 let Some(xy) = fields.next() else {
                     continue;
                 };
-                for _ in 0..6 {
-                    let _ = fields.next();
-                }
+                let _sub = fields.next();
+                let _mode_head = fields.next();
+                let _mode_index = fields.next();
+                let _mode_worktree = fields.next();
+                let head_oid = fields.next();
+                let _index_oid = fields.next();
                 let Some(path) = fields.next() else {
                     continue;
                 };
-                statuses.insert(
-                    path.to_string(),
-                    GitStatusEntry {
-                        status: status_from_xy(xy, path, None, worktree_path),
-                        layer: layer_from_xy(xy),
-                    },
-                );
+                let status = status_from_xy(xy, path, None, worktree_path);
+                let layer = layer_from_xy(xy);
+                if status == FileStatus::Deleted
+                    && layer == GitFileLayer::Unstaged
+                    && let Some(head_oid) = head_oid
+                {
+                    unstaged_deleted_head_oids.insert(path.to_string(), head_oid.to_string());
+                }
+                statuses.insert(path.to_string(), GitStatusEntry { status, layer });
             }
             b'2' => {
                 let mut fields = record.splitn(10, ' ');
@@ -334,7 +376,75 @@ fn parse_file_tree_git_status(
         }
     }
 
-    statuses
+    FileTreeStatusParse {
+        statuses,
+        unstaged_deleted_head_oids,
+        untracked_paths,
+    }
+}
+
+async fn suppress_unstaged_rename_deletion_ghosts(
+    worktree_path: &str,
+    statuses: &mut HashMap<String, GitStatusEntry>,
+    deleted_head_oids: &HashMap<String, String>,
+    untracked_paths: &[String],
+) -> HashSet<String> {
+    if deleted_head_oids.is_empty() || untracked_paths.is_empty() {
+        return HashSet::new();
+    }
+
+    let mut untracked_oid_counts: HashMap<String, usize> = HashMap::new();
+    for path in untracked_paths {
+        let Some(status) = statuses.get(path) else {
+            continue;
+        };
+        if status.status != FileStatus::Added || status.layer != GitFileLayer::Untracked {
+            continue;
+        }
+        if let Some(oid) = hash_worktree_file(worktree_path, path).await {
+            *untracked_oid_counts.entry(oid).or_default() += 1;
+        }
+    }
+
+    if untracked_oid_counts.is_empty() {
+        return HashSet::new();
+    }
+
+    let mut deleted_paths: Vec<_> = deleted_head_oids.iter().collect();
+    deleted_paths.sort_by_key(|(path, _)| *path);
+
+    let mut suppressed = HashSet::new();
+    for (path, oid) in deleted_paths {
+        let Some(count) = untracked_oid_counts.get_mut(oid) else {
+            continue;
+        };
+        if *count == 0 {
+            continue;
+        }
+        *count -= 1;
+        statuses.remove(path);
+        suppressed.insert(path.clone());
+    }
+    suppressed
+}
+
+async fn hash_worktree_file(worktree_path: &str, relative_path: &str) -> Option<String> {
+    let output = Command::new(crate::git::resolve_git_path_blocking())
+        .no_console_window()
+        .args(["-C", worktree_path])
+        .arg("hash-object")
+        .arg(format!("--path={relative_path}"))
+        .arg("--")
+        .arg(relative_path)
+        .output()
+        .await
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+    let oid = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!oid.is_empty()).then_some(oid)
 }
 
 fn layer_from_xy(xy: &str) -> GitFileLayer {
@@ -1789,6 +1899,122 @@ mod integration_tests {
             Some(&GitStatusEntry {
                 status: FileStatus::Modified,
                 layer: GitFileLayer::Mixed,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_file_tree_git_status_hides_unstaged_rename_deleted_ghost() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        git_cmd(dir, &["init", "-b", "main"]);
+        git_cmd(dir, &["config", "user.email", "test@test.com"]);
+        git_cmd(dir, &["config", "user.name", "Test"]);
+        git_cmd(dir, &["config", "core.autocrlf", "false"]);
+        std::fs::write(dir.join("index.rs"), "fn main() {}\n").unwrap();
+        git_cmd(dir, &["add", "."]);
+        git_cmd(dir, &["commit", "-m", "initial"]);
+
+        std::fs::rename(dir.join("index.rs"), dir.join("index2.rs")).unwrap();
+
+        let status_result = file_tree_git_status_with_suppressed(dir.to_str().unwrap())
+            .await
+            .unwrap();
+        let status = status_result.statuses;
+
+        assert!(!status.contains_key("index.rs"));
+        assert!(status_result.suppressed_paths.contains("index.rs"));
+        assert_eq!(
+            status.get("index2.rs"),
+            Some(&GitStatusEntry {
+                status: FileStatus::Added,
+                layer: GitFileLayer::Untracked,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_file_tree_git_status_keeps_deleted_when_untracked_content_differs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        git_cmd(dir, &["init", "-b", "main"]);
+        git_cmd(dir, &["config", "user.email", "test@test.com"]);
+        git_cmd(dir, &["config", "user.name", "Test"]);
+        git_cmd(dir, &["config", "core.autocrlf", "false"]);
+        std::fs::write(dir.join("index.rs"), "fn main() {}\n").unwrap();
+        git_cmd(dir, &["add", "."]);
+        git_cmd(dir, &["commit", "-m", "initial"]);
+
+        std::fs::rename(dir.join("index.rs"), dir.join("index2.rs")).unwrap();
+        std::fs::write(dir.join("index2.rs"), "fn changed() {}\n").unwrap();
+
+        let status_result = file_tree_git_status_with_suppressed(dir.to_str().unwrap())
+            .await
+            .unwrap();
+        let status = status_result.statuses;
+
+        assert!(status_result.suppressed_paths.is_empty());
+        assert_eq!(
+            status.get("index.rs"),
+            Some(&GitStatusEntry {
+                status: FileStatus::Deleted,
+                layer: GitFileLayer::Unstaged,
+            })
+        );
+        assert_eq!(
+            status.get("index2.rs"),
+            Some(&GitStatusEntry {
+                status: FileStatus::Added,
+                layer: GitFileLayer::Untracked,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_file_tree_git_status_suppresses_only_one_delete_per_untracked_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        git_cmd(dir, &["init", "-b", "main"]);
+        git_cmd(dir, &["config", "user.email", "test@test.com"]);
+        git_cmd(dir, &["config", "user.name", "Test"]);
+        git_cmd(dir, &["config", "core.autocrlf", "false"]);
+        std::fs::write(dir.join("a.rs"), "same contents\n").unwrap();
+        std::fs::write(dir.join("b.rs"), "same contents\n").unwrap();
+        git_cmd(dir, &["add", "."]);
+        git_cmd(dir, &["commit", "-m", "initial"]);
+
+        std::fs::rename(dir.join("a.rs"), dir.join("renamed.rs")).unwrap();
+        std::fs::remove_file(dir.join("b.rs")).unwrap();
+
+        let status_result = file_tree_git_status_with_suppressed(dir.to_str().unwrap())
+            .await
+            .unwrap();
+        let status = status_result.statuses;
+        let suppressed_count = ["a.rs", "b.rs"]
+            .into_iter()
+            .filter(|path| status_result.suppressed_paths.contains(*path))
+            .count();
+        let visible_deleted_count = ["a.rs", "b.rs"]
+            .into_iter()
+            .filter(|path| {
+                status.get(*path)
+                    == Some(&GitStatusEntry {
+                        status: FileStatus::Deleted,
+                        layer: GitFileLayer::Unstaged,
+                    })
+            })
+            .count();
+
+        assert_eq!(suppressed_count, 1);
+        assert_eq!(visible_deleted_count, 1);
+        assert_eq!(
+            status.get("renamed.rs"),
+            Some(&GitStatusEntry {
+                status: FileStatus::Added,
+                layer: GitFileLayer::Untracked,
             })
         );
     }

@@ -77,6 +77,23 @@
   text-overflow: ellipsis;
 }
 
+.renameInput {
+  flex: 1;
+  min-width: 0;
+  height: 20px;
+  padding: 1px 4px;
+  border: 1px solid var(--accent-primary);
+  border-radius: 3px;
+  background: var(--chat-input-bg);
+  color: var(--text-primary);
+  font: inherit;
+  outline: none;
+}
+
+.renameInput[aria-invalid="true"] {
+  border-color: var(--status-stopped);
+}
+
 .status {
   width: 14px;
   flex-shrink: 0;
