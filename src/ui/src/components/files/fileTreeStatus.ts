@@ -1,5 +1,11 @@
 import type { FileTreeNode } from "../../utils/buildFileTree";
-import type { DiffLayer, FileStatus, GitFileLayer } from "../../types/diff";
+import type {
+  DiffFile,
+  DiffLayer,
+  FileStatus,
+  GitFileLayer,
+  StagedDiffFiles,
+} from "../../types/diff";
 
 export type FileTreeActivation =
   | { kind: "file"; path: string }
@@ -51,6 +57,30 @@ export function resolveFileTreeActivation(
     };
   }
   return { kind: "file", path: node.path };
+}
+
+export function statusForOpenFileTab(
+  path: string,
+  stagedFiles: StagedDiffFiles | null,
+): FileStatus | null {
+  if (!stagedFiles) return null;
+  const matches = [
+    ...stagedFiles.staged,
+    ...stagedFiles.unstaged,
+    ...stagedFiles.untracked,
+  ].filter((file) => file.path === path);
+  if (matches.length === 0) return null;
+  return combineFileStatuses(matches);
+}
+
+function combineFileStatuses(files: DiffFile[]): FileStatus {
+  const deleted = files.find((file) => file.status === "Deleted");
+  if (deleted) return deleted.status;
+  const added = files.find((file) => file.status === "Added");
+  if (added) return added.status;
+  const renamed = files.find((file) => typeof file.status !== "string");
+  if (renamed) return renamed.status;
+  return "Modified";
 }
 
 function assertNever(value: never): never {

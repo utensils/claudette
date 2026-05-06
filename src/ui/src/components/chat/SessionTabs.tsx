@@ -31,7 +31,12 @@ import {
 import { DiscardUnsavedChangesConfirm } from "../files/DiscardUnsavedChangesConfirm";
 import { getFileIcon } from "../../utils/fileIcons";
 import { createSerialGate } from "../../utils/serialGate";
-import type { ChatSession, DiffFileTab, DiffLayer } from "../../types";
+import {
+  statusColor,
+  statusForOpenFileTab,
+  statusLabel,
+} from "../files/fileTreeStatus";
+import type { ChatSession, DiffFileTab, DiffLayer, FileStatus } from "../../types";
 import styles from "./SessionTabs.module.css";
 
 type NavDirection = "prev" | "next" | "first" | "last";
@@ -78,6 +83,7 @@ export function SessionTabs({ workspaceId }: Props) {
   );
   const diffSelectedFile = useAppStore((s) => s.diffSelectedFile);
   const diffSelectedLayer = useAppStore((s) => s.diffSelectedLayer);
+  const diffStagedFiles = useAppStore((s) => s.diffStagedFiles);
   const fileTabs = useAppStore(
     (s) => s.fileTabsByWorkspace[workspaceId] ?? EMPTY_FILE_TABS,
   );
@@ -515,10 +521,10 @@ export function SessionTabs({ workspaceId }: Props) {
   // Build the menu items lazily from the entry that was right-clicked. The
   // unified navEntries order is what "to the right" / "others" resolve against,
   // matching the order the user sees in the strip.
-  const contextMenuItems = useMemo<AttachmentContextMenuItem[]>(() => {
-    if (!contextMenu) return [];
+  const contextMenuItems = useMemo<AttachmentContextMenuItem[] | null>(() => {
+    if (!contextMenu) return null;
     const idx = navEntries.findIndex((e) => e.key === contextMenu.entryKey);
-    if (idx < 0) return [];
+    if (idx < 0) return null;
     const target = navEntries[idx];
     const others = navEntries.filter((_, i) => i !== idx);
     const toRight = navEntries.slice(idx + 1);
@@ -636,11 +642,13 @@ export function SessionTabs({ workspaceId }: Props) {
         }
         // entry.kind === "file"
         const isActive = activeFileTab === entry.path;
+        const gitStatus = statusForOpenFileTab(entry.path, diffStagedFiles);
         return (
           <FileTab
             key={navKey}
             workspaceId={workspaceId}
             path={entry.path}
+            gitStatus={gitStatus}
             isActive={isActive}
             onSelect={() => selectFileTab(workspaceId, entry.path)}
             onClose={() => requestCloseFileTab(entry.path)}
@@ -665,7 +673,8 @@ export function SessionTabs({ workspaceId }: Props) {
       >
         <Plus size={14} />
       </button>
-      {contextMenu && contextMenuItems.length > 0 && (
+      {/* eslint-disable-next-line react-hooks/refs -- contextMenu is React state; this is a compiler false positive around memoized menu actions. */}
+      {contextMenu && contextMenuItems && (
         <AttachmentContextMenu
           x={contextMenu.x}
           y={contextMenu.y}
@@ -869,6 +878,7 @@ function SessionTab({
 interface FileTabProps {
   workspaceId: string;
   path: string;
+  gitStatus: FileStatus | null;
   isActive: boolean;
   onSelect: () => void;
   onClose: () => void;
@@ -881,6 +891,7 @@ interface FileTabProps {
 function FileTab({
   workspaceId,
   path,
+  gitStatus,
   isActive,
   onSelect,
   onClose,
@@ -901,6 +912,12 @@ function FileTab({
   );
   const basename = path.split("/").pop() || path;
   const Icon = getFileIcon(basename);
+  const statusTitle =
+    gitStatus == null
+      ? null
+      : typeof gitStatus === "string"
+        ? gitStatus
+        : `Renamed from ${gitStatus.Renamed.from}`;
   return (
     <div
       ref={tabRef}
@@ -947,6 +964,7 @@ function FileTab({
         <span className={`${styles.dropEdge} ${styles.dropAfter}`} aria-hidden />
       )}
       <span className={styles.icon}>
+        {/* eslint-disable-next-line react-hooks/static-components -- fileIcons returns stable module-level lucide components. */}
         <Icon size={12} />
       </span>
       <span className={styles.name} title={path}>
@@ -955,6 +973,16 @@ function FileTab({
           <span className={styles.dirtyDot} aria-label={t("file_dirty_aria")} />
         )}
       </span>
+      {gitStatus && (
+        <span
+          className={styles.fileStatus}
+          style={{ color: statusColor(gitStatus) }}
+          title={statusTitle ?? undefined}
+          aria-label={statusTitle ?? undefined}
+        >
+          {statusLabel(gitStatus)}
+        </span>
+      )}
       <button
         type="button"
         className={styles.closeBtn}

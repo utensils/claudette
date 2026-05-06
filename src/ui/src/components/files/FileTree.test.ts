@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveFileTreeActivation } from "./fileTreeStatus";
+import { resolveFileTreeActivation, statusForOpenFileTab } from "./fileTreeStatus";
 import type { FileTreeNode } from "../../utils/buildFileTree";
 
 describe("resolveFileTreeActivation", () => {
@@ -63,5 +63,40 @@ describe("resolveFileTreeActivation", () => {
       kind: "file",
       path: "src/app.ts",
     });
+  });
+});
+
+describe("statusForOpenFileTab", () => {
+  it("returns status for open file tabs from current git status groups", () => {
+    expect(
+      statusForOpenFileTab("src/app.ts", {
+        committed: [],
+        staged: [],
+        unstaged: [{ path: "src/app.ts", status: "Modified" }],
+        untracked: [],
+      }),
+    ).toBe("Modified");
+  });
+
+  it("ignores committed-only changes for open file tabs", () => {
+    expect(
+      statusForOpenFileTab("src/app.ts", {
+        committed: [{ path: "src/app.ts", status: "Modified" }],
+        staged: [],
+        unstaged: [],
+        untracked: [],
+      }),
+    ).toBeNull();
+  });
+
+  it("uses deleted status when a file appears in multiple current groups", () => {
+    expect(
+      statusForOpenFileTab("src/app.ts", {
+        committed: [],
+        staged: [{ path: "src/app.ts", status: "Added" }],
+        unstaged: [{ path: "src/app.ts", status: "Deleted" }],
+        untracked: [],
+      }),
+    ).toBe("Deleted");
   });
 });
