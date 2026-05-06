@@ -37,6 +37,7 @@ export interface UiSlice {
     modes: Record<string, "manual">,
   ) => void;
   markWorkspaceOrderManual: (repoId: string) => void;
+  clearManualWorkspaceOrder: (repoId: string) => void;
   toggleRepoCollapsed: (id: string) => void;
   toggleStatusGroupCollapsed: (id: string) => void;
   toggleFuzzyFinder: () => void;
@@ -117,6 +118,13 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (
         [repoId]: "manual",
       },
     })),
+  clearManualWorkspaceOrder: (repoId) =>
+    set((s) => {
+      if (!(repoId in s.manualWorkspaceOrderByRepo)) return s;
+      const next = { ...s.manualWorkspaceOrderByRepo };
+      delete next[repoId];
+      return { manualWorkspaceOrderByRepo: next };
+    }),
   toggleRepoCollapsed: (id) =>
     set((s) => ({
       repoCollapsed: {

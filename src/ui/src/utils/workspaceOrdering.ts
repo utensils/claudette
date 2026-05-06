@@ -51,3 +51,7 @@ export function repoIdFromWorkspaceOrderModeKey(key: string): string | null {
     ? key.slice(WORKSPACE_ORDER_MODE_PREFIX.length)
     : null;
 }
+
+export function workspaceOrderModeKey(repositoryId: string): string {
+  return `${WORKSPACE_ORDER_MODE_PREFIX}${repositoryId}`;
+}

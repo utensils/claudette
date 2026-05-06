@@ -4,6 +4,7 @@ import { useAppStore } from "../../stores/useAppStore";
 import { isAgentBusy } from "../../utils/agentStatus";
 import {
   archiveWorkspace,
+  deleteAppSetting,
   reorderRepositories,
   reorderWorkspaces,
   renameWorkspace,
@@ -19,16 +20,18 @@ import {
   pairWithServer,
   startLocalServer,
 } from "../../services/tauri";
-import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, CircleStop, GitPullRequestArrow, GitPullRequestDraft, GitMerge, GitPullRequestClosed, ChevronRight, ChevronDown } from "lucide-react";
+import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, CircleStop, GitPullRequestArrow, GitPullRequestDraft, GitMerge, GitPullRequestClosed, ChevronRight, ChevronDown, ArrowDownAZ } from "lucide-react";
 import { RepoIcon } from "../shared/RepoIcon";
 import { extractRemoteWorkspace } from "./remoteWorkspaceResponse";
 import { HelpMenu } from "./HelpMenu";
 import { UpdateBanner } from "../layout/UpdateBanner";
+import { ContextMenu, type ContextMenuItem } from "../shared/ContextMenu";
 import { useTabDragReorder } from "../../hooks/useTabDragReorder";
 import { TabDragGhost } from "../shared/TabDragGhost";
 import {
   isManualWorkspaceOrder,
   orderRepoWorkspaces,
+  workspaceOrderModeKey,
 } from "../../utils/workspaceOrdering";
 import styles from "./Sidebar.module.css";
 
@@ -71,6 +74,9 @@ export const Sidebar = memo(function Sidebar() {
   );
   const markWorkspaceOrderManual = useAppStore(
     (s) => s.markWorkspaceOrderManual,
+  );
+  const clearManualWorkspaceOrder = useAppStore(
+    (s) => s.clearManualWorkspaceOrder,
   );
   const metaKeyHeld = useAppStore((s) => s.metaKeyHeld);
   const isMac = navigator.platform.startsWith("Mac");
@@ -128,6 +134,27 @@ export const Sidebar = memo(function Sidebar() {
   const archivingRef = useRef<Set<string>>(new Set());
   const restoringRef = useRef<Set<string>>(new Set());
   const [creatingWorkspace, setCreatingWorkspace] = useState<{ repoId: string } | null>(null);
+  const [repoContextMenu, setRepoContextMenu] = useState<{
+    repoId: string;
+    x: number;
+    y: number;
+  } | null>(null);
+
+  const repoContextMenuItems = useMemo<ContextMenuItem[]>(() => {
+    if (!repoContextMenu) return [];
+    const repoId = repoContextMenu.repoId;
+    return [
+      {
+        label: "Sort Workspaces Automatically",
+        icon: <ArrowDownAZ size={14} />,
+        disabled: !isManualWorkspaceOrder(manualWorkspaceOrderByRepo, repoId),
+        onSelect: async () => {
+          await deleteAppSetting(workspaceOrderModeKey(repoId));
+          clearManualWorkspaceOrder(repoId);
+        },
+      },
+    ];
+  }, [clearManualWorkspaceOrder, manualWorkspaceOrderByRepo, repoContextMenu]);
 
   const handleCreateWorkspace = useCallback(async (repoId: string) => {
     if (creatingRef.current) return;
@@ -943,6 +970,15 @@ export const Sidebar = memo(function Sidebar() {
               <div
                 className={styles.repoHeader}
                 onClick={() => { if (!didDragRef.current) toggleRepoCollapsed(repo.id); }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setRepoContextMenu({
+                    repoId: repo.id,
+                    x: e.clientX,
+                    y: e.clientY,
+                  });
+                }}
               >
                 <span className={styles.chevron}>
                   {collapsed ? "›" : "⌄"}
@@ -1073,6 +1109,15 @@ export const Sidebar = memo(function Sidebar() {
       </div>
       {workspaceDrag.dragGhost && workspaceDrag.draggingId !== null && (
         <TabDragGhost ghost={workspaceDrag.dragGhost} />
+      )}
+      {repoContextMenu && (
+        <ContextMenu
+          x={repoContextMenu.x}
+          y={repoContextMenu.y}
+          items={repoContextMenuItems}
+          onClose={() => setRepoContextMenu(null)}
+          dataTestId="repo-context-menu"
+        />
       )}
     </div>
   );

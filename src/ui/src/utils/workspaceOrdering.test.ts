@@ -5,6 +5,7 @@ import {
   orderRepoWorkspaces,
   repoIdFromWorkspaceOrderModeKey,
   WORKSPACE_ORDER_MODE_PREFIX,
+  workspaceOrderModeKey,
 } from "./workspaceOrdering";
 
 function workspace(
@@ -95,5 +96,11 @@ describe("repoIdFromWorkspaceOrderModeKey", () => {
       repoIdFromWorkspaceOrderModeKey(`${WORKSPACE_ORDER_MODE_PREFIX}repo-1`),
     ).toBe("repo-1");
     expect(repoIdFromWorkspaceOrderModeKey("view:sidebar_group_by")).toBeNull();
+  });
+
+  it("builds workspace order setting keys", () => {
+    expect(workspaceOrderModeKey("repo-1")).toBe(
+      `${WORKSPACE_ORDER_MODE_PREFIX}repo-1`,
+    );
   });
 });
