@@ -36,6 +36,13 @@ import type {
   PluginMarketplace,
 } from "../types/plugins";
 import type { ConversationCheckpoint } from "../types/checkpoint";
+import type {
+  CommitEntry,
+  DiffLayer,
+  FileStatus,
+  GitFileLayer,
+  StagedDiffFiles,
+} from "../types/diff";
 
 // -- Data --
 
@@ -485,6 +492,8 @@ export function savePluginChannelConfiguration(
 export interface FileEntry {
   path: string;
   is_directory: boolean;
+  git_status?: FileStatus | null;
+  git_layer?: GitFileLayer | null;
 }
 
 export function listWorkspaceFiles(
@@ -727,8 +736,6 @@ export function readPlanFile(path: string): Promise<string> {
 }
 
 // -- Diff --
-
-import type { CommitEntry, DiffLayer, StagedDiffFiles } from "../types/diff";
 
 export interface DiffFilesResult {
   files: DiffFile[];

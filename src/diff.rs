@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 
@@ -5,7 +6,8 @@ use crate::process::CommandWindowExt as _;
 use tokio::process::Command;
 
 use crate::model::diff::{
-    CommitEntry, DiffFile, DiffHunk, DiffLine, DiffLineType, FileDiff, FileStatus, StagedDiffFiles,
+    CommitEntry, DiffFile, DiffHunk, DiffLine, DiffLineType, FileDiff, FileStatus, GitFileLayer,
+    GitStatusEntry, StagedDiffFiles,
 };
 
 #[derive(Debug, Clone)]
@@ -246,6 +248,133 @@ pub async fn staged_changed_files(
         unstaged,
         untracked,
     })
+}
+
+/// Return current index/worktree git status, suitable for annotating a file tree.
+///
+/// This intentionally mirrors `git status` rather than the Changes tab's
+/// branch-vs-merge-base view: staged changes, unstaged changes, and untracked
+/// files only. Paths are repository-relative and keyed by their current path.
+pub async fn file_tree_git_status(
+    worktree_path: &str,
+) -> Result<HashMap<String, GitStatusEntry>, DiffError> {
+    let output = run_git(worktree_path, &["status", "--porcelain=v2", "-uall", "-z"]).await?;
+    Ok(parse_file_tree_git_status(&output, worktree_path))
+}
+
+fn parse_file_tree_git_status(
+    output: &str,
+    worktree_path: &str,
+) -> HashMap<String, GitStatusEntry> {
+    let mut statuses = HashMap::new();
+    let mut records = output.split('\0');
+
+    while let Some(record) = records.next() {
+        if record.is_empty() {
+            continue;
+        }
+
+        if let Some(path) = record.strip_prefix("? ") {
+            statuses.insert(
+                path.to_string(),
+                GitStatusEntry {
+                    status: FileStatus::Added,
+                    layer: GitFileLayer::Untracked,
+                },
+            );
+            continue;
+        }
+
+        let Some(kind) = record.as_bytes().first().copied() else {
+            continue;
+        };
+        match kind {
+            b'1' => {
+                let mut fields = record.splitn(9, ' ');
+                let _kind = fields.next();
+                let Some(xy) = fields.next() else {
+                    continue;
+                };
+                for _ in 0..6 {
+                    let _ = fields.next();
+                }
+                let Some(path) = fields.next() else {
+                    continue;
+                };
+                statuses.insert(
+                    path.to_string(),
+                    GitStatusEntry {
+                        status: status_from_xy(xy, path, None, worktree_path),
+                        layer: layer_from_xy(xy),
+                    },
+                );
+            }
+            b'2' => {
+                let mut fields = record.splitn(10, ' ');
+                let _kind = fields.next();
+                let Some(xy) = fields.next() else {
+                    continue;
+                };
+                for _ in 0..7 {
+                    let _ = fields.next();
+                }
+                let Some(path) = fields.next() else {
+                    continue;
+                };
+                let from = records.next().unwrap_or_default().to_string();
+                statuses.insert(
+                    path.to_string(),
+                    GitStatusEntry {
+                        status: status_from_xy(xy, path, Some(from), worktree_path),
+                        layer: layer_from_xy(xy),
+                    },
+                );
+            }
+            _ => {}
+        }
+    }
+
+    statuses
+}
+
+fn layer_from_xy(xy: &str) -> GitFileLayer {
+    let mut chars = xy.chars();
+    let index = chars.next().unwrap_or('.');
+    let worktree = chars.next().unwrap_or('.');
+
+    match (index != '.', worktree != '.') {
+        (true, true) => GitFileLayer::Mixed,
+        (true, false) => GitFileLayer::Staged,
+        (false, true) => GitFileLayer::Unstaged,
+        (false, false) => GitFileLayer::Unstaged,
+    }
+}
+
+fn status_from_xy(
+    xy: &str,
+    path: &str,
+    rename_from: Option<String>,
+    worktree_path: &str,
+) -> FileStatus {
+    let exists_on_disk = Path::new(worktree_path).join(path).exists();
+    // Explorer rows represent what the user can open in the worktree. If the
+    // path is gone, show it as deleted even for combinations like AD
+    // (staged-add then removed) or staged-rename plus worktree-delete.
+    if !exists_on_disk {
+        return FileStatus::Deleted;
+    }
+
+    if let Some(from) = rename_from {
+        return FileStatus::Renamed { from };
+    }
+
+    if xy.contains('A') {
+        return FileStatus::Added;
+    }
+    if xy.contains('D') {
+        return FileStatus::Deleted;
+    }
+    FileStatus::Modified
 }
 
 /// Parse `--name-status` output into a list of DiffFiles.
@@ -1576,6 +1705,92 @@ mod integration_tests {
         // will-modify.txt appears in BOTH committed AND unstaged
         assert!(committed_paths.contains(&"will-modify.txt"));
         assert!(unstaged_paths.contains(&"will-modify.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_file_tree_git_status_covers_current_git_status() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        git_cmd(dir, &["init", "-b", "main"]);
+        git_cmd(dir, &["config", "user.email", "test@test.com"]);
+        git_cmd(dir, &["config", "user.name", "Test"]);
+        git_cmd(dir, &["config", "core.autocrlf", "false"]);
+        std::fs::write(dir.join("clean.txt"), "clean\n").unwrap();
+        std::fs::write(dir.join("modified.txt"), "original\n").unwrap();
+        std::fs::write(dir.join("deleted.txt"), "remove me\n").unwrap();
+        std::fs::write(dir.join("renamed-old.txt"), "rename me\n").unwrap();
+        std::fs::write(dir.join("mixed.txt"), "base\n").unwrap();
+        git_cmd(dir, &["add", "."]);
+        git_cmd(dir, &["commit", "-m", "initial"]);
+
+        std::fs::write(dir.join("modified.txt"), "changed\n").unwrap();
+        std::fs::remove_file(dir.join("deleted.txt")).unwrap();
+        git_cmd(dir, &["mv", "renamed-old.txt", "renamed-new.txt"]);
+        std::fs::write(dir.join("untracked.txt"), "new\n").unwrap();
+        std::fs::write(dir.join("staged-new.txt"), "staged\n").unwrap();
+        git_cmd(dir, &["add", "staged-new.txt"]);
+        std::fs::write(dir.join("staged-then-removed.txt"), "staged\n").unwrap();
+        git_cmd(dir, &["add", "staged-then-removed.txt"]);
+        std::fs::remove_file(dir.join("staged-then-removed.txt")).unwrap();
+        std::fs::write(dir.join("mixed.txt"), "staged\n").unwrap();
+        git_cmd(dir, &["add", "mixed.txt"]);
+        std::fs::write(dir.join("mixed.txt"), "staged\nunstaged\n").unwrap();
+
+        let status = file_tree_git_status(dir.to_str().unwrap()).await.unwrap();
+
+        assert!(!status.contains_key("clean.txt"));
+        assert_eq!(
+            status.get("modified.txt"),
+            Some(&GitStatusEntry {
+                status: FileStatus::Modified,
+                layer: GitFileLayer::Unstaged,
+            })
+        );
+        assert_eq!(
+            status.get("deleted.txt"),
+            Some(&GitStatusEntry {
+                status: FileStatus::Deleted,
+                layer: GitFileLayer::Unstaged,
+            })
+        );
+        assert_eq!(
+            status.get("renamed-new.txt"),
+            Some(&GitStatusEntry {
+                status: FileStatus::Renamed {
+                    from: "renamed-old.txt".to_string(),
+                },
+                layer: GitFileLayer::Staged,
+            })
+        );
+        assert_eq!(
+            status.get("untracked.txt"),
+            Some(&GitStatusEntry {
+                status: FileStatus::Added,
+                layer: GitFileLayer::Untracked,
+            })
+        );
+        assert_eq!(
+            status.get("staged-new.txt"),
+            Some(&GitStatusEntry {
+                status: FileStatus::Added,
+                layer: GitFileLayer::Staged,
+            })
+        );
+        assert_eq!(
+            status.get("staged-then-removed.txt"),
+            Some(&GitStatusEntry {
+                status: FileStatus::Deleted,
+                layer: GitFileLayer::Mixed,
+            })
+        );
+        assert_eq!(
+            status.get("mixed.txt"),
+            Some(&GitStatusEntry {
+                status: FileStatus::Modified,
+                layer: GitFileLayer::Mixed,
+            })
+        );
     }
 
     #[tokio::test]

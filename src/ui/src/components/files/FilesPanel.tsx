@@ -1,40 +1,81 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import { listWorkspaceFiles, type FileEntry } from "../../services/tauri";
+import { isAgentBusy } from "../../utils/agentStatus";
+import type { DiffLayer } from "../../types/diff";
 import { FileTree } from "./FileTree";
 import styles from "./FilesPanel.module.css";
 
 export function FilesPanel() {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const workspaces = useAppStore((s) => s.workspaces);
+  const refreshNonce = useAppStore((s) =>
+    selectedWorkspaceId
+      ? (s.fileTreeRefreshNonceByWorkspace[selectedWorkspaceId] ?? 0)
+      : 0,
+  );
   const openFileTab = useAppStore((s) => s.openFileTab);
+  const openDiffTab = useAppStore((s) => s.openDiffTab);
+  const setDiffSelectedCommitHash = useAppStore((s) => s.setDiffSelectedCommitHash);
 
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const loadVersionRef = useRef(0);
+  const prevIsRunning = useRef(false);
+  const ws = workspaces.find((w) => w.id === selectedWorkspaceId);
+  const isRunning = isAgentBusy(ws?.agent_status);
+
+  const loadFiles = useCallback(
+    async (workspaceId: string, showLoading: boolean) => {
+      const version = ++loadVersionRef.current;
+      if (showLoading) {
+        setLoading(true);
+      }
+      setError(null);
+      try {
+        const result = await listWorkspaceFiles(workspaceId);
+        if (version !== loadVersionRef.current) return;
+        setEntries(result);
+        setLoading(false);
+      } catch (e) {
+        if (version !== loadVersionRef.current) return;
+        setError(String(e));
+        setLoading(false);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!selectedWorkspaceId) {
-      setEntries([]);
+      loadVersionRef.current += 1;
       return;
     }
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    listWorkspaceFiles(selectedWorkspaceId)
-      .then((result) => {
-        if (cancelled) return;
-        setEntries(result);
-        setLoading(false);
-      })
-      .catch((e) => {
-        if (cancelled) return;
-        setError(String(e));
-        setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedWorkspaceId]);
+    const timer = window.setTimeout(() => {
+      void loadFiles(selectedWorkspaceId, true);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [selectedWorkspaceId, refreshNonce, loadFiles]);
+
+  useEffect(() => {
+    if (!selectedWorkspaceId || !isRunning) return;
+    const interval = setInterval(() => {
+      void loadFiles(selectedWorkspaceId, false);
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [isRunning, selectedWorkspaceId, loadFiles]);
+
+  useEffect(() => {
+    const wasRunning = prevIsRunning.current;
+    prevIsRunning.current = isRunning;
+    if (!selectedWorkspaceId || wasRunning !== true || isRunning) return;
+
+    const timer = setTimeout(() => {
+      void loadFiles(selectedWorkspaceId, false);
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [isRunning, selectedWorkspaceId, loadFiles]);
 
   const handleActivateFile = useCallback(
     (path: string) => {
@@ -47,6 +88,15 @@ export function FilesPanel() {
       openFileTab(selectedWorkspaceId, path);
     },
     [selectedWorkspaceId, openFileTab],
+  );
+
+  const handleActivateDiff = useCallback(
+    (path: string, layer: DiffLayer | null) => {
+      if (!selectedWorkspaceId) return;
+      openDiffTab(selectedWorkspaceId, path, layer);
+      setDiffSelectedCommitHash(null);
+    },
+    [selectedWorkspaceId, openDiffTab, setDiffSelectedCommitHash],
   );
 
   if (!selectedWorkspaceId) {
@@ -64,6 +114,7 @@ export function FilesPanel() {
           workspaceId={selectedWorkspaceId}
           entries={entries}
           onActivateFile={handleActivateFile}
+          onActivateDiff={handleActivateDiff}
         />
       )}
     </div>

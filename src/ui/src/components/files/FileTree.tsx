@@ -15,6 +15,12 @@ import {
 } from "../../utils/buildFileTree";
 import { getFileIcon, getFolderIcon } from "../../utils/fileIcons";
 import type { FileEntry } from "../../services/tauri";
+import type { DiffLayer } from "../../types/diff";
+import {
+  resolveFileTreeActivation,
+  statusColor,
+  statusLabel,
+} from "./fileTreeStatus";
 import styles from "./FileTree.module.css";
 
 interface FileTreeProps {
@@ -27,6 +33,7 @@ interface FileTreeProps {
    *  The parent decides whether to actually open it (e.g. it may show a
    *  discard-changes modal first if there are unsaved changes). */
   onActivateFile: (path: string) => void;
+  onActivateDiff: (path: string, layer: DiffLayer | null) => void;
 }
 
 const EMPTY_EXPANDED: Record<string, boolean> = {};
@@ -35,6 +42,7 @@ export const FileTree = memo(function FileTree({
   workspaceId,
   entries,
   onActivateFile,
+  onActivateDiff,
 }: FileTreeProps) {
   const expanded = useAppStore(
     (s) => s.allFilesExpandedDirsByWorkspace[workspaceId] ?? EMPTY_EXPANDED,
@@ -166,7 +174,12 @@ export const FileTree = memo(function FileTree({
           if (cur.node.kind === "dir") {
             toggleDir(cur.node.path);
           } else {
-            onActivateFile(cur.node.path);
+            const activation = resolveFileTreeActivation(cur.node);
+            if (activation.kind === "diff") {
+              onActivateDiff(activation.path, activation.layer);
+            } else {
+              onActivateFile(activation.path);
+            }
           }
           break;
         }
@@ -181,6 +194,7 @@ export const FileTree = memo(function FileTree({
       setExpanded,
       toggleDir,
       onActivateFile,
+      onActivateDiff,
     ],
   );
 
@@ -224,7 +238,12 @@ export const FileTree = memo(function FileTree({
             if (node.kind === "dir") {
               toggleDir(node.path);
             } else {
-              onActivateFile(node.path);
+              const activation = resolveFileTreeActivation(node);
+              if (activation.kind === "diff") {
+                onActivateDiff(activation.path, activation.layer);
+              } else {
+                onActivateFile(activation.path);
+              }
             }
           }}
         />
@@ -251,11 +270,27 @@ function Row({ node, depth, expanded, selected, tabbable, rowRef, onClick }: Row
       : ChevronRight
     : null;
   const Icon = isDir ? getFolderIcon(expanded) : getFileIcon(node.name);
+  const status = node.kind === "file" ? node.git_status : null;
+  const dirChanged = node.kind === "dir" && node.statusCount > 0;
+  const statusTitle =
+    status == null
+      ? null
+      : typeof status === "string"
+        ? status
+        : `Renamed from ${status.Renamed.from}`;
+  const rowClassName = [
+    styles.row,
+    selected ? styles.rowSelected : "",
+    status === "Deleted" ? styles.rowDeleted : "",
+    dirChanged ? styles.rowDirChanged : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <div
       ref={rowRef}
-      className={`${styles.row} ${selected ? styles.rowSelected : ""}`}
+      className={rowClassName}
       style={{ ["--depth" as string]: depth }}
       role="treeitem"
       tabIndex={tabbable ? 0 : -1}
@@ -274,8 +309,28 @@ function Row({ node, depth, expanded, selected, tabbable, rowRef, onClick }: Row
         // 12-px spacer keeps file rows aligned with their sibling folders.
         <span className={styles.chevron} style={{ width: 12, height: 12 }} />
       )}
+      {/* eslint-disable-next-line react-hooks/static-components -- fileIcons returns stable module-level lucide components. */}
       <Icon size={14} className={styles.icon} aria-hidden="true" />
       <span className={styles.name}>{node.name}</span>
+      {node.kind === "dir" && node.statusCount > 0 && (
+        <span
+          className={styles.dirStatus}
+          title={`${node.statusCount} changed ${node.statusCount === 1 ? "file" : "files"}`}
+          aria-label={`${node.statusCount} changed ${node.statusCount === 1 ? "file" : "files"}`}
+        >
+          {node.statusCount > 1 ? node.statusCount : ""}
+        </span>
+      )}
+      {status && (
+        <span
+          className={styles.status}
+          style={{ color: statusColor(status) }}
+          title={statusTitle ?? undefined}
+          aria-label={statusTitle ?? undefined}
+        >
+          {statusLabel(status)}
+        </span>
+      )}
     </div>
   );
 }

@@ -22,6 +22,7 @@ import {
 import { isMacHotkeyPlatform } from "../../hotkeys/platform";
 import { fileBufferKey } from "../../stores/slices/fileTreeSlice";
 import {
+  loadDiffFiles,
   readWorkspaceFileBytes,
   readWorkspaceFileForViewer,
   writeWorkspaceFile,
@@ -76,18 +77,14 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
   const setFileBufferLoadError = useAppStore((s) => s.setFileBufferLoadError);
   const setFileBufferContent = useAppStore((s) => s.setFileBufferContent);
   const setFileBufferSaved = useAppStore((s) => s.setFileBufferSaved);
+  const setDiffFiles = useAppStore((s) => s.setDiffFiles);
   const setFileTabPreview = useAppStore((s) => s.setFileTabPreview);
+  const requestFileTreeRefresh = useAppStore((s) => s.requestFileTreeRefresh);
   const addToast = useAppStore((s) => s.addToast);
   const keybindings = useAppStore((s) => s.keybindings);
 
-  const [saving, setSaving] = useState(false);
-
-  // Reset transient per-tab UI state when the active tab/workspace changes
-  // so an in-flight save on a previous tab can't leak its disabled state
-  // into the newly mounted view.
-  useEffect(() => {
-    setSaving(false);
-  }, [workspaceId, path]);
+  const [savingKey, setSavingKey] = useState<string | null>(null);
+  const saving = savingKey === bufferKey;
 
   const isMarkdown = MARKDOWN_EXT.test(path);
   const isImage = isImagePath(path);
@@ -176,8 +173,9 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
     if (!bufferState || !dirty || saving) return;
     const requestedWorkspaceId = workspaceId;
     const requestedPath = path;
+    const requestedBufferKey = bufferKey;
     const snapshot = bufferState.buffer;
-    setSaving(true);
+    setSavingKey(requestedBufferKey);
     try {
       await writeWorkspaceFile(requestedWorkspaceId, requestedPath, snapshot);
       // The user may have switched tabs mid-save. Always update the
@@ -186,6 +184,17 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
       // a different tab/workspace to avoid confusing the user about which
       // file saved.
       setFileBufferSaved(requestedWorkspaceId, requestedPath, snapshot);
+      requestFileTreeRefresh(requestedWorkspaceId);
+      loadDiffFiles(requestedWorkspaceId)
+        .then((result) => {
+          if (useAppStore.getState().selectedWorkspaceId !== requestedWorkspaceId) {
+            return;
+          }
+          setDiffFiles(result.files, result.merge_base, result.staged_files, result.commits);
+        })
+        .catch((err) =>
+          console.error("Failed to refresh diff after file save:", err),
+        );
       const state = useAppStore.getState();
       if (
         state.selectedWorkspaceId === requestedWorkspaceId &&
@@ -207,9 +216,23 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
         addToast(t("file_save_failed", { error: String(e) }));
       }
     } finally {
-      setSaving(false);
+      setSavingKey((current) =>
+        current === requestedBufferKey ? null : current,
+      );
     }
-  }, [bufferState, dirty, saving, workspaceId, path, setFileBufferSaved, addToast, t]);
+  }, [
+    bufferState,
+    bufferKey,
+    dirty,
+    saving,
+    workspaceId,
+    path,
+    setFileBufferSaved,
+    setDiffFiles,
+    requestFileTreeRefresh,
+    addToast,
+    t,
+  ]);
 
   const showMarkdownToggle = isMarkdown && !editDisabled;
   const showMarkdownPreview =
