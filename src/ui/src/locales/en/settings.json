@@ -9,6 +9,7 @@
   "nav_community": "Community",
   "nav_pinned_prompts": "Pinned Prompts",
   "nav_cli": "CLI",
+  "nav_collaboration": "Collaboration",
   "nav_experimental": "Experimental",
 
   "cli_title": "Command-line interface",
@@ -534,5 +535,13 @@
   "claude_flags_no_match": "No flags match your search.",
   "claude_flags_tab_badge_tooltip": "Dangerously skip permissions is enabled for this workspace",
   "claude_flags_footer_tooltip_empty": "No extra flags configured",
-  "claude_flags_tooltip_overflow": "…and {{count}} more"
+  "claude_flags_tooltip_overflow": "…and {{count}} more",
+
+  "collab_section_title": "Collaboration",
+  "collab_display_name_label": "Display name",
+  "collab_display_name_description": "Shown to other participants in shared sessions. Leave blank to use this machine's hostname.",
+  "collab_display_name_placeholder": "e.g. Sean",
+  "collab_default_consensus_label": "Require plan approval by default",
+  "collab_default_consensus_description": "Pre-checks the \"Require unanimous plan approval\" option when you start a collaborative session.",
+  "collab_default_consensus_aria": "Require plan approval by default"
 }

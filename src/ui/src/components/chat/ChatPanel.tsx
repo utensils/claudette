@@ -31,6 +31,7 @@ import {
   getAppSetting,
   setAppSetting,
   clearConversation,
+  collaborationSessionSnapshot,
   readPlanFile,
   loadDiffFiles,
   forkWorkspaceAtCheckpoint,
@@ -79,6 +80,12 @@ import { CliInvocationBanner } from "./CliInvocationBanner";
 import { CurrentTurnTaskProgress } from "./CurrentTurnTaskProgress";
 import { ChatInputArea } from "./ChatInputArea";
 import { EMPTY_ACTIVITIES } from "./chatConstants";
+import { applyRemoteJoinSessionSnapshot } from "./remoteJoinSessionSnapshot";
+import {
+  isStalePlanApprovalError,
+  submitPlanApprovalResponse,
+} from "./submitPlanApprovalResponse";
+import { submitAgentAnswerResponse } from "./submitAgentAnswerResponse";
 
 const EMPTY_QUEUED_MESSAGES: QueuedMessage[] = [];
 
@@ -97,6 +104,8 @@ export function ChatPanel() {
   const repositories = useAppStore((s) => s.repositories);
   const chatMessages = useAppStore((s) => s.chatMessages);
   const setChatMessages = useAppStore((s) => s.setChatMessages);
+  const setParticipants = useAppStore((s) => s.setParticipants);
+  const setTurnHolder = useAppStore((s) => s.setTurnHolder);
   const hydrateCompletedTurns = useAppStore((s) => s.hydrateCompletedTurns);
   const addChatMessage = useAppStore((s) => s.addChatMessage);
   const enqueueTerminalCommand = useAppStore((s) => s.enqueueTerminalCommand);
@@ -267,13 +276,22 @@ export function ChatPanel() {
   const pendingQuestion = useAppStore(
     (s) => (activeSessionId ? s.agentQuestions[activeSessionId] ?? null : null)
   );
+  const activeParticipantsCount = useAppStore((s) =>
+    activeSessionId ? (s.participants[activeSessionId]?.length ?? 0) : 0,
+  );
+  const setAgentQuestion = useAppStore((s) => s.setAgentQuestion);
   const clearAgentQuestion = useAppStore((s) => s.clearAgentQuestion);
   const finishTypewriterDrainTop = useAppStore((s) => s.finishTypewriterDrain);
   const pendingPlan = useAppStore(
     (s) => (activeSessionId ? s.planApprovals[activeSessionId] ?? null : null)
   );
+  const setPlanApproval = useAppStore((s) => s.setPlanApproval);
   const clearPlanApproval = useAppStore((s) => s.clearPlanApproval);
+  const openConsensusVote = useAppStore((s) => s.openConsensusVote);
+  const recordConsensusVote = useAppStore((s) => s.recordConsensusVote);
   const setPlanMode = useAppStore((s) => s.setPlanMode);
+  const setSelectedModel = useAppStore((s) => s.setSelectedModel);
+  const setPromptStartTime = useAppStore((s) => s.setPromptStartTime);
   const queuedMessages = useAppStore(
     (s) =>
       activeSessionId
@@ -462,6 +480,29 @@ export function ChatPanel() {
     };
 
     if (isLocal) {
+      collaborationSessionSnapshot(sessionId)
+        .then((snapshot) => {
+          if (cancelled) return;
+          applyRemoteJoinSessionSnapshot(sessionId, snapshot, {
+            setParticipants,
+            setTurnHolder,
+            openConsensusVote,
+            recordConsensusVote,
+            setPlanApproval,
+            setPlanMode,
+            setSelectedModel,
+            setAgentQuestion,
+            setPromptStartTime: (startedAtMs) => {
+              if (selectedWorkspaceId) {
+                setPromptStartTime(selectedWorkspaceId, startedAtMs);
+              }
+            },
+          });
+        })
+        .catch((e) =>
+          console.warn("Failed to load collaboration session snapshot:", e),
+        );
+
       // Skip the reload when we've already loaded this session — otherwise
       // bouncing between long conversations would drop any older pages the
       // user already scrolled through and snap them back to the newest 50.
@@ -489,6 +530,42 @@ export function ChatPanel() {
           .catch((e) => console.error("Failed to load chat history:", e));
       }
     } else {
+      // For collaborative shares the server lazily creates a `Room` on
+      // `join_session` — and that's also what registers our per-connection
+      // event forwarder, so without this call we'd never receive live
+      // agent-stream / participants-changed / plan-vote-* events. Fire it
+      // before history loads so any in-flight broadcast we miss is
+      // re-deliverable on the join_session response (the server returns
+      // a snapshot of current state). For 1:1 shares the server returns an
+      // error ("Session is not collaborative") which we swallow silently.
+      sendRemoteCommand(currentWs!.remote_connection_id!, "join_session", {
+        chat_session_id: sessionId,
+      })
+        .then((snapshot) => {
+          if (cancelled) return;
+          applyRemoteJoinSessionSnapshot(sessionId, snapshot, {
+            setParticipants,
+            setTurnHolder,
+            openConsensusVote,
+            recordConsensusVote,
+            setPlanApproval,
+            setPlanMode,
+            setSelectedModel,
+            setAgentQuestion,
+            setPromptStartTime: (startedAtMs) => {
+              if (currentWs?.id) {
+                setPromptStartTime(currentWs.id, startedAtMs);
+              }
+            },
+          });
+        })
+        .catch((e) => {
+          // Non-fatal: 1:1 shares don't have rooms.
+          const msg = String(e);
+          if (!msg.includes("not collaborative")) {
+            console.warn("join_session failed:", e);
+          }
+        });
       sendRemoteCommand(currentWs!.remote_connection_id!, "load_chat_history", {
         chat_session_id: sessionId,
       })
@@ -513,7 +590,22 @@ export function ChatPanel() {
     return () => {
       cancelled = true;
     };
-  }, [activeSessionId, selectedWorkspaceId, setChatMessages, setChatPagination, hydrateCompletedTurns]);
+  }, [
+    activeSessionId,
+    selectedWorkspaceId,
+    setChatMessages,
+    setChatPagination,
+    setParticipants,
+    setTurnHolder,
+    openConsensusVote,
+    recordConsensusVote,
+    setPlanApproval,
+    setPlanMode,
+    setSelectedModel,
+    setAgentQuestion,
+    setPromptStartTime,
+    hydrateCompletedTurns,
+  ]);
 
   // Scroll to bottom unconditionally on session switch.
   useEffect(() => {
@@ -765,6 +857,8 @@ export function ChatPanel() {
       output_tokens: null,
       cache_read_tokens: null,
       cache_creation_tokens: null,
+      author_participant_id: null,
+      author_display_name: null,
     });
     if (attachments?.length) {
       const optimisticAtts = attachments.map((a) => ({
@@ -1018,7 +1112,7 @@ export function ChatPanel() {
               input_tokens: null,
               output_tokens: null,
               cache_read_tokens: null,
-              cache_creation_tokens: null,
+              cache_creation_tokens: null, author_participant_id: null, author_display_name: null,
             },
             { persisted: false },
           );
@@ -1046,10 +1140,13 @@ export function ChatPanel() {
         // Route plan-file reads through the remote server for remote
         // workspaces, matching the PlanApprovalCard's "View plan" dispatch.
         // Falls through to the local Tauri command for local workspaces.
+        // chat_session_id is required so the server can scope the read
+        // to the share's authorized workspace.
         const remoteConnectionId = ws.remote_connection_id;
         const readPlanFileBound = remoteConnectionId
           ? async (path: string) =>
               (await sendRemoteCommand(remoteConnectionId, "read_plan_file", {
+                chat_session_id: sessionId,
                 path,
               })) as string
           : readPlanFile;
@@ -1373,8 +1470,21 @@ export function ChatPanel() {
                     const sid = activeSessionId;
                     const toolUseId = pendingQuestion.toolUseId;
                     try {
-                      await submitAgentAnswer(sid, toolUseId, answers);
-                      clearAgentQuestion(sid);
+                      await submitAgentAnswerResponse({
+                        sessionId: sid,
+                        toolUseId,
+                        answers,
+                        remoteConnectionId:
+                          ws?.remote_connection_id ?? undefined,
+                        submitAgentAnswer,
+                        sendRemoteCommand,
+                      });
+                      if (
+                        !pendingQuestion.requiredVoters?.length &&
+                        activeParticipantsCount === 0
+                      ) {
+                        clearAgentQuestion(sid);
+                      }
                     } catch (e) {
                       console.error("Failed to submit agent answer:", e);
                       setError(String(e));
@@ -1392,7 +1502,15 @@ export function ChatPanel() {
                     const sid = activeSessionId;
                     const toolUseId = pendingPlan.toolUseId;
                     try {
-                      await submitPlanApproval(sid, toolUseId, approved, reason);
+                      await submitPlanApprovalResponse({
+                        sessionId: sid,
+                        toolUseId,
+                        approved,
+                        reason,
+                        remoteConnectionId: ws?.remote_connection_id,
+                        submitPlanApproval,
+                        sendRemoteCommand,
+                      });
                       clearPlanApproval(sid);
                       // User action is authoritative for ending the plan
                       // phase — flip planMode off so the next turn triggers
@@ -1401,6 +1519,12 @@ export function ChatPanel() {
                       // toolbar chip in sync).
                       setPlanMode(sid, false);
                     } catch (e) {
+                      if (isStalePlanApprovalError(e)) {
+                        clearPlanApproval(sid);
+                        setPlanMode(sid, false);
+                        setError(null);
+                        return;
+                      }
                       console.error("Failed to submit plan approval:", e);
                       setError(String(e));
                     }

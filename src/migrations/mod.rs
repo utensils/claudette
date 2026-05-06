@@ -160,6 +160,11 @@ pub const MIGRATIONS: &[Migration] = &[
         legacy_version: None,
     },
     Migration {
+        id: "20260428034257_chat_message_author",
+        sql: include_str!("20260428034257_chat_message_author.sql"),
+        legacy_version: None,
+    },
+    Migration {
         id: "20260430030147_pinned_prompts",
         sql: include_str!("20260430030147_pinned_prompts.sql"),
         legacy_version: None,

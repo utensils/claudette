@@ -73,6 +73,11 @@ const ClaudeFlagsSettings = lazy(() =>
     default: m.ClaudeFlagsSettings,
   })),
 );
+const CollaborationSettings = lazy(() =>
+  import("./sections/CollaborationSettings").then((m) => ({
+    default: m.CollaborationSettings,
+  })),
+);
 
 function SectionContent({ section }: { section: string | null }) {
   const pluginManagementEnabled = useAppStore((s) => s.pluginManagementEnabled);
@@ -92,6 +97,7 @@ function SectionContent({ section }: { section: string | null }) {
   if (section === "claude-flags")
     return <ClaudeFlagsSettings scope={{ kind: "global" }} />;
   if (section === "help") return <HelpSettings />;
+  if (section === "collaboration") return <CollaborationSettings />;
   if (section === "pinned-prompts") return <PinnedPromptsSettings />;
   if (section === "plugins") return <PluginsSettings />;
   if (section === "claude-code-plugins") {

@@ -39,6 +39,7 @@ import {
 } from "../../hotkeys/bindings";
 import { tooltipWithHotkey } from "../../hotkeys/display";
 import { isMacHotkeyPlatform } from "../../hotkeys/platform";
+import { useSelfParticipantId } from "../../hooks/useSelfParticipantId";
 import { ComposerToolbar } from "./composer/ComposerToolbar";
 import { ContextPopover } from "./composer/ContextPopover";
 import { SegmentedMeter } from "./composer/SegmentedMeter";
@@ -227,6 +228,23 @@ export function ChatInputArea({
     initialDraft.mode,
   );
   const [chatInput, setChatInput] = useState(initialDraft.text);
+  // In a collaborative session, another participant may currently hold the
+  // agent's turn lock. `null` when no turn is in flight, or when *we* are
+  // the holder. When set to a non-self holder, we disable the composer so
+  // the local user can't even attempt to send (the backend would hard-reject
+  // anyway, but greying out is the canonical UX).
+  //
+  // Compare against the workspace's self-pid (NOT the literal `"host"`),
+  // because on a remote client the local user's pid is the remote-issued
+  // string. Using `"host"` here would lock remote participants out of
+  // stopping their own turns — the bug Copilot flagged in PR 612.
+  const turnHolder = useAppStore((s) => s.currentTurnHolder[sessionId]);
+  const selfParticipantId = useSelfParticipantId(selectedWorkspaceId);
+  const lockedByOther =
+    turnHolder !== undefined &&
+    turnHolder !== null &&
+    selfParticipantId !== null &&
+    turnHolder.participant_id !== selfParticipantId;
   const [cursorPos, setCursorPos] = useState(0);
   const [inputScrollTop, setInputScrollTop] = useState(0);
   const [slashPickerIndex, setSlashPickerIndex] = useState(0);
@@ -1315,7 +1333,14 @@ export function ChatInputArea({
           }}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          placeholder={composerEnvPlaceholder}
+          disabled={lockedByOther}
+          placeholder={
+            lockedByOther && !workspaceEnvironmentPreparing
+              ? t("composer_locked_placeholder", {
+                  name: turnHolder?.display_name ?? t("user_label"),
+                })
+              : composerEnvPlaceholder
+          }
         />
       </div>
       <div className={styles.inputControls}>
@@ -1437,7 +1462,19 @@ export function ChatInputArea({
             onClick={isRunning ? onStop : handleSend}
             disabled={
               workspaceEnvironmentPreparing ||
+              lockedByOther ||
               (!isRunning && !chatInput.trim() && pendingAttachments.length === 0)
+            }
+            title={
+              lockedByOther
+                ? t("composer_locked_title", {
+                    name: turnHolder?.display_name ?? t("user_label"),
+                  })
+                : isRunning
+                  ? t("stop_agent")
+                  : composerMode === "shell"
+                    ? t("run_shell_command")
+                    : t("send_message")
             }
             data-tooltip={sendButtonTooltip}
             aria-label={sendButtonLabel}

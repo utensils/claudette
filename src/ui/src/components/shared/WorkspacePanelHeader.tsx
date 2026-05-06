@@ -1,6 +1,8 @@
 import { GitBranch } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
+import { useSelfParticipantId } from "../../hooks/useSelfParticipantId";
 import { WorkspaceActions } from "../chat/WorkspaceActions";
+import { ParticipantsRoster } from "../chat/ParticipantsRoster";
 import { PanelToggles } from "./PanelToggles";
 import { PanelHeader } from "./PanelHeader";
 import styles from "./WorkspacePanelHeader.module.css";
@@ -12,9 +14,15 @@ import styles from "./WorkspacePanelHeader.module.css";
  *  here. */
 export function WorkspacePanelHeader() {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const activeSessionId = useAppStore((s) =>
+    s.selectedWorkspaceId
+      ? s.selectedSessionIdByWorkspaceId[s.selectedWorkspaceId] ?? null
+      : null,
+  );
   const workspaces = useAppStore((s) => s.workspaces);
   const repositories = useAppStore((s) => s.repositories);
   const defaultBranchesMap = useAppStore((s) => s.defaultBranches);
+  const selfParticipantId = useSelfParticipantId(selectedWorkspaceId);
 
   const ws = workspaces.find((w) => w.id === selectedWorkspaceId);
   const repo = repositories.find((r) => r.id === ws?.repository_id);
@@ -45,6 +53,12 @@ export function WorkspacePanelHeader() {
       left={left}
       right={
         <>
+          {activeSessionId && (
+            <ParticipantsRoster
+              sessionId={activeSessionId}
+              selfParticipantId={selfParticipantId}
+            />
+          )}
           <WorkspaceActions worktreePath={ws?.worktree_path ?? null} />
           <PanelToggles />
         </>

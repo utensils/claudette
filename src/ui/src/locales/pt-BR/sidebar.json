@@ -72,6 +72,8 @@
   "auto_deleted_merged": "Workspace “{{name}}” excluído — PR #{{prNumber}} mesclado",
   "auto_archived_merged_nopr": "Workspace “{{name}}” arquivado — PR mesclado",
   "auto_deleted_merged_nopr": "Workspace “{{name}}” excluído — PR mesclado",
+  "remote_workspace_archived_named": "O workspace “{{name}}” foi arquivado pelo host",
+  "remote_workspace_archived_unnamed": "Um workspace compartilhado foi arquivado pelo host",
   "no_workspaces_archived_for_repo": "Nenhum workspace correspondente — todos os workspaces deste repositório estão arquivados.",
   "no_workspaces_all_archived": "Todos os workspaces estão arquivados.",
   "no_repos": "Ainda não há repositórios locais — adicione um na barra de ferramentas abaixo.",

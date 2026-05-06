@@ -67,4 +67,14 @@ pub struct ChatMessage {
     /// Per-message cache-creation input tokens (maps to
     /// `cache_creation_input_tokens` in the Anthropic API). NULL for historical rows.
     pub cache_creation_tokens: Option<i64>,
+    /// Identifies the connected participant who authored this message in a
+    /// collaborative session. In a collab session, the host stamps `"host"`
+    /// (see `claudette::room::ParticipantId::HOST`) on its own messages and
+    /// the per-pairing id on remote-authored ones. NULL for solo / 1:1
+    /// (non-collab) sessions, all Assistant/System rows, and pre-collab
+    /// legacy history.
+    pub author_participant_id: Option<String>,
+    /// Display name captured at submit time so the UI can render an author
+    /// chip without resolving the participant id at read time.
+    pub author_display_name: Option<String>,
 }

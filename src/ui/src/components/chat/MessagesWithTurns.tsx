@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import type { ToolDisplayMode } from "../../stores/slices/settingsSlice";
 import type { CompletedTurn, ToolActivity } from "../../stores/useAppStore";
+import { useSelfParticipantId } from "../../hooks/useSelfParticipantId";
 import { loadAttachmentData } from "../../services/tauri";
 import type { ChatMessage, ChatAttachment } from "../../types/chat";
 import { roleClassKey, shouldRenderAsMarkdown } from "./messageRendering";
@@ -57,8 +58,10 @@ import {
   EMPTY_ATTACHMENTS,
   EMPTY_CHECKPOINTS,
   EMPTY_COMPLETED_TURNS,
+  EMPTY_PARTICIPANTS,
   type RollbackModalData,
 } from "./chatConstants";
+import { userMessageAuthorLabel } from "./userMessageAuthorLabel";
 
 /**
  * Renders all messages interleaved with completed turn summaries at the correct
@@ -126,6 +129,13 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   // Retained for the rare path where every group of a turn shares the
   // same id and a per-turn toggle is what we want; today's
   // chronological-split rendering uses the per-group setter below.
+  // Used to render "You" instead of the user's display name when we recognize
+  // ourselves as the message author in a collaborative session. See
+  // `useSelfParticipantId` for the host-sentinel-vs-remote-pid logic.
+  const selfParticipantId = useSelfParticipantId(workspaceId);
+  const participants = useAppStore(
+    (s) => s.participants[sessionId] ?? EMPTY_PARTICIPANTS,
+  );
   const toggleCompletedTurn = useAppStore((s) => s.toggleCompletedTurn);
   const collapsedToolGroups = useAppStore(
     (s) => s.collapsedToolGroupsBySession[sessionId],
@@ -749,7 +759,22 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
             {msg.id === pendingMessageId ? streamingMessageNode : (
               <div className={`${styles.message} ${styles[roleClassKey(msg.role, msg.content)]}`}>
                 {msg.role === "User" && (
-                  <div className={styles.roleLabel}>{t("you_label")}</div>
+                  <div className={styles.roleLabel}>
+                    {/* In collaborative sessions the backend stamps each user
+                        message with the author's id + display name. We render
+                        "You" when the author matches the local user (host on
+                        local workspaces; the connection's stored participant
+                        id on remote workspaces), the display name for another
+                        stamped participant, and the host name for unstamped
+                        legacy rows in a remote collaborative room. */}
+                    {userMessageAuthorLabel(
+                      msg,
+                      selfParticipantId,
+                      participants,
+                      t("you_label"),
+                      t("user_label"),
+                    )}
+                  </div>
                 )}
                 {msg.role === "User" && msg.content.length > 0 && (
                   <MessageCopyButton

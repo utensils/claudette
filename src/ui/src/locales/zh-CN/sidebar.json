@@ -72,6 +72,8 @@
   "auto_deleted_merged": "工作区 “{{name}}” 已删除 — PR #{{prNumber}} 已合并",
   "auto_archived_merged_nopr": "工作区 “{{name}}” 已归档 — PR 已合并",
   "auto_deleted_merged_nopr": "工作区 “{{name}}” 已删除 — PR 已合并",
+  "remote_workspace_archived_named": "工作区 “{{name}}” 已被主机归档",
+  "remote_workspace_archived_unnamed": "一个共享工作区已被主机归档",
   "no_workspaces_archived_for_repo": "没有匹配的工作区 — 此仓库的所有工作区均已归档。",
   "no_workspaces_all_archived": "所有工作区均已归档。",
   "no_repos": "尚无本地仓库 — 从下方工具栏添加一个。",

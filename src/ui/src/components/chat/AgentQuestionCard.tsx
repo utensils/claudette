@@ -20,6 +20,73 @@ export function AgentQuestionCard({
   const { t } = useTranslation("chat");
   const total = question.questions.length;
   const isSingleQuestion = total === 1;
+  const participantNames = new Map(
+    (question.requiredVoters ?? []).map((p) => [p.id, p.display_name]),
+  );
+  const votes = question.votes ?? {};
+
+  const voterName = (participantId: string) =>
+    participantNames.get(participantId) ?? participantId;
+
+  const votesForAnswer = (questionText: string, answer: string) =>
+    Object.entries(votes)
+      .filter(([, vote]) => {
+        const value = vote.answers[questionText];
+        if (!value) return false;
+        return value
+          .split(",")
+          .map((part) => part.trim())
+          .includes(answer);
+      })
+      .map(([participantId]) => voterName(participantId));
+
+  const freeformVotes = (
+    questionText: string,
+    options: Array<{ label: string }>,
+  ) =>
+    Object.entries(votes)
+      .flatMap(([participantId, vote]) => {
+        const value = vote.answers[questionText];
+        if (!value) return [];
+        const selectedOptions = value.split(",").map((part) => part.trim());
+        const isOption = options.some((option) =>
+          selectedOptions.includes(option.label),
+        );
+        return isOption
+          ? []
+          : [{ participantId, name: voterName(participantId), answer: value }];
+      });
+
+  const renderBadges = (names: string[]) => {
+    if (names.length === 0) return null;
+    return (
+      <span className={styles.voteBadges}>
+        {names.map((name) => (
+          <span key={name} className={styles.voteBadge}>
+            {name}
+          </span>
+        ))}
+      </span>
+    );
+  };
+
+  const renderFreeformVotes = (
+    questionText: string,
+    options: Array<{ label: string }>,
+  ) => {
+    const items = freeformVotes(questionText, options);
+    if (items.length === 0) return null;
+    return (
+      <div className={styles.freeformVotes}>
+        {items.map((item) => (
+          <span key={item.participantId} className={styles.freeformVote}>
+            <span className={styles.voteBadge}>{item.name}</span>
+            <span className={styles.freeformVoteText}>{item.answer}</span>
+          </span>
+        ))}
+      </div>
+    );
+  };
 
   // All hooks declared unconditionally (React rules of hooks)
   const [selections, setSelections] = useState<Record<number, Set<number>>>(
@@ -76,6 +143,7 @@ export function AgentQuestionCard({
                     onClick={() => toggleSingle(optIdx)}
                   >
                     <span className={styles.optionLabel}>{opt.label}</span>
+                    {renderBadges(votesForAnswer(q.question, opt.label))}
                     {opt.description && (
                       <span className={styles.optionDesc}>
                         {opt.description}
@@ -86,6 +154,7 @@ export function AgentQuestionCard({
               })}
             </div>
           )}
+          {renderFreeformVotes(q.question, q.options)}
         </div>
         {isMulti && hasSelections && (
           <button
@@ -259,6 +328,7 @@ export function AgentQuestionCard({
                   onClick={() => handleOptionClick(optIdx)}
                 >
                   <span className={styles.optionLabel}>{opt.label}</span>
+                  {renderBadges(votesForAnswer(q.question, opt.label))}
                   {opt.description && (
                     <span className={styles.optionDesc}>
                       {opt.description}
@@ -269,6 +339,7 @@ export function AgentQuestionCard({
             })}
           </div>
         )}
+        {renderFreeformVotes(q.question, q.options)}
       </div>
 
       <div className={styles.divider}>{t("agent_question_or_type")}</div>

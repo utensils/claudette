@@ -1,7 +1,9 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MessageMarkdown } from "./MessageMarkdown";
 import type { PlanApproval } from "../../stores/useAppStore";
+import { useAppStore } from "../../stores/useAppStore";
+import { useSelfParticipantId } from "../../hooks/useSelfParticipantId";
 import { readPlanFile, sendRemoteCommand } from "../../services/tauri";
 import { CopyButton } from "../shared/CopyButton";
 import styles from "./PlanApprovalCard.module.css";
@@ -13,7 +15,7 @@ interface PlanApprovalCardProps {
    * ExitPlanMode tool's `call()` (which writes the plan file and emits the
    * real tool_result). `approved=false` sends a deny with the given reason.
    */
-  onRespond: (approved: boolean, reason?: string) => void;
+  onRespond: (approved: boolean, reason?: string) => void | Promise<void>;
   remoteConnectionId?: string;
 }
 
@@ -28,11 +30,20 @@ export function PlanApprovalCard({
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [feedback, setFeedback] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   // Memoize an in-flight read so concurrent callers (e.g. user clicks
   // Copy and View Plan in quick succession) share a single network call
   // instead of issuing duplicate `readPlanFile` / `sendRemoteCommand`
   // requests. Cleared in a `finally` so a failed fetch can be retried.
   const inFlightFetchRef = useRef<Promise<string> | null>(null);
+  const mountedRef = useRef(true);
+  const submittingRef = useRef(false);
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const fetchPlanContent = (): Promise<string> => {
     if (planContent !== null) return Promise.resolve(planContent);
@@ -44,6 +55,7 @@ export function PlanApprovalCard({
     const promise = (async () => {
       const content = remoteConnectionId
         ? ((await sendRemoteCommand(remoteConnectionId, "read_plan_file", {
+            chat_session_id: approval.sessionId,
             path: planFilePath,
           })) as string)
         : await readPlanFile(planFilePath);
@@ -73,6 +85,20 @@ export function PlanApprovalCard({
       setExpanded(true);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const submitResponse = async (approved: boolean, reason?: string) => {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    setSubmitting(true);
+    try {
+      await onRespond(approved, reason);
+    } finally {
+      submittingRef.current = false;
+      if (mountedRef.current) {
+        setSubmitting(false);
+      }
     }
   };
 
@@ -140,9 +166,14 @@ export function PlanApprovalCard({
         </div>
       )}
 
+      <ConsensusProgress approval={approval} />
+
       <button
         className={styles.approveBtn}
-        onClick={() => onRespond(true)}
+        onClick={() => {
+          void submitResponse(true);
+        }}
+        disabled={submitting}
       >
         {t("plan_approval_approve")}
       </button>
@@ -154,11 +185,12 @@ export function PlanApprovalCard({
           className={styles.freeformInput}
           value={feedback}
           onChange={(e) => setFeedback(e.target.value)}
+          disabled={submitting}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               const text = feedback.trim();
-              if (text) onRespond(false, text);
+              if (text) void submitResponse(false, text);
             }
           }}
           placeholder={t("plan_approval_feedback_placeholder")}
@@ -168,13 +200,68 @@ export function PlanApprovalCard({
           className={styles.feedbackBtn}
           onClick={() => {
             const text = feedback.trim();
-            if (text) onRespond(false, text);
+            if (text) void submitResponse(false, text);
           }}
-          disabled={!feedback.trim()}
+          disabled={submitting || !feedback.trim()}
         >
           {t("plan_approval_send")}
         </button>
       </div>
+    </div>
+  );
+}
+
+
+/**
+ * Render the per-voter vote state for an open consensus round. No-op when
+ * the session has no open vote (solo or non-consensus collab) — the card
+ * then behaves identically to its pre-collab single-shot form.
+ *
+ * The local host's voting status is derived from the `votes` map keyed by
+ * `"host"`, matching what the Rust resolver records.
+ */
+function ConsensusProgress({ approval }: { approval: PlanApproval }) {
+  const { t } = useTranslation("chat");
+  const vote = useAppStore((s) => s.consensusVotes[approval.sessionId]);
+  // Compare voter ids against the local participant's id (the workspace's
+  // self-pid), NOT the literal `"host"` — on a remote client the local
+  // user's pid is the remote-issued string, so hardcoding `"host"` would
+  // mark the host as "you" for every remote viewer of the same plan card.
+  const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const selfParticipantId = useSelfParticipantId(selectedWorkspaceId);
+  if (!vote || vote.toolUseId !== approval.toolUseId) {
+    return null;
+  }
+  const totalRequired = vote.requiredVoters.length;
+  const totalVoted = Object.keys(vote.votes).length;
+  return (
+    <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
+      <div>
+        <strong>
+          {t("plan_approval_consensus_required", {
+            voted: totalVoted,
+            required: totalRequired,
+          })}
+        </strong>
+      </div>
+      {vote.requiredVoters.map((voter) => {
+        const cast = vote.votes[voter.id];
+        const status = cast
+          ? cast.kind === "approve"
+            ? t("plan_approval_vote_approved")
+            : t("plan_approval_vote_denied", { reason: cast.reason })
+          : t("plan_approval_vote_waiting");
+        const isSelf = voter.id === selfParticipantId;
+        return (
+          <div key={voter.id}>
+            <span>{voter.display_name}</span>
+            {isSelf ? ` ${t("plan_approval_you_marker")}` : ""}
+            {voter.is_host ? ` · ${t("plan_approval_host_marker")}` : ""}
+            {": "}
+            <em>{status}</em>
+          </div>
+        );
+      })}
     </div>
   );
 }

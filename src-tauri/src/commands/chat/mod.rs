@@ -7,6 +7,11 @@ pub mod remote_control;
 pub mod send;
 pub mod session;
 
+// Re-export the consensus resolver so the host-side resolver task in
+// `commands::remote` can call into it through the canonical
+// `crate::commands::chat` path.
+pub use interaction::{prune_consensus_voters_for_session, record_agent_answer, record_plan_vote};
+
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -17,8 +22,13 @@ use claudette::env::WorkspaceEnv;
 use claudette::git;
 
 use crate::agent_mcp_sink::ChatBridgeSink;
-use claudette::agent::AgentEvent;
 use claudette::agent_mcp::bridge::{BridgeHandle, McpBridgeSession};
+
+// Re-export the shared struct under the existing path so call sites in this
+// crate keep working unchanged. The canonical home is `claudette::chat` —
+// see that module's docstring for why both bridges must serialize the same
+// struct.
+pub(crate) use claudette::chat::AgentStreamPayload;
 
 /// Frontend-facing input for a file attachment (base64-encoded).
 #[derive(Clone, Deserialize)]
@@ -59,13 +69,6 @@ pub struct ChatHistoryPage {
     pub attachments: Vec<AttachmentResponse>,
     pub has_more: bool,
     pub total_count: i64,
-}
-
-#[derive(Clone, Serialize)]
-pub(crate) struct AgentStreamPayload {
-    pub workspace_id: String,
-    pub chat_session_id: String,
-    pub event: AgentEvent,
 }
 
 /// How long to wait between emitting `agent-permission-prompt` and firing the

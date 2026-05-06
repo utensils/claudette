@@ -18,13 +18,33 @@
 
 use std::path::Path;
 
+use serde::Serialize;
 use serde_json::Value;
 
-use crate::agent::{AssistantMessage, CompactMetadata, ContentBlock, TokenUsage};
+use crate::agent::{AgentEvent, AssistantMessage, CompactMetadata, ContentBlock, TokenUsage};
 use crate::db::Database;
 use crate::model::{ChatMessage, ChatRole, ConversationCheckpoint};
 use crate::permissions::is_bypass_tools;
 use crate::snapshot;
+
+// ---------------------------------------------------------------------------
+// Agent-stream event payload
+// ---------------------------------------------------------------------------
+
+/// The wire shape of an `agent-stream` event, fan-out from either bridge to
+/// every connected participant (host webview via Tauri events; remote clients
+/// via the WebSocket forwarder). Both transports must serialize *this*
+/// struct so the JSON shape stays in lockstep with the frontend's
+/// `AgentStreamPayload` TypeScript interface — drifting field names here
+/// silently drops events on receivers (see commit `1e1db36` for the
+/// `session_id`-vs-`chat_session_id` regression that motivated extracting
+/// this type into the shared crate).
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentStreamPayload {
+    pub workspace_id: String,
+    pub chat_session_id: String,
+    pub event: AgentEvent,
+}
 
 // ---------------------------------------------------------------------------
 // Session-flag drift detection
@@ -219,6 +239,8 @@ pub fn build_assistant_chat_message(args: BuildAssistantArgs<'_>) -> ChatMessage
         cache_creation_tokens: usage
             .as_ref()
             .and_then(|u| u.cache_creation_input_tokens.map(|n| n as i64)),
+        author_participant_id: None,
+        author_display_name: None,
     }
 }
 
@@ -252,6 +274,8 @@ pub fn build_compaction_sentinel(
         output_tokens: None,
         cache_read_tokens: Some(meta.post_tokens as i64),
         cache_creation_tokens: None,
+        author_participant_id: None,
+        author_display_name: None,
     }
 }
 

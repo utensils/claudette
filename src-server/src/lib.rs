@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod collab;
 pub mod handler;
 pub mod mdns;
 pub mod tls;
@@ -7,6 +8,7 @@ pub mod ws;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use claudette::room::RoomRegistry;
 use tokio::net::TcpListener;
 
 use crate::auth::ServerConfig;
@@ -21,6 +23,11 @@ pub struct ServerOptions {
     pub name: Option<String>,
     pub no_mdns: bool,
     pub config_path: Option<PathBuf>,
+    /// Pre-built shared config. When `Some`, the server uses this instance
+    /// (so a host process can mutate the same `ServerConfig` to mint and
+    /// revoke shares); when `None`, the server loads from `config_path`
+    /// and owns its own copy.
+    pub existing_config: Option<Arc<tokio::sync::Mutex<ServerConfig>>>,
 }
 
 impl Default for ServerOptions {
@@ -31,6 +38,7 @@ impl Default for ServerOptions {
             name: None,
             no_mdns: false,
             config_path: None,
+            existing_config: None,
         }
     }
 }
@@ -54,7 +62,38 @@ pub fn db_path() -> PathBuf {
 ///
 /// Prints the connection string to stdout before entering the accept loop
 /// (the Tauri parent process reads this to extract the connection string).
+///
+/// This is the **subprocess** entrypoint — the server owns its own
+/// `RoomRegistry`. For collaborative sessions where the Tauri host needs to
+/// share rooms with the embedded server, see [`run_with_rooms`].
 pub async fn run(options: ServerOptions) -> Result<(), Box<dyn std::error::Error>> {
+    run_with_rooms(options, RoomRegistry::new()).await
+}
+
+/// Variant of [`run`] that accepts an externally-owned `RoomRegistry`. The
+/// Tauri host calls this from a `tokio::spawn` after starting collaborative
+/// share: the registry is the same `Arc` held by `AppState`, so events
+/// published from either side reach subscribers on the other.
+pub async fn run_with_rooms(
+    options: ServerOptions,
+    rooms: Arc<RoomRegistry>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_with_rooms_and_events(options, rooms, None).await
+}
+
+/// Variant of [`run_with_rooms`] that additionally wires a
+/// [`claudette::workspace_events::WorkspaceEventBus`] into the server.
+/// Authenticated WS connections subscribe to the bus and forward events
+/// (currently: workspace archive) to remote clients in scope.
+///
+/// The Tauri host passes a `Some(Arc<...>)` cloned from `AppState.workspace_events`
+/// so a publish on the host side reaches every connected remote.
+/// Subprocess servers without a host process pass `None`.
+pub async fn run_with_rooms_and_events(
+    options: ServerOptions,
+    rooms: Arc<RoomRegistry>,
+    workspace_events: Option<Arc<claudette::workspace_events::WorkspaceEventBus>>,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Install the default crypto provider for rustls. When both `aws-lc-rs` and
     // `ring` features are active (e.g. embedded in the Tauri binary where
     // tauri-plugin-updater pulls in ring), rustls cannot auto-detect and panics.
@@ -62,23 +101,41 @@ pub async fn run(options: ServerOptions) -> Result<(), Box<dyn std::error::Error
 
     let config_path = options.config_path.unwrap_or_else(default_config_path);
 
-    // Load or create config, applying overrides.
-    let mut config = ServerConfig::load_or_create(&config_path)?;
-    config.server.port = options.port;
-    config.server.bind = options.bind.clone();
-    if let Some(ref name) = options.name {
-        config.server.name = name.clone();
-    }
-    config.save(&config_path)?;
+    // Get or build the shared config. When the caller (Tauri host) supplies
+    // one, we use it as-is — that's what lets the host mint shares while
+    // the server is running. Otherwise we load from disk and own it.
+    let config = if let Some(existing) = options.existing_config {
+        // Apply runtime overrides to the caller's config too (port, bind,
+        // name) so a CLI override on a shared config still takes effect.
+        {
+            let mut guard = existing.lock().await;
+            guard.server.port = options.port;
+            guard.server.bind = options.bind.clone();
+            if let Some(ref name) = options.name {
+                guard.server.name = name.clone();
+            }
+            let _ = guard.save(&config_path);
+        }
+        existing
+    } else {
+        let mut config = ServerConfig::load_or_create(&config_path)?;
+        config.server.port = options.port;
+        config.server.bind = options.bind.clone();
+        if let Some(ref name) = options.name {
+            config.server.name = name.clone();
+        }
+        config.save(&config_path)?;
+        Arc::new(tokio::sync::Mutex::new(config))
+    };
 
     // Load or generate TLS certificate.
     let tls_config = tls::load_or_generate_tls(&config_dir())?;
     let fingerprint = tls::cert_fingerprint(&config_dir())?;
 
-    // Wrap config in shared state so all connections see session mutations.
-    let pairing_token = config.auth.pairing_token.clone();
-    let server_name = config.server.name.clone();
-    let config = Arc::new(tokio::sync::Mutex::new(config));
+    // No global pairing token any more — every share mints its own.
+    // The config is shared with `ServerState` (so RPC handlers can
+    // re-validate a connection's parent share on every request).
+    let server_name = config.lock().await.server.name.clone();
     let config_path = Arc::new(config_path);
 
     // Set up database.
@@ -142,11 +199,21 @@ pub async fn run(options: ServerOptions) -> Result<(), Box<dyn std::error::Error
         }
     }
 
-    let state = Arc::new(ws::ServerState::new_with_plugins(
+    let mut server_state = ws::ServerState::new_with_plugins_rooms_and_config_arc(
         db_path,
         worktree_base_dir,
         plugins,
-    ));
+        rooms,
+        config,
+    );
+    if let Some(bus) = workspace_events {
+        server_state.set_workspace_events(bus);
+    }
+    let state = Arc::new(server_state);
+    // The shared config inside `state` is the single source of truth.
+    // The accept loop hands `state.config` back into `handle_tls_connection`
+    // so the auth path mutates the same instance the handler validates against.
+    let config_for_accept = Arc::clone(&state.config);
 
     // Bind TCP listener before printing the connection string so the parent
     // process never sees `claudette://` unless we're actually listening.
@@ -173,18 +240,16 @@ pub async fn run(options: ServerOptions) -> Result<(), Box<dyn std::error::Error
     );
     println!("Name: {server_name}");
     println!();
-    println!("Connection string (paste into Claudette):");
-    println!("  claudette://{}:{}/{}", host, options.port, pairing_token);
-    println!();
     println!("Certificate fingerprint: {fingerprint}");
     println!();
+    println!("Hostname: {host} — connection strings are minted per-share from the Claudette UI.");
     println!("Ready for connections.\n");
 
     loop {
         let (stream, peer_addr) = listener.accept().await?;
         let acceptor = acceptor.clone();
         let state = Arc::clone(&state);
-        let config = Arc::clone(&config);
+        let config = Arc::clone(&config_for_accept);
         let config_path = Arc::clone(&config_path);
 
         tokio::spawn(async move {

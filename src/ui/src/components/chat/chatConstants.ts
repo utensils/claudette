@@ -1,4 +1,5 @@
 import type { CompletedTurn, ToolActivity } from "../../stores/useAppStore";
+import type { Participant } from "../../stores/slices/collabSlice";
 import type { ChatAttachment } from "../../types/chat";
 import type { ConversationCheckpoint } from "../../types/checkpoint";
 
@@ -13,6 +14,7 @@ export const EMPTY_COMPLETED_TURNS: readonly CompletedTurn[] = Object.freeze([])
 export const EMPTY_ACTIVITIES: readonly ToolActivity[] = Object.freeze([]);
 export const EMPTY_ATTACHMENTS: readonly ChatAttachment[] = Object.freeze([]);
 export const EMPTY_CHECKPOINTS: readonly ConversationCheckpoint[] = Object.freeze([]);
+export const EMPTY_PARTICIPANTS: readonly Participant[] = Object.freeze([]);
 
 export type RollbackModalData = {
   workspaceId: string;

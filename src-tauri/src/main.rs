@@ -829,6 +829,124 @@ fn main() {
                 }
             });
 
+            // Wire the host-side `Room` subscriber to fire on every new
+            // room creation. This must run before any handler that calls
+            // `RoomRegistry::get_or_create` — i.e. before the embedded
+            // collab server starts taking connections — otherwise the
+            // host UI misses the very first `participants-changed` event
+            // emitted by `handle_join_session`.
+            #[cfg(feature = "server")]
+            {
+                let rooms = app.state::<state::AppState>().rooms.clone();
+                let app_for_hook = app.handle().clone();
+                rooms.set_on_create(move |room| {
+                    commands::remote::attach_host_room_subscribers(app_for_hook.clone(), room);
+                });
+
+                let rooms = app.state::<state::AppState>().rooms.clone();
+                let app_for_snapshot = app.handle().clone();
+                rooms.set_pending_vote_snapshot_provider(move |chat_session_id| {
+                    let app = app_for_snapshot.clone();
+                    async move {
+                        let app_state = app.state::<state::AppState>();
+                        let plan_file_path = claudette::db::Database::open(&app_state.db_path)
+                            .ok()
+                            .and_then(|db| {
+                                db.latest_plan_file_path_for_session(&chat_session_id)
+                                    .ok()
+                                    .flatten()
+                            });
+                        let (tool_use_id, pending) = {
+                            let agents = app_state.agents.read().await;
+                            let session = agents.get(&chat_session_id)?;
+                            session
+                                .pending_permissions
+                                .iter()
+                                .find(|(_, pending)| pending.tool_name == "ExitPlanMode")
+                                .map(|(tool_use_id, pending)| {
+                                    (tool_use_id.clone(), pending.clone())
+                                })
+                        }?;
+                        let room = app_state.rooms.get(&chat_session_id).await?;
+                        let participants = room.participant_list().await;
+                        let required_voters = pending
+                            .required_voters
+                            .iter()
+                            .filter_map(|id| participants.iter().find(|p| &p.id == id).cloned())
+                            .collect();
+                        let votes = pending
+                            .votes
+                            .into_iter()
+                            .map(|(id, vote)| (id.0, vote))
+                            .collect();
+                        Some(claudette::room::PendingVoteSnapshot {
+                            tool_use_id,
+                            required_voters,
+                            votes,
+                            input: pending.original_input,
+                            plan_file_path,
+                        })
+                    }
+                });
+
+                let rooms = app.state::<state::AppState>().rooms.clone();
+                let app_for_question_snapshot = app.handle().clone();
+                rooms.set_pending_question_snapshot_provider(move |chat_session_id| {
+                    let app = app_for_question_snapshot.clone();
+                    async move {
+                        let app_state = app.state::<state::AppState>();
+                        let (tool_use_id, pending) = {
+                            let agents = app_state.agents.read().await;
+                            let session = agents.get(&chat_session_id)?;
+                            session
+                                .pending_permissions
+                                .iter()
+                                .find(|(_, pending)| pending.tool_name == "AskUserQuestion")
+                                .map(|(tool_use_id, pending)| {
+                                    (tool_use_id.clone(), pending.clone())
+                                })
+                        }?;
+                        let room = app_state.rooms.get(&chat_session_id).await?;
+                        let participants = room.participant_list().await;
+                        let required_voters = pending
+                            .required_voters
+                            .iter()
+                            .filter_map(|id| participants.iter().find(|p| &p.id == id).cloned())
+                            .collect();
+                        let votes = pending
+                            .question_votes
+                            .into_iter()
+                            .map(|(id, vote)| (id.0, vote))
+                            .collect();
+                        Some(claudette::room::PendingQuestionSnapshot {
+                            tool_use_id,
+                            required_voters,
+                            votes,
+                            input: pending.original_input,
+                        })
+                    }
+                });
+            }
+
+            // Hydrate any persisted shares on disk so the share modal shows
+            // them on first open (and their saved pairing strings actually
+            // work — the in-process server only listens on the share port
+            // when at least one share is hydrated). Done after the on_create
+            // hook above so the host subscriber is wired before the server
+            // accepts its first `join_session`.
+            #[cfg(feature = "server")]
+            {
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = app_handle.state::<state::AppState>();
+                    if let Err(e) =
+                        commands::share::hydrate_persisted_shares(&app_handle, &state).await
+                    {
+                        eprintln!("[share] hydrate_persisted_shares failed: {e}");
+                    }
+                });
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -1138,6 +1256,14 @@ fn main() {
             commands::remote::start_local_server,
             commands::remote::stop_local_server,
             commands::remote::get_local_server_status,
+            // Workspace-scoped share management — replaces the
+            // unscoped `start_collaborative_share` flow.
+            commands::share::start_share,
+            commands::share::stop_share,
+            commands::share::list_shares,
+            commands::remote::collaboration_session_snapshot,
+            commands::remote::kick_participant,
+            commands::remote::mute_participant,
             // Debug (dev builds only — cfg-gated in commands/debug.rs)
             #[cfg(debug_assertions)]
             commands::debug::debug_eval_js,

@@ -11,7 +11,9 @@ use claudette::claude_help::ClaudeFlagDef;
 use claudette::env_provider::{EnvCache, EnvWatcher};
 use claudette::file_watcher::FileWatcher;
 use claudette::plugin_runtime::PluginRegistry;
+use claudette::room::RoomRegistry;
 use claudette::scm::types::{CiCheck, PullRequest};
+use claudette::workspace_events::WorkspaceEventBus;
 use serde::{Deserialize, Serialize};
 
 use crate::boot_probation::BootProbationState;
@@ -43,6 +45,13 @@ pub enum AttentionKind {
 /// resolve via `control_response`. Keyed in `AgentSessionState::pending_permissions`
 /// by tool_use_id so UI callbacks (AgentQuestionCard, PlanApprovalCard) can
 /// resolve them using the tool_use_id they already track.
+///
+/// In collaborative mode with consensus required, `required_voters` is
+/// populated with a snapshot of room participants at the moment an
+/// interactive request arrives. The `control_response` is held until the
+/// plan vote or question response round resolves. For non-collaborative
+/// sessions and non-consensus prompts, `required_voters` stays empty and
+/// resolution is single-shot as before.
 #[derive(Debug, Clone)]
 pub struct PendingPermission {
     pub request_id: String,
@@ -50,6 +59,19 @@ pub struct PendingPermission {
     /// Original tool input sent by the model — used verbatim as the base for
     /// `updatedInput` when approving (we layer user-collected answers on top).
     pub original_input: serde_json::Value,
+    /// Snapshot of participants whose vote is required to resolve. Empty
+    /// for non-consensus prompts; non-empty marks a consensus vote that the
+    /// `submit_plan_approval` resolver must evaluate before sending the
+    /// CLI response.
+    pub required_voters: std::collections::HashSet<claudette::room::ParticipantId>,
+    /// Votes received so far, keyed by participant id. Populated as votes
+    /// arrive via `submit_plan_approval` (host) or the `vote_plan_approval`
+    /// RPC (remote).
+    pub votes: HashMap<claudette::room::ParticipantId, claudette::room::Vote>,
+    /// AskUserQuestion responses received so far, keyed by participant id.
+    /// In consensus mode the CLI control response is held until every
+    /// required voter has answered.
+    pub question_votes: HashMap<claudette::room::ParticipantId, claudette::room::QuestionVote>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -182,8 +204,9 @@ pub struct AgentSessionState {
     /// turn. Updated each time a new user message is inserted; cleared on
     /// session teardown. See `agent_mcp_sink::ChatBridgeSink`.
     pub last_user_msg_id: Option<String>,
-    /// Set after we've posted a trust-error system message into the
-    /// chat for the current resolved env. Cleared when an existing
+    /// Set on the first env-trust failure observed within a persistent
+    /// session, so the helpful "trust this env" system message is posted
+    /// at most once per session. Reset on every spawn — including when the
     /// persistent session is torn down because the resolved env drifted
     /// (e.g. after `direnv allow` / `mise trust`, config edits, or
     /// provider toggles), so a fresh failure re-emits once after that
@@ -564,6 +587,37 @@ pub struct AppState {
     /// the waiter to kill the process and emit a cancelled completion event.
     /// `Some` while a flow is running, `None` otherwise.
     pub auth_login_cancel: tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    /// Collaborative-session room registry. Shared `Arc` with the embedded
+    /// `claudette-server` (when the server feature is enabled) so a publish
+    /// from either side reaches subscribers on the other. Non-collaborative
+    /// sessions never enter the registry, and call sites fall back to direct
+    /// `app.emit` when `RoomRegistry::get(...)` returns `None`.
+    pub rooms: Arc<RoomRegistry>,
+    /// Cross-process bus for workspace lifecycle events (archive today,
+    /// rename/delete in future). Shared `Arc` with the embedded
+    /// `claudette-server` (when the server feature is enabled and a share
+    /// is running) so a publish from the host's Tauri commands reaches
+    /// every connected remote subscriber. Always present; the bus is
+    /// constructed unconditionally in `AppState::new` so publishers don't
+    /// need to handle the absent case.
+    pub workspace_events: Arc<WorkspaceEventBus>,
+    /// `true` while the in-process collaborative server is running for
+    /// this app instance. Distinct from `local_server` (subprocess) — the
+    /// in-process server shares `rooms` with `AppState` and is used only for
+    /// collab share. Reset when the server task exits so a failed bind or
+    /// early shutdown can be retried without restarting the app. Used to
+    /// refuse to start the subprocess server when an in-process server
+    /// already owns the port.
+    pub collab_server_running: tokio::sync::RwLock<bool>,
+    /// Shared `ServerConfig` for the in-process share server. Lazily
+    /// constructed on first `start_share` call and kept as a clone of the
+    /// same `Arc` `ServerState` holds, so share mutations on either side
+    /// (or via `list_shares` / `revoke_share`) are visible everywhere.
+    /// Persisted to `claudette-server`'s config file on each mutation.
+    /// Feature-gated: only meaningful when the `server` feature is enabled.
+    #[cfg(feature = "server")]
+    pub share_server_config:
+        tokio::sync::RwLock<Option<Arc<tokio::sync::Mutex<claudette_server::auth::ServerConfig>>>>,
 }
 
 impl AppState {
@@ -598,6 +652,11 @@ impl AppState {
             cesp_playback: Mutex::new(claudette::cesp::SoundPlaybackState::new()),
             claude_flag_defs: Arc::new(RwLock::new(ClaudeFlagDiscovery::Loading)),
             auth_login_cancel: tokio::sync::Mutex::new(None),
+            rooms: RoomRegistry::new(),
+            workspace_events: Arc::new(WorkspaceEventBus::new()),
+            collab_server_running: tokio::sync::RwLock::new(false),
+            #[cfg(feature = "server")]
+            share_server_config: tokio::sync::RwLock::new(None),
         }
     }
 
@@ -622,6 +681,25 @@ impl AppState {
     /// the Plugins settings page from stalling while env loads.
     pub async fn plugins_snapshot(&self) -> Arc<PluginRegistry> {
         Arc::clone(&*self.plugins.read().await)
+    }
+
+    /// Resolve the host's display name for collaborative sessions.
+    ///
+    /// Reads `app_settings:collab:display_name` if set and non-empty;
+    /// otherwise falls back to the OS hostname so users who never visit
+    /// the Collaboration settings page still get a sensible name. The
+    /// fallback matches what the legacy 1:1 pairing flow already used as
+    /// the client name, keeping behavior consistent across modes.
+    ///
+    /// This is a sync DB read (rusqlite::Connection isn't Send so we open
+    /// a fresh connection here, matching the convention from CLAUDE.md).
+    pub fn resolve_host_display_name(&self) -> String {
+        let name = claudette::db::Database::open(&self.db_path)
+            .ok()
+            .and_then(|db| db.get_app_setting("collab:display_name").ok().flatten())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        name.unwrap_or_else(|| gethostname::gethostname().to_string_lossy().to_string())
     }
 }
 

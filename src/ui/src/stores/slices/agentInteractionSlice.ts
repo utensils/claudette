@@ -2,6 +2,7 @@ import type { StateCreator } from "zustand";
 import type { AttachmentInput } from "../../types";
 import type { AppState } from "../useAppStore";
 import { clearSessionAttention } from "./_shared";
+import type { Participant } from "./collabSlice";
 
 export interface AgentQuestionItem {
   header?: string;
@@ -14,6 +15,8 @@ export interface AgentQuestion {
   sessionId: string;
   toolUseId: string;
   questions: AgentQuestionItem[];
+  requiredVoters?: Participant[];
+  votes?: Record<string, { answers: Record<string, string> }>;
 }
 
 export interface PlanApproval {
@@ -60,6 +63,12 @@ function createQueuedMessageId(): string {
 export interface AgentInteractionSlice {
   agentQuestions: Record<string, AgentQuestion>;
   setAgentQuestion: (q: AgentQuestion) => void;
+  recordAgentQuestionVote: (
+    sessionId: string,
+    toolUseId: string,
+    participantId: string,
+    answers: Record<string, string>,
+  ) => void;
   clearAgentQuestion: (sessionId: string) => void;
 
   planApprovals: Record<string, PlanApproval>;
@@ -94,6 +103,23 @@ export const createAgentInteractionSlice: StateCreator<
     set((s) => ({
       agentQuestions: { ...s.agentQuestions, [q.sessionId]: q },
     })),
+  recordAgentQuestionVote: (sessionId, toolUseId, participantId, answers) =>
+    set((s) => {
+      const existing = s.agentQuestions[sessionId];
+      if (!existing || existing.toolUseId !== toolUseId) return s;
+      return {
+        agentQuestions: {
+          ...s.agentQuestions,
+          [sessionId]: {
+            ...existing,
+            votes: {
+              ...(existing.votes ?? {}),
+              [participantId]: { answers },
+            },
+          },
+        },
+      };
+    }),
   clearAgentQuestion: (sessionId) =>
     set((s) => {
       const { [sessionId]: _, ...rest } = s.agentQuestions;

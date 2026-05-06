@@ -72,6 +72,8 @@
   "auto_deleted_merged": "Espacio «{{name}}» eliminado — PR #{{prNumber}} fusionado",
   "auto_archived_merged_nopr": "Espacio «{{name}}» archivado — PR fusionado",
   "auto_deleted_merged_nopr": "Espacio «{{name}}» eliminado — PR fusionado",
+  "remote_workspace_archived_named": "El espacio «{{name}}» fue archivado por el host",
+  "remote_workspace_archived_unnamed": "Un espacio compartido fue archivado por el host",
   "no_workspaces_archived_for_repo": "No hay espacios coincidentes — todos los de este repositorio están archivados.",
   "no_workspaces_all_archived": "Todos los espacios de trabajo están archivados.",
   "no_repos": "Aún no hay repositorios locales — añade uno desde la barra de herramientas.",

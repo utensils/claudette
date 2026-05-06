@@ -1,9 +1,8 @@
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::Parser;
 
-use claudette_server::auth::ServerConfig;
-use claudette_server::{DEFAULT_PORT, ServerOptions, default_config_path};
+use claudette_server::{DEFAULT_PORT, ServerOptions};
 
 #[derive(Parser)]
 #[command(
@@ -31,18 +30,13 @@ struct Cli {
     /// Config file path.
     #[arg(long)]
     config: Option<PathBuf>,
-
-    #[command(subcommand)]
-    command: Option<Commands>,
 }
 
-#[derive(Subcommand)]
-enum Commands {
-    /// Generate a new pairing token (revokes all sessions).
-    RegenerateToken,
-    /// Print the connection string for this server.
-    ShowConnectionString,
-}
+// The legacy subcommands `regenerate-token` and `show-connection-string`
+// were removed when the auth model switched from a single global pairing
+// token to per-share scoped grants. Connection strings are now minted by
+// the Claudette GUI when a share is created (one per share), so there's
+// no useful single string for the binary to print on demand.
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -57,40 +51,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _log_handle = claudette::logging::init();
 
     let cli = Cli::parse();
-    let config_path = cli.config.clone().unwrap_or_else(default_config_path);
-
-    match &cli.command {
-        Some(Commands::RegenerateToken) => {
-            let mut config = ServerConfig::load_or_create(&config_path)?;
-            config.regenerate_token();
-            config.save(&config_path)?;
-            println!("Pairing token regenerated. All existing sessions have been revoked.");
-            println!("\nNew connection string:");
-            let host = gethostname::gethostname().to_string_lossy().to_string();
-            println!(
-                "  claudette://{}:{}/{}",
-                host, config.server.port, config.auth.pairing_token
-            );
-        }
-        Some(Commands::ShowConnectionString) => {
-            let config = ServerConfig::load_or_create(&config_path)?;
-            let host = gethostname::gethostname().to_string_lossy().to_string();
-            println!(
-                "claudette://{}:{}/{}",
-                host, config.server.port, config.auth.pairing_token
-            );
-        }
-        None => {
-            claudette_server::run(ServerOptions {
-                port: cli.port,
-                bind: cli.bind,
-                name: cli.name,
-                no_mdns: cli.no_mdns,
-                config_path: cli.config,
-            })
-            .await?;
-        }
-    }
-
+    claudette_server::run(ServerOptions {
+        port: cli.port,
+        bind: cli.bind,
+        name: cli.name,
+        no_mdns: cli.no_mdns,
+        config_path: cli.config,
+        existing_config: None,
+    })
+    .await?;
     Ok(())
 }

@@ -29,6 +29,14 @@ export interface RemoteSlice {
   setLocalServerRunning: (running: boolean) => void;
   setLocalServerConnectionString: (cs: string | null) => void;
 
+  // Workspace-scoped collaborative shares. Number of currently-active
+  // shares the host has minted (independent of the legacy
+  // `localServerRunning` flag — the new model can have shares live
+  // without the legacy subprocess server). Surfaced so the sidebar
+  // ShareButton can show the right active/inactive styling.
+  activeSharesCount: number;
+  setActiveSharesCount: (count: number) => void;
+
   // MCP Status (per-repository)
   mcpStatus: Record<string, McpStatusSnapshot>;
   setMcpStatus: (repoId: string, snapshot: McpStatusSnapshot) => void;
@@ -136,6 +144,10 @@ export const createRemoteSlice: StateCreator<
   setLocalServerRunning: (running) => set({ localServerRunning: running }),
   setLocalServerConnectionString: (cs) =>
     set({ localServerConnectionString: cs }),
+
+  // Active shares count
+  activeSharesCount: 0,
+  setActiveSharesCount: (count) => set({ activeSharesCount: count }),
 
   // MCP Status
   mcpStatus: {},

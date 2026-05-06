@@ -20,19 +20,19 @@ import {
   removeRemoteConnection,
   sendRemoteCommand,
   pairWithServer,
-  startLocalServer,
   openInEditor,
   openWorkspaceInTerminal,
   listChatSessions,
   interruptPtyForeground,
 } from "../../services/tauri";
-import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, CircleStop, GitPullRequestArrow, GitPullRequestDraft, GitMerge, GitPullRequestClosed, ChevronRight, ChevronDown, ArrowDownAZ } from "lucide-react";
+import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, Cog, Filter, LayoutDashboard, ChevronRight, ChevronDown, ArrowDownAZ } from "lucide-react";
 import { RepoIcon } from "../shared/RepoIcon";
-import { WorkspaceEnvSpinner } from "./WorkspaceEnvSpinner";
 import { extractRemoteWorkspace } from "./remoteWorkspaceResponse";
 import { HelpMenu } from "./HelpMenu";
 import { UpdateBanner } from "../layout/UpdateBanner";
 import { ContextMenu, type ContextMenuItem } from "../shared/ContextMenu";
+import { WorkspaceStatusIcon } from "./WorkspaceStatusIcon";
+import { getScmSortPriority } from "../../utils/scmSortPriority";
 import { useTabDragReorder } from "../../hooks/useTabDragReorder";
 import { TabDragGhost } from "../shared/TabDragGhost";
 import { getHotkeyLabel, tooltipAttributes, tooltipWithHotkey } from "../../hotkeys/display";
@@ -263,6 +263,7 @@ export const Sidebar = memo(function Sidebar() {
           created_at: new Date().toISOString(),
           thinking: null,
           input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null,
+          author_participant_id: null, author_display_name: null,
         });
       }
       // Check if a setup script exists and prompt user to review it.
@@ -288,6 +289,7 @@ export const Sidebar = memo(function Sidebar() {
                   created_at: new Date().toISOString(),
                   thinking: null,
                   input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null,
+          author_participant_id: null, author_display_name: null,
                 });
               }
             }).catch((err) => {
@@ -301,6 +303,7 @@ export const Sidebar = memo(function Sidebar() {
                 created_at: new Date().toISOString(),
                 thinking: null,
                 input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_creation_tokens: null,
+          author_participant_id: null, author_display_name: null,
               });
             });
           } else {
@@ -649,21 +652,25 @@ export const Sidebar = memo(function Sidebar() {
       dragEnabled &&
       workspaceDrag.dropTarget?.id === ws.id &&
       workspaceDrag.dropTarget.placement === "after";
+    // Compute the unread/attention badge here only because the row's
+    // `wsUnread` className depends on it. The actual icon rendering lives
+    // in `WorkspaceStatusIcon`, which re-derives the same state — keeping
+    // the duplication in sync isn't a concern because the inputs are the
+    // same store slices and a divergence would surface immediately.
     const wsSessions = sessionsByWorkspace[ws.id] ?? [];
     const hasPlan = wsSessions.some((s) => s.needs_attention && s.attention_kind === "Plan");
     const hasQuestion = wsSessions.some((s) => s.needs_attention && s.attention_kind !== "Plan");
-    const badge: "ask" | "plan" | "done" | null =
-      hasQuestion ? "ask" :
-      hasPlan ? "plan" :
-      unreadCompletions.has(ws.id) && !isAgentBusy(ws.agent_status) ? "done" :
-      null;
+    const hasUnreadBadge =
+      hasQuestion
+      || hasPlan
+      || (unreadCompletions.has(ws.id) && !isAgentBusy(ws.agent_status));
     return (
       <div
         key={ws.id}
         data-sidebar-workspace-id={dragEnabled ? ws.id : undefined}
         data-drop-before={dropBefore || undefined}
         data-drop-after={dropAfter || undefined}
-        className={`${styles.wsItem} ${selectedWorkspaceId === ws.id ? styles.wsSelected : ""} ${badge ? styles.wsUnread : ""} ${isDragging ? styles.wsDragging : ""}`}
+        className={`${styles.wsItem} ${selectedWorkspaceId === ws.id ? styles.wsSelected : ""} ${hasUnreadBadge ? styles.wsUnread : ""} ${isDragging ? styles.wsDragging : ""}`}
         onClick={() => {
           if (dragEnabled && workspaceDrag.justEnded()) return;
           selectWorkspace(ws.id);
@@ -683,75 +690,7 @@ export const Sidebar = memo(function Sidebar() {
         onPointerUp={dragHandlers?.onPointerUp}
         onPointerCancel={dragHandlers?.onPointerCancel}
       >
-        {badge === "done" ? (
-          <span className={styles.badgeDone} title={t("status_badge_completed_title")} aria-label={t("status_badge_completed_aria")} role="img">
-            <CircleCheck size={14} />
-          </span>
-        ) : badge === "plan" ? (
-          <span className={styles.badgePlan} title={t("status_badge_plan_title")} aria-label={t("status_badge_plan_aria")} role="img">
-            <CircleAlert size={14} />
-          </span>
-        ) : badge === "ask" ? (
-          <span className={styles.badgeAsk} title={t("status_badge_ask_title")} aria-label={t("status_badge_ask_aria")} role="img">
-            <CircleQuestionMark size={14} />
-          </span>
-        ) : workspaceEnvironment[ws.id]?.status === "preparing"
-            && ws.agent_status !== "Running"
-            && ws.agent_status !== "Compacting" ? (
-          // Env-provider resolution priority: shown when this workspace
-          // is currently in `preparing` AND the agent isn't already
-          // running. Sidebar listens to `workspace_env_progress` events
-          // globally so we light up here even when a different
-          // workspace is selected — covers PTY spawns / new chat
-          // sessions in background workspaces.
-          <WorkspaceEnvSpinner workspaceId={ws.id} />
-        ) : ws.agent_status === "Running" || ws.agent_status === "Compacting" ? (
-          <span
-            className={styles.statusSpinner}
-            aria-hidden="true"
-            title={ws.agent_status === "Compacting" ? t("status_compacting") : t("status_running")}
-          >
-            <span className={styles.statusSpinnerRing} />
-          </span>
-        ) : (() => {
-          if (ws.status === "Archived") {
-            return (
-              <span className={styles.statusIcon} title={t("status_archived_title")}>
-                <Archive size={14} style={{ color: "var(--text-dim)" }} />
-              </span>
-            );
-          }
-          const summary = scmSummary[ws.id];
-          if (summary?.hasPr) {
-            const prState = summary.prState;
-            const ciState = summary.ciState;
-            const Icon = prState === "merged" ? GitMerge
-              : prState === "closed" ? GitPullRequestClosed
-              : prState === "draft" ? GitPullRequestDraft
-              : GitPullRequestArrow;
-            const color = prState === "merged" ? "var(--badge-plan)"
-              : prState === "closed" ? "var(--status-stopped)"
-              : prState === "draft" ? "var(--text-dim)"
-              : ciState === "failure" ? "var(--status-stopped)"
-              : ciState === "pending" ? "var(--badge-ask)"
-              : "var(--badge-done)";
-            const titleText = `PR: ${prState}${ciState ? `, CI: ${ciState}` : ""}`;
-            return (
-              <span className={styles.statusIcon} title={titleText}>
-                <Icon size={14} style={{ color }} />
-              </span>
-            );
-          }
-          return ws.agent_status === "Stopped" ? (
-            <span className={styles.statusIcon} title={t("status_stopped")}>
-              <CircleStop size={14} style={{ color: "var(--status-stopped)" }} />
-            </span>
-          ) : (
-            <span className={styles.statusIcon} title={t("status_idle")}>
-              <CircleDashed size={14} style={{ color: "var(--text-dim)" }} />
-            </span>
-          );
-        })()}
+        <WorkspaceStatusIcon workspace={ws} />
         <div className={styles.wsInfo}>
           {renamingWsId === ws.id ? (
             <input
@@ -1737,19 +1676,7 @@ function RemoteConnectionGroup({
                       });
                     }}
                   >
-                    {isAgentBusy(ws.agent_status) ? (
-                      <span className={styles.statusSpinner} aria-hidden="true">
-                        <span className={styles.statusSpinnerRing} />
-                      </span>
-                    ) : (
-                      <span
-                        className={`${styles.statusDot} ${
-                          ws.agent_status === "Stopped"
-                            ? styles.remoteStatusStopped
-                            : styles.remoteStatusIdle
-                        }`}
-                      />
-                    )}
+                    <WorkspaceStatusIcon workspace={ws} />
                     <div className={styles.wsInfo}>
                       <span className={styles.wsName}>{ws.name}</span>
                       <span className={styles.wsBranch}>{ws.branch_name}</span>
@@ -1794,38 +1721,26 @@ function RemoteConnectionGroup({
 }
 
 function ShareButton({ openModal }: { openModal: (name: string) => void }) {
+  // The button now just *opens* the share UI. Starting/stopping the
+  // server is the modal's job — the canonical place where the user mints
+  // workspace-scoped shares and sees their connection strings. Auto-
+  // starting the legacy unscoped server here was a footgun: the new
+  // server's startup banner no longer prints `claudette://...` (every
+  // share mints its own), so the old auto-start path would time out.
+  //
+  // Active styling reads from `activeSharesCount` (the workspace-scoped
+  // shares count, hydrated at startup and kept in sync by ShareModal's
+  // refresh). The legacy `localServerRunning` flag is no longer the
+  // canonical "is sharing on" indicator — under the new model a share
+  // can be live without that legacy server running.
   const { t } = useTranslation("sidebar");
-  const running = useAppStore((s) => s.localServerRunning);
-  const setRunning = useAppStore((s) => s.setLocalServerRunning);
-  const setConnectionString = useAppStore((s) => s.setLocalServerConnectionString);
-  const [loading, setLoading] = useState(false);
-
-  const handleClick = async () => {
-    if (running) {
-      openModal("share");
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const info = await startLocalServer();
-      setRunning(true);
-      setConnectionString(info.connection_string);
-      openModal("share");
-    } catch (e) {
-      console.error("Failed to start server:", e);
-      alert(`Failed to start server: ${e}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
+  const activeSharesCount = useAppStore((s) => s.activeSharesCount);
+  const active = activeSharesCount > 0;
   return (
     <button
-      className={`${styles.footerBtn}${running ? ` ${styles.shareBtnActive}` : ""}`}
-      onClick={handleClick}
-      title={running ? t("share_active_title") : t("share_inactive_title")}
-      disabled={loading}
+      className={`${styles.footerBtn}${active ? ` ${styles.shareBtnActive}` : ""}`}
+      onClick={() => openModal("share")}
+      title={active ? t("share_active_title") : t("share_inactive_title")}
     >
       <Share2 size={16} />
     </button>
