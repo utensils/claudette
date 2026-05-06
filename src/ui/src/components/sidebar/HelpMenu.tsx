@@ -58,6 +58,13 @@ export function HelpMenu({ buttonClassName, triggerLabel }: HelpMenuProps) {
   // avoiding a flash at (0,0). We re-measure on resize/scroll so the
   // menu follows its anchor if the layout shifts while open.
   //
+  // `appVersion` is in the dep list because it arrives asynchronously
+  // (Promise from `getVersion()`) AFTER the first render — its arrival
+  // toggles the Changelog item from disabled→enabled and renders the
+  // version footer, both of which change the menu height. Without
+  // recomputing, the menu's bottom would slide down by ~30px and could
+  // overlap the trigger.
+  //
   // No reset to null when closing — the menu unmounts via the `open`
   // guard, so stale position is invisible, and on reopen this effect
   // runs synchronously before paint and overwrites the value.
@@ -100,7 +107,7 @@ export function HelpMenu({ buttonClassName, triggerLabel }: HelpMenuProps) {
       window.removeEventListener("resize", compute);
       window.removeEventListener("scroll", compute, true);
     };
-  }, [open]);
+  }, [open, appVersion]);
 
   // Close on Escape and outside click. The trigger and the portaled menu
   // both count as "inside" — without that, clicking the menu's items

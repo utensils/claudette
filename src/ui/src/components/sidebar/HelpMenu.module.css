@@ -8,11 +8,12 @@
 
 .menu {
   position: fixed;
-  /* Above sidebar chrome but below modals (which use z-index: 100 and
-   * the AttachmentContextMenu uses 10002). 10000 keeps us beneath the
-   * attachment lightbox / context menu while clearly clearing the
-   * sidebar/chat boundary. */
-  z-index: 10000;
+  /* Popover layer — above sidebar/chat content, below `Modal.module.css`
+   * (z-index: 100) so any modal correctly overlays the menu if both
+   * happen to be open. Matches `ContextPopover` / `ReasoningPill`'s
+   * z-index 40-50 convention. The portal is what escapes the sidebar's
+   * `overflow: hidden` clipping; z-index doesn't fix that. */
+  z-index: 50;
   min-width: 240px;
   background: var(--sidebar-bg);
   border: 1px solid var(--sidebar-border);
