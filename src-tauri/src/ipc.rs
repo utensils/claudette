@@ -2,8 +2,11 @@
 //!
 //! Mirrors [`claudette::agent_mcp::bridge`] in shape: a long-running
 //! `interprocess` listener bound to a Unix domain socket (or Windows
-//! named pipe), line-delimited JSON-RPC v2 framing, and a per-connection
-//! task that authenticates via a shared bearer token before dispatching.
+//! named pipe), line-delimited JSON-RPC-inspired framing (see
+//! [`claudette::rpc`] — request/response shapes match JSON-RPC 2.0 but
+//! intentionally omit the `"jsonrpc": "2.0"` discriminator), and a
+//! per-connection task that authenticates via a shared bearer token
+//! before dispatching.
 //!
 //! The CLI discovers the socket + token by reading the discovery file
 //! from [`crate::app_info`]. Authentication is defense in depth — the
@@ -443,8 +446,12 @@ pub(crate) struct SendChatParams {
 /// Parse the JSON params object the IPC sends. Tolerant of both
 /// `session_id` and `chat_session_id` so older clients (and the WS
 /// server's wire shape) keep working. All agent-setting fields are
-/// optional — omit and the GUI's per-workspace defaults apply (or, for
-/// freshly-spawned sessions, the `claude` CLI's own defaults).
+/// optional — omit and `send_chat_message` substitutes `false` for
+/// missing booleans / `None` for missing strings (i.e. omission does
+/// **not** inherit the GUI toolbar's current state for that workspace,
+/// since the toolbar lives in the React store and isn't visible from
+/// the backend dispatch path). Pass the values explicitly if you need a
+/// specific configuration.
 pub(crate) fn parse_send_chat_params(params: &serde_json::Value) -> Result<SendChatParams, String> {
     let session_id = params
         .get("session_id")

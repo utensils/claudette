@@ -450,7 +450,13 @@ function App() {
         // runtime state (chat sessions, terminals, etc.) the way a full
         // page reload would.
         if (kind === "archived") {
-          store.updateWorkspace(workspace_id, { status: "Archived" as const });
+          // Archiving stops the agent process backend-side; mirror that
+          // here so a previously-running workspace doesn't keep showing
+          // a Running spinner in the sidebar after the row vanishes.
+          store.updateWorkspace(workspace_id, {
+            status: "Archived" as const,
+            agent_status: "Stopped" as const,
+          });
         } else {
           loadInitialData()
             .then((data) => {
@@ -470,9 +476,15 @@ function App() {
               }
               // Drop any local rows the DB no longer knows about (e.g.
               // a hard delete that raced with this refresh) so the
-              // sidebar doesn't keep ghost entries around.
+              // sidebar doesn't keep ghost entries around. Skip remote
+              // workspaces — `loadInitialData` only returns local rows,
+              // so a naive removal would also evict every remote-
+              // connection workspace from the store.
               for (const local of fresh) {
-                if (!incomingIds.has(local.id)) {
+                if (
+                  local.remote_connection_id === null &&
+                  !incomingIds.has(local.id)
+                ) {
                   useAppStore.getState().removeWorkspace(local.id);
                 }
               }
