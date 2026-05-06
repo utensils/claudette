@@ -11,6 +11,35 @@ env:
   RUSTFLAGS: -Dwarnings
 
 jobs:
+  migration-guard:
+    name: Migration guard
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Reject edits to released migrations
+        run: |
+          changed="$(
+            git diff --find-renames --diff-filter=MDR --name-status "origin/${{ github.base_ref }}...HEAD" -- 'src/migrations/*.sql'
+          )"
+
+          if [ -n "$changed" ]; then
+            echo "::error title=Released migration changed::Released migration files are immutable; do not edit, rename, or delete them. Add a new forward migration instead. See CLAUDE.md Schema migrations."
+            echo "Changed released migration files:" >&2
+            while IFS=$'\t' read -r status path rest; do
+              [ -n "$status" ] || continue
+              echo "::error file=$path::Released migration files are immutable; do not edit, rename, or delete them."
+              if [ -n "$rest" ]; then
+                echo "  - $status $path -> $rest" >&2
+              else
+                echo "  - $status $path" >&2
+              fi
+            done <<< "$changed"
+            exit 1
+          fi
+
   fmt:
     name: Format
     runs-on: ubuntu-latest
