@@ -354,6 +354,10 @@ describe("workspace removal cascades to terminal state", () => {
       workspaceTerminalCommands: {
         [WS_A]: { 1: "cargo test" },
       },
+      pendingTerminalCommands: [
+        { id: "cmd-a", workspaceId: WS_A, command: "cargo test" },
+        { id: "cmd-b", workspaceId: WS_B, command: "git status" },
+      ],
     });
 
     useAppStore.getState().removeWorkspace(WS_A);
@@ -361,6 +365,9 @@ describe("workspace removal cascades to terminal state", () => {
     expect(useAppStore.getState().terminalTabs[WS_A]).toBeUndefined();
     expect(useAppStore.getState().activeTerminalTabId[WS_A]).toBeUndefined();
     expect(useAppStore.getState().workspaceTerminalCommands[WS_A]).toBeUndefined();
+    expect(useAppStore.getState().pendingTerminalCommands).toEqual([
+      { id: "cmd-b", workspaceId: WS_B, command: "git status" },
+    ]);
   });
 
   it("removeRepository cascades through its workspaces' terminal state", () => {

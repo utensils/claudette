@@ -43,6 +43,9 @@ export const createWorkspacesSlice: StateCreator<
       delete newActiveTerminalTabId[id];
       const newWorkspaceTerminalCommands = { ...s.workspaceTerminalCommands };
       delete newWorkspaceTerminalCommands[id];
+      const newPendingTerminalCommands = s.pendingTerminalCommands.filter(
+        (cmd) => cmd.workspaceId !== id,
+      );
       const newPaneTrees = { ...s.terminalPaneTrees };
       const newActivePane = { ...s.activeTerminalPaneId };
       for (const tabId of orphanedTabIds) {
@@ -70,6 +73,7 @@ export const createWorkspacesSlice: StateCreator<
         terminalTabs: newTerminalTabs,
         activeTerminalTabId: newActiveTerminalTabId,
         workspaceTerminalCommands: newWorkspaceTerminalCommands,
+        pendingTerminalCommands: newPendingTerminalCommands,
         terminalPaneTrees: newPaneTrees,
         activeTerminalPaneId: newActivePane,
         diffTabsByWorkspace: newDiffTabs,

@@ -55,6 +55,11 @@ function serializeComposerDraft(mode: ComposerMode, text: string): string {
   return mode === "shell" ? `!${text}` : text;
 }
 
+function normalizeShellCommand(value: string): string {
+  const trimmed = value.trim();
+  return trimmed.startsWith("!") ? trimmed.slice(1).trimStart() : trimmed;
+}
+
 /** Extract the @-query based on cursor position in the textarea. */
 function extractMentionQuery(text: string, cursorPos: number): string | null {
   const before = text.slice(0, cursorPos);
@@ -783,15 +788,14 @@ export function ChatInputArea({
 
   const handleSend = () => {
     if (composerMode === "shell") {
-      const command = chatInput.trim();
+      const command = normalizeShellCommand(chatInput);
       if (!command) return;
-      const { content } = consumeComposer();
-      const trimmedCommand = content.trim();
+      consumeComposer();
       const history = (historyRef.current[sessionId] ??= []);
-      history.push(`!${trimmedCommand}`);
+      history.push(serializeComposerDraft("shell", command));
       historyIndexRef.current = -1;
       draftRef.current = "";
-      void onRunShellCommand(trimmedCommand);
+      void onRunShellCommand(command);
       return;
     }
     const { content, files, attachmentPayload } = consumeComposer();
