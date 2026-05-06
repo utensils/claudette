@@ -55,6 +55,7 @@ describe("buildFileTree", () => {
     const src = tree[0];
     const removed = src.kind === "dir" ? src.children[0] : null;
 
+    expect(src.path).toBe("src/");
     expect(src).toMatchObject({
       kind: "dir",
       path: "src/",

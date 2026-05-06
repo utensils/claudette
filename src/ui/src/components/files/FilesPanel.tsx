@@ -22,7 +22,7 @@ export function FilesPanel() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const loadVersionRef = useRef(0);
-  const prevIsRunning = useRef<boolean | undefined>(undefined);
+  const prevIsRunning = useRef(false);
   const ws = workspaces.find((w) => w.id === selectedWorkspaceId);
   const isRunning = isAgentBusy(ws?.agent_status);
 
@@ -62,7 +62,7 @@ export function FilesPanel() {
     if (!selectedWorkspaceId || !isRunning) return;
     const interval = setInterval(() => {
       void loadFiles(selectedWorkspaceId, false);
-    }, 3000);
+    }, 5000);
     return () => clearInterval(interval);
   }, [isRunning, selectedWorkspaceId, loadFiles]);
 

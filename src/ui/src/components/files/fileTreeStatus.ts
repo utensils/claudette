@@ -7,7 +7,16 @@ export type FileTreeActivation =
 
 export function statusLabel(status: FileStatus): string {
   if (typeof status === "string") {
-    return status === "Added" ? "A" : status === "Modified" ? "M" : "D";
+    switch (status) {
+      case "Added":
+        return "A";
+      case "Modified":
+        return "M";
+      case "Deleted":
+        return "D";
+      default:
+        return assertNever(status);
+    }
   }
   return "R";
 }
@@ -42,4 +51,8 @@ export function resolveFileTreeActivation(
     };
   }
   return { kind: "file", path: node.path };
+}
+
+function assertNever(value: never): never {
+  throw new Error(`Unhandled file status: ${value}`);
 }

@@ -1,5 +1,4 @@
 import {
-  createElement,
   memo,
   useCallback,
   useEffect,
@@ -310,11 +309,8 @@ function Row({ node, depth, expanded, selected, tabbable, rowRef, onClick }: Row
         // 12-px spacer keeps file rows aligned with their sibling folders.
         <span className={styles.chevron} style={{ width: 12, height: 12 }} />
       )}
-      {createElement(Icon, {
-        size: 14,
-        className: styles.icon,
-        "aria-hidden": "true",
-      })}
+      {/* eslint-disable-next-line react-hooks/static-components -- fileIcons returns stable module-level lucide components. */}
+      <Icon size={14} className={styles.icon} aria-hidden="true" />
       <span className={styles.name}>{node.name}</span>
       {node.kind === "dir" && node.statusCount > 0 && (
         <span

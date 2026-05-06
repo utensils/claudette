@@ -258,102 +258,123 @@ pub async fn staged_changed_files(
 pub async fn file_tree_git_status(
     worktree_path: &str,
 ) -> Result<HashMap<String, GitStatusEntry>, DiffError> {
-    let (staged_ns, unstaged_ns, untracked_out) = tokio::join!(
-        run_git(worktree_path, &["diff", "--cached", "--name-status"]),
-        run_git(worktree_path, &["diff", "--name-status"]),
-        run_git(
-            worktree_path,
-            &["ls-files", "--others", "--exclude-standard"],
-        ),
-    );
-
-    let staged_ns = staged_ns?;
-    let unstaged_ns = unstaged_ns?;
-    let untracked_out = untracked_out?;
-
-    let mut statuses = HashMap::new();
-    for file in parse_name_status(&staged_ns) {
-        merge_git_status(
-            &mut statuses,
-            worktree_path,
-            file.path,
-            file.status,
-            GitFileLayer::Staged,
-        );
-    }
-    for file in parse_name_status(&unstaged_ns) {
-        merge_git_status(
-            &mut statuses,
-            worktree_path,
-            file.path,
-            file.status,
-            GitFileLayer::Unstaged,
-        );
-    }
-    for file in parse_untracked(&untracked_out) {
-        merge_git_status(
-            &mut statuses,
-            worktree_path,
-            file.path,
-            file.status,
-            GitFileLayer::Untracked,
-        );
-    }
-
-    Ok(statuses)
+    let output = run_git(worktree_path, &["status", "--porcelain=v2", "-uall", "-z"]).await?;
+    Ok(parse_file_tree_git_status(&output, worktree_path))
 }
 
-fn merge_git_status(
-    statuses: &mut HashMap<String, GitStatusEntry>,
+fn parse_file_tree_git_status(
+    output: &str,
     worktree_path: &str,
-    path: String,
-    incoming_status: FileStatus,
-    incoming_layer: GitFileLayer,
-) {
-    let exists_on_disk = Path::new(worktree_path).join(&path).exists();
-    let entry = statuses.remove(&path);
-    let (status, layer) = match entry {
-        Some(existing) => {
-            let layer = if existing.layer == incoming_layer {
-                existing.layer
-            } else {
-                GitFileLayer::Mixed
-            };
-            (
-                combine_file_status(existing.status, incoming_status, exists_on_disk),
-                layer,
-            )
+) -> HashMap<String, GitStatusEntry> {
+    let mut statuses = HashMap::new();
+    let mut records = output.split('\0');
+
+    while let Some(record) = records.next() {
+        if record.is_empty() {
+            continue;
         }
-        None => {
-            let status = if !exists_on_disk && incoming_status != FileStatus::Added {
-                FileStatus::Deleted
-            } else {
-                incoming_status
-            };
-            (status, incoming_layer)
+
+        if let Some(path) = record.strip_prefix("? ") {
+            statuses.insert(
+                path.to_string(),
+                GitStatusEntry {
+                    status: FileStatus::Added,
+                    layer: GitFileLayer::Untracked,
+                },
+            );
+            continue;
         }
-    };
-    statuses.insert(path, GitStatusEntry { status, layer });
+
+        let Some(kind) = record.as_bytes().first().copied() else {
+            continue;
+        };
+        match kind {
+            b'1' => {
+                let mut fields = record.splitn(9, ' ');
+                let _kind = fields.next();
+                let Some(xy) = fields.next() else {
+                    continue;
+                };
+                for _ in 0..6 {
+                    let _ = fields.next();
+                }
+                let Some(path) = fields.next() else {
+                    continue;
+                };
+                statuses.insert(
+                    path.to_string(),
+                    GitStatusEntry {
+                        status: status_from_xy(xy, path, None, worktree_path),
+                        layer: layer_from_xy(xy),
+                    },
+                );
+            }
+            b'2' => {
+                let mut fields = record.splitn(10, ' ');
+                let _kind = fields.next();
+                let Some(xy) = fields.next() else {
+                    continue;
+                };
+                for _ in 0..7 {
+                    let _ = fields.next();
+                }
+                let Some(path) = fields.next() else {
+                    continue;
+                };
+                let from = records.next().unwrap_or_default().to_string();
+                statuses.insert(
+                    path.to_string(),
+                    GitStatusEntry {
+                        status: status_from_xy(xy, path, Some(from), worktree_path),
+                        layer: layer_from_xy(xy),
+                    },
+                );
+            }
+            _ => {}
+        }
+    }
+
+    statuses
 }
 
-fn combine_file_status(
-    existing: FileStatus,
-    incoming: FileStatus,
-    exists_on_disk: bool,
+fn layer_from_xy(xy: &str) -> GitFileLayer {
+    let mut chars = xy.chars();
+    let index = chars.next().unwrap_or('.');
+    let worktree = chars.next().unwrap_or('.');
+
+    match (index != '.', worktree != '.') {
+        (true, true) => GitFileLayer::Mixed,
+        (true, false) => GitFileLayer::Staged,
+        (false, true) => GitFileLayer::Unstaged,
+        (false, false) => GitFileLayer::Unstaged,
+    }
+}
+
+fn status_from_xy(
+    xy: &str,
+    path: &str,
+    rename_from: Option<String>,
+    worktree_path: &str,
 ) -> FileStatus {
+    let exists_on_disk = Path::new(worktree_path).join(path).exists();
+    // Explorer rows represent what the user can open in the worktree. If the
+    // path is gone, show it as deleted even for combinations like AD
+    // (staged-add then removed) or staged-rename plus worktree-delete.
     if !exists_on_disk {
         return FileStatus::Deleted;
     }
-    if existing == FileStatus::Added || incoming == FileStatus::Added {
+
+    if let Some(from) = rename_from {
+        return FileStatus::Renamed { from };
+    }
+
+    if xy.contains('A') {
         return FileStatus::Added;
     }
-    match (existing, incoming) {
-        (FileStatus::Renamed { from }, _) | (_, FileStatus::Renamed { from }) => {
-            FileStatus::Renamed { from }
-        }
-        (FileStatus::Deleted, _) | (_, FileStatus::Deleted) => FileStatus::Deleted,
-        _ => FileStatus::Modified,
+    if xy.contains('D') {
+        return FileStatus::Deleted;
     }
+    FileStatus::Modified
 }
 
 /// Parse `--name-status` output into a list of DiffFiles.
@@ -1695,6 +1716,7 @@ mod integration_tests {
         git_cmd(dir, &["config", "user.email", "test@test.com"]);
         git_cmd(dir, &["config", "user.name", "Test"]);
         git_cmd(dir, &["config", "core.autocrlf", "false"]);
+        std::fs::write(dir.join("clean.txt"), "clean\n").unwrap();
         std::fs::write(dir.join("modified.txt"), "original\n").unwrap();
         std::fs::write(dir.join("deleted.txt"), "remove me\n").unwrap();
         std::fs::write(dir.join("renamed-old.txt"), "rename me\n").unwrap();
@@ -1708,12 +1730,16 @@ mod integration_tests {
         std::fs::write(dir.join("untracked.txt"), "new\n").unwrap();
         std::fs::write(dir.join("staged-new.txt"), "staged\n").unwrap();
         git_cmd(dir, &["add", "staged-new.txt"]);
+        std::fs::write(dir.join("staged-then-removed.txt"), "staged\n").unwrap();
+        git_cmd(dir, &["add", "staged-then-removed.txt"]);
+        std::fs::remove_file(dir.join("staged-then-removed.txt")).unwrap();
         std::fs::write(dir.join("mixed.txt"), "staged\n").unwrap();
         git_cmd(dir, &["add", "mixed.txt"]);
         std::fs::write(dir.join("mixed.txt"), "staged\nunstaged\n").unwrap();
 
         let status = file_tree_git_status(dir.to_str().unwrap()).await.unwrap();
 
+        assert!(!status.contains_key("clean.txt"));
         assert_eq!(
             status.get("modified.txt"),
             Some(&GitStatusEntry {
@@ -1749,6 +1775,13 @@ mod integration_tests {
             Some(&GitStatusEntry {
                 status: FileStatus::Added,
                 layer: GitFileLayer::Staged,
+            })
+        );
+        assert_eq!(
+            status.get("staged-then-removed.txt"),
+            Some(&GitStatusEntry {
+                status: FileStatus::Deleted,
+                layer: GitFileLayer::Mixed,
             })
         );
         assert_eq!(

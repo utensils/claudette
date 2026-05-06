@@ -49,4 +49,19 @@ describe("resolveFileTreeActivation", () => {
       path: "src/app.ts",
     });
   });
+
+  it("opens non-deleted files in the editor when layer metadata is missing", () => {
+    const node: FileTreeNode & { kind: "file" } = {
+      kind: "file",
+      path: "src/app.ts",
+      name: "app.ts",
+      git_status: "Modified",
+      git_layer: null,
+    };
+
+    expect(resolveFileTreeActivation(node)).toEqual({
+      kind: "file",
+      path: "src/app.ts",
+    });
+  });
 });
