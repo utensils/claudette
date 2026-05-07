@@ -89,58 +89,63 @@ function App() {
   useViewTogglePersistence(viewStateHydrated);
 
   useEffect(() => {
-    loadInitialData().then(async (data) => {
-      // Tag local data with null remote_connection_id (backend omits this field).
-      setRepositories(
-        data.repositories.map((r) => ({ ...r, remote_connection_id: null }))
-      );
-      setWorkspaces(
-        data.workspaces.map((w) => ({ ...w, remote_connection_id: null }))
-      );
-      setManualWorkspaceOrderByRepo(
-        workspaceOrderModesFromRepoIds(data.manual_workspace_order_repo_ids),
-      );
-      setWorktreeBaseDir(data.worktree_base_dir);
-      setDefaultBranches(data.default_branches);
-      // Index last messages by workspace_id for dashboard display.
-      const msgMap: Record<string, (typeof data.last_messages)[0]> = {};
-      for (const msg of data.last_messages) {
-        msgMap[msg.workspace_id] = msg;
-      }
-      setLastMessages(msgMap);
-      await hydratePersistedViewState(
-        data.workspaces.map((w) => ({ ...w, remote_connection_id: null })),
-      );
-      setViewStateHydrated(true);
-      // Hydrate SCM summaries from persisted cache for instant sidebar display.
-      for (const row of data.scm_cache) {
-        if (row.pr_json == null) continue;
-        try {
-          const parsed: unknown = JSON.parse(row.pr_json);
-          const pr =
-            parsed !== null &&
-            typeof parsed === "object" &&
-            "number" in parsed &&
-            typeof (parsed as { number: unknown }).number === "number" &&
-            "state" in parsed &&
-            typeof (parsed as { state: unknown }).state === "string"
-              ? (parsed as import("./types/plugin").PullRequest)
-              : null;
-          const parsedChecks: unknown = row.ci_json ? JSON.parse(row.ci_json) : [];
-          const checks = Array.isArray(parsedChecks)
-            ? (parsedChecks as import("./types/plugin").CiCheck[])
-            : [];
-          useAppStore.getState().setScmSummary(row.workspace_id, {
-            hasPr: pr !== null,
-            prState: pr?.state ?? null,
-            ciState: pr ? deriveScmCiState(pr.ci_status, checks) : null,
-            lastUpdated: new Date(row.fetched_at.replace(" ", "T") + "Z").getTime(),
-          });
-        } catch {
-          // Corrupted cache entry — skip silently, will be refreshed by polling.
+    loadInitialData()
+      .then(async (data) => {
+        // Tag local data with null remote_connection_id (backend omits this field).
+        const localWorkspaces = data.workspaces.map((w) => ({
+          ...w,
+          remote_connection_id: null,
+        }));
+        setRepositories(
+          data.repositories.map((r) => ({ ...r, remote_connection_id: null }))
+        );
+        setWorkspaces(localWorkspaces);
+        setManualWorkspaceOrderByRepo(
+          workspaceOrderModesFromRepoIds(data.manual_workspace_order_repo_ids),
+        );
+        setWorktreeBaseDir(data.worktree_base_dir);
+        setDefaultBranches(data.default_branches);
+        // Index last messages by workspace_id for dashboard display.
+        const msgMap: Record<string, (typeof data.last_messages)[0]> = {};
+        for (const msg of data.last_messages) {
+          msgMap[msg.workspace_id] = msg;
         }
-      }
-    });
+        setLastMessages(msgMap);
+        await hydratePersistedViewState(localWorkspaces);
+        setViewStateHydrated(true);
+        // Hydrate SCM summaries from persisted cache for instant sidebar display.
+        for (const row of data.scm_cache) {
+          if (row.pr_json == null) continue;
+          try {
+            const parsed: unknown = JSON.parse(row.pr_json);
+            const pr =
+              parsed !== null &&
+              typeof parsed === "object" &&
+              "number" in parsed &&
+              typeof (parsed as { number: unknown }).number === "number" &&
+              "state" in parsed &&
+              typeof (parsed as { state: unknown }).state === "string"
+                ? (parsed as import("./types/plugin").PullRequest)
+                : null;
+            const parsedChecks: unknown = row.ci_json ? JSON.parse(row.ci_json) : [];
+            const checks = Array.isArray(parsedChecks)
+              ? (parsedChecks as import("./types/plugin").CiCheck[])
+              : [];
+            useAppStore.getState().setScmSummary(row.workspace_id, {
+              hasPr: pr !== null,
+              prState: pr?.state ?? null,
+              ciState: pr ? deriveScmCiState(pr.ci_status, checks) : null,
+              lastUpdated: new Date(row.fetched_at.replace(" ", "T") + "Z").getTime(),
+            });
+          } catch {
+            // Corrupted cache entry — skip silently, will be refreshed by polling.
+          }
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to load initial data:", err);
+        setViewStateHydrated(true);
+      });
     getAppSetting("terminal_font_size")
       .then((val) => {
         if (val) {
@@ -717,6 +722,7 @@ function App() {
     return () => mq.removeListener(handleChange);
   }, []);
 
+  if (!viewStateHydrated) return null;
   return <AppLayout />;
 }
 
