@@ -170,10 +170,10 @@ A single sandboxed Lua runtime (`src/plugin_runtime/`) serves multiple plugin ki
 
 ### macOS privacy-prompt contract
 
-Do not trigger CoreAudio, Speech.framework, or Local Network APIs at app launch — macOS attributes the TCC prompt to that moment, and an unmotivated launch-time prompt looks like spyware.
-- mDNS browser starts only via the `start_remote_discovery` Tauri command, gated by an `AtomicBool` latch in `AppState::mdns_browser_started` (resets on failure so retry works). The `AddRemoteModal` mounts → command fires → polling begins; closing the modal stops the poll but the browser keeps running for the rest of the session.
+Do not trigger CoreAudio or Speech.framework permission prompts at app launch — macOS attributes the TCC prompt to that moment, and an unmotivated launch-time prompt looks like spyware.
 - Voice setup uses `PlatformSpeechEngine::availability()` (prompt-safe; reports `NeedsSpeechPermission` etc.) for status display, and `prepare()` (triggers the TCC prompt) only inside `start_recording_locked` — i.e. when the user actually clicks the mic. There is no startup prewarm; cpal device enumeration is also avoided at launch.
 - `VoiceStartLatency.was_prewarmed` in `voice.rs` is retained for wire-format stability but is permanently `false`.
+- mDNS discovery currently starts at app launch so the sidebar's Nearby list stays populated without extra UI. Changing that affects macOS Local Network prompt timing and should come with an intentional replacement UX.
 
 ### Windows specifics
 
