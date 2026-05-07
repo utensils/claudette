@@ -1,5 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -36,6 +37,26 @@ pub struct BackendListResponse {
 pub struct BackendSecretUpdate {
     pub backend_id: String,
     pub value: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CodexAuthMaterial {
+    access_token: String,
+    account_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexAuthJson {
+    auth_mode: Option<String>,
+    #[serde(rename = "OPENAI_API_KEY")]
+    openai_api_key: Option<String>,
+    tokens: Option<CodexAuthTokens>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexAuthTokens {
+    access_token: String,
+    account_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -168,7 +189,13 @@ pub async fn refresh_agent_backend_models(
         .position(|backend| backend.id == backend_id)
         .ok_or_else(|| format!("Unknown backend `{backend_id}`"))?;
     let discovered = discover_models(&backends[idx]).await?;
-    if backends[idx].kind == AgentBackendKind::Ollama && !discovered.is_empty() {
+    if matches!(
+        backends[idx].kind,
+        AgentBackendKind::Ollama
+            | AgentBackendKind::OpenAiApi
+            | AgentBackendKind::CodexSubscription
+    ) && !discovered.is_empty()
+    {
         backends[idx].manual_models.clear();
         if !backends[idx]
             .default_model
@@ -219,7 +246,7 @@ pub async fn resolve_backend_runtime(
     if !enabled {
         return Ok(AgentBackendRuntime::default());
     }
-    let backend = find_backend(&db, backend_id)?;
+    let mut backend = find_backend(&db, backend_id)?;
     if backend.kind == AgentBackendKind::Anthropic {
         return Ok(AgentBackendRuntime {
             backend_id: Some(backend.id),
@@ -231,11 +258,16 @@ pub async fn resolve_backend_runtime(
         return Err(format!("Backend `{}` is disabled", backend.label));
     }
 
-    let secret = load_secure_secret(SECRET_BUCKET, &backend.id)?;
+    let secret = if backend.kind == AgentBackendKind::CodexSubscription {
+        Some(serde_json::to_string(&load_codex_auth_material()?).map_err(|e| e.to_string())?)
+    } else {
+        load_secure_secret(SECRET_BUCKET, &backend.id)?
+    };
     if backend.kind.needs_gateway() {
         if backend.kind == AgentBackendKind::OpenAiApi && secret.is_none() {
             return Err("OpenAI API backend requires an API key in Settings → Models".to_string());
         }
+        hydrate_gateway_models_for_runtime(&mut backend, model).await?;
         let (gateway_url, hash) = state
             .backend_gateway
             .ensure(backend.clone(), secret, model.map(String::from))
@@ -284,6 +316,49 @@ pub async fn resolve_backend_runtime(
         env,
         hash: runtime_hash(&backend, secret.as_deref(), model),
     })
+}
+
+async fn hydrate_gateway_models_for_runtime(
+    backend: &mut AgentBackendConfig,
+    model: Option<&str>,
+) -> Result<(), String> {
+    if !matches!(
+        backend.kind,
+        AgentBackendKind::OpenAiApi | AgentBackendKind::CodexSubscription
+    ) {
+        return Ok(());
+    }
+    let has_models = !backend.manual_models.is_empty() || !backend.discovered_models.is_empty();
+    let selected_is_known = model
+        .map(|model| backend_models_contain(backend, model))
+        .unwrap_or(true);
+    if has_models && selected_is_known {
+        return Ok(());
+    }
+
+    let discovered = discover_models(backend).await?;
+    if !discovered.is_empty() {
+        backend.manual_models.clear();
+        backend.discovered_models = discovered;
+    }
+
+    if let Some(model) = model
+        && !backend_models_contain(backend, model)
+    {
+        return Err(format!(
+            "Selected model `{model}` was not reported by the {} backend. Refresh models or pick an available model.",
+            backend.label
+        ));
+    }
+    Ok(())
+}
+
+fn backend_models_contain(backend: &AgentBackendConfig, model: &str) -> bool {
+    backend
+        .manual_models
+        .iter()
+        .chain(backend.discovered_models.iter())
+        .any(|candidate| candidate.id == model)
 }
 
 fn load_backend_configs(db: &Database) -> Result<Vec<AgentBackendConfig>, String> {
@@ -364,7 +439,24 @@ fn normalize_backend(mut backend: AgentBackendConfig) -> AgentBackendConfig {
             model.context_window_tokens = backend.context_window_default;
         }
     }
+    strip_legacy_seeded_models(&mut backend);
     backend
+}
+
+fn strip_legacy_seeded_models(backend: &mut AgentBackendConfig) {
+    let legacy: &[&str] = match backend.kind {
+        AgentBackendKind::OpenAiApi => &["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5-codex"],
+        AgentBackendKind::CodexSubscription => &["gpt-5.3-codex", "gpt-5.4"],
+        _ => return,
+    };
+    if !backend.manual_models.is_empty()
+        && backend
+            .manual_models
+            .iter()
+            .all(|model| legacy.contains(&model.id.as_str()))
+    {
+        backend.manual_models.clear();
+    }
 }
 
 async fn discover_models(backend: &AgentBackendConfig) -> Result<Vec<AgentBackendModel>, String> {
@@ -429,6 +521,8 @@ async fn discover_models(backend: &AgentBackendConfig) -> Result<Vec<AgentBacken
                 backend.context_window_default,
             ))
         }
+        AgentBackendKind::OpenAiApi => discover_openai_api_models(backend).await,
+        AgentBackendKind::CodexSubscription => discover_codex_models().await,
         _ => Ok(backend.manual_models.clone()),
     }
 }
@@ -440,36 +534,205 @@ async fn test_backend_connectivity(backend: &AgentBackendConfig) -> Result<Backe
             message: "Using Claude Code's default authentication".to_string(),
         }),
         AgentBackendKind::CodexSubscription => {
-            let output = tokio::process::Command::new("codex")
-                .arg("--version")
-                .output()
-                .await;
-            Ok(match output {
-                Ok(out) if out.status.success() => BackendStatus {
-                    ok: true,
-                    message:
-                        "Codex CLI is installed. Run codex login if authentication is missing."
-                            .to_string(),
-                },
-                _ => BackendStatus {
-                    ok: false,
-                    message: "Codex CLI is not installed or not on PATH".to_string(),
-                },
+            let status = codex_login_status().await?;
+            let models = discover_codex_models().await.unwrap_or_default();
+            Ok(BackendStatus {
+                ok: true,
+                message: format!("{status}. Found {} model(s).", models.len()),
             })
         }
-        AgentBackendKind::OpenAiApi => Ok(BackendStatus {
-            ok: load_secure_secret(SECRET_BUCKET, &backend.id)?.is_some(),
-            message: if load_secure_secret(SECRET_BUCKET, &backend.id)?.is_some() {
-                "API key saved".to_string()
-            } else {
-                "API key required".to_string()
-            },
-        }),
+        AgentBackendKind::OpenAiApi => {
+            discover_openai_api_models(backend)
+                .await
+                .map(|models| BackendStatus {
+                    ok: true,
+                    message: format!("API key works. Found {} model(s).", models.len()),
+                })
+        }
         _ => discover_models(backend).await.map(|models| BackendStatus {
             ok: true,
             message: format!("Connected. Found {} model(s).", models.len()),
         }),
     }
+}
+
+async fn discover_openai_api_models(
+    backend: &AgentBackendConfig,
+) -> Result<Vec<AgentBackendModel>, String> {
+    let secret = load_secure_secret(SECRET_BUCKET, &backend.id)?
+        .ok_or("OpenAI API backend requires an API key in Settings -> Models")?;
+    let base = backend
+        .base_url
+        .as_deref()
+        .unwrap_or("https://api.openai.com")
+        .trim_end_matches('/');
+    let value = reqwest::Client::new()
+        .get(openai_api_url(base, "models"))
+        .bearer_auth(secret)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to query OpenAI models: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("OpenAI model discovery failed: {e}"))?
+        .json::<Value>()
+        .await
+        .map_err(|e| format!("Invalid OpenAI model response: {e}"))?;
+    Ok(filter_openai_models(models_from_openai_shape(
+        &value,
+        backend.context_window_default,
+    )))
+}
+
+async fn discover_codex_models() -> Result<Vec<AgentBackendModel>, String> {
+    codex_login_status().await?;
+    let output = tokio::process::Command::new("codex")
+        .args(["debug", "models"])
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run `codex debug models`: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            "`codex debug models` failed".to_string()
+        } else {
+            format!("`codex debug models` failed: {stderr}")
+        });
+    }
+    let value = serde_json::from_slice::<Value>(&output.stdout)
+        .map_err(|e| format!("Invalid Codex model catalog: {e}"))?;
+    let models = value
+        .get("models")
+        .and_then(Value::as_array)
+        .ok_or("Codex model catalog did not include `models`")?;
+    Ok(models
+        .iter()
+        .filter(|model| model.get("visibility").and_then(Value::as_str) == Some("list"))
+        .filter_map(|model| {
+            let id = model.get("slug").and_then(Value::as_str)?;
+            let label = model
+                .get("display_name")
+                .and_then(Value::as_str)
+                .unwrap_or(id);
+            let context = model
+                .get("max_context_window")
+                .or_else(|| model.get("context_window"))
+                .and_then(Value::as_u64)
+                .and_then(|n| u32::try_from(n).ok())
+                .unwrap_or(400_000);
+            Some(AgentBackendModel {
+                id: id.to_string(),
+                label: label.to_string(),
+                context_window_tokens: context,
+                discovered: true,
+            })
+        })
+        .collect())
+}
+
+async fn codex_login_status() -> Result<String, String> {
+    let output = tokio::process::Command::new("codex")
+        .args(["login", "status"])
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run `codex login status`: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            "Codex is not authenticated. Run codex login.".to_string()
+        } else {
+            format!("Codex is not authenticated: {stderr}")
+        });
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if stdout.is_empty() {
+        Ok("Codex authenticated".to_string())
+    } else {
+        Ok(stdout)
+    }
+}
+
+fn load_codex_auth_material() -> Result<CodexAuthMaterial, String> {
+    let path = codex_auth_path()?;
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read Codex auth cache at {}: {e}", path.display()))?;
+    let auth = serde_json::from_str::<CodexAuthJson>(&raw)
+        .map_err(|e| format!("Failed to parse Codex auth cache: {e}"))?;
+    match auth.auth_mode.as_deref() {
+        Some("chatgpt") | Some("chatgpt_auth_tokens") => {
+            let tokens = auth
+                .tokens
+                .ok_or("Codex auth cache is missing ChatGPT tokens. Run codex login.")?;
+            if tokens.access_token.trim().is_empty() {
+                return Err(
+                    "Codex auth cache has an empty access token. Run codex login.".to_string(),
+                );
+            }
+            Ok(CodexAuthMaterial {
+                access_token: tokens.access_token,
+                account_id: tokens.account_id,
+            })
+        }
+        Some("apikey") | Some("api_key") => {
+            let key = auth
+                .openai_api_key
+                .filter(|key| !key.trim().is_empty())
+                .ok_or("Codex API-key auth is missing OPENAI_API_KEY")?;
+            Ok(CodexAuthMaterial {
+                access_token: key,
+                account_id: None,
+            })
+        }
+        Some(other) => Err(format!(
+            "Unsupported Codex auth mode `{other}`. Run codex login with ChatGPT or an API key."
+        )),
+        None => Err("Codex auth cache is missing auth_mode. Run codex login.".to_string()),
+    }
+}
+
+fn codex_auth_path() -> Result<PathBuf, String> {
+    if let Ok(home) = std::env::var("CODEX_HOME")
+        && !home.trim().is_empty()
+    {
+        return Ok(PathBuf::from(home).join("auth.json"));
+    }
+    let home = dirs::home_dir().ok_or("Could not determine home directory for Codex auth")?;
+    Ok(home.join(".codex").join("auth.json"))
+}
+
+fn filter_openai_models(models: Vec<AgentBackendModel>) -> Vec<AgentBackendModel> {
+    let mut seen = HashSet::new();
+    let mut filtered: Vec<_> = models
+        .into_iter()
+        .filter(|model| is_openai_text_model(&model.id))
+        .filter(|model| seen.insert(model.id.clone()))
+        .collect();
+    filtered.sort_by(|a, b| a.id.cmp(&b.id));
+    filtered
+}
+
+fn is_openai_text_model(id: &str) -> bool {
+    let id = id.to_ascii_lowercase();
+    let excluded = [
+        "audio",
+        "dall-e",
+        "embedding",
+        "image",
+        "moderation",
+        "realtime",
+        "search",
+        "speech",
+        "transcribe",
+        "tts",
+        "whisper",
+    ];
+    if excluded.iter().any(|needle| id.contains(needle)) {
+        return false;
+    }
+    id.starts_with("gpt-")
+        || id.starts_with("o1")
+        || id.starts_with("o3")
+        || id.starts_with("o4")
+        || id.starts_with("codex")
 }
 
 fn models_from_openai_shape(value: &Value, default_context: u32) -> Vec<AgentBackendModel> {
@@ -486,6 +749,16 @@ fn models_from_openai_shape(value: &Value, default_context: u32) -> Vec<AgentBac
             discovered: true,
         })
         .collect()
+}
+
+fn openai_api_url(base: &str, path: &str) -> String {
+    let base = base.trim_end_matches('/');
+    let path = path.trim_start_matches('/');
+    if base.ends_with("/v1") {
+        format!("{base}/{path}")
+    } else {
+        format!("{base}/v1/{path}")
+    }
 }
 
 fn runtime_hash(config: &AgentBackendConfig, secret: Option<&str>, model: Option<&str>) -> String {
@@ -625,10 +898,7 @@ async fn call_openai_responses(
     anthropic_req: Value,
 ) -> Result<Value, String> {
     if config.kind == AgentBackendKind::CodexSubscription {
-        return Err(
-            "Codex subscription gateway requires Codex auth extraction support; use OpenAI API for now"
-                .to_string(),
-        );
+        return call_codex_responses(config, secret, anthropic_req).await;
     }
     let secret = secret.ok_or("OpenAI-compatible backend requires an API key")?;
     let base = config
@@ -649,7 +919,7 @@ async fn call_openai_responses(
     });
     let client = reqwest::Client::new();
     let value = client
-        .post(format!("{base}/v1/responses"))
+        .post(openai_api_url(base, "responses"))
         .bearer_auth(secret)
         .json(&openai_req)
         .send()
@@ -668,6 +938,127 @@ async fn call_openai_responses(
             .and_then(Value::as_bool)
             .unwrap_or(false),
     ))
+}
+
+async fn call_codex_responses(
+    config: &AgentBackendConfig,
+    secret: Option<&str>,
+    anthropic_req: Value,
+) -> Result<Value, String> {
+    let auth = serde_json::from_str::<CodexAuthMaterial>(
+        secret.ok_or("Codex subscription backend requires Codex CLI authentication")?,
+    )
+    .map_err(|e| format!("Invalid Codex gateway auth material: {e}"))?;
+    let model = anthropic_req
+        .get("model")
+        .and_then(Value::as_str)
+        .or(config.default_model.as_deref())
+        .ok_or("Missing model")?;
+    let instructions = codex_instructions_from_anthropic(&anthropic_req);
+    let codex_req = json!({
+        "model": model,
+        "instructions": instructions,
+        "input": codex_input_from_anthropic(&anthropic_req),
+        "tools": tools_from_anthropic(&anthropic_req),
+        "tool_choice": "auto",
+        "parallel_tool_calls": true,
+        "store": false,
+        "stream": true,
+    });
+    let base = config
+        .base_url
+        .as_deref()
+        .unwrap_or("https://chatgpt.com/backend-api/codex")
+        .trim_end_matches('/');
+    let client = reqwest::Client::new();
+    let mut request = client
+        .post(format!("{base}/responses"))
+        .bearer_auth(&auth.access_token)
+        .header(reqwest::header::ACCEPT, "text/event-stream")
+        .json(&codex_req);
+    if let Some(account_id) = auth.account_id.as_deref()
+        && !account_id.trim().is_empty()
+    {
+        request = request.header("ChatGPT-Account-ID", account_id);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("Codex request failed: {e}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("Invalid Codex response body: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("Codex request failed ({status}): {body}"));
+    }
+    let value = openai_response_from_sse(&body)?;
+    Ok(anthropic_message_from_openai(
+        model,
+        value,
+        anthropic_req
+            .get("stream")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    ))
+}
+
+fn codex_instructions_from_anthropic(req: &Value) -> String {
+    req.get("system")
+        .map(content_value_text)
+        .filter(|text| !text.trim().is_empty())
+        .unwrap_or_else(|| "You are a concise coding assistant.".to_string())
+}
+
+fn codex_input_from_anthropic(req: &Value) -> Value {
+    let input = req
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|message| {
+            json!({
+                "role": message.get("role").and_then(Value::as_str).unwrap_or("user"),
+                "content": content_value_text(message.get("content").unwrap_or(&Value::Null)),
+            })
+        })
+        .collect::<Vec<_>>();
+    Value::Array(input)
+}
+
+fn openai_response_from_sse(body: &str) -> Result<Value, String> {
+    let mut output_text = String::new();
+    let mut last_response = None;
+    for line in body.lines() {
+        let Some(data) = line.strip_prefix("data:") else {
+            continue;
+        };
+        let data = data.trim();
+        if data == "[DONE]" || data.is_empty() {
+            continue;
+        }
+        let value = serde_json::from_str::<Value>(data)
+            .map_err(|e| format!("Invalid Codex SSE event: {e}"))?;
+        match value.get("type").and_then(Value::as_str) {
+            Some("response.output_text.delta") => {
+                if let Some(delta) = value.get("delta").and_then(Value::as_str) {
+                    output_text.push_str(delta);
+                }
+            }
+            Some("response.completed") => {
+                if let Some(response) = value.get("response") {
+                    last_response = Some(response.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut response = last_response.ok_or("Codex stream ended without response.completed")?;
+    if response.get("output_text").is_none() && !output_text.is_empty() {
+        response["output_text"] = Value::String(output_text);
+    }
+    Ok(response)
 }
 
 fn transcript_from_anthropic(req: &Value) -> String {
@@ -922,5 +1313,77 @@ mod tests {
         );
         assert_eq!(mapped["message"]["content"][0]["text"], "hello");
         assert_eq!(mapped["message"]["usage"]["input_tokens"], 3);
+    }
+
+    #[test]
+    fn openai_api_url_adds_v1_once() {
+        assert_eq!(
+            openai_api_url("https://api.openai.com", "models"),
+            "https://api.openai.com/v1/models"
+        );
+        assert_eq!(
+            openai_api_url("https://example.test/v1/", "/responses"),
+            "https://example.test/v1/responses"
+        );
+    }
+
+    #[test]
+    fn openai_model_filter_keeps_text_and_codex_models() {
+        let models = models_from_openai_shape(
+            &json!({
+                "data": [
+                    {"id": "gpt-5.5"},
+                    {"id": "gpt-5.5"},
+                    {"id": "gpt-image-1"},
+                    {"id": "text-embedding-3-large"},
+                    {"id": "o4-mini"},
+                    {"id": "codex-mini-latest"},
+                    {"id": "whisper-1"}
+                ]
+            }),
+            400_000,
+        );
+        let ids = filter_openai_models(models)
+            .into_iter()
+            .map(|model| model.id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["codex-mini-latest", "gpt-5.5", "o4-mini"]);
+    }
+
+    #[test]
+    fn legacy_seeded_models_are_removed_from_saved_backends() {
+        let mut openai = AgentBackendConfig::builtin_openai_api();
+        openai.manual_models = vec![AgentBackendModel {
+            id: "gpt-5.4".to_string(),
+            label: "GPT-5.4".to_string(),
+            context_window_tokens: 1_000_000,
+            discovered: false,
+        }];
+        let normalized = normalize_backend(openai);
+        assert!(normalized.manual_models.is_empty());
+
+        let mut custom = AgentBackendConfig::builtin_openai_api();
+        custom.manual_models = vec![AgentBackendModel {
+            id: "team-private-model".to_string(),
+            label: "Team private model".to_string(),
+            context_window_tokens: 400_000,
+            discovered: false,
+        }];
+        let normalized = normalize_backend(custom);
+        assert_eq!(normalized.manual_models.len(), 1);
+    }
+
+    #[test]
+    fn codex_sse_response_maps_to_openai_response() {
+        let response = openai_response_from_sse(
+            r#"data: {"type":"response.output_text.delta","delta":"hel"}
+data: {"type":"response.output_text.delta","delta":"lo"}
+data: {"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":1,"output_tokens":2}}}
+data: [DONE]
+"#,
+        )
+        .expect("SSE should parse");
+        assert_eq!(response["output_text"], "hello");
+        assert_eq!(response["usage"]["output_tokens"], 2);
     }
 }

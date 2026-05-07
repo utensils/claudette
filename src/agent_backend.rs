@@ -136,38 +136,13 @@ impl AgentBackendConfig {
             kind: AgentBackendKind::OpenAiApi,
             base_url: Some("https://api.openai.com".to_string()),
             enabled: false,
-            default_model: Some("gpt-5.4".to_string()),
-            manual_models: vec![
-                AgentBackendModel {
-                    id: "gpt-5.5".to_string(),
-                    label: "GPT-5.5".to_string(),
-                    context_window_tokens: 1_000_000,
-                    discovered: false,
-                },
-                AgentBackendModel {
-                    id: "gpt-5.4".to_string(),
-                    label: "GPT-5.4".to_string(),
-                    context_window_tokens: 1_000_000,
-                    discovered: false,
-                },
-                AgentBackendModel {
-                    id: "gpt-5.4-mini".to_string(),
-                    label: "GPT-5.4 mini".to_string(),
-                    context_window_tokens: 400_000,
-                    discovered: false,
-                },
-                AgentBackendModel {
-                    id: "gpt-5-codex".to_string(),
-                    label: "GPT-5-Codex".to_string(),
-                    context_window_tokens: 400_000,
-                    discovered: false,
-                },
-            ],
+            default_model: None,
+            manual_models: Vec::new(),
             discovered_models: Vec::new(),
             auth_ref: Some("agent-backend:openai-api".to_string()),
             capabilities: AgentBackendCapabilities::gateway(),
             context_window_default: 400_000,
-            model_discovery: false,
+            model_discovery: true,
             has_secret: false,
         }
     }
@@ -179,26 +154,13 @@ impl AgentBackendConfig {
             kind: AgentBackendKind::CodexSubscription,
             base_url: None,
             enabled: false,
-            default_model: Some("gpt-5.3-codex".to_string()),
-            manual_models: vec![
-                AgentBackendModel {
-                    id: "gpt-5.3-codex".to_string(),
-                    label: "GPT-5.3-Codex".to_string(),
-                    context_window_tokens: 400_000,
-                    discovered: false,
-                },
-                AgentBackendModel {
-                    id: "gpt-5.4".to_string(),
-                    label: "GPT-5.4".to_string(),
-                    context_window_tokens: 1_000_000,
-                    discovered: false,
-                },
-            ],
+            default_model: None,
+            manual_models: Vec::new(),
             discovered_models: Vec::new(),
             auth_ref: Some("codex-cli".to_string()),
             capabilities: AgentBackendCapabilities::gateway(),
             context_window_default: 400_000,
-            model_discovery: false,
+            model_discovery: true,
             has_secret: false,
         }
     }
