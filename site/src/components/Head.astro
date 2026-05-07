@@ -1,9 +1,12 @@
 ---
 import Default from '@astrojs/starlight/components/Head.astro';
 
-const siteUrl = 'https://utensils.github.io';
-const base    = '/claudette';
-const ogImage = `${siteUrl}${base}/og-image.png`;
+// Derive the OG image URL from Astro's deploy config (`site` and `base` in
+// astro.config.mjs) rather than hardcoding — keeps forks/staging deployments
+// correct without touching this file. BASE_URL may or may not include a
+// trailing slash depending on how `base` is configured; normalize before joining.
+const baseWithSlash = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+const ogImage = new URL(`${baseWithSlash}og-image.png`, Astro.site).href;
 ---
 
 <Default {...Astro.props}><slot /></Default>
