@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getAppSetting, setAppSetting, listAgentBackends, saveAgentBackend, saveAgentBackendSecret, refreshAgentBackendModels, testAgentBackend, launchCodexLogin } from "../../../services/tauri";
 import type { AgentBackendConfig } from "../../../services/tauri";
@@ -353,13 +353,19 @@ function BackendCard({
   const [status, setStatus] = useState<string | null>(null);
   const [statusModelCount, setStatusModelCount] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const lastSavedDraftRef = useRef("");
+  const draftSaveSeqRef = useRef(0);
+  const secretSaveSeqRef = useRef(0);
 
   useEffect(() => {
+    lastSavedDraftRef.current = JSON.stringify(backend);
     setDraft(backend);
     setSecret("");
     setStatus(null);
     setStatusModelCount(null);
     setBusy(false);
+    setSaving(false);
   }, [backend]);
 
   const discoveredModels = dedupeBackendModels(draft.discovered_models);
@@ -385,35 +391,76 @@ function BackendCard({
     return refreshed;
   };
 
-  const persistDraft = async () => {
+  const persistDraft = useCallback(async (nextDraft: AgentBackendConfig) => {
+    const saved = await saveAgentBackend(nextDraft);
+    onSaved(saved);
+    const refreshed = saved.find((item) => item.id === nextDraft.id);
+    lastSavedDraftRef.current = JSON.stringify(refreshed ?? nextDraft);
+    return saved;
+  }, [onSaved]);
+
+  useEffect(() => {
+    const serialized = JSON.stringify(draft);
+    if (serialized === lastSavedDraftRef.current) return;
+    const seq = draftSaveSeqRef.current + 1;
+    draftSaveSeqRef.current = seq;
+    setSaving(true);
+    const handle = window.setTimeout(() => {
+      void persistDraft(draft)
+        .then(() => {
+          if (draftSaveSeqRef.current !== seq) return;
+          setStatusModelCount(null);
+          setStatus(t("models_backend_status_saved"));
+          setError(null);
+        })
+        .catch((e) => {
+          if (draftSaveSeqRef.current !== seq) return;
+          setError(String(e));
+        })
+        .finally(() => {
+          if (draftSaveSeqRef.current === seq) setSaving(false);
+        });
+    }, 450);
+    return () => window.clearTimeout(handle);
+  }, [draft, persistDraft, setError, t]);
+
+  useEffect(() => {
+    if (!secret) return;
+    const seq = secretSaveSeqRef.current + 1;
+    secretSaveSeqRef.current = seq;
+    setSaving(true);
+    const handle = window.setTimeout(() => {
+      void saveAgentBackendSecret({ backend_id: draft.id, value: secret })
+        .then(() => {
+          if (secretSaveSeqRef.current !== seq) return;
+          setSecret("");
+          setStatus(t("models_backend_status_saved"));
+          setError(null);
+        })
+        .catch((e) => {
+          if (secretSaveSeqRef.current !== seq) return;
+          setError(String(e));
+        })
+        .finally(() => {
+          if (secretSaveSeqRef.current === seq) setSaving(false);
+        });
+    }, 650);
+    return () => window.clearTimeout(handle);
+  }, [draft.id, secret, setError, t]);
+
+  const persistCurrentDraft = async () => {
     if (secret) {
       await saveAgentBackendSecret({ backend_id: draft.id, value: secret });
+      setSecret("");
     }
-    const saved = await saveAgentBackend(draft);
-    onSaved(saved);
-    setSecret("");
-    return saved;
-  };
-
-  const save = async () => {
-    try {
-      setError(null);
-      setBusy(true);
-      await persistDraft();
-      setStatusModelCount(null);
-      setStatus(t("models_backend_status_saved"));
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
+    return persistDraft(draft);
   };
 
   const refresh = async () => {
     try {
       setError(null);
       setBusy(true);
-      await persistDraft();
+      await persistCurrentDraft();
       const saved = await refreshAgentBackendModels(draft.id);
       const refreshed = applySavedBackends(saved);
       const count = (refreshed?.discovered_models.length ?? 0) + (refreshed?.manual_models.length ?? 0);
@@ -430,7 +477,7 @@ function BackendCard({
     try {
       setError(null);
       setBusy(true);
-      await persistDraft();
+      await persistCurrentDraft();
       const result = await testAgentBackend(draft.id);
       let refreshed: AgentBackendConfig | undefined;
       if (result.backends) {
@@ -471,6 +518,7 @@ function BackendCard({
         <div className={styles.settingLabel}>{draft.label}</div>
         <div className={styles.settingDescription}>
           {draft.kind} · {displayModelCount} models
+          {saving ? ` · ${t("models_backend_status_saving")}` : ""}
           {status ? ` · ${status}` : ""}
         </div>
         <div className={styles.backendForm}>
@@ -562,7 +610,6 @@ function BackendCard({
           >
             <div className={styles.toggleKnob} />
           </button>
-          <button className={styles.iconBtn} onClick={save} disabled={busy}>{t("models_backend_save")}</button>
           <button className={styles.iconBtn} onClick={test} disabled={busy}>{t("models_backend_test")}</button>
           {discoveryBackend && (
             <button className={styles.iconBtn} onClick={refresh} disabled={busy}>{t("models_backend_refresh")}</button>

@@ -132,10 +132,10 @@
   "models_backend_manual_models_placeholder": "Optional fallback models, comma-separated",
   "models_backend_secret": "API key or token",
   "models_backend_secret_saved": "Saved",
-  "models_backend_save": "Save",
   "models_backend_refresh": "Refresh models",
   "models_backend_test": "Test",
   "models_backend_login": "Run codex login",
+  "models_backend_status_saving": "Saving",
   "models_backend_status_saved": "Saved",
   "models_backend_status_refreshed": "Refreshed {{count}} model(s)",
 
