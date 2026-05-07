@@ -215,6 +215,7 @@ fn main() {
     }
 
     let app_state = state::AppState::new(db_path, worktree_base_dir, plugins);
+
     let remote_manager = remote::RemoteConnectionManager::new();
     let mcp_supervisor = std::sync::Arc::new(claudette::mcp_supervisor::McpSupervisor::new());
 
@@ -327,6 +328,29 @@ fn main() {
             if let Err(e) = mdns::start_mdns_browser(app.handle(), saved_fingerprints) {
                 eprintln!("[mdns] Failed to start browser: {e}");
             }
+
+            // Discover `claude --help` flags in the background so the Settings
+            // panel can render the available-flags list without blocking app
+            // boot. Must run inside `.setup` (not at the top of `main`) — the
+            // Tokio runtime isn't live until `tauri::Builder::run` boots it,
+            // so a `tokio::spawn` before that point panics with "no reactor
+            // running". `app.state::<AppState>()` works here because the
+            // state is `.manage()`-d above this `.setup` callback.
+            let flag_defs_handle =
+                std::sync::Arc::clone(&app.state::<state::AppState>().claude_flag_defs);
+            tauri::async_runtime::spawn(async move {
+                match claudette::claude_help::discover_claude_flags().await {
+                    Ok(defs) => {
+                        let mut guard = flag_defs_handle.write().await;
+                        *guard = state::ClaudeFlagDiscovery::Ok(defs);
+                    }
+                    Err(msg) => {
+                        eprintln!("[claude-flags] discovery failed: {msg}");
+                        let mut guard = flag_defs_handle.write().await;
+                        *guard = state::ClaudeFlagDiscovery::Err(msg);
+                    }
+                }
+            });
 
             // macOS native menu — built and applied here (rather than via
             // tauri::Builder::menu) so AppKit doesn't auto-promote the
@@ -707,6 +731,12 @@ fn main() {
             commands::agent_backends::refresh_agent_backend_models,
             commands::agent_backends::test_agent_backend,
             commands::agent_backends::launch_codex_login,
+            // Claude flags
+            commands::claude_flags::list_claude_flags,
+            commands::claude_flags::refresh_claude_flags,
+            commands::claude_flags::get_claude_flag_state,
+            commands::claude_flags::set_claude_flag_state,
+            commands::claude_flags::clear_claude_flag_repo_override,
             // Updater
             commands::updater::check_for_updates_with_channel,
             commands::updater::install_pending_update,
