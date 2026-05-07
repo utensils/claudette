@@ -25,6 +25,9 @@ export function ExperimentalSettings() {
   const alternativeBackendsEnabled = useAppStore(
     (s) => s.alternativeBackendsEnabled,
   );
+  const alternativeBackendsAvailable = useAppStore(
+    (s) => s.alternativeBackendsAvailable,
+  );
   const setAlternativeBackendsEnabled = useAppStore(
     (s) => s.setAlternativeBackendsEnabled,
   );
@@ -82,6 +85,7 @@ export function ExperimentalSettings() {
   };
 
   const handleAlternativeBackendsToggle = async () => {
+    if (!alternativeBackendsAvailable) return;
     const next = !alternativeBackendsEnabled;
     setAlternativeBackendsEnabled(next);
     try {
@@ -138,6 +142,7 @@ export function ExperimentalSettings() {
             aria-checked={alternativeBackendsEnabled}
             aria-label={t("experimental_alternative_backends_aria")}
             data-checked={alternativeBackendsEnabled}
+            disabled={!alternativeBackendsAvailable}
             onClick={handleAlternativeBackendsToggle}
           >
             <div className={styles.toggleKnob} />

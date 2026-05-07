@@ -58,6 +58,7 @@ function App() {
   const setEditorGitGutterBase = useAppStore((s) => s.setEditorGitGutterBase);
   const setEditorMinimapEnabled = useAppStore((s) => s.setEditorMinimapEnabled);
   const setDisable1mContext = useAppStore((s) => s.setDisable1mContext);
+  const setAlternativeBackendsAvailable = useAppStore((s) => s.setAlternativeBackendsAvailable);
   const setAlternativeBackendsEnabled = useAppStore((s) => s.setAlternativeBackendsEnabled);
   const setAgentBackends = useAppStore((s) => s.setAgentBackends);
   const setDefaultAgentBackendId = useAppStore((s) => s.setDefaultAgentBackendId);
@@ -244,8 +245,12 @@ function App() {
     getAppSetting("community_registry_enabled")
       .then((val) => { if (val === "true") setCommunityRegistryEnabled(true); })
       .catch(() => {});
-    getAppSetting("alternative_backends_enabled")
-      .then((val) => { if (val === "true") setAlternativeBackendsEnabled(true); })
+    Promise.all([getAppSetting("alternative_backends_enabled"), getHostEnvFlags()])
+      .then(([val, flags]) => {
+        setAlternativeBackendsAvailable(flags.alternative_backends_compiled);
+        setAlternativeBackendsEnabled(val === "true" && flags.alternative_backends_compiled);
+        if (flags.disable_1m_context) setDisable1mContext(true);
+      })
       .catch(() => {});
     listAgentBackends()
       .then((data) => {
@@ -295,10 +300,6 @@ function App() {
         }
       })
       .catch(() => {});
-    getHostEnvFlags()
-      .then(({ disable_1m_context }) => { if (disable_1m_context) setDisable1mContext(true); })
-      .catch(() => {});
-
     // Listen for terminal command events. PTYs live on pane leaves inside
     // each tab's pane tree (a tab can hold multiple split panes, each with
     // its own PTY), so we walk the trees to find which tab owns the firing
@@ -643,7 +644,7 @@ function App() {
       unlistenChatTurnStarted.then((fn) => fn());
       unlistenMissingCli.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setPluginManagementEnabled, setCommunityRegistryEnabled, setAlternativeBackendsEnabled, setAgentBackends, setDefaultAgentBackendId, setEditorGitGutterBase, setEditorMinimapEnabled, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setPluginManagementEnabled, setCommunityRegistryEnabled, setAlternativeBackendsAvailable, setAlternativeBackendsEnabled, setAgentBackends, setDefaultAgentBackendId, setEditorGitGutterBase, setEditorMinimapEnabled, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo]);
 
   // Listen for OS light/dark changes and switch theme when mode is "system".
   useEffect(() => {

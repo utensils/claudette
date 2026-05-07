@@ -48,6 +48,8 @@ export interface SettingsSlice {
   setCommunityRegistryEnabled: (enabled: boolean) => void;
   disable1mContext: boolean;
   setDisable1mContext: (v: boolean) => void;
+  alternativeBackendsAvailable: boolean;
+  setAlternativeBackendsAvailable: (available: boolean) => void;
   alternativeBackendsEnabled: boolean;
   setAlternativeBackendsEnabled: (enabled: boolean) => void;
   agentBackends: AgentBackendConfig[];
@@ -135,9 +137,17 @@ export const createSettingsSlice: StateCreator<
     })),
   disable1mContext: false,
   setDisable1mContext: (v) => set({ disable1mContext: v }),
+  alternativeBackendsAvailable: false,
+  setAlternativeBackendsAvailable: (available) =>
+    set((state) => ({
+      alternativeBackendsAvailable: available,
+      alternativeBackendsEnabled: available ? state.alternativeBackendsEnabled : false,
+    })),
   alternativeBackendsEnabled: false,
   setAlternativeBackendsEnabled: (enabled) =>
-    set({ alternativeBackendsEnabled: enabled }),
+    set((state) => ({
+      alternativeBackendsEnabled: state.alternativeBackendsAvailable && enabled,
+    })),
   agentBackends: [],
   setAgentBackends: (backends) => set({ agentBackends: backends }),
   defaultAgentBackendId: "anthropic",

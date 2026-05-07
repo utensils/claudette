@@ -80,6 +80,33 @@ describe("modelRegistry", () => {
   });
 
   describe("buildModelRegistry", () => {
+    it("hides backend models when alternative backends are disabled", () => {
+      const registry = buildModelRegistry(false, [
+        {
+          id: "codex-subscription",
+          label: "Codex",
+          kind: "codex_subscription",
+          enabled: true,
+          capabilities: {
+            thinking: false,
+            effort: false,
+            fast_mode: false,
+          },
+          manual_models: [],
+          discovered_models: [
+            {
+              id: "gpt-5.4",
+              label: "gpt-5.4",
+              context_window_tokens: 272_000,
+            },
+          ],
+        },
+      ]);
+
+      expect(registry).toBe(MODELS);
+      expect(registry.find((model) => model.providerQualifiedId === "codex-subscription/gpt-5.4")).toBeUndefined();
+    });
+
     it("exposes discovered backend models and prefers them over manual fallbacks", () => {
       const registry = buildModelRegistry(true, [
         {

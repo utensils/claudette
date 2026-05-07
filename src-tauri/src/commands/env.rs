@@ -579,6 +579,7 @@ pub fn spawn_repo_env_warmup(app: AppHandle, repo_id: String) {
 #[derive(Serialize)]
 pub struct HostEnvFlags {
     pub disable_1m_context: bool,
+    pub alternative_backends_compiled: bool,
 }
 
 /// Return environment-derived flags from the host process. Unlike app
@@ -588,6 +589,7 @@ pub struct HostEnvFlags {
 pub fn get_host_env_flags() -> HostEnvFlags {
     HostEnvFlags {
         disable_1m_context: std::env::var("CLAUDE_CODE_DISABLE_1M_CONTEXT").is_ok(),
+        alternative_backends_compiled: cfg!(feature = "alternative-backends"),
     }
 }
 

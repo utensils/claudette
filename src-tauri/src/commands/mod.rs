@@ -1,3 +1,7 @@
+#[cfg(feature = "alternative-backends")]
+pub mod agent_backends;
+#[cfg(not(feature = "alternative-backends"))]
+#[path = "agent_backends_disabled.rs"]
 pub mod agent_backends;
 pub mod apps;
 pub mod auth;

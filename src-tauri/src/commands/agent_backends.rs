@@ -3,6 +3,7 @@ use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tauri::State;
@@ -21,6 +22,8 @@ use crate::state::AppState;
 const SETTINGS_KEY: &str = "agent_backends_config";
 const SECRET_BUCKET: &str = "agentBackendSecrets";
 const BACKEND_RUNTIME_ENV_VERSION: u8 = 2;
+const CODEX_DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
+const CODEX_JWT_AUTH_CLAIM: &str = "https://api.openai.com/auth";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackendStatus {
@@ -771,8 +774,10 @@ fn load_codex_auth_material() -> Result<CodexAuthMaterial, String> {
                 );
             }
             Ok(CodexAuthMaterial {
+                account_id: tokens
+                    .account_id
+                    .or_else(|| codex_account_id_from_access_token(&tokens.access_token)),
                 access_token: tokens.access_token,
-                account_id: tokens.account_id,
             })
         }
         Some("apikey") | Some("api_key") => {
@@ -953,7 +958,10 @@ async fn handle_gateway_connection(
     }
     let body = &buf[body_start..usize::min(buf.len(), body_start + content_length)];
 
-    match (method.as_str(), path.as_str()) {
+    let route_path = route_path(&path);
+
+    match (method.as_str(), route_path) {
+        ("HEAD", "/") | ("HEAD", "/health") => write_empty_response(&mut stream, 200).await,
         ("GET", "/health") => write_json_response(&mut stream, 200, json!({"ok": true})).await,
         ("GET", "/v1/models") => {
             let data: Vec<_> = config
@@ -1059,31 +1067,33 @@ async fn call_codex_responses(
         .or(config.default_model.as_deref())
         .ok_or("Missing model")?;
     let instructions = codex_instructions_from_anthropic(&anthropic_req);
+    let request_id = uuid::Uuid::new_v4().to_string();
     let codex_req = json!({
         "model": model,
+        "store": false,
+        "stream": true,
         "instructions": instructions,
         "input": codex_input_from_anthropic(&anthropic_req),
+        "text": {"verbosity": "low"},
+        "include": ["reasoning.encrypted_content"],
         "tools": tools_from_anthropic(&anthropic_req),
         "tool_choice": "auto",
         "parallel_tool_calls": true,
-        "store": false,
-        "stream": true,
     });
-    let base = config
-        .base_url
-        .as_deref()
-        .unwrap_or("https://chatgpt.com/backend-api/codex")
-        .trim_end_matches('/');
     let client = reqwest::Client::new();
     let mut request = client
-        .post(format!("{base}/responses"))
+        .post(codex_responses_url(config.base_url.as_deref()))
         .bearer_auth(&auth.access_token)
         .header(reqwest::header::ACCEPT, "text/event-stream")
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .header("OpenAI-Beta", "responses=experimental")
+        .header("originator", "claudette")
+        .header("x-client-request-id", request_id)
         .json(&codex_req);
     if let Some(account_id) = auth.account_id.as_deref()
         && !account_id.trim().is_empty()
     {
-        request = request.header("ChatGPT-Account-ID", account_id);
+        request = request.header("chatgpt-account-id", account_id);
     }
     let response = request
         .send()
@@ -1122,13 +1132,60 @@ fn codex_input_from_anthropic(req: &Value) -> Value {
         .into_iter()
         .flatten()
         .map(|message| {
-            json!({
-                "role": message.get("role").and_then(Value::as_str).unwrap_or("user"),
-                "content": content_value_text(message.get("content").unwrap_or(&Value::Null)),
-            })
+            let role = message
+                .get("role")
+                .and_then(Value::as_str)
+                .unwrap_or("user");
+            let text = content_value_text(message.get("content").unwrap_or(&Value::Null));
+            if role == "assistant" {
+                json!({
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": text, "annotations": []}],
+                    "status": "completed",
+                })
+            } else {
+                json!({
+                    "role": role,
+                    "content": [{"type": "input_text", "text": text}],
+                })
+            }
         })
         .collect::<Vec<_>>();
     Value::Array(input)
+}
+
+fn route_path(path: &str) -> &str {
+    path.split_once('?').map_or(path, |(route, _)| route)
+}
+
+fn codex_responses_url(base_url: Option<&str>) -> String {
+    let raw = base_url
+        .map(str::trim)
+        .filter(|base| !base.is_empty())
+        .unwrap_or(CODEX_DEFAULT_BASE_URL);
+    let normalized = raw.trim_end_matches('/');
+    if normalized.ends_with("/codex/responses") {
+        normalized.to_string()
+    } else if normalized.ends_with("/codex") {
+        format!("{normalized}/responses")
+    } else {
+        format!("{normalized}/codex/responses")
+    }
+}
+
+fn codex_account_id_from_access_token(token: &str) -> Option<String> {
+    let payload = token.split('.').nth(1)?;
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .ok()?;
+    let value = serde_json::from_slice::<Value>(&decoded).ok()?;
+    value
+        .get(CODEX_JWT_AUTH_CLAIM)?
+        .get("chatgpt_account_id")?
+        .as_str()
+        .filter(|account_id| !account_id.trim().is_empty())
+        .map(ToString::to_string)
 }
 
 fn openai_response_from_sse(body: &str) -> Result<Value, String> {
@@ -1390,6 +1447,21 @@ async fn write_json_response(
         .map_err(|e| format!("write failed: {e}"))
 }
 
+async fn write_empty_response(stream: &mut TcpStream, status: u16) -> Result<(), String> {
+    let reason = match status {
+        200 => "OK",
+        404 => "Not Found",
+        502 => "Bad Gateway",
+        _ => "OK",
+    };
+    let headers =
+        format!("HTTP/1.1 {status} {reason}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    stream
+        .write_all(headers.as_bytes())
+        .await
+        .map_err(|e| format!("write failed: {e}"))
+}
+
 fn find_header_end(buf: &[u8]) -> Option<usize> {
     buf.windows(4).position(|window| window == b"\r\n\r\n")
 }
@@ -1489,6 +1561,67 @@ mod tests {
             openai_api_url("https://example.test/v1/", "/responses"),
             "https://example.test/v1/responses"
         );
+    }
+
+    #[test]
+    fn gateway_route_path_ignores_claude_code_query_flags() {
+        assert_eq!(route_path("/v1/messages?beta=true"), "/v1/messages");
+        assert_eq!(route_path("/v1/models?limit=1000"), "/v1/models");
+        assert_eq!(route_path("/health"), "/health");
+    }
+
+    #[test]
+    fn codex_responses_url_matches_chatgpt_codex_shapes() {
+        assert_eq!(
+            codex_responses_url(None),
+            "https://chatgpt.com/backend-api/codex/responses"
+        );
+        assert_eq!(
+            codex_responses_url(Some("https://chatgpt.com/backend-api")),
+            "https://chatgpt.com/backend-api/codex/responses"
+        );
+        assert_eq!(
+            codex_responses_url(Some("https://chatgpt.com/backend-api/codex")),
+            "https://chatgpt.com/backend-api/codex/responses"
+        );
+        assert_eq!(
+            codex_responses_url(Some("https://chatgpt.com/backend-api/codex/responses")),
+            "https://chatgpt.com/backend-api/codex/responses"
+        );
+    }
+
+    #[test]
+    fn codex_account_id_can_be_derived_from_chatgpt_access_token() {
+        let mut claims = serde_json::Map::new();
+        claims.insert(
+            CODEX_JWT_AUTH_CLAIM.to_string(),
+            json!({"chatgpt_account_id": "acct-123"}),
+        );
+        let payload = Value::Object(claims);
+        let encoded =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload.to_string().as_bytes());
+        let token = format!("header.{encoded}.signature");
+        assert_eq!(
+            codex_account_id_from_access_token(&token).as_deref(),
+            Some("acct-123")
+        );
+        assert_eq!(codex_account_id_from_access_token("not-a-jwt"), None);
+    }
+
+    #[test]
+    fn codex_input_uses_responses_text_parts() {
+        let input = codex_input_from_anthropic(&json!({
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "hi"}]}
+            ]
+        }));
+        assert_eq!(input[0]["role"], "user");
+        assert_eq!(input[0]["content"][0]["type"], "input_text");
+        assert_eq!(input[0]["content"][0]["text"], "hello");
+        assert_eq!(input[1]["type"], "message");
+        assert_eq!(input[1]["content"][0]["type"], "output_text");
+        assert_eq!(input[1]["content"][0]["text"], "hi");
     }
 
     #[test]

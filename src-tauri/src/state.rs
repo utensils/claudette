@@ -346,6 +346,7 @@ pub struct AppState {
     pub detected_apps: RwLock<Vec<DetectedApp>>,
     /// Loopback Anthropic-compatible gateway used for experimental
     /// OpenAI-compatible Claude Code backends.
+    #[cfg_attr(not(feature = "alternative-backends"), allow(dead_code))]
     pub backend_gateway: BackendGateway,
     /// System tray icon handle (None when tray is disabled).
     pub tray_handle: Mutex<Option<TrayIcon>>,
