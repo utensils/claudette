@@ -6,6 +6,7 @@ import { EFFORT_LEVELS } from "../../chat/EffortSelector";
 import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "../../chat/modelCapabilities";
 import { buildModelRegistry, resolveModelSelection } from "../../chat/modelRegistry";
 import { useAppStore } from "../../../stores/useAppStore";
+import { formatBackendError } from "../backendSettingsErrors";
 import styles from "../Settings.module.css";
 
 export function ModelSettings() {
@@ -298,7 +299,6 @@ export function ModelSettings() {
         <BackendSettingsPanel
           backends={agentBackends}
           onBackends={setAgentBackends}
-          setError={setError}
         />
       )}
     </div>
@@ -308,11 +308,9 @@ export function ModelSettings() {
 function BackendSettingsPanel({
   backends,
   onBackends,
-  setError,
 }: {
   backends: AgentBackendConfig[];
   onBackends: (backends: AgentBackendConfig[]) => void;
-  setError: (error: string | null) => void;
 }) {
   const { t } = useTranslation("settings");
   return (
@@ -330,7 +328,6 @@ function BackendSettingsPanel({
           key={backend.id}
           backend={backend}
           onSaved={onBackends}
-          setError={setError}
         />
       ))}
     </div>
@@ -340,17 +337,16 @@ function BackendSettingsPanel({
 function BackendCard({
   backend,
   onSaved,
-  setError,
 }: {
   backend: AgentBackendConfig;
   onSaved: (backends: AgentBackendConfig[]) => void;
-  setError: (error: string | null) => void;
 }) {
   const { t } = useTranslation("settings");
   const [draft, setDraft] = useState(backend);
   const [secret, setSecret] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [statusModelCount, setStatusModelCount] = useState<number | null>(null);
+  const [cardError, setCardError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const lastSavedDraftRef = useRef("");
@@ -363,6 +359,7 @@ function BackendCard({
     setSecret("");
     setStatus(null);
     setStatusModelCount(null);
+    setCardError(null);
     setBusy(false);
     setSaving(false);
   }, [backend]);
@@ -410,18 +407,18 @@ function BackendCard({
           if (draftSaveSeqRef.current !== seq) return;
           setStatusModelCount(null);
           setStatus(t("models_backend_status_saved"));
-          setError(null);
+          setCardError(null);
         })
         .catch((e) => {
           if (draftSaveSeqRef.current !== seq) return;
-          setError(String(e));
+          setCardError(formatBackendError(e, draft));
         })
         .finally(() => {
           if (draftSaveSeqRef.current === seq) setSaving(false);
         });
     }, 450);
     return () => window.clearTimeout(handle);
-  }, [draft, persistDraft, setError, t]);
+  }, [draft, persistDraft, t]);
 
   useEffect(() => {
     if (!secret) return;
@@ -434,18 +431,18 @@ function BackendCard({
           if (secretSaveSeqRef.current !== seq) return;
           setSecret("");
           setStatus(t("models_backend_status_saved"));
-          setError(null);
+          setCardError(null);
         })
         .catch((e) => {
           if (secretSaveSeqRef.current !== seq) return;
-          setError(String(e));
+          setCardError(formatBackendError(e, draft));
         })
         .finally(() => {
           if (secretSaveSeqRef.current === seq) setSaving(false);
         });
     }, 650);
     return () => window.clearTimeout(handle);
-  }, [draft.id, secret, setError, t]);
+  }, [draft, secret, t]);
 
   const persistCurrentDraft = async () => {
     if (secret) {
@@ -457,7 +454,7 @@ function BackendCard({
 
   const refresh = async () => {
     try {
-      setError(null);
+      setCardError(null);
       setBusy(true);
       await persistCurrentDraft();
       const saved = await refreshAgentBackendModels(draft.id);
@@ -466,7 +463,7 @@ function BackendCard({
       setStatusModelCount(count);
       setStatus(t("models_backend_status_refreshed", { count }));
     } catch (e) {
-      setError(String(e));
+      setCardError(formatBackendError(e, draft));
     } finally {
       setBusy(false);
     }
@@ -474,7 +471,7 @@ function BackendCard({
 
   const test = async () => {
     try {
-      setError(null);
+      setCardError(null);
       setBusy(true);
       await persistCurrentDraft();
       const result = await testAgentBackend(draft.id);
@@ -489,7 +486,7 @@ function BackendCard({
       setStatusModelCount(count);
       setStatus(result.message);
     } catch (e) {
-      setError(String(e));
+      setCardError(formatBackendError(e, draft));
     } finally {
       setBusy(false);
     }
@@ -520,6 +517,11 @@ function BackendCard({
           {saving ? ` · ${t("models_backend_status_saving")}` : ""}
           {status ? ` · ${status}` : ""}
         </div>
+        {cardError && (
+          <div className={styles.backendError} role="alert">
+            {cardError}
+          </div>
+        )}
         <div className={styles.backendForm}>
           {showBaseUrl && (
             <label className={styles.backendField}>

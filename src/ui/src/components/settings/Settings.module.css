@@ -1490,6 +1490,19 @@
   cursor: default;
 }
 
+.backendError {
+  margin-top: var(--space-2);
+  max-width: 760px;
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid var(--status-stopped);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--error-hover);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
 .modelChipList {
   min-height: 34px;
   display: flex;
