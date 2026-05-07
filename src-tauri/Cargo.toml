@@ -65,6 +65,8 @@ candle-core = { version = "=0.9.2", features = ["metal"], optional = true }
 candle-nn = { version = "=0.9.2", features = ["metal"], optional = true }
 candle-transformers = { version = "=0.9.2", features = ["metal"], optional = true }
 mac-notification-sys = "0.6"
+objc = "0.2"
+raw-window-handle = "0.6"
 
 [target.'cfg(windows)'.dependencies]
 # Registry probe for WebView2 Runtime + MessageBoxW fallback. Kept as direct

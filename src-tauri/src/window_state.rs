@@ -1,10 +1,10 @@
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tauri::{
-    LogicalPosition, LogicalSize, Manager, Monitor, PhysicalPosition, PhysicalSize, Position, Size,
-    WebviewWindow, Window,
+    AppHandle, LogicalPosition, LogicalSize, Manager, Monitor, PhysicalPosition, PhysicalSize,
+    Position, Size, WebviewWindow, Window,
 };
 
 use claudette::db::Database;
@@ -17,8 +17,11 @@ const DEFAULT_HEIGHT: u32 = 800;
 const MIN_WIDTH: u32 = 600;
 const MIN_HEIGHT: u32 = 400;
 const SAVE_DEBOUNCE_MS: u64 = 250;
+const RESTORE_SAVE_SUPPRESSION_MS: u64 = 1_500;
+const RESTORE_SETTLE_SAVE_MS: u64 = 900;
 
 static SAVE_GENERATION: AtomicU64 = AtomicU64::new(0);
+static SUPPRESS_SAVE_UNTIL_MS: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct SavedWindowState {
@@ -78,6 +81,8 @@ pub fn restore_main_window(app: &tauri::App) {
         return;
     };
 
+    suppress_saves_for(Duration::from_millis(RESTORE_SAVE_SUPPRESSION_MS));
+
     let state = app.state::<AppState>();
     let db = Database::open(&state.db_path).ok();
     let raw_saved = db
@@ -104,10 +109,14 @@ pub fn restore_main_window(app: &tauri::App) {
 
     let _ = window.show();
     let _ = window.set_focus();
+    save_after_restore_settles(window);
 }
 
 pub fn schedule_main_window_save(window: Window) {
     if window.label() != "main" {
+        return;
+    }
+    if saves_are_suppressed() {
         return;
     }
 
@@ -127,13 +136,112 @@ pub fn save_main_window_now(window: &Window) {
     if window.label() != "main" {
         return;
     }
+    if saves_are_suppressed() {
+        return;
+    }
     SAVE_GENERATION.fetch_add(1, Ordering::Relaxed);
     if let Err(err) = save_window_state(window) {
         eprintln!("[window-state] failed to save main window state: {err}");
     }
 }
 
-fn save_window_state(window: &Window) -> Result<(), String> {
+fn save_after_restore_settles(window: WebviewWindow) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(RESTORE_SETTLE_SAVE_MS)).await;
+        SAVE_GENERATION.fetch_add(1, Ordering::Relaxed);
+        if let Err(err) = save_window_state(&window) {
+            eprintln!("[window-state] failed to save settled main window state: {err}");
+        }
+    });
+}
+
+fn suppress_saves_for(duration: Duration) {
+    let until = unix_time_millis().saturating_add(duration.as_millis() as u64);
+    SUPPRESS_SAVE_UNTIL_MS.store(until, Ordering::Relaxed);
+}
+
+fn saves_are_suppressed() -> bool {
+    unix_time_millis() < SUPPRESS_SAVE_UNTIL_MS.load(Ordering::Relaxed)
+}
+
+fn unix_time_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+trait WindowStateSource {
+    fn app_handle(&self) -> &AppHandle;
+    fn outer_position(&self) -> tauri::Result<PhysicalPosition<i32>>;
+    fn inner_size(&self) -> tauri::Result<PhysicalSize<u32>>;
+    fn current_monitor(&self) -> tauri::Result<Option<Monitor>>;
+    fn scale_factor(&self) -> tauri::Result<f64>;
+    fn is_maximized(&self) -> tauri::Result<bool>;
+    fn is_fullscreen(&self) -> tauri::Result<bool>;
+}
+
+impl WindowStateSource for Window {
+    fn app_handle(&self) -> &AppHandle {
+        tauri::Manager::app_handle(self)
+    }
+
+    fn outer_position(&self) -> tauri::Result<PhysicalPosition<i32>> {
+        self.outer_position()
+    }
+
+    fn inner_size(&self) -> tauri::Result<PhysicalSize<u32>> {
+        self.inner_size()
+    }
+
+    fn current_monitor(&self) -> tauri::Result<Option<Monitor>> {
+        self.current_monitor()
+    }
+
+    fn scale_factor(&self) -> tauri::Result<f64> {
+        self.scale_factor()
+    }
+
+    fn is_maximized(&self) -> tauri::Result<bool> {
+        self.is_maximized()
+    }
+
+    fn is_fullscreen(&self) -> tauri::Result<bool> {
+        self.is_fullscreen()
+    }
+}
+
+impl WindowStateSource for WebviewWindow {
+    fn app_handle(&self) -> &AppHandle {
+        tauri::Manager::app_handle(self)
+    }
+
+    fn outer_position(&self) -> tauri::Result<PhysicalPosition<i32>> {
+        self.outer_position()
+    }
+
+    fn inner_size(&self) -> tauri::Result<PhysicalSize<u32>> {
+        self.inner_size()
+    }
+
+    fn current_monitor(&self) -> tauri::Result<Option<Monitor>> {
+        self.current_monitor()
+    }
+
+    fn scale_factor(&self) -> tauri::Result<f64> {
+        self.scale_factor()
+    }
+
+    fn is_maximized(&self) -> tauri::Result<bool> {
+        self.is_maximized()
+    }
+
+    fn is_fullscreen(&self) -> tauri::Result<bool> {
+        self.is_fullscreen()
+    }
+}
+
+fn save_window_state(window: &impl WindowStateSource) -> Result<(), String> {
     let app = window.app_handle();
     let app_state = app.state::<AppState>();
     let db = Database::open(&app_state.db_path).map_err(|e| e.to_string())?;
@@ -150,7 +258,7 @@ fn save_window_state(window: &Window) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-fn read_current_state(window: &Window) -> Result<SavedWindowState, String> {
+fn read_current_state(window: &impl WindowStateSource) -> Result<SavedWindowState, String> {
     let position = window.outer_position().map_err(|e| e.to_string())?;
     let size = window.inner_size().map_err(|e| e.to_string())?;
     let monitor = window.current_monitor().map_err(|e| e.to_string())?;
@@ -179,6 +287,16 @@ fn read_current_state(window: &Window) -> Result<SavedWindowState, String> {
 }
 
 fn apply_saved_state(window: &WebviewWindow, state: SavedWindowState) -> tauri::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        if apply_saved_state_macos(window, state).is_ok() {
+            if state.maximized {
+                window.maximize()?;
+            }
+            return Ok(());
+        }
+    }
+
     if let (Some(width), Some(height)) = (state.logical_width, state.logical_height) {
         window.set_size(Size::Logical(LogicalSize { width, height }))?;
     } else {
@@ -199,6 +317,11 @@ fn apply_saved_state(window: &WebviewWindow, state: SavedWindowState) -> tauri::
         window.maximize()?;
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn apply_saved_state_macos(window: &WebviewWindow, state: SavedWindowState) -> Result<(), String> {
+    macos_window_restore::apply(window, state).map_err(|err| err.to_string())
 }
 
 fn apply_default_bounds(window: &WebviewWindow) -> tauri::Result<()> {
@@ -332,10 +455,14 @@ fn restoreable_state_for_monitors(
     }
 
     let rect = state.rect();
-    let target_monitor = monitors
-        .iter()
-        .copied()
-        .find(|monitor| rects_intersect(rect, monitor.rect))
+    let target_monitor = saved_monitor_rect(state)
+        .and_then(|saved_monitor| matching_monitor(saved_monitor, monitors))
+        .or_else(|| {
+            monitors
+                .iter()
+                .copied()
+                .find(|monitor| rects_intersect(rect, monitor.rect))
+        })
         .unwrap_or_else(|| nearest_monitor(state, monitors));
     let target_rect = scaled_rect_for_target_monitor(state, target_monitor);
     let clamped = clamp_rect_to_monitor(target_rect, target_monitor.rect);
@@ -368,6 +495,20 @@ fn nearest_monitor(state: SavedWindowState, candidates: &[MonitorSnapshot]) -> M
             rect: state.rect(),
             scale_factor: state.scale_factor.unwrap_or(1.0),
         })
+}
+
+fn matching_monitor(
+    saved_monitor: Rect,
+    candidates: &[MonitorSnapshot],
+) -> Option<MonitorSnapshot> {
+    candidates
+        .iter()
+        .copied()
+        .filter(|candidate| {
+            candidate.rect.width == saved_monitor.width
+                && candidate.rect.height == saved_monitor.height
+        })
+        .min_by_key(|candidate| squared_distance_between_centers(saved_monitor, candidate.rect))
 }
 
 fn scaled_rect_for_target_monitor(state: SavedWindowState, target: MonitorSnapshot) -> Rect {
@@ -504,6 +645,86 @@ fn rects_intersect(a: Rect, b: Rect) -> bool {
         && a_right > i64::from(b.x)
         && i64::from(a.y) < b_bottom
         && a_bottom > i64::from(b.y)
+}
+
+#[cfg(target_os = "macos")]
+#[allow(unexpected_cfgs)]
+mod macos_window_restore {
+    use objc::{msg_send, sel, sel_impl};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    use super::{SavedWindowState, WebviewWindow};
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct NSPoint {
+        x: f64,
+        y: f64,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct NSSize {
+        width: f64,
+        height: f64,
+    }
+
+    pub fn apply(window: &WebviewWindow, state: SavedWindowState) -> Result<(), String> {
+        let ns_window = ns_window_ptr(window)?;
+        let width = state.logical_width.unwrap_or(f64::from(state.width));
+        let height = state.logical_height.unwrap_or(f64::from(state.height));
+        let x = state.logical_x.unwrap_or(f64::from(state.x));
+        let y = state.logical_y.unwrap_or(f64::from(state.y));
+        let main_display_height = main_display_height()?;
+
+        unsafe {
+            let _: () = msg_send![ns_window, setContentSize: NSSize { width, height }];
+            let point = NSPoint {
+                x,
+                y: main_display_height - y,
+            };
+            let _: () = msg_send![ns_window, setFrameTopLeftPoint: point];
+        }
+
+        Ok(())
+    }
+
+    fn ns_window_ptr(window: &WebviewWindow) -> Result<*mut objc::runtime::Object, String> {
+        let handle = window
+            .window_handle()
+            .map_err(|err| format!("window handle unavailable: {err}"))?;
+        let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
+            return Err("not an AppKit window".to_string());
+        };
+        let ns_view = appkit.ns_view.as_ptr() as *mut objc::runtime::Object;
+        if ns_view.is_null() {
+            return Err("AppKit NSView pointer was null".to_string());
+        }
+        let ns_window = unsafe {
+            let window: *mut objc::runtime::Object = msg_send![ns_view, window];
+            window
+        };
+        if ns_window.is_null() {
+            return Err("AppKit NSWindow pointer was null".to_string());
+        }
+        Ok(ns_window)
+    }
+
+    fn main_display_height() -> Result<f64, String> {
+        #[link(name = "CoreGraphics", kind = "framework")]
+        unsafe extern "C" {
+            fn CGMainDisplayID() -> u32;
+            fn CGDisplayPixelsHigh(display: u32) -> usize;
+        }
+
+        let display = unsafe { CGMainDisplayID() };
+        let height = unsafe { CGDisplayPixelsHigh(display) } as f64;
+        if height > 0.0 {
+            Ok(height)
+        } else {
+            Err("main display height unavailable".to_string())
+        }
+    }
 }
 
 #[cfg(test)]
@@ -743,6 +964,50 @@ mod tests {
         assert_eq!(restored.logical_height, Some(800.0));
         assert_eq!(restored.x, 720);
         assert_eq!(restored.y, 100);
+    }
+
+    #[test]
+    fn restoreable_state_prefers_saved_monitor_when_bounds_overlap_retina_main() {
+        let saved_monitor = Rect {
+            x: 2056,
+            y: -26,
+            width: 3440,
+            height: 1440,
+        };
+        let saved = state_with_monitor(2550, 95, 1650, 900, 1.0, saved_monitor);
+        let restored = restoreable_state_for_monitors(
+            saved,
+            &[
+                MonitorSnapshot {
+                    rect: Rect {
+                        x: 0,
+                        y: 0,
+                        width: 4112,
+                        height: 2658,
+                    },
+                    scale_factor: 2.0,
+                },
+                MonitorSnapshot {
+                    rect: Rect {
+                        x: -5120,
+                        y: 0,
+                        width: 5120,
+                        height: 1440,
+                    },
+                    scale_factor: 1.0,
+                },
+                MonitorSnapshot {
+                    rect: saved_monitor,
+                    scale_factor: 1.0,
+                },
+            ],
+        );
+        assert_eq!(restored.x, 2550);
+        assert_eq!(restored.y, 95);
+        assert_eq!(restored.width, 1650);
+        assert_eq!(restored.height, 900);
+        assert_eq!(restored.monitor_x, Some(2056));
+        assert_eq!(restored.monitor_width, Some(3440));
     }
 
     #[test]
