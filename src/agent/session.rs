@@ -368,8 +368,11 @@ fn build_persistent_args(
     }
     args.push(session_id.to_string());
 
-    // Model is session-level — only set on fresh sessions, not resumes.
-    if !is_resume && let Some(ref model) = settings.model {
+    // The Claude CLI accepts --model during --resume startup and applies it
+    // before loading the transcript. Keep passing the UI-selected model so
+    // restored Claudette sessions do not silently fall back to Claude Code's
+    // saved/default model, especially for custom backend model IDs.
+    if let Some(ref model) = settings.model {
         args.push("--model".to_string());
         args.push(model.clone());
     }
@@ -470,6 +473,18 @@ mod tests {
         let args = build_persistent_args("sess-1", false, &[], None, &settings);
         let idx = args.iter().position(|a| a == "--model").unwrap();
         assert_eq!(args[idx + 1], "opus");
+    }
+
+    #[test]
+    fn test_build_persistent_args_preserves_model_on_resume() {
+        let settings = AgentSettings {
+            model: Some("gpt-5.4".to_string()),
+            ..Default::default()
+        };
+        let args = build_persistent_args("sess-1", true, &[], None, &settings);
+        assert!(args.contains(&"--resume".to_string()));
+        let idx = args.iter().position(|a| a == "--model").unwrap();
+        assert_eq!(args[idx + 1], "gpt-5.4");
     }
 
     #[test]

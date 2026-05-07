@@ -21,6 +21,7 @@ const mod = isMac ? "⌘" : "Ctrl+";
 
 export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
   const selectedModel = useAppStore((s) => s.selectedModel[sessionId] ?? "opus");
+  const selectedProvider = useAppStore((s) => s.selectedModelProvider[sessionId] ?? "anthropic");
   const fastMode = useAppStore((s) => s.fastMode[sessionId] ?? false);
   const thinkingEnabled = useAppStore((s) => s.thinkingEnabled[sessionId] ?? false);
   const planMode = useAppStore((s) => s.planMode[sessionId] ?? false);
@@ -94,13 +95,13 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
   }, [sessionId, setSelectedModel, setFastMode, setThinkingEnabled, setEffortLevel, setShowThinkingBlocks, setChromeEnabled]);
 
   const handleModelSelect = useCallback(
-    async (model: string) => {
-      if (model !== selectedModel) {
-        await applySelectedModel(sessionId, model);
+    async (model: string, providerId = "anthropic") => {
+      if (model !== selectedModel || providerId !== selectedProvider) {
+        await applySelectedModel(sessionId, model, providerId);
       }
       setModelSelectorOpen(false);
     },
-    [sessionId, selectedModel, setModelSelectorOpen],
+    [sessionId, selectedModel, selectedProvider, setModelSelectorOpen],
   );
 
   const handleEffortSelect = useCallback(
@@ -250,6 +251,7 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
       {modelSelectorOpen && (
         <ModelSelector
           selected={selectedModel}
+          selectedProvider={selectedProvider}
           onSelect={handleModelSelect}
           onClose={() => setModelSelectorOpen(false)}
         />

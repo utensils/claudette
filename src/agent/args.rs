@@ -32,8 +32,11 @@ pub fn build_claude_args(
 
     let bypass_permissions = crate::permissions::is_bypass_tools(allowed_tools);
 
-    // Model is session-level — only set on the first turn.
-    if !is_resume && let Some(ref model) = settings.model {
+    // The Claude CLI accepts --model during --resume startup and applies it
+    // before loading the transcript. Keep passing the UI-selected model so
+    // restored Claudette sessions do not silently fall back to Claude Code's
+    // saved/default model, especially for custom backend model IDs.
+    if let Some(ref model) = settings.model {
         args.push("--model".to_string());
         args.push(model.clone());
     }
@@ -359,13 +362,14 @@ mod tests {
     }
 
     #[test]
-    fn test_build_args_model_skipped_on_resume() {
+    fn test_build_args_model_preserved_on_resume() {
         let settings = AgentSettings {
             model: Some("opus".to_string()),
             ..Default::default()
         };
         let args = build_claude_args("sess-1", "hello", true, &[], None, &settings, false);
-        assert!(!args.contains(&"--model".to_string()));
+        let idx = args.iter().position(|a| a == "--model").unwrap();
+        assert_eq!(args[idx + 1], "opus");
     }
 
     #[test]

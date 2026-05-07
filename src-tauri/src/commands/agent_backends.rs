@@ -253,7 +253,12 @@ pub async fn resolve_backend_runtime(
     if !enabled {
         return Ok(AgentBackendRuntime::default());
     }
-    let mut backend = find_backend(&db, backend_id)?;
+    let backends = load_backend_configs(&db)?;
+    let default_backend_id = db
+        .get_app_setting("default_agent_backend")
+        .map_err(|e| e.to_string())?;
+    let mut backend =
+        select_backend_for_request(&backends, backend_id, model, default_backend_id.as_deref())?;
     if backend.kind == AgentBackendKind::Anthropic {
         return Ok(AgentBackendRuntime {
             backend_id: Some(backend.id),
@@ -473,6 +478,51 @@ fn find_backend(db: &Database, backend_id: Option<&str>) -> Result<AgentBackendC
         .into_iter()
         .find(|backend| backend.id == id)
         .ok_or_else(|| format!("Unknown backend `{id}`"))
+}
+
+fn select_backend_for_request(
+    backends: &[AgentBackendConfig],
+    backend_id: Option<&str>,
+    model: Option<&str>,
+    default_backend_id: Option<&str>,
+) -> Result<AgentBackendConfig, String> {
+    let requested = backend_id
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .unwrap_or("anthropic");
+    let should_infer = requested == "anthropic" || backend_id.is_none();
+    if should_infer
+        && let Some(model) = model.map(str::trim).filter(|model| !model.is_empty())
+        && let Some(backend) = infer_backend_for_model(backends, model, default_backend_id)
+    {
+        return Ok(backend.clone());
+    }
+    backends
+        .iter()
+        .find(|backend| backend.id == requested)
+        .cloned()
+        .ok_or_else(|| format!("Unknown backend `{requested}`"))
+}
+
+fn infer_backend_for_model<'a>(
+    backends: &'a [AgentBackendConfig],
+    model: &str,
+    default_backend_id: Option<&str>,
+) -> Option<&'a AgentBackendConfig> {
+    let mut candidates = backends.iter().filter(|backend| {
+        backend.enabled
+            && backend.kind != AgentBackendKind::Anthropic
+            && (backend.default_model.as_deref() == Some(model)
+                || backend_models_contain(backend, model))
+    });
+    if let Some(default_backend_id) = default_backend_id
+        && let Some(default_match) = candidates
+            .clone()
+            .find(|backend| backend.id == default_backend_id)
+    {
+        return Some(default_match);
+    }
+    candidates.next()
 }
 
 fn normalize_backend(mut backend: AgentBackendConfig) -> AgentBackendConfig {
@@ -1385,6 +1435,37 @@ mod tests {
             Some("sonnet"),
         );
         assert!(env.is_empty());
+    }
+
+    #[test]
+    fn backend_selection_infers_provider_from_selected_model() {
+        let anthropic = AgentBackendConfig::builtin_anthropic();
+        let mut openai = AgentBackendConfig::builtin_openai_api();
+        openai.enabled = false;
+        openai.discovered_models = vec![AgentBackendModel {
+            id: "gpt-5.4".to_string(),
+            label: "gpt-5.4".to_string(),
+            context_window_tokens: 272_000,
+            discovered: true,
+        }];
+        let mut codex = AgentBackendConfig::builtin_codex_subscription();
+        codex.enabled = true;
+        codex.discovered_models = vec![AgentBackendModel {
+            id: "gpt-5.4".to_string(),
+            label: "gpt-5.4".to_string(),
+            context_window_tokens: 272_000,
+            discovered: true,
+        }];
+        let backends = vec![anthropic, openai, codex];
+
+        let inferred =
+            select_backend_for_request(&backends, Some("anthropic"), Some("gpt-5.4"), None)
+                .expect("backend should infer from model");
+        assert_eq!(inferred.id, "codex-subscription");
+
+        let fallback = select_backend_for_request(&backends, None, Some("sonnet"), None)
+            .expect("unknown model should use anthropic default");
+        assert_eq!(fallback.id, "anthropic");
     }
 
     #[test]

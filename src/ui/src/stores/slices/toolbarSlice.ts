@@ -8,6 +8,7 @@ export interface ChatTurnSettings {
   // session — toolbar state is per-conversation, not per-worktree.
   chatSessionId: string;
   model: string | null;
+  backendId: string | null;
   fastMode: boolean;
   thinkingEnabled: boolean;
   planMode: boolean;
@@ -90,6 +91,7 @@ export const createToolbarSlice: StateCreator<
   applyChatTurnSettings: ({
     chatSessionId,
     model,
+    backendId,
     fastMode,
     thinkingEnabled,
     planMode,
@@ -105,6 +107,9 @@ export const createToolbarSlice: StateCreator<
       };
       if (model !== null) {
         next.selectedModel = { ...s.selectedModel, [chatSessionId]: model };
+      }
+      if (backendId !== null) {
+        next.selectedModelProvider = { ...s.selectedModelProvider, [chatSessionId]: backendId };
       }
       if (effort !== null) {
         next.effortLevel = { ...s.effortLevel, [chatSessionId]: effort };

@@ -564,6 +564,7 @@ function App() {
       workspaceId: string;
       chatSessionId: string;
       model: string | null;
+      backendId: string | null;
       fastMode: boolean;
       thinkingEnabled: boolean;
       planMode: boolean;
@@ -574,6 +575,7 @@ function App() {
       useAppStore.getState().applyChatTurnSettings({
         chatSessionId: event.payload.chatSessionId,
         model: event.payload.model,
+        backendId: event.payload.backendId,
         fastMode: event.payload.fastMode,
         thinkingEnabled: event.payload.thinkingEnabled,
         planMode: event.payload.planMode,
