@@ -13,6 +13,7 @@ import {
 import { useAppStore } from "../../../stores/useAppStore";
 import { EMPTY_PINNED_PROMPTS } from "../../../stores/slices/pinnedPromptsSlice";
 import { useSlashAutocomplete } from "../../../hooks/useSlashAutocomplete";
+import { PLAIN_TEXT_INPUT_PROPS } from "../../../utils/textInput";
 import { SlashCommandPicker } from "../../chat/SlashCommandPicker";
 import styles from "./PinnedPromptsManager.module.css";
 
@@ -527,6 +528,7 @@ function PromptRow({
           placeholder={t("pinned_prompts_display_name_placeholder")}
           aria-label={t("pinned_prompts_display_name_label")}
           disabled={mode === "confirm-delete"}
+          {...PLAIN_TEXT_INPUT_PROPS}
         />
       </div>
       <div className={styles.textareaWrapper}>
@@ -541,6 +543,7 @@ function PromptRow({
           placeholder={t("pinned_prompts_prompt_placeholder")}
           aria-label={t("pinned_prompts_prompt_label")}
           disabled={mode === "confirm-delete"}
+          {...PLAIN_TEXT_INPUT_PROPS}
         />
         {mode === "editing" && slash.showPicker && (
           <SlashCommandPicker
@@ -714,6 +717,7 @@ function DraftRowView({
           placeholder={t("pinned_prompts_display_name_placeholder")}
           aria-label={t("pinned_prompts_display_name_label")}
           autoFocus
+          {...PLAIN_TEXT_INPUT_PROPS}
         />
       </div>
       <div className={styles.textareaWrapper}>
@@ -727,6 +731,7 @@ function DraftRowView({
           rows={3}
           placeholder={t("pinned_prompts_prompt_placeholder")}
           aria-label={t("pinned_prompts_prompt_label")}
+          {...PLAIN_TEXT_INPUT_PROPS}
         />
         {slash.showPicker && (
           <SlashCommandPicker
