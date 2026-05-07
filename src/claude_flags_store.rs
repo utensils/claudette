@@ -151,7 +151,14 @@ pub fn set_global_flag(
         &global_enabled_key(name),
         if enabled { "true" } else { "false" },
     )?;
-    db.set_app_setting(&global_value_key(name), value.unwrap_or(""))?;
+    match value {
+        Some(v) if !v.is_empty() => {
+            db.set_app_setting(&global_value_key(name), v)?;
+        }
+        _ => {
+            db.delete_app_setting(&global_value_key(name))?;
+        }
+    }
     Ok(())
 }
 
@@ -167,7 +174,14 @@ pub fn set_repo_override(
         &repo_enabled_key(repo_id, name),
         if enabled { "true" } else { "false" },
     )?;
-    db.set_app_setting(&repo_value_key(repo_id, name), value.unwrap_or(""))?;
+    match value {
+        Some(v) if !v.is_empty() => {
+            db.set_app_setting(&repo_value_key(repo_id, name), v)?;
+        }
+        _ => {
+            db.delete_app_setting(&repo_value_key(repo_id, name))?;
+        }
+    }
     Ok(())
 }
 
@@ -303,5 +317,78 @@ mod tests {
         let defs = vec![def("--debug", false)];
         let resolved = resolve_for_repo(&db, &defs, None).unwrap();
         assert_eq!(resolved, vec![("--debug".to_string(), None)]);
+    }
+
+    #[test]
+    fn set_global_flag_with_none_value_does_not_persist_value_key() {
+        let (db, _td) = open_db();
+        set_global_flag(&db, "--add-dir", true, None).unwrap();
+        let loaded = load_global(&db).unwrap();
+        let entry = loaded.get("--add-dir").expect("flag should exist");
+        assert!(entry.enabled);
+        assert!(
+            entry.value.is_none(),
+            "value should be None, got {:?}",
+            entry.value
+        );
+    }
+
+    #[test]
+    fn set_global_flag_with_empty_string_treated_as_none() {
+        let (db, _td) = open_db();
+        set_global_flag(&db, "--add-dir", true, Some("")).unwrap();
+        let loaded = load_global(&db).unwrap();
+        let entry = loaded.get("--add-dir").expect("flag should exist");
+        assert!(entry.enabled);
+        assert!(
+            entry.value.is_none(),
+            "empty string should be treated as None, got {:?}",
+            entry.value
+        );
+    }
+
+    #[test]
+    fn set_global_flag_with_real_value_persists() {
+        let (db, _td) = open_db();
+        set_global_flag(&db, "--add-dir", true, Some("/foo")).unwrap();
+        let loaded = load_global(&db).unwrap();
+        let entry = loaded.get("--add-dir").expect("flag should exist");
+        assert_eq!(entry.value.as_deref(), Some("/foo"));
+    }
+
+    #[test]
+    fn set_global_flag_clearing_value_deletes_value_key() {
+        let (db, _td) = open_db();
+        set_global_flag(&db, "--add-dir", true, Some("/foo")).unwrap();
+        set_global_flag(&db, "--add-dir", true, None).unwrap();
+        let loaded = load_global(&db).unwrap();
+        let entry = loaded.get("--add-dir").expect("flag should exist");
+        assert!(
+            entry.value.is_none(),
+            "stale value should be cleared, got {:?}",
+            entry.value
+        );
+    }
+
+    #[test]
+    fn set_repo_override_with_empty_string_treated_as_none() {
+        let (db, _td) = open_db();
+        set_repo_override(&db, "r1", "--add-dir", true, Some("")).unwrap();
+        let loaded = load_repo_overrides(&db, "r1").unwrap();
+        let entry = loaded.get("--add-dir").expect("override should exist");
+        assert!(
+            entry.value.is_none(),
+            "empty string should be treated as None"
+        );
+    }
+
+    #[test]
+    fn set_repo_override_clearing_value_deletes_value_key() {
+        let (db, _td) = open_db();
+        set_repo_override(&db, "r1", "--add-dir", true, Some("/foo")).unwrap();
+        set_repo_override(&db, "r1", "--add-dir", true, None).unwrap();
+        let loaded = load_repo_overrides(&db, "r1").unwrap();
+        let entry = loaded.get("--add-dir").expect("override should exist");
+        assert!(entry.value.is_none(), "stale value should be cleared");
     }
 }
