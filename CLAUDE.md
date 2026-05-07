@@ -63,29 +63,35 @@ CI also enforces `bun install --frozen-lockfile` — do not modify `bun.lock` wi
 
 ### Crate structure
 
-Three crates in a Cargo workspace:
+Four crates in a Cargo workspace:
 
 | Crate | Path | Purpose |
 |---|---|---|
 | `claudette` | `src/` (workspace root) | Core library — models, db, git, diff, agent logic. No UI or Tauri dependencies. |
-| `claudette-tauri` | `src-tauri/` | Tauri binary. Thin `#[tauri::command]` wrappers that call into `claudette`. |
+| `claudette-tauri` | `src-tauri/` | Tauri binary (`claudette-app`). Thin `#[tauri::command]` wrappers that call into `claudette`. |
 | `claudette-server` | `src-server/` | WebSocket server for remote access. Also embeddable in the Tauri binary. |
+| `claudette-cli` | `src-cli/` | Command-line client (`claudette` binary) that drives the running GUI over a local IPC socket. |
 
 Feature flags in `claudette-tauri`:
-- `default = ["server"]` — bundles the remote server into the desktop app
+- `default = ["server", "voice", "devtools"]`
+- `voice` — pulls in `cpal` (audio capture), `candle-*` (Whisper inference), `tokenizers`, `rubato`, `hound`. Linux requires `libasound2-dev` (ALSA); headless builds drop it via `--no-default-features --features tauri/custom-protocol,server`.
 - `devtools` — enables Tauri devtools (`tauri/devtools`)
 - `server` — optional dep on `claudette-server`
 
 ### Frontend
 
-- Vite dev server runs on **port 1420** with `strictPort: true` — if the port is taken, dev mode fails
+- Vite dev server port is chosen by `scripts/dev.sh` (default base **14253**, probes for the first free port and exports `VITE_PORT`); `strictPort: true` so a probe/Vite race fails loudly. Default was moved off Tauri's stock 1420 because other Tauri starter templates default to it and their dev scripts can rebind the port underneath a running webview.
 - TypeScript enforces `noUnusedLocals`, `noUnusedParameters`, `noFallthroughCasesInSwitch`
 - Test runner is **vitest** (not Jest)
 - macOS uses overlay title bar (`titleBarStyle: "Overlay"`) — affects layout near top of window
 
 ### Tauri commands
 
-Commands in `src-tauri/src/commands/` are organized by domain: `apps`, `auth`, `cesp`, `chat`, `data`, `debug`, `diff`, `env`, `files`, `mcp`, `metrics`, `plan`, `plugin`, `plugins_runtime`, `remote`, `repository`, `scm`, `settings`, `shell`, `slash_commands`, `terminal`, `updater`, `usage`, `workspace`. Each is a thin wrapper — business logic belongs in the `claudette` crate.
+Commands in `src-tauri/src/commands/` are organized by domain: `apps`, `auth`, `cesp`, `chat`, `cli`, `community`, `data`, `debug`, `devtools`, `diff`, `env`, `files`, `grammars`, `mcp`, `metrics`, `pinned_prompts`, `plan`, `plugin`, `plugins_runtime`, `remote`, `repository`, `scm`, `settings`, `shell`, `slash_commands`, `terminal`, `updater`, `usage`, `voice`, `workspace`. Each is a thin wrapper — business logic belongs in the `claudette` crate.
+
+### CLI client
+
+`claudette` (in `src-cli/`) drives the running GUI over a local IPC socket (Unix domain socket on macOS/Linux, Named Pipes on Windows; `interprocess` crate). It reuses the same command core as the GUI, so tray, notifications, and workspace list update live. Subcommands include `capabilities`, `repo list`, `workspace create`, `chat send|show|turns|stop|answer|approve-plan|deny-plan`, and `batch validate|run`. IPC server lives in `src-tauri/src/ipc.rs`; CLI surface in `src-tauri/src/commands/cli.rs`. The CLI requires the GUI to be running — prefer it over poking the SQLite DB directly.
 
 ## Project structure
 
@@ -157,9 +163,17 @@ A single sandboxed Lua runtime (`src/plugin_runtime/`) serves multiple plugin ki
 - **Rust**: tests use `tempfile::tempdir()` to create ephemeral git repos — no fixtures or test databases. Async tests use `#[tokio::test]`. Test modules live at the bottom of each file (`#[cfg(test)] mod tests`).
 - **TypeScript**: vitest with `describe`/`it`/`expect`. Zustand tests reset state via `useAppStore.setState()` in `beforeEach`. No test database — frontend tests are pure state/logic tests. When constructing fixtures for store state, always read the actual type definition (e.g., `TerminalTab` in `types/terminal.ts`) — do not guess field names. Look for existing `make*` helpers in adjacent test files before creating new fixtures.
 
-### macOS specifics
+### Dev launcher
 
-- `scripts/macos-dev-app-runner.sh` wraps the dev binary in a signed `.app` bundle (using `src-tauri/Entitlements.plist`) so TCC attributes mic/speech permissions to the app rather than the terminal. `cargo tauri dev` calls this automatically — required for voice input features.
+- **Use `./scripts/dev.sh`** (not bare `cargo tauri dev`). It probes free Vite + debug-eval ports (bases `14253` / `19432`), writes a per-PID discovery file at `${TMPDIR:-/tmp}/claudette-dev/<pid>.json` so `/claudette-debug` can find the right instance, stages the CLI sidecar via `scripts/stage-cli-sidecar.sh`, and on macOS adds `--runner scripts/macos-dev-app-runner.sh` so the build is wrapped in a signed `.app` bundle (using `src-tauri/Entitlements.plist`) — required for TCC to grant mic/speech permissions to Claudette rather than the terminal. Default features used: `devtools,server,voice` (override via `$CARGO_TAURI_FEATURES`).
+- Bare `cargo tauri dev` still works for non-voice changes but **does not** invoke the macOS runner, probe ports, or write the discovery file.
+
+### macOS privacy-prompt contract
+
+Do not trigger CoreAudio, Speech.framework, or Local Network APIs at app launch — macOS attributes the TCC prompt to that moment, and an unmotivated launch-time prompt looks like spyware.
+- mDNS browser starts only via the `start_remote_discovery` Tauri command, gated by an `AtomicBool` latch in `AppState::mdns_browser_started` (resets on failure so retry works). The `AddRemoteModal` mounts → command fires → polling begins; closing the modal stops the poll but the browser keeps running for the rest of the session.
+- Voice setup uses `PlatformSpeechEngine::availability()` (prompt-safe; reports `NeedsSpeechPermission` etc.) for status display, and `prepare()` (triggers the TCC prompt) only inside `start_recording_locked` — i.e. when the user actually clicks the mic. There is no startup prewarm; cpal device enumeration is also avoided at launch.
+- `VoiceStartLatency.was_prewarmed` in `voice.rs` is retained for wire-format stability but is permanently `false`.
 
 ### Windows specifics
 
