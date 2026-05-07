@@ -1157,7 +1157,7 @@ export const Sidebar = memo(function Sidebar() {
   );
 });
 
-function RemoteSections() {
+export function RemoteSections() {
   const { t } = useTranslation("sidebar");
   const discoveredServers = useAppStore((s) => s.discoveredServers);
   const remoteConnections = useAppStore((s) => s.remoteConnections);

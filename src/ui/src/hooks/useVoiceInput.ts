@@ -203,7 +203,13 @@ export function useVoiceInput(
         setState("error");
         return;
       }
-      if (provider.setupRequired || provider.status !== "ready") {
+      const canRequestPlatformPermission =
+        provider.id === PLATFORM_VOICE_PROVIDER_ID &&
+        provider.status === "needs-setup";
+      if (
+        !canRequestPlatformPermission &&
+        (provider.setupRequired || provider.status !== "ready")
+      ) {
         setError(providerMessage);
         setState("setup-required");
         onNeedsSetup(provider.id);
@@ -214,7 +220,12 @@ export function useVoiceInput(
         await startVoiceRecording(provider.id);
       } catch (err) {
         setError(String(err));
-        setState("error");
+        if (canRequestPlatformPermission) {
+          setState("setup-required");
+          onNeedsSetup(provider.id);
+        } else {
+          setState("error");
+        }
         return;
       }
 

@@ -80,7 +80,6 @@ pub async fn voice_remove_provider_model(
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct VoiceStartLatencyEvent {
-    cold_start: bool,
     total_ms: u128,
     stream_open_ms: u128,
 }
@@ -105,15 +104,14 @@ pub async fn voice_start_recording(
         .await?;
     let total_ms = t0.elapsed().as_millis();
     eprintln!(
-        "[voice] start latency cold_start={} total_ms={total_ms}ms stream_open_ms={}ms",
-        !latency.was_prewarmed, latency.stream_open_ms
+        "[voice] start latency total_ms={total_ms}ms stream_open_ms={}ms",
+        latency.stream_open_ms
     );
     #[cfg(debug_assertions)]
     {
         let _ = app.emit(
             "voice://debug/start_latency",
             VoiceStartLatencyEvent {
-                cold_start: !latency.was_prewarmed,
                 total_ms,
                 stream_open_ms: latency.stream_open_ms,
             },
