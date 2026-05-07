@@ -657,6 +657,25 @@ async fn handle_send_chat_message(
                 got_init = true;
             }
 
+            // Persist the captured `claude` invocation on first emit.
+            // Mirrors the desktop path's `set_session_cli_invocation` Tauri
+            // command — the underlying DB helper is first-emit-wins, so a
+            // respawn within the same session leaves the original recorded
+            // value in place. Banner is UX-cosmetic; drop on error.
+            if let AgentEvent::Stream(StreamEvent::System {
+                ref subtype,
+                ref command_line,
+                ..
+            }) = event
+                && subtype == "command_line"
+                && let Some(line) = command_line.as_deref()
+                && let Ok(db) = Database::open(&db_path)
+                && let Err(e) =
+                    db.set_chat_session_cli_invocation(&chat_session_id_for_stream, line)
+            {
+                eprintln!("[server] persist cli_invocation failed: {e}");
+            }
+
             if let AgentEvent::ProcessExited(code) = &event
                 && (!got_init || *code != Some(0))
             {
