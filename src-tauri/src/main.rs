@@ -649,6 +649,7 @@ fn main() {
             commands::chat::session::get_chat_session,
             commands::chat::session::create_chat_session,
             commands::chat::session::rename_chat_session,
+            commands::chat::session::set_session_cli_invocation,
             commands::chat::session::reorder_chat_sessions,
             commands::chat::session::archive_chat_session,
             // Plan
