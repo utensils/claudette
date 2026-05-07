@@ -10,6 +10,8 @@ export interface Repository {
   sort_order: number;
   branch_rename_preferences: string | null;
   setup_script_auto_run: boolean;
+  archive_script: string | null;
+  archive_script_auto_run: boolean;
   base_branch: string | null;
   default_remote: string | null;
   path_valid: boolean;
@@ -40,6 +42,7 @@ export interface CreateWorkspaceResult {
 export interface RepoConfigInfo {
   has_config_file: boolean;
   setup_script: string | null;
+  archive_script: string | null;
   instructions: string | null;
   parse_error: string | null;
 }

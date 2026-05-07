@@ -61,6 +61,14 @@
   "setup_script_running": "Running...",
   "setup_script_confirm": "Run Script",
 
+  "archive_script_title": "Review archive script",
+  "archive_script_warning": "This workspace has an archive script from <strong>{{source}}</strong> that will be executed before the worktree is removed. Please review it before proceeding.",
+  "archive_script_label": "Script",
+  "archive_script_always_run": "Always run archive scripts for this repo",
+  "archive_script_skip": "Archive without running",
+  "archive_script_running": "Running...",
+  "archive_script_confirm": "Run & Archive",
+
   "import_worktrees_title": "Import worktrees",
   "import_worktrees_scanning": "Scanning for existing worktrees...",
   "import_worktrees_none_found": "No existing worktrees found for this repository.",

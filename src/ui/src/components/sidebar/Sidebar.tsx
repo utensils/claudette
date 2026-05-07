@@ -311,36 +311,72 @@ export const Sidebar = memo(function Sidebar() {
     if (archivingRef.current.has(wsId)) return;
     archivingRef.current.add(wsId);
 
-    const initialState = useAppStore.getState();
-    const snapshot = initialState.workspaces.find((w) => w.id === wsId);
-    const wasSelected = initialState.selectedWorkspaceId === wsId;
-
-    updateWorkspace(wsId, {
-      status: "Archived",
-      worktree_path: null,
-      agent_status: "Stopped",
-    });
-    if (wasSelected) selectWorkspace(null);
-
     try {
-      const deleted = await archiveWorkspace(wsId);
-      if (deleted) {
-        removeWorkspace(wsId);
+      const preState = useAppStore.getState();
+      const ws = preState.workspaces.find((w) => w.id === wsId);
+      const repo = ws ? preState.repositories.find((r) => r.id === ws.repository_id) : null;
+
+      // If this repo has an archive script and the user hasn't opted into
+      // auto-run, surface a confirmation modal so they can review the script
+      // and choose to run it or skip. The modal handles the archive call
+      // itself (and the optimistic update) — see ConfirmArchiveScriptModal.
+      if (repo) {
+        let script: string | null = repo.archive_script ?? null;
+        let source: "repo" | "settings" = "settings";
+        try {
+          const config = await getRepoConfig(repo.id);
+          if (config.archive_script) {
+            script = config.archive_script;
+            source = "repo";
+          }
+        } catch {
+          // No config or error reading it — fall back to per-repo override.
+        }
+        if (script && !repo.archive_script_auto_run) {
+          openModal("confirmArchiveScript", {
+            workspaceId: wsId,
+            repoId: repo.id,
+            script,
+            source,
+          });
+          return;
+        }
       }
-    } catch (e) {
-      console.error("Failed to archive workspace:", e);
-      if (snapshot) {
-        updateWorkspace(wsId, snapshot);
-        // Only restore selection if the user hasn't navigated elsewhere
-        // while the archive command was in flight.
-        if (wasSelected && useAppStore.getState().selectedWorkspaceId === null) {
-          selectWorkspace(wsId);
+
+      // Re-read state after the await — selection or workspace data may have
+      // changed while `getRepoConfig` was in flight. Using stale state here
+      // would leave snapshot/restore acting on outdated data.
+      const currentState = useAppStore.getState();
+      const snapshot = currentState.workspaces.find((w) => w.id === wsId);
+      const wasSelected = currentState.selectedWorkspaceId === wsId;
+
+      updateWorkspace(wsId, {
+        status: "Archived",
+        worktree_path: null,
+        agent_status: "Stopped",
+      });
+      if (wasSelected) selectWorkspace(null);
+
+      try {
+        const deleted = await archiveWorkspace(wsId);
+        if (deleted) {
+          removeWorkspace(wsId);
+        }
+      } catch (e) {
+        console.error("Failed to archive workspace:", e);
+        if (snapshot) {
+          updateWorkspace(wsId, snapshot);
+          // Only restore selection if the user hasn't navigated elsewhere
+          // while the archive command was in flight.
+          if (wasSelected && useAppStore.getState().selectedWorkspaceId === null) {
+            selectWorkspace(wsId);
+          }
         }
       }
     } finally {
       archivingRef.current.delete(wsId);
     }
-  }, [updateWorkspace, removeWorkspace, selectWorkspace]);
+  }, [updateWorkspace, removeWorkspace, selectWorkspace, openModal]);
 
   const handleRestore = useCallback(async (wsId: string) => {
     if (restoringRef.current.has(wsId)) return;

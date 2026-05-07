@@ -8,7 +8,7 @@ use claudette::db::Database;
 use claudette::fork::{self, ForkInputs};
 use claudette::git;
 use claudette::mcp_supervisor::McpSupervisor;
-use claudette::model::{AgentStatus, Workspace, WorkspaceStatus};
+use claudette::model::{AgentStatus, ChatMessage, ChatRole, Workspace, WorkspaceStatus};
 use claudette::names::NameGenerator;
 use claudette::ops::workspace::{self as ops_workspace, CreateParams, SetupResult};
 use claudette::process::CommandWindowExt as _;
@@ -231,11 +231,20 @@ async fn resolve_env_for_workspace(
 #[tauri::command]
 pub async fn archive_workspace(
     id: String,
+    skip_archive_script: Option<bool>,
     app: AppHandle,
     state: State<'_, AppState>,
     supervisor: State<'_, Arc<McpSupervisor>>,
 ) -> Result<bool, String> {
-    let out = archive_workspace_inner(&id, None, &app, &state, &supervisor).await?;
+    let out = archive_workspace_inner(
+        &id,
+        None,
+        skip_archive_script.unwrap_or(false),
+        &app,
+        &state,
+        &supervisor,
+    )
+    .await?;
     Ok(out.delete_branch)
 }
 
@@ -248,6 +257,7 @@ pub(crate) struct ArchiveWorkspaceOutput {
     pub was_last_workspace: bool,
     pub worktree_path: Option<String>,
     pub repository_id: String,
+    pub archive_result: Option<SetupResult>,
 }
 
 /// Shared implementation of the GUI's `archive_workspace` command.
@@ -266,6 +276,7 @@ pub(crate) struct ArchiveWorkspaceOutput {
 pub(crate) async fn archive_workspace_inner(
     id: &str,
     delete_branch_override: Option<bool>,
+    skip_archive_script: bool,
     app: &AppHandle,
     state: &AppState,
     supervisor: &McpSupervisor,
@@ -319,6 +330,83 @@ pub(crate) async fn archive_workspace_inner(
         let _ = db.end_agent_session(sid, true);
     }
 
+    // Resolve and run the archive script before removing the worktree so it
+    // still has filesystem access. Best-effort: failure logs to chat but
+    // does not block the archive. The frontend gates this via
+    // `archive_script_auto_run` + a confirmation modal — when the user
+    // declines, it passes `skip_archive_script: true` and the script is
+    // bypassed entirely.
+    let archive_result: Option<SetupResult> = if skip_archive_script {
+        None
+    } else {
+        let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
+        let repos = db.list_repositories().map_err(|e| e.to_string())?;
+        let ws_opt = workspaces.iter().find(|w| w.id == id);
+        let repo_opt = ws_opt.and_then(|ws| repos.iter().find(|r| r.id == ws.repository_id));
+        match (ws_opt, repo_opt) {
+            (Some(ws), Some(repo)) => {
+                if let Some(ref wt_path) = ws.worktree_path {
+                    let resolved_env = resolve_env_for_workspace(state, ws, &repo.path).await;
+                    let result = ops_workspace::resolve_and_run_archive(
+                        ws,
+                        Path::new(&repo.path),
+                        Path::new(wt_path),
+                        repo.archive_script.as_deref(),
+                        repo.base_branch.as_deref(),
+                        repo.default_remote.as_deref(),
+                        resolved_env.as_ref(),
+                    )
+                    .await;
+                    if let Some(ref r) = result
+                        && let Ok(Some(session_id)) = db.default_session_id_for_workspace(id)
+                    {
+                        let label = if r.source == "repo" {
+                            ".claudette.json"
+                        } else {
+                            "settings"
+                        };
+                        let status = if r.timed_out {
+                            "timed out"
+                        } else if r.success {
+                            "completed"
+                        } else {
+                            "failed"
+                        };
+                        let content = if r.output.is_empty() {
+                            format!("Archive script ({label}) {status}")
+                        } else {
+                            format!("Archive script ({label}) {status}:\n{}", r.output)
+                        };
+                        let msg = ChatMessage {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            workspace_id: id.to_string(),
+                            chat_session_id: session_id,
+                            role: ChatRole::System,
+                            content,
+                            cost_usd: None,
+                            duration_ms: None,
+                            created_at: now_iso(),
+                            thinking: None,
+                            input_tokens: None,
+                            output_tokens: None,
+                            cache_read_tokens: None,
+                            cache_creation_tokens: None,
+                        };
+                        if let Err(err) = db.insert_chat_message(&msg) {
+                            eprintln!("[archive] failed to post archive script result: {err}");
+                        } else {
+                            let _ = app.emit("chat-system-message", &msg);
+                        }
+                    }
+                    result
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    };
+
     let out = ops_workspace::archive(
         &mut db,
         TauriHooks::new(app.clone()).as_ref(),
@@ -355,6 +443,7 @@ pub(crate) async fn archive_workspace_inner(
         was_last_workspace: out.was_last_workspace,
         worktree_path: out.worktree_path,
         repository_id: out.repository_id,
+        archive_result,
     })
 }
 
