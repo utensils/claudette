@@ -526,6 +526,61 @@ fn scm_detail_from_previous(
     }
 }
 
+/// Hydrate the in-memory SCM cache from SQLite. Called at polling-task
+/// startup so that `merge_scm_results` can see the user's persisted PR/CI
+/// state as `previous` on the very first poll after an app restart.
+///
+/// Errors at any layer are logged and swallowed: a missing or unreadable
+/// row just means the in-memory cache stays empty for that key, which is
+/// the same state we had before this seed existed.
+async fn seed_scm_cache_from_db(db_path: &std::path::Path, cache: &crate::state::ScmCache) {
+    let rows = match Database::open(db_path) {
+        Ok(db) => match db.load_all_scm_status_cache() {
+            Ok(rows) => rows,
+            Err(e) => {
+                eprintln!("[scm] Failed to load SCM cache from DB on seed: {e}");
+                return;
+            }
+        },
+        Err(e) => {
+            eprintln!("[scm] Failed to open DB for SCM cache seed: {e}");
+            return;
+        }
+    };
+
+    // Anchor seeded entries far enough in the past that the first poll
+    // cycle after restart treats them as stale and triggers a fresh fetch
+    // — the SQLite row could be hours old. Falls back to `now()` only on
+    // platforms where `Instant` can't represent the past (none in
+    // practice on the targets we ship).
+    let stale_anchor = Instant::now()
+        .checked_sub(std::time::Duration::from_secs(60))
+        .unwrap_or_else(Instant::now);
+
+    let mut entries = cache.entries.write().await;
+    for row in rows {
+        let pull_request = row
+            .pr_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<Option<PullRequest>>(s).ok())
+            .flatten();
+        let ci_checks = row
+            .ci_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<Vec<CiCheck>>(s).ok())
+            .unwrap_or_default();
+        entries.insert(
+            (row.repo_id, row.branch_name),
+            ScmCacheEntry {
+                pull_request,
+                ci_checks,
+                last_fetched: stale_anchor,
+                error: row.error,
+            },
+        );
+    }
+}
+
 /// Identity for a `persist_scm_cache` write — bundles the workspace, repo,
 /// branch, and provider names so the helper signature stays under clippy's
 /// `too_many_arguments` ceiling.
@@ -567,7 +622,7 @@ async fn persist_scm_cache(
                 branch_name: cache_map_key.1,
                 provider: Some(key.provider.to_string()),
                 pr_json: serde_json::to_string(pull_request).ok(),
-                ci_json: serde_json::to_string(&ci_checks.to_vec()).ok(),
+                ci_json: serde_json::to_string(ci_checks).ok(),
                 error,
                 fetched_at: String::new(),
             }) {
@@ -748,6 +803,17 @@ async fn poll_workspace_scm(app_state: &AppState, workspace_id: &str) -> Option<
 pub fn start_scm_polling(app_handle: tauri::AppHandle) {
     let handle = app_handle.clone();
     tauri::async_runtime::spawn(async move {
+        // Hydrate the in-memory cache from SQLite immediately so that the
+        // first poll cycle after a restart has access to the user's prior
+        // PR/CI state via `merge_scm_results`. Without this seed, a
+        // post-restart transient outage would see `previous = None`,
+        // overwrite the still-valid SQLite row with `pr_json = "null"`,
+        // and reintroduce the disappearing-PR-badge regression.
+        {
+            let app_state = handle.state::<AppState>();
+            seed_scm_cache_from_db(&app_state.db_path, &app_state.scm_cache).await;
+        }
+
         // Small delay to let the app fully initialize
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
@@ -1198,5 +1264,123 @@ mod tests {
             "PRs for other branches must not be selected",
         );
         assert!(outcome.should_persist);
+    }
+
+    /// Build a minimal `Repository` fixture for DB tests. We can't reuse
+    /// `claudette::db::test_support::make_repo` because it's `pub(crate)`.
+    fn fixture_repo(id: &str, path: &str) -> claudette::model::Repository {
+        claudette::model::Repository {
+            id: id.into(),
+            path: path.into(),
+            name: id.into(),
+            path_slug: id.into(),
+            icon: None,
+            created_at: String::new(),
+            setup_script: None,
+            custom_instructions: None,
+            sort_order: 0,
+            branch_rename_preferences: None,
+            setup_script_auto_run: false,
+            base_branch: None,
+            default_remote: None,
+            path_valid: true,
+        }
+    }
+
+    fn fixture_workspace(id: &str, repo_id: &str, branch: &str) -> claudette::model::Workspace {
+        claudette::model::Workspace {
+            id: id.into(),
+            repository_id: repo_id.into(),
+            name: id.into(),
+            branch_name: branch.into(),
+            worktree_path: None,
+            status: claudette::model::WorkspaceStatus::Active,
+            agent_status: claudette::model::AgentStatus::Idle,
+            status_line: String::new(),
+            created_at: String::new(),
+            sort_order: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn seed_hydrates_in_memory_cache_from_sqlite() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("claudette.db");
+        let db = Database::open(&db_path).unwrap();
+        db.insert_repository(&fixture_repo("r1", "/tmp/repo1"))
+            .unwrap();
+        db.insert_workspace(&fixture_workspace("w1", "r1", "feature/seed"))
+            .unwrap();
+
+        let pr = make_pr("feature/seed", 123);
+        let row = claudette::db::ScmStatusCacheRow {
+            workspace_id: "w1".into(),
+            repo_id: "r1".into(),
+            branch_name: "feature/seed".into(),
+            provider: Some("github".into()),
+            pr_json: serde_json::to_string(&Some(pr)).ok(),
+            ci_json: serde_json::to_string(&vec![make_check("ci/build", CiCheckStatus::Success)])
+                .ok(),
+            error: None,
+            fetched_at: String::new(),
+        };
+        db.upsert_scm_status_cache(&row).unwrap();
+        // Drop the synchronous DB handle before the async seed reopens it.
+        drop(db);
+
+        let cache = crate::state::ScmCache::new();
+        seed_scm_cache_from_db(&db_path, &cache).await;
+
+        let entries = cache.entries.read().await;
+        let entry = entries
+            .get(&("r1".to_string(), "feature/seed".to_string()))
+            .expect("seed should populate the cache from the SQLite row");
+        assert_eq!(entry.pull_request.as_ref().map(|pr| pr.number), Some(123));
+        assert_eq!(entry.ci_checks.len(), 1);
+        assert_eq!(entry.ci_checks[0].name, "ci/build");
+        // Seed marks entries stale enough that the first poll triggers a
+        // real fetch instead of returning the seeded row as "fresh".
+        assert!(
+            entry.last_fetched.elapsed().as_secs() >= 30,
+            "seeded last_fetched must be older than the 30s polling freshness window",
+        );
+    }
+
+    #[tokio::test]
+    async fn seed_skips_rows_with_null_pr_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("claudette.db");
+        let db = Database::open(&db_path).unwrap();
+        db.insert_repository(&fixture_repo("r1", "/tmp/repo1"))
+            .unwrap();
+        db.insert_workspace(&fixture_workspace("w1", "r1", "feature/none"))
+            .unwrap();
+
+        // Row representing "we polled and there's no PR for this branch".
+        let row = claudette::db::ScmStatusCacheRow {
+            workspace_id: "w1".into(),
+            repo_id: "r1".into(),
+            branch_name: "feature/none".into(),
+            provider: Some("github".into()),
+            pr_json: Some("null".into()),
+            ci_json: Some("[]".into()),
+            error: None,
+            fetched_at: String::new(),
+        };
+        db.upsert_scm_status_cache(&row).unwrap();
+        drop(db);
+
+        let cache = crate::state::ScmCache::new();
+        seed_scm_cache_from_db(&db_path, &cache).await;
+
+        let entries = cache.entries.read().await;
+        let entry = entries
+            .get(&("r1".to_string(), "feature/none".to_string()))
+            .expect("entry should still be created so subsequent polls see prior state");
+        assert!(
+            entry.pull_request.is_none(),
+            "null pr_json must hydrate as None, not panic",
+        );
+        assert!(entry.ci_checks.is_empty());
     }
 }
