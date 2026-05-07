@@ -278,19 +278,21 @@ pub async fn resolve_backend_runtime(
             .backend_gateway
             .ensure(backend.clone(), secret, model.map(String::from))
             .await?;
+        let mut env = vec![
+            ("ANTHROPIC_BASE_URL".to_string(), gateway_url),
+            (
+                "ANTHROPIC_AUTH_TOKEN".to_string(),
+                "claudette-gateway".to_string(),
+            ),
+            (
+                "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY".to_string(),
+                "1".to_string(),
+            ),
+        ];
+        append_custom_model_env(&mut env, &backend, model);
         return Ok(AgentBackendRuntime {
             backend_id: Some(backend.id),
-            env: vec![
-                ("ANTHROPIC_BASE_URL".to_string(), gateway_url),
-                (
-                    "ANTHROPIC_AUTH_TOKEN".to_string(),
-                    "claudette-gateway".to_string(),
-                ),
-                (
-                    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY".to_string(),
-                    "1".to_string(),
-                ),
-            ],
+            env,
             hash,
         });
     }
@@ -317,11 +319,37 @@ pub async fn resolve_backend_runtime(
             "1".to_string(),
         ));
     }
+    append_custom_model_env(&mut env, &backend, model);
     Ok(AgentBackendRuntime {
         backend_id: Some(backend.id.clone()),
         env,
         hash: runtime_hash(&backend, secret.as_deref(), model),
     })
+}
+
+fn append_custom_model_env(
+    env: &mut Vec<(String, String)>,
+    backend: &AgentBackendConfig,
+    model: Option<&str>,
+) {
+    let Some(model) = model.filter(|model| !model.trim().is_empty()) else {
+        return;
+    };
+    if backend.kind == AgentBackendKind::Anthropic {
+        return;
+    }
+    env.push((
+        "ANTHROPIC_CUSTOM_MODEL_OPTION".to_string(),
+        model.to_string(),
+    ));
+    env.push((
+        "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME".to_string(),
+        model.to_string(),
+    ));
+    env.push((
+        "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION".to_string(),
+        format!("{} via Claudette", backend.label),
+    ));
 }
 
 async fn hydrate_gateway_models_for_runtime(
@@ -1333,6 +1361,35 @@ mod tests {
         let c = runtime_hash(&backend, Some("two"), Some("glm"));
         assert_ne!(a, b);
         assert_ne!(b, c);
+    }
+
+    #[test]
+    fn custom_model_env_is_added_for_non_anthropic_backends() {
+        let mut env = Vec::new();
+        append_custom_model_env(
+            &mut env,
+            &AgentBackendConfig::builtin_codex_subscription(),
+            Some("gpt-5.4"),
+        );
+        assert!(env.contains(&(
+            "ANTHROPIC_CUSTOM_MODEL_OPTION".to_string(),
+            "gpt-5.4".to_string()
+        )));
+        assert!(env.contains(&(
+            "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME".to_string(),
+            "gpt-5.4".to_string()
+        )));
+    }
+
+    #[test]
+    fn custom_model_env_is_not_added_for_anthropic_backend() {
+        let mut env = Vec::new();
+        append_custom_model_env(
+            &mut env,
+            &AgentBackendConfig::builtin_anthropic(),
+            Some("sonnet"),
+        );
+        assert!(env.is_empty());
     }
 
     #[test]
