@@ -50,6 +50,14 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all --check
 
+  cargo-version-sync:
+    name: Cargo Version Sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - run: scripts/check-cargo-version-sync.sh
+
   clippy:
     name: Lint
     runs-on: ubuntu-latest
@@ -59,7 +67,7 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy -p claudette -p claudette-server --all-targets --all-features
+      - run: cargo clippy -p claudette -p claudette-server -p claudette-cli --all-targets --all-features
 
   test:
     name: Test
@@ -72,7 +80,7 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: Swatinem/rust-cache@v2
       - name: Run tests with coverage
-        run: cargo llvm-cov -p claudette -p claudette-server --all-features --lcov --output-path lcov.info
+        run: cargo llvm-cov -p claudette -p claudette-server -p claudette-cli --all-features --lcov --output-path lcov.info
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:

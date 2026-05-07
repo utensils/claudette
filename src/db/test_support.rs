@@ -3,8 +3,6 @@
 //! Each domain module's `mod tests` imports from here so we don't duplicate
 //! the same `make_*` helpers across files.
 
-#![cfg(test)]
-
 use crate::model::{AgentStatus, ChatMessage, ChatRole, Repository, Workspace, WorkspaceStatus};
 
 use super::Database;
