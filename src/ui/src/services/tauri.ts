@@ -1245,10 +1245,6 @@ export function removeRemoteConnection(id: string): Promise<void> {
   return invoke("remove_remote_connection", { id });
 }
 
-export function startRemoteDiscovery(): Promise<DiscoveredServer[]> {
-  return invoke("start_remote_discovery");
-}
-
 export function listDiscoveredServers(): Promise<DiscoveredServer[]> {
   return invoke("list_discovered_servers");
 }

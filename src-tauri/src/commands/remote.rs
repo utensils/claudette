@@ -1,5 +1,4 @@
 use serde::Serialize;
-use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, State};
 
 use claudette::db::Database;
@@ -13,16 +12,6 @@ use crate::transport::ws::WebSocketTransport;
 use claudette::process::CommandWindowExt as _;
 #[cfg(feature = "server")]
 use tokio::io::{AsyncBufReadExt, BufReader};
-
-fn claim_remote_discovery_start(started: &AtomicBool) -> bool {
-    started
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_ok()
-}
-
-fn reset_remote_discovery_start(started: &AtomicBool) {
-    started.store(false, Ordering::Release);
-}
 
 #[derive(Serialize)]
 pub struct PairResult {
@@ -206,30 +195,6 @@ pub async fn remove_remote_connection(
     db.delete_remote_connection(&id)
         .map_err(|e| e.to_string())?;
     Ok(())
-}
-
-#[tauri::command]
-pub async fn start_remote_discovery(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<Vec<DiscoveredServer>, String> {
-    if claim_remote_discovery_start(&state.mdns_browser_started) {
-        let saved_fingerprints: Vec<String> = Database::open(&state.db_path)
-            .ok()
-            .and_then(|db| db.list_remote_connections().ok())
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|c| c.cert_fingerprint)
-            .collect();
-
-        if let Err(err) = crate::mdns::start_mdns_browser(&app, saved_fingerprints) {
-            reset_remote_discovery_start(&state.mdns_browser_started);
-            return Err(err);
-        }
-    }
-
-    let servers = state.discovered_servers.read().await;
-    Ok(servers.clone())
 }
 
 #[tauri::command]
@@ -434,22 +399,5 @@ pub async fn get_local_server_status(
             running: false,
             connection_string: None,
         }),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn remote_discovery_start_is_claimed_once_until_reset() {
-        let started = AtomicBool::new(false);
-
-        assert!(claim_remote_discovery_start(&started));
-        assert!(!claim_remote_discovery_start(&started));
-
-        reset_remote_discovery_start(&started);
-
-        assert!(claim_remote_discovery_start(&started));
     }
 }

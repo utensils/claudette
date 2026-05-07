@@ -3,6 +3,19 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DiscoveredServer, RemoteConnectionInfo } from "../../types/remote";
+
+interface RemoteSectionsStore {
+  activeRemoteIds: string[];
+  addActiveRemoteId: ReturnType<typeof vi.fn>;
+  addRemoteConnection: ReturnType<typeof vi.fn>;
+  clearRemoteData: ReturnType<typeof vi.fn>;
+  discoveredServers: DiscoveredServer[];
+  mergeRemoteData: ReturnType<typeof vi.fn>;
+  remoteConnections: RemoteConnectionInfo[];
+  removeActiveRemoteId: ReturnType<typeof vi.fn>;
+  removeRemoteConnection: ReturnType<typeof vi.fn>;
+}
 
 const remoteServices = vi.hoisted(() => ({
   archiveWorkspace: vi.fn(),
@@ -12,7 +25,6 @@ const remoteServices = vi.hoisted(() => ({
   disconnectRemote: vi.fn(),
   generateWorkspaceName: vi.fn(),
   getRepoConfig: vi.fn(),
-  listDiscoveredServers: vi.fn(),
   pairWithServer: vi.fn(),
   removeRemoteConnection: vi.fn(),
   renameWorkspace: vi.fn(),
@@ -22,17 +34,19 @@ const remoteServices = vi.hoisted(() => ({
   runWorkspaceSetup: vi.fn(),
   sendRemoteCommand: vi.fn(),
   startLocalServer: vi.fn(),
-  startRemoteDiscovery: vi.fn(),
 }));
 
-const store = vi.hoisted(() => ({
+const store = vi.hoisted(
+  (): RemoteSectionsStore => ({
+  activeRemoteIds: [],
   addActiveRemoteId: vi.fn(),
+  addRemoteConnection: vi.fn(),
   clearRemoteData: vi.fn(),
   discoveredServers: [],
   mergeRemoteData: vi.fn(),
   remoteConnections: [],
+  removeActiveRemoteId: vi.fn(),
   removeRemoteConnection: vi.fn(),
-  setDiscoveredServers: vi.fn(),
 }));
 
 vi.mock("../../services/tauri", () => remoteServices);
@@ -86,11 +100,6 @@ const discoveredServer = {
   is_paired: false,
 };
 
-async function flushPromises(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
-}
-
 async function renderRemoteSections(): Promise<Root> {
   const container = document.createElement("div");
   document.body.appendChild(container);
@@ -98,60 +107,35 @@ async function renderRemoteSections(): Promise<Root> {
   await act(async () => {
     root.render(<RemoteSections />);
   });
-  await act(flushPromises);
   return root;
 }
 
 describe("RemoteSections", () => {
   beforeEach(() => {
-    vi.useFakeTimers();
     document.body.innerHTML = "";
     Object.values(remoteServices).forEach((mock) => mock.mockReset());
-    store.addActiveRemoteId.mockReset();
-    store.clearRemoteData.mockReset();
-    store.mergeRemoteData.mockReset();
-    store.removeRemoteConnection.mockReset();
-    store.setDiscoveredServers.mockReset();
+    store.activeRemoteIds = [];
     store.discoveredServers = [];
     store.remoteConnections = [];
   });
 
   afterEach(() => {
-    vi.useRealTimers();
+    document.body.innerHTML = "";
   });
 
-  it("starts nearby discovery from the sidebar and polls while mounted", async () => {
-    remoteServices.startRemoteDiscovery.mockResolvedValueOnce([discoveredServer]);
-    remoteServices.listDiscoveredServers.mockResolvedValueOnce([]);
+  it("hides Nearby when no unpaired servers are discovered", async () => {
+    await renderRemoteSections();
 
-    const root = await renderRemoteSections();
-    const button = document.querySelector("button");
-    expect(button?.textContent).toBe("nearby_find");
+    expect(document.body.textContent).not.toContain("nearby_section");
+  });
 
-    await act(async () => {
-      button?.click();
-      await flushPromises();
-    });
+  it("shows Nearby only when an unpaired server exists", async () => {
+    store.discoveredServers = [discoveredServer];
 
-    expect(remoteServices.startRemoteDiscovery).toHaveBeenCalledOnce();
-    expect(store.setDiscoveredServers).toHaveBeenCalledWith([discoveredServer]);
+    await renderRemoteSections();
 
-    await act(async () => {
-      vi.advanceTimersByTime(5000);
-      await flushPromises();
-    });
-
-    expect(remoteServices.listDiscoveredServers).toHaveBeenCalledOnce();
-    expect(store.setDiscoveredServers).toHaveBeenLastCalledWith([]);
-
-    await act(async () => {
-      root.unmount();
-    });
-    await act(async () => {
-      vi.advanceTimersByTime(5000);
-      await flushPromises();
-    });
-
-    expect(remoteServices.listDiscoveredServers).toHaveBeenCalledOnce();
+    expect(document.body.textContent).toContain("nearby_section");
+    expect(document.body.textContent).toContain("Studio Mac");
+    expect(document.body.textContent).toContain("studio-mac.local");
   });
 });

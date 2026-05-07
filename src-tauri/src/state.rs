@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -335,8 +335,6 @@ pub struct AppState {
     pub next_pty_id: AtomicU64,
     /// mDNS-discovered servers on the local network.
     pub discovered_servers: RwLock<Vec<DiscoveredServer>>,
-    /// True after LAN server discovery has been explicitly started by the user.
-    pub mdns_browser_started: AtomicBool,
     /// Embedded local claudette-server process (when "Share this machine" is active).
     pub local_server: RwLock<Option<LocalServerState>>,
     /// Detected apps cache (populated on startup, read by open_workspace_in_app for TUI wrapping).
@@ -395,7 +393,6 @@ impl AppState {
             agent_task_tailers: RwLock::new(HashMap::new()),
             next_pty_id: AtomicU64::new(1),
             discovered_servers: RwLock::new(Vec::new()),
-            mdns_browser_started: AtomicBool::new(false),
             local_server: RwLock::new(None),
             detected_apps: RwLock::new(Vec::new()),
             tray_handle: Mutex::new(None),
