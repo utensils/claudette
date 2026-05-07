@@ -35,3 +35,12 @@ export function resolveEnabledExtraFlags(
 export function hasDangerousFlag(resolved: ResolvedFlag[]): boolean {
   return resolved.some((f) => f.name === DANGEROUS_FLAG);
 }
+
+/// True iff the rejection is the Tauri-side "still loading" sentinel from
+/// `list_claude_flags`. Couples this guard to the literal Rust message —
+/// alternative would be a typed payload across the boundary, much more
+/// surface area for marginal gain. If the message text changes, the guard
+/// silently degrades to "show error banner" (UX papercut, not correctness).
+export function isStillLoading(e: unknown): boolean {
+  return e instanceof Error && /still loading/i.test(e.message);
+}

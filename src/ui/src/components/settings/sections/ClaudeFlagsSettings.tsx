@@ -14,6 +14,7 @@ import {
 import { ClaudeFlagRow } from "./ClaudeFlagRow";
 import type { FlagRowScope } from "./claudeFlagRowLogic";
 import { rowStateFor, sortFlags } from "./claudeFlagsLogic";
+import { isStillLoading } from "../../../services/claudeFlagsLogic";
 import styles from "../Settings.module.css";
 
 export interface ClaudeFlagsSettingsProps {
@@ -47,6 +48,16 @@ export function ClaudeFlagsSettings({
       const defs = await listClaudeFlags();
       setCachedDefs(defs);
     } catch (e) {
+      if (isStillLoading(e)) {
+        // Don't surface a Retry banner during the boot-time discovery
+        // window — re-poll until discovery resolves to Ok or a real error.
+        setTimeout(() => {
+          if (useAppStore.getState().claudeFlagDefs === null) {
+            void loadDefs();
+          }
+        }, 500);
+        return;
+      }
       setDefsError(String(e));
     } finally {
       setDefsLoading(false);
