@@ -314,9 +314,9 @@ export const Sidebar = memo(function Sidebar() {
     archivingRef.current.add(wsId);
 
     try {
-      const initialState = useAppStore.getState();
-      const ws = initialState.workspaces.find((w) => w.id === wsId);
-      const repo = ws ? initialState.repositories.find((r) => r.id === ws.repository_id) : null;
+      const preState = useAppStore.getState();
+      const ws = preState.workspaces.find((w) => w.id === wsId);
+      const repo = ws ? preState.repositories.find((r) => r.id === ws.repository_id) : null;
 
       // If this repo has an archive script and the user hasn't opted into
       // auto-run, surface a confirmation modal so they can review the script
@@ -345,8 +345,12 @@ export const Sidebar = memo(function Sidebar() {
         }
       }
 
-      const snapshot = initialState.workspaces.find((w) => w.id === wsId);
-      const wasSelected = initialState.selectedWorkspaceId === wsId;
+      // Re-read state after the await — selection or workspace data may have
+      // changed while `getRepoConfig` was in flight. Using stale state here
+      // would leave snapshot/restore acting on outdated data.
+      const currentState = useAppStore.getState();
+      const snapshot = currentState.workspaces.find((w) => w.id === wsId);
+      const wasSelected = currentState.selectedWorkspaceId === wsId;
 
       updateWorkspace(wsId, {
         status: "Archived",

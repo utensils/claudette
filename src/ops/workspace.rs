@@ -33,10 +33,12 @@ use crate::workspace_alloc::{allocate_workspace_name, is_valid_workspace_name};
 use super::{NotificationEvent, OpsError, OpsHooks, WorkspaceChangeKind};
 
 const CREATE_WORKTREE_ALLOCATION_ATTEMPTS: usize = 5;
-/// Hard cap on setup script wall-clock time. Five minutes is enough for
-/// `bun install` / `cargo build` first-runs but short enough that a stuck
-/// script doesn't wedge workspace creation indefinitely.
-const SETUP_SCRIPT_TIMEOUT: Duration = Duration::from_secs(300);
+/// Hard cap on setup and archive script wall-clock time. Five minutes is
+/// enough for `bun install` / `cargo build` first-runs but short enough
+/// that a stuck script doesn't wedge workspace creation or archival
+/// indefinitely. Shared between setup and archive so the two budgets can't
+/// silently diverge.
+const SCRIPT_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Outcome of running a workspace's setup script. Both fields the GUI
 /// surfaces in its post-create system message and the WS-server clients
@@ -313,7 +315,7 @@ pub async fn resolve_and_run_setup(
         buf
     });
 
-    match tokio::time::timeout(SETUP_SCRIPT_TIMEOUT, child.wait()).await {
+    match tokio::time::timeout(SCRIPT_TIMEOUT, child.wait()).await {
         Ok(Ok(status)) => {
             let stdout_buf = stdout_task.await.unwrap_or_default();
             let stderr_buf = stderr_task.await.unwrap_or_default();
@@ -360,14 +362,14 @@ pub async fn resolve_and_run_setup(
             let _ = stdout_task.await;
             let _ = stderr_task.await;
             // Format the deadline from the actual constant so changing
-            // SETUP_SCRIPT_TIMEOUT updates the user-visible diagnostic
+            // SCRIPT_TIMEOUT updates the user-visible diagnostic
             // automatically. Whole-second precision is plenty here.
             Some(SetupResult {
                 source: source.to_string(),
                 script,
                 output: format!(
                     "Setup script timed out after {} seconds",
-                    SETUP_SCRIPT_TIMEOUT.as_secs()
+                    SCRIPT_TIMEOUT.as_secs()
                 ),
                 exit_code: None,
                 success: false,
@@ -376,9 +378,6 @@ pub async fn resolve_and_run_setup(
         }
     }
 }
-
-/// Hard cap on archive script wall-clock time — same budget as setup scripts.
-const ARCHIVE_SCRIPT_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Resolve the archive script (preferring `.claudette.json`, falling back to
 /// the per-repo settings script) and execute it before the worktree is
@@ -484,7 +483,7 @@ pub async fn resolve_and_run_archive(
         buf
     });
 
-    match tokio::time::timeout(ARCHIVE_SCRIPT_TIMEOUT, child.wait()).await {
+    match tokio::time::timeout(SCRIPT_TIMEOUT, child.wait()).await {
         Ok(Ok(status)) => {
             let stdout_buf = stdout_task.await.unwrap_or_default();
             let stderr_buf = stderr_task.await.unwrap_or_default();
@@ -531,7 +530,7 @@ pub async fn resolve_and_run_archive(
                 script,
                 output: format!(
                     "Archive script timed out after {} seconds",
-                    ARCHIVE_SCRIPT_TIMEOUT.as_secs()
+                    SCRIPT_TIMEOUT.as_secs()
                 ),
                 exit_code: None,
                 success: false,
