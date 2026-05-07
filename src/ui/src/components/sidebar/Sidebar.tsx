@@ -63,8 +63,6 @@ export const Sidebar = memo(function Sidebar() {
   const removeWorkspace = useAppStore((s) => s.removeWorkspace);
   const addToast = useAppStore((s) => s.addToast);
   const unreadCompletions = useAppStore((s) => s.unreadCompletions);
-  const agentQuestions = useAppStore((s) => s.agentQuestions);
-  const planApprovals = useAppStore((s) => s.planApprovals);
   const sessionsByWorkspace = useAppStore((s) => s.sessionsByWorkspace);
   const scmSummary = useAppStore((s) => s.scmSummary);
   const setRepositories = useAppStore((s) => s.setRepositories);
@@ -465,8 +463,8 @@ export const Sidebar = memo(function Sidebar() {
       workspaceDrag.dropTarget?.id === ws.id &&
       workspaceDrag.dropTarget.placement === "after";
     const wsSessions = sessionsByWorkspace[ws.id] ?? [];
-    const hasQuestion = wsSessions.some((s) => agentQuestions[s.id]);
-    const hasPlan = wsSessions.some((s) => planApprovals[s.id]);
+    const hasQuestion = wsSessions.some((s) => s.needs_attention && s.attention_kind === "Ask");
+    const hasPlan = wsSessions.some((s) => s.needs_attention && s.attention_kind === "Plan");
     const badge: "ask" | "plan" | "done" | null =
       hasQuestion ? "ask" :
       hasPlan ? "plan" :
