@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { MODELS, is1mContextModel, get1mFallback } from "./modelRegistry";
+import {
+  MODELS,
+  buildModelRegistry,
+  findModelInRegistry,
+  is1mContextModel,
+  get1mFallback,
+} from "./modelRegistry";
 
 describe("modelRegistry", () => {
   it("every model has a positive integer contextWindowTokens", () => {
@@ -76,6 +82,128 @@ describe("modelRegistry", () => {
         expect(target, `${m.id} → ${fallback} not in MODELS`).toBeDefined();
         expect(target!.contextWindowTokens, `${m.id} → ${fallback} should be non-1M`).toBeLessThan(1_000_000);
       }
+    });
+  });
+
+  describe("buildModelRegistry", () => {
+    it("hides backend models when alternative backends are disabled", () => {
+      const registry = buildModelRegistry(false, [
+        {
+          id: "codex-subscription",
+          label: "Codex",
+          kind: "codex_subscription",
+          enabled: true,
+          capabilities: {
+            thinking: false,
+            effort: false,
+            fast_mode: false,
+          },
+          manual_models: [],
+          discovered_models: [
+            {
+              id: "gpt-5.4",
+              label: "gpt-5.4",
+              context_window_tokens: 272_000,
+            },
+          ],
+        },
+      ]);
+
+      expect(registry).toBe(MODELS);
+      expect(registry.find((model) => model.providerQualifiedId === "codex-subscription/gpt-5.4")).toBeUndefined();
+    });
+
+    it("exposes discovered backend models and prefers them over manual fallbacks", () => {
+      const registry = buildModelRegistry(true, [
+        {
+          id: "codex-subscription",
+          label: "Codex",
+          kind: "codex_subscription",
+          enabled: true,
+          capabilities: {
+            thinking: false,
+            effort: false,
+            fast_mode: false,
+          },
+          manual_models: [
+            {
+              id: "manual-fallback",
+              label: "Manual fallback",
+              context_window_tokens: 400_000,
+            },
+          ],
+          discovered_models: [
+            {
+              id: "gpt-5.4",
+              label: "gpt-5.4",
+              context_window_tokens: 272_000,
+            },
+            {
+              id: "gpt-5.3-codex",
+              label: "gpt-5.3-codex",
+              context_window_tokens: 272_000,
+            },
+          ],
+        },
+      ]);
+
+      expect(registry.find((model) => model.providerQualifiedId === "codex-subscription/gpt-5.4")).toBeDefined();
+      expect(registry.find((model) => model.providerQualifiedId === "codex-subscription/gpt-5.3-codex")).toBeDefined();
+      expect(registry.find((model) => model.providerQualifiedId === "codex-subscription/manual-fallback")).toBeUndefined();
+    });
+  });
+
+  describe("findModelInRegistry", () => {
+    it("uses provider when backend model ids overlap", () => {
+      const registry = buildModelRegistry(true, [
+        {
+          id: "openai-api",
+          label: "OpenAI API",
+          kind: "openai_api",
+          enabled: true,
+          capabilities: {
+            thinking: false,
+            effort: false,
+            fast_mode: false,
+          },
+          manual_models: [],
+          discovered_models: [
+            {
+              id: "gpt-5.4",
+              label: "gpt-5.4",
+              context_window_tokens: 272_000,
+            },
+          ],
+        },
+        {
+          id: "codex-subscription",
+          label: "Codex",
+          kind: "codex_subscription",
+          enabled: true,
+          capabilities: {
+            thinking: false,
+            effort: false,
+            fast_mode: false,
+          },
+          manual_models: [],
+          discovered_models: [
+            {
+              id: "gpt-5.4",
+              label: "gpt-5.4",
+              context_window_tokens: 1_000_000,
+            },
+          ],
+        },
+      ]);
+
+      expect(
+        findModelInRegistry(registry, "gpt-5.4", "codex-subscription")
+          ?.contextWindowTokens,
+      ).toBe(1_000_000);
+      expect(
+        findModelInRegistry(registry, "gpt-5.4", "openai-api")
+          ?.contextWindowTokens,
+      ).toBe(272_000);
     });
   });
 });

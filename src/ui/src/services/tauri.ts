@@ -56,8 +56,100 @@ export interface InitialData {
   manual_workspace_order_repo_ids: string[];
 }
 
+export type AgentBackendKind =
+  | "anthropic"
+  | "ollama"
+  | "openai_api"
+  | "codex_subscription"
+  | "custom_anthropic"
+  | "custom_openai";
+
+export interface AgentBackendCapabilities {
+  thinking: boolean;
+  effort: boolean;
+  fast_mode: boolean;
+  one_m_context: boolean;
+  tools: boolean;
+  vision: boolean;
+}
+
+export interface AgentBackendModel {
+  id: string;
+  label: string;
+  context_window_tokens: number;
+  discovered: boolean;
+}
+
+export interface AgentBackendConfig {
+  id: string;
+  label: string;
+  kind: AgentBackendKind;
+  base_url: string | null;
+  enabled: boolean;
+  default_model: string | null;
+  manual_models: AgentBackendModel[];
+  discovered_models: AgentBackendModel[];
+  auth_ref: string | null;
+  capabilities: AgentBackendCapabilities;
+  context_window_default: number;
+  model_discovery: boolean;
+  has_secret: boolean;
+}
+
+export interface AgentBackendListResponse {
+  backends: AgentBackendConfig[];
+  default_backend_id: string;
+}
+
+export interface BackendSecretUpdate {
+  backend_id: string;
+  value: string | null;
+}
+
+export interface BackendStatus {
+  ok: boolean;
+  message: string;
+  backends?: AgentBackendConfig[];
+}
+
 export function loadInitialData(): Promise<InitialData> {
   return invoke("load_initial_data");
+}
+
+export function listAgentBackends(): Promise<AgentBackendListResponse> {
+  return invoke("list_agent_backends");
+}
+
+export function saveAgentBackend(
+  backend: AgentBackendConfig,
+): Promise<AgentBackendConfig[]> {
+  return invoke("save_agent_backend", { backend });
+}
+
+export function deleteAgentBackend(
+  backendId: string,
+): Promise<AgentBackendConfig[]> {
+  return invoke("delete_agent_backend", { backendId });
+}
+
+export function saveAgentBackendSecret(
+  update: BackendSecretUpdate,
+): Promise<void> {
+  return invoke("save_agent_backend_secret", { update });
+}
+
+export function refreshAgentBackendModels(
+  backendId: string,
+): Promise<AgentBackendConfig[]> {
+  return invoke("refresh_agent_backend_models", { backendId });
+}
+
+export function testAgentBackend(backendId: string): Promise<BackendStatus> {
+  return invoke("test_agent_backend", { backendId });
+}
+
+export function launchCodexLogin(): Promise<void> {
+  return invoke("launch_codex_login");
 }
 
 // -- Repository --
@@ -545,6 +637,7 @@ export function sendChatMessage(
   effort?: string,
   chromeEnabled?: boolean,
   disable1mContext?: boolean,
+  backendId?: string,
   attachments?: AttachmentInput[],
   messageId?: string,
 ): Promise<void> {
@@ -561,6 +654,7 @@ export function sendChatMessage(
     effort: effort ?? null,
     chromeEnabled: chromeEnabled ?? null,
     disable1mContext: disable1mContext ?? null,
+    backendId: backendId ?? null,
     attachments: attachments ?? null,
   });
 }
@@ -1104,7 +1198,10 @@ export function listAppSettingsWithPrefix(prefix: string): Promise<[string, stri
   return invoke("list_app_settings_with_prefix", { prefix });
 }
 
-export function getHostEnvFlags(): Promise<{ disable_1m_context: boolean }> {
+export function getHostEnvFlags(): Promise<{
+  disable_1m_context: boolean;
+  alternative_backends_compiled: boolean;
+}> {
   return invoke("get_host_env_flags");
 }
 

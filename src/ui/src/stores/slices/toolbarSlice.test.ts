@@ -5,6 +5,7 @@ describe("toolbarSlice.applyChatTurnSettings", () => {
   beforeEach(() => {
     useAppStore.setState({
       selectedModel: {},
+      selectedModelProvider: {},
       fastMode: {},
       thinkingEnabled: {},
       planMode: {},
@@ -17,6 +18,7 @@ describe("toolbarSlice.applyChatTurnSettings", () => {
     useAppStore.getState().applyChatTurnSettings({
       chatSessionId: "sess-1",
       model: "sonnet",
+      backendId: "anthropic",
       fastMode: false,
       thinkingEnabled: true,
       planMode: true,
@@ -25,6 +27,7 @@ describe("toolbarSlice.applyChatTurnSettings", () => {
     });
     const s = useAppStore.getState();
     expect(s.selectedModel["sess-1"]).toBe("sonnet");
+    expect(s.selectedModelProvider["sess-1"]).toBe("anthropic");
     expect(s.thinkingEnabled["sess-1"]).toBe(true);
     expect(s.planMode["sess-1"]).toBe(true);
     expect(s.effortLevel["sess-1"]).toBe("high");
@@ -45,6 +48,7 @@ describe("toolbarSlice.applyChatTurnSettings", () => {
     useAppStore.getState().applyChatTurnSettings({
       chatSessionId: "sess-1",
       model: null,
+      backendId: null,
       fastMode: false,
       thinkingEnabled: false,
       planMode: false,
@@ -65,11 +69,13 @@ describe("toolbarSlice.applyChatTurnSettings", () => {
   it("leaves model + effort untouched when payload omits them (null)", () => {
     useAppStore.setState({
       selectedModel: { "sess-1": "opus" },
+      selectedModelProvider: { "sess-1": "codex-subscription" },
       effortLevel: { "sess-1": "medium" },
     });
     useAppStore.getState().applyChatTurnSettings({
       chatSessionId: "sess-1",
       model: null,
+      backendId: null,
       fastMode: false,
       thinkingEnabled: false,
       planMode: false,
@@ -78,17 +84,20 @@ describe("toolbarSlice.applyChatTurnSettings", () => {
     });
     const s = useAppStore.getState();
     expect(s.selectedModel["sess-1"]).toBe("opus");
+    expect(s.selectedModelProvider["sess-1"]).toBe("codex-subscription");
     expect(s.effortLevel["sess-1"]).toBe("medium");
   });
 
   it("scopes updates to the keyed session and leaves siblings alone", () => {
     useAppStore.setState({
       selectedModel: { "sess-1": "opus", "sess-2": "haiku" },
+      selectedModelProvider: { "sess-1": "anthropic", "sess-2": "anthropic" },
       planMode: { "sess-2": true },
     });
     useAppStore.getState().applyChatTurnSettings({
       chatSessionId: "sess-1",
       model: "sonnet",
+      backendId: "codex-subscription",
       fastMode: true,
       thinkingEnabled: false,
       planMode: false,
@@ -98,6 +107,8 @@ describe("toolbarSlice.applyChatTurnSettings", () => {
     const s = useAppStore.getState();
     expect(s.selectedModel["sess-1"]).toBe("sonnet");
     expect(s.selectedModel["sess-2"]).toBe("haiku");
+    expect(s.selectedModelProvider["sess-1"]).toBe("codex-subscription");
+    expect(s.selectedModelProvider["sess-2"]).toBe("anthropic");
     expect(s.planMode["sess-2"]).toBe(true);
     expect(s.planMode["sess-1"]).toBe(false);
     expect(s.fastMode["sess-1"]).toBe(true);

@@ -4,7 +4,8 @@
 #
 # Shared backend for build-win-arm64 / build-win-x64 devshell commands.
 # See flake.nix devshell notes for why we invoke `cargo xwin` directly
-# (--features tauri/custom-protocol, --release, target triple).
+# (--features tauri/custom-protocol,alternative-backends, --release,
+# target triple).
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,7 +28,7 @@ esac
 cargo tauri icon assets/logo.png
 
 cargo xwin build --release \
-  --features tauri/custom-protocol \
+  --features tauri/custom-protocol,alternative-backends \
   --target "$TRIPLE" -p claudette-tauri
 echo
 echo "Built: $REPO_ROOT/target/$TRIPLE/release/claudette-app.exe"

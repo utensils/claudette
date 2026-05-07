@@ -1,6 +1,7 @@
 import type { StateCreator } from "zustand";
 import { DEFAULT_THEME_ID, DEFAULT_LIGHT_THEME_ID } from "../../styles/themes";
 import type { AppState } from "../useAppStore";
+import type { AgentBackendConfig } from "../../services/tauri";
 
 export interface SettingsSlice {
   worktreeBaseDir: string;
@@ -47,6 +48,14 @@ export interface SettingsSlice {
   setCommunityRegistryEnabled: (enabled: boolean) => void;
   disable1mContext: boolean;
   setDisable1mContext: (v: boolean) => void;
+  alternativeBackendsAvailable: boolean;
+  setAlternativeBackendsAvailable: (available: boolean) => void;
+  alternativeBackendsEnabled: boolean;
+  setAlternativeBackendsEnabled: (enabled: boolean) => void;
+  agentBackends: AgentBackendConfig[];
+  setAgentBackends: (backends: AgentBackendConfig[]) => void;
+  defaultAgentBackendId: string;
+  setDefaultAgentBackendId: (id: string) => void;
   /// Which revision the Monaco git gutter compares the editor buffer
   /// against. "head" (default) shows uncommitted changes only; "merge_base"
   /// shows every change made on the workspace's branch since it diverged
@@ -128,6 +137,21 @@ export const createSettingsSlice: StateCreator<
     })),
   disable1mContext: false,
   setDisable1mContext: (v) => set({ disable1mContext: v }),
+  alternativeBackendsAvailable: false,
+  setAlternativeBackendsAvailable: (available) =>
+    set((state) => ({
+      alternativeBackendsAvailable: available,
+      alternativeBackendsEnabled: available ? state.alternativeBackendsEnabled : false,
+    })),
+  alternativeBackendsEnabled: false,
+  setAlternativeBackendsEnabled: (enabled) =>
+    set((state) => ({
+      alternativeBackendsEnabled: state.alternativeBackendsAvailable && enabled,
+    })),
+  agentBackends: [],
+  setAgentBackends: (backends) => set({ agentBackends: backends }),
+  defaultAgentBackendId: "anthropic",
+  setDefaultAgentBackendId: (id) => set({ defaultAgentBackendId: id }),
   editorGitGutterBase: "head",
   setEditorGitGutterBase: (value) => set({ editorGitGutterBase: value }),
   editorMinimapEnabled: false,

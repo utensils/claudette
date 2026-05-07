@@ -38,6 +38,7 @@ pub struct SessionFlags<'a> {
     pub allowed_tools: &'a [String],
     pub exited_plan: bool,
     pub disable_1m_context: bool,
+    pub backend_hash: &'a str,
 }
 
 /// Flags the next turn is asking for. Compared against [`SessionFlags`] to
@@ -46,6 +47,7 @@ pub struct RequestedFlags<'a> {
     pub plan_mode: bool,
     pub allowed_tools: &'a [String],
     pub disable_1m_context: bool,
+    pub backend_hash: &'a str,
 }
 
 /// Detect whether the persistent session's spawn-time flags have drifted
@@ -66,6 +68,7 @@ pub fn persistent_session_flags_drifted(
     session.plan_mode != requested.plan_mode
         || session.allowed_tools != requested.allowed_tools
         || session.disable_1m_context != requested.disable_1m_context
+        || session.backend_hash != requested.backend_hash
         || (session.plan_mode && session.exited_plan)
 }
 
@@ -406,6 +409,7 @@ mod tests {
             allowed_tools,
             exited_plan,
             disable_1m_context: false,
+            backend_hash: "",
         }
     }
 
@@ -414,6 +418,7 @@ mod tests {
             plan_mode,
             allowed_tools,
             disable_1m_context: false,
+            backend_hash: "",
         }
     }
 
@@ -523,11 +528,13 @@ mod tests {
                 allowed_tools: &tools,
                 exited_plan: false,
                 disable_1m_context: false,
+                backend_hash: "",
             },
             RequestedFlags {
                 plan_mode: false,
                 allowed_tools: &tools,
                 disable_1m_context: true,
+                backend_hash: "",
             },
         ));
         assert!(persistent_session_flags_drifted(
@@ -536,11 +543,13 @@ mod tests {
                 allowed_tools: &tools,
                 exited_plan: false,
                 disable_1m_context: true,
+                backend_hash: "",
             },
             RequestedFlags {
                 plan_mode: false,
                 allowed_tools: &tools,
                 disable_1m_context: false,
+                backend_hash: "",
             },
         ));
     }
@@ -554,11 +563,33 @@ mod tests {
                 allowed_tools: &tools,
                 exited_plan: false,
                 disable_1m_context: true,
+                backend_hash: "",
             },
             RequestedFlags {
                 plan_mode: false,
                 allowed_tools: &tools,
                 disable_1m_context: true,
+                backend_hash: "",
+            },
+        ));
+    }
+
+    #[test]
+    fn drift_when_backend_hash_changes() {
+        let tools = s(&["Read"]);
+        assert!(persistent_session_flags_drifted(
+            SessionFlags {
+                plan_mode: false,
+                allowed_tools: &tools,
+                exited_plan: false,
+                disable_1m_context: false,
+                backend_hash: "anthropic",
+            },
+            RequestedFlags {
+                plan_mode: false,
+                allowed_tools: &tools,
+                disable_1m_context: false,
+                backend_hash: "ollama",
             },
         ));
     }

@@ -100,6 +100,7 @@ pub async fn run_turn(
     if let Some(env) = resolved_env {
         env.apply(&mut cmd);
     }
+    settings.backend_runtime.apply_to_command(&mut cmd);
 
     cmd.env_remove("CLAUDE_CODE_DISABLE_1M_CONTEXT");
     if settings.disable_1m_context {

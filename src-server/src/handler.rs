@@ -53,6 +53,10 @@ pub async fn handle_request(
                 .map(String::from);
             let chrome_enabled = params.get("chrome_enabled").and_then(|v| v.as_bool());
             let disable_1m_context = params.get("disable_1m_context").and_then(|v| v.as_bool());
+            let backend_id = params
+                .get("backend_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let mentioned_files: Option<Vec<String>> = params
                 .get("mentioned_files")
                 .and_then(|v| serde_json::from_value(v.clone()).ok());
@@ -69,6 +73,7 @@ pub async fn handle_request(
                 effort,
                 chrome_enabled,
                 disable_1m_context,
+                backend_id,
                 mentioned_files,
             )
             .await
@@ -435,6 +440,7 @@ async fn handle_send_chat_message(
     effort: Option<String>,
     chrome_enabled: Option<bool>,
     disable_1m_context: Option<bool>,
+    backend_id: Option<String>,
     mentioned_files: Option<Vec<String>>,
 ) -> Result<serde_json::Value, String> {
     let db = open_db(state)?;
@@ -593,8 +599,12 @@ async fn handle_send_chat_message(
         chrome_enabled: chrome_enabled.unwrap_or(false),
         mcp_config,
         disable_1m_context: disable_1m_context.unwrap_or(false),
+        backend_runtime: Default::default(),
         hook_bridge: None,
     };
+    if backend_id.as_deref().is_some_and(|id| id != "anthropic") {
+        eprintln!("[handler] alternate backends are not supported over remote transport yet");
+    }
 
     let turn_handle = agent::run_turn(
         std::path::Path::new(&worktree_path),

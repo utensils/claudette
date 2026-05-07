@@ -1,8 +1,8 @@
 import type { CSSProperties } from "react";
 import { useAppStore } from "../../../stores/useAppStore";
-import { MODELS } from "../modelRegistry";
 import { computeMeterState } from "../contextMeterLogic";
 import { formatTokens } from "../formatTokens";
+import { useSelectedModelEntry } from "../useSelectedModelEntry";
 import { segmentedBand, segmentedColor } from "./segmentedMeterLogic";
 import styles from "./SegmentedMeter.module.css";
 
@@ -15,9 +15,8 @@ interface SegmentedMeterProps {
 
 export function SegmentedMeter({ sessionId, onClick }: SegmentedMeterProps) {
   const usage = useAppStore((s) => s.latestTurnUsage[sessionId]);
-  const selectedModel = useAppStore((s) => s.selectedModel[sessionId]);
 
-  const model = MODELS.find((m) => m.id === selectedModel);
+  const model = useSelectedModelEntry(sessionId);
   const state = computeMeterState(usage, model?.contextWindowTokens);
   if (!state) return null;
 

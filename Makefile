@@ -7,4 +7,4 @@ setup:
 	mise exec -- cargo fetch
 
 run:
-	mise exec -- cargo tauri dev --features devtools,server
+	mise exec -- cargo tauri dev --features devtools,server,alternative-backends

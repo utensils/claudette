@@ -1,8 +1,8 @@
 import { useEffect, useRef } from "react";
 import { useAppStore } from "../../../stores/useAppStore";
-import { MODELS } from "../modelRegistry";
 import { computeMeterState } from "../contextMeterLogic";
 import { formatTokens } from "../formatTokens";
+import { useSelectedModelEntry } from "../useSelectedModelEntry";
 import { segmentedBand, segmentedColor, stateLabel } from "./segmentedMeterLogic";
 import { estimateCost, formatCost } from "./formatCost";
 import styles from "./ContextPopover.module.css";
@@ -29,9 +29,8 @@ const SEGMENT_COLORS = [
 export function ContextPopover({ sessionId, onClose, onCompact, onClear }: ContextPopoverProps) {
   const popoverRef = useRef<HTMLDivElement>(null);
   const usage = useAppStore((s) => s.latestTurnUsage[sessionId]);
-  const selectedModel = useAppStore((s) => s.selectedModel[sessionId]);
 
-  const model = MODELS.find((m) => m.id === selectedModel);
+  const model = useSelectedModelEntry(sessionId);
   const state = computeMeterState(usage, model?.contextWindowTokens);
 
   useEffect(() => {

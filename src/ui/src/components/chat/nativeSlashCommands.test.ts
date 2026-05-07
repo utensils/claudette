@@ -33,6 +33,7 @@ function makeCtx(overrides: Partial<NativeCommandContext> = {}): NativeCommandCo
     workspaceId: "ws-1",
     agentStatus: "Idle",
     selectedModel: "opus",
+    selectedModelProvider: "anthropic",
     permissionLevel: "full",
     planMode: false,
     fastMode: false,
@@ -890,7 +891,7 @@ describe("/model handler", () => {
     const ctx = makeCtx({ selectedModel: "opus" });
     const handler = resolveNativeHandler("model")!;
     await handler.execute(ctx, "sonnet");
-    expect(ctx.setSelectedModel).toHaveBeenCalledWith("sonnet");
+    expect(ctx.setSelectedModel).toHaveBeenCalledWith("sonnet", "anthropic");
     expect(ctx.addLocalMessage).toHaveBeenCalledWith("Model set to sonnet.");
   });
 
@@ -898,7 +899,7 @@ describe("/model handler", () => {
     const ctx = makeCtx({ selectedModel: "opus" });
     const handler = resolveNativeHandler("model")!;
     await handler.execute(ctx, "SONNET");
-    expect(ctx.setSelectedModel).toHaveBeenCalledWith("sonnet");
+    expect(ctx.setSelectedModel).toHaveBeenCalledWith("sonnet", "anthropic");
   });
 
   it("no-ops when the requested model equals the current one", async () => {

@@ -830,7 +830,13 @@ export function useAgentStream() {
           const { setLatestTurnUsage, clearLatestTurnUsage } =
             useAppStore.getState();
           if (callUsage) setLatestTurnUsage(sessionId, callUsage);
-          else clearLatestTurnUsage(sessionId);
+          // Preserve the just-emitted result.usage when the CLI does not also
+          // write token metadata onto assistant messages (observed with
+          // Claude Code gateway backends). Initial history loads still clear
+          // stale meter state when no persisted token data exists.
+          else if (!useAppStore.getState().latestTurnUsage[sessionId]) {
+            clearLatestTurnUsage(sessionId);
+          }
         })
         .catch((e) => console.error("Failed to reload messages after checkpoint:", e));
     });

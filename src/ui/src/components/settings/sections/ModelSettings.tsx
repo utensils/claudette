@@ -1,14 +1,18 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { getAppSetting, setAppSetting } from "../../../services/tauri";
-import { MODELS } from "../../chat/ModelSelector";
+import { getAppSetting, setAppSetting, listAgentBackends, saveAgentBackend, saveAgentBackendSecret, refreshAgentBackendModels, testAgentBackend, launchCodexLogin } from "../../../services/tauri";
+import type { AgentBackendConfig } from "../../../services/tauri";
 import { EFFORT_LEVELS } from "../../chat/EffortSelector";
 import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "../../chat/modelCapabilities";
+import { buildModelRegistry, resolveModelSelection } from "../../chat/modelRegistry";
+import { useAppStore } from "../../../stores/useAppStore";
+import { formatBackendError } from "../backendSettingsErrors";
 import styles from "../Settings.module.css";
 
 export function ModelSettings() {
   const { t } = useTranslation("settings");
   const [defaultModel, setDefaultModel] = useState("opus");
+  const [defaultBackend, setDefaultBackend] = useState("anthropic");
   const [defaultThinking, setDefaultThinking] = useState(false);
   const [defaultPlanMode, setDefaultPlanMode] = useState(false);
   const [defaultFastMode, setDefaultFastMode] = useState(false);
@@ -16,10 +20,29 @@ export function ModelSettings() {
   const [defaultEffort, setDefaultEffort] = useState("auto");
   const [defaultShowThinking, setDefaultShowThinking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
+  const agentBackends = useAppStore((s) => s.agentBackends);
+  const setAgentBackends = useAppStore((s) => s.setAgentBackends);
+  const setDefaultAgentBackendId = useAppStore((s) => s.setDefaultAgentBackendId);
 
   useEffect(() => {
     getAppSetting("default_model")
       .then((val) => { if (val) setDefaultModel(val); })
+      .catch(() => {});
+    getAppSetting("default_agent_backend")
+      .then((val) => {
+        if (val) {
+          setDefaultBackend(val);
+          setDefaultAgentBackendId(val);
+        }
+      })
+      .catch(() => {});
+    listAgentBackends()
+      .then((data) => {
+        setAgentBackends(data.backends);
+        setDefaultBackend(data.default_backend_id);
+        setDefaultAgentBackendId(data.default_backend_id);
+      })
       .catch(() => {});
     getAppSetting("default_thinking")
       .then((val) => setDefaultThinking(val === "true"))
@@ -39,7 +62,7 @@ export function ModelSettings() {
     getAppSetting("default_show_thinking")
       .then((val) => setDefaultShowThinking(val === "true"))
       .catch(() => {});
-  }, []);
+  }, [setAgentBackends, setDefaultAgentBackendId]);
 
   const saveSetting = async (key: string, value: string) => {
     try {
@@ -50,9 +73,24 @@ export function ModelSettings() {
     }
   };
 
-  const handleModelChange = async (model: string) => {
+  const registry = useMemo(
+    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends),
+    [alternativeBackendsEnabled, agentBackends],
+  );
+  const defaultModelValue = `${defaultBackend}/${defaultModel}`;
+
+  const handleModelChange = async (value: string) => {
+    const [backendId, ...modelParts] = value.includes("/")
+      ? value.split("/")
+      : ["anthropic", value];
+    const model = modelParts.join("/");
+    const match = resolveModelSelection(registry, backendId === "anthropic" ? model : value);
+    const nextBackend = match?.providerId ?? backendId;
     setDefaultModel(model);
+    setDefaultBackend(nextBackend);
+    setDefaultAgentBackendId(nextBackend);
     await saveSetting("default_model", model);
+    await saveSetting("default_agent_backend", nextBackend);
     // Normalize fast mode when model changes
     if (defaultFastMode && !isFastSupported(model)) {
       setDefaultFastMode(false);
@@ -99,13 +137,18 @@ export function ModelSettings() {
   };
 
   // Filter effort levels based on selected default model
+  const selectedDefaultModel = registry.find(
+    (m) => (m.providerId ?? "anthropic") === defaultBackend && m.id === defaultModel,
+  );
+  const supportsEffort = selectedDefaultModel?.supportsEffort ?? isEffortSupported(defaultModel);
+  const supportsFast = selectedDefaultModel?.supportsFastMode ?? isFastSupported(defaultModel);
   const availableEffortLevels = isXhighEffortAllowed(defaultModel)
     ? EFFORT_LEVELS
     : isMaxEffortAllowed(defaultModel)
       ? EFFORT_LEVELS.filter((l) => l.id !== "xhigh")
       : EFFORT_LEVELS.filter((l) => l.id !== "xhigh" && l.id !== "max");
-  const effortDisabled = !isEffortSupported(defaultModel);
-  const fastDisabled = !isFastSupported(defaultModel);
+  const effortDisabled = !supportsEffort;
+  const fastDisabled = !supportsFast;
 
   return (
     <div>
@@ -124,12 +167,12 @@ export function ModelSettings() {
           <div className={styles.inlineControl}>
             <select
               className={styles.select}
-              value={defaultModel}
+              value={defaultModelValue}
               onChange={(e) => handleModelChange(e.target.value)}
             >
-              {MODELS.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
+              {registry.map((m) => (
+                <option key={m.providerQualifiedId ?? `anthropic/${m.id}`} value={m.providerQualifiedId ?? `anthropic/${m.id}`}>
+                  {m.providerLabel ? `${m.providerLabel} / ${m.label}` : m.label}
                 </option>
               ))}
             </select>
@@ -254,6 +297,361 @@ export function ModelSettings() {
           </button>
         </div>
       </div>
+
+      {alternativeBackendsEnabled && (
+        <BackendSettingsPanel
+          backends={agentBackends}
+          onBackends={setAgentBackends}
+        />
+      )}
     </div>
+  );
+}
+
+function BackendSettingsPanel({
+  backends,
+  onBackends,
+}: {
+  backends: AgentBackendConfig[];
+  onBackends: (backends: AgentBackendConfig[]) => void;
+}) {
+  const { t } = useTranslation("settings");
+  return (
+    <div>
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>{t("models_backends_title")}</div>
+          <div className={styles.settingDescription}>
+            {t("models_backends_desc")}
+          </div>
+        </div>
+      </div>
+      {backends.filter((b) => b.id !== "anthropic").map((backend) => (
+        <BackendCard
+          key={backend.id}
+          backend={backend}
+          onSaved={onBackends}
+        />
+      ))}
+    </div>
+  );
+}
+
+function BackendCard({
+  backend,
+  onSaved,
+}: {
+  backend: AgentBackendConfig;
+  onSaved: (backends: AgentBackendConfig[]) => void;
+}) {
+  const { t } = useTranslation("settings");
+  const [draft, setDraft] = useState(backend);
+  const [secret, setSecret] = useState("");
+  const [status, setStatus] = useState<string | null>(null);
+  const [statusModelCount, setStatusModelCount] = useState<number | null>(null);
+  const [cardError, setCardError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const lastSavedDraftRef = useRef("");
+  const draftSaveSeqRef = useRef(0);
+  const secretSaveSeqRef = useRef(0);
+
+  useEffect(() => {
+    lastSavedDraftRef.current = JSON.stringify(backend);
+    setDraft(backend);
+    setSecret("");
+    setStatus(null);
+    setStatusModelCount(null);
+    setCardError(null);
+    setBusy(false);
+    setSaving(false);
+  }, [backend]);
+
+  const discoveredModels = dedupeBackendModels(draft.discovered_models);
+  const manualModels = dedupeBackendModels(draft.manual_models);
+  const modelOptions = dedupeBackendModels([...discoveredModels, ...manualModels]);
+  const manualModelText = manualModels.map((m) => m.id).join(", ");
+  const discoveryBackend = isDiscoveryBackend(draft);
+  const showBaseUrl = draft.kind !== "codex_subscription";
+  const showSecret = draft.kind !== "codex_subscription";
+  const showManualModels = draft.kind === "custom_anthropic" || draft.kind === "custom_openai";
+  const actualModelCount = countBackendModels(draft);
+  const displayModelCount = actualModelCount > 0 ? actualModelCount : statusModelCount ?? 0;
+  const selectedDefaultModel = modelOptions.some((model) => model.id === draft.default_model)
+    ? draft.default_model ?? ""
+    : "";
+
+  const applySavedBackends = (saved: AgentBackendConfig[]) => {
+    onSaved(saved);
+    const refreshed = saved.find((item) => item.id === draft.id);
+    if (refreshed) {
+      setDraft(refreshed);
+    }
+    return refreshed;
+  };
+
+  const persistDraft = useCallback(async (nextDraft: AgentBackendConfig) => {
+    const saved = await saveAgentBackend(nextDraft);
+    onSaved(saved);
+    const refreshed = saved.find((item) => item.id === nextDraft.id);
+    lastSavedDraftRef.current = JSON.stringify(refreshed ?? nextDraft);
+    return saved;
+  }, [onSaved]);
+
+  useEffect(() => {
+    const serialized = JSON.stringify(draft);
+    if (serialized === lastSavedDraftRef.current) return;
+    const seq = draftSaveSeqRef.current + 1;
+    draftSaveSeqRef.current = seq;
+    setSaving(true);
+    const handle = window.setTimeout(() => {
+      void persistDraft(draft)
+        .then(() => {
+          if (draftSaveSeqRef.current !== seq) return;
+          setStatusModelCount(null);
+          setStatus(t("models_backend_status_saved"));
+          setCardError(null);
+        })
+        .catch((e) => {
+          if (draftSaveSeqRef.current !== seq) return;
+          setCardError(formatBackendError(e, draft));
+        })
+        .finally(() => {
+          if (draftSaveSeqRef.current === seq) setSaving(false);
+        });
+    }, 450);
+    return () => window.clearTimeout(handle);
+  }, [draft, persistDraft, t]);
+
+  useEffect(() => {
+    if (!secret) return;
+    const seq = secretSaveSeqRef.current + 1;
+    secretSaveSeqRef.current = seq;
+    setSaving(true);
+    const handle = window.setTimeout(() => {
+      void saveAgentBackendSecret({ backend_id: draft.id, value: secret })
+        .then(() => {
+          if (secretSaveSeqRef.current !== seq) return;
+          setSecret("");
+          setStatus(t("models_backend_status_saved"));
+          setCardError(null);
+        })
+        .catch((e) => {
+          if (secretSaveSeqRef.current !== seq) return;
+          setCardError(formatBackendError(e, draft));
+        })
+        .finally(() => {
+          if (secretSaveSeqRef.current === seq) setSaving(false);
+        });
+    }, 650);
+    return () => window.clearTimeout(handle);
+  }, [draft, secret, t]);
+
+  const persistCurrentDraft = async () => {
+    if (secret) {
+      await saveAgentBackendSecret({ backend_id: draft.id, value: secret });
+      setSecret("");
+    }
+    return persistDraft(draft);
+  };
+
+  const refresh = async () => {
+    try {
+      setCardError(null);
+      setBusy(true);
+      await persistCurrentDraft();
+      const saved = await refreshAgentBackendModels(draft.id);
+      const refreshed = applySavedBackends(saved);
+      const count = (refreshed?.discovered_models.length ?? 0) + (refreshed?.manual_models.length ?? 0);
+      setStatusModelCount(count);
+      setStatus(t("models_backend_status_refreshed", { count }));
+    } catch (e) {
+      setCardError(formatBackendError(e, draft));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const test = async () => {
+    try {
+      setCardError(null);
+      setBusy(true);
+      await persistCurrentDraft();
+      const result = await testAgentBackend(draft.id);
+      let refreshed: AgentBackendConfig | undefined;
+      if (result.backends) {
+        refreshed = applySavedBackends(result.backends);
+      } else if (result.ok && discoveryBackend) {
+        const saved = await refreshAgentBackendModels(draft.id);
+        refreshed = applySavedBackends(saved);
+      }
+      const count = refreshed ? countBackendModels(refreshed) : parseModelCount(result.message);
+      setStatusModelCount(count);
+      setStatus(result.message);
+    } catch (e) {
+      setCardError(formatBackendError(e, draft));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const updateModels = (value: string) => {
+    setDraft({
+      ...draft,
+      manual_models: value
+        .split(",")
+        .map((m) => m.trim())
+        .filter(Boolean)
+        .map((id) => ({
+          id,
+          label: id,
+          context_window_tokens: draft.context_window_default,
+          discovered: false,
+        })),
+    });
+  };
+
+  return (
+    <div className={styles.settingRow}>
+      <div className={styles.settingInfo}>
+        <div className={styles.settingLabel}>{draft.label}</div>
+        <div className={styles.settingDescription}>
+          {draft.kind} · {displayModelCount} models
+          {saving ? ` · ${t("models_backend_status_saving")}` : ""}
+          {status ? ` · ${status}` : ""}
+        </div>
+        {cardError && (
+          <div className={styles.backendError} role="alert">
+            {cardError}
+          </div>
+        )}
+        <div className={styles.backendForm}>
+          {showBaseUrl && (
+            <label className={styles.backendField}>
+              <span className={styles.backendFieldLabel}>{t("models_backend_base_url")}</span>
+              <input
+                className={styles.input}
+                value={draft.base_url ?? ""}
+                placeholder={t("models_backend_base_url")}
+                onChange={(e) => setDraft({ ...draft, base_url: e.target.value || null })}
+              />
+            </label>
+          )}
+          <label className={styles.backendField}>
+            <span className={styles.backendFieldLabel}>{t("models_backend_default_model")}</span>
+            {discoveryBackend || modelOptions.length > 0 ? (
+              <select
+                className={styles.select}
+                value={selectedDefaultModel}
+                onChange={(e) => setDraft({ ...draft, default_model: e.target.value || null })}
+              >
+                <option value="">{t("models_backend_default_auto")}</option>
+                {modelOptions.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.label || model.id}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                className={styles.input}
+                value={draft.default_model ?? ""}
+                placeholder={t("models_backend_default_model")}
+                onChange={(e) => setDraft({ ...draft, default_model: e.target.value || null })}
+              />
+            )}
+          </label>
+        </div>
+        <div className={styles.backendForm}>
+          {discoveryBackend && (
+            <label className={styles.backendField}>
+              <span className={styles.backendFieldLabel}>{t("models_backend_discovered_models")}</span>
+              <div className={styles.modelChipList}>
+                {discoveredModels.length > 0 ? (
+                  discoveredModels.map((model) => (
+                    <span key={model.id} className={styles.modelChip}>{model.label || model.id}</span>
+                  ))
+                ) : (
+                  <span className={styles.modelChipEmpty}>{t("models_backend_no_discovered_models")}</span>
+                )}
+              </div>
+            </label>
+          )}
+          {showManualModels && (
+            <label className={styles.backendField}>
+              <span className={styles.backendFieldLabel}>{t("models_backend_manual_models")}</span>
+              <input
+                className={styles.input}
+                value={manualModelText}
+                placeholder={t("models_backend_manual_models_placeholder")}
+                onChange={(e) => updateModels(e.target.value)}
+              />
+            </label>
+          )}
+          {showSecret && (
+            <label className={styles.backendField}>
+              <span className={styles.backendFieldLabel}>{t("models_backend_secret")}</span>
+              <input
+                className={styles.input}
+                type="password"
+                value={secret}
+                placeholder={draft.has_secret ? t("models_backend_secret_saved") : t("models_backend_secret")}
+                onChange={(e) => setSecret(e.target.value)}
+              />
+            </label>
+          )}
+        </div>
+      </div>
+      <div className={styles.settingControl}>
+        <div className={styles.backendActions}>
+          <button
+            className={styles.toggle}
+            role="switch"
+            aria-checked={draft.enabled}
+            aria-label={t("models_backend_enabled")}
+            data-checked={draft.enabled}
+            onClick={() => setDraft({ ...draft, enabled: !draft.enabled })}
+          >
+            <div className={styles.toggleKnob} />
+          </button>
+          <button className={styles.iconBtn} onClick={test} disabled={busy}>{t("models_backend_test")}</button>
+          {discoveryBackend && (
+            <button className={styles.iconBtn} onClick={refresh} disabled={busy}>{t("models_backend_refresh")}</button>
+          )}
+          {draft.kind === "codex_subscription" && (
+            <button className={styles.iconBtn} onClick={() => void launchCodexLogin()} disabled={busy}>
+              {t("models_backend_login")}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function dedupeBackendModels(models: AgentBackendConfig["manual_models"]) {
+  const seen = new Set<string>();
+  return models.filter((model) => {
+    if (!model.id || seen.has(model.id)) return false;
+    seen.add(model.id);
+    return true;
+  });
+}
+
+function countBackendModels(backend: AgentBackendConfig) {
+  return dedupeBackendModels([...backend.discovered_models, ...backend.manual_models]).length;
+}
+
+function parseModelCount(message: string) {
+  const match = message.match(/Found\s+(\d+)\s+model/i);
+  return match ? Number(match[1]) : null;
+}
+
+function isDiscoveryBackend(backend: AgentBackendConfig) {
+  return (
+    backend.model_discovery ||
+    backend.kind === "ollama" ||
+    backend.kind === "openai_api" ||
+    backend.kind === "codex_subscription"
   );
 }

@@ -1,31 +1,43 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CircleDollarSign, ChevronRight } from "lucide-react";
 import styles from "./ModelSelector.module.css";
-import { MODELS, type Model } from "./modelRegistry";
+import { buildModelRegistry, type Model } from "./modelRegistry";
 import { useAppStore } from "../../stores/useAppStore";
 
 export { MODELS, is1mContextModel, get1mFallback } from "./modelRegistry";
 
 interface ModelSelectorProps {
   selected: string;
-  onSelect: (model: string) => void;
+  selectedProvider?: string;
+  onSelect: (model: string, providerId?: string) => void;
   onClose: () => void;
 }
 
 export function ModelSelector({
   selected,
+  selectedProvider = "anthropic",
   onSelect,
   onClose,
 }: ModelSelectorProps) {
   const { t } = useTranslation("chat");
   const disable1mContext = useAppStore((s) => s.disable1mContext);
-  const visibleModels = disable1mContext
-    ? MODELS.filter((m) => m.contextWindowTokens < 1_000_000)
-    : MODELS;
-  const primary = visibleModels.filter((m) => !m.legacy);
-  const legacy = visibleModels.filter((m) => m.legacy);
-  const selectedIsLegacy = legacy.some((m) => m.id === selected);
+  const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
+  const agentBackends = useAppStore((s) => s.agentBackends);
+  const registry = useMemo(
+    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends),
+    [alternativeBackendsEnabled, agentBackends],
+  );
+  const visibleModels = useMemo(
+    () =>
+      disable1mContext
+        ? registry.filter((m) => m.contextWindowTokens < 1_000_000)
+        : registry,
+    [disable1mContext, registry],
+  );
+  const primary = useMemo(() => visibleModels.filter((m) => !m.legacy), [visibleModels]);
+  const legacy = useMemo(() => visibleModels.filter((m) => m.legacy), [visibleModels]);
+  const selectedIsLegacy = legacy.some((m) => m.id === selected && (m.providerId ?? "anthropic") === selectedProvider);
 
   const [moreOpen, setMoreOpen] = useState(selectedIsLegacy);
 
@@ -56,9 +68,9 @@ export function ModelSelector({
             <div className={styles.groupLabel}>{group}</div>
             {models.map((model) => (
               <ModelRow
-                key={model.id}
+                key={model.providerQualifiedId ?? model.id}
                 model={model}
-                selected={model.id === selected}
+                selected={model.id === selected && (model.providerId ?? "anthropic") === selectedProvider}
                 onSelect={onSelect}
               />
             ))}
@@ -82,9 +94,9 @@ export function ModelSelector({
               <div>
                 {legacy.map((model) => (
                   <ModelRow
-                    key={model.id}
+                    key={model.providerQualifiedId ?? model.id}
                     model={model}
-                    selected={model.id === selected}
+                    selected={model.id === selected && (model.providerId ?? "anthropic") === selectedProvider}
                     onSelect={onSelect}
                   />
                 ))}
@@ -104,17 +116,20 @@ function ModelRow({
 }: {
   model: Model;
   selected: boolean;
-  onSelect: (id: string) => void;
+  onSelect: (id: string, providerId?: string) => void;
 }) {
   const { t } = useTranslation("chat");
   return (
     <button
       type="button"
       className={`${styles.item} ${selected ? styles.itemSelected : ""}`}
-      onClick={() => onSelect(model.id)}
+      onClick={() => onSelect(model.id, model.providerId)}
     >
       <span className={styles.dot} />
       {model.label}
+      {model.providerLabel && (
+        <span className={styles.providerBadge}>{model.providerLabel}</span>
+      )}
       {model.extraUsage && (
         <span
           className={styles.extraUsage}

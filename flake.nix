@@ -575,7 +575,7 @@
               }
               {
                 name = "build-app";
-                command = "cargo tauri icon assets/logo.png && cargo tauri build --features server";
+                command = "cargo tauri icon assets/logo.png && cargo tauri build --features server,alternative-backends";
                 help = "Build release app bundle (.app / .deb) with embedded server";
                 category = "development";
               }

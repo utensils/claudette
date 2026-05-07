@@ -3,12 +3,13 @@ import { useTranslation } from "react-i18next";
 import { CircleDollarSign, Sparkles, Zap, Brain, BookOpen, Gauge, Eye, EyeOff, Globe } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import { resetAgentSession, setAppSetting, getAppSetting } from "../../services/tauri";
-import { ModelSelector, MODELS } from "./ModelSelector";
+import { ModelSelector } from "./ModelSelector";
 import { EffortSelector, EFFORT_LEVELS } from "./EffortSelector";
 import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "./modelCapabilities";
 import { applySelectedModel } from "./applySelectedModel";
 import { applyPlanModeMountDefault } from "./applyPlanModeMountDefault";
 import { ContextMeter } from "./ContextMeter";
+import { useSelectedModelEntry } from "./useSelectedModelEntry";
 import styles from "./ChatToolbar.module.css";
 
 interface ChatToolbarProps {
@@ -21,6 +22,7 @@ const mod = isMac ? "⌘" : "Ctrl+";
 
 export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
   const selectedModel = useAppStore((s) => s.selectedModel[sessionId] ?? "opus");
+  const selectedProvider = useAppStore((s) => s.selectedModelProvider[sessionId] ?? "anthropic");
   const fastMode = useAppStore((s) => s.fastMode[sessionId] ?? false);
   const thinkingEnabled = useAppStore((s) => s.thinkingEnabled[sessionId] ?? false);
   const planMode = useAppStore((s) => s.planMode[sessionId] ?? false);
@@ -48,14 +50,16 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      const [model, fast, thinking, effort, showThinking, chrome, defModel, defFast, defThinking, defPlan, defEffort, defShowThinking, defChrome] = await Promise.all([
+      const [model, provider, fast, thinking, effort, showThinking, chrome, defModel, defProvider, defFast, defThinking, defPlan, defEffort, defShowThinking, defChrome] = await Promise.all([
         getAppSetting(`model:${sessionId}`),
+        getAppSetting(`model_provider:${sessionId}`),
         getAppSetting(`fast_mode:${sessionId}`),
         getAppSetting(`thinking_enabled:${sessionId}`),
         getAppSetting(`effort_level:${sessionId}`),
         getAppSetting(`show_thinking:${sessionId}`),
         getAppSetting(`chrome_enabled:${sessionId}`),
         getAppSetting("default_model"),
+        getAppSetting("default_agent_backend"),
         getAppSetting("default_fast_mode"),
         getAppSetting("default_thinking"),
         getAppSetting("default_plan_mode"),
@@ -65,7 +69,7 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
       ]);
       if (cancelled) return;
       const loadedModel = model ?? defModel ?? "opus";
-      setSelectedModel(sessionId, loadedModel);
+      setSelectedModel(sessionId, loadedModel, provider ?? defProvider ?? "anthropic");
       const effectiveFast = isFastSupported(loadedModel) && (fast === "true" || (!fast && defFast === "true"));
       const effectiveThinking = thinking === "true" || (!thinking && defThinking === "true");
       setFastMode(sessionId, effectiveFast);
@@ -92,13 +96,13 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
   }, [sessionId, setSelectedModel, setFastMode, setThinkingEnabled, setEffortLevel, setShowThinkingBlocks, setChromeEnabled]);
 
   const handleModelSelect = useCallback(
-    async (model: string) => {
-      if (model !== selectedModel) {
-        await applySelectedModel(sessionId, model);
+    async (model: string, providerId = "anthropic") => {
+      if (model !== selectedModel || providerId !== selectedProvider) {
+        await applySelectedModel(sessionId, model, providerId);
       }
       setModelSelectorOpen(false);
     },
-    [sessionId, selectedModel, setModelSelectorOpen],
+    [sessionId, selectedModel, selectedProvider, setModelSelectorOpen],
   );
 
   const handleEffortSelect = useCallback(
@@ -154,8 +158,10 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
     return () => window.removeEventListener("keydown", handleKey);
   }, [disabled, toggleThinking]);
 
-  const currentModel = MODELS.find((m) => m.id === selectedModel);
-  const modelLabel = currentModel?.label ?? selectedModel;
+  const currentModel = useSelectedModelEntry(sessionId);
+  const modelLabel = currentModel?.providerLabel
+    ? `${currentModel.providerLabel} / ${currentModel.label}`
+    : currentModel?.label ?? selectedModel;
   const isExtraUsage = currentModel?.extraUsage ?? false;
   const effortLabel =
     EFFORT_LEVELS.find((l) => l.id === effortLevel)?.label ?? effortLevel;
@@ -248,6 +254,7 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
       {modelSelectorOpen && (
         <ModelSelector
           selected={selectedModel}
+          selectedProvider={selectedProvider}
           onSelect={handleModelSelect}
           onClose={() => setModelSelectorOpen(false)}
         />

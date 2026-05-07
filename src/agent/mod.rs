@@ -8,6 +8,8 @@ mod types;
 
 use serde::{Deserialize, Serialize};
 
+use crate::agent_backend::AgentBackendRuntime;
+
 pub use args::{build_claude_args, build_stdin_message};
 pub use binary::{resolve_claude_path, resolve_claude_path_blocking};
 pub use naming::{generate_branch_name, generate_session_name, sanitize_branch_name};
@@ -47,6 +49,9 @@ pub struct AgentSettings {
     /// selected model runs at its 200k window. Derived frontend-side from
     /// the model registry's `contextWindowTokens`.
     pub disable_1m_context: bool,
+    /// Provider-specific env for experimental alternate Claude Code backends.
+    /// Empty means the normal Claude Code account/API environment is used.
+    pub backend_runtime: AgentBackendRuntime,
     /// Optional bridge used by Claude Code hooks. When present, args inject
     /// command hooks and process env points those hook children back at the
     /// parent-side bridge.

@@ -567,13 +567,24 @@ fn schedule_background_task_wake(
             if let AgentEvent::Stream(StreamEvent::Result {
                 total_cost_usd,
                 duration_ms,
+                usage,
                 ..
             }) = &event
                 && let Ok(db) = Database::open(&db_path)
-                && let (Some(cost), Some(dur)) = (total_cost_usd, duration_ms)
                 && let Some(ref msg_id) = last_assistant_msg_id
             {
-                let _ = db.update_chat_message_cost(msg_id, *cost, *dur);
+                if let Some(usage) = usage {
+                    let _ = db.update_chat_message_usage_if_missing(
+                        msg_id,
+                        usage.input_tokens,
+                        usage.output_tokens,
+                        usage.cache_read_input_tokens,
+                        usage.cache_creation_input_tokens,
+                    );
+                }
+                if let (Some(cost), Some(dur)) = (total_cost_usd, duration_ms) {
+                    let _ = db.update_chat_message_cost(msg_id, *cost, *dur);
+                }
             }
 
             let is_done = matches!(
@@ -637,6 +648,7 @@ struct ChatTurnSettingsPayload<'a> {
     workspace_id: &'a str,
     chat_session_id: &'a str,
     model: Option<&'a str>,
+    backend_id: Option<&'a str>,
     fast_mode: bool,
     thinking_enabled: bool,
     plan_mode: bool,
@@ -1055,6 +1067,7 @@ pub async fn send_chat_message(
     effort: Option<String>,
     chrome_enabled: Option<bool>,
     disable_1m_context: Option<bool>,
+    backend_id: Option<String>,
     attachments: Option<Vec<AttachmentInput>>,
     app: AppHandle,
     state: State<'_, AppState>,
@@ -1163,6 +1176,7 @@ pub async fn send_chat_message(
                 session_plan_mode: false,
                 session_allowed_tools: Vec::new(),
                 session_disable_1m_context: false,
+                session_backend_hash: String::new(),
                 pending_permissions: std::collections::HashMap::new(),
                 running_background_tasks: std::collections::HashSet::new(),
                 background_wake_active: false,
@@ -1188,6 +1202,7 @@ pub async fn send_chat_message(
             session_plan_mode: false,
             session_allowed_tools: Vec::new(),
             session_disable_1m_context: false,
+            session_backend_hash: String::new(),
             pending_permissions: std::collections::HashMap::new(),
             running_background_tasks: std::collections::HashSet::new(),
             background_wake_active: false,
@@ -1291,9 +1306,23 @@ pub async fn send_chat_message(
     session.needs_attention = false;
     session.attention_kind = None;
 
+    let (resolved_backend_id, resolved_model) =
+        crate::commands::agent_backends::resolve_backend_request_defaults(
+            &db,
+            backend_id.as_deref(),
+            model.as_deref(),
+        )?;
+
+    let backend_runtime = crate::commands::agent_backends::resolve_backend_runtime(
+        &state,
+        resolved_backend_id.as_deref(),
+        resolved_model.as_deref(),
+    )
+    .await?;
+
     // Build agent settings from frontend params.
     let agent_settings = AgentSettings {
-        model,
+        model: resolved_model,
         fast_mode: fast_mode.unwrap_or(false),
         thinking_enabled: thinking_enabled.unwrap_or(false),
         plan_mode: plan_mode.unwrap_or(false),
@@ -1301,6 +1330,7 @@ pub async fn send_chat_message(
         chrome_enabled: chrome_enabled.unwrap_or(false),
         mcp_config,
         disable_1m_context: disable_1m_context.unwrap_or(false),
+        backend_runtime,
         hook_bridge: None,
     };
 
@@ -1313,6 +1343,7 @@ pub async fn send_chat_message(
             workspace_id: &workspace_id,
             chat_session_id: &chat_session_id,
             model: agent_settings.model.as_deref(),
+            backend_id: agent_settings.backend_runtime.backend_id.as_deref(),
             fast_mode: agent_settings.fast_mode,
             thinking_enabled: agent_settings.thinking_enabled,
             plan_mode: agent_settings.plan_mode,
@@ -1337,11 +1368,13 @@ pub async fn send_chat_message(
                 allowed_tools: &session.session_allowed_tools,
                 exited_plan: session.session_exited_plan,
                 disable_1m_context: session.session_disable_1m_context,
+                backend_hash: &session.session_backend_hash,
             },
             RequestedFlags {
                 plan_mode: agent_settings.plan_mode,
                 allowed_tools: &allowed_tools,
                 disable_1m_context: agent_settings.disable_1m_context,
+                backend_hash: &agent_settings.backend_runtime.hash,
             },
         )
     {
@@ -1355,22 +1388,25 @@ pub async fn send_chat_message(
                 allowed_tools: &session.session_allowed_tools,
                 exited_plan: session.session_exited_plan,
                 disable_1m_context: session.session_disable_1m_context,
+                backend_hash: &session.session_backend_hash,
             },
             RequestedFlags {
                 plan_mode: agent_settings.plan_mode,
                 allowed_tools: &allowed_tools,
                 disable_1m_context: agent_settings.disable_1m_context,
+                backend_hash: &agent_settings.backend_runtime.hash,
             },
         )
     {
         eprintln!(
-            "[chat] session flags drifted (plan_mode {} -> {}, allowed_tools changed: {}, exited_plan: {}, disable_1m_context {} -> {}) — tearing down persistent session for {workspace_id}",
+            "[chat] session flags drifted (plan_mode {} -> {}, allowed_tools changed: {}, exited_plan: {}, disable_1m_context {} -> {}, backend_hash changed: {}) — tearing down persistent session for {workspace_id}",
             session.session_plan_mode,
             agent_settings.plan_mode,
             session.session_allowed_tools != allowed_tools,
             session.session_exited_plan,
             session.session_disable_1m_context,
             agent_settings.disable_1m_context,
+            session.session_backend_hash != agent_settings.backend_runtime.hash,
         );
         // Resolve any pending permission requests against the doomed process
         // before we kill it, so the next turn doesn't carry stale tool_use_ids.
@@ -1648,6 +1684,7 @@ pub async fn send_chat_message(
                 session.session_plan_mode = agent_settings.plan_mode;
                 session.session_allowed_tools = allowed_tools.clone();
                 session.session_disable_1m_context = agent_settings.disable_1m_context;
+                session.session_backend_hash = agent_settings.backend_runtime.hash.clone();
                 // Fresh process — any prior ExitPlanMode observation belongs
                 // to the dead session. Keep this in lockstep with the
                 // spawn-time flags above so the latch can't leak across
@@ -1745,6 +1782,7 @@ pub async fn send_chat_message(
         session.session_plan_mode = agent_settings.plan_mode;
         session.session_allowed_tools = allowed_tools.clone();
         session.session_disable_1m_context = agent_settings.disable_1m_context;
+        session.session_backend_hash = agent_settings.backend_runtime.hash.clone();
         // See the sibling reset above — fresh process, fresh latch.
         session.session_exited_plan = false;
         session.session_resolved_env = resolved_env.vars.clone();
@@ -2627,14 +2665,25 @@ pub async fn send_chat_message(
             if let AgentEvent::Stream(StreamEvent::Result {
                 total_cost_usd,
                 duration_ms,
+                usage,
                 ..
             }) = &event
             {
                 if let Ok(db) = Database::open(&db_path)
-                    && let (Some(cost), Some(dur)) = (total_cost_usd, duration_ms)
                     && let Some(ref msg_id) = last_assistant_msg_id
                 {
-                    let _ = db.update_chat_message_cost(msg_id, *cost, *dur);
+                    if let Some(usage) = usage {
+                        let _ = db.update_chat_message_usage_if_missing(
+                            msg_id,
+                            usage.input_tokens,
+                            usage.output_tokens,
+                            usage.cache_read_input_tokens,
+                            usage.cache_creation_input_tokens,
+                        );
+                    }
+                    if let (Some(cost), Some(dur)) = (total_cost_usd, duration_ms) {
+                        let _ = db.update_chat_message_cost(msg_id, *cost, *dur);
+                    }
                 }
 
                 let anchor_msg_id = last_assistant_msg_id.as_deref().unwrap_or(&user_msg_id);

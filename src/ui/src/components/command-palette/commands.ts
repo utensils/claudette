@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import type { ThemeDefinition } from "../../types/theme";
 import { MODELS } from "../chat/ModelSelector";
+import type { Model } from "../chat/modelRegistry";
 import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "../chat/modelCapabilities";
 
 export type CommandCategory =
@@ -135,17 +136,19 @@ export function buildThemeCommands(
 /** Build model sub-menu commands. */
 export function buildModelCommands(
   selectedModel: string,
-  onSelect: (model: string) => void,
+  onSelect: (model: string, providerId?: string) => void,
   close: () => void,
+  models: readonly Model[] = MODELS,
+  selectedProvider = "anthropic",
 ): Command[] {
-  return MODELS.map((m) => ({
-    id: `model:${m.id}`,
-    name: `${m.label}${m.id === selectedModel ? " ✓" : ""}`,
+  return models.map((m) => ({
+    id: `model:${m.providerQualifiedId ?? m.id}`,
+    name: `${m.providerLabel ? `${m.providerLabel} / ` : ""}${m.label}${m.id === selectedModel && (m.providerId ?? "anthropic") === selectedProvider ? " ✓" : ""}`,
     description: m.extraUsage ? "Extra usage: 1M context billed at API rates" : undefined,
     category: "agent" as const,
     icon: m.extraUsage ? BadgeDollarSign : Sparkles,
     keywords: ["model", ...m.label.toLowerCase().split(/\s+/)],
-    execute: () => { onSelect(m.id); close(); },
+    execute: () => { onSelect(m.id, m.providerId ?? "anthropic"); close(); },
   }));
 }
 

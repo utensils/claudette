@@ -181,14 +181,16 @@ jobs:
       # contact the devUrl at startup and shows "localhost refused to
       # connect"). `tauri-action` sets this automatically via
       # `cargo tauri build`; since we're bypassing it on Windows, we
-      # pass the flag explicitly.
+      # pass the flag explicitly. `alternative-backends` is kept in release
+      # binaries while the user-facing experimental setting remains off by
+      # default.
       - name: Build desktop exe (Windows)
         if: startsWith(matrix.platform, 'windows')
         shell: bash
         run: |
           cd src/ui && bun run build && cd ../..
           cargo build --release -p claudette-tauri \
-            --features tauri/custom-protocol \
+            --features tauri/custom-protocol,alternative-backends \
             --target ${{ matrix.rust-target }}
 
       # Zip the bare .exe before upload. Raw unsigned .exe downloads

@@ -68,6 +68,12 @@
   top: -1px;
 }
 
+.providerBadge {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
 .check {
   margin-left: auto;
   color: var(--accent-primary);

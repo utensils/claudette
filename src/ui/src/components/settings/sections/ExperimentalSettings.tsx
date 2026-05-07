@@ -1,7 +1,13 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../../stores/useAppStore";
-import { setAppSetting } from "../../../services/tauri";
+import {
+  getAppSetting,
+  listAppSettingsWithPrefix,
+  resetAgentSession,
+  setAppSetting,
+} from "../../../services/tauri";
+import { planAlternativeBackendDisableCleanup } from "../alternativeBackendCleanup";
 import styles from "../Settings.module.css";
 
 export function ExperimentalSettings() {
@@ -21,6 +27,18 @@ export function ExperimentalSettings() {
   );
   const setCommunityRegistryEnabled = useAppStore(
     (s) => s.setCommunityRegistryEnabled,
+  );
+  const alternativeBackendsEnabled = useAppStore(
+    (s) => s.alternativeBackendsEnabled,
+  );
+  const alternativeBackendsAvailable = useAppStore(
+    (s) => s.alternativeBackendsAvailable,
+  );
+  const setAlternativeBackendsEnabled = useAppStore(
+    (s) => s.setAlternativeBackendsEnabled,
+  );
+  const setDefaultAgentBackendId = useAppStore(
+    (s) => s.setDefaultAgentBackendId,
   );
   const [error, setError] = useState<string | null>(null);
 
@@ -75,6 +93,61 @@ export function ExperimentalSettings() {
     }
   };
 
+  const resetAlternativeBackendSelections = async () => {
+    const [
+      defaultModel,
+      defaultBackend,
+      sessionModels,
+      sessionProviders,
+    ] = await Promise.all([
+      getAppSetting("default_model"),
+      getAppSetting("default_agent_backend"),
+      listAppSettingsWithPrefix("model:"),
+      listAppSettingsWithPrefix("model_provider:"),
+    ]);
+    const store = useAppStore.getState();
+    const plan = planAlternativeBackendDisableCleanup({
+      defaultModel,
+      defaultBackend,
+      sessionModels,
+      sessionProviders,
+      selectedModels: store.selectedModel,
+      selectedProviders: store.selectedModelProvider,
+    });
+
+    if (plan.resetDefault) {
+      await setAppSetting("default_model", plan.defaultModel);
+      await setAppSetting("default_agent_backend", plan.defaultBackend);
+      setDefaultAgentBackendId(plan.defaultBackend);
+    }
+
+    for (const sessionId of plan.sessionIds) {
+      store.setSelectedModel(sessionId, plan.defaultModel, plan.defaultBackend);
+      await setAppSetting(`model:${sessionId}`, plan.defaultModel);
+      await setAppSetting(`model_provider:${sessionId}`, plan.defaultBackend);
+      await resetAgentSession(sessionId);
+      store.clearAgentQuestion(sessionId);
+      store.clearPlanApproval(sessionId);
+    }
+  };
+
+  const handleAlternativeBackendsToggle = async () => {
+    if (!alternativeBackendsAvailable) return;
+    const next = !alternativeBackendsEnabled;
+    const previous = alternativeBackendsEnabled;
+    setAlternativeBackendsEnabled(next);
+    try {
+      setError(null);
+      if (!next) {
+        await resetAlternativeBackendSelections();
+      }
+      await setAppSetting("alternative_backends_enabled", next ? "true" : "false");
+    } catch (e) {
+      setAlternativeBackendsEnabled(previous);
+      setError(String(e));
+    }
+  };
+
   return (
     <div>
       <h2 className={styles.sectionTitle}>{t("experimental_title")}</h2>
@@ -98,6 +171,30 @@ export function ExperimentalSettings() {
             aria-label={t("experimental_claudette_terminal_aria")}
             data-checked={claudetteTerminalEnabled}
             onClick={handleClaudetteTerminalToggle}
+          >
+            <div className={styles.toggleKnob} />
+          </button>
+        </div>
+      </div>
+
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>
+            {t("experimental_alternative_backends")}
+          </div>
+          <div className={styles.settingDescription}>
+            {t("experimental_alternative_backends_desc")}
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          <button
+            className={styles.toggle}
+            role="switch"
+            aria-checked={alternativeBackendsEnabled}
+            aria-label={t("experimental_alternative_backends_aria")}
+            data-checked={alternativeBackendsEnabled}
+            disabled={!alternativeBackendsAvailable}
+            onClick={handleAlternativeBackendsToggle}
           >
             <div className={styles.toggleKnob} />
           </button>

@@ -852,6 +852,7 @@ async fn handle_send_chat_message(
         parsed.effort,
         parsed.chrome_enabled,
         parsed.disable_1m_context,
+        parsed.backend_id,
         parsed.attachments,
         app.clone(),
         state,
@@ -877,6 +878,7 @@ pub(crate) struct SendChatParams {
     pub effort: Option<String>,
     pub chrome_enabled: Option<bool>,
     pub disable_1m_context: Option<bool>,
+    pub backend_id: Option<String>,
     pub permission_level: Option<String>,
     pub attachments: Option<Vec<crate::commands::chat::AttachmentInput>>,
 }
@@ -913,6 +915,10 @@ pub(crate) fn parse_send_chat_params(params: &serde_json::Value) -> Result<SendC
         effort: str_param("effort"),
         chrome_enabled: bool_param("chrome_enabled"),
         disable_1m_context: bool_param("disable_1m_context"),
+        backend_id: str_param("backend_id")
+            .or_else(|| str_param("backendId"))
+            .or_else(|| str_param("model_provider"))
+            .or_else(|| str_param("modelProvider")),
         permission_level: str_param("permission_level"),
         attachments: parse_optional_param(params, &["attachments"])?,
     })
@@ -1342,6 +1348,7 @@ mod tests {
             session_plan_mode: false,
             session_allowed_tools: Vec::new(),
             session_disable_1m_context: false,
+            session_backend_hash: String::new(),
             pending_permissions: HashMap::new(),
             running_background_tasks: Default::default(),
             background_wake_active: false,

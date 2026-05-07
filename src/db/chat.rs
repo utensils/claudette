@@ -263,6 +263,33 @@ impl Database {
         Ok(())
     }
 
+    #[allow(dead_code)]
+    pub fn update_chat_message_usage_if_missing(
+        &self,
+        id: &str,
+        input_tokens: u64,
+        output_tokens: u64,
+        cache_read_tokens: Option<u64>,
+        cache_creation_tokens: Option<u64>,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE chat_messages
+             SET input_tokens = COALESCE(input_tokens, ?1),
+                 output_tokens = COALESCE(output_tokens, ?2),
+                 cache_read_tokens = COALESCE(cache_read_tokens, ?3),
+                 cache_creation_tokens = COALESCE(cache_creation_tokens, ?4)
+             WHERE id = ?5",
+            params![
+                input_tokens as i64,
+                output_tokens as i64,
+                cache_read_tokens.map(|value| value as i64),
+                cache_creation_tokens.map(|value| value as i64),
+                id,
+            ],
+        )?;
+        Ok(())
+    }
+
     /// Get the most recent chat message for each workspace (for dashboard display).
     /// Uses a correlated subquery with rowid tie-breaking to guarantee exactly
     /// one row per workspace even when multiple messages share the same timestamp.
@@ -914,6 +941,23 @@ mod tests {
         assert_eq!(msgs[0].output_tokens, None);
         assert_eq!(msgs[0].cache_read_tokens, None);
         assert_eq!(msgs[0].cache_creation_tokens, None);
+    }
+
+    #[test]
+    fn test_update_chat_message_usage_if_missing_preserves_existing_values() {
+        let db = setup_db_with_workspace();
+        let mut msg = make_chat_msg(&db, "mt3", "w1", ChatRole::Assistant, "hello");
+        msg.input_tokens = Some(12);
+        db.insert_chat_message(&msg).unwrap();
+
+        db.update_chat_message_usage_if_missing("mt3", 100, 20, Some(30), Some(40))
+            .unwrap();
+
+        let msgs = db.list_chat_messages("w1").unwrap();
+        assert_eq!(msgs[0].input_tokens, Some(12));
+        assert_eq!(msgs[0].output_tokens, Some(20));
+        assert_eq!(msgs[0].cache_read_tokens, Some(30));
+        assert_eq!(msgs[0].cache_creation_tokens, Some(40));
     }
 
     // --- Pagination tests ---
