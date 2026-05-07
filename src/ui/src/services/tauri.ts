@@ -210,6 +210,10 @@ export function openWorkspaceInTerminal(worktreePath: string): Promise<void> {
   return invoke("open_workspace_in_terminal", { worktreePath });
 }
 
+export function openInEditor(path: string): Promise<void> {
+  return invoke("open_in_editor", { path });
+}
+
 // -- Worktree Discovery --
 
 export interface DiscoveredWorktree {

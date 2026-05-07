@@ -167,6 +167,8 @@
   cursor: pointer;
   gap: 6px;
   transition: background var(--transition-fast);
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .statusGroupHeader:hover {
@@ -200,6 +202,8 @@
   cursor: grab;
   gap: 6px;
   transition: background var(--transition-fast);
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .dragging .repoHeader {
@@ -324,6 +328,8 @@
   gap: 8px;
   position: relative;
   transition: background var(--transition-fast);
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .wsItem:hover {
