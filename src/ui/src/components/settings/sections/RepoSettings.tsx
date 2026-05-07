@@ -21,6 +21,10 @@ import {
   PinnedPromptsManager,
 } from "./PinnedPromptsManager";
 import { EMPTY_PINNED_PROMPTS } from "../../../stores/slices/pinnedPromptsSlice";
+import {
+  normalizeShellScriptInput,
+  PLAIN_TEXT_INPUT_PROPS,
+} from "../../../utils/textInput";
 import styles from "../Settings.module.css";
 
 interface RepoSettingsProps {
@@ -329,6 +333,7 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
           onChange={(e) => setName(e.target.value)}
           onBlur={() => save({ name })}
           aria-label={t("repo_display_name_aria")}
+          {...PLAIN_TEXT_INPUT_PROPS}
         />
       </div>
 
@@ -418,10 +423,18 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
         <textarea
           className={`${styles.textarea}${repoScriptOverrides ? ` ${styles.overriddenInput}` : ""}`}
           value={setupScript}
-          onChange={(e) => setSetupScript(e.target.value)}
-          onBlur={() => save({ setup_script: setupScript.trim() || null })}
+          onChange={(e) =>
+            setSetupScript(normalizeShellScriptInput(e.target.value))
+          }
+          onBlur={() =>
+            save({
+              setup_script:
+                normalizeShellScriptInput(setupScript).trim() || null,
+            })
+          }
           placeholder={t("repo_setup_script_placeholder")}
           rows={3}
+          {...PLAIN_TEXT_INPUT_PROPS}
         />
         <div className={styles.fieldHint}>
           {t("repo_setup_script_hint")}
@@ -462,10 +475,18 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
         <textarea
           className={`${styles.textarea}${repoArchiveScriptOverrides ? ` ${styles.overriddenInput}` : ""}`}
           value={archiveScript}
-          onChange={(e) => setArchiveScript(e.target.value)}
-          onBlur={() => save({ archive_script: archiveScript.trim() || null })}
+          onChange={(e) =>
+            setArchiveScript(normalizeShellScriptInput(e.target.value))
+          }
+          onBlur={() =>
+            save({
+              archive_script:
+                normalizeShellScriptInput(archiveScript).trim() || null,
+            })
+          }
           placeholder={t("repo_archive_script_placeholder")}
           rows={3}
+          {...PLAIN_TEXT_INPUT_PROPS}
         />
         <div className={styles.fieldHint}>
           {t("repo_archive_script_hint")}
@@ -517,6 +538,7 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
           }
           placeholder={t("repo_custom_instructions_placeholder")}
           rows={4}
+          {...PLAIN_TEXT_INPUT_PROPS}
         />
         <div className={styles.fieldHint}>
           {t("repo_custom_instructions_hint")}
@@ -542,6 +564,7 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
           }
           placeholder={t("repo_branch_rename_placeholder")}
           rows={3}
+          {...PLAIN_TEXT_INPUT_PROPS}
         />
       </div>
 
