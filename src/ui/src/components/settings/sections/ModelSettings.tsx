@@ -351,12 +351,14 @@ function BackendCard({
   const [draft, setDraft] = useState(backend);
   const [secret, setSecret] = useState("");
   const [status, setStatus] = useState<string | null>(null);
+  const [statusModelCount, setStatusModelCount] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     setDraft(backend);
     setSecret("");
     setStatus(null);
+    setStatusModelCount(null);
     setBusy(false);
   }, [backend]);
 
@@ -367,6 +369,8 @@ function BackendCard({
   const showBaseUrl = draft.kind !== "codex_subscription";
   const showSecret = draft.kind !== "codex_subscription";
   const showManualModels = draft.kind === "custom_anthropic" || draft.kind === "custom_openai";
+  const actualModelCount = countBackendModels(draft);
+  const displayModelCount = actualModelCount > 0 ? actualModelCount : statusModelCount ?? 0;
   const selectedDefaultModel = modelOptions.some((model) => model.id === draft.default_model)
     ? draft.default_model ?? ""
     : "";
@@ -395,6 +399,7 @@ function BackendCard({
       setError(null);
       setBusy(true);
       await persistDraft();
+      setStatusModelCount(null);
       setStatus(t("models_backend_status_saved"));
     } catch (e) {
       setError(String(e));
@@ -411,6 +416,7 @@ function BackendCard({
       const saved = await refreshAgentBackendModels(draft.id);
       const refreshed = applySavedBackends(saved);
       const count = (refreshed?.discovered_models.length ?? 0) + (refreshed?.manual_models.length ?? 0);
+      setStatusModelCount(count);
       setStatus(t("models_backend_status_refreshed", { count }));
     } catch (e) {
       setError(String(e));
@@ -425,12 +431,15 @@ function BackendCard({
       setBusy(true);
       await persistDraft();
       const result = await testAgentBackend(draft.id);
+      let refreshed: AgentBackendConfig | undefined;
       if (result.backends) {
-        applySavedBackends(result.backends);
+        refreshed = applySavedBackends(result.backends);
       } else if (result.ok && draft.model_discovery) {
         const saved = await refreshAgentBackendModels(draft.id);
-        applySavedBackends(saved);
+        refreshed = applySavedBackends(saved);
       }
+      const count = refreshed ? countBackendModels(refreshed) : parseModelCount(result.message);
+      setStatusModelCount(count);
       setStatus(result.message);
     } catch (e) {
       setError(String(e));
@@ -460,7 +469,7 @@ function BackendCard({
       <div className={styles.settingInfo}>
         <div className={styles.settingLabel}>{draft.label}</div>
         <div className={styles.settingDescription}>
-          {draft.kind} · {draft.discovered_models.length + draft.manual_models.length} models
+          {draft.kind} · {displayModelCount} models
           {status ? ` · ${status}` : ""}
         </div>
         <div className={styles.backendForm}>
@@ -575,4 +584,13 @@ function dedupeBackendModels(models: AgentBackendConfig["manual_models"]) {
     seen.add(model.id);
     return true;
   });
+}
+
+function countBackendModels(backend: AgentBackendConfig) {
+  return dedupeBackendModels([...backend.discovered_models, ...backend.manual_models]).length;
+}
+
+function parseModelCount(message: string) {
+  const match = message.match(/Found\s+(\d+)\s+model/i);
+  return match ? Number(match[1]) : null;
 }
