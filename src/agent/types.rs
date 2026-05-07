@@ -64,6 +64,11 @@ pub struct TaskUsage {
 /// Top-level JSON line from Claude CLI stdout.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
+// Variants are constructed one at a time from streaming JSON; we never
+// hold them in collections, so the size delta between variants doesn't
+// matter in practice. Boxing the larger payloads would force a deref
+// at every pattern-match callsite.
+#[allow(clippy::large_enum_variant)]
 pub enum StreamEvent {
     #[serde(rename = "system")]
     System {
@@ -106,6 +111,12 @@ pub enum StreamEvent {
         /// Only present on `subtype: "compact_boundary"` events.
         #[serde(default)]
         compact_metadata: Option<CompactMetadata>,
+        /// Present on `subtype: "command_line"` events emitted at session
+        /// start by the agent runner. Contains the shell-quoted, redacted
+        /// `claude ...` command line for display in the chat tab. See
+        /// `crate::agent::args::format_redacted_invocation`.
+        #[serde(default)]
+        command_line: Option<String>,
     },
 
     #[serde(rename = "stream_event")]
