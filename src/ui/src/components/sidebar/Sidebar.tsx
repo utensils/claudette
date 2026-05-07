@@ -1,5 +1,7 @@
 import { memo, useRef, useState, useMemo, useCallback, useEffect } from "react";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
+import { writeText as clipboardWriteText } from "@tauri-apps/plugin-clipboard-manager";
 import { useAppStore } from "../../stores/useAppStore";
 import { isAgentBusy } from "../../utils/agentStatus";
 import {
@@ -19,6 +21,9 @@ import {
   sendRemoteCommand,
   pairWithServer,
   startLocalServer,
+  openInEditor,
+  openWorkspaceInTerminal,
+  listChatSessions,
 } from "../../services/tauri";
 import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, CircleStop, GitPullRequestArrow, GitPullRequestDraft, GitMerge, GitPullRequestClosed, ChevronRight, ChevronDown, ArrowDownAZ } from "lucide-react";
 import { RepoIcon } from "../shared/RepoIcon";
@@ -33,12 +38,49 @@ import {
   orderRepoWorkspaces,
   workspaceOrderModeKey,
 } from "../../utils/workspaceOrdering";
+import {
+  buildWorkspaceContextMenuItems,
+  type WorkspaceContextMenuLabels,
+} from "./workspaceContextMenu";
+import type { ChatSession } from "../../types";
 import styles from "./Sidebar.module.css";
 
 type StatusBucketKey = "in-progress" | "in-review" | "draft" | "merged" | "closed" | "archived";
 const STATUS_BUCKET_ORDER: StatusBucketKey[] = [
   "merged", "in-review", "draft", "in-progress", "closed", "archived",
 ];
+
+function workspaceContextMenuLabels(t: TFunction<"sidebar">): WorkspaceContextMenuLabels {
+  return {
+    renameWorkspace: t("context_rename_workspace"),
+    markAsUnread: t("context_mark_as_unread"),
+    openInFileManager: t("context_open_in_file_manager"),
+    openInTerminal: t("context_open_in_terminal"),
+    copyWorkingDirectory: t("context_copy_working_directory"),
+    copyClaudeSessionId: t("context_copy_claude_session_id"),
+    archiveWorkspace: t("archive_workspace"),
+    restoreWorkspace: t("restore_workspace"),
+    deleteWorkspace: t("delete_workspace"),
+  };
+}
+
+function pickClaudeSessionId(
+  sessions: readonly ChatSession[],
+  selectedSessionId: string | undefined,
+): string | null {
+  return (
+    sessions.find(
+      (session) =>
+        session.id === selectedSessionId &&
+        session.status === "Active" &&
+        session.session_id,
+    )?.session_id ??
+    sessions.find(
+      (session) => session.status === "Active" && session.session_id,
+    )?.session_id ??
+    null
+  );
+}
 
 export const Sidebar = memo(function Sidebar() {
   const repositories = useAppStore((s) => s.repositories);
@@ -61,9 +103,11 @@ export const Sidebar = memo(function Sidebar() {
   const openSettings = useAppStore((s) => s.openSettings);
   const updateWorkspace = useAppStore((s) => s.updateWorkspace);
   const removeWorkspace = useAppStore((s) => s.removeWorkspace);
+  const markWorkspaceAsUnread = useAppStore((s) => s.markWorkspaceAsUnread);
   const addToast = useAppStore((s) => s.addToast);
   const unreadCompletions = useAppStore((s) => s.unreadCompletions);
   const sessionsByWorkspace = useAppStore((s) => s.sessionsByWorkspace);
+  const setSessionsForWorkspace = useAppStore((s) => s.setSessionsForWorkspace);
   const scmSummary = useAppStore((s) => s.scmSummary);
   const setRepositories = useAppStore((s) => s.setRepositories);
   const setWorkspaces = useAppStore((s) => s.setWorkspaces);
@@ -134,6 +178,11 @@ export const Sidebar = memo(function Sidebar() {
   const [creatingWorkspace, setCreatingWorkspace] = useState<{ repoId: string } | null>(null);
   const [repoContextMenu, setRepoContextMenu] = useState<{
     repoId: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [workspaceContextMenu, setWorkspaceContextMenu] = useState<{
+    workspaceId: string;
     x: number;
     y: number;
   } | null>(null);
@@ -408,6 +457,78 @@ export const Sidebar = memo(function Sidebar() {
     setRenamingWsId(null);
   }, [renameValue, workspaces, updateWorkspace, addToast, t]);
 
+  const workspaceContextMenuItems = useMemo<ContextMenuItem[]>(() => {
+    if (!workspaceContextMenu) return [];
+    const ws = workspaces.find((w) => w.id === workspaceContextMenu.workspaceId);
+    if (!ws) return [];
+    return buildWorkspaceContextMenuItems(
+      { status: ws.status, worktreePath: ws.worktree_path, remote: false },
+      workspaceContextMenuLabels(t),
+      {
+        rename: () => {
+          setRenamingWsId(ws.id);
+          setRenameValue(ws.name);
+        },
+        markAsUnread: () => {
+          markWorkspaceAsUnread(ws.id);
+          addToast(t("context_marked_as_unread"));
+        },
+        openInFileManager: ws.worktree_path
+          ? () => openInEditor(ws.worktree_path!)
+          : undefined,
+        openInTerminal: ws.worktree_path
+          ? () => openWorkspaceInTerminal(ws.worktree_path!)
+          : undefined,
+        copyWorkingDirectory: ws.worktree_path
+          ? async () => {
+              await clipboardWriteText(ws.worktree_path!);
+              addToast(t("context_copied_working_directory"));
+            }
+          : undefined,
+        copyClaudeSessionId: async () => {
+          const state = useAppStore.getState();
+          let sessions = state.sessionsByWorkspace[ws.id] ?? [];
+          let selectedSessionId = state.selectedSessionIdByWorkspaceId[ws.id];
+          let claudeSessionId = pickClaudeSessionId(sessions, selectedSessionId);
+          if (!claudeSessionId) {
+            sessions = await listChatSessions(ws.id, false);
+            setSessionsForWorkspace(ws.id, sessions);
+            selectedSessionId =
+              useAppStore.getState().selectedSessionIdByWorkspaceId[ws.id] ??
+              selectedSessionId;
+            claudeSessionId = pickClaudeSessionId(sessions, selectedSessionId);
+          }
+          if (!claudeSessionId) {
+            addToast(t("context_no_claude_session_id"));
+            return;
+          }
+          await clipboardWriteText(claudeSessionId);
+          addToast(t("context_copied_claude_session_id"));
+        },
+        archive: ws.status === "Active" ? () => handleArchive(ws.id) : undefined,
+        restore: ws.status === "Archived" ? () => handleRestore(ws.id) : undefined,
+        delete:
+          ws.status === "Archived"
+            ? () =>
+                openModal("deleteWorkspace", {
+                  wsId: ws.id,
+                  wsName: ws.name,
+                })
+            : undefined,
+      },
+    );
+  }, [
+    addToast,
+    handleArchive,
+    handleRestore,
+    markWorkspaceAsUnread,
+    openModal,
+    setSessionsForWorkspace,
+    t,
+    workspaceContextMenu,
+    workspaces,
+  ]);
+
   // Drag-reorder for workspaces inside a repo group. Disabled in "by status"
   // grouping mode (option 2A — within-repo only): when the sidebar is grouped
   // by status, sibling workspaces in a status bucket can come from different
@@ -516,6 +637,16 @@ export const Sidebar = memo(function Sidebar() {
         onClick={() => {
           if (dragEnabled && workspaceDrag.justEnded()) return;
           selectWorkspace(ws.id);
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setRepoContextMenu(null);
+          setWorkspaceContextMenu({
+            workspaceId: ws.id,
+            x: e.clientX,
+            y: e.clientY,
+          });
         }}
         onPointerDown={dragHandlers?.onPointerDown}
         onPointerMove={dragHandlers?.onPointerMove}
@@ -1153,6 +1284,15 @@ export const Sidebar = memo(function Sidebar() {
           dataTestId="repo-context-menu"
         />
       )}
+      {workspaceContextMenu && workspaceContextMenuItems.length > 0 && (
+        <ContextMenu
+          x={workspaceContextMenu.x}
+          y={workspaceContextMenu.y}
+          items={workspaceContextMenuItems}
+          onClose={() => setWorkspaceContextMenu(null)}
+          dataTestId="workspace-context-menu"
+        />
+      )}
     </div>
   );
 });
@@ -1307,10 +1447,17 @@ function RemoteConnectionGroup({
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
   const addWorkspace = useAppStore((s) => s.addWorkspace);
   const updateWorkspace = useAppStore((s) => s.updateWorkspace);
+  const markWorkspaceAsUnread = useAppStore((s) => s.markWorkspaceAsUnread);
+  const addToast = useAppStore((s) => s.addToast);
   const repoCollapsed = useAppStore((s) => s.repoCollapsed);
   const toggleRepoCollapsed = useAppStore((s) => s.toggleRepoCollapsed);
   const creatingRef = useRef<Set<string>>(new Set());
   const archivingRef = useRef<Set<string>>(new Set());
+  const [workspaceContextMenu, setWorkspaceContextMenu] = useState<{
+    workspaceId: string;
+    x: number;
+    y: number;
+  } | null>(null);
 
   const remoteRepos = repositories.filter(
     (r) => r.remote_connection_id === conn.id
@@ -1350,7 +1497,7 @@ function RemoteConnectionGroup({
     }
   };
 
-  const handleArchive = async (wsId: string) => {
+  const handleArchive = useCallback(async (wsId: string) => {
     if (archivingRef.current.has(wsId)) return;
     archivingRef.current.add(wsId);
     try {
@@ -1368,7 +1515,33 @@ function RemoteConnectionGroup({
     } finally {
       archivingRef.current.delete(wsId);
     }
-  };
+  }, [conn.id, selectedWorkspaceId, selectWorkspace, updateWorkspace]);
+
+  const workspaceContextMenuItems = useMemo<ContextMenuItem[]>(() => {
+    if (!workspaceContextMenu) return [];
+    const ws = remoteWorkspaces.find(
+      (candidate) => candidate.id === workspaceContextMenu.workspaceId,
+    );
+    if (!ws) return [];
+    return buildWorkspaceContextMenuItems(
+      { status: ws.status, worktreePath: null, remote: true },
+      workspaceContextMenuLabels(t),
+      {
+        markAsUnread: () => {
+          markWorkspaceAsUnread(ws.id);
+          addToast(t("context_marked_as_unread"));
+        },
+        archive: ws.status === "Active" ? () => handleArchive(ws.id) : undefined,
+      },
+    );
+  }, [
+    addToast,
+    handleArchive,
+    markWorkspaceAsUnread,
+    remoteWorkspaces,
+    t,
+    workspaceContextMenu,
+  ]);
 
   return (
     <div className={styles.repoGroup}>
@@ -1451,6 +1624,15 @@ function RemoteConnectionGroup({
                     key={ws.id}
                     className={`${styles.wsItem} ${selectedWorkspaceId === ws.id ? styles.wsSelected : ""}`}
                     onClick={() => selectWorkspace(ws.id)}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setWorkspaceContextMenu({
+                        workspaceId: ws.id,
+                        x: e.clientX,
+                        y: e.clientY,
+                      });
+                    }}
                   >
                     {isAgentBusy(ws.agent_status) ? (
                       <span className={styles.statusSpinner} aria-hidden="true">
@@ -1494,6 +1676,15 @@ function RemoteConnectionGroup({
             <span className={styles.wsName}>{t("no_remote_repos")}</span>
           </div>
         </div>
+      )}
+      {workspaceContextMenu && workspaceContextMenuItems.length > 0 && (
+        <ContextMenu
+          x={workspaceContextMenu.x}
+          y={workspaceContextMenu.y}
+          items={workspaceContextMenuItems}
+          onClose={() => setWorkspaceContextMenu(null)}
+          dataTestId="remote-workspace-context-menu"
+        />
       )}
     </div>
   );
