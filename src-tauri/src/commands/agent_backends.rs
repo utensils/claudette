@@ -1209,28 +1209,147 @@ fn codex_input_from_anthropic(req: &Value) -> Value {
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .map(|message| {
+        .flat_map(|message| {
             let role = message
                 .get("role")
                 .and_then(Value::as_str)
                 .unwrap_or("user");
-            let text = content_value_text(message.get("content").unwrap_or(&Value::Null));
+            let content = message.get("content").unwrap_or(&Value::Null);
             if role == "assistant" {
-                json!({
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [{"type": "output_text", "text": text, "annotations": []}],
-                    "status": "completed",
-                })
+                assistant_input_items_from_anthropic(content)
             } else {
-                json!({
-                    "role": role,
-                    "content": [{"type": "input_text", "text": text}],
-                })
+                user_input_items_from_anthropic(role, content)
             }
         })
         .collect::<Vec<_>>();
     Value::Array(input)
+}
+
+fn assistant_input_items_from_anthropic(content: &Value) -> Vec<Value> {
+    let mut items = Vec::new();
+    match content {
+        Value::Array(blocks) => {
+            let mut text_parts = Vec::new();
+            for block in blocks {
+                match block.get("type").and_then(Value::as_str) {
+                    Some("text") => {
+                        if let Some(text) = block.get("text").and_then(Value::as_str)
+                            && !text.is_empty()
+                        {
+                            text_parts.push(text.to_string());
+                        }
+                    }
+                    Some("tool_use") => {
+                        let call_id = block
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or("call")
+                            .to_string();
+                        let name = block
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or("tool")
+                            .to_string();
+                        let arguments = block
+                            .get("input")
+                            .map(Value::to_string)
+                            .unwrap_or_else(|| "{}".to_string());
+                        items.push(json!({
+                            "type": "function_call",
+                            "call_id": call_id,
+                            "name": name,
+                            "arguments": arguments,
+                            "status": "completed",
+                        }));
+                    }
+                    _ => {}
+                }
+            }
+            if !text_parts.is_empty() {
+                items.insert(
+                    0,
+                    json!({
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": text_parts.join("\n"), "annotations": []}],
+                        "status": "completed",
+                    }),
+                );
+            }
+        }
+        Value::String(text) if !text.is_empty() => {
+            items.push(json!({
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": text, "annotations": []}],
+                "status": "completed",
+            }));
+        }
+        other if !other.is_null() => {
+            items.push(json!({
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": other.to_string(), "annotations": []}],
+                "status": "completed",
+            }));
+        }
+        _ => {}
+    }
+    items
+}
+
+fn user_input_items_from_anthropic(role: &str, content: &Value) -> Vec<Value> {
+    let mut items = Vec::new();
+    match content {
+        Value::Array(blocks) => {
+            let mut text_parts = Vec::new();
+            for block in blocks {
+                match block.get("type").and_then(Value::as_str) {
+                    Some("text") => {
+                        if let Some(text) = block.get("text").and_then(Value::as_str)
+                            && !text.is_empty()
+                        {
+                            text_parts.push(text.to_string());
+                        }
+                    }
+                    Some("tool_result") => {
+                        if !text_parts.is_empty() {
+                            items.push(json!({
+                                "role": role,
+                                "content": [{"type": "input_text", "text": text_parts.join("\n")}],
+                            }));
+                            text_parts.clear();
+                        }
+                        items.push(json!({
+                            "type": "function_call_output",
+                            "call_id": block.get("tool_use_id").and_then(Value::as_str).unwrap_or("call"),
+                            "output": content_value_text(block.get("content").unwrap_or(&Value::Null)),
+                        }));
+                    }
+                    _ => {}
+                }
+            }
+            if !text_parts.is_empty() {
+                items.push(json!({
+                    "role": role,
+                    "content": [{"type": "input_text", "text": text_parts.join("\n")}],
+                }));
+            }
+        }
+        Value::String(text) => {
+            items.push(json!({
+                "role": role,
+                "content": [{"type": "input_text", "text": text}],
+            }));
+        }
+        other => {
+            items.push(json!({
+                "role": role,
+                "content": [{"type": "input_text", "text": content_value_text(other)}],
+            }));
+        }
+    }
+    items
 }
 
 fn route_path(path: &str) -> &str {
@@ -1269,6 +1388,8 @@ fn codex_account_id_from_access_token(token: &str) -> Option<String> {
 fn openai_response_from_sse(body: &str) -> Result<Value, String> {
     let mut output_text = String::new();
     let mut last_response = None;
+    let mut output_items: HashMap<usize, Value> = HashMap::new();
+    let mut function_args: HashMap<usize, String> = HashMap::new();
     for line in body.lines() {
         let Some(data) = line.strip_prefix("data:") else {
             continue;
@@ -1285,6 +1406,40 @@ fn openai_response_from_sse(body: &str) -> Result<Value, String> {
                     output_text.push_str(delta);
                 }
             }
+            Some("response.output_item.added") => {
+                if let Some(index) = event_output_index(&value)
+                    && let Some(item) = value.get("item")
+                {
+                    output_items.insert(index, item.clone());
+                }
+            }
+            Some("response.function_call_arguments.delta") => {
+                if let Some(index) = event_output_index(&value)
+                    && let Some(delta) = value.get("delta").and_then(Value::as_str)
+                {
+                    function_args.entry(index).or_default().push_str(delta);
+                    if let Some(item) = output_items.get_mut(&index) {
+                        item["arguments"] = Value::String(function_args[&index].clone());
+                    }
+                }
+            }
+            Some("response.function_call_arguments.done") => {
+                if let Some(index) = event_output_index(&value)
+                    && let Some(arguments) = value.get("arguments").and_then(Value::as_str)
+                {
+                    function_args.insert(index, arguments.to_string());
+                    if let Some(item) = output_items.get_mut(&index) {
+                        item["arguments"] = Value::String(arguments.to_string());
+                    }
+                }
+            }
+            Some("response.output_item.done") => {
+                if let Some(index) = event_output_index(&value)
+                    && let Some(item) = value.get("item")
+                {
+                    output_items.insert(index, item.clone());
+                }
+            }
             Some("response.completed") => {
                 if let Some(response) = value.get("response") {
                     last_response = Some(response.clone());
@@ -1297,7 +1452,23 @@ fn openai_response_from_sse(body: &str) -> Result<Value, String> {
     if response.get("output_text").is_none() && !output_text.is_empty() {
         response["output_text"] = Value::String(output_text);
     }
+    let response_output_empty = response
+        .get("output")
+        .and_then(Value::as_array)
+        .is_none_or(Vec::is_empty);
+    if response_output_empty && !output_items.is_empty() {
+        let mut indexed = output_items.into_iter().collect::<Vec<_>>();
+        indexed.sort_by_key(|(index, _)| *index);
+        response["output"] = Value::Array(indexed.into_iter().map(|(_, item)| item).collect());
+    }
     Ok(response)
+}
+
+fn event_output_index(value: &Value) -> Option<usize> {
+    value
+        .get("output_index")
+        .and_then(Value::as_u64)
+        .and_then(|index| usize::try_from(index).ok())
 }
 
 fn transcript_from_anthropic(req: &Value) -> String {
@@ -1480,6 +1651,13 @@ fn anthropic_sse_body(message: &Value) -> String {
             let block_type = block.get("type").and_then(Value::as_str);
             let start_block = if block_type == Some("text") {
                 json!({"type":"text","text":""})
+            } else if block_type == Some("tool_use") {
+                json!({
+                    "type": "tool_use",
+                    "id": block.get("id").cloned().unwrap_or(json!("toolu_claudette_gateway")),
+                    "name": block.get("name").cloned().unwrap_or(json!("tool")),
+                    "input": ""
+                })
             } else {
                 block.clone()
             };
@@ -1496,6 +1674,17 @@ fn anthropic_sse_body(message: &Value) -> String {
                 out.push_str(&format!(
                     "data: {}\n\n",
                     json!({"type":"content_block_delta","index":index,"delta":{"type":"text_delta","text":text}})
+                ));
+            }
+            if block_type == Some("tool_use") {
+                let partial_json = block
+                    .get("input")
+                    .map(Value::to_string)
+                    .unwrap_or_else(|| "{}".to_string());
+                out.push_str("event: content_block_delta\n");
+                out.push_str(&format!(
+                    "data: {}\n\n",
+                    json!({"type":"content_block_delta","index":index,"delta":{"type":"input_json_delta","partial_json":partial_json}})
                 ));
             }
             out.push_str("event: content_block_stop\n");
@@ -1783,6 +1972,31 @@ mod tests {
     }
 
     #[test]
+    fn codex_input_preserves_tool_calls_and_results() {
+        let input = codex_input_from_anthropic(&json!({
+            "messages": [
+                {"role": "assistant", "content": [
+                    {"type": "text", "text": "I'll read it."},
+                    {"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {"path": "README.md"}}
+                ]},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_1", "content": "contents"}
+                ]}
+            ]
+        }));
+
+        assert_eq!(input[0]["type"], "message");
+        assert_eq!(input[0]["content"][0]["text"], "I'll read it.");
+        assert_eq!(input[1]["type"], "function_call");
+        assert_eq!(input[1]["call_id"], "toolu_1");
+        assert_eq!(input[1]["name"], "Read");
+        assert_eq!(input[1]["arguments"], r#"{"path":"README.md"}"#);
+        assert_eq!(input[2]["type"], "function_call_output");
+        assert_eq!(input[2]["call_id"], "toolu_1");
+        assert_eq!(input[2]["output"], "contents");
+    }
+
+    #[test]
     fn openai_model_filter_keeps_text_and_codex_models() {
         let models = models_from_openai_shape(
             &json!({
@@ -1834,6 +2048,28 @@ data: [DONE]
     }
 
     #[test]
+    fn codex_sse_response_preserves_streamed_function_call_items() {
+        let response = openai_response_from_sse(
+            r#"data: {"type":"response.output_item.added","output_index":0,"item":{"id":"fc_1","type":"function_call","status":"in_progress","arguments":"","call_id":"call_1","name":"Read"}}
+data: {"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"path\""}
+data: {"type":"response.function_call_arguments.delta","output_index":0,"delta":":\"README.md\"}"}
+data: {"type":"response.output_item.done","output_index":0,"item":{"id":"fc_1","type":"function_call","status":"completed","arguments":"{\"path\":\"README.md\"}","call_id":"call_1","name":"Read"}}
+data: {"type":"response.completed","response":{"id":"resp_1","output":[],"usage":{"input_tokens":1,"output_tokens":2}}}
+data: [DONE]
+"#,
+        )
+        .expect("SSE should parse");
+
+        assert_eq!(response["output"][0]["type"], "function_call");
+        assert_eq!(response["output"][0]["call_id"], "call_1");
+        assert_eq!(response["output"][0]["name"], "Read");
+        assert_eq!(
+            response["output"][0]["arguments"],
+            r#"{"path":"README.md"}"#
+        );
+    }
+
+    #[test]
     fn anthropic_sse_emits_text_delta_for_stream_json_consumers() {
         let body = anthropic_sse_body(&json!({
             "id": "msg_1",
@@ -1847,5 +2083,26 @@ data: [DONE]
         }));
         assert!(body.contains(r#""content_block":{"text":"","type":"text"}"#));
         assert!(body.contains(r#""delta":{"text":"hello","type":"text_delta"}"#));
+    }
+
+    #[test]
+    fn anthropic_sse_emits_tool_input_json_delta_for_stream_json_consumers() {
+        let body = anthropic_sse_body(&json!({
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "gpt-test",
+            "content": [{"type":"tool_use","id":"toolu_1","name":"Read","input":{"path":"README.md"}}],
+            "stop_reason": "tool_use",
+            "stop_sequence": null,
+            "usage": {"input_tokens": 1, "output_tokens": 1}
+        }));
+
+        assert!(body.contains(
+            r#""content_block":{"id":"toolu_1","input":"","name":"Read","type":"tool_use"}"#
+        ));
+        assert!(body.contains(
+            r#""delta":{"partial_json":"{\"path\":\"README.md\"}","type":"input_json_delta"}"#
+        ));
     }
 }
