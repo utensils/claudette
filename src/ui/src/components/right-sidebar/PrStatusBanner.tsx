@@ -95,7 +95,7 @@ export const PrStatusBanner = memo(function PrStatusBanner() {
         title={`Open PR #${pr.number} in browser`}
       >
         <Icon size={14} />
-        <span className={styles.prNumber}>PR #{pr.number}</span>
+        <span className={styles.prNumber}>#{pr.number}</span>
         <ExternalLink size={14} className={styles.externalIcon} />
       </button>
 
