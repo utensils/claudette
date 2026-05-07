@@ -283,6 +283,9 @@ pub async fn resolve_backend_runtime(
             return Err("OpenAI API backend requires an API key in Settings → Models".to_string());
         }
         hydrate_gateway_models_for_runtime(&mut backend, model).await?;
+        if let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) {
+            backend.default_model = Some(model.to_string());
+        }
         let (gateway_url, hash) = state
             .backend_gateway
             .ensure(backend.clone(), secret, model.map(String::from))
@@ -437,6 +440,7 @@ fn append_custom_model_env(
         "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION".to_string(),
         format!("{} via Claudette", backend.label),
     ));
+    env.push(("CLAUDE_CODE_SUBAGENT_MODEL".to_string(), model.to_string()));
 }
 
 async fn hydrate_gateway_models_for_runtime(
@@ -1096,13 +1100,9 @@ async fn call_openai_responses(
         .as_deref()
         .unwrap_or("https://api.openai.com")
         .trim_end_matches('/');
-    let model = anthropic_req
-        .get("model")
-        .and_then(Value::as_str)
-        .or(config.default_model.as_deref())
-        .ok_or("Missing model")?;
+    let model = openai_compatible_request_model(config, &anthropic_req)?;
     let openai_req = json!({
-        "model": model,
+        "model": model.clone(),
         "input": transcript_from_anthropic(&anthropic_req),
         "tools": tools_from_anthropic(&anthropic_req),
         "max_output_tokens": anthropic_req.get("max_tokens").cloned().unwrap_or(json!(4096)),
@@ -1121,7 +1121,7 @@ async fn call_openai_responses(
         .await
         .map_err(|e| format!("Invalid OpenAI response: {e}"))?;
     Ok(anthropic_message_from_openai(
-        model,
+        &model,
         value,
         anthropic_req
             .get("stream")
@@ -1139,15 +1139,11 @@ async fn call_codex_responses(
         secret.ok_or("Codex subscription backend requires Codex CLI authentication")?,
     )
     .map_err(|e| format!("Invalid Codex gateway auth material: {e}"))?;
-    let model = anthropic_req
-        .get("model")
-        .and_then(Value::as_str)
-        .or(config.default_model.as_deref())
-        .ok_or("Missing model")?;
+    let model = openai_compatible_request_model(config, &anthropic_req)?;
     let instructions = codex_instructions_from_anthropic(&anthropic_req);
     let request_id = uuid::Uuid::new_v4().to_string();
     let codex_req = json!({
-        "model": model,
+        "model": model.clone(),
         "store": false,
         "stream": true,
         "instructions": instructions,
@@ -1187,13 +1183,55 @@ async fn call_codex_responses(
     }
     let value = openai_response_from_sse(&body)?;
     Ok(anthropic_message_from_openai(
-        model,
+        &model,
         value,
         anthropic_req
             .get("stream")
             .and_then(Value::as_bool)
             .unwrap_or(false),
     ))
+}
+
+fn openai_compatible_request_model(
+    config: &AgentBackendConfig,
+    anthropic_req: &Value,
+) -> Result<String, String> {
+    let requested = anthropic_req
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|model| !model.is_empty());
+    if let Some(model) = requested
+        && (backend_models_contain(config, model) || !is_claude_code_model_alias(model))
+    {
+        return Ok(model.to_string());
+    }
+
+    config
+        .default_model
+        .as_deref()
+        .filter(|model| !model.trim().is_empty())
+        .or_else(|| {
+            config
+                .discovered_models
+                .first()
+                .or_else(|| config.manual_models.first())
+                .map(|model| model.id.as_str())
+        })
+        .map(ToString::to_string)
+        .or_else(|| requested.map(ToString::to_string))
+        .ok_or_else(|| "Missing model".to_string())
+}
+
+fn is_claude_code_model_alias(model: &str) -> bool {
+    let lower = model.trim().to_ascii_lowercase();
+    let without_context_suffix = lower.strip_suffix("[1m]").unwrap_or(&lower);
+    matches!(
+        without_context_suffix,
+        "sonnet" | "opus" | "haiku" | "opusplan"
+    ) || without_context_suffix.starts_with("claude-")
+        || without_context_suffix.starts_with("anthropic.claude-")
+        || without_context_suffix.contains(".anthropic.claude-")
 }
 
 fn codex_instructions_from_anthropic(req: &Value) -> String {
@@ -1554,11 +1592,11 @@ fn tools_from_anthropic(req: &Value) -> Value {
 
 fn anthropic_message_from_openai(model: &str, value: Value, stream: bool) -> Value {
     let mut content = Vec::new();
-    if let Some(text) = value.get("output_text").and_then(Value::as_str)
-        && !text.is_empty()
-    {
-        content.push(json!({"type": "text", "text": text}));
-    }
+    let fallback_text = value
+        .get("output_text")
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty());
+    let mut has_text_content = false;
     if let Some(output) = value.get("output").and_then(Value::as_array) {
         for item in output {
             match item.get("type").and_then(Value::as_str) {
@@ -1571,6 +1609,7 @@ fn anthropic_message_from_openai(model: &str, value: Value, stream: bool) -> Val
                                 .and_then(Value::as_str)
                                 && !text.is_empty()
                             {
+                                has_text_content = true;
                                 content.push(json!({"type":"text","text":text}));
                             }
                         }
@@ -1593,6 +1632,9 @@ fn anthropic_message_from_openai(model: &str, value: Value, stream: bool) -> Val
                 _ => {}
             }
         }
+    }
+    if !has_text_content && let Some(text) = fallback_text {
+        content.insert(0, json!({"type": "text", "text": text}));
     }
     if content.is_empty() {
         content.push(json!({"type":"text","text":""}));
@@ -1641,10 +1683,12 @@ async fn write_json_or_sse_response(stream: &mut TcpStream, payload: Value) -> R
 
 fn anthropic_sse_body(message: &Value) -> String {
     let mut out = String::new();
+    let mut start_message = message.clone();
+    start_message["content"] = json!([]);
     out.push_str("event: message_start\n");
     out.push_str(&format!(
         "data: {}\n\n",
-        json!({"type":"message_start","message":message})
+        json!({"type":"message_start","message":start_message})
     ));
     if let Some(content) = message.get("content").and_then(Value::as_array) {
         for (index, block) in content.iter().enumerate() {
@@ -1788,6 +1832,10 @@ mod tests {
             "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME".to_string(),
             "gpt-5.4".to_string()
         )));
+        assert!(env.contains(&(
+            "CLAUDE_CODE_SUBAGENT_MODEL".to_string(),
+            "gpt-5.4".to_string()
+        )));
     }
 
     #[test]
@@ -1896,6 +1944,67 @@ mod tests {
         );
         assert_eq!(mapped["message"]["content"][0]["text"], "hello");
         assert_eq!(mapped["message"]["usage"]["input_tokens"], 3);
+    }
+
+    #[test]
+    fn openai_response_does_not_duplicate_streamed_and_final_text() {
+        let mapped = anthropic_message_from_openai(
+            "gpt-test",
+            json!({
+                "id":"resp_1",
+                "output_text":"hello",
+                "output":[{
+                    "type":"message",
+                    "content":[{"type":"output_text","text":"hello"}]
+                }],
+                "usage":{"input_tokens":3,"output_tokens":4}
+            }),
+            false,
+        );
+        let content = mapped["message"]["content"]
+            .as_array()
+            .expect("content should be an array");
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0]["text"], "hello");
+    }
+
+    #[test]
+    fn openai_compatible_request_model_maps_claude_subagent_alias_to_backend_model() {
+        let mut codex = AgentBackendConfig::builtin_codex_subscription();
+        codex.default_model = Some("gpt-5.5".to_string());
+        codex.discovered_models = vec![model("gpt-5.5")];
+
+        let resolved =
+            openai_compatible_request_model(&codex, &json!({"model": "sonnet", "messages": []}))
+                .expect("model should resolve");
+
+        assert_eq!(resolved, "gpt-5.5");
+    }
+
+    #[test]
+    fn openai_compatible_request_model_keeps_known_backend_model() {
+        let mut codex = AgentBackendConfig::builtin_codex_subscription();
+        codex.default_model = Some("gpt-5.5".to_string());
+        codex.discovered_models = vec![model("gpt-5.5"), model("gpt-5.4")];
+
+        let resolved =
+            openai_compatible_request_model(&codex, &json!({"model": "gpt-5.4", "messages": []}))
+                .expect("model should resolve");
+
+        assert_eq!(resolved, "gpt-5.4");
+    }
+
+    #[test]
+    fn openai_compatible_request_model_keeps_unknown_non_claude_model() {
+        let codex = AgentBackendConfig::builtin_codex_subscription();
+
+        let resolved = openai_compatible_request_model(
+            &codex,
+            &json!({"model": "future-gpt", "messages": []}),
+        )
+        .expect("model should resolve");
+
+        assert_eq!(resolved, "future-gpt");
     }
 
     #[test]
@@ -2081,6 +2190,7 @@ data: [DONE]
             "stop_sequence": null,
             "usage": {"input_tokens": 1, "output_tokens": 1}
         }));
+        assert!(body.contains(r#""message":{"content":[],"id":"msg_1""#));
         assert!(body.contains(r#""content_block":{"text":"","type":"text"}"#));
         assert!(body.contains(r#""delta":{"text":"hello","type":"text_delta"}"#));
     }

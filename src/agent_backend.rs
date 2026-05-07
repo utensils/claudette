@@ -186,6 +186,7 @@ impl AgentBackendRuntime {
             "ANTHROPIC_CUSTOM_MODEL_OPTION",
             "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME",
             "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION",
+            "CLAUDE_CODE_SUBAGENT_MODEL",
             "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
         ] {
             cmd.env_remove(key);
