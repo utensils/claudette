@@ -174,12 +174,10 @@ pub async fn generate_session_name(
         env.apply(&mut cmd);
     }
 
-    let output = cmd.output().await.map_err(|e| {
-        format!(
-            "Failed to spawn claude at {:?} for session name: {e}",
-            claude_path
-        )
-    })?;
+    let output = cmd
+        .output()
+        .await
+        .map_err(|e| format!("Failed to spawn claude at {claude_path:?} for session name: {e}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
