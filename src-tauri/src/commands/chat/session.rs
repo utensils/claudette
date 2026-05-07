@@ -224,6 +224,7 @@ mod tests {
             status: claudette::model::SessionStatus::Active,
             created_at: String::new(),
             archived_at: None,
+            cli_invocation: None,
             agent_status: AgentStatus::Idle,
             needs_attention: false,
             attention_kind: None,

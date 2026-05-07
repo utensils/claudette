@@ -349,7 +349,7 @@ impl Database {
     // --- Chat Sessions ---
 
     const CHAT_SESSION_COLS: &str = "id, workspace_id, session_id, name, name_edited, \
-         turn_count, sort_order, status, created_at, archived_at";
+         turn_count, sort_order, status, created_at, archived_at, cli_invocation";
 
     fn parse_chat_session_row(row: &rusqlite::Row) -> rusqlite::Result<ChatSession> {
         let status_str: String = row.get(7)?;
@@ -367,6 +367,7 @@ impl Database {
             status,
             created_at: row.get(8)?,
             archived_at: row.get(9)?,
+            cli_invocation: row.get(10)?,
             agent_status: AgentStatus::Idle,
             needs_attention: false,
             attention_kind: None,
@@ -446,6 +447,22 @@ impl Database {
         self.conn.execute(
             "UPDATE chat_sessions SET name = ?1, name_edited = 1 WHERE id = ?2",
             params![name, chat_session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Set the captured `claude` invocation for a session. Only writes if
+    /// the column is currently NULL — first-emit-wins, so a respawn caused
+    /// by transient errors can't overwrite the original record.
+    pub fn set_chat_session_cli_invocation(
+        &self,
+        chat_session_id: &str,
+        invocation: &str,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE chat_sessions SET cli_invocation = ?2 \
+             WHERE id = ?1 AND cli_invocation IS NULL",
+            params![chat_session_id, invocation],
         )?;
         Ok(())
     }
@@ -1553,6 +1570,32 @@ mod tests {
             }
             other => panic!("expected FromSqlConversionFailure for unknown role, got: {other:?}",),
         }
+    }
+
+    #[test]
+    fn cli_invocation_round_trip() {
+        let db = setup_db_with_workspace();
+        let session = db.create_chat_session("w1").unwrap();
+
+        // Initial value is None.
+        let loaded = db.get_chat_session(&session.id).unwrap().unwrap();
+        assert!(loaded.cli_invocation.is_none());
+
+        // First write succeeds.
+        db.set_chat_session_cli_invocation(&session.id, "claude --foo")
+            .unwrap();
+        let after_first = db.get_chat_session(&session.id).unwrap().unwrap();
+        assert_eq!(after_first.cli_invocation.as_deref(), Some("claude --foo"));
+
+        // Second write does NOT overwrite (first-emit-wins).
+        db.set_chat_session_cli_invocation(&session.id, "claude --bar")
+            .unwrap();
+        let after_second = db.get_chat_session(&session.id).unwrap().unwrap();
+        assert_eq!(
+            after_second.cli_invocation.as_deref(),
+            Some("claude --foo"),
+            "second write must not clobber first"
+        );
     }
 
     /// Regression: an unknown `status` string in the `chat_sessions` table

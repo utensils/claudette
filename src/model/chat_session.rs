@@ -95,6 +95,11 @@ pub struct ChatSession {
     pub status: SessionStatus,
     pub created_at: String,
     pub archived_at: Option<String>,
+    /// Redacted, shell-quoted `claude` invocation captured the first time
+    /// the agent process spawns for this session. `None` for sessions that
+    /// pre-date this feature, or whose first spawn raced with a write
+    /// failure. UI renders a banner only when `Some`.
+    pub cli_invocation: Option<String>,
     /// Runtime agent status — defaults to `Idle` when loaded from DB; the
     /// command layer overlays the live `AppState.agents` view on top.
     pub agent_status: AgentStatus,
