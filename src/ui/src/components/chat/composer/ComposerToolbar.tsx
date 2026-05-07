@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { CircleDollarSign, Sparkles, BookOpen } from "lucide-react";
 import { useAppStore } from "../../../stores/useAppStore";
 import { getAppSetting, setAppSetting } from "../../../services/tauri";
-import { ModelSelector, MODELS, is1mContextModel, get1mFallback } from "../ModelSelector";
+import { ModelSelector, is1mContextModel, get1mFallback } from "../ModelSelector";
+import { buildModelRegistry } from "../modelRegistry";
 import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "../modelCapabilities";
 import { applySelectedModel } from "../applySelectedModel";
 import { applyPlanModeMountDefault } from "../applyPlanModeMountDefault";
@@ -18,11 +19,15 @@ interface ComposerToolbarProps {
 
 export function ComposerToolbar({ sessionId, disabled }: ComposerToolbarProps) {
   const selectedModel = useAppStore((s) => s.selectedModel[sessionId] ?? "opus");
+  const selectedProvider = useAppStore((s) => s.selectedModelProvider[sessionId] ?? "anthropic");
   const disable1mContext = useAppStore((s) => s.disable1mContext);
   const thinkingEnabled = useAppStore((s) => s.thinkingEnabled[sessionId] ?? false);
   const planMode = useAppStore((s) => s.planMode[sessionId] ?? false);
   const modelSelectorOpen = useAppStore((s) => s.modelSelectorOpen);
+  const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
+  const agentBackends = useAppStore((s) => s.agentBackends);
   const setSelectedModel = useAppStore((s) => s.setSelectedModel);
+  const setSelectedModelProvider = useAppStore((s) => s.setSelectedModelProvider);
   const setFastMode = useAppStore((s) => s.setFastMode);
   const setThinkingEnabled = useAppStore((s) => s.setThinkingEnabled);
   const setPlanMode = useAppStore((s) => s.setPlanMode);
@@ -36,14 +41,16 @@ export function ComposerToolbar({ sessionId, disabled }: ComposerToolbarProps) {
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      const [model, fast, thinking, effort, showThinking, chrome, defModel, defFast, defThinking, defPlan, defEffort, defShowThinking, defChrome] = await Promise.all([
+      const [model, provider, fast, thinking, effort, showThinking, chrome, defModel, defProvider, defFast, defThinking, defPlan, defEffort, defShowThinking, defChrome] = await Promise.all([
         getAppSetting(`model:${sessionId}`),
+        getAppSetting(`model_provider:${sessionId}`),
         getAppSetting(`fast_mode:${sessionId}`),
         getAppSetting(`thinking_enabled:${sessionId}`),
         getAppSetting(`effort_level:${sessionId}`),
         getAppSetting(`show_thinking:${sessionId}`),
         getAppSetting(`chrome_enabled:${sessionId}`),
         getAppSetting("default_model"),
+        getAppSetting("default_agent_backend"),
         getAppSetting("default_fast_mode"),
         getAppSetting("default_thinking"),
         getAppSetting("default_plan_mode"),
@@ -53,7 +60,9 @@ export function ComposerToolbar({ sessionId, disabled }: ComposerToolbarProps) {
       ]);
       if (cancelled) return;
       const loadedModel = model ?? defModel ?? "opus";
-      setSelectedModel(sessionId, loadedModel);
+      const loadedProvider = provider ?? defProvider ?? "anthropic";
+      setSelectedModel(sessionId, loadedModel, loadedProvider);
+      setSelectedModelProvider(sessionId, loadedProvider);
       const effectiveFast = isFastSupported(loadedModel) && (fast === "true" || (!fast && defFast === "true"));
       const effectiveThinking = thinking === "true" || (!thinking && defThinking === "true");
       setFastMode(sessionId, effectiveFast);
@@ -76,16 +85,16 @@ export function ComposerToolbar({ sessionId, disabled }: ComposerToolbarProps) {
     }
     load();
     return () => { cancelled = true; };
-  }, [sessionId, setSelectedModel, setFastMode, setThinkingEnabled, setEffortLevel, setShowThinkingBlocks, setChromeEnabled]);
+  }, [sessionId, setSelectedModel, setSelectedModelProvider, setFastMode, setThinkingEnabled, setEffortLevel, setShowThinkingBlocks, setChromeEnabled]);
 
   const handleModelSelect = useCallback(
-    async (model: string) => {
-      if (model !== selectedModel) {
-        await applySelectedModel(sessionId, model);
+    async (model: string, providerId = "anthropic") => {
+      if (model !== selectedModel || providerId !== selectedProvider) {
+        await applySelectedModel(sessionId, model, providerId);
       }
       setModelSelectorOpen(false);
     },
-    [sessionId, selectedModel, setModelSelectorOpen],
+    [sessionId, selectedModel, selectedProvider, setModelSelectorOpen],
   );
 
   const toggleThinking = useCallback(async () => {
@@ -116,8 +125,13 @@ export function ComposerToolbar({ sessionId, disabled }: ComposerToolbarProps) {
     }
   }, [loaded, disable1mContext, selectedModel, sessionId]);
 
-  const currentModel = MODELS.find((m) => m.id === selectedModel);
-  const modelLabel = currentModel?.label ?? selectedModel;
+  const registry = buildModelRegistry(alternativeBackendsEnabled, agentBackends);
+  const currentModel = registry.find(
+    (m) => m.id === selectedModel && (m.providerId ?? "anthropic") === selectedProvider,
+  );
+  const modelLabel = currentModel?.providerLabel
+    ? `${currentModel.providerLabel} / ${currentModel.label}`
+    : currentModel?.label ?? selectedModel;
   const isExtraUsage = currentModel?.extraUsage ?? false;
 
   if (!loaded) return null;
@@ -138,6 +152,7 @@ export function ComposerToolbar({ sessionId, disabled }: ComposerToolbarProps) {
         {modelSelectorOpen && (
           <ModelSelector
             selected={selectedModel}
+            selectedProvider={selectedProvider}
             onSelect={handleModelSelect}
             onClose={() => setModelSelectorOpen(false)}
           />

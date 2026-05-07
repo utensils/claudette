@@ -22,6 +22,12 @@ export function ExperimentalSettings() {
   const setCommunityRegistryEnabled = useAppStore(
     (s) => s.setCommunityRegistryEnabled,
   );
+  const alternativeBackendsEnabled = useAppStore(
+    (s) => s.alternativeBackendsEnabled,
+  );
+  const setAlternativeBackendsEnabled = useAppStore(
+    (s) => s.setAlternativeBackendsEnabled,
+  );
   const [error, setError] = useState<string | null>(null);
 
   const handleClaudetteTerminalToggle = async () => {
@@ -75,6 +81,18 @@ export function ExperimentalSettings() {
     }
   };
 
+  const handleAlternativeBackendsToggle = async () => {
+    const next = !alternativeBackendsEnabled;
+    setAlternativeBackendsEnabled(next);
+    try {
+      setError(null);
+      await setAppSetting("alternative_backends_enabled", next ? "true" : "false");
+    } catch (e) {
+      setAlternativeBackendsEnabled(!next);
+      setError(String(e));
+    }
+  };
+
   return (
     <div>
       <h2 className={styles.sectionTitle}>{t("experimental_title")}</h2>
@@ -98,6 +116,29 @@ export function ExperimentalSettings() {
             aria-label={t("experimental_claudette_terminal_aria")}
             data-checked={claudetteTerminalEnabled}
             onClick={handleClaudetteTerminalToggle}
+          >
+            <div className={styles.toggleKnob} />
+          </button>
+        </div>
+      </div>
+
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>
+            {t("experimental_alternative_backends")}
+          </div>
+          <div className={styles.settingDescription}>
+            {t("experimental_alternative_backends_desc")}
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          <button
+            className={styles.toggle}
+            role="switch"
+            aria-checked={alternativeBackendsEnabled}
+            aria-label={t("experimental_alternative_backends_aria")}
+            data-checked={alternativeBackendsEnabled}
+            onClick={handleAlternativeBackendsToggle}
           >
             <div className={styles.toggleKnob} />
           </button>

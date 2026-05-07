@@ -11,6 +11,12 @@ export type Model = {
   readonly group: string;
   readonly extraUsage: boolean;
   readonly legacy?: boolean;
+  readonly providerId?: string;
+  readonly providerLabel?: string;
+  readonly providerQualifiedId?: string;
+  readonly supportsThinking?: boolean;
+  readonly supportsEffort?: boolean;
+  readonly supportsFastMode?: boolean;
   /** Maximum total tokens this model can hold across input + cache + output.
    *  Used by the ContextMeter to compute utilization as a percentage. */
   readonly contextWindowTokens: number;
@@ -43,3 +49,70 @@ export const MODELS: readonly Model[] = [
   { id: "claude-sonnet-4-5", label: "Sonnet 4.5", group: "Claude Code", extraUsage: false, legacy: true, contextWindowTokens: 200_000 },
   { id: "claude-haiku-3-5", label: "Haiku 3.5", group: "Claude Code", extraUsage: false, legacy: true, contextWindowTokens: 200_000 },
 ];
+
+export interface BackendRegistryModel {
+  id: string;
+  label: string;
+  context_window_tokens: number;
+}
+
+export interface BackendRegistrySource {
+  id: string;
+  label: string;
+  kind?: string;
+  enabled: boolean;
+  capabilities: {
+    thinking: boolean;
+    effort: boolean;
+    fast_mode: boolean;
+  };
+  manual_models: BackendRegistryModel[];
+  discovered_models: BackendRegistryModel[];
+}
+
+export function buildModelRegistry(
+  alternativeBackendsEnabled: boolean,
+  backends: readonly BackendRegistrySource[],
+): readonly Model[] {
+  if (!alternativeBackendsEnabled) return MODELS;
+
+  const models: Model[] = [...MODELS];
+  for (const backend of backends) {
+    if (!backend.enabled || backend.id === "anthropic") continue;
+    const backendModels =
+      backend.id === "ollama" && backend.discovered_models.length > 0
+        ? backend.discovered_models
+        : [...backend.discovered_models, ...backend.manual_models];
+    const seen = new Set<string>();
+    for (const model of backendModels) {
+      if (!model.id || seen.has(model.id)) continue;
+      seen.add(model.id);
+      models.push({
+        id: model.id,
+        label: model.label || model.id,
+        group: backend.label,
+        extraUsage: false,
+        providerId: backend.id,
+        providerLabel: backend.label,
+        providerQualifiedId: `${backend.id}/${model.id}`,
+        supportsThinking: backend.capabilities.thinking,
+        supportsEffort: backend.capabilities.effort,
+        supportsFastMode: backend.capabilities.fast_mode,
+        contextWindowTokens: model.context_window_tokens,
+      });
+    }
+  }
+  return models;
+}
+
+export function resolveModelSelection(
+  registry: readonly Model[],
+  input: string,
+): Model | undefined {
+  const normalized = input.trim().toLowerCase();
+  return registry.find(
+    (model) =>
+      model.id.toLowerCase() === normalized ||
+      model.providerQualifiedId?.toLowerCase() === normalized,
+  );
+}

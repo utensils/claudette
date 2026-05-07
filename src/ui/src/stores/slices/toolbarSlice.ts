@@ -17,13 +17,15 @@ export interface ChatTurnSettings {
 
 export interface ToolbarSlice {
   selectedModel: Record<string, string>;
+  selectedModelProvider: Record<string, string>;
   fastMode: Record<string, boolean>;
   thinkingEnabled: Record<string, boolean>;
   planMode: Record<string, boolean>;
   effortLevel: Record<string, string>;
   chromeEnabled: Record<string, boolean>;
   modelSelectorOpen: boolean;
-  setSelectedModel: (wsId: string, model: string) => void;
+  setSelectedModel: (wsId: string, model: string, providerId?: string) => void;
+  setSelectedModelProvider: (wsId: string, providerId: string) => void;
   setFastMode: (wsId: string, enabled: boolean) => void;
   setThinkingEnabled: (wsId: string, enabled: boolean) => void;
   setPlanMode: (wsId: string, enabled: boolean) => void;
@@ -40,15 +42,23 @@ export const createToolbarSlice: StateCreator<
   ToolbarSlice
 > = (set) => ({
   selectedModel: {},
+  selectedModelProvider: {},
   fastMode: {},
   thinkingEnabled: {},
   planMode: {},
   effortLevel: {},
   chromeEnabled: {},
   modelSelectorOpen: false,
-  setSelectedModel: (wsId, model) =>
+  setSelectedModel: (wsId, model, providerId) =>
     set((s) => ({
       selectedModel: { ...s.selectedModel, [wsId]: model },
+      selectedModelProvider: providerId
+        ? { ...s.selectedModelProvider, [wsId]: providerId }
+        : s.selectedModelProvider,
+    })),
+  setSelectedModelProvider: (wsId, providerId) =>
+    set((s) => ({
+      selectedModelProvider: { ...s.selectedModelProvider, [wsId]: providerId },
     })),
   setFastMode: (wsId, enabled) =>
     set((s) => ({

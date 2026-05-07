@@ -20,13 +20,15 @@ import { is1mContextModel, get1mFallback } from "./modelRegistry";
 export async function applySelectedModel(
   sessionId: string,
   nextModel: string,
+  nextProvider = "anthropic",
 ): Promise<void> {
   const store = useAppStore.getState();
   const model = store.disable1mContext && is1mContextModel(nextModel)
     ? get1mFallback(nextModel)
     : nextModel;
-  store.setSelectedModel(sessionId, model);
+  store.setSelectedModel(sessionId, model, nextProvider);
   await setAppSetting(`model:${sessionId}`, model);
+  await setAppSetting(`model_provider:${sessionId}`, nextProvider);
   await resetAgentSession(sessionId);
   store.clearAgentQuestion(sessionId);
   store.clearPlanApproval(sessionId);

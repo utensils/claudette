@@ -2,7 +2,7 @@ import type { PluginSettingsIntent } from "../../types/plugins";
 import type { NativeSlashKind, SlashCommand } from "../../services/tauri";
 import type { PermissionLevel } from "../../stores/useAppStore";
 import { parsePluginSlashCommand } from "./pluginSlashCommand";
-import { MODELS } from "./modelRegistry";
+import { buildModelRegistry, resolveModelSelection } from "./modelRegistry";
 import { useAppStore } from "../../stores/useAppStore";
 
 export type { NativeSlashKind };
@@ -50,6 +50,7 @@ export interface NativeCommandContext {
   workspaceId: string | null;
   agentStatus: string | null;
   selectedModel: string;
+  selectedModelProvider: string;
   permissionLevel: PermissionLevel;
   planMode: boolean;
   fastMode: boolean;
@@ -60,7 +61,7 @@ export interface NativeCommandContext {
 
   // -- Pre-bound per-workspace write callbacks. Callers wire these to the
   // same store setters / backend commands the toolbar and shortcuts use. --
-  setSelectedModel: (model: string) => Promise<void>;
+  setSelectedModel: (model: string, providerId?: string) => Promise<void>;
   setPermissionLevel: (level: PermissionLevel) => Promise<void>;
   setPlanMode: (enabled: boolean) => void;
   clearConversation: (restoreFiles: boolean) => Promise<void>;
@@ -513,34 +514,38 @@ const modelHandler: NativeHandler = {
       return handled;
     }
     const { disable1mContext } = useAppStore.getState();
+    const { alternativeBackendsEnabled, agentBackends } = useAppStore.getState();
+    const registry = buildModelRegistry(alternativeBackendsEnabled, agentBackends);
     const available = disable1mContext
-      ? MODELS.filter((m) => m.contextWindowTokens < 1_000_000)
-      : MODELS;
+      ? registry.filter((m) => m.contextWindowTokens < 1_000_000)
+      : registry;
     const arg = args.trim();
-    const modelIds = available.map((m) => m.id);
+    const modelIds = available.map((m) => m.providerQualifiedId ?? m.id);
     if (arg === "") {
       const lines = available.map((m) => {
-        const marker = m.id === ctx.selectedModel ? "•" : " ";
-        return ` ${marker} ${m.id} — ${m.label}`;
+        const provider = m.providerId ?? "anthropic";
+        const marker = m.id === ctx.selectedModel && provider === ctx.selectedModelProvider ? "•" : " ";
+        const id = m.providerQualifiedId ?? m.id;
+        return ` ${marker} ${id} — ${m.label}`;
       }).join("\n");
       ctx.addLocalMessage(`Current model: ${ctx.selectedModel}\n${lines}`);
       return handled;
     }
-    const normalized = arg.toLowerCase();
-    const match = available.find((m) => m.id.toLowerCase() === normalized);
+    const match = resolveModelSelection(available, arg);
     if (!match) {
       ctx.addLocalMessage(
         `/model: unknown model "${arg}". Valid options: ${modelIds.join(", ")}`,
       );
       return handled;
     }
-    if (match.id === ctx.selectedModel) {
+    const provider = match.providerId ?? "anthropic";
+    if (match.id === ctx.selectedModel && provider === ctx.selectedModelProvider) {
       ctx.addLocalMessage(`Model is already ${match.id}.`);
       return handled;
     }
     try {
-      await ctx.setSelectedModel(match.id);
-      ctx.addLocalMessage(`Model set to ${match.id}.`);
+      await ctx.setSelectedModel(match.id, provider);
+      ctx.addLocalMessage(`Model set to ${match.providerQualifiedId ?? match.id}.`);
     } catch (error) {
       ctx.addLocalMessage(`/model failed: ${String(error)}`);
     }

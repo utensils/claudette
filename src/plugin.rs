@@ -1372,6 +1372,39 @@ fn write_secure_storage_object(value: &Value) -> Result<(), String> {
     }
 }
 
+pub fn load_secure_secret(bucket: &str, key: &str) -> Result<Option<String>, String> {
+    let storage = read_secure_storage_object()?;
+    Ok(storage
+        .get(bucket)
+        .and_then(Value::as_object)
+        .and_then(|secrets| secrets.get(key))
+        .and_then(Value::as_str)
+        .map(String::from))
+}
+
+pub fn save_secure_secret(bucket: &str, key: &str, value: &str) -> Result<(), String> {
+    let mut storage = read_secure_storage_object()?;
+    let root = storage
+        .as_object_mut()
+        .ok_or("Secure storage must be a JSON object")?;
+    let bucket = ensure_object(root, bucket);
+    bucket.insert(key.to_string(), Value::String(value.to_string()));
+    write_secure_storage_object(&storage)
+}
+
+pub fn delete_secure_secret(bucket: &str, key: &str) -> Result<(), String> {
+    let mut storage = read_secure_storage_object()?;
+    if let Some(root) = storage.as_object_mut()
+        && let Some(secrets) = root.get_mut(bucket).and_then(Value::as_object_mut)
+    {
+        secrets.remove(key);
+        if secrets.is_empty() {
+            root.remove(bucket);
+        }
+    }
+    write_secure_storage_object(&storage)
+}
+
 fn load_settings_docs(repo_path: Option<&Path>) -> SettingsDocs {
     let user =
         read_json_object(&user_settings_path()).unwrap_or_else(|_| Value::Object(Map::new()));

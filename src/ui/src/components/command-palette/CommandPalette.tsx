@@ -14,6 +14,7 @@ import {
   listWorkspaceFiles,
 } from "../../services/tauri";
 import { applySelectedModel } from "../chat/applySelectedModel";
+import { buildModelRegistry } from "../chat/modelRegistry";
 import type { ThemeDefinition } from "../../types/theme";
 import { scoreCommand } from "./searchScore";
 import {
@@ -85,6 +86,11 @@ export function CommandPalette() {
   const selectedModel = useAppStore(
     (s) => (selectedSessionId ? s.selectedModel[selectedSessionId] ?? "opus" : "opus"),
   );
+  const selectedModelProvider = useAppStore(
+    (s) => (selectedSessionId ? s.selectedModelProvider[selectedSessionId] ?? "anthropic" : "anthropic"),
+  );
+  const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
+  const agentBackends = useAppStore((s) => s.agentBackends);
   const setThinkingEnabled = useAppStore((s) => s.setThinkingEnabled);
   const setPlanMode = useAppStore((s) => s.setPlanMode);
   const setFastMode = useAppStore((s) => s.setFastMode);
@@ -336,14 +342,16 @@ export function CommandPalette() {
   const modelCommands = useMemo(
     () => buildModelCommands(
       selectedModel,
-      async (model: string) => {
-        if (!selectedSessionId || model === selectedModel) return;
-        await applySelectedModel(selectedSessionId, model);
+      async (model: string, providerId = "anthropic") => {
+        if (!selectedSessionId || (model === selectedModel && providerId === selectedModelProvider)) return;
+        await applySelectedModel(selectedSessionId, model, providerId);
       },
       close,
+      buildModelRegistry(alternativeBackendsEnabled, agentBackends),
+      selectedModelProvider,
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectedModel, selectedSessionId],
+    [selectedModel, selectedModelProvider, selectedSessionId, alternativeBackendsEnabled, agentBackends],
   );
 
   const effortCommands = useMemo(

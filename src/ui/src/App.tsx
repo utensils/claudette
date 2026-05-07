@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { useAppStore } from "./stores/useAppStore";
-import { loadInitialData, getAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix } from "./services/tauri";
+import { loadInitialData, getAppSetting, getHostEnvFlags, listRemoteConnections, listDiscoveredServers, getLocalServerStatus, detectInstalledApps, listSystemFonts, deleteTerminalTab, listAppSettingsWithPrefix, listAgentBackends } from "./services/tauri";
 import { applyTheme, applyUserFonts, loadAllThemes, findTheme, cacheThemePreference, getThemeDataAttr } from "./utils/theme";
 import { DEFAULT_THEME_ID, DEFAULT_LIGHT_THEME_ID } from "./styles/themes";
 import type { ThemeDefinition } from "./types/theme";
@@ -58,6 +58,9 @@ function App() {
   const setEditorGitGutterBase = useAppStore((s) => s.setEditorGitGutterBase);
   const setEditorMinimapEnabled = useAppStore((s) => s.setEditorMinimapEnabled);
   const setDisable1mContext = useAppStore((s) => s.setDisable1mContext);
+  const setAlternativeBackendsEnabled = useAppStore((s) => s.setAlternativeBackendsEnabled);
+  const setAgentBackends = useAppStore((s) => s.setAgentBackends);
+  const setDefaultAgentBackendId = useAppStore((s) => s.setDefaultAgentBackendId);
   const setVoiceToggleHotkey = useAppStore((s) => s.setVoiceToggleHotkey);
   const setVoiceHoldHotkey = useAppStore((s) => s.setVoiceHoldHotkey);
   const setKeybindings = useAppStore((s) => s.setKeybindings);
@@ -240,6 +243,15 @@ function App() {
       .catch(() => {});
     getAppSetting("community_registry_enabled")
       .then((val) => { if (val === "true") setCommunityRegistryEnabled(true); })
+      .catch(() => {});
+    getAppSetting("alternative_backends_enabled")
+      .then((val) => { if (val === "true") setAlternativeBackendsEnabled(true); })
+      .catch(() => {});
+    listAgentBackends()
+      .then((data) => {
+        setAgentBackends(data.backends);
+        setDefaultAgentBackendId(data.default_backend_id);
+      })
       .catch(() => {});
     getAppSetting("editor_git_gutter_base")
       .then((val) => {
@@ -629,7 +641,7 @@ function App() {
       unlistenChatTurnStarted.then((fn) => fn());
       unlistenMissingCli.then((fn) => fn());
     };
-  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setPluginManagementEnabled, setCommunityRegistryEnabled, setEditorGitGutterBase, setEditorMinimapEnabled, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo]);
+  }, [setRepositories, setWorkspaces, setWorktreeBaseDir, setDefaultBranches, setTerminalFontSize, setLastMessages, setRemoteConnections, setDiscoveredServers, setLocalServerRunning, setLocalServerConnectionString, setCurrentThemeId, setThemeMode, setThemeDark, setThemeLight, setUiFontSize, setFontFamilySans, setFontFamilyMono, setSystemFonts, setDetectedApps, setUsageInsightsEnabled, setClaudetteTerminalEnabled, setShowSidebarRunningCommands, setPluginManagementEnabled, setCommunityRegistryEnabled, setAlternativeBackendsEnabled, setAgentBackends, setDefaultAgentBackendId, setEditorGitGutterBase, setEditorMinimapEnabled, setDisable1mContext, setAppVersion, setVoiceToggleHotkey, setVoiceHoldHotkey, setKeybindings, setManualWorkspaceOrderByRepo]);
 
   // Listen for OS light/dark changes and switch theme when mode is "system".
   useEffect(() => {

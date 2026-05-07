@@ -48,14 +48,16 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      const [model, fast, thinking, effort, showThinking, chrome, defModel, defFast, defThinking, defPlan, defEffort, defShowThinking, defChrome] = await Promise.all([
+      const [model, provider, fast, thinking, effort, showThinking, chrome, defModel, defProvider, defFast, defThinking, defPlan, defEffort, defShowThinking, defChrome] = await Promise.all([
         getAppSetting(`model:${sessionId}`),
+        getAppSetting(`model_provider:${sessionId}`),
         getAppSetting(`fast_mode:${sessionId}`),
         getAppSetting(`thinking_enabled:${sessionId}`),
         getAppSetting(`effort_level:${sessionId}`),
         getAppSetting(`show_thinking:${sessionId}`),
         getAppSetting(`chrome_enabled:${sessionId}`),
         getAppSetting("default_model"),
+        getAppSetting("default_agent_backend"),
         getAppSetting("default_fast_mode"),
         getAppSetting("default_thinking"),
         getAppSetting("default_plan_mode"),
@@ -65,7 +67,7 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
       ]);
       if (cancelled) return;
       const loadedModel = model ?? defModel ?? "opus";
-      setSelectedModel(sessionId, loadedModel);
+      setSelectedModel(sessionId, loadedModel, provider ?? defProvider ?? "anthropic");
       const effectiveFast = isFastSupported(loadedModel) && (fast === "true" || (!fast && defFast === "true"));
       const effectiveThinking = thinking === "true" || (!thinking && defThinking === "true");
       setFastMode(sessionId, effectiveFast);

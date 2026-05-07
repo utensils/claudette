@@ -686,6 +686,13 @@ fn main() {
             commands::settings::play_notification_sound,
             commands::settings::run_notification_command,
             commands::settings::get_git_username,
+            commands::agent_backends::list_agent_backends,
+            commands::agent_backends::save_agent_backend,
+            commands::agent_backends::delete_agent_backend,
+            commands::agent_backends::save_agent_backend_secret,
+            commands::agent_backends::refresh_agent_backend_models,
+            commands::agent_backends::test_agent_backend,
+            commands::agent_backends::launch_codex_login,
             // Updater
             commands::updater::check_for_updates_with_channel,
             commands::updater::install_pending_update,

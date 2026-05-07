@@ -1,14 +1,17 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { getAppSetting, setAppSetting } from "../../../services/tauri";
-import { MODELS } from "../../chat/ModelSelector";
+import { getAppSetting, setAppSetting, listAgentBackends, saveAgentBackend, saveAgentBackendSecret, refreshAgentBackendModels, testAgentBackend, launchCodexLogin } from "../../../services/tauri";
+import type { AgentBackendConfig } from "../../../services/tauri";
 import { EFFORT_LEVELS } from "../../chat/EffortSelector";
 import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "../../chat/modelCapabilities";
+import { buildModelRegistry, resolveModelSelection } from "../../chat/modelRegistry";
+import { useAppStore } from "../../../stores/useAppStore";
 import styles from "../Settings.module.css";
 
 export function ModelSettings() {
   const { t } = useTranslation("settings");
   const [defaultModel, setDefaultModel] = useState("opus");
+  const [defaultBackend, setDefaultBackend] = useState("anthropic");
   const [defaultThinking, setDefaultThinking] = useState(false);
   const [defaultPlanMode, setDefaultPlanMode] = useState(false);
   const [defaultFastMode, setDefaultFastMode] = useState(false);
@@ -16,10 +19,29 @@ export function ModelSettings() {
   const [defaultEffort, setDefaultEffort] = useState("auto");
   const [defaultShowThinking, setDefaultShowThinking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
+  const agentBackends = useAppStore((s) => s.agentBackends);
+  const setAgentBackends = useAppStore((s) => s.setAgentBackends);
+  const setDefaultAgentBackendId = useAppStore((s) => s.setDefaultAgentBackendId);
 
   useEffect(() => {
     getAppSetting("default_model")
       .then((val) => { if (val) setDefaultModel(val); })
+      .catch(() => {});
+    getAppSetting("default_agent_backend")
+      .then((val) => {
+        if (val) {
+          setDefaultBackend(val);
+          setDefaultAgentBackendId(val);
+        }
+      })
+      .catch(() => {});
+    listAgentBackends()
+      .then((data) => {
+        setAgentBackends(data.backends);
+        setDefaultBackend(data.default_backend_id);
+        setDefaultAgentBackendId(data.default_backend_id);
+      })
       .catch(() => {});
     getAppSetting("default_thinking")
       .then((val) => setDefaultThinking(val === "true"))
@@ -39,7 +61,7 @@ export function ModelSettings() {
     getAppSetting("default_show_thinking")
       .then((val) => setDefaultShowThinking(val === "true"))
       .catch(() => {});
-  }, []);
+  }, [setAgentBackends, setDefaultAgentBackendId]);
 
   const saveSetting = async (key: string, value: string) => {
     try {
@@ -50,9 +72,21 @@ export function ModelSettings() {
     }
   };
 
-  const handleModelChange = async (model: string) => {
+  const registry = buildModelRegistry(alternativeBackendsEnabled, agentBackends);
+  const defaultModelValue = `${defaultBackend}/${defaultModel}`;
+
+  const handleModelChange = async (value: string) => {
+    const [backendId, ...modelParts] = value.includes("/")
+      ? value.split("/")
+      : ["anthropic", value];
+    const model = modelParts.join("/");
+    const match = resolveModelSelection(registry, backendId === "anthropic" ? model : value);
+    const nextBackend = match?.providerId ?? backendId;
     setDefaultModel(model);
+    setDefaultBackend(nextBackend);
+    setDefaultAgentBackendId(nextBackend);
     await saveSetting("default_model", model);
+    await saveSetting("default_agent_backend", nextBackend);
     // Normalize fast mode when model changes
     if (defaultFastMode && !isFastSupported(model)) {
       setDefaultFastMode(false);
@@ -99,13 +133,18 @@ export function ModelSettings() {
   };
 
   // Filter effort levels based on selected default model
+  const selectedDefaultModel = registry.find(
+    (m) => (m.providerId ?? "anthropic") === defaultBackend && m.id === defaultModel,
+  );
+  const supportsEffort = selectedDefaultModel?.supportsEffort ?? isEffortSupported(defaultModel);
+  const supportsFast = selectedDefaultModel?.supportsFastMode ?? isFastSupported(defaultModel);
   const availableEffortLevels = isXhighEffortAllowed(defaultModel)
     ? EFFORT_LEVELS
     : isMaxEffortAllowed(defaultModel)
       ? EFFORT_LEVELS.filter((l) => l.id !== "xhigh")
       : EFFORT_LEVELS.filter((l) => l.id !== "xhigh" && l.id !== "max");
-  const effortDisabled = !isEffortSupported(defaultModel);
-  const fastDisabled = !isFastSupported(defaultModel);
+  const effortDisabled = !supportsEffort;
+  const fastDisabled = !supportsFast;
 
   return (
     <div>
@@ -124,12 +163,12 @@ export function ModelSettings() {
           <div className={styles.inlineControl}>
             <select
               className={styles.select}
-              value={defaultModel}
+              value={defaultModelValue}
               onChange={(e) => handleModelChange(e.target.value)}
             >
-              {MODELS.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
+              {registry.map((m) => (
+                <option key={m.providerQualifiedId ?? `anthropic/${m.id}`} value={m.providerQualifiedId ?? `anthropic/${m.id}`}>
+                  {m.providerLabel ? `${m.providerLabel} / ${m.label}` : m.label}
                 </option>
               ))}
             </select>
@@ -254,6 +293,258 @@ export function ModelSettings() {
           </button>
         </div>
       </div>
+
+      <BackendSettingsPanel
+        enabled={alternativeBackendsEnabled}
+        backends={agentBackends}
+        onBackends={setAgentBackends}
+        setError={setError}
+      />
     </div>
   );
+}
+
+function BackendSettingsPanel({
+  enabled,
+  backends,
+  onBackends,
+  setError,
+}: {
+  enabled: boolean;
+  backends: AgentBackendConfig[];
+  onBackends: (backends: AgentBackendConfig[]) => void;
+  setError: (error: string | null) => void;
+}) {
+  const { t } = useTranslation("settings");
+  return (
+    <div>
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>{t("models_backends_title")}</div>
+          <div className={styles.settingDescription}>
+            {enabled ? t("models_backends_desc") : t("models_backends_disabled")}
+          </div>
+        </div>
+      </div>
+      {backends.filter((b) => b.id !== "anthropic").map((backend) => (
+        <BackendCard
+          key={backend.id}
+          backend={backend}
+          onSaved={onBackends}
+          setError={setError}
+        />
+      ))}
+    </div>
+  );
+}
+
+function BackendCard({
+  backend,
+  onSaved,
+  setError,
+}: {
+  backend: AgentBackendConfig;
+  onSaved: (backends: AgentBackendConfig[]) => void;
+  setError: (error: string | null) => void;
+}) {
+  const { t } = useTranslation("settings");
+  const [draft, setDraft] = useState(backend);
+  const [secret, setSecret] = useState("");
+  const [status, setStatus] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setDraft(backend);
+    setSecret("");
+    setStatus(null);
+    setBusy(false);
+  }, [backend]);
+
+  const discoveredModels = dedupeBackendModels(draft.discovered_models);
+  const manualModels = dedupeBackendModels(draft.manual_models);
+  const modelOptions = dedupeBackendModels([...discoveredModels, ...manualModels]);
+  const discoveredModelText = discoveredModels.map((m) => m.id).join(", ");
+  const manualModelText = manualModels.map((m) => m.id).join(", ");
+
+  const persistDraft = async () => {
+    if (secret) {
+      await saveAgentBackendSecret({ backend_id: draft.id, value: secret });
+    }
+    const saved = await saveAgentBackend(draft);
+    onSaved(saved);
+    setSecret("");
+    return saved;
+  };
+
+  const save = async () => {
+    try {
+      setError(null);
+      setBusy(true);
+      await persistDraft();
+      setStatus(t("models_backend_status_saved"));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const refresh = async () => {
+    try {
+      setError(null);
+      setBusy(true);
+      await persistDraft();
+      const saved = await refreshAgentBackendModels(draft.id);
+      onSaved(saved);
+      const refreshed = saved.find((item) => item.id === draft.id);
+      const count = (refreshed?.discovered_models.length ?? 0) + (refreshed?.manual_models.length ?? 0);
+      setStatus(t("models_backend_status_refreshed", { count }));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const test = async () => {
+    try {
+      setError(null);
+      setBusy(true);
+      await persistDraft();
+      const result = await testAgentBackend(draft.id);
+      setStatus(result.message);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const updateModels = (value: string) => {
+    setDraft({
+      ...draft,
+      manual_models: value
+        .split(",")
+        .map((m) => m.trim())
+        .filter(Boolean)
+        .map((id) => ({
+          id,
+          label: id,
+          context_window_tokens: draft.context_window_default,
+          discovered: false,
+        })),
+    });
+  };
+
+  return (
+    <div className={styles.settingRow}>
+      <div className={styles.settingInfo}>
+        <div className={styles.settingLabel}>{draft.label}</div>
+        <div className={styles.settingDescription}>
+          {draft.kind} · {draft.discovered_models.length + draft.manual_models.length} models
+          {status ? ` · ${status}` : ""}
+        </div>
+        <div className={styles.backendForm}>
+          <label className={styles.backendField}>
+            <span className={styles.backendFieldLabel}>{t("models_backend_base_url")}</span>
+            <input
+              className={styles.input}
+              value={draft.base_url ?? ""}
+              placeholder={t("models_backend_base_url")}
+              onChange={(e) => setDraft({ ...draft, base_url: e.target.value || null })}
+            />
+          </label>
+          <label className={styles.backendField}>
+            <span className={styles.backendFieldLabel}>{t("models_backend_default_model")}</span>
+            {modelOptions.length > 0 ? (
+              <select
+                className={styles.select}
+                value={draft.default_model ?? ""}
+                onChange={(e) => setDraft({ ...draft, default_model: e.target.value || null })}
+              >
+                <option value="">{t("models_backend_default_auto")}</option>
+                {modelOptions.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.label || model.id}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                className={styles.input}
+                value={draft.default_model ?? ""}
+                placeholder={t("models_backend_default_model")}
+                onChange={(e) => setDraft({ ...draft, default_model: e.target.value || null })}
+              />
+            )}
+          </label>
+        </div>
+        <div className={styles.backendForm}>
+          {draft.model_discovery && (
+            <label className={styles.backendField}>
+              <span className={styles.backendFieldLabel}>{t("models_backend_discovered_models")}</span>
+              <input
+                className={styles.input}
+                value={discoveredModelText}
+                placeholder={t("models_backend_no_discovered_models")}
+                readOnly
+              />
+            </label>
+          )}
+          <label className={styles.backendField}>
+            <span className={styles.backendFieldLabel}>{t("models_backend_manual_models")}</span>
+            <input
+              className={styles.input}
+              value={manualModelText}
+              placeholder={t("models_backend_manual_models_placeholder")}
+              onChange={(e) => updateModels(e.target.value)}
+            />
+          </label>
+          <label className={styles.backendField}>
+            <span className={styles.backendFieldLabel}>{t("models_backend_secret")}</span>
+            <input
+              className={styles.input}
+              type="password"
+              value={secret}
+              placeholder={draft.has_secret ? t("models_backend_secret_saved") : t("models_backend_secret")}
+              onChange={(e) => setSecret(e.target.value)}
+            />
+          </label>
+        </div>
+      </div>
+      <div className={styles.settingControl}>
+        <div className={styles.backendActions}>
+          <button
+            className={styles.toggle}
+            role="switch"
+            aria-checked={draft.enabled}
+            aria-label={t("models_backend_enabled")}
+            data-checked={draft.enabled}
+            onClick={() => setDraft({ ...draft, enabled: !draft.enabled })}
+          >
+            <div className={styles.toggleKnob} />
+          </button>
+          <button className={styles.iconBtn} onClick={save} disabled={busy}>{t("models_backend_save")}</button>
+          <button className={styles.iconBtn} onClick={test} disabled={busy}>{t("models_backend_test")}</button>
+          {draft.model_discovery && (
+            <button className={styles.iconBtn} onClick={refresh} disabled={busy}>{t("models_backend_refresh")}</button>
+          )}
+          {draft.kind === "codex_subscription" && (
+            <button className={styles.iconBtn} onClick={() => void launchCodexLogin()} disabled={busy}>
+              {t("models_backend_login")}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function dedupeBackendModels(models: AgentBackendConfig["manual_models"]) {
+  const seen = new Set<string>();
+  return models.filter((model) => {
+    if (!model.id || seen.has(model.id)) return false;
+    seen.add(model.id);
+    return true;
+  });
 }

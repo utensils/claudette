@@ -498,10 +498,10 @@ pub async fn restore_workspace_path_from_trash(
             .await
             .map_err(|e| format!("join error: {e}"))??;
         let is_directory = metadata_is_dir_blocking(target.absolute).await?;
-        return Ok(WorkspacePathRestoreResult {
+        Ok(WorkspacePathRestoreResult {
             restored_path,
             is_directory,
-        });
+        })
     }
 
     #[cfg(any(
@@ -818,7 +818,7 @@ fn reveal_path(path: &Path) -> Result<(), String> {
         if output.status.success() {
             return Ok(());
         }
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
     }
 
     #[cfg(target_os = "windows")]

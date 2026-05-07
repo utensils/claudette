@@ -11,6 +11,7 @@ use claudette::env_provider::{EnvCache, EnvWatcher};
 use claudette::plugin_runtime::PluginRegistry;
 use claudette::scm::types::{CiCheck, PullRequest};
 
+use crate::commands::agent_backends::BackendGateway;
 use crate::commands::apps::DetectedApp;
 use crate::remote::DiscoveredServer;
 use crate::usage::UsageCacheEntry;
@@ -90,6 +91,10 @@ pub struct AgentSessionState {
     /// switched from 200k to 1M model variant, or vice versa) forces a
     /// teardown + respawn so the env var matches the new selection.
     pub session_disable_1m_context: bool,
+    /// Hash of alternate-backend environment baked into the current
+    /// persistent session. A mismatch means the Claude Code process must
+    /// restart so provider/base-url/auth changes take effect.
+    pub session_backend_hash: String,
     /// Outstanding `can_use_tool` control requests awaiting a `control_response`,
     /// keyed by tool_use_id. See [`PendingPermission`].
     pub pending_permissions: HashMap<String, PendingPermission>,
@@ -339,6 +344,9 @@ pub struct AppState {
     pub local_server: RwLock<Option<LocalServerState>>,
     /// Detected apps cache (populated on startup, read by open_workspace_in_app for TUI wrapping).
     pub detected_apps: RwLock<Vec<DetectedApp>>,
+    /// Loopback Anthropic-compatible gateway used for experimental
+    /// OpenAI-compatible Claude Code backends.
+    pub backend_gateway: BackendGateway,
     /// System tray icon handle (None when tray is disabled).
     pub tray_handle: Mutex<Option<TrayIcon>>,
     /// Monotonic counter for generating unique tray IDs. Each call to
@@ -395,6 +403,7 @@ impl AppState {
             discovered_servers: RwLock::new(Vec::new()),
             local_server: RwLock::new(None),
             detected_apps: RwLock::new(Vec::new()),
+            backend_gateway: BackendGateway::new(),
             tray_handle: Mutex::new(None),
             next_tray_seq: AtomicU64::new(1),
             usage_cache: RwLock::new(None),

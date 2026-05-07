@@ -902,6 +902,7 @@ export function ChatPanel() {
         const workspaceId = selectedWorkspaceId;
         const state = useAppStore.getState();
         const currentModel = state.selectedModel[sessionId] ?? "opus";
+        const currentModelProvider = state.selectedModelProvider[sessionId] ?? "anthropic";
         const currentPermission: PermissionLevel =
           state.permissionLevel[sessionId] ?? "full";
         const currentPlanMode = state.planMode[sessionId] ?? false;
@@ -938,8 +939,8 @@ export function ChatPanel() {
           );
         };
 
-        const setSelectedModelBound = (nextModel: string) =>
-          applySelectedModel(sessionId, nextModel);
+        const setSelectedModelBound = (nextModel: string, providerId?: string) =>
+          applySelectedModel(sessionId, nextModel, providerId ?? "anthropic");
 
         const setPermissionLevelBound = async (level: PermissionLevel) => {
           const previous =
@@ -1036,6 +1037,7 @@ export function ChatPanel() {
             workspaceId,
             agentStatus: agentStatusLabel,
             selectedModel: currentModel,
+            selectedModelProvider: currentModelProvider,
             permissionLevel: currentPermission,
             planMode: currentPlanMode,
             fastMode: currentFastMode,
@@ -1112,6 +1114,7 @@ export function ChatPanel() {
         // Route to remote server via WebSocket.
         const state = useAppStore.getState();
         const selectedModel = state.selectedModel[sessionId] || null;
+        const selectedProvider = state.selectedModelProvider[sessionId] || null;
         const disable1mContext = shouldDisable1mContext(selectedModel);
         const effort = resolveUltrathinkEffort(
           trimmed,
@@ -1123,6 +1126,7 @@ export function ChatPanel() {
           mentioned_files: mentionedFilesArray,
           permission_level: permissionLevel,
           model: state.selectedModel[sessionId] || null,
+          backend_id: selectedProvider,
           fast_mode: state.fastMode[sessionId] || false,
           thinking_enabled: state.thinkingEnabled[sessionId] || false,
           plan_mode: state.planMode[sessionId] || false,
@@ -1133,6 +1137,7 @@ export function ChatPanel() {
       } else {
         const state = useAppStore.getState();
         const model = state.selectedModel[sessionId] || undefined;
+        const backendId = state.selectedModelProvider[sessionId] || undefined;
         const fastMode = state.fastMode[sessionId] || false;
         const thinkingEnabled = state.thinkingEnabled[sessionId] || false;
         const planMode = state.planMode[sessionId] || false;
@@ -1154,6 +1159,7 @@ export function ChatPanel() {
           effort,
           chromeEnabled || undefined,
           disable1mContext || undefined,
+          backendId,
           attachments,
           optimisticMsgId,
         );

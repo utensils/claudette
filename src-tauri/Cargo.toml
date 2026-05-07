@@ -84,7 +84,8 @@ windows-sys = { version = "0.61", features = [
 # `devtools` is in the default set so the Help → Open dev tools menu item
 # works in release builds. The webview inspector ships in every binary;
 # users open it via the help menu rather than via a custom build flag.
-default = ["server", "voice", "devtools"]
+default = ["server", "voice", "devtools", "alternative-backends"]
+alternative-backends = []
 devtools = ["tauri/devtools"]
 server = ["dep:claudette-server"]
 voice = [
