@@ -14,6 +14,18 @@ use super::binary::resolve_claude_path;
 use super::process::{AgentEvent, TurnHandle};
 use super::types::{FileAttachment, StreamEvent, parse_stream_line};
 
+fn emit_invocation_to_broadcast(
+    tx: &tokio::sync::broadcast::Sender<super::process::AgentEvent>,
+    claude_path: &std::ffi::OsStr,
+    args: &[String],
+) {
+    let line = super::args::format_redacted_invocation(claude_path, args);
+    let event = super::process::AgentEvent::Stream(StreamEvent::system_command_line(line));
+    // broadcast::Sender::send returns the count of active receivers or an
+    // error if there are none. Either is fine for a fire-and-forget banner.
+    let _ = tx.send(event);
+}
+
 /// A persistent Claude CLI process that stays alive across turns.
 ///
 /// Instead of spawning a new `claude --print` per turn (which kills MCP server
@@ -118,6 +130,11 @@ impl PersistentSession {
             .ok_or_else(|| "Failed to capture stderr".to_string())?;
 
         let (event_tx, _) = tokio::sync::broadcast::channel::<AgentEvent>(2048);
+
+        // Persistent sessions only build argv once — `start` is the right
+        // (and only) spot to capture the invocation. No `is_resume` guard
+        // because the persistent path doesn't re-spawn within a session.
+        emit_invocation_to_broadcast(&event_tx, claude_path.as_os_str(), &args);
 
         // Background stdout reader — runs for the session lifetime.
         let tx = event_tx.clone();
