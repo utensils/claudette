@@ -447,6 +447,7 @@
 
   "nav_claude_flags": "Claude flags",
   "claude_flags_title": "Claude CLI flags",
+  "claude_flags_tooltip_aria_label": "Active Claude CLI flags",
   "claude_flags_description": "Toggle any flag the installed `claude` CLI supports. These are appended to every agent turn. Flags Claudette manages itself (model, session, output framing) are filtered out.",
   "claude_flags_repo_label": "Claude CLI flags",
   "claude_flags_repo_description": "Override global flag settings for this repository.",
