@@ -63,6 +63,7 @@ import { ScrollContext } from "./ScrollContext";
 import { StreamingThinkingBlock } from "./StreamingThinkingBlock";
 import { StreamingMessage } from "./StreamingMessage";
 import { MessagesWithTurns } from "./MessagesWithTurns";
+import { CliInvocationBanner } from "./CliInvocationBanner";
 import { ToolActivitiesSection } from "./ToolActivitiesSection";
 import { CurrentTurnTaskProgress } from "./CurrentTurnTaskProgress";
 import { ChatInputArea } from "./ChatInputArea";
@@ -248,6 +249,14 @@ export function ChatPanel() {
     return sessions?.find((sess) => sess.id === activeSessionId)?.agent_status ?? "Idle" as const;
   });
   const isRunning = activeSessionStatus === "Running";
+  const activeChatSessionRecord = useAppStore((s) =>
+    selectedWorkspaceId
+      ? (s.sessionsByWorkspace[selectedWorkspaceId] ?? []).find(
+          (cs) => cs.id === activeSessionId,
+        ) ?? null
+      : null,
+  );
+  const cliInvocation = activeChatSessionRecord?.cli_invocation ?? null;
 
   const isRemote = !!ws?.remote_connection_id;
 
@@ -1211,6 +1220,7 @@ export function ChatPanel() {
         )}
         <ScrollContext.Provider value={scrollContextValue}>
         <div className={styles.messages} ref={messagesContainerRef}>
+          <CliInvocationBanner invocation={cliInvocation} />
           {messages.length === 0 && !hasStreaming ? (
             <div className={styles.empty}>
               Send a message to start a conversation
