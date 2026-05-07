@@ -134,19 +134,16 @@ export function ExperimentalSettings() {
   const handleAlternativeBackendsToggle = async () => {
     if (!alternativeBackendsAvailable) return;
     const next = !alternativeBackendsEnabled;
+    const previous = alternativeBackendsEnabled;
     setAlternativeBackendsEnabled(next);
-    let persistedToggle = false;
     try {
       setError(null);
-      await setAppSetting("alternative_backends_enabled", next ? "true" : "false");
-      persistedToggle = true;
       if (!next) {
         await resetAlternativeBackendSelections();
       }
+      await setAppSetting("alternative_backends_enabled", next ? "true" : "false");
     } catch (e) {
-      if (!persistedToggle) {
-        setAlternativeBackendsEnabled(!next);
-      }
+      setAlternativeBackendsEnabled(previous);
       setError(String(e));
     }
   };

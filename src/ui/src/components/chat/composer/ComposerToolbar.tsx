@@ -27,7 +27,6 @@ export function ComposerToolbar({ sessionId, disabled }: ComposerToolbarProps) {
   const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
   const agentBackends = useAppStore((s) => s.agentBackends);
   const setSelectedModel = useAppStore((s) => s.setSelectedModel);
-  const setSelectedModelProvider = useAppStore((s) => s.setSelectedModelProvider);
   const setFastMode = useAppStore((s) => s.setFastMode);
   const setThinkingEnabled = useAppStore((s) => s.setThinkingEnabled);
   const setPlanMode = useAppStore((s) => s.setPlanMode);
@@ -62,7 +61,6 @@ export function ComposerToolbar({ sessionId, disabled }: ComposerToolbarProps) {
       const loadedModel = model ?? defModel ?? "opus";
       const loadedProvider = provider ?? defProvider ?? "anthropic";
       setSelectedModel(sessionId, loadedModel, loadedProvider);
-      setSelectedModelProvider(sessionId, loadedProvider);
       const effectiveFast = isFastSupported(loadedModel) && (fast === "true" || (!fast && defFast === "true"));
       const effectiveThinking = thinking === "true" || (!thinking && defThinking === "true");
       setFastMode(sessionId, effectiveFast);
@@ -85,7 +83,7 @@ export function ComposerToolbar({ sessionId, disabled }: ComposerToolbarProps) {
     }
     load();
     return () => { cancelled = true; };
-  }, [sessionId, setSelectedModel, setSelectedModelProvider, setFastMode, setThinkingEnabled, setEffortLevel, setShowThinkingBlocks, setChromeEnabled]);
+  }, [sessionId, setSelectedModel, setFastMode, setThinkingEnabled, setEffortLevel, setShowThinkingBlocks, setChromeEnabled]);
 
   const handleModelSelect = useCallback(
     async (model: string, providerId = "anthropic") => {

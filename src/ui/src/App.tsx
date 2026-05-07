@@ -245,11 +245,25 @@ function App() {
     getAppSetting("community_registry_enabled")
       .then((val) => { if (val === "true") setCommunityRegistryEnabled(true); })
       .catch(() => {});
-    Promise.all([getAppSetting("alternative_backends_enabled"), getHostEnvFlags()])
-      .then(([val, flags]) => {
+    Promise.allSettled([getAppSetting("alternative_backends_enabled"), getHostEnvFlags()])
+      .then(([settingResult, flagsResult]) => {
+        const flags =
+          flagsResult.status === "fulfilled"
+            ? flagsResult.value
+            : { alternative_backends_compiled: false, disable_1m_context: false };
+        if (flagsResult.status === "rejected") {
+          console.error("Failed to load host environment flags:", flagsResult.reason);
+        }
         setAlternativeBackendsAvailable(flags.alternative_backends_compiled);
-        setAlternativeBackendsEnabled(val === "true" && flags.alternative_backends_compiled);
         if (flags.disable_1m_context) setDisable1mContext(true);
+        if (settingResult.status === "fulfilled") {
+          setAlternativeBackendsEnabled(
+            settingResult.value === "true" && flags.alternative_backends_compiled,
+          );
+        } else {
+          console.error("Failed to load alternative backend setting:", settingResult.reason);
+          setAlternativeBackendsEnabled(false);
+        }
       })
       .catch(() => {});
     listAgentBackends()

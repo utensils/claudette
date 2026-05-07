@@ -709,7 +709,9 @@ async fn discover_models(backend: &AgentBackendConfig) -> Result<Vec<AgentBacken
                 .trim_end_matches('/');
             let mut request = client.get(format!("{base}/v1/models"));
             if let Some(secret) = load_secure_secret(SECRET_BUCKET, &backend.id)? {
-                request = request.bearer_auth(secret);
+                request = request
+                    .header("x-api-key", secret)
+                    .header("anthropic-version", "2023-06-01");
             }
             let value = request
                 .send()
