@@ -3,7 +3,8 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::{
-    Manager, Monitor, PhysicalPosition, PhysicalSize, Position, Size, WebviewWindow, Window,
+    LogicalPosition, LogicalSize, Manager, Monitor, PhysicalPosition, PhysicalSize, Position, Size,
+    WebviewWindow, Window,
 };
 
 use claudette::db::Database;
@@ -19,7 +20,7 @@ const SAVE_DEBOUNCE_MS: u64 = 250;
 
 static SAVE_GENERATION: AtomicU64 = AtomicU64::new(0);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct SavedWindowState {
     pub x: i32,
     pub y: i32,
@@ -27,6 +28,24 @@ pub struct SavedWindowState {
     pub height: u32,
     #[serde(default)]
     pub maximized: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logical_x: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logical_y: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logical_width: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logical_height: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale_factor: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monitor_x: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monitor_y: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monitor_width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monitor_height: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +54,12 @@ pub struct Rect {
     pub y: i32,
     pub width: u32,
     pub height: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct MonitorSnapshot {
+    rect: Rect,
+    scale_factor: f64,
 }
 
 impl SavedWindowState {
@@ -54,19 +79,25 @@ pub fn restore_main_window(app: &tauri::App) {
     };
 
     let state = app.state::<AppState>();
-    let raw_saved = Database::open(&state.db_path)
-        .ok()
+    let db = Database::open(&state.db_path).ok();
+    let raw_saved = db
+        .as_ref()
         .and_then(|db| db.get_app_setting(MAIN_WINDOW_STATE_KEY).ok().flatten());
     let saved = raw_saved.as_deref().and_then(parse_saved_state);
 
     let monitors = window.available_monitors().unwrap_or_default();
     let restored = saved
-        .filter(|state| state_is_restoreable(*state, &monitors))
+        .map(|state| restoreable_state(state, &monitors))
         .is_some_and(|state| apply_saved_state(&window, state).is_ok());
 
     if !restored {
         let _ = apply_default_bounds(&window);
         if should_maximize_default(raw_saved.as_deref()) {
+            if let Some(db) = db.as_ref() {
+                if let Err(err) = seed_default_maximized_state(db, &window) {
+                    eprintln!("[window-state] failed to seed default window state: {err}");
+                }
+            }
             let _ = window.maximize();
         }
     }
@@ -121,25 +152,49 @@ fn save_window_state(window: &Window) -> Result<(), String> {
 
 fn read_current_state(window: &Window) -> Result<SavedWindowState, String> {
     let position = window.outer_position().map_err(|e| e.to_string())?;
-    let size = window.outer_size().map_err(|e| e.to_string())?;
+    let size = window.inner_size().map_err(|e| e.to_string())?;
+    let monitor = window.current_monitor().map_err(|e| e.to_string())?;
+    let scale_factor = monitor
+        .as_ref()
+        .map(Monitor::scale_factor)
+        .or_else(|| window.scale_factor().ok())
+        .filter(|scale| scale.is_finite() && *scale > 0.0);
+    let monitor_rect = monitor.as_ref().map(monitor_to_rect);
     Ok(SavedWindowState {
         x: position.x,
         y: position.y,
         width: size.width,
         height: size.height,
         maximized: false,
+        logical_x: scale_factor.map(|scale| f64::from(position.x) / scale),
+        logical_y: scale_factor.map(|scale| f64::from(position.y) / scale),
+        logical_width: scale_factor.map(|scale| f64::from(size.width) / scale),
+        logical_height: scale_factor.map(|scale| f64::from(size.height) / scale),
+        scale_factor,
+        monitor_x: monitor_rect.map(|rect| rect.x),
+        monitor_y: monitor_rect.map(|rect| rect.y),
+        monitor_width: monitor_rect.map(|rect| rect.width),
+        monitor_height: monitor_rect.map(|rect| rect.height),
     })
 }
 
 fn apply_saved_state(window: &WebviewWindow, state: SavedWindowState) -> tauri::Result<()> {
-    window.set_size(Size::Physical(PhysicalSize {
-        width: state.width,
-        height: state.height,
-    }))?;
-    window.set_position(Position::Physical(PhysicalPosition {
-        x: state.x,
-        y: state.y,
-    }))?;
+    if let (Some(width), Some(height)) = (state.logical_width, state.logical_height) {
+        window.set_size(Size::Logical(LogicalSize { width, height }))?;
+    } else {
+        window.set_size(Size::Physical(PhysicalSize {
+            width: state.width,
+            height: state.height,
+        }))?;
+    }
+    if let (Some(x), Some(y)) = (state.logical_x, state.logical_y) {
+        window.set_position(Position::Logical(LogicalPosition { x, y }))?;
+    } else {
+        window.set_position(Position::Physical(PhysicalPosition {
+            x: state.x,
+            y: state.y,
+        }))?;
+    }
     if state.maximized {
         window.maximize()?;
     }
@@ -152,6 +207,37 @@ fn apply_default_bounds(window: &WebviewWindow) -> tauri::Result<()> {
         height: DEFAULT_HEIGHT,
     }))?;
     window.center()
+}
+
+fn seed_default_maximized_state(db: &Database, window: &WebviewWindow) -> Result<(), String> {
+    let position = window.outer_position().map_err(|e| e.to_string())?;
+    let size = window.inner_size().map_err(|e| e.to_string())?;
+    let monitor = window.current_monitor().map_err(|e| e.to_string())?;
+    let scale_factor = monitor
+        .as_ref()
+        .map(Monitor::scale_factor)
+        .or_else(|| window.scale_factor().ok())
+        .filter(|scale| scale.is_finite() && *scale > 0.0);
+    let monitor_rect = monitor.as_ref().map(monitor_to_rect);
+    let raw = serde_json::to_string(&SavedWindowState {
+        x: position.x,
+        y: position.y,
+        width: size.width,
+        height: size.height,
+        maximized: true,
+        logical_x: scale_factor.map(|scale| f64::from(position.x) / scale),
+        logical_y: scale_factor.map(|scale| f64::from(position.y) / scale),
+        logical_width: scale_factor.map(|scale| f64::from(size.width) / scale),
+        logical_height: scale_factor.map(|scale| f64::from(size.height) / scale),
+        scale_factor,
+        monitor_x: monitor_rect.map(|rect| rect.x),
+        monitor_y: monitor_rect.map(|rect| rect.y),
+        monitor_width: monitor_rect.map(|rect| rect.width),
+        monitor_height: monitor_rect.map(|rect| rect.height),
+    })
+    .map_err(|e| e.to_string())?;
+    db.set_app_setting(MAIN_WINDOW_STATE_KEY, &raw)
+        .map_err(|e| e.to_string())
 }
 
 fn should_maximize_default(raw_saved: Option<&str>) -> bool {
@@ -189,25 +275,223 @@ fn build_next_state(
     }
 }
 
-fn state_is_restoreable(state: SavedWindowState, monitors: &[Monitor]) -> bool {
-    let rect = state.rect();
+fn restoreable_state(state: SavedWindowState, monitors: &[Monitor]) -> SavedWindowState {
+    restoreable_state_for_monitors(state, &monitor_snapshots(monitors))
+}
+
+fn monitor_snapshots(monitors: &[Monitor]) -> Vec<MonitorSnapshot> {
+    monitors
+        .iter()
+        .map(|monitor| {
+            let scale_factor = monitor.scale_factor();
+            MonitorSnapshot {
+                rect: monitor_to_rect(monitor),
+                scale_factor: if scale_factor.is_finite() && scale_factor > 0.0 {
+                    scale_factor
+                } else {
+                    1.0
+                },
+            }
+        })
+        .collect()
+}
+
+fn monitor_to_rect(monitor: &Monitor) -> Rect {
+    let pos = monitor.position();
+    let size = monitor.size();
+    Rect {
+        x: pos.x,
+        y: pos.y,
+        width: size.width,
+        height: size.height,
+    }
+}
+
+#[cfg(test)]
+fn restoreable_state_for_rects(
+    state: SavedWindowState,
+    monitor_rects: &[Rect],
+) -> SavedWindowState {
+    let monitors = monitor_rects
+        .iter()
+        .copied()
+        .map(|rect| MonitorSnapshot {
+            rect,
+            scale_factor: 1.0,
+        })
+        .collect::<Vec<_>>();
+    restoreable_state_for_monitors(state, &monitors)
+}
+
+fn restoreable_state_for_monitors(
+    state: SavedWindowState,
+    monitors: &[MonitorSnapshot],
+) -> SavedWindowState {
     if monitors.is_empty() {
-        return true;
+        return state;
     }
 
-    monitors.iter().any(|monitor| {
-        let pos = monitor.position();
-        let size = monitor.size();
-        rects_intersect(
-            rect,
-            Rect {
-                x: pos.x,
-                y: pos.y,
-                width: size.width,
-                height: size.height,
-            },
+    let rect = state.rect();
+    let target_monitor = monitors
+        .iter()
+        .copied()
+        .find(|monitor| rects_intersect(rect, monitor.rect))
+        .unwrap_or_else(|| nearest_monitor(state, monitors));
+    let target_rect = scaled_rect_for_target_monitor(state, target_monitor);
+    let clamped = clamp_rect_to_monitor(target_rect, target_monitor.rect);
+
+    SavedWindowState {
+        x: clamped.x,
+        y: clamped.y,
+        width: clamped.width,
+        height: clamped.height,
+        maximized: state.maximized,
+        logical_x: Some(f64::from(clamped.x) / target_monitor.scale_factor),
+        logical_y: Some(f64::from(clamped.y) / target_monitor.scale_factor),
+        logical_width: Some(f64::from(clamped.width) / target_monitor.scale_factor),
+        logical_height: Some(f64::from(clamped.height) / target_monitor.scale_factor),
+        scale_factor: Some(target_monitor.scale_factor),
+        monitor_x: Some(target_monitor.rect.x),
+        monitor_y: Some(target_monitor.rect.y),
+        monitor_width: Some(target_monitor.rect.width),
+        monitor_height: Some(target_monitor.rect.height),
+    }
+}
+
+fn nearest_monitor(state: SavedWindowState, candidates: &[MonitorSnapshot]) -> MonitorSnapshot {
+    let rect = saved_monitor_rect(state).unwrap_or_else(|| state.rect());
+    candidates
+        .iter()
+        .copied()
+        .min_by_key(|candidate| squared_distance_between_centers(rect, candidate.rect))
+        .unwrap_or(MonitorSnapshot {
+            rect: state.rect(),
+            scale_factor: state.scale_factor.unwrap_or(1.0),
+        })
+}
+
+fn scaled_rect_for_target_monitor(state: SavedWindowState, target: MonitorSnapshot) -> Rect {
+    let saved_monitor = saved_monitor_rect(state);
+    let saved_scale_factor = state
+        .scale_factor
+        .filter(|scale| scale.is_finite() && *scale > 0.0)
+        .unwrap_or(target.scale_factor);
+    let mut width = state
+        .logical_width
+        .filter(|width| width.is_finite() && *width > 0.0)
+        .map(|width| logical_to_physical(width, target.scale_factor))
+        .unwrap_or_else(|| {
+            scale_physical_between_monitors(state.width, saved_scale_factor, target.scale_factor)
+        });
+    let mut height = state
+        .logical_height
+        .filter(|height| height.is_finite() && *height > 0.0)
+        .map(|height| logical_to_physical(height, target.scale_factor))
+        .unwrap_or_else(|| {
+            scale_physical_between_monitors(state.height, saved_scale_factor, target.scale_factor)
+        });
+    if state.logical_width.is_none()
+        && state.logical_height.is_none()
+        && state.scale_factor.is_none()
+        && let Some((legacy_width, legacy_height)) =
+            infer_legacy_scaled_size(width, height, target.rect)
+    {
+        width = legacy_width;
+        height = legacy_height;
+    }
+
+    let (x, y) = if let Some(saved_monitor) = saved_monitor {
+        let relative_x =
+            (f64::from(state.x - saved_monitor.x) / saved_scale_factor) * target.scale_factor;
+        let relative_y =
+            (f64::from(state.y - saved_monitor.y) / saved_scale_factor) * target.scale_factor;
+        (
+            f64_to_i32(f64::from(target.rect.x) + relative_x),
+            f64_to_i32(f64::from(target.rect.y) + relative_y),
         )
+    } else {
+        (state.x, state.y)
+    };
+
+    Rect {
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
+fn saved_monitor_rect(state: SavedWindowState) -> Option<Rect> {
+    Some(Rect {
+        x: state.monitor_x?,
+        y: state.monitor_y?,
+        width: state.monitor_width?,
+        height: state.monitor_height?,
     })
+}
+
+fn logical_to_physical(value: f64, scale_factor: f64) -> u32 {
+    f64_to_u32(value * scale_factor)
+}
+
+fn scale_physical_between_monitors(
+    value: u32,
+    saved_scale_factor: f64,
+    target_scale_factor: f64,
+) -> u32 {
+    let logical = f64::from(value) / saved_scale_factor;
+    logical_to_physical(logical, target_scale_factor)
+}
+
+fn infer_legacy_scaled_size(width: u32, height: u32, target: Rect) -> Option<(u32, u32)> {
+    if width <= target.width && height <= target.height {
+        return None;
+    }
+
+    [2.0, 1.75, 1.5, 1.25].into_iter().find_map(|scale| {
+        let scaled_width = f64_to_u32(f64::from(width) / scale);
+        let scaled_height = f64_to_u32(f64::from(height) / scale);
+        (scaled_width >= MIN_WIDTH
+            && scaled_height >= MIN_HEIGHT
+            && scaled_width <= target.width
+            && scaled_height <= target.height)
+            .then_some((scaled_width, scaled_height))
+    })
+}
+
+fn f64_to_u32(value: f64) -> u32 {
+    value.round().clamp(1.0, f64::from(u32::MAX)) as u32
+}
+
+fn f64_to_i32(value: f64) -> i32 {
+    value
+        .round()
+        .clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32
+}
+
+fn clamp_rect_to_monitor(rect: Rect, monitor: Rect) -> Rect {
+    let width = rect.width.min(monitor.width.max(MIN_WIDTH));
+    let height = rect.height.min(monitor.height.max(MIN_HEIGHT));
+    Rect {
+        x: clamp_axis(rect.x, width, monitor.x, monitor.width),
+        y: clamp_axis(rect.y, height, monitor.y, monitor.height),
+        width,
+        height,
+    }
+}
+
+fn clamp_axis(value: i32, size: u32, monitor_start: i32, monitor_size: u32) -> i32 {
+    let min = i64::from(monitor_start);
+    let max = i64::from(monitor_start) + i64::from(monitor_size.saturating_sub(size));
+    i64::from(value).clamp(min, max) as i32
+}
+
+fn squared_distance_between_centers(a: Rect, b: Rect) -> i64 {
+    let ax = i64::from(a.x) * 2 + i64::from(a.width);
+    let ay = i64::from(a.y) * 2 + i64::from(a.height);
+    let bx = i64::from(b.x) * 2 + i64::from(b.width);
+    let by = i64::from(b.y) * 2 + i64::from(b.height);
+    (ax - bx).pow(2) + (ay - by).pow(2)
 }
 
 fn rects_intersect(a: Rect, b: Rect) -> bool {
@@ -233,6 +517,41 @@ mod tests {
             width,
             height,
             maximized,
+            logical_x: None,
+            logical_y: None,
+            logical_width: None,
+            logical_height: None,
+            scale_factor: None,
+            monitor_x: None,
+            monitor_y: None,
+            monitor_width: None,
+            monitor_height: None,
+        }
+    }
+
+    fn state_with_monitor(
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+        scale_factor: f64,
+        monitor: Rect,
+    ) -> SavedWindowState {
+        SavedWindowState {
+            x,
+            y,
+            width,
+            height,
+            maximized: false,
+            logical_x: Some(f64::from(x) / scale_factor),
+            logical_y: Some(f64::from(y) / scale_factor),
+            logical_width: Some(f64::from(width) / scale_factor),
+            logical_height: Some(f64::from(height) / scale_factor),
+            scale_factor: Some(scale_factor),
+            monitor_x: Some(monitor.x),
+            monitor_y: Some(monitor.y),
+            monitor_width: Some(monitor.width),
+            monitor_height: Some(monitor.height),
         }
     }
 
@@ -280,6 +599,150 @@ mod tests {
     fn default_restore_maximizes_only_when_no_prior_state_exists() {
         assert!(should_maximize_default(None));
         assert!(!should_maximize_default(Some("{not json")));
+    }
+
+    #[test]
+    fn restoreable_state_preserves_size_when_saved_rect_intersects_monitor() {
+        let saved = state(-1790, 70, 1716, 944, false);
+        let restored = restoreable_state_for_rects(
+            saved,
+            &[
+                Rect {
+                    x: -1920,
+                    y: 0,
+                    width: 1920,
+                    height: 1080,
+                },
+                Rect {
+                    x: 0,
+                    y: 0,
+                    width: 2560,
+                    height: 1440,
+                },
+            ],
+        );
+        assert_eq!(restored.x, saved.x);
+        assert_eq!(restored.y, saved.y);
+        assert_eq!(restored.width, saved.width);
+        assert_eq!(restored.height, saved.height);
+    }
+
+    #[test]
+    fn restoreable_state_clamps_offscreen_position_without_using_default_size() {
+        let restored = restoreable_state_for_rects(
+            state(5000, 200, 1716, 944, false),
+            &[Rect {
+                x: 0,
+                y: 0,
+                width: 2560,
+                height: 1440,
+            }],
+        );
+        assert_eq!(restored.width, 1716);
+        assert_eq!(restored.height, 944);
+        assert_eq!(restored.x, 844);
+        assert_eq!(restored.y, 200);
+    }
+
+    #[test]
+    fn restoreable_state_shrinks_only_when_saved_size_exceeds_monitor() {
+        let restored = restoreable_state_for_rects(
+            state(0, 0, 7680, 2159, false),
+            &[Rect {
+                x: 0,
+                y: 0,
+                width: 2560,
+                height: 1440,
+            }],
+        );
+        assert_eq!(restored.width, 2560);
+        assert_eq!(restored.height, 1440);
+    }
+
+    #[test]
+    fn restoreable_state_uses_logical_size_on_different_scale_monitor() {
+        let saved_monitor = Rect {
+            x: -3000,
+            y: 0,
+            width: 3000,
+            height: 2000,
+        };
+        let saved = state_with_monitor(-2800, 200, 2400, 1600, 2.0, saved_monitor);
+        let restored = restoreable_state_for_monitors(
+            saved,
+            &[MonitorSnapshot {
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    width: 1920,
+                    height: 1080,
+                },
+                scale_factor: 1.0,
+            }],
+        );
+        assert_eq!(restored.width, 1200);
+        assert_eq!(restored.height, 800);
+        assert_eq!(restored.logical_x, Some(100.0));
+        assert_eq!(restored.logical_y, Some(100.0));
+        assert_eq!(restored.logical_width, Some(1200.0));
+        assert_eq!(restored.logical_height, Some(800.0));
+        assert_eq!(restored.x, 100);
+        assert_eq!(restored.y, 100);
+    }
+
+    #[test]
+    fn restoreable_state_scales_logical_size_up_for_high_dpi_target() {
+        let saved_monitor = Rect {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        };
+        let saved = state_with_monitor(100, 100, 1200, 800, 1.0, saved_monitor);
+        let restored = restoreable_state_for_monitors(
+            saved,
+            &[MonitorSnapshot {
+                rect: Rect {
+                    x: -3000,
+                    y: 0,
+                    width: 3000,
+                    height: 2000,
+                },
+                scale_factor: 2.0,
+            }],
+        );
+        assert_eq!(restored.width, 2400);
+        assert_eq!(restored.height, 1600);
+        assert_eq!(restored.logical_x, Some(-1400.0));
+        assert_eq!(restored.logical_y, Some(100.0));
+        assert_eq!(restored.logical_width, Some(1200.0));
+        assert_eq!(restored.logical_height, Some(800.0));
+        assert_eq!(restored.x, -2800);
+        assert_eq!(restored.y, 200);
+    }
+
+    #[test]
+    fn restoreable_state_infers_legacy_high_dpi_size_before_clamping() {
+        let restored = restoreable_state_for_monitors(
+            state(5000, 100, 2400, 1600, false),
+            &[MonitorSnapshot {
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    width: 1920,
+                    height: 1080,
+                },
+                scale_factor: 1.0,
+            }],
+        );
+        assert_eq!(restored.width, 1200);
+        assert_eq!(restored.height, 800);
+        assert_eq!(restored.logical_x, Some(720.0));
+        assert_eq!(restored.logical_y, Some(100.0));
+        assert_eq!(restored.logical_width, Some(1200.0));
+        assert_eq!(restored.logical_height, Some(800.0));
+        assert_eq!(restored.x, 720);
+        assert_eq!(restored.y, 100);
     }
 
     #[test]

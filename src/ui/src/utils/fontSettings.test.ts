@@ -1,11 +1,27 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { useAppStore } from "../stores/useAppStore";
 import {
+  adjustUiFontSize,
   clampUiFontSize,
   UI_FONT_SIZE_MIN,
   UI_FONT_SIZE_MAX,
   UI_FONT_SIZE_DEFAULT,
   buildFontOptions,
+  resetUiFontSize,
 } from "./fontSettings";
+
+const mocks = vi.hoisted(() => ({
+  applyUserFonts: vi.fn(),
+  setAppSetting: vi.fn(() => Promise.resolve()),
+}));
+
+vi.mock("./theme", () => ({
+  applyUserFonts: mocks.applyUserFonts,
+}));
+
+vi.mock("../services/tauri", () => ({
+  setAppSetting: mocks.setAppSetting,
+}));
 
 describe("clampUiFontSize", () => {
   it("returns the value when in range", () => {
@@ -27,6 +43,52 @@ describe("clampUiFontSize", () => {
 
   it("returns default when given default", () => {
     expect(clampUiFontSize(UI_FONT_SIZE_DEFAULT)).toBe(UI_FONT_SIZE_DEFAULT);
+  });
+});
+
+describe("UI zoom persistence", () => {
+  beforeEach(() => {
+    mocks.applyUserFonts.mockClear();
+    mocks.setAppSetting.mockClear();
+    useAppStore.setState({
+      fontFamilySans: "",
+      fontFamilyMono: "",
+      uiFontSize: UI_FONT_SIZE_DEFAULT,
+    });
+  });
+
+  it("persists keyboard/menu zoom changes to app settings", () => {
+    adjustUiFontSize(+1);
+
+    expect(useAppStore.getState().uiFontSize).toBe(UI_FONT_SIZE_DEFAULT + 1);
+    expect(mocks.applyUserFonts).toHaveBeenCalledWith("", "", UI_FONT_SIZE_DEFAULT + 1);
+    expect(mocks.setAppSetting).toHaveBeenCalledWith(
+      "ui_font_size",
+      String(UI_FONT_SIZE_DEFAULT + 1),
+    );
+  });
+
+  it("persists reset zoom to the default UI font size", () => {
+    useAppStore.setState({ uiFontSize: 17 });
+
+    resetUiFontSize();
+
+    expect(useAppStore.getState().uiFontSize).toBe(UI_FONT_SIZE_DEFAULT);
+    expect(mocks.applyUserFonts).toHaveBeenCalledWith("", "", UI_FONT_SIZE_DEFAULT);
+    expect(mocks.setAppSetting).toHaveBeenCalledWith(
+      "ui_font_size",
+      String(UI_FONT_SIZE_DEFAULT),
+    );
+  });
+
+  it("does not write settings when zoom is already at the clamp boundary", () => {
+    useAppStore.setState({ uiFontSize: UI_FONT_SIZE_MAX });
+
+    adjustUiFontSize(+1);
+
+    expect(useAppStore.getState().uiFontSize).toBe(UI_FONT_SIZE_MAX);
+    expect(mocks.applyUserFonts).not.toHaveBeenCalled();
+    expect(mocks.setAppSetting).not.toHaveBeenCalled();
   });
 });
 

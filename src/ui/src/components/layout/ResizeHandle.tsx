@@ -29,7 +29,17 @@ export const ResizeHandle = memo(function ResizeHandle({
 }: ResizeHandleProps) {
   const isDraggingRef = useRef(false);
   const startPosRef = useRef(0);
+  const startValueRef = useRef(0);
   const currentValueRef = useRef(0);
+  const pendingValueRef = useRef<number | null>(null);
+  const frameRef = useRef<number | null>(null);
+
+  const flushPendingValue = useCallback(() => {
+    frameRef.current = null;
+    const next = pendingValueRef.current;
+    if (next === null || !targetRef?.current || !cssVar) return;
+    targetRef.current.style.setProperty(cssVar, `${next}px`);
+  }, [targetRef, cssVar]);
 
   const handleMouseDown = useCallback((e: MouseEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -40,6 +50,9 @@ export const ResizeHandle = memo(function ResizeHandle({
       currentValueRef.current = parseFloat(
         getComputedStyle(targetRef.current).getPropertyValue(cssVar),
       ) || 0;
+      startValueRef.current = currentValueRef.current;
+      pendingValueRef.current = currentValueRef.current;
+      targetRef.current.dataset.resizing = "true";
     }
     document.body.style.cursor =
       direction === "horizontal" ? "col-resize" : "row-resize";
@@ -47,23 +60,31 @@ export const ResizeHandle = memo(function ResizeHandle({
   }, [direction, targetRef, cssVar]);
 
   useEffect(() => {
+    const cleanupTarget = targetRef?.current ?? null;
+
     const handleMouseMove = (e: globalThis.MouseEvent) => {
       if (!isDraggingRef.current) return;
 
       const currentPos = direction === "horizontal" ? e.clientX : e.clientY;
       const delta = currentPos - startPosRef.current;
-      startPosRef.current = currentPos;
 
       // CSS variable fast-path: write directly to the DOM, no React state.
       if (targetRef?.current && cssVar) {
-        const next = Math.max(min, Math.min(max, currentValueRef.current + (invert ? -delta : delta)));
+        const next = Math.max(
+          min,
+          Math.min(max, startValueRef.current + (invert ? -delta : delta)),
+        );
         currentValueRef.current = next;
-        targetRef.current.style.setProperty(cssVar, `${next}px`);
+        pendingValueRef.current = next;
+        if (frameRef.current === null) {
+          frameRef.current = window.requestAnimationFrame(flushPendingValue);
+        }
         return;
       }
 
       // Legacy fallback: per-pixel React state callback.
       onResize?.(delta);
+      startPosRef.current = currentPos;
     };
 
     const handleMouseUp = () => {
@@ -71,6 +92,13 @@ export const ResizeHandle = memo(function ResizeHandle({
       isDraggingRef.current = false;
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
+      if (targetRef?.current) {
+        delete targetRef.current.dataset.resizing;
+      }
+      if (frameRef.current !== null) {
+        window.cancelAnimationFrame(frameRef.current);
+        flushPendingValue();
+      }
 
       // Sync final value to React state once.
       if (targetRef?.current && cssVar && onResizeEnd) {
@@ -84,8 +112,25 @@ export const ResizeHandle = memo(function ResizeHandle({
     return () => {
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
+      if (frameRef.current !== null) {
+        window.cancelAnimationFrame(frameRef.current);
+        frameRef.current = null;
+      }
+      if (cleanupTarget) {
+        delete cleanupTarget.dataset.resizing;
+      }
     };
-  }, [direction, onResize, targetRef, cssVar, min, max, invert, onResizeEnd]);
+  }, [
+    direction,
+    onResize,
+    targetRef,
+    cssVar,
+    min,
+    max,
+    invert,
+    onResizeEnd,
+    flushPendingValue,
+  ]);
 
   return (
     <div
