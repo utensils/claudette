@@ -48,6 +48,9 @@ export type StreamEvent =
         post_tokens: number;
         duration_ms: number;
       } | null;
+      /** Only present on `subtype: "command_line"` events. Carries the
+       * resolved Claude CLI invocation string for this session. */
+      command_line?: string | null;
     }
   | { type: "stream_event"; event: InnerStreamEvent }
   | { type: "assistant"; message: AssistantMessage }

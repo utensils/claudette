@@ -1,7 +1,11 @@
 import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "../stores/useAppStore";
-import { loadChatHistory, saveTurnToolActivities } from "../services/tauri";
+import {
+  loadChatHistory,
+  saveTurnToolActivities,
+  setSessionCliInvocation,
+} from "../services/tauri";
 import type { AgentStreamPayload } from "../types/agent-events";
 import type { AgentToolCall } from "../stores/useAppStore";
 import type { ChatMessage } from "../types/chat";
@@ -168,6 +172,23 @@ export function useAgentStream() {
       if ("type" in streamEvent) {
         switch (streamEvent.type) {
           case "system": {
+            if (
+              streamEvent.subtype === "command_line" &&
+              typeof streamEvent.command_line === "string"
+            ) {
+              const line = streamEvent.command_line;
+              // Update local state immediately so the banner renders without
+              // waiting for a session refetch.
+              useAppStore
+                .getState()
+                .updateChatSession(sessionId, { cli_invocation: line });
+              // Persist (idempotent on the DB side: first-emit-wins).
+              void setSessionCliInvocation(sessionId, line).catch((e) => {
+                // Banner is UX-cosmetic — log and move on.
+                console.warn("[stream] persist cli_invocation failed:", e);
+              });
+              break;
+            }
             if (
               (streamEvent.subtype === "task_started" ||
                 streamEvent.subtype === "task_progress" ||
