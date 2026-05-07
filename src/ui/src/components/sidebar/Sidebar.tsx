@@ -463,8 +463,8 @@ export const Sidebar = memo(function Sidebar() {
       workspaceDrag.dropTarget?.id === ws.id &&
       workspaceDrag.dropTarget.placement === "after";
     const wsSessions = sessionsByWorkspace[ws.id] ?? [];
-    const hasQuestion = wsSessions.some((s) => s.needs_attention && s.attention_kind === "Ask");
     const hasPlan = wsSessions.some((s) => s.needs_attention && s.attention_kind === "Plan");
+    const hasQuestion = wsSessions.some((s) => s.needs_attention && s.attention_kind !== "Plan");
     const badge: "ask" | "plan" | "done" | null =
       hasQuestion ? "ask" :
       hasPlan ? "plan" :
