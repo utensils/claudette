@@ -1295,16 +1295,23 @@ pub async fn send_chat_message(
     session.needs_attention = false;
     session.attention_kind = None;
 
+    let (resolved_backend_id, resolved_model) =
+        crate::commands::agent_backends::resolve_backend_request_defaults(
+            &db,
+            backend_id.as_deref(),
+            model.as_deref(),
+        )?;
+
     let backend_runtime = crate::commands::agent_backends::resolve_backend_runtime(
         &state,
-        backend_id.as_deref(),
-        model.as_deref(),
+        resolved_backend_id.as_deref(),
+        resolved_model.as_deref(),
     )
     .await?;
 
     // Build agent settings from frontend params.
     let agent_settings = AgentSettings {
-        model,
+        model: resolved_model,
         fast_mode: fast_mode.unwrap_or(false),
         thinking_enabled: thinking_enabled.unwrap_or(false),
         plan_mode: plan_mode.unwrap_or(false),

@@ -101,3 +101,20 @@ pub async fn resolve_backend_runtime(
 ) -> Result<AgentBackendRuntime, String> {
     Ok(AgentBackendRuntime::default())
 }
+
+pub fn resolve_backend_request_defaults(
+    _db: &claudette::db::Database,
+    backend_id: Option<&str>,
+    model: Option<&str>,
+) -> Result<(Option<String>, Option<String>), String> {
+    Ok((
+        backend_id
+            .map(str::trim)
+            .filter(|backend| !backend.is_empty())
+            .map(ToString::to_string),
+        model
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+            .map(ToString::to_string),
+    ))
+}

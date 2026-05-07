@@ -336,6 +336,84 @@ pub async fn resolve_backend_runtime(
     })
 }
 
+pub fn resolve_backend_request_defaults(
+    db: &Database,
+    backend_id: Option<&str>,
+    model: Option<&str>,
+) -> Result<(Option<String>, Option<String>), String> {
+    let requested_model = model
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(ToString::to_string);
+    let requested_backend = backend_id
+        .map(str::trim)
+        .filter(|backend| !backend.is_empty())
+        .map(ToString::to_string);
+    let enabled = db
+        .get_app_setting("alternative_backends_enabled")
+        .map_err(|e| e.to_string())?
+        .as_deref()
+        == Some("true");
+    if !enabled {
+        return Ok((requested_backend, requested_model));
+    }
+
+    let backends = load_backend_configs(db)?;
+    if requested_model.is_some() {
+        return Ok((requested_backend, requested_model));
+    }
+
+    if let Some(backend_id) = requested_backend.as_deref() {
+        let backend = backends
+            .iter()
+            .find(|backend| backend.id == backend_id)
+            .ok_or_else(|| format!("Unknown backend `{backend_id}`"))?;
+        let model = if backend.kind == AgentBackendKind::Anthropic {
+            None
+        } else {
+            backend.default_model.clone().or_else(|| {
+                backend
+                    .discovered_models
+                    .first()
+                    .or_else(|| backend.manual_models.first())
+                    .map(|model| model.id.clone())
+            })
+        };
+        return Ok((requested_backend, model));
+    }
+
+    let default_backend_id = db
+        .get_app_setting("default_agent_backend")
+        .map_err(|e| e.to_string())?
+        .filter(|backend| !backend.trim().is_empty())
+        .unwrap_or_else(|| "anthropic".to_string());
+    let default_model = db
+        .get_app_setting("default_model")
+        .map_err(|e| e.to_string())?
+        .filter(|model| !model.trim().is_empty());
+    let Some(backend) = backends
+        .iter()
+        .find(|backend| backend.id == default_backend_id)
+    else {
+        return Ok((None, default_model));
+    };
+    if backend.kind == AgentBackendKind::Anthropic {
+        return Ok((Some(backend.id.clone()), default_model));
+    }
+
+    let model = default_model
+        .filter(|model| backend_models_contain(backend, model))
+        .or_else(|| backend.default_model.clone())
+        .or_else(|| {
+            backend
+                .discovered_models
+                .first()
+                .or_else(|| backend.manual_models.first())
+                .map(|model| model.id.clone())
+        });
+    Ok((Some(backend.id.clone()), model))
+}
+
 fn append_custom_model_env(
     env: &mut Vec<(String, String)>,
     backend: &AgentBackendConfig,
@@ -1399,11 +1477,27 @@ fn anthropic_sse_body(message: &Value) -> String {
     ));
     if let Some(content) = message.get("content").and_then(Value::as_array) {
         for (index, block) in content.iter().enumerate() {
+            let block_type = block.get("type").and_then(Value::as_str);
+            let start_block = if block_type == Some("text") {
+                json!({"type":"text","text":""})
+            } else {
+                block.clone()
+            };
             out.push_str("event: content_block_start\n");
             out.push_str(&format!(
                 "data: {}\n\n",
-                json!({"type":"content_block_start","index":index,"content_block":block})
+                json!({"type":"content_block_start","index":index,"content_block":start_block})
             ));
+            if block_type == Some("text")
+                && let Some(text) = block.get("text").and_then(Value::as_str)
+                && !text.is_empty()
+            {
+                out.push_str("event: content_block_delta\n");
+                out.push_str(&format!(
+                    "data: {}\n\n",
+                    json!({"type":"content_block_delta","index":index,"delta":{"type":"text_delta","text":text}})
+                ));
+            }
             out.push_str("event: content_block_stop\n");
             out.push_str(&format!(
                 "data: {}\n\n",
@@ -1470,6 +1564,15 @@ fn find_header_end(buf: &[u8]) -> Option<usize> {
 mod tests {
     use super::*;
 
+    fn model(id: &str) -> AgentBackendModel {
+        AgentBackendModel {
+            id: id.to_string(),
+            label: id.to_string(),
+            context_window_tokens: 400_000,
+            discovered: true,
+        }
+    }
+
     #[test]
     fn runtime_hash_changes_with_backend_model_and_secret() {
         let backend = AgentBackendConfig::builtin_ollama();
@@ -1514,20 +1617,10 @@ mod tests {
         let anthropic = AgentBackendConfig::builtin_anthropic();
         let mut openai = AgentBackendConfig::builtin_openai_api();
         openai.enabled = false;
-        openai.discovered_models = vec![AgentBackendModel {
-            id: "gpt-5.4".to_string(),
-            label: "gpt-5.4".to_string(),
-            context_window_tokens: 272_000,
-            discovered: true,
-        }];
+        openai.discovered_models = vec![model("gpt-5.4")];
         let mut codex = AgentBackendConfig::builtin_codex_subscription();
         codex.enabled = true;
-        codex.discovered_models = vec![AgentBackendModel {
-            id: "gpt-5.4".to_string(),
-            label: "gpt-5.4".to_string(),
-            context_window_tokens: 272_000,
-            discovered: true,
-        }];
+        codex.discovered_models = vec![model("gpt-5.4")];
         let backends = vec![anthropic, openai, codex];
 
         let inferred =
@@ -1538,6 +1631,71 @@ mod tests {
         let fallback = select_backend_for_request(&backends, None, Some("sonnet"), None)
             .expect("unknown model should use anthropic default");
         assert_eq!(fallback.id, "anthropic");
+    }
+
+    #[test]
+    fn backend_defaults_resolve_codex_default_model_for_empty_request() {
+        let db = Database::open_in_memory().expect("test db should open");
+        db.set_app_setting("alternative_backends_enabled", "true")
+            .expect("setting should save");
+        db.set_app_setting("default_agent_backend", "codex-subscription")
+            .expect("setting should save");
+        db.set_app_setting("default_model", "gpt-5.4")
+            .expect("setting should save");
+
+        let mut codex = AgentBackendConfig::builtin_codex_subscription();
+        codex.enabled = true;
+        codex.default_model = Some("gpt-5.3-codex".to_string());
+        codex.discovered_models = vec![model("gpt-5.3-codex"), model("gpt-5.4")];
+        save_backend_configs(&db, &[codex]).expect("backend config should save");
+
+        let (backend_id, resolved_model) =
+            resolve_backend_request_defaults(&db, None, None).expect("defaults should resolve");
+
+        assert_eq!(backend_id.as_deref(), Some("codex-subscription"));
+        assert_eq!(resolved_model.as_deref(), Some("gpt-5.4"));
+    }
+
+    #[test]
+    fn backend_defaults_ignore_stale_global_model_for_non_anthropic_backend() {
+        let db = Database::open_in_memory().expect("test db should open");
+        db.set_app_setting("alternative_backends_enabled", "true")
+            .expect("setting should save");
+        db.set_app_setting("default_agent_backend", "codex-subscription")
+            .expect("setting should save");
+        db.set_app_setting("default_model", "claude-opus-4-7")
+            .expect("setting should save");
+
+        let mut codex = AgentBackendConfig::builtin_codex_subscription();
+        codex.enabled = true;
+        codex.default_model = Some("gpt-5.3-codex".to_string());
+        codex.discovered_models = vec![model("gpt-5.3-codex"), model("gpt-5.4")];
+        save_backend_configs(&db, &[codex]).expect("backend config should save");
+
+        let (backend_id, resolved_model) =
+            resolve_backend_request_defaults(&db, None, None).expect("defaults should resolve");
+
+        assert_eq!(backend_id.as_deref(), Some("codex-subscription"));
+        assert_eq!(resolved_model.as_deref(), Some("gpt-5.3-codex"));
+    }
+
+    #[test]
+    fn backend_defaults_fill_model_for_provider_only_request() {
+        let db = Database::open_in_memory().expect("test db should open");
+        db.set_app_setting("alternative_backends_enabled", "true")
+            .expect("setting should save");
+
+        let mut ollama = AgentBackendConfig::builtin_ollama();
+        ollama.enabled = true;
+        ollama.discovered_models = vec![model("qwen3-coder")];
+        save_backend_configs(&db, &[ollama]).expect("backend config should save");
+
+        let (backend_id, resolved_model) =
+            resolve_backend_request_defaults(&db, Some("ollama"), None)
+                .expect("provider-only request should resolve");
+
+        assert_eq!(backend_id.as_deref(), Some("ollama"));
+        assert_eq!(resolved_model.as_deref(), Some("qwen3-coder"));
     }
 
     #[test]
@@ -1650,23 +1808,13 @@ mod tests {
     #[test]
     fn built_in_discovery_backends_do_not_keep_manual_model_seeds() {
         let mut openai = AgentBackendConfig::builtin_openai_api();
-        openai.manual_models = vec![AgentBackendModel {
-            id: "any-future-model".to_string(),
-            label: "Any future model".to_string(),
-            context_window_tokens: 1_000_000,
-            discovered: false,
-        }];
+        openai.manual_models = vec![model("any-future-model")];
         let normalized = normalize_backend(openai);
         assert!(normalized.manual_models.is_empty());
 
         let mut custom = AgentBackendConfig::builtin_openai_api();
         custom.kind = AgentBackendKind::CustomOpenAi;
-        custom.manual_models = vec![AgentBackendModel {
-            id: "team-private-model".to_string(),
-            label: "Team private model".to_string(),
-            context_window_tokens: 400_000,
-            discovered: false,
-        }];
+        custom.manual_models = vec![model("team-private-model")];
         let normalized = normalize_backend(custom);
         assert_eq!(normalized.manual_models.len(), 1);
     }
@@ -1683,5 +1831,21 @@ data: [DONE]
         .expect("SSE should parse");
         assert_eq!(response["output_text"], "hello");
         assert_eq!(response["usage"]["output_tokens"], 2);
+    }
+
+    #[test]
+    fn anthropic_sse_emits_text_delta_for_stream_json_consumers() {
+        let body = anthropic_sse_body(&json!({
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "gpt-test",
+            "content": [{"type":"text","text":"hello"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": null,
+            "usage": {"input_tokens": 1, "output_tokens": 1}
+        }));
+        assert!(body.contains(r#""content_block":{"text":"","type":"text"}"#));
+        assert!(body.contains(r#""delta":{"text":"hello","type":"text_delta"}"#));
     }
 }
