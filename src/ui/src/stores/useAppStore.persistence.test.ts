@@ -32,6 +32,7 @@ function makeSession(id: string, wsId: string): ChatSession {
     status: "Active",
     created_at: "2026-01-01T00:00:00Z",
     archived_at: null,
+    cli_invocation: null,
     agent_status: "Idle",
     needs_attention: false,
     attention_kind: null,

@@ -32,6 +32,7 @@ export interface ChatSession {
   status: SessionStatus;
   created_at: string;
   archived_at: string | null;
+  cli_invocation: string | null;
   agent_status: SessionAgentStatus;
   needs_attention: boolean;
   attention_kind: SessionAttentionKind | null;
