@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import type { AppState } from "../stores/useAppStore";
 import { useAppStore } from "../stores/useAppStore";
 import { getAppSetting, setAppSetting } from "../services/tauri";
@@ -67,6 +67,62 @@ export interface PersistedViewStateV1 {
 }
 
 type PersistedViewState = PersistedViewStateV1;
+
+interface ViewStatePersistenceController {
+  schedule: () => void;
+  flush: () => void;
+  dispose: () => void;
+}
+
+interface ViewStatePersistenceControllerOptions {
+  readJson: () => string;
+  writeJson: (json: string) => void;
+  delayMs?: number;
+  setTimer?: (callback: () => void, delayMs: number) => number;
+  clearTimer?: (id: number) => void;
+}
+
+export function createViewStatePersistenceController({
+  readJson,
+  writeJson,
+  delayMs = WRITE_DEBOUNCE_MS,
+  setTimer = (callback, delay) => window.setTimeout(callback, delay),
+  clearTimer = (id) => window.clearTimeout(id),
+}: ViewStatePersistenceControllerOptions): ViewStatePersistenceController {
+  let timeout: number | null = null;
+  let lastJson: string | null = null;
+
+  const writeIfChanged = () => {
+    const json = readJson();
+    if (json === lastJson) return;
+    lastJson = json;
+    writeJson(json);
+  };
+
+  const flush = () => {
+    if (timeout !== null) {
+      clearTimer(timeout);
+      timeout = null;
+    }
+    writeIfChanged();
+  };
+
+  const schedule = () => {
+    if (timeout !== null) return;
+    timeout = setTimer(() => {
+      timeout = null;
+      writeIfChanged();
+    }, delayMs);
+  };
+
+  const dispose = () => {
+    if (timeout !== null) {
+      flush();
+    }
+  };
+
+  return { schedule, flush, dispose };
+}
 
 function parseBool(raw: string | null): boolean | null {
   if (raw === "true") return true;
@@ -605,30 +661,27 @@ export async function hydratePersistedViewState(workspaces: readonly Workspace[]
 }
 
 export function useViewTogglePersistence(enabled: boolean) {
-  const lastJsonRef = useRef<string | null>(null);
-
   useEffect(() => {
     if (!enabled) return;
 
-    let timeout: number | null = null;
-    const flush = () => {
-      timeout = null;
-      const json = JSON.stringify(buildPersistedViewState(useAppStore.getState()));
-      if (json === lastJsonRef.current) return;
-      lastJsonRef.current = json;
-      void setAppSetting(VIEW_STATE_KEY, json).catch((err) => {
-        console.error("[viewState] Failed to persist view state:", err);
-      });
-    };
-
-    const unsubscribe = useAppStore.subscribe(() => {
-      if (timeout !== null) window.clearTimeout(timeout);
-      timeout = window.setTimeout(flush, WRITE_DEBOUNCE_MS);
+    const controller = createViewStatePersistenceController({
+      readJson: () => JSON.stringify(buildPersistedViewState(useAppStore.getState())),
+      writeJson: (json) => {
+        void setAppSetting(VIEW_STATE_KEY, json).catch((err) => {
+          console.error("[viewState] Failed to persist view state:", err);
+        });
+      },
     });
 
+    const unsubscribe = useAppStore.subscribe(controller.schedule);
+    window.addEventListener("pagehide", controller.flush);
+    window.addEventListener("beforeunload", controller.flush);
+
     return () => {
+      window.removeEventListener("pagehide", controller.flush);
+      window.removeEventListener("beforeunload", controller.flush);
       unsubscribe();
-      if (timeout !== null) window.clearTimeout(timeout);
+      controller.dispose();
     };
   }, [enabled]);
 }

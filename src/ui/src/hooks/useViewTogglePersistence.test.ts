@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   applyPersistedViewState,
   buildPersistedViewState,
+  createViewStatePersistenceController,
   type PersistedViewStateV1,
 } from "./useViewTogglePersistence";
 import { fileBufferKey } from "../stores/slices/fileTreeSlice";
@@ -277,5 +278,60 @@ describe("view state persistence", () => {
 
     const persisted = buildPersistedViewState(useAppStore.getState());
     expect(persisted.diffSelectionByWorkspace["ws-a"]).toBeUndefined();
+  });
+
+  it("does not postpone pending writes when unrelated state changes keep arriving", () => {
+    let currentJson = "initial";
+    const writes: string[] = [];
+    const timers: Array<() => void> = [];
+    const cleared: number[] = [];
+    const controller = createViewStatePersistenceController({
+      readJson: () => currentJson,
+      writeJson: (json) => writes.push(json),
+      setTimer: (callback) => {
+        timers.push(callback);
+        return timers.length - 1;
+      },
+      clearTimer: (id) => {
+        cleared.push(id);
+      },
+    });
+
+    controller.schedule();
+    currentJson = "after-first-change";
+    controller.schedule();
+    currentJson = "after-streaming-noise";
+    controller.schedule();
+
+    expect(timers).toHaveLength(1);
+    expect(cleared).toEqual([]);
+
+    timers[0]();
+    expect(writes).toEqual(["after-streaming-noise"]);
+  });
+
+  it("flushes a pending write during cleanup", () => {
+    let currentJson = "before-close";
+    const writes: string[] = [];
+    const timers: Array<() => void> = [];
+    const cleared: number[] = [];
+    const controller = createViewStatePersistenceController({
+      readJson: () => currentJson,
+      writeJson: (json) => writes.push(json),
+      setTimer: (callback) => {
+        timers.push(callback);
+        return timers.length - 1;
+      },
+      clearTimer: (id) => {
+        cleared.push(id);
+      },
+    });
+
+    controller.schedule();
+    currentJson = "latest-before-close";
+    controller.dispose();
+
+    expect(cleared).toEqual([0]);
+    expect(writes).toEqual(["latest-before-close"]);
   });
 });
