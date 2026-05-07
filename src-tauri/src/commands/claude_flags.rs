@@ -132,8 +132,8 @@ pub async fn set_claude_flag_state(
         }
         FlagScope::Repo { repo_id } => {
             let seeded_value = if value.is_none() {
-                let existing =
-                    claude_flags_store::load_repo_overrides(&db, &repo_id).unwrap_or_default();
+                let existing = claude_flags_store::load_repo_overrides(&db, &repo_id)
+                    .map_err(|e| e.to_string())?;
                 if existing.contains_key(&name) {
                     None
                 } else {
