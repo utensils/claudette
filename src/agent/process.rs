@@ -35,6 +35,21 @@ pub struct TurnHandle {
     pub pid: u32,
 }
 
+/// Emit a `command_line` System event onto the agent event channel. Used by
+/// both `run_turn` (one-shot) and `PersistentSession::start` so the chat tab
+/// records the invocation that was actually run.
+fn emit_invocation_event(
+    tx: &mpsc::Sender<AgentEvent>,
+    claude_path: &std::ffi::OsStr,
+    args: &[String],
+) {
+    let line = crate::agent::args::format_redacted_invocation(claude_path, args);
+    let event = AgentEvent::Stream(crate::agent::types::StreamEvent::system_command_line(line));
+    // Channel might be full or closed — drop on error; the banner is
+    // UX-cosmetic, never load-bearing.
+    let _ = tx.try_send(event);
+}
+
 /// Run a single agent turn by spawning `claude -p` with the given prompt.
 ///
 /// For the first turn, uses `--session-id` to establish the session.
@@ -157,6 +172,14 @@ pub async fn run_turn(
         .ok_or_else(|| "Failed to capture stderr".to_string())?;
 
     let (event_tx, event_rx) = mpsc::channel::<AgentEvent>(128);
+
+    // Capture the invocation on the first turn only. Subsequent turns reuse
+    // the same session, so the banner persisted at session start is the
+    // canonical record. `is_resume == false` is the canonical "first turn"
+    // signal already used elsewhere in this function.
+    if !is_resume {
+        emit_invocation_event(&event_tx, &claude_path, &args);
+    }
 
     // Stdout reader task — parse stream-json events
     let tx_stdout = event_tx.clone();

@@ -5,15 +5,14 @@ use super::types::FileAttachment;
 /// carry tokens), `--settings` (inline JSON, may carry hook bridge socket +
 /// auth token), `--append-system-prompt` (potentially huge user prompt).
 /// Renders these as `<flag> <redacted>` in `format_redacted_invocation`.
-#[allow(dead_code)] // consumed by upcoming chat-tab banner wiring
-pub const REDACTED_VALUE_FLAGS: &[&str] = &["--mcp-config", "--settings", "--append-system-prompt"];
+pub(crate) const REDACTED_VALUE_FLAGS: &[&str] =
+    &["--mcp-config", "--settings", "--append-system-prompt"];
 
 /// Render `(claude_path, argv)` as a shell-quoted, single-line command string
 /// suitable for display in the chat tab. Sensitive values are replaced with
 /// `<redacted>`. The trailing prompt positional (if present) is replaced with
 /// `<prompt>` so we don't duplicate the user's first message.
-#[allow(dead_code)] // consumed by upcoming chat-tab banner wiring
-pub fn format_redacted_invocation(claude_path: &std::ffi::OsStr, args: &[String]) -> String {
+pub(crate) fn format_redacted_invocation(claude_path: &std::ffi::OsStr, args: &[String]) -> String {
     let mut tokens: Vec<String> = Vec::with_capacity(args.len() + 1);
     tokens.push(shell_quote(&claude_path.to_string_lossy()));
 

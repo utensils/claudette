@@ -163,6 +163,29 @@ pub enum StreamEvent {
     Unknown,
 }
 
+impl StreamEvent {
+    /// Construct a `command_line` System event carrying the redacted
+    /// invocation string. Centralizes the 13-field initialization so call
+    /// sites in `process.rs` and `session.rs` don't duplicate it.
+    pub fn system_command_line(line: String) -> Self {
+        Self::System {
+            subtype: "command_line".to_string(),
+            session_id: None,
+            task_id: None,
+            tool_use_id: None,
+            output_file: None,
+            summary: None,
+            description: None,
+            last_tool_name: None,
+            usage: None,
+            status: None,
+            compact_result: None,
+            compact_metadata: None,
+            command_line: Some(line),
+        }
+    }
+}
+
 /// Inner payload of a `control_request`. We only care about `can_use_tool` for
 /// permission-prompt routing; other subtypes are captured as [`ControlRequestInner::Unknown`]
 /// and forwarded to the frontend for observability.
