@@ -580,6 +580,7 @@ fn main() {
             commands::repository::list_git_remote_branches,
             commands::repository::reorder_repositories,
             commands::repository::set_setup_script_auto_run,
+            commands::repository::set_archive_script_auto_run,
             // Workspace
             commands::workspace::create_workspace,
             commands::workspace::fork_workspace_at_checkpoint,

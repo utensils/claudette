@@ -97,6 +97,7 @@ pub async fn add_repository(
         branch_rename_preferences: None,
         setup_script_auto_run: false,
         archive_script: None,
+        archive_script_auto_run: false,
         base_branch,
         default_remote,
         path_valid: true,
@@ -136,6 +137,7 @@ pub async fn update_repository_settings(
     custom_instructions: Option<String>,
     branch_rename_preferences: Option<String>,
     setup_script_auto_run: bool,
+    archive_script_auto_run: bool,
     base_branch: Option<String>,
     default_remote: Option<String>,
     app: AppHandle,
@@ -159,6 +161,8 @@ pub async fn update_repository_settings(
         .map_err(|e| e.to_string())?;
     db.update_repository_setup_script_auto_run(&id, setup_script_auto_run)
         .map_err(|e| e.to_string())?;
+    db.update_repository_archive_script_auto_run(&id, archive_script_auto_run)
+        .map_err(|e| e.to_string())?;
     db.update_repository_base_branch(&id, base_branch.as_deref())
         .map_err(|e| e.to_string())?;
     db.update_repository_default_remote(&id, default_remote.as_deref())
@@ -177,6 +181,18 @@ pub async fn set_setup_script_auto_run(
 ) -> Result<(), String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     db.update_repository_setup_script_auto_run(&repo_id, enabled)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_archive_script_auto_run(
+    repo_id: String,
+    enabled: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    db.update_repository_archive_script_auto_run(&repo_id, enabled)
         .map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -295,13 +311,16 @@ pub async fn get_repo_config(
             .map_err(|e| format!("Config load task failed: {e}"))?;
 
     match config_result {
-        Ok(Some(cfg)) => Ok(RepoConfigInfo {
-            has_config_file: true,
-            setup_script: cfg.scripts.as_ref().and_then(|s| s.setup.clone()),
-            archive_script: cfg.scripts.and_then(|s| s.archive),
-            instructions: cfg.instructions,
-            parse_error: None,
-        }),
+        Ok(Some(cfg)) => {
+            let scripts = cfg.scripts;
+            Ok(RepoConfigInfo {
+                has_config_file: true,
+                setup_script: scripts.as_ref().and_then(|s| s.setup.clone()),
+                archive_script: scripts.and_then(|s| s.archive),
+                instructions: cfg.instructions,
+                parse_error: None,
+            })
+        }
         Ok(None) => Ok(RepoConfigInfo {
             has_config_file: false,
             setup_script: None,

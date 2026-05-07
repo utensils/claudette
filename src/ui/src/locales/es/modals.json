@@ -61,6 +61,14 @@
   "setup_script_running": "Ejecutando...",
   "setup_script_confirm": "Ejecutar script",
 
+  "archive_script_title": "Revisar script de archivado",
+  "archive_script_warning": "Este espacio de trabajo tiene un script de archivado de <strong>{{source}}</strong> que se ejecutará antes de eliminar el worktree. Por favor, revísalo antes de continuar.",
+  "archive_script_label": "Script",
+  "archive_script_always_run": "Ejecutar siempre los scripts de archivado para este repositorio",
+  "archive_script_skip": "Archivar sin ejecutar",
+  "archive_script_running": "Ejecutando...",
+  "archive_script_confirm": "Ejecutar y archivar",
+
   "import_worktrees_title": "Importar worktrees",
   "import_worktrees_scanning": "Buscando worktrees existentes...",
   "import_worktrees_none_found": "No se encontraron worktrees existentes para este repositorio.",

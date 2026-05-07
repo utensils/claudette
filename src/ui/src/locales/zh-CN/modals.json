@@ -61,6 +61,14 @@
   "setup_script_running": "运行中...",
   "setup_script_confirm": "运行脚本",
 
+  "archive_script_title": "审查归档脚本",
+  "archive_script_warning": "此工作区有一个来自 <strong>{{source}}</strong> 的归档脚本将在工作树被移除之前执行。请在继续之前审查。",
+  "archive_script_label": "脚本",
+  "archive_script_always_run": "始终为此仓库运行归档脚本",
+  "archive_script_skip": "归档但不运行",
+  "archive_script_running": "运行中...",
+  "archive_script_confirm": "运行并归档",
+
   "import_worktrees_title": "导入工作树",
   "import_worktrees_scanning": "正在扫描已有工作树...",
   "import_worktrees_none_found": "未找到此仓库的现有工作树。",

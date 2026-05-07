@@ -231,11 +231,20 @@ async fn resolve_env_for_workspace(
 #[tauri::command]
 pub async fn archive_workspace(
     id: String,
+    skip_archive_script: Option<bool>,
     app: AppHandle,
     state: State<'_, AppState>,
     supervisor: State<'_, Arc<McpSupervisor>>,
 ) -> Result<bool, String> {
-    let out = archive_workspace_inner(&id, None, &app, &state, &supervisor).await?;
+    let out = archive_workspace_inner(
+        &id,
+        None,
+        skip_archive_script.unwrap_or(false),
+        &app,
+        &state,
+        &supervisor,
+    )
+    .await?;
     Ok(out.delete_branch)
 }
 
@@ -267,6 +276,7 @@ pub(crate) struct ArchiveWorkspaceOutput {
 pub(crate) async fn archive_workspace_inner(
     id: &str,
     delete_branch_override: Option<bool>,
+    skip_archive_script: bool,
     app: &AppHandle,
     state: &AppState,
     supervisor: &McpSupervisor,
@@ -322,8 +332,13 @@ pub(crate) async fn archive_workspace_inner(
 
     // Resolve and run the archive script before removing the worktree so it
     // still has filesystem access. Best-effort: failure logs to chat but
-    // does not block the archive.
-    let archive_result: Option<SetupResult> = {
+    // does not block the archive. The frontend gates this via
+    // `archive_script_auto_run` + a confirmation modal — when the user
+    // declines, it passes `skip_archive_script: true` and the script is
+    // bypassed entirely.
+    let archive_result: Option<SetupResult> = if skip_archive_script {
+        None
+    } else {
         let workspaces = db.list_workspaces().map_err(|e| e.to_string())?;
         let repos = db.list_repositories().map_err(|e| e.to_string())?;
         let ws_opt = workspaces.iter().find(|w| w.id == id);
@@ -342,45 +357,45 @@ pub(crate) async fn archive_workspace_inner(
                         resolved_env.as_ref(),
                     )
                     .await;
-                    if let Some(ref r) = result {
-                        if let Ok(Some(session_id)) = db.default_session_id_for_workspace(id) {
-                            let label = if r.source == "repo" {
-                                ".claudette.json"
-                            } else {
-                                "settings"
-                            };
-                            let status = if r.timed_out {
-                                "timed out"
-                            } else if r.success {
-                                "completed"
-                            } else {
-                                "failed"
-                            };
-                            let content = if r.output.is_empty() {
-                                format!("Archive script ({label}) {status}")
-                            } else {
-                                format!("Archive script ({label}) {status}:\n{}", r.output)
-                            };
-                            let msg = ChatMessage {
-                                id: uuid::Uuid::new_v4().to_string(),
-                                workspace_id: id.to_string(),
-                                chat_session_id: session_id,
-                                role: ChatRole::System,
-                                content,
-                                cost_usd: None,
-                                duration_ms: None,
-                                created_at: now_iso(),
-                                thinking: None,
-                                input_tokens: None,
-                                output_tokens: None,
-                                cache_read_tokens: None,
-                                cache_creation_tokens: None,
-                            };
-                            if let Err(err) = db.insert_chat_message(&msg) {
-                                eprintln!("[archive] failed to post archive script result: {err}");
-                            } else {
-                                let _ = app.emit("chat-system-message", &msg);
-                            }
+                    if let Some(ref r) = result
+                        && let Ok(Some(session_id)) = db.default_session_id_for_workspace(id)
+                    {
+                        let label = if r.source == "repo" {
+                            ".claudette.json"
+                        } else {
+                            "settings"
+                        };
+                        let status = if r.timed_out {
+                            "timed out"
+                        } else if r.success {
+                            "completed"
+                        } else {
+                            "failed"
+                        };
+                        let content = if r.output.is_empty() {
+                            format!("Archive script ({label}) {status}")
+                        } else {
+                            format!("Archive script ({label}) {status}:\n{}", r.output)
+                        };
+                        let msg = ChatMessage {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            workspace_id: id.to_string(),
+                            chat_session_id: session_id,
+                            role: ChatRole::System,
+                            content,
+                            cost_usd: None,
+                            duration_ms: None,
+                            created_at: now_iso(),
+                            thinking: None,
+                            input_tokens: None,
+                            output_tokens: None,
+                            cache_read_tokens: None,
+                            cache_creation_tokens: None,
+                        };
+                        if let Err(err) = db.insert_chat_message(&msg) {
+                            eprintln!("[archive] failed to post archive script result: {err}");
+                        } else {
+                            let _ = app.emit("chat-system-message", &msg);
                         }
                     }
                     result

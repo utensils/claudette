@@ -75,6 +75,7 @@ export function updateRepositorySettings(
   customInstructions: string | null,
   branchRenamePreferences: string | null,
   setupScriptAutoRun: boolean,
+  archiveScriptAutoRun: boolean,
   baseBranch: string | null,
   defaultRemote: string | null
 ): Promise<void> {
@@ -87,6 +88,7 @@ export function updateRepositorySettings(
     customInstructions,
     branchRenamePreferences,
     setupScriptAutoRun,
+    archiveScriptAutoRun,
     baseBranch,
     defaultRemote,
   });
@@ -124,6 +126,10 @@ export function setSetupScriptAutoRun(repoId: string, enabled: boolean): Promise
   return invoke("set_setup_script_auto_run", { repoId, enabled });
 }
 
+export function setArchiveScriptAutoRun(repoId: string, enabled: boolean): Promise<void> {
+  return invoke("set_archive_script_auto_run", { repoId, enabled });
+}
+
 // -- Workspace --
 
 export function createWorkspace(
@@ -152,8 +158,8 @@ export function runWorkspaceSetup(
   return invoke("run_workspace_setup", { workspaceId });
 }
 
-export function archiveWorkspace(id: string): Promise<boolean> {
-  return invoke("archive_workspace", { id });
+export function archiveWorkspace(id: string, skipArchiveScript?: boolean): Promise<boolean> {
+  return invoke("archive_workspace", { id, skipArchiveScript: skipArchiveScript ?? false });
 }
 
 export function restoreWorkspace(id: string): Promise<string> {

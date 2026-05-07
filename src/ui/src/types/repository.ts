@@ -11,6 +11,7 @@ export interface Repository {
   branch_rename_preferences: string | null;
   setup_script_auto_run: boolean;
   archive_script: string | null;
+  archive_script_auto_run: boolean;
   base_branch: string | null;
   default_remote: string | null;
   path_valid: boolean;

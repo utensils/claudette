@@ -55,6 +55,7 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
     repo?.branch_rename_preferences ?? ""
   );
   const [autoRunSetup, setAutoRunSetup] = useState(repo?.setup_script_auto_run ?? false);
+  const [autoRunArchive, setAutoRunArchive] = useState(repo?.archive_script_auto_run ?? false);
   const [baseBranch, setBaseBranch] = useState(repo?.base_branch ?? "");
   const [defaultRemote, setDefaultRemote] = useState(repo?.default_remote ?? "");
   const [availableRemotes, setAvailableRemotes] = useState<string[]>([]);
@@ -77,6 +78,7 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
       setCustomInstructions(repo.custom_instructions ?? "");
       setBranchRenamePreferences(repo.branch_rename_preferences ?? "");
       setAutoRunSetup(repo.setup_script_auto_run ?? false);
+      setAutoRunArchive(repo.archive_script_auto_run ?? false);
       setBaseBranch(repo.base_branch ?? "");
       setDefaultRemote(repo.default_remote ?? "");
       setArchiveOnMerge("inherit");
@@ -167,6 +169,7 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
   const customInstructionsRef = useRef(customInstructions);
   const branchRenamePreferencesRef = useRef(branchRenamePreferences);
   const autoRunSetupRef = useRef(autoRunSetup);
+  const autoRunArchiveRef = useRef(autoRunArchive);
   const baseBranchRef = useRef(baseBranch);
   const defaultRemoteRef = useRef(defaultRemote);
   nameRef.current = name;
@@ -176,6 +179,7 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
   customInstructionsRef.current = customInstructions;
   branchRenamePreferencesRef.current = branchRenamePreferences;
   autoRunSetupRef.current = autoRunSetup;
+  autoRunArchiveRef.current = autoRunArchive;
   baseBranchRef.current = baseBranch;
   defaultRemoteRef.current = defaultRemote;
 
@@ -188,6 +192,7 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
       custom_instructions?: string | null;
       branch_rename_preferences?: string | null;
       setup_script_auto_run?: boolean;
+      archive_script_auto_run?: boolean;
       base_branch?: string;
       default_remote?: string;
     }) => {
@@ -217,6 +222,10 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
         updates.setup_script_auto_run !== undefined
           ? updates.setup_script_auto_run
           : autoRunSetupRef.current;
+      const finalArchiveAutoRun =
+        updates.archive_script_auto_run !== undefined
+          ? updates.archive_script_auto_run
+          : autoRunArchiveRef.current;
       const finalBaseBranch =
         updates.base_branch !== undefined
           ? updates.base_branch
@@ -237,6 +246,7 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
           finalInstructions,
           finalBranchPrefs,
           finalAutoRun,
+          finalArchiveAutoRun,
           finalBaseBranch,
           finalDefaultRemote
         );
@@ -248,6 +258,7 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
           custom_instructions: finalInstructions,
           branch_rename_preferences: finalBranchPrefs,
           setup_script_auto_run: finalAutoRun,
+          archive_script_auto_run: finalArchiveAutoRun,
           base_branch: finalBaseBranch,
           default_remote: finalDefaultRemote,
         });
@@ -459,6 +470,17 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
         <div className={styles.fieldHint}>
           {t("repo_archive_script_hint")}
         </div>
+        <label className={styles.autoRunLabel}>
+          <input
+            type="checkbox"
+            checked={autoRunArchive}
+            onChange={(e) => {
+              setAutoRunArchive(e.target.checked);
+              save({ archive_script_auto_run: e.target.checked });
+            }}
+          />
+          {t("repo_archive_autorun_label")}
+        </label>
       </div>
 
       <div className={styles.fieldGroup}>
