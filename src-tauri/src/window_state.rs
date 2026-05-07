@@ -54,10 +54,10 @@ pub fn restore_main_window(app: &tauri::App) {
     };
 
     let state = app.state::<AppState>();
-    let saved = Database::open(&state.db_path)
+    let raw_saved = Database::open(&state.db_path)
         .ok()
-        .and_then(|db| db.get_app_setting(MAIN_WINDOW_STATE_KEY).ok().flatten())
-        .and_then(|raw| parse_saved_state(&raw));
+        .and_then(|db| db.get_app_setting(MAIN_WINDOW_STATE_KEY).ok().flatten());
+    let saved = raw_saved.as_deref().and_then(parse_saved_state);
 
     let monitors = window.available_monitors().unwrap_or_default();
     let restored = saved
@@ -65,11 +65,10 @@ pub fn restore_main_window(app: &tauri::App) {
         .is_some_and(|state| apply_saved_state(&window, state).is_ok());
 
     if !restored {
-        let _ = window.set_size(Size::Physical(PhysicalSize {
-            width: DEFAULT_WIDTH,
-            height: DEFAULT_HEIGHT,
-        }));
-        let _ = window.center();
+        let _ = apply_default_bounds(&window);
+        if should_maximize_default(raw_saved.as_deref()) {
+            let _ = window.maximize();
+        }
     }
 
     let _ = window.show();
@@ -145,6 +144,18 @@ fn apply_saved_state(window: &WebviewWindow, state: SavedWindowState) -> tauri::
         window.maximize()?;
     }
     Ok(())
+}
+
+fn apply_default_bounds(window: &WebviewWindow) -> tauri::Result<()> {
+    window.set_size(Size::Physical(PhysicalSize {
+        width: DEFAULT_WIDTH,
+        height: DEFAULT_HEIGHT,
+    }))?;
+    window.center()
+}
+
+fn should_maximize_default(raw_saved: Option<&str>) -> bool {
+    raw_saved.is_none()
 }
 
 fn parse_saved_state(raw: &str) -> Option<SavedWindowState> {
@@ -263,6 +274,12 @@ mod tests {
             build_next_state(Some(previous), fullscreen_bounds, false, true),
             state(10, 20, 1300, 900, false)
         );
+    }
+
+    #[test]
+    fn default_restore_maximizes_only_when_no_prior_state_exists() {
+        assert!(should_maximize_default(None));
+        assert!(!should_maximize_default(Some("{not json")));
     }
 
     #[test]
