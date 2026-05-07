@@ -461,6 +461,7 @@ mod tests {
             sort_order: 0,
             branch_rename_preferences: None,
             setup_script_auto_run: false,
+            archive_script: None,
             base_branch: None,
             default_remote: None,
             path_valid: true,

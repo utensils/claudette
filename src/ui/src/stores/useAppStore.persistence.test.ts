@@ -51,6 +51,7 @@ function makeRepository(id: string): Repository {
     sort_order: 0,
     branch_rename_preferences: null,
     setup_script_auto_run: false,
+    archive_script: null,
     base_branch: null,
     default_remote: null,
     path_valid: true,

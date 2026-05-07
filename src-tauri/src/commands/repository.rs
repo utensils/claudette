@@ -50,6 +50,7 @@ pub(crate) fn resolve_default_branch(
 pub struct RepoConfigInfo {
     pub has_config_file: bool,
     pub setup_script: Option<String>,
+    pub archive_script: Option<String>,
     pub instructions: Option<String>,
     pub parse_error: Option<String>,
 }
@@ -95,6 +96,7 @@ pub async fn add_repository(
         sort_order: 0,
         branch_rename_preferences: None,
         setup_script_auto_run: false,
+        archive_script: None,
         base_branch,
         default_remote,
         path_valid: true,
@@ -130,6 +132,7 @@ pub async fn update_repository_settings(
     name: String,
     icon: Option<String>,
     setup_script: Option<String>,
+    archive_script: Option<String>,
     custom_instructions: Option<String>,
     branch_rename_preferences: Option<String>,
     setup_script_auto_run: bool,
@@ -147,6 +150,8 @@ pub async fn update_repository_settings(
     db.update_repository_icon(&id, icon.as_deref())
         .map_err(|e| e.to_string())?;
     db.update_repository_setup_script(&id, setup_script.as_deref())
+        .map_err(|e| e.to_string())?;
+    db.update_repository_archive_script(&id, archive_script.as_deref())
         .map_err(|e| e.to_string())?;
     db.update_repository_custom_instructions(&id, custom_instructions.as_deref())
         .map_err(|e| e.to_string())?;
@@ -292,19 +297,22 @@ pub async fn get_repo_config(
     match config_result {
         Ok(Some(cfg)) => Ok(RepoConfigInfo {
             has_config_file: true,
-            setup_script: cfg.scripts.and_then(|s| s.setup),
+            setup_script: cfg.scripts.as_ref().and_then(|s| s.setup.clone()),
+            archive_script: cfg.scripts.and_then(|s| s.archive),
             instructions: cfg.instructions,
             parse_error: None,
         }),
         Ok(None) => Ok(RepoConfigInfo {
             has_config_file: false,
             setup_script: None,
+            archive_script: None,
             instructions: None,
             parse_error: None,
         }),
         Err(e) => Ok(RepoConfigInfo {
             has_config_file: true,
             setup_script: None,
+            archive_script: None,
             instructions: None,
             parse_error: Some(e),
         }),

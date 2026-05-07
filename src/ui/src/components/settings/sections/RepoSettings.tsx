@@ -47,6 +47,7 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
   const [name, setName] = useState(repo?.name ?? "");
   const [icon, setIcon] = useState(repo?.icon ?? "");
   const [setupScript, setSetupScript] = useState(repo?.setup_script ?? "");
+  const [archiveScript, setArchiveScript] = useState(repo?.archive_script ?? "");
   const [customInstructions, setCustomInstructions] = useState(
     repo?.custom_instructions ?? ""
   );
@@ -72,6 +73,7 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
       setName(repo.name);
       setIcon(repo.icon ?? "");
       setSetupScript(repo.setup_script ?? "");
+      setArchiveScript(repo.archive_script ?? "");
       setCustomInstructions(repo.custom_instructions ?? "");
       setBranchRenamePreferences(repo.branch_rename_preferences ?? "");
       setAutoRunSetup(repo.setup_script_auto_run ?? false);
@@ -161,6 +163,7 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
   const nameRef = useRef(name);
   const iconRef = useRef(icon);
   const setupScriptRef = useRef(setupScript);
+  const archiveScriptRef = useRef(archiveScript);
   const customInstructionsRef = useRef(customInstructions);
   const branchRenamePreferencesRef = useRef(branchRenamePreferences);
   const autoRunSetupRef = useRef(autoRunSetup);
@@ -169,6 +172,7 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
   nameRef.current = name;
   iconRef.current = icon;
   setupScriptRef.current = setupScript;
+  archiveScriptRef.current = archiveScript;
   customInstructionsRef.current = customInstructions;
   branchRenamePreferencesRef.current = branchRenamePreferences;
   autoRunSetupRef.current = autoRunSetup;
@@ -180,6 +184,7 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
       name?: string;
       icon?: string | null;
       setup_script?: string | null;
+      archive_script?: string | null;
       custom_instructions?: string | null;
       branch_rename_preferences?: string | null;
       setup_script_auto_run?: boolean;
@@ -196,6 +201,10 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
         updates.setup_script !== undefined
           ? updates.setup_script
           : setupScriptRef.current.trim() || null;
+      const finalArchiveScript =
+        updates.archive_script !== undefined
+          ? updates.archive_script
+          : archiveScriptRef.current.trim() || null;
       const finalInstructions =
         updates.custom_instructions !== undefined
           ? updates.custom_instructions
@@ -224,6 +233,7 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
           finalName,
           finalIcon,
           finalScript,
+          finalArchiveScript,
           finalInstructions,
           finalBranchPrefs,
           finalAutoRun,
@@ -234,6 +244,7 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
           name: finalName,
           icon: finalIcon,
           setup_script: finalScript,
+          archive_script: finalArchiveScript,
           custom_instructions: finalInstructions,
           branch_rename_preferences: finalBranchPrefs,
           setup_script_auto_run: finalAutoRun,
@@ -267,6 +278,8 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
 
   const repoScriptOverrides =
     repoConfig?.has_config_file && repoConfig.setup_script != null;
+  const repoArchiveScriptOverrides =
+    repoConfig?.has_config_file && repoConfig.archive_script != null;
   const repoInstructionsOverrides =
     repoConfig?.has_config_file && repoConfig.instructions != null;
 
@@ -413,6 +426,39 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
           />
           {t("repo_autorun_label")}
         </label>
+      </div>
+
+      <div className={styles.fieldGroup}>
+        <div className={styles.fieldLabel}>{t("repo_archive_script")}</div>
+        {repoArchiveScriptOverrides && (
+          <div className={styles.overrideNotice}>
+            {t("repo_archive_script_override_notice")}
+          </div>
+        )}
+        {repoConfig?.has_config_file && repoConfig.archive_script && (
+          <div>
+            <div className={styles.overriddenLabel}>
+              {t("repo_from_config")}
+            </div>
+            <pre className={styles.readOnlyPre}>{repoConfig.archive_script}</pre>
+          </div>
+        )}
+        <div className={styles.overriddenLabel}>
+          {repoArchiveScriptOverrides
+            ? t("repo_personal_archive_script_overridden")
+            : t("repo_personal_archive_script")}
+        </div>
+        <textarea
+          className={`${styles.textarea}${repoArchiveScriptOverrides ? ` ${styles.overriddenInput}` : ""}`}
+          value={archiveScript}
+          onChange={(e) => setArchiveScript(e.target.value)}
+          onBlur={() => save({ archive_script: archiveScript.trim() || null })}
+          placeholder={t("repo_archive_script_placeholder")}
+          rows={3}
+        />
+        <div className={styles.fieldHint}>
+          {t("repo_archive_script_hint")}
+        </div>
       </div>
 
       <div className={styles.fieldGroup}>

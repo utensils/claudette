@@ -1077,6 +1077,7 @@ async fn handle_archive_workspace(
         "worktree_path": out.worktree_path,
         "repository_id": out.repository_id,
         "delete_branch": out.delete_branch,
+        "archive_result": out.archive_result,
     }))
 }
 

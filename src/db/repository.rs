@@ -58,13 +58,14 @@ impl Database {
             setup_script_auto_run: row.get::<_, i32>(10).unwrap_or(0) != 0,
             base_branch: row.get(11)?,
             default_remote: row.get(12)?,
+            archive_script: row.get(13)?,
             path_valid: true, // validated after load
         })
     }
 
     pub fn list_repositories(&self) -> Result<Vec<Repository>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, path, name, icon, path_slug, created_at, setup_script, custom_instructions, sort_order, branch_rename_preferences, setup_script_auto_run, base_branch, default_remote
+            "SELECT id, path, name, icon, path_slug, created_at, setup_script, custom_instructions, sort_order, branch_rename_preferences, setup_script_auto_run, base_branch, default_remote, archive_script
              FROM repositories ORDER BY sort_order, name",
         )?;
         let rows = stmt.query_map([], Self::parse_repo_row)?;
@@ -74,7 +75,7 @@ impl Database {
     pub fn get_repository(&self, id: &str) -> Result<Option<Repository>, rusqlite::Error> {
         self.conn
             .query_row(
-                "SELECT id, path, name, icon, path_slug, created_at, setup_script, custom_instructions, sort_order, branch_rename_preferences, setup_script_auto_run, base_branch, default_remote
+                "SELECT id, path, name, icon, path_slug, created_at, setup_script, custom_instructions, sort_order, branch_rename_preferences, setup_script_auto_run, base_branch, default_remote, archive_script
                  FROM repositories WHERE id = ?1",
                 params![id],
                 Self::parse_repo_row,
@@ -151,6 +152,18 @@ impl Database {
         self.conn.execute(
             "UPDATE repositories SET setup_script_auto_run = ?1 WHERE id = ?2",
             params![enabled as i32, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_repository_archive_script(
+        &self,
+        id: &str,
+        script: Option<&str>,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE repositories SET archive_script = ?1 WHERE id = ?2",
+            params![script, id],
         )?;
         Ok(())
     }
