@@ -161,15 +161,6 @@ fn main() {
         }
     };
 
-    // Load saved certificate fingerprints for mDNS pairing detection.
-    let saved_fingerprints: Vec<String> = Database::open(&db_path)
-        .ok()
-        .and_then(|db| db.list_remote_connections().ok())
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|c| c.cert_fingerprint)
-        .collect();
-
     // Initialize plugin registry: seed bundled plugins, then discover.
     let plugin_dir = dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -322,11 +313,6 @@ fn main() {
 
     let builder = builder
         .setup(move |app| {
-            // Start mDNS browser to discover nearby claudette-server instances.
-            if let Err(e) = mdns::start_mdns_browser(app.handle(), saved_fingerprints) {
-                eprintln!("[mdns] Failed to start browser: {e}");
-            }
-
             // macOS native menu — built and applied here (rather than via
             // tauri::Builder::menu) so AppKit doesn't auto-promote the
             // "Help" submenu to its built-in help-search behavior. See
@@ -468,16 +454,6 @@ fn main() {
             // handler that touches `enriched_path` until the probe
             // returns). On Windows this is a no-op.
             std::thread::spawn(claudette::env::prewarm_shell_path);
-
-            // Pre-warm voice subsystems so the user's first mic click
-            // hits warm CoreAudio + Speech.framework state instead of
-            // a multi-second cold-start delay. Touches enumeration /
-            // status APIs only — no permission prompts triggered.
-            #[cfg(feature = "voice")]
-            {
-                let voice = app.state::<state::AppState>().voice.clone();
-                std::thread::spawn(move || voice.prewarm());
-            }
 
             // Set up the system tray icon (respects tray_enabled setting).
             if let Err(e) = tray::setup_tray(app.handle()) {
@@ -744,6 +720,7 @@ fn main() {
             commands::remote::connect_remote,
             commands::remote::disconnect_remote,
             commands::remote::remove_remote_connection,
+            commands::remote::start_remote_discovery,
             commands::remote::list_discovered_servers,
             commands::remote::add_remote_connection,
             commands::remote::send_remote_command,

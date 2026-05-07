@@ -200,13 +200,6 @@ impl RecordingSession {
 
 trait AudioRecorder: Send + Sync {
     fn start(&self) -> Result<RecordingSession, String>;
-    /// Touch the underlying audio host enough to trigger any one-time
-    /// initialization (e.g. CoreAudio's audio-server XPC handshake on
-    /// macOS). Safe to call without microphone permission — it must
-    /// not open an input stream and must not block on TCC prompts.
-    fn warmup(&self) {
-        // Default no-op; concrete recorders override.
-    }
 }
 
 trait VoiceTranscriber: Send + Sync {
@@ -279,9 +272,11 @@ pub trait VoiceProvider: Send + Sync {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VoiceStartLatency {
-    /// True when `prewarm()` ran before this start call.
+    /// True if a future prompt-safe warm path ran before this start call.
+    /// Currently false because microphone-related startup prewarming is
+    /// intentionally disabled to avoid macOS TCC prompts on launch.
     pub was_prewarmed: bool,
-    /// Milliseconds spent opening the cpal input stream (the part prewarm amortizes).
+    /// Milliseconds spent opening the cpal input stream.
     pub stream_open_ms: u128,
 }
 
@@ -449,21 +444,6 @@ impl VoiceProviderRegistry {
         ]
     }
 
-    /// Pre-warm voice subsystems so the user's first mic click hits warm
-    /// state instead of paying cold-start cost (CoreAudio XPC handshake,
-    /// Speech.framework load, TCC verification of a fresh CDHash).
-    ///
-    /// Safe to call without any microphone or speech-recognition
-    /// permission — only touches enumeration / status APIs that don't
-    /// trigger TCC prompts. Intended to run once on a std thread
-    /// during app setup.
-    pub fn prewarm(&self) {
-        self.recorder.warmup();
-        let _ = self.platform_speech.availability();
-        let _ = self.backend_checker.ready_backend();
-        self.was_prewarmed.store(true, Ordering::Relaxed);
-    }
-
     pub fn set_selected_provider(
         &self,
         db: &Database,
@@ -543,9 +523,9 @@ impl VoiceProviderRegistry {
         app: Option<AppHandle>,
     ) -> Result<VoiceStartLatency, String> {
         self.ensure_known(provider_id)?;
-        // Snapshot before opening the stream: prewarm runs on a separate
-        // thread (see main.rs), so a fast first click can race with it and
-        // pay the cold-start cost even though the flag flips mid-flight.
+        // Kept in the debug latency payload so older frontend diagnostics
+        // still receive a stable shape. Voice startup prewarming is disabled
+        // because macOS can show microphone TCC prompts during audio setup.
         let was_prewarmed = self.was_prewarmed.load(Ordering::Relaxed);
         let stream_open_ms = match provider_id {
             PLATFORM_ID => self.start_platform_recording(db_path, app).await,
@@ -586,7 +566,10 @@ impl VoiceProviderRegistry {
             if !self.enabled(&db, PLATFORM_ID) {
                 return Err("System dictation is disabled".to_string());
             }
-            let availability = self.platform_speech.availability();
+            let platform_speech = Arc::clone(&self.platform_speech);
+            let availability = tokio::task::spawn_blocking(move || platform_speech.prepare())
+                .await
+                .map_err(|e| format!("System dictation permission task failed: {e}"))?;
             if availability.status != PlatformSpeechAvailabilityStatus::Ready {
                 return Err(availability.message);
             }
@@ -1340,18 +1323,6 @@ fn resample_to_target_rate(samples: &[f32], sample_rate: u32) -> Vec<f32> {
 }
 
 impl AudioRecorder for CpalAudioRecorder {
-    fn warmup(&self) {
-        // Enumerating the default input device + reading its default
-        // config initializes the CoreAudio audio-server XPC connection
-        // on macOS without opening a stream — so the eventual mic
-        // click only pays the TCC prompt cost, not the cold-start
-        // CoreAudio handshake. No permission is required for this.
-        let host = cpal::default_host();
-        if let Some(device) = host.default_input_device() {
-            let _ = device.default_input_config();
-        }
-    }
-
     fn start(&self) -> Result<RecordingSession, String> {
         let host = cpal::default_host();
         let device = host
@@ -2266,28 +2237,57 @@ mod tests {
     #[cfg(target_os = "macos")]
     struct FakePlatformSpeechEngine {
         availability: PlatformSpeechAvailability,
+        prepare_availability: PlatformSpeechAvailability,
         transcript: Mutex<Result<String, String>>,
+        prepare_delay: Duration,
+        prepare_calls: AtomicUsize,
         calls: AtomicUsize,
     }
 
     #[cfg(target_os = "macos")]
     impl FakePlatformSpeechEngine {
         fn ready(engine_label: &str) -> Self {
+            let availability = PlatformSpeechAvailability::ready(engine_label);
             Self {
-                availability: PlatformSpeechAvailability::ready(engine_label),
+                availability: availability.clone(),
+                prepare_availability: availability,
                 transcript: Mutex::new(Ok("platform transcript".to_string())),
+                prepare_delay: Duration::ZERO,
+                prepare_calls: AtomicUsize::new(0),
                 calls: AtomicUsize::new(0),
             }
         }
 
         fn needs_speech_permission() -> Self {
+            let availability = PlatformSpeechAvailability::needs_speech_permission(
+                "Needs Speech Recognition permission",
+            );
+            Self {
+                availability: availability.clone(),
+                prepare_availability: availability,
+                transcript: Mutex::new(Ok("ignored".to_string())),
+                prepare_delay: Duration::ZERO,
+                prepare_calls: AtomicUsize::new(0),
+                calls: AtomicUsize::new(0),
+            }
+        }
+
+        fn needs_speech_permission_then_ready() -> Self {
             Self {
                 availability: PlatformSpeechAvailability::needs_speech_permission(
                     "Needs Speech Recognition permission",
                 ),
+                prepare_availability: PlatformSpeechAvailability::ready("Apple Speech"),
                 transcript: Mutex::new(Ok("ignored".to_string())),
+                prepare_delay: Duration::ZERO,
+                prepare_calls: AtomicUsize::new(0),
                 calls: AtomicUsize::new(0),
             }
+        }
+
+        fn with_prepare_delay(mut self, delay: Duration) -> Self {
+            self.prepare_delay = delay;
+            self
         }
     }
 
@@ -2298,7 +2298,9 @@ mod tests {
         }
 
         fn prepare(&self) -> PlatformSpeechAvailability {
-            self.availability.clone()
+            self.prepare_calls.fetch_add(1, Ordering::Relaxed);
+            std::thread::sleep(self.prepare_delay);
+            self.prepare_availability.clone()
         }
 
         fn transcribe(&self, _audio: CapturedAudio) -> Result<String, String> {
@@ -2588,6 +2590,74 @@ mod tests {
 
         assert!(err.contains("already active"));
         assert_eq!(recorder.starts.load(Ordering::Relaxed), 1);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn start_platform_recording_prepares_permission_on_user_action() {
+        let (_db_dir, db_path) = test_db_path();
+        let platform_engine =
+            Arc::new(FakePlatformSpeechEngine::needs_speech_permission_then_ready());
+        let recorder = Arc::new(FakeRecorder::new(vec![0.1, 0.2, 0.3]));
+        let registry = VoiceProviderRegistry::with_platform_runtime(
+            PathBuf::from("/tmp/models"),
+            recorder.clone(),
+            Arc::new(FakeTranscriber::ok("ignored")),
+            platform_engine.clone(),
+        );
+
+        let db = open_test_db(&db_path);
+        let provider = registry
+            .list_providers(&db)
+            .into_iter()
+            .find(|provider| provider.metadata.id == PLATFORM_ID)
+            .expect("platform provider");
+        assert_eq!(provider.status, VoiceProviderStatus::NeedsSetup);
+        assert_eq!(platform_engine.prepare_calls.load(Ordering::Relaxed), 0);
+        drop(db);
+
+        registry
+            .start_recording(&db_path, PLATFORM_ID, None)
+            .await
+            .expect("platform recording starts after prepare");
+
+        assert_eq!(platform_engine.prepare_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(recorder.starts.load(Ordering::Relaxed), 1);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn start_platform_recording_prepares_permission_off_runtime_thread() {
+        let (_db_dir, db_path) = test_db_path();
+        let platform_engine = Arc::new(
+            FakePlatformSpeechEngine::needs_speech_permission_then_ready()
+                .with_prepare_delay(Duration::from_millis(200)),
+        );
+        let registry = Arc::new(VoiceProviderRegistry::with_platform_runtime(
+            PathBuf::from("/tmp/models"),
+            Arc::new(FakeRecorder::new(vec![0.1, 0.2, 0.3])),
+            Arc::new(FakeTranscriber::ok("ignored")),
+            platform_engine,
+        ));
+
+        let start = std::time::Instant::now();
+        let start_registry = Arc::clone(&registry);
+        let handle = tokio::spawn(async move {
+            start_registry
+                .start_recording(&db_path, PLATFORM_ID, None)
+                .await
+        });
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+
+        assert!(
+            start.elapsed() < Duration::from_millis(150),
+            "permission prepare must not block the async runtime thread"
+        );
+        handle
+            .await
+            .expect("recording task joined")
+            .expect("platform recording starts after prepare");
     }
 
     #[cfg(target_os = "macos")]

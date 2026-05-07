@@ -1,7 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
-import { addRemoteConnection } from "../../services/tauri";
+import {
+  addRemoteConnection,
+  listDiscoveredServers,
+  startRemoteDiscovery,
+} from "../../services/tauri";
 import { Modal } from "./Modal";
 import shared from "./shared.module.css";
 
@@ -12,9 +16,33 @@ export function AddRemoteModal() {
   const addRemote = useAppStore((s) => s.addRemoteConnection);
   const addActiveId = useAppStore((s) => s.addActiveRemoteId);
   const mergeRemoteData = useAppStore((s) => s.mergeRemoteData);
+  const setDiscoveredServers = useAppStore((s) => s.setDiscoveredServers);
   const [connectionString, setConnectionString] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refreshDiscoveredServers = () => {
+      listDiscoveredServers()
+        .then((servers) => {
+          if (!cancelled) setDiscoveredServers(servers);
+        })
+        .catch((err) => console.error("Failed to load discovered servers:", err));
+    };
+
+    startRemoteDiscovery()
+      .then((servers) => {
+        if (!cancelled) setDiscoveredServers(servers);
+      })
+      .catch((err) => console.error("Failed to start remote discovery:", err));
+    const interval = window.setInterval(refreshDiscoveredServers, 5000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [setDiscoveredServers]);
 
   const handleSubmit = async () => {
     if (!connectionString.trim()) return;

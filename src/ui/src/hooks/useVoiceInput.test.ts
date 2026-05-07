@@ -241,7 +241,34 @@ describe("useVoiceInput", () => {
     expect(onTranscript).toHaveBeenCalledWith("spoken words");
   });
 
-  it("routes setup-required platform providers to settings", async () => {
+  it("requests setup-required platform permission from the mic action", async () => {
+    const onNeedsSetup = vi.fn();
+    const onTranscript = vi.fn();
+    const controller = useVoiceInput(onTranscript, onNeedsSetup);
+    voiceService.listVoiceProviders.mockResolvedValueOnce([
+      provider({
+        id: "voice-platform-system",
+        recordingMode: "native",
+        status: "needs-setup",
+        statusLabel: "Needs Speech Recognition permission",
+        setupRequired: true,
+      }),
+    ]);
+    voiceService.startVoiceRecording.mockResolvedValueOnce(undefined);
+    voiceService.stopAndTranscribeVoice.mockResolvedValueOnce(" platform words ");
+
+    await controller.start();
+    controller.stop();
+    await flushPromises();
+
+    expect(voiceService.startVoiceRecording).toHaveBeenCalledWith(
+      "voice-platform-system",
+    );
+    expect(onNeedsSetup).not.toHaveBeenCalled();
+    expect(onTranscript).toHaveBeenCalledWith("platform words");
+  });
+
+  it("routes denied platform permission to settings after the mic action", async () => {
     const onNeedsSetup = vi.fn();
     const controller = useVoiceInput(vi.fn(), onNeedsSetup);
     voiceService.listVoiceProviders.mockResolvedValueOnce([
@@ -253,12 +280,17 @@ describe("useVoiceInput", () => {
         setupRequired: true,
       }),
     ]);
+    voiceService.startVoiceRecording.mockRejectedValueOnce(
+      "Needs Speech Recognition permission",
+    );
 
     await controller.start();
 
+    expect(voiceService.startVoiceRecording).toHaveBeenCalledWith(
+      "voice-platform-system",
+    );
     expect(onNeedsSetup).toHaveBeenCalledOnce();
     expect(onNeedsSetup).toHaveBeenCalledWith("voice-platform-system");
-    expect(voiceService.startVoiceRecording).not.toHaveBeenCalled();
   });
 
   it("does not instantiate Web Speech on macOS", async () => {

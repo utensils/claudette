@@ -15,9 +15,11 @@ import {
   runWorkspaceSetup,
   connectRemote,
   disconnectRemote,
+  listDiscoveredServers,
   removeRemoteConnection,
   sendRemoteCommand,
   pairWithServer,
+  startRemoteDiscovery,
   startLocalServer,
 } from "../../services/tauri";
 import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, CircleStop, GitPullRequestArrow, GitPullRequestDraft, GitMerge, GitPullRequestClosed, ChevronRight, ChevronDown, ArrowDownAZ } from "lucide-react";
@@ -1157,7 +1159,7 @@ export const Sidebar = memo(function Sidebar() {
   );
 });
 
-function RemoteSections() {
+export function RemoteSections() {
   const { t } = useTranslation("sidebar");
   const discoveredServers = useAppStore((s) => s.discoveredServers);
   const remoteConnections = useAppStore((s) => s.remoteConnections);
@@ -1168,9 +1170,44 @@ function RemoteSections() {
   const removeRemote = useAppStore((s) => s.removeRemoteConnection);
   const mergeRemoteData = useAppStore((s) => s.mergeRemoteData);
   const clearRemoteData = useAppStore((s) => s.clearRemoteData);
+  const setDiscoveredServers = useAppStore((s) => s.setDiscoveredServers);
   const unpaired = discoveredServers.filter((s) => !s.is_paired);
   const [connectingIds, setConnectingIds] = useState<Set<string>>(new Set());
   const [connectError, setConnectError] = useState<string | null>(null);
+  const [discoveryStarted, setDiscoveryStarted] = useState(false);
+  const [discoveryLoading, setDiscoveryLoading] = useState(false);
+  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
+
+  const refreshDiscoveredServers = useCallback(async () => {
+    const servers = await listDiscoveredServers();
+    setDiscoveredServers(servers);
+  }, [setDiscoveredServers]);
+
+  const handleStartDiscovery = async () => {
+    setDiscoveryLoading(true);
+    setDiscoveryError(null);
+    try {
+      const servers = await startRemoteDiscovery();
+      setDiscoveredServers(servers);
+      setDiscoveryStarted(true);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setDiscoveryError(msg);
+      console.error("Failed to start remote discovery:", e);
+    } finally {
+      setDiscoveryLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!discoveryStarted) return;
+    const interval = window.setInterval(() => {
+      refreshDiscoveredServers().catch((e) =>
+        console.error("Failed to load discovered servers:", e),
+      );
+    }, 5000);
+    return () => window.clearInterval(interval);
+  }, [discoveryStarted, refreshDiscoveredServers]);
 
   const handleConnect = async (id: string) => {
     setConnectError(null);
@@ -1229,18 +1266,37 @@ function RemoteSections() {
     }
   };
 
-  if (unpaired.length === 0 && remoteConnections.length === 0) return null;
-
   return (
     <>
-      {unpaired.length > 0 && (
-        <div className={styles.remoteSection}>
-          <div className={`${styles.repoHeader} ${styles.remoteHeader}`}>
-            <span className={`${styles.repoName} ${styles.sectionLabel}`}>
-              {t("nearby_section")}
-            </span>
+      <div className={styles.remoteSection}>
+        <div className={`${styles.repoHeader} ${styles.remoteHeader}`}>
+          <span className={`${styles.repoName} ${styles.sectionLabel}`}>
+            {t("nearby_section")}
+          </span>
+        </div>
+        {discoveryError && (
+          <div className={styles.connectError}>{discoveryError}</div>
+        )}
+        {unpaired.length === 0 && (
+          <div className={styles.wsItem}>
+            <span className={`${styles.statusDot} ${styles.remoteStatusIdle}`} />
+            <div className={styles.wsInfo}>
+              <span className={styles.wsName}>
+                {discoveryStarted ? t("nearby_none_found") : t("nearby_find_title")}
+              </span>
+            </div>
+            <button
+              className={`${styles.iconBtn} ${styles.smallBtn}`}
+              onClick={handleStartDiscovery}
+              disabled={discoveryLoading}
+              title={t("nearby_find")}
+            >
+              {discoveryLoading ? t("nearby_searching") : t("nearby_find")}
+            </button>
           </div>
-          {unpaired.map((server) => (
+        )}
+        {unpaired.length > 0 &&
+          unpaired.map((server) => (
             <div key={`${server.host}:${server.port}`} className={styles.wsItem}>
               <span className={`${styles.statusDot} ${styles.remoteStatusIdle}`} />
               <div className={styles.wsInfo}>
@@ -1256,8 +1312,7 @@ function RemoteSections() {
               </button>
             </div>
           ))}
-        </div>
-      )}
+      </div>
 
       {remoteConnections.length > 0 && (
         <div className={styles.remoteSection}>
