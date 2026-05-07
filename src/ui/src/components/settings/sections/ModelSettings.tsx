@@ -366,6 +366,19 @@ function BackendCard({
   const manualModelText = manualModels.map((m) => m.id).join(", ");
   const showBaseUrl = draft.kind !== "codex_subscription";
   const showSecret = draft.kind !== "codex_subscription";
+  const showManualModels = draft.kind === "custom_anthropic" || draft.kind === "custom_openai";
+  const selectedDefaultModel = modelOptions.some((model) => model.id === draft.default_model)
+    ? draft.default_model ?? ""
+    : "";
+
+  const applySavedBackends = (saved: AgentBackendConfig[]) => {
+    onSaved(saved);
+    const refreshed = saved.find((item) => item.id === draft.id);
+    if (refreshed) {
+      setDraft(refreshed);
+    }
+    return refreshed;
+  };
 
   const persistDraft = async () => {
     if (secret) {
@@ -396,8 +409,7 @@ function BackendCard({
       setBusy(true);
       await persistDraft();
       const saved = await refreshAgentBackendModels(draft.id);
-      onSaved(saved);
-      const refreshed = saved.find((item) => item.id === draft.id);
+      const refreshed = applySavedBackends(saved);
       const count = (refreshed?.discovered_models.length ?? 0) + (refreshed?.manual_models.length ?? 0);
       setStatus(t("models_backend_status_refreshed", { count }));
     } catch (e) {
@@ -414,7 +426,10 @@ function BackendCard({
       await persistDraft();
       const result = await testAgentBackend(draft.id);
       if (result.backends) {
-        onSaved(result.backends);
+        applySavedBackends(result.backends);
+      } else if (result.ok && draft.model_discovery) {
+        const saved = await refreshAgentBackendModels(draft.id);
+        applySavedBackends(saved);
       }
       setStatus(result.message);
     } catch (e) {
@@ -462,10 +477,10 @@ function BackendCard({
           )}
           <label className={styles.backendField}>
             <span className={styles.backendFieldLabel}>{t("models_backend_default_model")}</span>
-            {modelOptions.length > 0 ? (
+            {draft.model_discovery || modelOptions.length > 0 ? (
               <select
                 className={styles.select}
-                value={draft.default_model ?? ""}
+                value={selectedDefaultModel}
                 onChange={(e) => setDraft({ ...draft, default_model: e.target.value || null })}
               >
                 <option value="">{t("models_backend_default_auto")}</option>
@@ -500,15 +515,17 @@ function BackendCard({
               </div>
             </label>
           )}
-          <label className={styles.backendField}>
-            <span className={styles.backendFieldLabel}>{t("models_backend_manual_models")}</span>
-            <input
-              className={styles.input}
-              value={manualModelText}
-              placeholder={t("models_backend_manual_models_placeholder")}
-              onChange={(e) => updateModels(e.target.value)}
-            />
-          </label>
+          {showManualModels && (
+            <label className={styles.backendField}>
+              <span className={styles.backendFieldLabel}>{t("models_backend_manual_models")}</span>
+              <input
+                className={styles.input}
+                value={manualModelText}
+                placeholder={t("models_backend_manual_models_placeholder")}
+                onChange={(e) => updateModels(e.target.value)}
+              />
+            </label>
+          )}
           {showSecret && (
             <label className={styles.backendField}>
               <span className={styles.backendFieldLabel}>{t("models_backend_secret")}</span>
