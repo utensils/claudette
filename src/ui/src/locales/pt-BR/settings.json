@@ -413,5 +413,7 @@
   "claude_flags_danger_badge": "Dangerous",
   "claude_flags_danger_warning": "Dangerous flag — disables safety checks. Use with care.",
   "claude_flags_override_label": "Override global",
-  "claude_flags_inheriting_global": "Inheriting from global"
+  "claude_flags_inheriting_global": "Inheriting from global",
+  "claude_flags_tab_badge_tooltip": "Dangerously skip permissions is enabled for this workspace",
+  "claude_flags_footer_tooltip_empty": "No extra flags configured"
 }
