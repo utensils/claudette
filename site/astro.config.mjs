@@ -52,6 +52,8 @@ export default defineConfig({
         // Renders the default site title plus our primary nav (Features /
         // Docs / Releases) next to the logo. See `src/components/SiteTitle.astro`.
         SiteTitle: './src/components/SiteTitle.astro',
+        // Injects Open Graph and Twitter Card meta tags for social link previews.
+        Head: './src/components/Head.astro',
       },
       sidebar: [
         {

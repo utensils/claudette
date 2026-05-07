@@ -1,0 +1,18 @@
+---
+import Default from '@astrojs/starlight/components/Head.astro';
+
+// Derive the OG image URL from Astro's deploy config (`site` and `base` in
+// astro.config.mjs) rather than hardcoding — keeps forks/staging deployments
+// correct without touching this file. BASE_URL may or may not include a
+// trailing slash depending on how `base` is configured; normalize before joining.
+const baseWithSlash = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+const ogImage = new URL(`${baseWithSlash}og-image.png`, Astro.site).href;
+---
+
+<Default {...Astro.props}><slot /></Default>
+
+<!-- og:image and twitter:image — not emitted by Starlight's default Head -->
+<meta property="og:image"      content={ogImage} />
+<meta property="og:image:alt"  content="Claudette dashboard — parallel Claude Code agents at a glance" />
+<meta name="twitter:image"     content={ogImage} />
+<meta name="twitter:image:alt" content="Claudette dashboard — parallel Claude Code agents at a glance" />
