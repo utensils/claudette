@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   resolveEnabledExtraFlags,
   type ResolvedFlag,
-} from "../stores/slices/workspaceClaudeFlagsSlice";
+} from "./claudeFlagsLogic";
 
 /// One option parsed out of `claude --help`. Mirrors
 /// `claudette::claude_help::ClaudeFlagDef` (snake_case via serde default).
