@@ -7,6 +7,7 @@ use std::time::Instant;
 use claudette::agent::PersistentSession;
 use tokio::sync::{RwLock, Semaphore};
 
+use claudette::claude_help::ClaudeFlagDef;
 use claudette::env_provider::{EnvCache, EnvWatcher};
 use claudette::plugin_runtime::PluginRegistry;
 use claudette::scm::types::{CiCheck, PullRequest};
@@ -303,6 +304,20 @@ pub fn kill_process_sync(pid: u32) {
     );
 }
 
+/// Result of running `claude --help` at startup, parsed into `ClaudeFlagDef`s.
+/// Lives in `AppState` so the Settings UI can render the available flag list
+/// without re-spawning the CLI on every render.
+#[derive(Debug, Clone)]
+pub enum ClaudeFlagDiscovery {
+    /// Discovery task is in flight (set at app boot before the spawned task
+    /// finishes). Settings UI shows a "loading" state.
+    Loading,
+    /// Parsed flag definitions, filtered against `RESERVED_FLAGS`.
+    Ok(Vec<ClaudeFlagDef>),
+    /// Spawn / parse / timeout failure. Settings UI shows a Retry banner.
+    Err(String),
+}
+
 /// Cached SCM data for a specific (repo_id, branch) pair.
 pub struct ScmCacheEntry {
     pub pull_request: Option<PullRequest>,
@@ -384,6 +399,10 @@ pub struct AppState {
     pub pending_update: tokio::sync::Mutex<Option<tauri_plugin_updater::Update>>,
     /// CESP sound pack playback state (no-repeat + debounce tracking).
     pub cesp_playback: Mutex<claudette::cesp::SoundPlaybackState>,
+    /// Cached `claude --help` parse result. Populated by a background task
+    /// spawned at startup; `Loading` until it completes. Settings reads this
+    /// to render the user-toggleable flags list.
+    pub claude_flag_defs: Arc<RwLock<ClaudeFlagDiscovery>>,
     /// Cancellation signal for an in-flight `claude auth login` subprocess.
     /// The waiter task owns the `Child` directly and selects between
     /// `child.wait()` and this receiver; sending on the paired sender asks
@@ -419,6 +438,7 @@ impl AppState {
             scm_semaphore: Arc::new(Semaphore::new(4)),
             pending_update: tokio::sync::Mutex::new(None),
             cesp_playback: Mutex::new(claudette::cesp::SoundPlaybackState::new()),
+            claude_flag_defs: Arc::new(RwLock::new(ClaudeFlagDiscovery::Loading)),
             auth_login_cancel: tokio::sync::Mutex::new(None),
         }
     }

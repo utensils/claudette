@@ -7,6 +7,7 @@ pub mod apps;
 pub mod auth;
 pub mod cesp;
 pub mod chat;
+pub mod claude_flags;
 pub mod cli;
 pub mod community;
 pub mod data;

@@ -399,5 +399,19 @@
   "help_menu_docs": "Documentación",
   "help_menu_changelog": "Cambios",
   "help_menu_issues": "Informar problema",
-  "help_menu_devtools": "Abrir herramientas de desarrollo"
+  "help_menu_devtools": "Abrir herramientas de desarrollo",
+
+  "nav_claude_flags": "Claude flags",
+  "claude_flags_title": "Claude CLI flags",
+  "claude_flags_description": "Toggle any flag the installed `claude` CLI supports. These are appended to every agent turn. Flags Claudette manages itself (model, session, output framing) are filtered out.",
+  "claude_flags_repo_label": "Claude CLI flags",
+  "claude_flags_repo_description": "Override global flag settings for this repository.",
+  "claude_flags_error_load": "Could not load CLI flags from `claude --help`.",
+  "claude_flags_retry": "Retry",
+  "claude_flags_loading": "Loading flags from `claude --help`…",
+  "claude_flags_empty": "No flags discovered.",
+  "claude_flags_danger_badge": "Dangerous",
+  "claude_flags_danger_warning": "Dangerous flag — disables safety checks. Use with care.",
+  "claude_flags_override_label": "Override global",
+  "claude_flags_inheriting_global": "Inheriting from global"
 }

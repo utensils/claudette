@@ -1,5 +1,6 @@
 import type { StateCreator } from "zustand";
 import { DEFAULT_THEME_ID, DEFAULT_LIGHT_THEME_ID } from "../../styles/themes";
+import type { ClaudeFlagDef } from "../../services/claudeFlags";
 import type { AppState } from "../useAppStore";
 import type { AgentBackendConfig } from "../../services/tauri";
 
@@ -72,6 +73,12 @@ export interface SettingsSlice {
   setVoiceToggleHotkey: (hotkey: string | null) => void;
   voiceHoldHotkey: string | null;
   setVoiceHoldHotkey: (hotkey: string | null) => void;
+
+  /// Cached parse of `claude --help`. `null` until the section first loads
+  /// (or the discovery task hasn't finished yet). Per-scope persisted values
+  /// are fetched per-mount and live in the section component, not here.
+  claudeFlagDefs: ClaudeFlagDef[] | null;
+  setClaudeFlagDefs: (defs: ClaudeFlagDef[] | null) => void;
 }
 
 export const createSettingsSlice: StateCreator<
@@ -170,4 +177,7 @@ export const createSettingsSlice: StateCreator<
   setVoiceToggleHotkey: (hotkey) => set({ voiceToggleHotkey: hotkey }),
   voiceHoldHotkey: null,
   setVoiceHoldHotkey: (hotkey) => set({ voiceHoldHotkey: hotkey }),
+
+  claudeFlagDefs: null,
+  setClaudeFlagDefs: (defs) => set({ claudeFlagDefs: defs }),
 });
