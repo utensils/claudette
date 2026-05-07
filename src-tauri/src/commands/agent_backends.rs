@@ -501,22 +501,15 @@ fn normalize_backend(mut backend: AgentBackendConfig) -> AgentBackendConfig {
             model.context_window_tokens = backend.context_window_default;
         }
     }
-    strip_legacy_seeded_models(&mut backend);
+    clear_manual_models_for_discovery_backend(&mut backend);
     backend
 }
 
-fn strip_legacy_seeded_models(backend: &mut AgentBackendConfig) {
-    let legacy: &[&str] = match backend.kind {
-        AgentBackendKind::OpenAiApi => &["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5-codex"],
-        AgentBackendKind::CodexSubscription => &["gpt-5.3-codex", "gpt-5.4"],
-        _ => return,
-    };
-    if !backend.manual_models.is_empty()
-        && backend
-            .manual_models
-            .iter()
-            .all(|model| legacy.contains(&model.id.as_str()))
-    {
+fn clear_manual_models_for_discovery_backend(backend: &mut AgentBackendConfig) {
+    if matches!(
+        backend.kind,
+        AgentBackendKind::OpenAiApi | AgentBackendKind::CodexSubscription
+    ) {
         backend.manual_models.clear();
     }
 }
@@ -1439,11 +1432,11 @@ mod tests {
     }
 
     #[test]
-    fn legacy_seeded_models_are_removed_from_saved_backends() {
+    fn built_in_discovery_backends_do_not_keep_manual_model_seeds() {
         let mut openai = AgentBackendConfig::builtin_openai_api();
         openai.manual_models = vec![AgentBackendModel {
-            id: "gpt-5.4".to_string(),
-            label: "GPT-5.4".to_string(),
+            id: "any-future-model".to_string(),
+            label: "Any future model".to_string(),
             context_window_tokens: 1_000_000,
             discovered: false,
         }];
@@ -1451,6 +1444,7 @@ mod tests {
         assert!(normalized.manual_models.is_empty());
 
         let mut custom = AgentBackendConfig::builtin_openai_api();
+        custom.kind = AgentBackendKind::CustomOpenAi;
         custom.manual_models = vec![AgentBackendModel {
             id: "team-private-model".to_string(),
             label: "Team private model".to_string(),
