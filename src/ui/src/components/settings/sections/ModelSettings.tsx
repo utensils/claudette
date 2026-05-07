@@ -294,23 +294,22 @@ export function ModelSettings() {
         </div>
       </div>
 
-      <BackendSettingsPanel
-        enabled={alternativeBackendsEnabled}
-        backends={agentBackends}
-        onBackends={setAgentBackends}
-        setError={setError}
-      />
+      {alternativeBackendsEnabled && (
+        <BackendSettingsPanel
+          backends={agentBackends}
+          onBackends={setAgentBackends}
+          setError={setError}
+        />
+      )}
     </div>
   );
 }
 
 function BackendSettingsPanel({
-  enabled,
   backends,
   onBackends,
   setError,
 }: {
-  enabled: boolean;
   backends: AgentBackendConfig[];
   onBackends: (backends: AgentBackendConfig[]) => void;
   setError: (error: string | null) => void;
@@ -322,7 +321,7 @@ function BackendSettingsPanel({
         <div className={styles.settingInfo}>
           <div className={styles.settingLabel}>{t("models_backends_title")}</div>
           <div className={styles.settingDescription}>
-            {enabled ? t("models_backends_desc") : t("models_backends_disabled")}
+            {t("models_backends_desc")}
           </div>
         </div>
       </div>

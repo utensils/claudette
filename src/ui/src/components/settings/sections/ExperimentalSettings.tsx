@@ -1,7 +1,13 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../../stores/useAppStore";
-import { setAppSetting } from "../../../services/tauri";
+import {
+  getAppSetting,
+  listAppSettingsWithPrefix,
+  resetAgentSession,
+  setAppSetting,
+} from "../../../services/tauri";
+import { planAlternativeBackendDisableCleanup } from "../alternativeBackendCleanup";
 import styles from "../Settings.module.css";
 
 export function ExperimentalSettings() {
@@ -30,6 +36,9 @@ export function ExperimentalSettings() {
   );
   const setAlternativeBackendsEnabled = useAppStore(
     (s) => s.setAlternativeBackendsEnabled,
+  );
+  const setDefaultAgentBackendId = useAppStore(
+    (s) => s.setDefaultAgentBackendId,
   );
   const [error, setError] = useState<string | null>(null);
 
@@ -84,15 +93,60 @@ export function ExperimentalSettings() {
     }
   };
 
+  const resetAlternativeBackendSelections = async () => {
+    const [
+      defaultModel,
+      defaultBackend,
+      sessionModels,
+      sessionProviders,
+    ] = await Promise.all([
+      getAppSetting("default_model"),
+      getAppSetting("default_agent_backend"),
+      listAppSettingsWithPrefix("model:"),
+      listAppSettingsWithPrefix("model_provider:"),
+    ]);
+    const store = useAppStore.getState();
+    const plan = planAlternativeBackendDisableCleanup({
+      defaultModel,
+      defaultBackend,
+      sessionModels,
+      sessionProviders,
+      selectedModels: store.selectedModel,
+      selectedProviders: store.selectedModelProvider,
+    });
+
+    if (plan.resetDefault) {
+      await setAppSetting("default_model", plan.defaultModel);
+      await setAppSetting("default_agent_backend", plan.defaultBackend);
+      setDefaultAgentBackendId(plan.defaultBackend);
+    }
+
+    for (const sessionId of plan.sessionIds) {
+      store.setSelectedModel(sessionId, plan.defaultModel, plan.defaultBackend);
+      await setAppSetting(`model:${sessionId}`, plan.defaultModel);
+      await setAppSetting(`model_provider:${sessionId}`, plan.defaultBackend);
+      await resetAgentSession(sessionId);
+      store.clearAgentQuestion(sessionId);
+      store.clearPlanApproval(sessionId);
+    }
+  };
+
   const handleAlternativeBackendsToggle = async () => {
     if (!alternativeBackendsAvailable) return;
     const next = !alternativeBackendsEnabled;
     setAlternativeBackendsEnabled(next);
+    let persistedToggle = false;
     try {
       setError(null);
       await setAppSetting("alternative_backends_enabled", next ? "true" : "false");
+      persistedToggle = true;
+      if (!next) {
+        await resetAlternativeBackendSelections();
+      }
     } catch (e) {
-      setAlternativeBackendsEnabled(!next);
+      if (!persistedToggle) {
+        setAlternativeBackendsEnabled(!next);
+      }
       setError(String(e));
     }
   };
