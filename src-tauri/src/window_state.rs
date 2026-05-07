@@ -98,10 +98,10 @@ pub fn restore_main_window(app: &tauri::App) {
     if !restored {
         let _ = apply_default_bounds(&window);
         if should_maximize_default(raw_saved.as_deref()) {
-            if let Some(db) = db.as_ref() {
-                if let Err(err) = seed_default_maximized_state(db, &window) {
-                    eprintln!("[window-state] failed to seed default window state: {err}");
-                }
+            if let Some(db) = db.as_ref()
+                && let Err(err) = seed_default_maximized_state(db, &window)
+            {
+                eprintln!("[window-state] failed to seed default window state: {err}");
             }
             let _ = window.maximize();
         }
@@ -387,12 +387,26 @@ fn build_next_state(
     fullscreen: bool,
 ) -> SavedWindowState {
     if fullscreen || maximized {
-        let mut base = existing.unwrap_or(current);
+        let mut base = existing.unwrap_or_else(|| default_normal_state(current));
         base.maximized = maximized && !fullscreen;
         return base;
     }
 
     SavedWindowState {
+        maximized: false,
+        ..current
+    }
+}
+
+fn default_normal_state(current: SavedWindowState) -> SavedWindowState {
+    let scale_factor = current
+        .scale_factor
+        .filter(|scale| scale.is_finite() && *scale > 0.0);
+    SavedWindowState {
+        width: DEFAULT_WIDTH,
+        height: DEFAULT_HEIGHT,
+        logical_width: scale_factor.map(|scale| f64::from(DEFAULT_WIDTH) / scale),
+        logical_height: scale_factor.map(|scale| f64::from(DEFAULT_HEIGHT) / scale),
         maximized: false,
         ..current
     }
@@ -813,6 +827,38 @@ mod tests {
         assert_eq!(
             build_next_state(Some(previous), fullscreen_bounds, false, true),
             state(10, 20, 1300, 900, false)
+        );
+    }
+
+    #[test]
+    fn build_next_state_uses_default_normal_bounds_when_first_seen_maximized() {
+        let maximized_bounds = SavedWindowState {
+            scale_factor: Some(2.0),
+            logical_width: Some(3840.0),
+            logical_height: Some(1080.0),
+            ..state(0, 0, 7680, 2160, false)
+        };
+
+        assert_eq!(
+            build_next_state(None, maximized_bounds, true, false),
+            SavedWindowState {
+                width: DEFAULT_WIDTH,
+                height: DEFAULT_HEIGHT,
+                maximized: true,
+                logical_width: Some(f64::from(DEFAULT_WIDTH) / 2.0),
+                logical_height: Some(f64::from(DEFAULT_HEIGHT) / 2.0),
+                ..maximized_bounds
+            }
+        );
+    }
+
+    #[test]
+    fn build_next_state_uses_default_normal_bounds_when_first_seen_fullscreen() {
+        let fullscreen_bounds = state(0, 0, 7680, 2160, false);
+
+        assert_eq!(
+            build_next_state(None, fullscreen_bounds, false, true),
+            state(0, 0, DEFAULT_WIDTH, DEFAULT_HEIGHT, false)
         );
     }
 

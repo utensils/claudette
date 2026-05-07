@@ -26,7 +26,7 @@ export interface CommandEvent {
   exit_code: number | null;
 }
 
-// -- Split-pane layout (ephemeral, not persisted) --
+// -- Split-pane layout (view-state persisted, process state excluded) --
 
 export type TerminalPaneNodeId = string;
 
@@ -52,8 +52,9 @@ export interface TerminalSplitPane {
   direction: TerminalSplitDirection;
   children: [TerminalPaneNode, TerminalPaneNode];
   // Percentages that sum to 100. Drives react-resizable-panels' initial
-  // layout and is updated on drag so the split persists across re-renders
-  // (but not across app restarts — the whole tree is ephemeral).
+  // layout and is updated on drag so the split persists across re-renders and
+  // app restarts. Persistence stores pane ids, split direction, and sizes only;
+  // PTY ids, running commands, and spawn errors are intentionally excluded.
   sizes: [number, number];
 }
 

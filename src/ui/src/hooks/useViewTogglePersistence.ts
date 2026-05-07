@@ -26,6 +26,14 @@ const LEGACY_KEYS = {
 const RIGHT_SIDEBAR_TABS = ["files", "changes", "tasks"] as const;
 const SIDEBAR_GROUP_BYS = ["status", "repo"] as const;
 const DIFF_LAYERS = ["committed", "staged", "unstaged", "untracked"] as const;
+const STATUS_GROUP_KEYS = [
+  "status:merged",
+  "status:in-review",
+  "status:draft",
+  "status:in-progress",
+  "status:closed",
+  "status:archived",
+] as const;
 
 type RightSidebarTab = (typeof RIGHT_SIDEBAR_TABS)[number];
 type SidebarGroupBy = (typeof SIDEBAR_GROUP_BYS)[number];
@@ -331,6 +339,15 @@ function filteredRecord<T>(
   );
 }
 
+function filteredBooleanRecord(
+  record: Record<string, boolean>,
+  ids: Set<string>,
+): Record<string, boolean> {
+  return Object.fromEntries(
+    Object.entries(record).filter(([id]) => ids.has(id)),
+  );
+}
+
 function diffTabKey(tab: DiffFileTab): string {
   return `${tab.path}\0${tab.layer ?? ""}`;
 }
@@ -455,6 +472,7 @@ export function applyPersistedViewState(
       .filter((workspace) => workspace.status === "Active")
       .map((workspace) => workspace.repository_id),
   );
+  const validStatusGroupKeys = new Set<string>(STATUS_GROUP_KEYS);
   const selectedWorkspaceId =
     persisted.selectedWorkspaceId && activeWorkspaceIds.has(persisted.selectedWorkspaceId)
       ? persisted.selectedWorkspaceId
@@ -536,8 +554,11 @@ export function applyPersistedViewState(
       persisted.selectedSessionIdByWorkspaceId,
       activeWorkspaceIds,
     ),
-    repoCollapsed: persisted.repoCollapsed,
-    statusGroupCollapsed: persisted.statusGroupCollapsed,
+    repoCollapsed: filteredBooleanRecord(persisted.repoCollapsed, activeRepositoryIds),
+    statusGroupCollapsed: filteredBooleanRecord(
+      persisted.statusGroupCollapsed,
+      validStatusGroupKeys,
+    ),
     allFilesExpandedDirsByWorkspace: filteredRecord(
       persisted.allFilesExpandedDirsByWorkspace,
       activeWorkspaceIds,

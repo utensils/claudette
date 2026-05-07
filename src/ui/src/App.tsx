@@ -142,8 +142,9 @@ function App() {
           }
         }
       })
-      .catch((err) => {
+      .catch(async (err) => {
         console.error("Failed to load initial data:", err);
+        await hydratePersistedViewState([]);
         setViewStateHydrated(true);
       });
     getAppSetting("terminal_font_size")

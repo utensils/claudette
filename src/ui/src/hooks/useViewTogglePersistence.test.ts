@@ -234,6 +234,34 @@ describe("view state persistence", () => {
     expect(useAppStore.getState().sidebarRepoFilter).toBe("all");
   });
 
+  it("drops stale collapsed repo and status group state", () => {
+    applyPersistedViewState(
+      makePersistedState({
+        repoCollapsed: {
+          "repo-live": true,
+          "repo-archived": true,
+          "repo-stale": true,
+        },
+        statusGroupCollapsed: {
+          "status:merged": true,
+          "status:archived": false,
+          "status:unknown": true,
+        },
+      }),
+      [
+        makeWorkspace("live", "Active", "repo-live"),
+        makeWorkspace("archived", "Archived", "repo-archived"),
+      ],
+    );
+
+    const state = useAppStore.getState();
+    expect(state.repoCollapsed).toEqual({ "repo-live": true });
+    expect(state.statusGroupCollapsed).toEqual({
+      "status:merged": true,
+      "status:archived": false,
+    });
+  });
+
   it("does not resurrect a stale diff selection when current view is chat", () => {
     useAppStore.setState({
       selectedWorkspaceId: "ws-a",
