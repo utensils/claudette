@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getAppSetting, setAppSetting, listAgentBackends, saveAgentBackend, saveAgentBackendSecret, refreshAgentBackendModels, testAgentBackend, launchCodexLogin } from "../../../services/tauri";
 import type { AgentBackendConfig } from "../../../services/tauri";
@@ -73,7 +73,10 @@ export function ModelSettings() {
     }
   };
 
-  const registry = buildModelRegistry(alternativeBackendsEnabled, agentBackends);
+  const registry = useMemo(
+    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends),
+    [alternativeBackendsEnabled, agentBackends],
+  );
   const defaultModelValue = `${defaultBackend}/${defaultModel}`;
 
   const handleModelChange = async (value: string) => {

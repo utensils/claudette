@@ -471,7 +471,10 @@ mod tests {
             ..Default::default()
         };
         let args = build_persistent_args("sess-1", false, &[], None, &settings);
-        let idx = args.iter().position(|a| a == "--model").unwrap();
+        let idx = args
+            .iter()
+            .position(|a| a == "--model")
+            .expect("--model should be present");
         assert_eq!(args[idx + 1], "opus");
     }
 
@@ -483,7 +486,10 @@ mod tests {
         };
         let args = build_persistent_args("sess-1", true, &[], None, &settings);
         assert!(args.contains(&"--resume".to_string()));
-        let idx = args.iter().position(|a| a == "--model").unwrap();
+        let idx = args
+            .iter()
+            .position(|a| a == "--model")
+            .expect("--model should be present");
         assert_eq!(args[idx + 1], "gpt-5.4");
     }
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { CircleDollarSign, Sparkles, BookOpen } from "lucide-react";
 import { useAppStore } from "../../../stores/useAppStore";
 import { getAppSetting, setAppSetting } from "../../../services/tauri";
@@ -125,7 +125,10 @@ export function ComposerToolbar({ sessionId, disabled }: ComposerToolbarProps) {
     }
   }, [loaded, disable1mContext, selectedModel, sessionId]);
 
-  const registry = buildModelRegistry(alternativeBackendsEnabled, agentBackends);
+  const registry = useMemo(
+    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends),
+    [alternativeBackendsEnabled, agentBackends],
+  );
   const currentModel = registry.find(
     (m) => m.id === selectedModel && (m.providerId ?? "anthropic") === selectedProvider,
   );

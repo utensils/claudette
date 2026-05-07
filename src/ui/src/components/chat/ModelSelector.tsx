@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CircleDollarSign, ChevronRight } from "lucide-react";
 import styles from "./ModelSelector.module.css";
@@ -24,12 +24,19 @@ export function ModelSelector({
   const disable1mContext = useAppStore((s) => s.disable1mContext);
   const alternativeBackendsEnabled = useAppStore((s) => s.alternativeBackendsEnabled);
   const agentBackends = useAppStore((s) => s.agentBackends);
-  const registry = buildModelRegistry(alternativeBackendsEnabled, agentBackends);
-  const visibleModels = disable1mContext
-    ? registry.filter((m) => m.contextWindowTokens < 1_000_000)
-    : registry;
-  const primary = visibleModels.filter((m) => !m.legacy);
-  const legacy = visibleModels.filter((m) => m.legacy);
+  const registry = useMemo(
+    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends),
+    [alternativeBackendsEnabled, agentBackends],
+  );
+  const visibleModels = useMemo(
+    () =>
+      disable1mContext
+        ? registry.filter((m) => m.contextWindowTokens < 1_000_000)
+        : registry,
+    [disable1mContext, registry],
+  );
+  const primary = useMemo(() => visibleModels.filter((m) => !m.legacy), [visibleModels]);
+  const legacy = useMemo(() => visibleModels.filter((m) => m.legacy), [visibleModels]);
   const selectedIsLegacy = legacy.some((m) => m.id === selected && (m.providerId ?? "anthropic") === selectedProvider);
 
   const [moreOpen, setMoreOpen] = useState(selectedIsLegacy);

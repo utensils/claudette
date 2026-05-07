@@ -357,7 +357,10 @@ mod tests {
             ..Default::default()
         };
         let args = build_claude_args("sess-1", "hello", false, &[], None, &settings, false);
-        let idx = args.iter().position(|a| a == "--model").unwrap();
+        let idx = args
+            .iter()
+            .position(|a| a == "--model")
+            .expect("--model should be present");
         assert_eq!(args[idx + 1], "opus");
     }
 
@@ -368,7 +371,10 @@ mod tests {
             ..Default::default()
         };
         let args = build_claude_args("sess-1", "hello", true, &[], None, &settings, false);
-        let idx = args.iter().position(|a| a == "--model").unwrap();
+        let idx = args
+            .iter()
+            .position(|a| a == "--model")
+            .expect("--model should be present");
         assert_eq!(args[idx + 1], "opus");
     }
 

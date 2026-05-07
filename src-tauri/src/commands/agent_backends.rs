@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use base64::Engine as _;
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tauri::State;
@@ -78,6 +79,7 @@ struct CodexAuthTokens {
 #[derive(Debug, Clone)]
 struct GatewayServer {
     base_url: String,
+    auth_token: String,
     hash: String,
     cancel: Arc<Notify>,
 }
@@ -97,12 +99,12 @@ impl BackendGateway {
         config: AgentBackendConfig,
         upstream_secret: Option<String>,
         model: Option<String>,
-    ) -> Result<(String, String), String> {
+    ) -> Result<(String, String, String), String> {
         let hash = runtime_hash(&config, upstream_secret.as_deref(), model.as_deref());
         if let Some(existing) = self.servers.read().await.get(&config.id)
             && existing.hash == hash
         {
-            return Ok((existing.base_url.clone(), hash));
+            return Ok((existing.base_url.clone(), existing.auth_token.clone(), hash));
         }
 
         if let Some(existing) = self.servers.write().await.remove(&config.id) {
@@ -117,17 +119,31 @@ impl BackendGateway {
             .map_err(|e| format!("Failed to read gateway address: {e}"))?
             .port();
         let base_url = format!("http://127.0.0.1:{port}");
+        let auth_token = generate_gateway_token();
         let cancel = Arc::new(Notify::new());
         let server = GatewayServer {
             base_url: base_url.clone(),
+            auth_token: auth_token.clone(),
             hash: hash.clone(),
             cancel: Arc::clone(&cancel),
         };
         self.servers.write().await.insert(config.id.clone(), server);
 
-        tokio::spawn(run_gateway(listener, cancel, config, upstream_secret));
-        Ok((base_url, hash))
+        tokio::spawn(run_gateway(
+            listener,
+            cancel,
+            config,
+            upstream_secret,
+            auth_token.clone(),
+        ));
+        Ok((base_url, auth_token, hash))
     }
+}
+
+fn generate_gateway_token() -> String {
+    let mut bytes = [0_u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
 #[tauri::command]
@@ -286,16 +302,13 @@ pub async fn resolve_backend_runtime(
         if let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) {
             backend.default_model = Some(model.to_string());
         }
-        let (gateway_url, hash) = state
+        let (gateway_url, gateway_token, hash) = state
             .backend_gateway
             .ensure(backend.clone(), secret, model.map(String::from))
             .await?;
         let mut env = vec![
             ("ANTHROPIC_BASE_URL".to_string(), gateway_url),
-            (
-                "ANTHROPIC_AUTH_TOKEN".to_string(),
-                "claudette-gateway".to_string(),
-            ),
+            ("ANTHROPIC_AUTH_TOKEN".to_string(), gateway_token),
             (
                 "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY".to_string(),
                 "1".to_string(),
@@ -773,6 +786,9 @@ async fn discover_openai_api_models(
 
 async fn discover_codex_models() -> Result<Vec<AgentBackendModel>, String> {
     codex_login_status().await?;
+    // Codex does not currently expose a stable model-list API for ChatGPT
+    // subscription auth. This experimental backend depends on the CLI debug
+    // catalog until Codex publishes a supported discovery surface.
     let output = tokio::process::Command::new("codex")
         .args(["debug", "models"])
         .output()
@@ -956,7 +972,7 @@ fn runtime_hash(config: &AgentBackendConfig, secret: Option<&str>, model: Option
     BACKEND_RUNTIME_ENV_VERSION.hash(&mut hasher);
     config.id.hash(&mut hasher);
     config.label.hash(&mut hasher);
-    format!("{:?}", config.kind).hash(&mut hasher);
+    backend_kind_hash_key(config.kind).hash(&mut hasher);
     config.base_url.hash(&mut hasher);
     config.enabled.hash(&mut hasher);
     config.default_model.hash(&mut hasher);
@@ -966,11 +982,23 @@ fn runtime_hash(config: &AgentBackendConfig, secret: Option<&str>, model: Option
     format!("{:016x}", hasher.finish())
 }
 
+fn backend_kind_hash_key(kind: AgentBackendKind) -> &'static str {
+    match kind {
+        AgentBackendKind::Anthropic => "anthropic",
+        AgentBackendKind::Ollama => "ollama",
+        AgentBackendKind::OpenAiApi => "openai_api",
+        AgentBackendKind::CodexSubscription => "codex_subscription",
+        AgentBackendKind::CustomAnthropic => "custom_anthropic",
+        AgentBackendKind::CustomOpenAi => "custom_openai",
+    }
+}
+
 async fn run_gateway(
     listener: TcpListener,
     cancel: Arc<Notify>,
     config: AgentBackendConfig,
     upstream_secret: Option<String>,
+    auth_token: String,
 ) {
     loop {
         tokio::select! {
@@ -979,8 +1007,11 @@ async fn run_gateway(
                 let Ok((stream, _)) = accepted else { continue };
                 let config = config.clone();
                 let upstream_secret = upstream_secret.clone();
+                let auth_token = auth_token.clone();
                 tokio::spawn(async move {
-                    if let Err(err) = handle_gateway_connection(stream, config, upstream_secret).await {
+                    if let Err(err) =
+                        handle_gateway_connection(stream, config, upstream_secret, &auth_token).await
+                    {
                         eprintln!("[agent-backend-gateway] {err}");
                     }
                 });
@@ -993,6 +1024,7 @@ async fn handle_gateway_connection(
     mut stream: TcpStream,
     config: AgentBackendConfig,
     upstream_secret: Option<String>,
+    auth_token: &str,
 ) -> Result<(), String> {
     let mut buf = Vec::new();
     let mut tmp = [0_u8; 4096];
@@ -1018,6 +1050,17 @@ async fn handle_gateway_connection(
     let mut request_parts = request_line.split_whitespace();
     let method = request_parts.next().unwrap_or("").to_string();
     let path = request_parts.next().unwrap_or("").to_string();
+    let route_path = route_path(&path);
+    if gateway_route_requires_auth(&method, route_path)
+        && !gateway_auth_matches(&header, auth_token)
+    {
+        return write_json_response(
+            &mut stream,
+            401,
+            json!({"type":"error","error":{"type":"authentication_error","message":"Unauthorized"}}),
+        )
+        .await;
+    }
     let content_length = header
         .lines()
         .find_map(|line| {
@@ -1039,9 +1082,6 @@ async fn handle_gateway_connection(
         buf.extend_from_slice(&tmp[..n]);
     }
     let body = &buf[body_start..usize::min(buf.len(), body_start + content_length)];
-
-    let route_path = route_path(&path);
-
     match (method.as_str(), route_path) {
         ("HEAD", "/") | ("HEAD", "/health") => write_empty_response(&mut stream, 200).await,
         ("GET", "/health") => write_json_response(&mut stream, 200, json!({"ok": true})).await,
@@ -1084,6 +1124,31 @@ async fn handle_gateway_connection(
             .await
         }
     }
+}
+
+fn gateway_route_requires_auth(method: &str, route_path: &str) -> bool {
+    !matches!(
+        (method, route_path),
+        ("HEAD", "/") | ("HEAD", "/health") | ("GET", "/health")
+    )
+}
+
+fn gateway_auth_matches(header: &str, auth_token: &str) -> bool {
+    header.lines().any(|line| {
+        let Some((name, value)) = line.split_once(':') else {
+            return false;
+        };
+        let value = value.trim();
+        if name.eq_ignore_ascii_case("authorization") {
+            let mut parts = value.split_whitespace();
+            return parts
+                .next()
+                .is_some_and(|scheme| scheme.eq_ignore_ascii_case("bearer"))
+                && parts.next() == Some(auth_token)
+                && parts.next().is_none();
+        }
+        name.eq_ignore_ascii_case("x-api-key") && value == auth_token
+    })
 }
 
 async fn call_openai_responses(
@@ -1756,6 +1821,7 @@ async fn write_json_response(
     let body = value.to_string();
     let reason = match status {
         200 => "OK",
+        401 => "Unauthorized",
         404 => "Not Found",
         502 => "Bad Gateway",
         _ => "OK",
@@ -1777,6 +1843,7 @@ async fn write_json_response(
 async fn write_empty_response(stream: &mut TcpStream, status: u16) -> Result<(), String> {
     let reason = match status {
         200 => "OK",
+        401 => "Unauthorized",
         404 => "Not Found",
         502 => "Bad Gateway",
         _ => "OK",
@@ -1814,6 +1881,39 @@ mod tests {
         let c = runtime_hash(&backend, Some("two"), Some("glm"));
         assert_ne!(a, b);
         assert_ne!(b, c);
+    }
+
+    #[test]
+    fn backend_kind_hash_key_uses_stable_wire_values() {
+        assert_eq!(
+            backend_kind_hash_key(AgentBackendKind::Anthropic),
+            "anthropic"
+        );
+        assert_eq!(
+            backend_kind_hash_key(AgentBackendKind::CodexSubscription),
+            "codex_subscription"
+        );
+        assert_eq!(
+            backend_kind_hash_key(AgentBackendKind::CustomOpenAi),
+            "custom_openai"
+        );
+    }
+
+    #[test]
+    fn gateway_auth_accepts_bearer_or_x_api_key_token() {
+        let bearer = "POST /v1/messages HTTP/1.1\r\nAuthorization: Bearer abc123\r\n\r\n";
+        let x_api_key = "GET /v1/models HTTP/1.1\r\nx-api-key: abc123\r\n\r\n";
+        assert!(gateway_auth_matches(bearer, "abc123"));
+        assert!(gateway_auth_matches(x_api_key, "abc123"));
+        assert!(!gateway_auth_matches(bearer, "wrong"));
+    }
+
+    #[test]
+    fn gateway_auth_required_for_backend_api_routes_only() {
+        assert!(!gateway_route_requires_auth("GET", "/health"));
+        assert!(!gateway_route_requires_auth("HEAD", "/"));
+        assert!(gateway_route_requires_auth("GET", "/v1/models"));
+        assert!(gateway_route_requires_auth("POST", "/v1/messages"));
     }
 
     #[test]

@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import { buildModelRegistry, findModelInRegistry, type Model } from "./modelRegistry";
 
@@ -10,6 +11,9 @@ export function useSelectedModelEntry(sessionId: string): Model | undefined {
     (s) => s.alternativeBackendsEnabled,
   );
   const agentBackends = useAppStore((s) => s.agentBackends);
-  const registry = buildModelRegistry(alternativeBackendsEnabled, agentBackends);
+  const registry = useMemo(
+    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends),
+    [alternativeBackendsEnabled, agentBackends],
+  );
   return findModelInRegistry(registry, selectedModel, selectedProvider);
 }

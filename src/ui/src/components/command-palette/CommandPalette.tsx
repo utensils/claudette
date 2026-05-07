@@ -339,6 +339,11 @@ export function CommandPalette() {
     [themes, applyThemeById],
   );
 
+  const modelRegistry = useMemo(
+    () => buildModelRegistry(alternativeBackendsEnabled, agentBackends),
+    [alternativeBackendsEnabled, agentBackends],
+  );
+
   const modelCommands = useMemo(
     () => buildModelCommands(
       selectedModel,
@@ -347,11 +352,11 @@ export function CommandPalette() {
         await applySelectedModel(selectedSessionId, model, providerId);
       },
       close,
-      buildModelRegistry(alternativeBackendsEnabled, agentBackends),
+      modelRegistry,
       selectedModelProvider,
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectedModel, selectedModelProvider, selectedSessionId, alternativeBackendsEnabled, agentBackends],
+    [selectedModel, selectedModelProvider, selectedSessionId, modelRegistry],
   );
 
   const effortCommands = useMemo(
