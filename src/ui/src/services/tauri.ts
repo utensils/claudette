@@ -109,6 +109,7 @@ export interface BackendSecretUpdate {
 export interface BackendStatus {
   ok: boolean;
   message: string;
+  backends?: AgentBackendConfig[];
 }
 
 export function loadInitialData(): Promise<InitialData> {

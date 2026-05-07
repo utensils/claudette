@@ -363,8 +363,9 @@ function BackendCard({
   const discoveredModels = dedupeBackendModels(draft.discovered_models);
   const manualModels = dedupeBackendModels(draft.manual_models);
   const modelOptions = dedupeBackendModels([...discoveredModels, ...manualModels]);
-  const discoveredModelText = discoveredModels.map((m) => m.id).join(", ");
   const manualModelText = manualModels.map((m) => m.id).join(", ");
+  const showBaseUrl = draft.kind !== "codex_subscription";
+  const showSecret = draft.kind !== "codex_subscription";
 
   const persistDraft = async () => {
     if (secret) {
@@ -412,6 +413,9 @@ function BackendCard({
       setBusy(true);
       await persistDraft();
       const result = await testAgentBackend(draft.id);
+      if (result.backends) {
+        onSaved(result.backends);
+      }
       setStatus(result.message);
     } catch (e) {
       setError(String(e));
@@ -445,15 +449,17 @@ function BackendCard({
           {status ? ` · ${status}` : ""}
         </div>
         <div className={styles.backendForm}>
-          <label className={styles.backendField}>
-            <span className={styles.backendFieldLabel}>{t("models_backend_base_url")}</span>
-            <input
-              className={styles.input}
-              value={draft.base_url ?? ""}
-              placeholder={t("models_backend_base_url")}
-              onChange={(e) => setDraft({ ...draft, base_url: e.target.value || null })}
-            />
-          </label>
+          {showBaseUrl && (
+            <label className={styles.backendField}>
+              <span className={styles.backendFieldLabel}>{t("models_backend_base_url")}</span>
+              <input
+                className={styles.input}
+                value={draft.base_url ?? ""}
+                placeholder={t("models_backend_base_url")}
+                onChange={(e) => setDraft({ ...draft, base_url: e.target.value || null })}
+              />
+            </label>
+          )}
           <label className={styles.backendField}>
             <span className={styles.backendFieldLabel}>{t("models_backend_default_model")}</span>
             {modelOptions.length > 0 ? (
@@ -483,12 +489,15 @@ function BackendCard({
           {draft.model_discovery && (
             <label className={styles.backendField}>
               <span className={styles.backendFieldLabel}>{t("models_backend_discovered_models")}</span>
-              <input
-                className={styles.input}
-                value={discoveredModelText}
-                placeholder={t("models_backend_no_discovered_models")}
-                readOnly
-              />
+              <div className={styles.modelChipList}>
+                {discoveredModels.length > 0 ? (
+                  discoveredModels.map((model) => (
+                    <span key={model.id} className={styles.modelChip}>{model.label || model.id}</span>
+                  ))
+                ) : (
+                  <span className={styles.modelChipEmpty}>{t("models_backend_no_discovered_models")}</span>
+                )}
+              </div>
             </label>
           )}
           <label className={styles.backendField}>
@@ -500,16 +509,18 @@ function BackendCard({
               onChange={(e) => updateModels(e.target.value)}
             />
           </label>
-          <label className={styles.backendField}>
-            <span className={styles.backendFieldLabel}>{t("models_backend_secret")}</span>
-            <input
-              className={styles.input}
-              type="password"
-              value={secret}
-              placeholder={draft.has_secret ? t("models_backend_secret_saved") : t("models_backend_secret")}
-              onChange={(e) => setSecret(e.target.value)}
-            />
-          </label>
+          {showSecret && (
+            <label className={styles.backendField}>
+              <span className={styles.backendFieldLabel}>{t("models_backend_secret")}</span>
+              <input
+                className={styles.input}
+                type="password"
+                value={secret}
+                placeholder={draft.has_secret ? t("models_backend_secret_saved") : t("models_backend_secret")}
+                onChange={(e) => setSecret(e.target.value)}
+              />
+            </label>
+          )}
         </div>
       </div>
       <div className={styles.settingControl}>

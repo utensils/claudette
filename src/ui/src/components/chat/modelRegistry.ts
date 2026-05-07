@@ -80,9 +80,9 @@ export function buildModelRegistry(
   for (const backend of backends) {
     if (!backend.enabled || backend.id === "anthropic") continue;
     const backendModels =
-      backend.id === "ollama" && backend.discovered_models.length > 0
+      backend.discovered_models.length > 0
         ? backend.discovered_models
-        : [...backend.discovered_models, ...backend.manual_models];
+        : backend.manual_models;
     const seen = new Set<string>();
     for (const model of backendModels) {
       if (!model.id || seen.has(model.id)) continue;

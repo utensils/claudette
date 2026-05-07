@@ -25,6 +25,18 @@ const SECRET_BUCKET: &str = "agentBackendSecrets";
 pub struct BackendStatus {
     pub ok: bool,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backends: Option<Vec<AgentBackendConfig>>,
+}
+
+impl BackendStatus {
+    fn new(ok: bool, message: impl Into<String>) -> Self {
+        Self {
+            ok,
+            message: message.into(),
+            backends: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -189,23 +201,7 @@ pub async fn refresh_agent_backend_models(
         .position(|backend| backend.id == backend_id)
         .ok_or_else(|| format!("Unknown backend `{backend_id}`"))?;
     let discovered = discover_models(&backends[idx]).await?;
-    if matches!(
-        backends[idx].kind,
-        AgentBackendKind::Ollama
-            | AgentBackendKind::OpenAiApi
-            | AgentBackendKind::CodexSubscription
-    ) && !discovered.is_empty()
-    {
-        backends[idx].manual_models.clear();
-        if !backends[idx]
-            .default_model
-            .as_deref()
-            .is_some_and(|model| discovered.iter().any(|found| found.id == model))
-        {
-            backends[idx].default_model = discovered.first().map(|model| model.id.clone());
-        }
-    }
-    backends[idx].discovered_models = discovered;
+    apply_discovered_models(&mut backends[idx], discovered);
     save_backend_configs(&db, &backends)?;
     load_backend_configs(&db)
 }
@@ -217,7 +213,17 @@ pub async fn test_agent_backend(
 ) -> Result<BackendStatus, String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let backend = find_backend(&db, Some(&backend_id))?;
-    test_backend_connectivity(&backend).await
+    let mut status = test_backend_connectivity(&backend).await?;
+    if status.ok && backend.model_discovery {
+        let mut backends = load_backend_configs(&db)?;
+        if let Some(idx) = backends.iter().position(|item| item.id == backend_id) {
+            let discovered = discover_models(&backends[idx]).await?;
+            apply_discovered_models(&mut backends[idx], discovered);
+            save_backend_configs(&db, &backends)?;
+            status.backends = Some(load_backend_configs(&db)?);
+        }
+    }
+    Ok(status)
 }
 
 #[tauri::command]
@@ -359,6 +365,26 @@ fn backend_models_contain(backend: &AgentBackendConfig, model: &str) -> bool {
         .iter()
         .chain(backend.discovered_models.iter())
         .any(|candidate| candidate.id == model)
+}
+
+fn apply_discovered_models(backend: &mut AgentBackendConfig, discovered: Vec<AgentBackendModel>) {
+    if matches!(
+        backend.kind,
+        AgentBackendKind::Ollama
+            | AgentBackendKind::OpenAiApi
+            | AgentBackendKind::CodexSubscription
+    ) && !discovered.is_empty()
+    {
+        backend.manual_models.clear();
+        if !backend
+            .default_model
+            .as_deref()
+            .is_some_and(|model| discovered.iter().any(|found| found.id == model))
+        {
+            backend.default_model = discovered.first().map(|model| model.id.clone());
+        }
+    }
+    backend.discovered_models = discovered;
 }
 
 fn load_backend_configs(db: &Database) -> Result<Vec<AgentBackendConfig>, String> {
@@ -529,29 +555,26 @@ async fn discover_models(backend: &AgentBackendConfig) -> Result<Vec<AgentBacken
 
 async fn test_backend_connectivity(backend: &AgentBackendConfig) -> Result<BackendStatus, String> {
     match backend.kind {
-        AgentBackendKind::Anthropic => Ok(BackendStatus {
-            ok: true,
-            message: "Using Claude Code's default authentication".to_string(),
-        }),
+        AgentBackendKind::Anthropic => Ok(BackendStatus::new(
+            true,
+            "Using Claude Code's default authentication",
+        )),
         AgentBackendKind::CodexSubscription => {
             let status = codex_login_status().await?;
             let models = discover_codex_models().await.unwrap_or_default();
-            Ok(BackendStatus {
-                ok: true,
-                message: format!("{status}. Found {} model(s).", models.len()),
-            })
+            Ok(BackendStatus::new(
+                true,
+                format!("{status}. Found {} model(s).", models.len()),
+            ))
         }
-        AgentBackendKind::OpenAiApi => {
-            discover_openai_api_models(backend)
-                .await
-                .map(|models| BackendStatus {
-                    ok: true,
-                    message: format!("API key works. Found {} model(s).", models.len()),
-                })
-        }
-        _ => discover_models(backend).await.map(|models| BackendStatus {
-            ok: true,
-            message: format!("Connected. Found {} model(s).", models.len()),
+        AgentBackendKind::OpenAiApi => discover_openai_api_models(backend).await.map(|models| {
+            BackendStatus::new(
+                true,
+                format!("API key works. Found {} model(s).", models.len()),
+            )
+        }),
+        _ => discover_models(backend).await.map(|models| {
+            BackendStatus::new(true, format!("Connected. Found {} model(s).", models.len()))
         }),
     }
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { MODELS, is1mContextModel, get1mFallback } from "./modelRegistry";
+import { MODELS, buildModelRegistry, is1mContextModel, get1mFallback } from "./modelRegistry";
 
 describe("modelRegistry", () => {
   it("every model has a positive integer contextWindowTokens", () => {
@@ -76,6 +76,47 @@ describe("modelRegistry", () => {
         expect(target, `${m.id} → ${fallback} not in MODELS`).toBeDefined();
         expect(target!.contextWindowTokens, `${m.id} → ${fallback} should be non-1M`).toBeLessThan(1_000_000);
       }
+    });
+  });
+
+  describe("buildModelRegistry", () => {
+    it("exposes discovered backend models and prefers them over manual fallbacks", () => {
+      const registry = buildModelRegistry(true, [
+        {
+          id: "codex-subscription",
+          label: "Codex",
+          kind: "codex_subscription",
+          enabled: true,
+          capabilities: {
+            thinking: false,
+            effort: false,
+            fast_mode: false,
+          },
+          manual_models: [
+            {
+              id: "manual-fallback",
+              label: "Manual fallback",
+              context_window_tokens: 400_000,
+            },
+          ],
+          discovered_models: [
+            {
+              id: "gpt-5.4",
+              label: "gpt-5.4",
+              context_window_tokens: 272_000,
+            },
+            {
+              id: "gpt-5.3-codex",
+              label: "gpt-5.3-codex",
+              context_window_tokens: 272_000,
+            },
+          ],
+        },
+      ]);
+
+      expect(registry.find((model) => model.providerQualifiedId === "codex-subscription/gpt-5.4")).toBeDefined();
+      expect(registry.find((model) => model.providerQualifiedId === "codex-subscription/gpt-5.3-codex")).toBeDefined();
+      expect(registry.find((model) => model.providerQualifiedId === "codex-subscription/manual-fallback")).toBeUndefined();
     });
   });
 });
