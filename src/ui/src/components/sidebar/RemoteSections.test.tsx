@@ -38,16 +38,17 @@ const remoteServices = vi.hoisted(() => ({
 
 const store = vi.hoisted(
   (): RemoteSectionsStore => ({
-  activeRemoteIds: [],
-  addActiveRemoteId: vi.fn(),
-  addRemoteConnection: vi.fn(),
-  clearRemoteData: vi.fn(),
-  discoveredServers: [],
-  mergeRemoteData: vi.fn(),
-  remoteConnections: [],
-  removeActiveRemoteId: vi.fn(),
-  removeRemoteConnection: vi.fn(),
-}));
+    activeRemoteIds: [],
+    addActiveRemoteId: vi.fn(),
+    addRemoteConnection: vi.fn(),
+    clearRemoteData: vi.fn(),
+    discoveredServers: [],
+    mergeRemoteData: vi.fn(),
+    remoteConnections: [],
+    removeActiveRemoteId: vi.fn(),
+    removeRemoteConnection: vi.fn(),
+  }),
+);
 
 vi.mock("../../services/tauri", () => remoteServices);
 
@@ -100,10 +101,15 @@ const discoveredServer = {
   is_paired: false,
 };
 
+const mountedRoots: Root[] = [];
+const mountedContainers: HTMLElement[] = [];
+
 async function renderRemoteSections(): Promise<Root> {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
+  mountedRoots.push(root);
+  mountedContainers.push(container);
   await act(async () => {
     root.render(<RemoteSections />);
   });
@@ -119,8 +125,15 @@ describe("RemoteSections", () => {
     store.remoteConnections = [];
   });
 
-  afterEach(() => {
-    document.body.innerHTML = "";
+  afterEach(async () => {
+    for (const root of mountedRoots.splice(0).reverse()) {
+      await act(async () => {
+        root.unmount();
+      });
+    }
+    for (const container of mountedContainers.splice(0)) {
+      container.remove();
+    }
   });
 
   it("hides Nearby when no unpaired servers are discovered", async () => {

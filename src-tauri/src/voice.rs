@@ -272,10 +272,6 @@ pub trait VoiceProvider: Send + Sync {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VoiceStartLatency {
-    /// True if a future prompt-safe warm path ran before this start call.
-    /// Currently false because microphone-related startup prewarming is
-    /// intentionally disabled to avoid macOS TCC prompts on launch.
-    pub was_prewarmed: bool,
     /// Milliseconds spent opening the cpal input stream.
     pub stream_open_ms: u128,
 }
@@ -288,7 +284,6 @@ pub struct VoiceProviderRegistry {
     platform_speech: Arc<dyn PlatformSpeechEngine>,
     backend_checker: Arc<dyn CandleBackendChecker>,
     transcription_timeout: Duration,
-    was_prewarmed: AtomicBool,
     active_distil_cancel: Mutex<Option<Arc<AtomicBool>>>,
 }
 
@@ -420,7 +415,6 @@ impl VoiceProviderRegistry {
             platform_speech,
             backend_checker,
             transcription_timeout,
-            was_prewarmed: AtomicBool::new(false),
             active_distil_cancel: Mutex::new(None),
         }
     }
@@ -523,19 +517,12 @@ impl VoiceProviderRegistry {
         app: Option<AppHandle>,
     ) -> Result<VoiceStartLatency, String> {
         self.ensure_known(provider_id)?;
-        // Kept in the debug latency payload so older frontend diagnostics
-        // still receive a stable shape. Voice startup prewarming is disabled
-        // because macOS can show microphone TCC prompts during audio setup.
-        let was_prewarmed = self.was_prewarmed.load(Ordering::Relaxed);
         let stream_open_ms = match provider_id {
             PLATFORM_ID => self.start_platform_recording(db_path, app).await,
             DISTIL_ID => self.start_distil_recording(db_path, app).await,
             _ => Err(format!("Unknown voice provider: {provider_id}")),
         }?;
-        Ok(VoiceStartLatency {
-            was_prewarmed,
-            stream_open_ms,
-        })
+        Ok(VoiceStartLatency { stream_open_ms })
     }
 
     pub async fn stop_and_transcribe(&self, provider_id: &str) -> Result<String, String> {
@@ -2235,11 +2222,17 @@ mod tests {
     }
 
     #[cfg(target_os = "macos")]
+    struct PrepareGate {
+        entered: std::sync::mpsc::Sender<()>,
+        release: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+    }
+
+    #[cfg(target_os = "macos")]
     struct FakePlatformSpeechEngine {
         availability: PlatformSpeechAvailability,
         prepare_availability: PlatformSpeechAvailability,
         transcript: Mutex<Result<String, String>>,
-        prepare_delay: Duration,
+        prepare_gate: Option<PrepareGate>,
         prepare_calls: AtomicUsize,
         calls: AtomicUsize,
     }
@@ -2252,7 +2245,7 @@ mod tests {
                 availability: availability.clone(),
                 prepare_availability: availability,
                 transcript: Mutex::new(Ok("platform transcript".to_string())),
-                prepare_delay: Duration::ZERO,
+                prepare_gate: None,
                 prepare_calls: AtomicUsize::new(0),
                 calls: AtomicUsize::new(0),
             }
@@ -2266,7 +2259,7 @@ mod tests {
                 availability: availability.clone(),
                 prepare_availability: availability,
                 transcript: Mutex::new(Ok("ignored".to_string())),
-                prepare_delay: Duration::ZERO,
+                prepare_gate: None,
                 prepare_calls: AtomicUsize::new(0),
                 calls: AtomicUsize::new(0),
             }
@@ -2279,14 +2272,21 @@ mod tests {
                 ),
                 prepare_availability: PlatformSpeechAvailability::ready("Apple Speech"),
                 transcript: Mutex::new(Ok("ignored".to_string())),
-                prepare_delay: Duration::ZERO,
+                prepare_gate: None,
                 prepare_calls: AtomicUsize::new(0),
                 calls: AtomicUsize::new(0),
             }
         }
 
-        fn with_prepare_delay(mut self, delay: Duration) -> Self {
-            self.prepare_delay = delay;
+        fn with_prepare_gate(
+            mut self,
+            entered: std::sync::mpsc::Sender<()>,
+            release: std::sync::mpsc::Receiver<()>,
+        ) -> Self {
+            self.prepare_gate = Some(PrepareGate {
+                entered,
+                release: Mutex::new(Some(release)),
+            });
             self
         }
     }
@@ -2299,7 +2299,12 @@ mod tests {
 
         fn prepare(&self) -> PlatformSpeechAvailability {
             self.prepare_calls.fetch_add(1, Ordering::Relaxed);
-            std::thread::sleep(self.prepare_delay);
+            if let Some(gate) = &self.prepare_gate {
+                let _ = gate.entered.send(());
+                if let Some(release) = gate.release.lock().take() {
+                    let _ = release.recv();
+                }
+            }
             self.prepare_availability.clone()
         }
 
@@ -2629,9 +2634,26 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn start_platform_recording_prepares_permission_off_runtime_thread() {
         let (_db_dir, db_path) = test_db_path();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let release_watchdog = release_tx.clone();
+        let released = Arc::new(AtomicBool::new(false));
+        let watchdog_released = Arc::clone(&released);
+        let watchdog = std::thread::spawn(move || {
+            if entered_rx.recv_timeout(Duration::from_secs(5)).is_ok() {
+                for _ in 0..50 {
+                    if watchdog_released.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                let _ = release_watchdog.send(());
+            }
+        });
+
         let platform_engine = Arc::new(
             FakePlatformSpeechEngine::needs_speech_permission_then_ready()
-                .with_prepare_delay(Duration::from_millis(200)),
+                .with_prepare_gate(entered_tx, release_rx),
         );
         let registry = Arc::new(VoiceProviderRegistry::with_platform_runtime(
             PathBuf::from("/tmp/models"),
@@ -2640,7 +2662,6 @@ mod tests {
             platform_engine,
         ));
 
-        let start = std::time::Instant::now();
         let start_registry = Arc::clone(&registry);
         let handle = tokio::spawn(async move {
             start_registry
@@ -2648,16 +2669,25 @@ mod tests {
                 .await
         });
 
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        let liveness = tokio::spawn(async {
+            tokio::task::yield_now().await;
+        });
+        tokio::time::timeout(Duration::from_secs(1), liveness)
+            .await
+            .expect("async runtime must stay live while permission prepare is pending")
+            .expect("liveness task joined");
 
         assert!(
-            start.elapsed() < Duration::from_millis(150),
-            "permission prepare must not block the async runtime thread"
+            !handle.is_finished(),
+            "recording start must still be waiting for permission prepare"
         );
+        released.store(true, Ordering::Relaxed);
+        release_tx.send(()).expect("release permission prepare");
         handle
             .await
             .expect("recording task joined")
             .expect("platform recording starts after prepare");
+        watchdog.join().expect("watchdog joined");
     }
 
     #[cfg(target_os = "macos")]

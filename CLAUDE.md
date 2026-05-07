@@ -172,7 +172,6 @@ A single sandboxed Lua runtime (`src/plugin_runtime/`) serves multiple plugin ki
 
 Do not trigger CoreAudio or Speech.framework permission prompts at app launch — macOS attributes the TCC prompt to that moment, and an unmotivated launch-time prompt looks like spyware.
 - Voice setup uses `PlatformSpeechEngine::availability()` (prompt-safe; reports `NeedsSpeechPermission` etc.) for status display, and `prepare()` (triggers the TCC prompt) only inside `start_recording_locked` — i.e. when the user actually clicks the mic. There is no startup prewarm; cpal device enumeration is also avoided at launch.
-- `VoiceStartLatency.was_prewarmed` in `voice.rs` is retained for wire-format stability but is permanently `false`.
 - mDNS discovery currently starts at app launch so the sidebar's Nearby list stays populated without extra UI. Changing that affects macOS Local Network prompt timing and should come with an intentional replacement UX.
 
 ### Windows specifics
