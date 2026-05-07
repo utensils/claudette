@@ -20,6 +20,7 @@ use crate::state::AppState;
 
 const SETTINGS_KEY: &str = "agent_backends_config";
 const SECRET_BUCKET: &str = "agentBackendSecrets";
+const BACKEND_RUNTIME_ENV_VERSION: u8 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackendStatus {
@@ -815,6 +816,7 @@ fn openai_api_url(base: &str, path: &str) -> String {
 
 fn runtime_hash(config: &AgentBackendConfig, secret: Option<&str>, model: Option<&str>) -> String {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    BACKEND_RUNTIME_ENV_VERSION.hash(&mut hasher);
     config.id.hash(&mut hasher);
     config.label.hash(&mut hasher);
     format!("{:?}", config.kind).hash(&mut hasher);
