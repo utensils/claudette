@@ -13,7 +13,7 @@ import type {
 } from "../../../types/soundpacks";
 import styles from "../Settings.module.css";
 
-const REGISTRY_BASE = "https://peonping.github.io/registry/packs/";
+const REGISTRY_BASE = "https://openpeon.com/packs/";
 
 function packRegistryUrl(name: string): string {
   return `${REGISTRY_BASE}${encodeURIComponent(name)}`;
