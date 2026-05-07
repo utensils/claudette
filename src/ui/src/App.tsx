@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { useAppStore } from "./stores/useAppStore";
@@ -11,7 +11,10 @@ import { deriveScmCiState } from "./utils/scmChecks";
 import { KEYBINDING_SETTING_PREFIX } from "./hotkeys/bindings";
 import type { WorkspaceOrderModeByRepo } from "./utils/workspaceOrdering";
 import { useMcpStatus } from "./hooks/useMcpStatus";
-import { useViewTogglePersistence } from "./hooks/useViewTogglePersistence";
+import {
+  hydratePersistedViewState,
+  useViewTogglePersistence,
+} from "./hooks/useViewTogglePersistence";
 import { AppLayout } from "./components/layout/AppLayout";
 import { findLeafByPtyId } from "./stores/terminalPaneTree";
 import type { CommandEvent } from "./types";
@@ -69,6 +72,7 @@ function App() {
   const setManualWorkspaceOrderByRepo = useAppStore(
     (s) => s.setManualWorkspaceOrderByRepo,
   );
+  const [viewStateHydrated, setViewStateHydrated] = useState(false);
 
   // Cached theme list — populated on initial load, reused by the OS handler.
   const loadedThemesRef = useRef<ThemeDefinition[]>([]);
@@ -80,14 +84,12 @@ function App() {
   // Listen for MCP supervisor status events from the Rust backend.
   useMcpStatus();
 
-  // Hydrate sidebar / panel visibility + sizes from app_settings on mount,
-  // and write back when the user toggles or resizes anything. Without this
-  // the user's preferred layout (e.g. right sidebar closed, terminal
-  // hidden, custom widths) resets to the slice defaults on every restart.
-  useViewTogglePersistence();
+  // Hydrate persisted view state after workspaces are loaded, then write back
+  // future layout, selection, tab, and terminal-view changes.
+  useViewTogglePersistence(viewStateHydrated);
 
   useEffect(() => {
-    loadInitialData().then((data) => {
+    loadInitialData().then(async (data) => {
       // Tag local data with null remote_connection_id (backend omits this field).
       setRepositories(
         data.repositories.map((r) => ({ ...r, remote_connection_id: null }))
@@ -106,6 +108,10 @@ function App() {
         msgMap[msg.workspace_id] = msg;
       }
       setLastMessages(msgMap);
+      await hydratePersistedViewState(
+        data.workspaces.map((w) => ({ ...w, remote_connection_id: null })),
+      );
+      setViewStateHydrated(true);
       // Hydrate SCM summaries from persisted cache for instant sidebar display.
       for (const row of data.scm_cache) {
         if (row.pr_json == null) continue;
