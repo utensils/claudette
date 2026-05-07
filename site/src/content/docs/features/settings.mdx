@@ -102,7 +102,7 @@ Per-repository settings are documented in [Per-Repo Settings](/claudette/feature
 
 ## Environment Variables
 
-Claudette sets the following `CLAUDETTE_*` environment variables in every subprocess it spawns — terminals, setup scripts, the agent CLI, and notification commands.
+Claudette sets the following `CLAUDETTE_*` environment variables in every subprocess it spawns — terminals, setup and archive scripts, the agent CLI, and notification commands.
 
 | Variable | Description | Example |
 |----------|-------------|---------|
@@ -113,4 +113,4 @@ Claudette sets the following `CLAUDETTE_*` environment variables in every subpro
 | `CLAUDETTE_DEFAULT_BRANCH` | Default branch name | `main` |
 | `CLAUDETTE_BRANCH_NAME` | Workspace branch name | `sean/fix-auth-bug` |
 
-These are useful in [setup scripts](/claudette/features/per-repo-settings/#setup-script), [notification commands](#notification-command), and any tools you run in the [integrated terminal](/claudette/features/integrated-terminal/).
+These are useful in [setup scripts](/claudette/features/per-repo-settings/#setup-script), [archive scripts](/claudette/features/per-repo-settings/#archive-script), [notification commands](#notification-command), and any tools you run in the [integrated terminal](/claudette/features/integrated-terminal/).

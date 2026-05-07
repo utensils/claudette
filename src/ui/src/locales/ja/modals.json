@@ -61,6 +61,14 @@
   "setup_script_running": "実行中...",
   "setup_script_confirm": "スクリプトを実行",
 
+  "archive_script_title": "アーカイブスクリプトを確認",
+  "archive_script_warning": "このワークスペースには、worktree が削除される前に <strong>{{source}}</strong> から実行されるアーカイブスクリプトがあります。続行する前に内容を確認してください。",
+  "archive_script_label": "スクリプト",
+  "archive_script_always_run": "このリポジトリでは常にアーカイブスクリプトを実行する",
+  "archive_script_skip": "実行せずにアーカイブ",
+  "archive_script_running": "実行中...",
+  "archive_script_confirm": "実行してアーカイブ",
+
   "import_worktrees_title": "ワークツリーをインポート",
   "import_worktrees_scanning": "既存のワークツリーをスキャン中...",
   "import_worktrees_none_found": "このリポジトリの既存のワークツリーは見つかりませんでした。",

@@ -22,6 +22,11 @@ pub struct Repository {
     pub branch_rename_preferences: Option<String>,
     /// When true, setup scripts run automatically without a confirmation modal.
     pub setup_script_auto_run: bool,
+    /// Per-user archive script configured in the Settings UI. Runs before the worktree
+    /// is removed when archiving. None means no script.
+    pub archive_script: Option<String>,
+    /// When true, archive scripts run automatically without a confirmation modal.
+    pub archive_script_auto_run: bool,
     /// Explicit remote-tracking branch to use as the base for new workspaces
     /// (e.g. "origin/main"). None means auto-detect via git.
     pub base_branch: Option<String>,

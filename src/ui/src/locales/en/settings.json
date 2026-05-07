@@ -364,6 +364,14 @@
   "repo_personal_instructions_overridden": "Personal instructions (overridden):",
   "repo_autorun_label": "Skip confirmation when running setup scripts",
 
+  "repo_archive_script": "Archive script",
+  "repo_archive_script_placeholder": "e.g. git stash && rm -rf node_modules",
+  "repo_archive_script_hint": "Runs automatically when a workspace is archived. The workspace filesystem is still accessible.",
+  "repo_archive_script_override_notice": "A .claudette.json in this repo defines an archive script. Repo-level scripts take precedence over your personal archive script.",
+  "repo_personal_archive_script": "Personal archive script:",
+  "repo_personal_archive_script_overridden": "Personal archive script (overridden):",
+  "repo_archive_autorun_label": "Skip confirmation when running archive scripts",
+
   "pinned_prompts_title": "Pinned Prompts",
   "pinned_prompts_global_description": "Quick-access prompts that appear as pills on the chat composer. Pinned prompts can be slash commands (with or without arguments) or any prompt text. Repository-specific prompts override globals with the same name.",
   "pinned_prompts_repo_label": "Pinned prompts",

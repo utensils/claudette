@@ -1056,6 +1056,10 @@ async fn handle_archive_workspace(
         .and_then(|v| v.as_str())
         .ok_or("missing workspace_id")?;
     let delete_branch_override = params.get("delete_branch").and_then(|v| v.as_bool());
+    let skip_archive_script = params
+        .get("skip_archive_script")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let state = app_state(app)?;
     let supervisor = app
@@ -1065,6 +1069,7 @@ async fn handle_archive_workspace(
     let out = crate::commands::workspace::archive_workspace_inner(
         workspace_id,
         delete_branch_override,
+        skip_archive_script,
         app,
         &state,
         supervisor.inner(),
@@ -1077,6 +1082,7 @@ async fn handle_archive_workspace(
         "worktree_path": out.worktree_path,
         "repository_id": out.repository_id,
         "delete_branch": out.delete_branch,
+        "archive_result": out.archive_result,
     }))
 }
 
@@ -1255,6 +1261,8 @@ mod tests {
             sort_order: 0,
             branch_rename_preferences: None,
             setup_script_auto_run: false,
+            archive_script: None,
+            archive_script_auto_run: false,
             base_branch: None,
             default_remote: None,
             path_valid: true,

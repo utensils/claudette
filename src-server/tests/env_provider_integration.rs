@@ -66,6 +66,8 @@ fn make_repo(path: &str) -> Repository {
         sort_order: 0,
         branch_rename_preferences: None,
         setup_script_auto_run: false,
+        archive_script: None,
+        archive_script_auto_run: false,
         base_branch: None,
         default_remote: None,
         path_valid: true,

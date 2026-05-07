@@ -19,6 +19,8 @@ pub struct ClaudetteConfig {
 pub struct Scripts {
     #[serde(default)]
     pub setup: Option<String>,
+    #[serde(default)]
+    pub archive: Option<String>,
 }
 
 /// Load and parse `.claudette.json` from the given directory.
@@ -58,6 +60,22 @@ mod tests {
         assert_eq!(
             config.scripts.unwrap().setup.unwrap(),
             "mise trust && mise install"
+        );
+    }
+
+    #[test]
+    fn test_valid_config_with_archive() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join(CONFIG_FILE_NAME),
+            r#"{"scripts": {"archive": "git stash && rm -rf node_modules"}}"#,
+        )
+        .unwrap();
+
+        let config = load_config(dir.path()).unwrap().unwrap();
+        assert_eq!(
+            config.scripts.unwrap().archive.unwrap(),
+            "git stash && rm -rf node_modules"
         );
     }
 

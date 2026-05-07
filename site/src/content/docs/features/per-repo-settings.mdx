@@ -1,9 +1,9 @@
 ---
 title: Per-Repo Settings
-description: Custom instructions, setup scripts, and branch preferences for each repository.
+description: Custom instructions, setup and archive scripts, and branch preferences for each repository.
 ---
 
-Claudette lets you configure settings per-repository — instructions for the agent, scripts that run on workspace creation, and branch naming preferences.
+Claudette lets you configure settings per-repository — instructions for the agent, scripts that run on workspace creation and archive, and branch naming preferences.
 
 ## Accessing Repo Settings
 
@@ -28,6 +28,31 @@ mix deps.get && mix ecto.setup
 
 The script runs in the workspace's worktree directory using your default shell. [Workspace environment variables](/claudette/features/settings/#environment-variables) like `$CLAUDETTE_WORKSPACE_NAME` and `$CLAUDETTE_ROOT_PATH` are available in setup scripts.
 
+By default, Claudette shows a confirmation modal with the script contents before running it. Tick **Skip confirmation when running setup scripts** in the repo settings (or **Always run setup scripts for this repo** in the modal) to opt into auto-run for that repository.
+
+## Archive Script
+
+A shell command that runs when a workspace is archived, **before** the worktree is removed. Use this to push final commits, tear down services, or stash uncommitted work.
+
+**Examples:**
+
+```bash
+# Push any unpushed commits to the remote
+git push --all && git push --tags
+
+# Stash uncommitted changes so they aren't lost
+git stash push -u -m "claudette archive"
+
+# Tear down a docker-compose stack started by setup
+docker compose down
+```
+
+The script runs in the workspace's worktree directory and has access to the same workspace environment variables as setup scripts. The worktree is still on disk while the script runs, so any commands that need to read workspace files will work as expected.
+
+By default, Claudette prompts before archiving when an archive script is configured — the modal shows the script contents and lets you choose **Run & Archive** or **Archive without running**. Tick **Skip confirmation when running archive scripts** in repo settings (or **Always run archive scripts for this repo** in the modal) to skip the prompt for that repository.
+
+If the archive script fails or times out, Claudette continues with the archive — a system message in the workspace's last chat session records the script output and exit status, so you can inspect what happened.
+
 ## Custom Instructions
 
 Text that is appended to the agent's system prompt at the start of every chat in this repository. Use this to give the agent context about your project:
@@ -48,7 +73,8 @@ You can also configure these settings via a `.claudette.json` file in your repos
 ```json
 {
   "scripts": {
-    "setup": "bun install"
+    "setup": "bun install",
+    "archive": "git push --all && git push --tags"
   },
   "instructions": "This is a Next.js 15 app using the App Router. Use TypeScript strict mode."
 }
@@ -59,6 +85,7 @@ You can also configure these settings via a `.claudette.json` file in your repos
 | Field | Type | Description |
 |-------|------|-------------|
 | `scripts.setup` | string | Shell command to run on workspace creation |
+| `scripts.archive` | string | Shell command to run before a workspace is archived |
 | `instructions` | string | Custom instructions for the agent |
 
 :::note

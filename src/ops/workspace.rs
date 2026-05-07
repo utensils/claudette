@@ -33,10 +33,12 @@ use crate::workspace_alloc::{allocate_workspace_name, is_valid_workspace_name};
 use super::{NotificationEvent, OpsError, OpsHooks, WorkspaceChangeKind};
 
 const CREATE_WORKTREE_ALLOCATION_ATTEMPTS: usize = 5;
-/// Hard cap on setup script wall-clock time. Five minutes is enough for
-/// `bun install` / `cargo build` first-runs but short enough that a stuck
-/// script doesn't wedge workspace creation indefinitely.
-const SETUP_SCRIPT_TIMEOUT: Duration = Duration::from_secs(300);
+/// Hard cap on setup and archive script wall-clock time. Five minutes is
+/// enough for `bun install` / `cargo build` first-runs but short enough
+/// that a stuck script doesn't wedge workspace creation or archival
+/// indefinitely. Shared between setup and archive so the two budgets can't
+/// silently diverge.
+const SCRIPT_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Outcome of running a workspace's setup script. Both fields the GUI
 /// surfaces in its post-create system message and the WS-server clients
@@ -313,7 +315,7 @@ pub async fn resolve_and_run_setup(
         buf
     });
 
-    match tokio::time::timeout(SETUP_SCRIPT_TIMEOUT, child.wait()).await {
+    match tokio::time::timeout(SCRIPT_TIMEOUT, child.wait()).await {
         Ok(Ok(status)) => {
             let stdout_buf = stdout_task.await.unwrap_or_default();
             let stderr_buf = stderr_task.await.unwrap_or_default();
@@ -360,14 +362,175 @@ pub async fn resolve_and_run_setup(
             let _ = stdout_task.await;
             let _ = stderr_task.await;
             // Format the deadline from the actual constant so changing
-            // SETUP_SCRIPT_TIMEOUT updates the user-visible diagnostic
+            // SCRIPT_TIMEOUT updates the user-visible diagnostic
             // automatically. Whole-second precision is plenty here.
             Some(SetupResult {
                 source: source.to_string(),
                 script,
                 output: format!(
                     "Setup script timed out after {} seconds",
-                    SETUP_SCRIPT_TIMEOUT.as_secs()
+                    SCRIPT_TIMEOUT.as_secs()
+                ),
+                exit_code: None,
+                success: false,
+                timed_out: true,
+            })
+        }
+    }
+}
+
+/// Resolve the archive script (preferring `.claudette.json`, falling back to
+/// the per-repo settings script) and execute it before the worktree is
+/// removed. Returns `None` when no script is configured.
+pub async fn resolve_and_run_archive(
+    ws: &Workspace,
+    repo_path: &Path,
+    worktree_path: &Path,
+    settings_script: Option<&str>,
+    base_branch: Option<&str>,
+    default_remote: Option<&str>,
+    resolved_env: Option<&ResolvedEnv>,
+) -> Option<SetupResult> {
+    let (script, source) = match config::load_config(repo_path) {
+        Ok(Some(cfg)) => {
+            if let Some(archive) = cfg.scripts.and_then(|s| s.archive) {
+                (archive, "repo")
+            } else if let Some(fallback) = settings_script {
+                (fallback.to_string(), "settings")
+            } else {
+                return None;
+            }
+        }
+        Ok(None) => {
+            if let Some(fallback) = settings_script {
+                (fallback.to_string(), "settings")
+            } else {
+                return None;
+            }
+        }
+        Err(parse_err) => {
+            eprintln!("[archive] {parse_err}");
+            if let Some(fallback) = settings_script {
+                (fallback.to_string(), "settings")
+            } else {
+                return Some(SetupResult {
+                    source: "repo".to_string(),
+                    script: String::new(),
+                    output: parse_err,
+                    exit_code: None,
+                    success: false,
+                    timed_out: false,
+                });
+            }
+        }
+    };
+
+    let repo_path_str = repo_path.to_string_lossy();
+    let default_branch = match base_branch {
+        Some(b) => b.to_string(),
+        None => git::default_branch(&repo_path_str, default_remote)
+            .await
+            .unwrap_or_else(|_| "main".to_string()),
+    };
+    let ws_env = WorkspaceEnv::from_workspace(ws, &repo_path_str, default_branch);
+
+    let mut cmd = TokioCommand::new("sh");
+    cmd.no_console_window();
+    cmd.arg("-c")
+        .arg(&script)
+        .current_dir(worktree_path)
+        .env("PATH", enriched_path())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    #[cfg(unix)]
+    cmd.process_group(0);
+    if let Some(env) = resolved_env {
+        env.apply(&mut cmd);
+    }
+    ws_env.apply(&mut cmd);
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            return Some(SetupResult {
+                source: source.to_string(),
+                script,
+                output: format!("Failed to spawn script: {e}"),
+                exit_code: None,
+                success: false,
+                timed_out: false,
+            });
+        }
+    };
+
+    #[cfg(unix)]
+    let pid = child.id();
+
+    let stdout_handle = child.stdout.take();
+    let stderr_handle = child.stderr.take();
+
+    let stdout_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        if let Some(mut out) = stdout_handle {
+            let _ = tokio::io::AsyncReadExt::read_to_end(&mut out, &mut buf).await;
+        }
+        buf
+    });
+    let stderr_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        if let Some(mut err) = stderr_handle {
+            let _ = tokio::io::AsyncReadExt::read_to_end(&mut err, &mut buf).await;
+        }
+        buf
+    });
+
+    match tokio::time::timeout(SCRIPT_TIMEOUT, child.wait()).await {
+        Ok(Ok(status)) => {
+            let stdout_buf = stdout_task.await.unwrap_or_default();
+            let stderr_buf = stderr_task.await.unwrap_or_default();
+            let stdout = String::from_utf8_lossy(&stdout_buf);
+            let stderr = String::from_utf8_lossy(&stderr_buf);
+            let combined = if stderr.is_empty() {
+                stdout.to_string()
+            } else if stdout.is_empty() {
+                stderr.to_string()
+            } else {
+                format!("{stdout}\n{stderr}")
+            };
+            let code = status.code();
+            Some(SetupResult {
+                source: source.to_string(),
+                script,
+                output: combined,
+                exit_code: code,
+                success: code == Some(0),
+                timed_out: false,
+            })
+        }
+        Ok(Err(e)) => Some(SetupResult {
+            source: source.to_string(),
+            script,
+            output: format!("Script execution error: {e}"),
+            exit_code: None,
+            success: false,
+            timed_out: false,
+        }),
+        Err(_) => {
+            #[cfg(unix)]
+            if let Some(pgid) = pid {
+                unsafe {
+                    libc::kill(-(pgid as i32), libc::SIGKILL);
+                }
+            }
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            let _ = stdout_task.await;
+            let _ = stderr_task.await;
+            Some(SetupResult {
+                source: source.to_string(),
+                script,
+                output: format!(
+                    "Archive script timed out after {} seconds",
+                    SCRIPT_TIMEOUT.as_secs()
                 ),
                 exit_code: None,
                 success: false,
@@ -618,6 +781,8 @@ mod tests {
             sort_order: 0,
             branch_rename_preferences: None,
             setup_script_auto_run: false,
+            archive_script: None,
+            archive_script_auto_run: false,
             base_branch: None,
             default_remote: None,
             path_valid: true,

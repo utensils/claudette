@@ -189,4 +189,14 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("20260506220711_workspace_manual_order_modes.sql"),
         legacy_version: None,
     },
+    Migration {
+        id: "20260506230000_archive_script_column",
+        sql: include_str!("20260506230000_archive_script_column.sql"),
+        legacy_version: None,
+    },
+    Migration {
+        id: "20260506230001_archive_script_auto_run_column",
+        sql: include_str!("20260506230001_archive_script_auto_run_column.sql"),
+        legacy_version: None,
+    },
 ];

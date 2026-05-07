@@ -7,6 +7,7 @@ import { RelinkRepoModal } from "./RelinkRepoModal";
 import { RollbackModal } from "./RollbackModal";
 import { ShareModal } from "./ShareModal";
 import { ConfirmSetupScriptModal } from "./ConfirmSetupScriptModal";
+import { ConfirmArchiveScriptModal } from "./ConfirmArchiveScriptModal";
 import { McpSelectionModal } from "./McpSelectionModal";
 import { ImportWorktreesModal } from "./ImportWorktreesModal";
 import { ConfirmNightlyChannelModal } from "./ConfirmNightlyChannelModal";
@@ -33,6 +34,8 @@ export function ModalRouter() {
       return <ShareModal />;
     case "confirmSetupScript":
       return <ConfirmSetupScriptModal />;
+    case "confirmArchiveScript":
+      return <ConfirmArchiveScriptModal />;
     case "mcpSelection":
       return <McpSelectionModal />;
     case "importWorktrees":
