@@ -177,16 +177,21 @@ export function useAgentStream() {
               typeof streamEvent.command_line === "string"
             ) {
               const line = streamEvent.command_line;
-              // Update local state immediately so the banner renders without
-              // waiting for a session refetch.
-              useAppStore
-                .getState()
-                .updateChatSession(sessionId, { cli_invocation: line });
-              // Persist (idempotent on the DB side: first-emit-wins).
-              void setSessionCliInvocation(sessionId, line).catch((e) => {
-                // Banner is UX-cosmetic — log and move on.
-                console.warn("[stream] persist cli_invocation failed:", e);
-              });
+              const store = useAppStore.getState();
+              // Mirror the backend's first-emit-wins semantics: never
+              // overwrite a captured invocation with a later respawn's
+              // argv, so the live banner stays in sync with what reload
+              // would show.
+              const current = store.sessionsByWorkspace[wsId]?.find(
+                (cs) => cs.id === sessionId,
+              )?.cli_invocation ?? null;
+              if (current === null || current === "") {
+                store.updateChatSession(sessionId, { cli_invocation: line });
+                void setSessionCliInvocation(sessionId, line).catch((e) => {
+                  // Banner is UX-cosmetic — log and move on.
+                  console.warn("[stream] persist cli_invocation failed:", e);
+                });
+              }
               break;
             }
             if (
