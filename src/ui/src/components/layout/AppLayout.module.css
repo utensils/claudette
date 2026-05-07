@@ -14,6 +14,14 @@
   --terminal-h: 300px;
 }
 
+.main[data-resizing="true"] .sidebar,
+.main[data-resizing="true"] .sidebarContent,
+.main[data-resizing="true"] .terminal,
+.main[data-resizing="true"] .rightSidebar,
+.main[data-resizing="true"] .rightSidebarContent {
+  transition: none;
+}
+
 /* Shared wrapper for settings and workspace view panels. */
 .viewPanel {
   display: flex;

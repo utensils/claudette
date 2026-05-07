@@ -21,6 +21,7 @@ mod usage;
 #[cfg(feature = "voice")]
 mod voice;
 mod webview2_check;
+mod window_state;
 
 use std::path::PathBuf;
 
@@ -438,6 +439,11 @@ fn main() {
                 app.set_menu(menu)?;
             }
 
+            // Restore the main window before showing it. The window starts
+            // hidden in tauri.conf.json so users never see the default
+            // 1200x800/maximized placement flash before saved bounds apply.
+            window_state::restore_main_window(app);
+
             // Set the notification app identity before any notifications are sent.
             // mac-notification-sys uses Once — first call wins. We call early so
             // both our direct calls and the tauri-plugin-notification share the
@@ -528,30 +534,37 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                // On macOS, Cmd+W always hides (standard behavior).
-                #[cfg(target_os = "macos")]
-                {
-                    api.prevent_close();
-                    let _ = window.hide();
+            match event {
+                tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_) => {
+                    window_state::schedule_main_window_save(window.clone());
                 }
-                // On Linux, hide to tray only when agents are running;
-                // otherwise let the close proceed normally (quits the app).
-                #[cfg(not(target_os = "macos"))]
-                {
-                    let state = window.app_handle().state::<state::AppState>();
-                    let has_tray = state.tray_handle.lock().is_ok_and(|g| g.is_some());
-                    // Fail closed: if the lock is contended, assume agents
-                    // are running so we don't accidentally quit mid-task.
-                    let running = state
-                        .agents
-                        .try_read()
-                        .map_or(true, |a| tray::has_running_agents(&a));
-                    if has_tray && running {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    window_state::save_main_window_now(window);
+                    // On macOS, Cmd+W always hides (standard behavior).
+                    #[cfg(target_os = "macos")]
+                    {
                         api.prevent_close();
                         let _ = window.hide();
                     }
+                    // On Linux, hide to tray only when agents are running;
+                    // otherwise let the close proceed normally (quits the app).
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        let state = window.app_handle().state::<state::AppState>();
+                        let has_tray = state.tray_handle.lock().is_ok_and(|g| g.is_some());
+                        // Fail closed: if the lock is contended, assume agents
+                        // are running so we don't accidentally quit mid-task.
+                        let running = state
+                            .agents
+                            .try_read()
+                            .map_or(true, |a| tray::has_running_agents(&a));
+                        if has_tray && running {
+                            api.prevent_close();
+                            let _ = window.hide();
+                        }
+                    }
                 }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![

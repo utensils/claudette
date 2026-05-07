@@ -607,6 +607,12 @@
                 help = "Run all Rust tests";
                 category = "quality";
               }
+              {
+                name = "window-restore-matrix";
+                command = ''exec "$PRJ_ROOT/scripts/window-restore-matrix.sh" "$@"'';
+                help = "macOS: move/resize Claudette across every monitor and verify window restore after restart";
+                category = "quality";
+              }
               # Windows cross-build + deploy + AWS ephemeral-host helpers.
               # All bodies live in ./scripts/ — the devshell commands are
               # thin wrappers so flake.nix doesn't carry hundreds of lines

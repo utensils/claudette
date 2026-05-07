@@ -3,10 +3,10 @@ import type { ChatSession, DiffFileTab, DiffLayer } from "../../types";
 // A unified entry in the workspace tab strip. SessionTabs renders sessions,
 // diffs, and files as one ordered list; the user can drag any of them to
 // any position. Persistence is asymmetric: chat sessions persist via
-// `chat_sessions.sort_order`, while file/diff openness is volatile (per the
-// 3A "volatile" decision). After a drop we need to (a) split the new
-// unified order back into per-kind arrays and (b) compute which session
-// `sort_order` values to write to the DB.
+// `chat_sessions.sort_order`, while file/diff tab identities and visual order
+// persist in view state and lazily reload after restart. After a drop we need
+// to (a) split the new unified order back into per-kind arrays and (b) compute
+// which session `sort_order` values to write to the DB.
 export type UnifiedTabEntry =
   | { kind: "session"; sessionId: string }
   | { kind: "diff"; path: string; layer: DiffLayer | null }
@@ -70,16 +70,15 @@ export function splitUnifiedTabOrder(
  * Compute the chat-session id sequence to persist via
  * `reorder_chat_sessions`. This is the meaningful business decision left to
  * the human: how should session sort_order relate to a unified strip that
- * includes non-persistent file/diff tabs?
+ * includes file/diff tabs whose identities are restored from view state?
  *
  * Three reasonable interpretations:
  *
  * (1) Dense-among-sessions: session sort_orders are 0..N-1 in the order
  *     sessions appear in the unified strip, ignoring intervening files/
- *     diffs. On reload (no files/diffs open) sessions appear in exactly
- *     the relative order the user dragged them into. This is the most
- *     "WYSIWYG-on-reload" option and matches how IDEs treat pinned vs.
- *     unpinned tabs as separate persisted lists.
+ *     diffs. On reload, sessions appear in exactly the relative order the user
+ *     dragged them into, and restored file/diff tabs keep their separate view
+ *     state order.
  *
  * (2) Unified-index-anchored: each session's sort_order is its position
  *     in the full unified array (with gaps where files/diffs were). On
@@ -96,8 +95,8 @@ export function splitUnifiedTabOrder(
  *
  * Default: option (1) "dense-among-sessions". Walk the unified order, pick
  * out session entries in the order they appear, and write that sequence to
- * `chat_sessions.sort_order`. On reload (no files/diffs persisted) sessions
- * appear in exactly the relative order the user dragged them into.
+ * `chat_sessions.sort_order`. The full unified order is persisted separately
+ * in view state.
  *
  * Swap to (3) "frozen" by returning [] here and only writing when a real
  * session-vs-session move was committed; SessionTabs already skips the

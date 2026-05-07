@@ -15,7 +15,8 @@
         "width": 1200,
         "height": 800,
         "center": true,
-        "maximized": true,
+        "maximized": false,
+        "visible": false,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
         "dragDropEnabled": true
