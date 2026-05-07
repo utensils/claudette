@@ -453,6 +453,14 @@ fn normalize_backend(mut backend: AgentBackendConfig) -> AgentBackendConfig {
     if backend.context_window_default == 0 {
         backend.context_window_default = 64_000;
     }
+    if matches!(
+        backend.kind,
+        AgentBackendKind::Ollama
+            | AgentBackendKind::OpenAiApi
+            | AgentBackendKind::CodexSubscription
+    ) {
+        backend.model_discovery = true;
+    }
     for model in backend
         .manual_models
         .iter_mut()

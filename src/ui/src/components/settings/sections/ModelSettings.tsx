@@ -366,6 +366,7 @@ function BackendCard({
   const manualModels = dedupeBackendModels(draft.manual_models);
   const modelOptions = dedupeBackendModels([...discoveredModels, ...manualModels]);
   const manualModelText = manualModels.map((m) => m.id).join(", ");
+  const discoveryBackend = isDiscoveryBackend(draft);
   const showBaseUrl = draft.kind !== "codex_subscription";
   const showSecret = draft.kind !== "codex_subscription";
   const showManualModels = draft.kind === "custom_anthropic" || draft.kind === "custom_openai";
@@ -434,7 +435,7 @@ function BackendCard({
       let refreshed: AgentBackendConfig | undefined;
       if (result.backends) {
         refreshed = applySavedBackends(result.backends);
-      } else if (result.ok && draft.model_discovery) {
+      } else if (result.ok && discoveryBackend) {
         const saved = await refreshAgentBackendModels(draft.id);
         refreshed = applySavedBackends(saved);
       }
@@ -486,7 +487,7 @@ function BackendCard({
           )}
           <label className={styles.backendField}>
             <span className={styles.backendFieldLabel}>{t("models_backend_default_model")}</span>
-            {draft.model_discovery || modelOptions.length > 0 ? (
+            {discoveryBackend || modelOptions.length > 0 ? (
               <select
                 className={styles.select}
                 value={selectedDefaultModel}
@@ -510,7 +511,7 @@ function BackendCard({
           </label>
         </div>
         <div className={styles.backendForm}>
-          {draft.model_discovery && (
+          {discoveryBackend && (
             <label className={styles.backendField}>
               <span className={styles.backendFieldLabel}>{t("models_backend_discovered_models")}</span>
               <div className={styles.modelChipList}>
@@ -563,7 +564,7 @@ function BackendCard({
           </button>
           <button className={styles.iconBtn} onClick={save} disabled={busy}>{t("models_backend_save")}</button>
           <button className={styles.iconBtn} onClick={test} disabled={busy}>{t("models_backend_test")}</button>
-          {draft.model_discovery && (
+          {discoveryBackend && (
             <button className={styles.iconBtn} onClick={refresh} disabled={busy}>{t("models_backend_refresh")}</button>
           )}
           {draft.kind === "codex_subscription" && (
@@ -593,4 +594,13 @@ function countBackendModels(backend: AgentBackendConfig) {
 function parseModelCount(message: string) {
   const match = message.match(/Found\s+(\d+)\s+model/i);
   return match ? Number(match[1]) : null;
+}
+
+function isDiscoveryBackend(backend: AgentBackendConfig) {
+  return (
+    backend.model_discovery ||
+    backend.kind === "ollama" ||
+    backend.kind === "openai_api" ||
+    backend.kind === "codex_subscription"
+  );
 }
