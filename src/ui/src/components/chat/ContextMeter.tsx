@@ -1,7 +1,7 @@
 import { useAppStore } from "../../stores/useAppStore";
-import { MODELS } from "./modelRegistry";
 import { formatTokens } from "./formatTokens";
 import { buildMeterTooltip, computeMeterState, type Band } from "./contextMeterLogic";
+import { useSelectedModelEntry } from "./useSelectedModelEntry";
 import styles from "./ContextMeter.module.css";
 
 interface ContextMeterProps {
@@ -34,9 +34,8 @@ function fillClassForBand(band: Band): string {
  */
 export function ContextMeter({ sessionId }: ContextMeterProps) {
   const usage = useAppStore((s) => s.latestTurnUsage[sessionId]);
-  const selectedModel = useAppStore((s) => s.selectedModel[sessionId]);
 
-  const model = MODELS.find((m) => m.id === selectedModel);
+  const model = useSelectedModelEntry(sessionId);
   const state = computeMeterState(usage, model?.contextWindowTokens);
   if (!state) return null;
 

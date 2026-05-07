@@ -567,13 +567,24 @@ fn schedule_background_task_wake(
             if let AgentEvent::Stream(StreamEvent::Result {
                 total_cost_usd,
                 duration_ms,
+                usage,
                 ..
             }) = &event
                 && let Ok(db) = Database::open(&db_path)
-                && let (Some(cost), Some(dur)) = (total_cost_usd, duration_ms)
                 && let Some(ref msg_id) = last_assistant_msg_id
             {
-                let _ = db.update_chat_message_cost(msg_id, *cost, *dur);
+                if let Some(usage) = usage {
+                    let _ = db.update_chat_message_usage_if_missing(
+                        msg_id,
+                        usage.input_tokens,
+                        usage.output_tokens,
+                        usage.cache_read_input_tokens,
+                        usage.cache_creation_input_tokens,
+                    );
+                }
+                if let (Some(cost), Some(dur)) = (total_cost_usd, duration_ms) {
+                    let _ = db.update_chat_message_cost(msg_id, *cost, *dur);
+                }
             }
 
             let is_done = matches!(
@@ -2654,14 +2665,25 @@ pub async fn send_chat_message(
             if let AgentEvent::Stream(StreamEvent::Result {
                 total_cost_usd,
                 duration_ms,
+                usage,
                 ..
             }) = &event
             {
                 if let Ok(db) = Database::open(&db_path)
-                    && let (Some(cost), Some(dur)) = (total_cost_usd, duration_ms)
                     && let Some(ref msg_id) = last_assistant_msg_id
                 {
-                    let _ = db.update_chat_message_cost(msg_id, *cost, *dur);
+                    if let Some(usage) = usage {
+                        let _ = db.update_chat_message_usage_if_missing(
+                            msg_id,
+                            usage.input_tokens,
+                            usage.output_tokens,
+                            usage.cache_read_input_tokens,
+                            usage.cache_creation_input_tokens,
+                        );
+                    }
+                    if let (Some(cost), Some(dur)) = (total_cost_usd, duration_ms) {
+                        let _ = db.update_chat_message_cost(msg_id, *cost, *dur);
+                    }
                 }
 
                 let anchor_msg_id = last_assistant_msg_id.as_deref().unwrap_or(&user_msg_id);

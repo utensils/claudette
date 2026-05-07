@@ -116,3 +116,24 @@ export function resolveModelSelection(
       model.providerQualifiedId?.toLowerCase() === normalized,
   );
 }
+
+export function findModelInRegistry(
+  registry: readonly Model[],
+  modelId: string | undefined,
+  providerId = "anthropic",
+): Model | undefined {
+  if (!modelId) return undefined;
+  const normalizedProvider = providerId || "anthropic";
+  return (
+    registry.find(
+      (model) =>
+        model.id === modelId &&
+        (model.providerId ?? "anthropic") === normalizedProvider,
+    ) ??
+    registry.find(
+      (model) => model.providerQualifiedId === `${normalizedProvider}/${modelId}`,
+    ) ??
+    registry.find((model) => model.id === modelId && !model.providerId) ??
+    registry.find((model) => model.id === modelId)
+  );
+}

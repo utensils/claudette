@@ -3,12 +3,13 @@ import { useTranslation } from "react-i18next";
 import { CircleDollarSign, Sparkles, Zap, Brain, BookOpen, Gauge, Eye, EyeOff, Globe } from "lucide-react";
 import { useAppStore } from "../../stores/useAppStore";
 import { resetAgentSession, setAppSetting, getAppSetting } from "../../services/tauri";
-import { ModelSelector, MODELS } from "./ModelSelector";
+import { ModelSelector } from "./ModelSelector";
 import { EffortSelector, EFFORT_LEVELS } from "./EffortSelector";
 import { isFastSupported, isEffortSupported, isXhighEffortAllowed, isMaxEffortAllowed } from "./modelCapabilities";
 import { applySelectedModel } from "./applySelectedModel";
 import { applyPlanModeMountDefault } from "./applyPlanModeMountDefault";
 import { ContextMeter } from "./ContextMeter";
+import { useSelectedModelEntry } from "./useSelectedModelEntry";
 import styles from "./ChatToolbar.module.css";
 
 interface ChatToolbarProps {
@@ -157,8 +158,10 @@ export function ChatToolbar({ sessionId, disabled }: ChatToolbarProps) {
     return () => window.removeEventListener("keydown", handleKey);
   }, [disabled, toggleThinking]);
 
-  const currentModel = MODELS.find((m) => m.id === selectedModel);
-  const modelLabel = currentModel?.label ?? selectedModel;
+  const currentModel = useSelectedModelEntry(sessionId);
+  const modelLabel = currentModel?.providerLabel
+    ? `${currentModel.providerLabel} / ${currentModel.label}`
+    : currentModel?.label ?? selectedModel;
   const isExtraUsage = currentModel?.extraUsage ?? false;
   const effortLabel =
     EFFORT_LEVELS.find((l) => l.id === effortLevel)?.label ?? effortLevel;
