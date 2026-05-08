@@ -62,11 +62,13 @@ fn sanitize_claude_project_path(path: &str) -> String {
     for b in path.bytes() {
         hash = hash.wrapping_mul(33).wrapping_add(u64::from(b));
     }
-    format!(
-        "{}-{:x}",
-        &sanitized[..CLAUDE_PROJECT_PATH_MAX],
-        hash & 0x7fff_ffff
-    )
+    // The masked hash is 31 bits, formatted as up to 8 lowercase hex digits;
+    // with the joining `-` that's a 9-char suffix. Reserve room so the final
+    // string honors the documented cap (otherwise long paths produce up to
+    // CLAUDE_PROJECT_PATH_MAX + 9 chars and the constant becomes a lie).
+    const SUFFIX_RESERVED: usize = 9;
+    let prefix_max = CLAUDE_PROJECT_PATH_MAX.saturating_sub(SUFFIX_RESERVED);
+    format!("{}-{:x}", &sanitized[..prefix_max], hash & 0x7fff_ffff)
 }
 
 fn claude_config_home_dir() -> Result<PathBuf, String> {
@@ -358,6 +360,27 @@ mod tests {
             sanitize_claude_project_path("/Users/james/claudette-workspaces/repo-name"),
             "-Users-james-claudette-workspaces-repo-name"
         );
+    }
+
+    #[test]
+    fn test_sanitize_claude_project_path_honors_max_with_hash_suffix() {
+        // Long path that triggers the hash branch — output must include the
+        // hash AND stay within CLAUDE_PROJECT_PATH_MAX (200). Before the
+        // SUFFIX_RESERVED fix the result was up to 209 chars.
+        let long_path = format!("/Users/{}", "a".repeat(300));
+        let sanitized = sanitize_claude_project_path(&long_path);
+        assert!(
+            sanitized.len() <= CLAUDE_PROJECT_PATH_MAX,
+            "expected sanitized len {} <= {}",
+            sanitized.len(),
+            CLAUDE_PROJECT_PATH_MAX,
+        );
+        // Hash suffix is `-` + up to 8 hex chars; verify the format actually
+        // appended one (otherwise a regression that drops the suffix would
+        // pass the length assertion above by accident).
+        let last_dash = sanitized.rfind('-').unwrap();
+        let suffix = &sanitized[last_dash + 1..];
+        assert!(!suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
     #[test]

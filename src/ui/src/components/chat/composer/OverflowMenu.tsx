@@ -303,6 +303,7 @@ function RemoteControlMenuItem({
             }}
             disabled={!url}
             title="Open Remote Control"
+            aria-label="Open Remote Control"
           >
             <ExternalLink size={13} />
           </button>
@@ -314,6 +315,7 @@ function RemoteControlMenuItem({
             }}
             disabled={!url}
             title="Copy Remote Control link"
+            aria-label="Copy Remote Control link"
           >
             <Copy size={13} />
           </button>
@@ -323,6 +325,7 @@ function RemoteControlMenuItem({
             onClick={toggle}
             disabled={disabled || busy}
             title="Turn off Remote Control"
+            aria-label="Turn off Remote Control"
           >
             <Power size={13} />
           </button>

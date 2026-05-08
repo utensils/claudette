@@ -204,7 +204,11 @@ impl AgentSessionState {
     }
 
     pub fn remember_local_user_message_uuid(&mut self, uuid: String) {
-        if self.local_user_message_uuids.len() > 1024 {
+        // Cap the set at 1024 entries — clear before inserting the entry that
+        // would push us past the cap so the post-insert size never exceeds it.
+        // `>` would let one extra entry slip in (cap → 1025) before the next
+        // insert noticed; `>=` keeps the post-insert max at exactly 1024.
+        if self.local_user_message_uuids.len() >= 1024 {
             self.local_user_message_uuids.clear();
         }
         self.local_user_message_uuids.insert(uuid);
