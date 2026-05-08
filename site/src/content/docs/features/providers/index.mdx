@@ -56,13 +56,13 @@ So Ollama gets thinking / tools / vision, but not the Anthropic-only knobs. Swit
 
 ## How the gateway runtime works
 
-For gateway providers, Claudette spins up an HTTP listener on `127.0.0.1:0` (random port) per provider and per model. It mints a one-time auth token, then exports three env vars into the spawned `claude` subprocess:
+For gateway providers, Claudette spins up an HTTP listener on `127.0.0.1:0` (random port) per provider and per model. It mints a random auth token for that listener, then exports three env vars into the spawned `claude` subprocess:
 
 - `ANTHROPIC_BASE_URL` — the local gateway URL.
-- `ANTHROPIC_AUTH_TOKEN` — the one-time token (rotated per launch).
+- `ANTHROPIC_AUTH_TOKEN` — the auth token. Cached for the gateway server's lifetime (keyed by backend id + runtime hash) and reused across turns; rotates only when the gateway restarts (e.g., after config or model changes).
 - `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` — tells the CLI to query the gateway for available models.
 
-The gateway translates Claude's request into the OpenAI Responses API (`POST /v1/responses` for OpenAI; `POST /codex/responses` for the Codex subscription path — note the absence of `/v1/`, since `https://chatgpt.com/backend-api` already includes it) and translates the streaming response back. It's an in-process tokio task; no external service.
+The gateway translates Claude's request into the OpenAI Responses API (`POST /v1/responses` for OpenAI; `POST /codex/responses` for the Codex subscription path — the unversioned form is intentional, since the upstream Codex Responses endpoint lives directly under `https://chatgpt.com/backend-api/codex/responses` with no `/v1/` segment) and translates the streaming response back. It's an in-process tokio task; no external service.
 
 If the provider config or model changes, the gateway restarts on the next agent turn. There's no manual lifecycle to manage.
 

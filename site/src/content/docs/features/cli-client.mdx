@@ -3,9 +3,12 @@ title: Command-Line Client
 description: Drive the running Claudette desktop app from the terminal — script workspaces, dispatch prompts, and orchestrate multi-workspace fan-outs.
 ---
 
-The `claudette` CLI talks to the running desktop app over a local socket. Every operation flows through the GUI's own command core — so tray icons, notifications, and the workspace list update live as the CLI works.
+The `claudette` CLI talks to the running desktop app over a local socket. Most operations flow through the GUI's own command core — so tray icons, notifications, and the workspace list update live as the CLI works.
 
-The desktop app must be running. If it isn't, the CLI exits with a clear "open the desktop app first" message rather than silently degrading.
+Most subcommands require the desktop app to be running. If it isn't, they exit with a clear "open the desktop app first" message rather than silently degrading. Two exceptions:
+
+- `claudette completion <shell>` is purely local — it generates a clap-driven completion script and writes it to stdout, no IPC at all.
+- `claudette version` always prints the CLI's own version, then attempts to query the GUI for its version on top — if the GUI isn't reachable it prints a "GUI not reachable" note instead of erroring out.
 
 ## Installation
 
@@ -77,7 +80,11 @@ claudette capabilities                 # JSON manifest of supported IPC methods
 claudette version                      # GUI app + protocol version
 ```
 
-The global `--json` flag opts into machine-readable output for the few commands that have a table-style renderer (`workspace list`, `repo list`, `pr list`, `plugin list`). Everything else always emits JSON.
+Output formats vary by subcommand:
+
+- **Table by default, JSON with `--json`**: `workspace list`, `repo list`, `pr list`, `plugin list` — these have a human-readable table renderer; pass `--json` to get the raw JSON for scripting.
+- **Always JSON**: every other IPC-backed command (`capabilities`, `chat *`, `workspace create`, `workspace archive`, `pr show`, `plugin invoke`, `rpc`, etc.) returns JSON straight from the GUI, regardless of `--json`.
+- **Plain text**: `version` prints two human-readable lines (CLI version + GUI version when reachable). `completion <shell>` writes the generated shell-completion script to stdout.
 
 ## Workspaces
 

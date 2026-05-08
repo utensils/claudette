@@ -192,7 +192,7 @@ workspaces:
     model: opus
 ```
 
-The CLI requires the desktop app to be running — every operation flows through the GUI's own command core, so tray icons, notifications, and the workspace list update live as the CLI works. Run `claudette --help` for the full subcommand list. The full reference (with every flag) lives at [docs/features/cli-client](https://utensils.github.io/claudette/features/cli-client/).
+Most CLI operations require the desktop app to be running — IPC-backed commands flow through the GUI's own command core, so tray icons, notifications, and the workspace list update live as the CLI works. Two exceptions: `claudette completion <shell>` is purely local (clap_complete output, no IPC) and `claudette version` prints the CLI version unconditionally and only notes if the GUI isn't reachable. Run `claudette --help` for the full subcommand list. The full reference (with every flag) lives at [docs/features/cli-client](https://utensils.github.io/claudette/features/cli-client/).
 
 Main-agent orchestration uses the same IPC surface: `claudette chat show` returns session metadata, recent transcript messages, completed tool activity, attachment metadata, and pending AskUserQuestion / ExitPlanMode controls. Use `claudette chat answer <session-id> <tool-use-id> --answers-json '{"Question?":"Answer"}'`, `claudette chat approve-plan`, or `claudette chat deny-plan` to resolve pending controls from a terminal or another agent.
 
