@@ -17,13 +17,17 @@ Claudette supports keyboard shortcuts for fast navigation and common actions. Ho
 | `⌘/Ctrl + ,` | Open/close settings |
 | `⌘⇧W` (macOS) | Close the window (hides to tray on macOS). `⌘W` is reserved for the terminal — see [Terminal Panes](#terminal-panes). |
 
-### Workspace Switching
+### Tabs & Navigation
+
+The unified tab strip holds chat sessions, diff tabs, file tabs, and any other workspace tabs in one drag-reorderable row. The bracket shortcuts cycle the strip in order, with wrap-around.
 
 | Shortcut | Action |
 |----------|--------|
-| `⌘/Ctrl + Shift + [` | Previous workspace (same project) |
-| `⌘/Ctrl + Shift + ]` | Next workspace (same project) |
+| `⌘/Ctrl + Shift + [` | Previous tab in the unified tab strip |
+| `⌘/Ctrl + Shift + ]` | Next tab in the unified tab strip |
 | `⌘/Ctrl + 1` – `⌘/Ctrl + 9` | Jump to project by index |
+
+To switch between workspaces in the same project, click them in the sidebar or use the fuzzy finder (`⌘/Ctrl + K`) — the bracket shortcuts no longer specifically cycle workspaces, since the unified tab strip subsumed that intent.
 
 ### Search & Commands
 
