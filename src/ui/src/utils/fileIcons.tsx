@@ -8,8 +8,6 @@ import {
   FileSpreadsheet,
   FileText,
   FileVideo,
-  Folder,
-  FolderOpen,
   type LucideProps,
 } from "lucide-react";
 import type { ComponentType } from "react";
@@ -129,10 +127,6 @@ export function getFileIcon(filename: string): IconComponent {
   if (dot === -1) return File;
   const ext = filename.slice(dot + 1).toLowerCase();
   return EXT_TO_ICON[ext] ?? File;
-}
-
-export function getFolderIcon(expanded: boolean): IconComponent {
-  return expanded ? FolderOpen : Folder;
 }
 
 export function isImagePath(filename: string): boolean {
