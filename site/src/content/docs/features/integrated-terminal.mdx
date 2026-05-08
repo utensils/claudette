@@ -43,3 +43,5 @@ Every terminal session has [workspace environment variables](/claudette/features
 ## Command Indicator
 
 The sidebar shows the foreground command running in each workspace's terminal. Detection is automatic — Claudette polls the PTY's foreground process group, so any shell works (zsh, bash, fish, anything else) with no configuration required and no changes to your shell rc files.
+
+The indicator is **macOS and Linux only** — Windows has no equivalent of process-group ownership on PTYs, so the sidebar simply omits the indicator there. The polling path also only observes start/stop transitions, not exit codes, so there's no separate "succeeded vs. failed" colorization.

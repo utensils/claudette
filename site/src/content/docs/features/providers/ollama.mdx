@@ -1,0 +1,78 @@
+---
+title: Ollama
+description: Run Claudette agents against local LLMs via Ollama — no API key, no gateway translation, all on-device.
+---
+
+The Ollama provider points the `claude` CLI at a local Ollama daemon. It's the simplest non-Anthropic setup: no API key, no gateway translation, and everything stays on your machine. Useful for air-gapped work, privacy-sensitive code, or running offline.
+
+Ollama is **anthropic-compatible** — it talks Claude's wire format directly, so the `claude` CLI doesn't even know it's not talking to api.anthropic.com.
+
+## Prerequisites
+
+1. Make sure the [Alternative Claude Code backends experimental flag](/claudette/features/providers/#enabling-the-feature) is on.
+2. Install Ollama:
+   - **macOS**: `brew install ollama` or download from [ollama.com/download](https://ollama.com/download).
+   - **Linux**: `curl -fsSL https://ollama.com/install.sh | sh`.
+   - **Windows**: download the installer from [ollama.com/download](https://ollama.com/download).
+3. Start the daemon. The Ollama installer typically registers a system service that starts on boot. To run it manually: `ollama serve`.
+
+By default Ollama listens on `http://localhost:11434`. Confirm it's reachable: `curl http://localhost:11434/api/tags` should return JSON.
+
+## Pull at least one model
+
+Ollama doesn't ship models — you pull them on demand. Pick something tool-tuned for agent workflows:
+
+```sh
+ollama pull qwen3-coder         # solid coding model
+ollama pull llama3.1:8b         # general-purpose, smaller
+ollama pull qwen2.5-coder:7b    # smaller coding model
+```
+
+Pulled models are cached under `~/.ollama/models/`. Run `ollama list` to see what you have.
+
+## Configure in Claudette
+
+1. Open **Settings > Models**. The `ollama` backend appears in the list.
+2. The base URL is pre-filled to `http://localhost:11434`. Change it if your daemon listens elsewhere (e.g. on a LAN host).
+3. (Optional) Add a bearer token in the **API key** field if you've put Ollama behind an authenticating proxy. Most local installs don't need this.
+4. Click **Test** — Claudette pings the daemon to confirm it's reachable.
+5. Click **Refresh models** — Claudette queries Ollama's `/api/tags` endpoint and discovers everything you've pulled. The chips appear under **Discovered models**.
+6. (Optional) Set a default model.
+7. Toggle **Enabled** on. The provider is now selectable in the chat header.
+
+## Picking a session model
+
+Once enabled, the model picker in the chat header includes Ollama models alongside Claude. Pick one and the next turn runs through Ollama.
+
+The chat header hides the **Effort**, **Fast mode**, and **1M-context** toggles when an Ollama model is active — `AgentBackendConfig::builtin_ollama()` declares those capabilities as `false`. **Extended thinking** stays available because Ollama supports it on models that have a thinking mode (like `qwen3-coder`).
+
+## Tool use and vision
+
+Tool use and vision are declared `true` for Ollama in the capability struct, but actual support depends on the model:
+
+- **Tool use** — works on tool-tuned models. `qwen3-coder` and `llama3.1` handle Claude-style tool calls; smaller / non-tuned models may ignore tool definitions.
+- **Vision** — works on multimodal models like `llama3.2-vision`. Plain text models drop image attachments silently.
+
+If a model misbehaves, try switching to a different one before assuming Claudette is broken.
+
+## Performance notes
+
+- Ollama runs on CPU by default; GPU acceleration depends on your platform (Metal on macOS, CUDA on Linux with the right drivers).
+- Large models (70B+) need substantial RAM. Watch `Activity Monitor` / `htop` while a turn runs.
+- Concurrent agents amplify resource pressure. Keep parallelism low (1–2 workspaces at a time) when running locally.
+
+## Troubleshooting
+
+**Test fails with "connection refused"** — the daemon isn't running, or it's bound to a different host/port. Run `ollama serve` and confirm `curl localhost:11434/api/tags` works first.
+
+**Refresh models returns nothing** — you haven't pulled any models yet. Run `ollama pull <model>` and click Refresh again.
+
+**Agent hangs on first turn** — the model is loading from disk into RAM/VRAM. First-turn latency on a cold model can be 10–60 seconds depending on size. Subsequent turns reuse the loaded weights and are much faster.
+
+**Tool calls get ignored** — the model doesn't support tool use, or the prompt is being interpreted as plain chat. Try a tool-tuned model (`qwen3-coder`, `llama3.1`).
+
+## See also
+
+- [Alternative Providers overview](/claudette/features/providers/) — capability matrix and architecture
+- [OpenAI & Codex](/claudette/features/providers/openai-codex/) — the gateway-based alternatives
+- [Agent Configuration](/claudette/features/agent-configuration/) — chat-header toggles and how they map to provider capabilities

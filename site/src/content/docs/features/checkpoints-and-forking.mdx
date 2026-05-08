@@ -1,0 +1,75 @@
+---
+title: Checkpoints & Forking
+description: Roll a session back to an earlier state, or fork a workspace from any point in its history into a new branch.
+---
+
+Long agent sessions accumulate decisions you might want to revisit. Claudette captures **checkpoints** automatically as the agent works, lets you roll a session back to any of them, and lets you **fork** a workspace at a checkpoint when you want to keep the original alive while exploring an alternate path.
+
+## What gets checkpointed
+
+A conversation checkpoint is recorded at meaningful boundaries during a turn — when the agent finishes a tool group, when a plan is approved, and at the end of every completed turn. Each checkpoint captures:
+
+- The conversation state at that point (which messages were sent, which tool activity completed).
+- A snapshot of the worktree's files, scoped to what git tracks (or would track — `.gitignore` is respected).
+- Files larger than 10 MB are skipped to keep the snapshot inexpensive.
+
+Checkpoints are stored in Claudette's database alongside the chat session. They don't pollute the git history of the workspace.
+
+## Rolling back
+
+Open the chat history sidebar and pick a turn. Each turn's contextual menu offers:
+
+- **Roll back** — truncate the chat session to this point and discard later messages.
+- **Roll back and restore files** — also restore the worktree's tracked files to the snapshot taken at that checkpoint.
+
+Rollbacks are scoped to a single chat session, so a rollback in one tab can't prune messages in another. If the agent is currently running a turn, rollback is blocked — stop the agent first.
+
+The post-rollback state is the same as if the agent had finished at the chosen turn and you'd just opened the workspace fresh: the chat resumes from there, file state matches, and the next message you send continues the conversation naturally.
+
+## Forking a workspace
+
+Forking creates a **new** workspace that branches from a checkpoint without disturbing the original. Use it when you want to:
+
+- Try a different approach without losing the current line of work.
+- Hand off a partially-completed task while keeping the parent session as a reference.
+- Experiment with a riskier plan and discard the fork if it doesn't pan out.
+
+From the chat history sidebar, pick a checkpoint and choose **Fork from here**. Claudette:
+
+1. Picks a non-colliding name (`<source>-fork`, `<source>-fork-2`, ...) that doesn't clash with an existing workspace, branch, or worktree directory.
+2. Branches the new worktree from the commit that the chosen checkpoint points to — so the file state matches the chosen turn.
+3. Copies the chat messages and conversation checkpoints up to and including the chosen turn into the new session.
+4. Copies the underlying Claude CLI session transcript when present, so the next turn can `--resume` without losing conversational context.
+
+The original workspace is untouched. The fork shows up in the sidebar as a new entry under the same repository.
+
+## Snapshots vs. checkpoints
+
+Claudette tracks two related concepts that are easy to conflate:
+
+- **Conversation checkpoint** — a row tied to a chat session that lets you roll the session back. Created automatically.
+- **Workspace snapshot** — a frozen capture of the worktree's tracked files used by the fork machinery (and exposed for diff comparisons). Snapshots are written to the database when a checkpoint is created, but you don't manage them directly.
+
+When you fork, both are involved: the chat session is reconstructed from checkpoints, and the worktree branch is rebuilt from the underlying commit (with the snapshot used to verify file state).
+
+## When forking can fail
+
+The fork operation surfaces a few specific errors so the UI can react helpfully:
+
+| Error | Meaning |
+|---|---|
+| Source workspace not found | Source workspace was deleted or archived. |
+| Source repository not found | Repository was unregistered. |
+| Source worktree missing | The worktree directory is gone — fork can't determine a base ref. |
+| Checkpoint not found | The selected checkpoint was deleted (e.g. by a rollback in another tab). |
+| Could not allocate fork name | Every `<source>-fork[-N]` candidate already exists. Rename existing forks or archive stale ones. |
+
+## Auto-archive interaction
+
+If you've enabled **Settings > Git > Auto-delete branch on archive**, archiving a fork only deletes its branch when the branch contains *only* checkpoint commits. If you've made manual commits on the fork, the branch stays so you don't lose work.
+
+## See also
+
+- [Git Worktrees](/claudette/features/git-worktrees/) — how Claudette structures the underlying branches and worktrees
+- [Parallel Agents](/claudette/features/parallel-agents/) — running the original and the fork side by side
+- [Plan Mode](/claudette/features/plan-mode/) — combine plan-mode review with forking before approving a risky plan

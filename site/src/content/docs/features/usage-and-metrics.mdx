@@ -1,0 +1,80 @@
+---
+title: Usage & Metrics
+description: Track Claude Code consumption against your plan and inspect Claudette's local activity dashboard.
+---
+
+Claudette surfaces two related but distinct views:
+
+1. **Claude Code usage** — tokens consumed against your Anthropic account. Fetched from Anthropic's usage API.
+2. **Claudette metrics** — local activity (workspaces, sessions, commits, slash commands). Computed from Claudette's database; never sent off-machine.
+
+## Claude Code usage
+
+The **Settings > Usage** panel shows your subscription type, rate-limit tier, and current consumption against your plan. Open it from the sidebar footer or via the `/usage` slash command.
+
+This panel is gated by the **Usage Insights** experimental toggle (off by default). When the toggle is off, Claudette never reads your Claude Code OAuth tokens — they stay strictly in the keychain / `.credentials.json` for the `claude` CLI's own use. Enable it in **Settings > Experimental** if you want the panel. Requires a Pro or Max plan with standard login (env-var auth tokens like `CLAUDE_CODE_OAUTH_TOKEN` lack the OAuth scopes the API needs).
+
+The data comes from the same usage API your Claude Code CLI hits. Claudette caches the result for 5 minutes to avoid hammering the endpoint, and backs off for 2 minutes if a fetch fails (e.g. a rate limit). To force a refresh, close and reopen the panel.
+
+To dive into the full Anthropic-hosted dashboard:
+
+- Click **Open in browser** in the panel, or
+- Use the `/extra-usage` slash command.
+
+Both deep-link to [claude.ai/settings/usage](https://claude.ai/settings/usage). The browser session uses your existing Anthropic login, not anything Claudette is holding.
+
+### Parallel agents and your plan
+
+Claudette can run multiple agents in parallel git worktrees, but [Anthropic's plan terms](/claudette/features/authentication/#parallel-agents-and-your-plan) treat Pro/Max usage as "ordinary, individual" use. Keep parallelism conservative (1–3 agents) unless you've moved to API-key billing.
+
+## Claudette metrics
+
+The **Metrics** view shows Claudette's view of *your* activity — derived entirely from local data.
+
+### Dashboard metrics
+
+| Metric | Meaning |
+|---|---|
+| Active sessions | Sessions currently running an agent turn. |
+| Sessions today | Sessions started in the last 24h. |
+| Commits today | Commits authored across all workspaces today. |
+| Additions / deletions (7d) | Lines added / removed across all workspaces in the last 7 days. |
+
+### Per-workspace metrics
+
+Each workspace gets its own card with:
+
+- Commit count and net additions / deletions on the workspace's branch.
+- Latest session turn count.
+- Total input / output / cache tokens for the latest session, when the underlying CLI emitted them.
+
+### Analytics
+
+The deeper analytics view exposes:
+
+- **Repo leaderboard** — workspaces ranked by activity over a configurable window.
+- **Heatmap** — session activity by day of week and hour of day, like GitHub's contribution graph.
+- **Turn histogram** — distribution of turn counts per session.
+- **Top slash commands** — which commands you actually use, ordered by frequency.
+- **Recent sessions (24h)** — a session-dot timeline of the last day.
+
+These are designed to surface your *own* patterns. There's no telemetry; the queries run against your local database and never leave the machine.
+
+## Deleted-workspace summaries
+
+Archiving a workspace doesn't drop its activity from the metrics. Closed-out work still counts toward leaderboards and 7-day deltas, so the dashboard keeps an honest picture of recent throughput even after cleanup.
+
+## What gets queried over the network
+
+| Source | Data | Trigger |
+|---|---|---|
+| Anthropic usage API | Subscription, tier, token totals | Opening the Usage panel; cached 5 min |
+| Local SQLite | Everything else | On view; never network |
+
+See [Privacy](/claudette/privacy/) for the full network-activity ledger.
+
+## See also
+
+- [Authentication](/claudette/features/authentication/) — context on Pro/Max vs API-key billing
+- [Privacy](/claudette/privacy/) — data flow and local-only guarantees
+- [Settings](/claudette/features/settings/) — where the Usage panel lives in the settings layout

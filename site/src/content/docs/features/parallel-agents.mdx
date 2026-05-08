@@ -32,8 +32,9 @@ Click the **+** button next to any repository in the sidebar to create a new wor
 ## Switching Between Workspaces
 
 - **Click** a workspace in the sidebar to switch to it
-- **Keyboard**: `⌘/Ctrl + Shift + [` and `⌘/Ctrl + Shift + ]` to cycle through workspaces in the same project
 - **Fuzzy finder**: `⌘/Ctrl + K` to quickly search and jump to any workspace
+- **Project jump**: `⌘/Ctrl + 1` – `⌘/Ctrl + 9` to jump straight to the Nth project (repository) in the sidebar
+- **Cycle the tab strip**: `⌘/Ctrl + Shift + [` and `⌘/Ctrl + Shift + ]` move one slot left/right through the unified tab strip (workspace tabs, chat sessions, diffs, file tabs) — useful when you want to flip between *open tabs* rather than projects
 
 ## Agent Lifecycle
 
@@ -44,3 +45,42 @@ Each agent session has a lifecycle:
 - **Stopped** — the session has ended; send a new message to restart it
 
 Press **Escape** to stop a running agent at any time.
+
+## Workspace Context Menu
+
+Right-click any workspace in the sidebar for quick actions: rename, archive, fork from a checkpoint, copy the worktree path, open the worktree in your file manager, and so on. The menu adapts to the workspace's state — you'll see **Stop agent** while a turn is running, **Re-send last prompt** when the session is idle, and so on.
+
+## Setup and Archive Scripts
+
+A workspace can run a script when it's created and another when it's archived. Use these for project-specific provisioning that the agent shouldn't have to do every time:
+
+- **Setup script** — runs once after the worktree is created. Good for `bun install`, `pnpm install`, `cargo fetch`, `nix develop --build` — anything that primes the dev environment.
+- **Archive script** — runs once before the worktree is removed. Good for cleanup of side-effect resources (Docker volumes, ngrok tunnels, etc.).
+
+Configure them per repository in **Settings > Repository > Setup scripts** / **Archive scripts**. See [Per-Repo Settings](/claudette/features/per-repo-settings/) for the full schema.
+
+## Fanning Out from the CLI
+
+The flagship use case for the [`claudette` CLI](/claudette/features/cli-client/): a phase-of-work plan that creates N workspaces and dispatches a prompt to each.
+
+```yaml
+# plan.yaml
+repository: my-repo
+defaults:
+  model: sonnet
+workspaces:
+  - name: builtins-tsx
+    prompt_file: ./prompts/43-builtins.md
+  - name: shell-rs
+    prompt_file: ./prompts/44-shell.md
+    model: opus
+  - name: validator
+    prompt: "Add input validation tests"
+```
+
+```sh
+claudette batch validate plan.yaml    # Lint without creating
+claudette batch run plan.yaml         # Create + dispatch
+```
+
+The CLI talks to the running desktop app, so the new workspaces appear in the sidebar and start their agents immediately. For agent-driven fan-outs (a "main" Claude Code session orchestrating worker agents inside Claudette workspaces), install the [Claudette skill](/claudette/features/cli-client/#driving-claudette-from-a-claude-code-agent) — it pre-grants the agent permission to invoke `claudette` directly.

@@ -55,12 +55,41 @@ Toggle fast mode in the chat header toolbar. Set the default in `Settings > Mode
 
 ## Plan Mode
 
-In plan mode, the agent outlines its approach before writing code. This is useful for complex tasks where you want to review the plan before execution.
+In plan mode, the agent runs read-only until it produces a plan you explicitly approve. See the dedicated [Plan Mode](/claudette/features/plan-mode/) page for the full approval workflow, denial-with-feedback path, and CLI integration.
 
 - **Toggle**: Click the plan mode button in the chat header, or press `Shift + Tab`
 - **Default**: Set in `Settings > Models > Default plan mode`
+- **Slash command**: `/plan` enables plan mode for the next turn
 
-When the agent produces a plan, you'll see a plan approval prompt where you can approve, reject, or modify the plan before the agent proceeds.
+## Chrome Browser Mode
+
+Toggle the Chrome chip in the chat header to enable the agent's browser tool for web tasks. Useful when the agent needs to navigate live pages, screenshot DOM state, or scrape something that doesn't have a clean API. Set the default in `Settings > Models > Default chrome mode`.
+
+## Mid-turn Steering
+
+While an agent turn is running, you can queue a follow-up message. Type into the chat input and hit **Enter** — the message is queued and delivered as the next user turn the moment the current one completes. This is the lowest-friction way to course-correct without stopping the agent.
+
+From the [CLI](/claudette/features/cli-client/):
+
+```sh
+claudette chat steer <session-id> "Also update the integration tests"
+```
+
+## Claude CLI Flags
+
+The **Settings > Claude CLI flags** panel exposes the underlying `claude` command flags Claudette is passing for each turn — useful for diagnosing "why didn't this work like I expected" issues. The chat header banner above each turn shows the model, effort, and any non-default flags in a structured chip so the active configuration is always visible.
+
+## Alternative Providers
+
+Claudette can run agents against alternative providers — [Ollama](/claudette/features/providers/ollama/) (local), or [OpenAI / Codex](/claudette/features/providers/openai-codex/) (gateway-translated) — instead of the official `claude` CLI. This is gated by the **Alternative Claude Code backends** experimental flag (the toggle keeps that wording in the UI).
+
+Several chat-header toggles on this page only apply to certain providers. The capability matrix in the dedicated section shows the full picture, but the highlights:
+
+- **Effort, fast mode, 1M-context auto-upgrade** — Anthropic only.
+- **Extended thinking** — Anthropic and Ollama (when the model supports it).
+- **All Claude-side toggles** — hidden on gateway providers (OpenAI / Codex), because the OpenAI Responses API has no equivalents.
+
+→ Full setup, capability matrix, and per-provider instructions: **[Alternative Providers](/claudette/features/providers/)**
 
 ## File References (@-mentions)
 

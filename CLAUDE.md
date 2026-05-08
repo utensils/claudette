@@ -139,7 +139,7 @@ src-tauri/              — Tauri binary crate
   src/transport/        — Remote transport trait + WebSocket client
   src/remote.rs         — embedded remote server wiring
   src/mdns.rs           — mDNS advertisement for remote discovery
-  src/osc133.rs         — OSC 133 terminal prompt-marker parsing
+  src/pty_tracker.rs    — PTY foreground-process-group polling for the sidebar command indicator (Unix-only; replaced OSC 133)
 src-server/             — Standalone + embeddable remote server
 plugins/                — bundled Lua plugins (compiled in via include_str!)
   scm-github/           — GitHub PR / CI provider

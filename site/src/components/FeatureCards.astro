@@ -9,57 +9,87 @@ const darkThemeCount = themeCount - lightThemeCount;
 const features = [
   {
     title: 'Integrated terminal',
-    desc: 'A real PTY per agent with split panes and OSC 133 shell integration — commands get tagged with run status as they finish.',
+    desc: 'A real PTY per agent with split panes. The sidebar surfaces running commands automatically — no shell-RC edits, works with any shell.',
     meta: 'zsh · bash · fish',
     icon: '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>',
+    href: '/claudette/features/integrated-terminal/',
   },
   {
     title: 'Plugin ecosystem',
-    desc: 'SCM providers (GitHub, GitLab), env-providers (dotenv, mise, direnv), voice input (Apple Speech + bundled Whisper), and a runtime that\'s user-extensible.',
+    desc: 'SCM providers (GitHub, GitLab), env-providers (dotenv, mise, direnv, nix-devshell), language grammars, and a sandboxed Lua runtime that\'s user-extensible.',
     meta: 'runtime kinds · per-repo env panel',
     icon: '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>',
+    href: '/claudette/features/scm-providers/',
+  },
+  {
+    title: 'Alternative providers',
+    desc: 'Run agents against Ollama (local), the OpenAI API, or OpenAI Codex through the Claude Code harness. An in-process gateway translates Claude\'s wire format to the OpenAI Responses API; chat-header toggles adapt to whichever provider is active.',
+    meta: 'experimental · Ollama · OpenAI · Codex',
+    icon: '<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
+    href: '/claudette/features/providers/',
   },
   {
     title: 'Diff viewer',
     desc: 'Side-by-side or unified, with rich Markdown and Mermaid rendering for plans and reviews. Diffs open as tabs alongside chat sessions.',
     meta: 'syntax-highlighted · hunk-staging',
     icon: '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>',
+    href: '/claudette/features/diff-viewer/',
   },
   {
     title: 'Full Monaco editor',
     desc: 'The same editor that ships in VS Code, embedded next to the chat and diff. Type-aware highlighting, language services in workers, runs entirely offline.',
     meta: 'theme-synced · offline',
     icon: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/>',
+    href: '/claudette/features/file-editor/',
   },
   {
     title: 'Notifications + sound packs',
     desc: 'Per-event sound selection, including the OpenPeon community pack. Optional system tray icon with light, dark, and color variants.',
     meta: 'tray · per-event audio',
     icon: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
+    href: '/claudette/features/notifications/',
   },
   {
     title: 'Native cross-platform',
     desc: 'Tauri-built binaries for macOS (Intel + Apple Silicon), Linux (x86_64 + aarch64), and Windows. Stable and nightly update channels.',
     meta: 'macOS · Linux · Windows',
     icon: '<rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>',
+    href: '/claudette/getting-started/installation/',
   },
   {
     title: 'Local metrics',
     desc: 'Workspace cards show total tokens. Drill into a per-workspace heatmap, leaderboard, and session history — entirely on disk in SQLite.',
     meta: 'stays on your machine',
     icon: '<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>',
+    href: '/claudette/features/usage-and-metrics/',
   },
   {
     title: 'Themeable',
     desc: `${themeCount} built-in themes spanning warm coral, deep navy, Solarized, Rosé Pine, and high-contrast — switch instantly from the command palette, or roll your own with CSS custom properties.`,
     meta: `${darkThemeCount} dark · ${lightThemeCount} light`,
     icon: '<circle cx="13.5" cy="6.5" r=".5" fill="currentColor" stroke="none"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor" stroke="none"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor" stroke="none"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor" stroke="none"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/>',
+    href: '/claudette/features/theming/',
   },
   {
     title: 'Remote access',
     desc: 'Drive your local Claudette from another machine on the same network. WebSocket transport with mDNS discovery — no cloud round-trip, no third-party relay.',
     meta: 'WebSocket · mDNS',
     icon: '<path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/>',
+    href: '/claudette/features/remote-workspaces/',
+  },
+  {
+    title: 'Voice input',
+    desc: 'Push-to-talk dictation with Apple Speech (macOS) or bundled Whisper. Runs entirely on-device — your microphone audio never leaves your machine.',
+    meta: 'Apple Speech · Whisper · on-device',
+    icon: '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/>',
+    href: '/claudette/features/voice-input/',
+  },
+  {
+    title: 'Scriptable',
+    desc: 'A `claudette` CLI drives the GUI over a local socket. Script workspace creation, fan a YAML manifest out across N workspaces, resolve plan approvals from a pipe, or hand the wheel to the bundled Claude Code skill.',
+    meta: 'CLI · YAML manifests · agent-driven',
+    icon: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>',
+    href: '/claudette/features/cli-client/',
   },
 ];
 ---
@@ -73,14 +103,14 @@ const features = [
 
     <div class="features-grid">
       {features.map((f) => (
-        <article class="feature-card">
+        <a class="feature-card" href={f.href}>
           <div class="icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" set:html={f.icon} />
           </div>
           <h3>{f.title}</h3>
           <p>{f.desc}</p>
           <div class="meta">{f.meta}</div>
-        </article>
+        </a>
       ))}
     </div>
   </div>

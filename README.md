@@ -7,10 +7,27 @@
 <p align="center">Claude's missing better half — a companion tool for Claude Code usage.</p>
 
 <p align="center">
+  <a href="https://utensils.github.io/claudette/"><img src="https://img.shields.io/badge/docs-utensils.github.io%2Fclaudette-7c3aed" alt="Documentation"/></a>
   <a href="https://codecov.io/gh/utensils/claudette"><img src="https://codecov.io/gh/utensils/claudette/graph/badge.svg" alt="codecov"/></a>
   <a href="https://discord.gg/JQdfT3Z67F"><img src="https://img.shields.io/discord/1491165880820699398?logo=discord&label=Discord" alt="Discord"/></a>
   <a href="https://www.reddit.com/r/ClaudetteApp"><img src="https://img.shields.io/reddit/subreddit-subscribers/ClaudetteApp?style=social" alt="Reddit"/></a>
 </p>
+
+## Highlights
+
+- **[Parallel agents in isolated git worktrees](https://utensils.github.io/claudette/features/parallel-agents/)** — run multiple Claude Code agents simultaneously, each on its own branch with no merge conflicts.
+- **[Plan mode and AskUserQuestion handling](https://utensils.github.io/claudette/features/plan-mode/)** — let the agent draft a plan or pause for input, then approve, deny with feedback, or answer from the GUI or the CLI.
+- **[Checkpoints and workspace forking](https://utensils.github.io/claudette/features/checkpoints-and-forking/)** — roll any session back to an earlier turn, or fork a workspace from a checkpoint to explore alternates without losing the original.
+- **[CLI client + Claude Code skill](https://utensils.github.io/claudette/features/cli-client/)** — script every workspace operation from the terminal; install the bundled skill and a "main" agent can drive Claudette to fan out work across N workspaces.
+- **[Remote workspaces over encrypted WebSocket](https://utensils.github.io/claudette/features/remote-workspaces/)** — connect to another machine and work with its repos, agents, and terminals as if they were local. Auto-discovers on LAN via mDNS.
+- **[SCM providers (GitHub, GitLab, extensible)](https://utensils.github.io/claudette/features/scm-providers/)** — pull request status, CI checks, and one-click merge without leaving the app, powered by sandboxed Lua plugins.
+- **[MCP supervision and env-providers](https://utensils.github.io/claudette/features/mcp-servers/)** — per-repo MCP server config with health monitoring, plus a pluggable env stack ([direnv, mise, dotenv, nix-devshell](https://utensils.github.io/claudette/features/scm-providers/#environment-provider-plugins)).
+- **[Voice input](https://utensils.github.io/claudette/features/voice-input/)** — push-to-talk dictation with Apple Speech (macOS) or bundled Whisper, all on-device.
+- **[Alternative providers](https://utensils.github.io/claudette/features/providers/)** _(experimental)_ — run agents through Ollama (local), the OpenAI API, or OpenAI Codex (subscription) instead of Claude. An in-process gateway translates wire formats; chat-header toggles adapt to whichever provider is active.
+
+Full documentation lives at **[utensils.github.io/claudette](https://utensils.github.io/claudette/)**.
+
+## About
 
 Claudette is a cross-platform desktop application built with [Tauri 2](https://tauri.app) (Rust backend) and React/TypeScript (frontend). It provides a lightweight interface for managing and orchestrating Claude Code sessions, similar in spirit to [Conductor.build](https://conductor.build) but with a focused feature set. Unlike most similar tools, Claudette runs natively on **macOS** (Apple Silicon + Intel), **Linux** (x86_64 + aarch64, Wayland + X11), and **Windows** (x86_64 + ARM64).
 
@@ -42,10 +59,30 @@ Claudette is a cross-platform desktop application built with [Tauri 2](https://t
 ```sh
 # Install frontend dependencies
 cd src/ui && bun install && cd ../..
+```
 
-# Run in development mode (hot-reload)
+### Run in development mode
+
+Two equivalent paths — pick whichever fits the change you're making:
+
+```sh
+# Quick path (works for everything except macOS voice input)
 cargo tauri dev
 
+# Full-feature path (recommended; required for macOS voice input)
+./scripts/dev.sh
+```
+
+`./scripts/dev.sh` does a few things `cargo tauri dev` doesn't:
+
+- **macOS only**: wraps the binary in a signed `Claudette Dev.app` bundle (with the right `Info.plist` usage strings and `Entitlements.plist`) and launches it via Launch Services. This is required because macOS's privacy system (TCC) refuses to grant Microphone or Speech Recognition permissions to a bare Mach-O binary and aborts the process when the prompt appears.
+- Probes free Vite + debug-eval ports and exports them so multiple dev instances can run side by side.
+- Stages the `claudette-cli` sidecar binary so the in-app CLI install path works in dev.
+- Writes a per-PID discovery file at `${TMPDIR:-/tmp}/claudette-dev/<pid>.json` consumed by the `/claudette-debug` skill.
+
+### Build, test, lint
+
+```sh
 # Build optimized release binary
 cargo tauri build
 
@@ -58,18 +95,6 @@ cargo clippy --workspace --all-targets
 # Check frontend types
 cd src/ui && bunx tsc --noEmit
 ```
-
-### macOS: voice input in dev mode
-
-`cargo tauri dev` runs the binary directly, which is fine for everything **except** the Apple Speech voice-input provider. macOS's privacy system (TCC) refuses to grant Microphone or Speech Recognition permissions to a bare Mach-O binary, and aborts the process when the prompt appears.
-
-Use the dev script instead — it wraps the binary in a signed `Claudette Dev.app` bundle (with the right `Info.plist` usage strings + entitlements) and launches it via Launch Services:
-
-```sh
-./scripts/dev.sh
-```
-
-If you don't need voice input, plain `cargo tauri dev` is still fine.
 
 ## Project structure
 
@@ -113,100 +138,6 @@ src-server/
     mdns.rs             # mDNS service advertisement
 ```
 
-## Shell integration (optional)
-
-Claudette can track terminal commands and display them in the sidebar with status indicators (running, success, failure). This requires adding a snippet to your shell's RC file.
-
-### Zsh
-
-Add to `~/.zshrc`:
-
-```bash
-# Claudette shell integration
-if [[ -n "$CLAUDETTE_PTY" ]]; then
-    _claudette_precmd() {
-        local exit_code=$?
-        printf '\033]133;D;%s\007' "$exit_code"
-        printf '\033]133;A\007'
-        return $exit_code
-    }
-
-    _claudette_preexec() {
-        printf '\033]133;B\007'
-        local cmd_encoded=$(printf '%s' "$1" | jq -sRr @uri 2>/dev/null || printf '%s' "$1" | od -An -tx1 | tr ' ' '%' | tr -d '\n')
-        if [[ -n "$cmd_encoded" ]]; then
-            printf '\033]133;E;%s\007' "$cmd_encoded"
-        fi
-        printf '\033]133;C\007'
-    }
-
-    autoload -Uz add-zsh-hook
-    add-zsh-hook precmd _claudette_precmd
-    add-zsh-hook preexec _claudette_preexec
-fi
-```
-
-### Bash
-
-Add to `~/.bashrc`:
-
-```bash
-# Claudette shell integration
-if [[ -n "$CLAUDETTE_PTY" ]]; then
-    _claudette_prompt_start() {
-        printf '\033]133;A\007'
-    }
-
-    _claudette_prompt_cmd() {
-        local exit_code=$?
-        printf '\033]133;D;%s\007' "$exit_code"
-        _claudette_prompt_start
-        return $exit_code
-    }
-
-    _claudette_preexec() {
-        printf '\033]133;B\007'
-        local cmd_encoded=$(printf '%s' "$BASH_COMMAND" | jq -sRr @uri 2>/dev/null || echo "")
-        if [[ -n "$cmd_encoded" ]]; then
-            printf '\033]133;E;%s\007' "$cmd_encoded"
-        fi
-        printf '\033]133;C\007'
-    }
-
-    PROMPT_COMMAND="_claudette_prompt_cmd"
-    trap '_claudette_preexec' DEBUG
-fi
-```
-
-### Fish
-
-Add to `~/.config/fish/config.fish`:
-
-```fish
-# Claudette shell integration
-if test -n "$CLAUDETTE_PTY"
-    function __claudette_prompt_start --on-event fish_prompt
-        printf '\033]133;A\007'
-    end
-
-    function __claudette_preexec --on-event fish_preexec
-        printf '\033]133;B\007'
-        set cmd (string join ' ' $argv)
-        set cmd_encoded (string escape --style=url -- $cmd)
-        if test -n "$cmd_encoded"
-            printf '\033]133;E;%s\007' "$cmd_encoded"
-        end
-        printf '\033]133;C\007'
-    end
-
-    function __claudette_postexec --on-event fish_postexec
-        printf '\033]133;D;%s\007' $status
-    end
-end
-```
-
-After adding the snippet, restart your terminal or run `source ~/.zshrc` (or `~/.bashrc`/`~/.config/fish/config.fish`). Commands will now appear in the sidebar.
-
 ## Command-line client
 
 The `claudette` CLI drives the running desktop app over a local IPC socket. Use it to script workspace creation, send prompts to chat sessions, or fan out a phase-of-work plan across many workspaces at once.
@@ -233,6 +164,17 @@ claudette chat stop <session-id>
 # Fan out N workspaces from a YAML manifest
 claudette batch validate plan.yaml
 claudette batch run plan.yaml
+
+# Pull-request shortcuts (resolves the active SCM provider per workspace)
+claudette pr list --workspace <workspace-id>
+claudette pr show <number> --workspace <workspace-id>
+
+# Generic plugin invocation (escape hatch when no first-class subcommand exists)
+claudette plugin list
+claudette plugin invoke github list_pull_requests --workspace <workspace-id> '{}'
+
+# Install shell completion
+claudette completion zsh > ~/.zsh/completions/_claudette
 ```
 
 A batch manifest declares one repository, optional defaults, and a list of workspaces with prompts:
@@ -250,9 +192,13 @@ workspaces:
     model: opus
 ```
 
-The CLI requires the desktop app to be running — every operation flows through the GUI's own command core, so tray icons, notifications, and the workspace list update live as the CLI works. Run `claudette --help` for the full subcommand list, or `claudette completion zsh > ~/.zsh/completions/_claudette` to install shell tab completion.
+Most CLI operations require the desktop app to be running — IPC-backed commands flow through the GUI's own command core, so tray icons, notifications, and the workspace list update live as the CLI works. Two exceptions: `claudette completion <shell>` is purely local (clap_complete output, no IPC) and `claudette version` prints the CLI version unconditionally and only notes if the GUI isn't reachable. Run `claudette --help` for the full subcommand list. The full reference (with every flag) lives at [docs/features/cli-client](https://utensils.github.io/claudette/features/cli-client/).
 
 Main-agent orchestration uses the same IPC surface: `claudette chat show` returns session metadata, recent transcript messages, completed tool activity, attachment metadata, and pending AskUserQuestion / ExitPlanMode controls. Use `claudette chat answer <session-id> <tool-use-id> --answers-json '{"Question?":"Answer"}'`, `claudette chat approve-plan`, or `claudette chat deny-plan` to resolve pending controls from a terminal or another agent.
+
+### Drive from a Claude Code agent
+
+The repo ships a Claude Code skill at [`.claude/skills/claudette/SKILL.md`](.claude/skills/claudette/SKILL.md) that pre-grants an agent permission to invoke `claudette` and provides a curated playbook of common workflows. Use it from a Claudette checkout (auto-loaded as a project skill), or symlink it into `~/.claude/skills/claudette/` to use it from any project. See [docs/features/cli-client](https://utensils.github.io/claudette/features/cli-client/#driving-claudette-from-a-claude-code-agent) for setup details.
 
 ## Remote access
 

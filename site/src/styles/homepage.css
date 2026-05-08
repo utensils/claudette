@@ -505,8 +505,19 @@
   flex-direction: column;
   gap: var(--space-3);
   margin: 0;
+  /* Anchor-element overrides: the card is now an `<a>` so each card
+     deep-links to its docs page. Reset default anchor styling so the
+     existing card visual is unchanged. */
+  text-decoration: none;
+  color: inherit;
 }
 .feature-card:hover { background: var(--chat-input-bg); }
+.feature-card:focus-visible {
+  /* Inset the outline so it doesn't get clipped by `.features-grid`'s
+     `overflow: hidden`, which exists to round the grid corners. */
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
 .feature-card .icon {
   width: 40px;
   height: 40px;

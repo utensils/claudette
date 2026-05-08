@@ -76,4 +76,32 @@ cd src/ui && bun install && cd ../..
 cargo tauri build
 ```
 
-The compiled binary will be in `src-tauri/target/release/`.
+The compiled binary will be in `target/release/` at the workspace root (Claudette uses a Cargo workspace, so the `src-tauri` crate's outputs share the workspace target dir, not its own).
+
+## Run from source
+
+Two equivalent paths — pick whichever fits the change you're making:
+
+```bash
+# Quick path (works for everything except macOS voice input)
+cargo tauri dev
+
+# Full-feature path (recommended; required for macOS voice input)
+./scripts/dev.sh
+```
+
+`./scripts/dev.sh` does a few things `cargo tauri dev` doesn't:
+
+- **macOS only**: wraps the binary in a signed `Claudette Dev.app` bundle so macOS's privacy system (TCC) grants Microphone and Speech Recognition permissions. A bare Mach-O binary will be killed by TCC the moment the prompt appears.
+- Probes free Vite + debug-eval ports so multiple dev instances can run side by side.
+- Stages the `claudette-cli` sidecar binary so the in-app CLI install path works in dev.
+
+## Headless / sandboxed Linux
+
+If you're on a Linux host without ALSA (containers, CI, sandboxed environments), build without voice support:
+
+```bash
+cargo tauri build --no-default-features --features tauri/custom-protocol,server
+```
+
+The `server` feature keeps the embedded WebSocket server for [remote workspaces](/claudette/features/remote-workspaces/); drop it too if you don't need that.

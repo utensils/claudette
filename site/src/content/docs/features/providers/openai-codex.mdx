@@ -1,0 +1,102 @@
+---
+title: OpenAI & Codex
+description: Run Claudette agents through the OpenAI API or your ChatGPT subscription via the codex CLI. Both routed through Claudette's in-process gateway.
+---
+
+The OpenAI API and Codex providers both run through the **gateway** path: Claudette spawns a tiny in-process HTTP listener that translates between Claude's wire format and the **OpenAI Responses API** (`/v1/responses`), so the official `claude` CLI can talk to OpenAI-shaped endpoints without forking.
+
+They differ in how you authenticate:
+
+- **OpenAI API** — bring an API key from `platform.openai.com`. Pay per token.
+- **Codex (subscription)** — bring a ChatGPT Plus / Pro / Team subscription. Reuses the `codex` CLI's stored OAuth credentials. Counts against your subscription quota.
+
+Both share the same capability profile (no thinking / effort / fast / 1M-context — see the [capability matrix](/claudette/features/providers/#capability-matrix) on the overview page).
+
+## Prerequisites
+
+Make sure the [Alternative Claude Code backends experimental flag](/claudette/features/providers/#enabling-the-feature) is on.
+
+## OpenAI API
+
+For users who specifically want `gpt-*` or OpenAI reasoning models, or who have prepaid OpenAI credit they'd rather burn than their Claude quota.
+
+1. Get an API key from [platform.openai.com](https://platform.openai.com/).
+2. In **Settings > Models**, find the `openai-api` backend.
+3. Paste the key into the **API key** field and save.
+4. Click **Test** — Claudette validates the key against `/v1/models`.
+5. Click **Refresh models** — Claudette queries the OpenAI `/v1/models` endpoint and populates the model list.
+6. (Optional) Set a default model. Common choices: `gpt-4.1`, `gpt-4o`, `o3-mini`, `o4-mini`.
+7. Toggle **Enabled** on.
+
+The OpenAI API panel is now wired up — the provider appears in the chat header picker alongside Claude.
+
+## Codex (OpenAI subscription)
+
+The Codex provider reuses the `codex` CLI's ChatGPT subscription auth instead of an API key — useful if you have a ChatGPT Plus / Pro / Team subscription that includes Codex access, and you'd rather draw from that allotment than pay per token.
+
+### Install the codex CLI
+
+```sh
+npm install -g @openai/codex
+# or
+bun install -g @openai/codex
+```
+
+Confirm it's on `PATH`: `codex --version` should print a version.
+
+### Sign in
+
+In **Settings > Models**, find the `codex-subscription` backend and click **Run codex login**. Claudette runs `codex login` for you, which:
+
+1. Opens your browser to OpenAI's OAuth page.
+2. Has you sign in with your ChatGPT account.
+3. Captures the resulting JWT to `~/.codex/auth.json`.
+
+You can also run `codex login` yourself in any terminal — Claudette reads `auth.json` directly to extract the access token and account ID, so it doesn't matter who launched the login.
+
+### Configure
+
+1. Click **Test** — Claudette confirms the JWT is valid by querying the discovery endpoint.
+2. Click **Refresh models** — populates the model list with what your subscription has access to.
+3. (Optional) Set a default model.
+4. Toggle **Enabled** on.
+
+### Auth lifecycle
+
+- Claudette **reads `~/.codex/auth.json` fresh from disk on every agent turn** (`load_codex_auth_material`). It does not cache tokens in memory and does not refresh them itself.
+- The `codex` CLI manages token refresh as part of its own auth flow — running `codex` for any reason (including `codex login status`, which Claudette's **Test** button triggers) will refresh `auth.json` if needed.
+- If you go a long time using Codex *only* through Claudette and the access token expires, the next agent turn will fail with an auth error from the upstream. Fix it by clicking **Run codex login** in Settings (or running `codex login` in any terminal) — the file gets a fresh JWT and the next turn works.
+- Signing out: `codex logout` in any terminal removes the credentials. The next agent turn will fail until you re-sign-in.
+
+## How requests flow
+
+Both providers route the same way:
+
+1. Claudette spins up a per-provider, per-model HTTP listener on `127.0.0.1:0` and mints a random auth token for that listener. The token is cached for the gateway server's lifetime (keyed by backend id + runtime hash) and reused across turns — it rotates only when the gateway restarts after a config or model change.
+2. The spawned `claude` subprocess gets `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, and `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` in its environment.
+3. The `claude` CLI thinks it's talking to api.anthropic.com; it's actually hitting Claudette's local listener.
+4. The listener translates the request body into an OpenAI Responses API call (`POST /v1/responses` for OpenAI; `POST /codex/responses` for the Codex subscription path — the unversioned form is intentional, since the upstream Codex Responses endpoint lives directly under `https://chatgpt.com/backend-api/codex/responses` with no `/v1/` segment) and translates the streaming response back into Anthropic's event format.
+
+This is why the chat-header **Thinking**, **Effort**, **Fast mode**, and **1M-context** toggles are hidden when either provider is active — there are no equivalents in the OpenAI Responses shape.
+
+If you change the provider config or selected model, the gateway restarts on the next agent turn.
+
+## Custom OpenAI-shaped endpoints
+
+The `CustomOpenAi` backend kind exists in the data model but isn't yet exposed in the Settings panel — there's no in-GUI flow to add a custom endpoint. When that flow lands, the same gateway path will work for any provider that implements `/v1/responses` (Together, Groq, OpenRouter, Fireworks, vLLM, etc.). Providers that only ship `/v1/chat/completions` won't work behind the gateway until they add the Responses API.
+
+## Troubleshooting
+
+**Test fails on OpenAI API** — the API key is invalid or rate-limited. Re-paste it; check the dashboard at `platform.openai.com/usage`.
+
+**Refresh models returns nothing on Codex** — your subscription tier may not have Codex access enabled. Confirm at `chatgpt.com/codex`.
+
+**Agent immediately errors with "no models"** — you haven't refreshed the model list, or the upstream returned no entries. Click **Refresh models** in Settings > Models.
+
+**Gateway restart loop** — usually caused by the upstream rejecting the translated request. Open the agent's terminal tab to see stderr from the listener; common causes are a model ID the upstream doesn't recognize or a `system` prompt the gateway dropped during translation.
+
+## See also
+
+- [Alternative Providers overview](/claudette/features/providers/) — capability matrix and architecture
+- [Ollama](/claudette/features/providers/ollama/) — the native (non-gateway) alternative
+- [Authentication](/claudette/features/authentication/) — how Claudette manages credentials for the default Anthropic backend

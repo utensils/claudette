@@ -1,0 +1,99 @@
+---
+title: MCP Servers
+description: Detect, configure, and supervise Model Context Protocol servers per repository.
+---
+
+Claudette discovers Model Context Protocol (MCP) servers from every place Claude Code looks, lets you pick which ones each repository should activate, and supervises their connections so a misconfigured server doesn't hang the agent.
+
+## How detection works
+
+When you open a repository, Claudette scans four sources and merges the results by name (later sources override earlier ones):
+
+1. **`~/.claude.json` → `mcpServers`** — your user-global MCP entries.
+2. **`~/.claude.json` → `projects[<repo path>].mcpServers`** — user-scoped project entries.
+3. **`<repo>/.mcp.json`** — committed project servers (shared with collaborators).
+4. **`<repo>/.claude.json`** — repo-local config (only used when the file is gitignored, so secrets in this file never end up in commits).
+
+Anything contributed by an enabled Claude Code plugin is added on top, without overriding an explicit config of the same name.
+
+This mirrors what Claude Code itself does — running an agent inside a worktree picks up the same set even if Claudette never opened the UI.
+
+## The MCP settings panel
+
+**Settings > Repository > MCP servers** shows the merged list with a checkbox per server. Toggle a server off to mark it disabled in the database; saving the form replaces the repository's saved config (never deletes any of the source files).
+
+The panel shows three things per server:
+
+- **Name** — the key in the `mcpServers` object.
+- **Source** — which of the four scopes contributed it (`user_global_config`, `user_project_config`, `project_mcp_json`, `repo_local_config`, or `plugin`).
+- **Enabled** — whether Claudette will pass this server to the spawned `claude` process via `--mcp-config`.
+
+Initial enabled state respects `~/.claude.json`'s `disabledMcpServers` list, so a server you disabled in another tool stays disabled here.
+
+## Supervision and status
+
+Claudette doesn't speak MCP protocol directly — it passes `--mcp-config` to the Claude CLI subprocess. The supervision layer pre-validates servers before each agent turn and watches the agent event stream for connection failures.
+
+Each server moves through a small state machine:
+
+| State | Meaning |
+|---|---|
+| **Connected** | Reachable; command exists; HTTP/SSE endpoint responds. |
+| **Pending** | Awaiting validation or reconnecting. |
+| **Failed** | Validation failed or the agent reported a terminal error (`ECONNRESET`, `ETIMEDOUT`, `Connection closed`, ...). |
+| **Disabled** | Manually disabled in the settings panel. |
+
+Status changes broadcast to the UI via `tokio::sync::watch`, so the indicator updates the instant something flips. The terminal-error pattern list is the same one Claude Code uses internally; if Claude considers a connection terminally broken, Claudette does too.
+
+The supervisor lives in the `claudette` library crate, so the same behavior applies whether you're running the desktop app or the standalone `claudette-server` for [remote workspaces](/claudette/features/remote-workspaces/).
+
+## Transports
+
+A server's transport is read from the explicit `type` field in its config: `"stdio"`, `"http"`, or `"sse"`.
+
+When detection runs, Claudette **normalizes** every parsed config by inserting `"type": "stdio"` if no `type` is present — so a config with a `url` but no `type` is persisted and validated as stdio (the runtime fallback heuristic for URL-only configs is unreachable for saved servers). In practice this means:
+
+- For HTTP servers, you must set `"type": "http"` explicitly.
+- For SSE servers, you must set `"type": "sse"` explicitly.
+- For stdio servers, `"type"` is optional — you can omit it and the normalizer will fill it in.
+
+If an HTTP/SSE server's config arrives without a `type`, validation will run the wrong transport check and the supervisor will mark it Failed.
+
+## Example: committed `.mcp.json`
+
+```json
+{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+      }
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/srv/notes"]
+    }
+  }
+}
+```
+
+Commit this file to share servers across the team. Use `<repo>/.claude.json` (gitignored) for any server whose config contains secrets.
+
+## Env-provider integration
+
+MCP servers run with the merged environment from the workspace's [env-provider plugins](/claudette/features/scm-providers/#environment-provider-plugins). If you use direnv, mise, dotenv, or `nix print-dev-env`, those variables are available to MCP server processes — so a server's `env` block can reference variables resolved by the env stack.
+
+## Troubleshooting
+
+**Server stays in Pending forever.** The validation step couldn't finish — usually a missing CLI (`npx`, `python`, etc.) or a network endpoint that doesn't respond. Open the agent's terminal tab to see the stderr from the spawned command.
+
+**Server flips to Failed mid-turn.** The agent reported one of the terminal error patterns. Check the server's logs; if the connection is intermittent, the supervisor will mark it Failed only after the configured retry budget is exhausted.
+
+**Server is detected but never enabled.** It may be in your `disabledMcpServers` list. Re-enable it in the MCP settings panel and save.
+
+## See also
+
+- [Per-Repo Settings](/claudette/features/per-repo-settings/) — where the MCP panel lives and how it interacts with other repo-scoped state
+- [Remote Workspaces](/claudette/features/remote-workspaces/) — supervision behaves identically when running `claudette-server` headless

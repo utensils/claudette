@@ -4,6 +4,13 @@ import starlight from '@astrojs/starlight';
 export default defineConfig({
   site: 'https://utensils.github.io',
   base: '/claudette',
+  // Redirects from old slugs that have been published. Keep these even after
+  // the slug is renamed so external links / bookmarks don't 404.
+  // Note: Astro applies the `base` prefix to source paths but not to
+  // destination paths, so the destination must include `/claudette` itself.
+  redirects: {
+    '/features/alternative-backends': '/claudette/features/providers',
+  },
   integrations: [
     starlight({
       title: 'Claudette',
@@ -69,31 +76,72 @@ export default defineConfig({
           items: [
             { slug: 'features/parallel-agents' },
             { slug: 'features/git-worktrees' },
-            { slug: 'features/scm-providers' },
+            { slug: 'features/checkpoints-and-forking' },
             { slug: 'features/diff-viewer' },
             { slug: 'features/file-editor' },
             { slug: 'features/integrated-terminal' },
-            { slug: 'features/remote-workspaces' },
-            { slug: 'features/claude-remote-control' },
-            { slug: 'features/agent-configuration' },
-            { slug: 'features/pinned-prompts' },
-            { slug: 'features/theming' },
             { slug: 'features/notifications' },
             { slug: 'features/voice-input' },
             { slug: 'features/keyboard-shortcuts' },
-            { slug: 'features/per-repo-settings' },
-            { slug: 'features/settings' },
+            { slug: 'features/theming' },
             { slug: 'features/internationalization' },
+          ],
+        },
+        {
+          label: 'Alternative Providers',
+          items: [
+            { slug: 'features/providers' },
+            { slug: 'features/providers/ollama' },
+            { slug: 'features/providers/openai-codex' },
+          ],
+        },
+        {
+          label: 'Agent Workflow',
+          items: [
+            { slug: 'features/agent-configuration' },
+            { slug: 'features/plan-mode' },
+            { slug: 'features/slash-commands' },
+            { slug: 'features/pinned-prompts' },
+            { slug: 'features/authentication' },
+            { slug: 'features/usage-and-metrics' },
+          ],
+        },
+        {
+          label: 'Integrations',
+          items: [
+            { slug: 'features/scm-providers' },
+            { slug: 'features/mcp-servers' },
+            { slug: 'features/per-repo-settings' },
+            { slug: 'features/claude-remote-control' },
+          ],
+        },
+        {
+          label: 'Remote & CLI',
+          items: [
+            { slug: 'features/remote-workspaces' },
+            { slug: 'features/cli-client' },
+          ],
+        },
+        {
+          label: 'Settings & Trust',
+          items: [
+            { slug: 'features/settings' },
+            { slug: 'features/experimental-features' },
             { slug: 'features/community-registry-trust' },
+            { slug: 'privacy' },
           ],
         },
         {
           label: 'Quickstart',
           autogenerate: { directory: 'quickstart' },
         },
-        { slug: 'built-with' },
-        { slug: 'contributing-translations' },
-        { slug: 'privacy' },
+        {
+          label: 'About',
+          items: [
+            { slug: 'built-with' },
+            { slug: 'contributing-translations' },
+          ],
+        },
       ],
       lastUpdated: true,
     }),

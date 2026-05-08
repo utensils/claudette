@@ -1,0 +1,101 @@
+---
+title: Plan Mode
+description: Have the agent draft a plan and wait for your approval before running tools or modifying files.
+---
+
+Plan mode runs the agent in a **read-only** state until it produces a plan and you explicitly approve it. The agent can read files and reason out loud; it cannot use tools that modify state until the plan is accepted.
+
+This is the right default for unfamiliar tasks, risky refactors, or any time you want to see what the agent intends before letting it loose.
+
+## Turning it on
+
+Per turn:
+
+- **Toggle in the chat header** — there's a plan-mode chip next to the model selector.
+- **Keyboard shortcut** — `Shift + Tab` toggles plan mode for the next message.
+- **Slash command** — `/plan` enables plan mode for your next turn.
+
+Per session by default:
+
+- **Settings > Models > Default plan mode** — every new session starts in plan mode.
+
+From the [CLI](/claudette/features/cli-client/):
+
+```sh
+claudette chat send <session-id> "Refactor the auth middleware" --plan
+```
+
+The CLI's `--plan` / `--no-plan` flags are tri-state: pass `--plan` to force on, `--no-plan` to force off, or omit both to inherit the GUI default.
+
+## The plan card
+
+When the agent finishes drafting, the chat surfaces a **plan card** with:
+
+- The plan body — usually a stepwise outline of intended changes.
+- The list of files the agent expects to touch.
+- **Approve** and **Deny** buttons.
+
+While the card is unresolved, the session sits in **attention** state — the workspace tab gets a pulsing dot, the system tray badge updates, and (if enabled in settings) a notification fires. This is the same attention pathway used for [AskUserQuestion](#asking-questions-mid-turn) prompts.
+
+### Approving
+
+Click **Approve** and the agent re-enters tool-use mode immediately, executing the plan it drafted. No re-prompting needed.
+
+### Denying with feedback
+
+Click **Deny** to open a feedback box. Whatever you type is sent to the agent as the next user turn — so this is the right path when you want a different approach, not a full restart. Examples that work well:
+
+- "Use middleware composition instead of inheritance — see `src/auth/wrap.ts` for the pattern."
+- "The test plan is fine but skip the legacy adapter for now."
+- "Read `docs/onboarding.md` first, then redo the plan."
+
+Denying without feedback is allowed but rarely useful — the agent has no signal about *why* you said no.
+
+## Asking questions mid-turn
+
+Plan mode and the broader **AskUserQuestion** mechanism share the same approval surface. When an agent inside Claudette asks a structured question (the `AskUserQuestion` tool), it pauses with the same attention/notification pathway and surfaces a question card with the available options.
+
+Resolve it by clicking your answer, or via the CLI:
+
+```sh
+claudette chat answer <session-id> <tool-use-id> \
+  --answers-json '{"Which library should we use?":"date-fns"}'
+```
+
+`tool_use_id` is in the `pending_controls` field returned by `claudette chat show <session-id>`.
+
+## Resolving from the CLI
+
+Both plan approvals and AskUserQuestion answers can be resolved without opening the GUI — useful for orchestration agents driving Claudette over the IPC socket. The repository ships a [Claude Code skill](/claudette/features/cli-client/#driving-claudette-from-a-claude-code-agent) that pre-grants an agent permission to run these commands, so a "main" agent can review and resolve pending controls in a "worker" agent's session without permission prompts.
+
+```sh
+# Approve a plan
+claudette chat approve-plan <session-id> <tool-use-id>
+
+# Deny with feedback
+claudette chat deny-plan <session-id> <tool-use-id> "Try the composition approach instead"
+
+# Answer a structured question
+claudette chat answer <session-id> <tool-use-id> \
+  --answers-json '{"Question text exactly as displayed":"Selected answer"}'
+```
+
+The `chat show` snapshot includes a `pending_controls` array; iterate it to find unresolved entries.
+
+## How it interacts with permissions
+
+`--permission-mode plan` is what Claudette passes to the underlying `claude` subprocess when plan mode is on for a turn. While the CLI is in plan mode, the agent's edit/bash/write tools are no-ops — they get the plan-mode response from Claude Code itself, not Claudette.
+
+Approval flips the permission mode and the in-flight session continues. Denial-with-feedback ends the read-only turn and starts a new turn with your reason as the next user message.
+
+## Tips
+
+- **Plan + fork** is a powerful pair — read the plan, fork the workspace from the plan checkpoint to try it, and keep the original session alive in case you want to deny and try again. See [Checkpoints & Forking](/claudette/features/checkpoints-and-forking/).
+- **Plan without permanent toggle** — `Shift + Tab` is faster than touching settings if you only need plan mode for one turn.
+- **Notifications fire on every attention transition.** If they're noisy, dial them down in **Settings > Notifications** or mute the per-event sound while keeping the badge.
+
+## See also
+
+- [Agent Configuration](/claudette/features/agent-configuration/) — model, effort, thinking, fast-mode and how they interact with plan mode
+- [Notifications](/claudette/features/notifications/) — controlling the attention pathway
+- [Command-Line Client](/claudette/features/cli-client/#resolving-pending-controls) — driving approvals from a script
