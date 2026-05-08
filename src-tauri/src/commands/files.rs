@@ -13,6 +13,25 @@ use claudette::process::CommandWindowExt as _;
 
 const MAX_FILES: usize = 10_000;
 
+/// Top-level directory names that are always excluded from file listings,
+/// regardless of `.gitignore`, to avoid overwhelming the panel with
+/// dependency/build trees.
+const SKIP_DIR_PREFIXES: &[&str] = &[
+    "node_modules/",
+    "target/",
+    ".gradle/",
+    "Pods/",
+    ".venv/",
+    "venv/",
+    "__pycache__/",
+    ".next/",
+    ".nuxt/",
+];
+
+fn is_high_volume_path(path: &str) -> bool {
+    SKIP_DIR_PREFIXES.iter().any(|prefix| path.starts_with(prefix))
+}
+
 #[derive(Clone, Serialize)]
 pub struct FileEntry {
     pub path: String,
@@ -79,7 +98,8 @@ const MAX_VIEWER_FILE_SIZE: usize = 10 * 1024 * 1024;
 /// List files in a workspace's worktree using `git ls-files`.
 ///
 /// Returns all files — tracked, untracked, and gitignored — capped at 10,000
-/// entries. Paths are relative to the worktree root.
+/// entries, excluding common high-volume build/dependency trees. Paths are
+/// relative to the worktree root.
 #[tauri::command]
 pub async fn list_workspace_files(
     workspace_id: String,
@@ -96,57 +116,93 @@ pub async fn list_workspace_files(
         .as_ref()
         .ok_or("Workspace has no worktree")?;
 
-    let output = Command::new(claudette::git::resolve_git_path_blocking())
+    collect_workspace_file_entries(worktree_path).await
+}
+
+/// Stream `git ls-files --cached --others -z` from `worktree_path`, stopping
+/// after `MAX_FILES` accepted entries and skipping high-volume directory trees.
+/// Uses NUL-delimited output (`-z`) so filenames with newlines or special
+/// characters are handled correctly without git's path quoting.
+async fn collect_workspace_file_entries(worktree_path: &str) -> Result<Vec<FileEntry>, String> {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let mut child = Command::new(claudette::git::resolve_git_path_blocking())
         .no_console_window()
         .args(["-C", worktree_path])
-        .args(["ls-files", "--cached", "--others"])
-        .output()
-        .await
-        .map_err(|e| format!("Failed to run git ls-files: {e}"))?;
+        .args(["ls-files", "--cached", "--others", "-z"])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn git ls-files: {e}"))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("git ls-files failed: {stderr}"));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
     let file_tree_status = claudette::diff::file_tree_git_status_with_suppressed(worktree_path)
         .await
         .map_err(|e| format!("Failed to load git status: {e}"))?;
     let git_status = file_tree_status.statuses;
     let suppressed_paths = file_tree_status.suppressed_paths;
 
-    // Collect file entries and extract unique directory paths.
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or("Failed to capture git ls-files stdout")?;
+    let mut reader = BufReader::new(stdout);
+
     let mut dirs = std::collections::BTreeSet::new();
     let mut seen_files = std::collections::BTreeSet::new();
-    let mut entries: Vec<FileEntry> = stdout
-        .lines()
-        .filter(|line| !line.is_empty())
-        .take(MAX_FILES)
-        .filter_map(|line| {
-            if suppressed_paths.contains(line) {
-                return None;
-            }
-            let status = git_status.get(line);
-            seen_files.insert(line.to_string());
-            // Extract all parent directories from the file path.
-            let mut pos = 0;
-            while let Some(slash) = line[pos..].find('/') {
-                let dir_end = pos + slash;
-                dirs.insert(line[..=dir_end].to_string());
-                pos = dir_end + 1;
-            }
-            Some(FileEntry {
-                path: line.to_string(),
-                is_directory: false,
-                git_status: status.map(|s| s.status.clone()),
-                git_layer: status.map(|s| s.layer),
-            })
-        })
-        .collect();
+    let mut entries: Vec<FileEntry> = Vec::new();
+    let mut buf = Vec::new();
+
+    loop {
+        buf.clear();
+        let n = reader
+            .read_until(0, &mut buf)
+            .await
+            .map_err(|e| format!("Failed to read git ls-files output: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        if buf.last() == Some(&0) {
+            buf.pop();
+        }
+        if buf.is_empty() {
+            continue;
+        }
+        let line = match std::str::from_utf8(&buf) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+
+        if suppressed_paths.contains(line) || is_high_volume_path(line) {
+            continue;
+        }
+
+        if entries.len() >= MAX_FILES {
+            let _ = child.kill().await;
+            break;
+        }
+
+        let status = git_status.get(line);
+        seen_files.insert(line.to_string());
+        let mut pos = 0;
+        while let Some(slash) = line[pos..].find('/') {
+            let dir_end = pos + slash;
+            dirs.insert(line[..=dir_end].to_string());
+            pos = dir_end + 1;
+        }
+        entries.push(FileEntry {
+            path: line.to_string(),
+            is_directory: false,
+            git_status: status.map(|s| s.status.clone()),
+            git_layer: status.map(|s| s.layer),
+        });
+    }
+
+    let _ = child.wait().await;
 
     for (path, status) in &git_status {
-        if entries.len() >= MAX_FILES || seen_files.contains(path) {
+        if entries.len() >= MAX_FILES
+            || seen_files.contains(path)
+            || is_high_volume_path(path)
+        {
             continue;
         }
         let mut pos = 0;
@@ -164,7 +220,6 @@ pub async fn list_workspace_files(
         });
     }
 
-    // Prepend directory entries (sorted alphabetically by BTreeSet).
     let dir_entries: Vec<FileEntry> = dirs
         .into_iter()
         .map(|path| FileEntry {
@@ -1568,6 +1623,67 @@ pub async fn copy_attachment_file_to_clipboard(
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn list_includes_gitignored_files() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+
+        // Bootstrap a minimal git repo with one commit so HEAD exists.
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "test@test.com"],
+            vec!["config", "user.name", "Test"],
+        ] {
+            std::process::Command::new("git")
+                .args(&args)
+                .current_dir(root)
+                .output()
+                .unwrap();
+        }
+        std::fs::write(root.join("tracked.txt"), "hello").unwrap();
+        for args in [vec!["add", "tracked.txt"], vec!["commit", "-m", "init"]] {
+            std::process::Command::new("git")
+                .args(&args)
+                .current_dir(root)
+                .output()
+                .unwrap();
+        }
+
+        // Create a gitignored file that an agent might produce for local use.
+        std::fs::write(root.join(".gitignore"), "local-notes.md\n").unwrap();
+        std::fs::write(root.join("local-notes.md"), "agent docs").unwrap();
+
+        let entries = collect_workspace_file_entries(&root.to_string_lossy())
+            .await
+            .unwrap();
+
+        let files: Vec<&str> = entries
+            .iter()
+            .filter(|e| !e.is_directory)
+            .map(|e| e.path.as_str())
+            .collect();
+        assert!(files.contains(&"tracked.txt"), "tracked file must appear");
+        assert!(
+            files.contains(&"local-notes.md"),
+            "gitignored file must appear; got: {files:?}"
+        );
+
+        let ignored = entries.iter().find(|e| e.path == "local-notes.md").unwrap();
+        assert!(
+            ignored.git_status.is_none(),
+            "gitignored file should carry no git status badge"
+        );
+    }
+
+    #[test]
+    fn high_volume_path_matches_known_dirs() {
+        assert!(is_high_volume_path("node_modules/react/index.js"));
+        assert!(is_high_volume_path("target/debug/build/foo"));
+        assert!(is_high_volume_path(".next/static/chunks/main.js"));
+        assert!(!is_high_volume_path("src/node_modules_helper.rs"));
+        assert!(!is_high_volume_path("mytarget/foo"));
+    }
 
     #[test]
     fn write_bytes_to_absolute_path_creates_parent_dirs() {
