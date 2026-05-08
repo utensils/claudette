@@ -7,9 +7,15 @@ import { HighlightedPlainText } from "./HighlightedPlainText";
 import styles from "./ChatPanel.module.css";
 import { toolColor } from "./chatHelpers";
 import { EMPTY_ACTIVITIES } from "./chatConstants";
-import { activitySummaryText } from "./agentToolCallRendering";
+import {
+  activityMatchesSearch,
+  activitySummaryText,
+} from "./agentToolCallRendering";
 import { AgentToolCallGroup } from "./AgentToolCallGroup";
-import { groupToolActivitiesForDisplay } from "./toolActivityGroups";
+import {
+  groupHasRunningActivity,
+  groupToolActivitiesForDisplay,
+} from "./toolActivityGroups";
 
 /**
  * Current tool activities section — subscribes to toolActivities for this workspace.
@@ -63,26 +69,58 @@ export const ToolActivitiesSection = memo(function ToolActivitiesSection({
             />
           ))
         ) : (
-          <div key={group.key} className={styles.turnSummary}>
-            <div className={styles.turnHeader}>
-              <span className={styles.turnLabel}>{group.label}</span>
-            </div>
-            <div className={styles.turnActivities}>
-              {group.activities.map((act) => (
-                <ToolActivityRow
-                  key={act.toolUseId}
-                  activity={act}
-                  searchQuery={searchQuery}
-                  worktreePath={worktreePath}
-                />
-              ))}
-            </div>
-          </div>
+          <GroupedToolActivityRows
+            key={group.key}
+            label={group.label}
+            activities={group.activities}
+            searchQuery={searchQuery}
+            worktreePath={worktreePath}
+          />
         ),
       )}
     </div>
   );
 });
+
+function GroupedToolActivityRows({
+  label,
+  activities,
+  searchQuery,
+  worktreePath,
+}: {
+  label: string;
+  activities: readonly ToolActivity[];
+  searchQuery: string;
+  worktreePath?: string | null;
+}) {
+  const queryHasMatch =
+    !!searchQuery &&
+    activities.some((activity) =>
+      activityMatchesSearch(activity, searchQuery, worktreePath),
+    );
+  const isExpanded = groupHasRunningActivity(activities, true) || queryHasMatch;
+
+  return (
+    <div className={styles.turnSummary}>
+      <div className={styles.turnHeader}>
+        <span className={styles.toolChevron}>{isExpanded ? "⌄" : "›"}</span>
+        <span className={styles.turnLabel}>{label}</span>
+      </div>
+      {isExpanded && (
+        <div className={styles.turnActivities}>
+          {activities.map((act) => (
+            <ToolActivityRow
+              key={act.toolUseId}
+              activity={act}
+              searchQuery={searchQuery}
+              worktreePath={worktreePath}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ToolActivityRow({
   activity,
