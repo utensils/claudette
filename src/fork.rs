@@ -445,7 +445,12 @@ fn copy_history(
 /// granularity by reading `workspaces.session_id`; that column became dead
 /// when chat sessions arrived (20260422000000_chat_sessions), and the
 /// missed migration here is what made every fork start a fresh Claude
-/// session — see `test_fork_resumes_claude_session` for the regression pin.
+/// session — see the `copy_claude_session_*` regression pins
+/// (`copy_claude_session_copies_jsonl_and_persists_per_chat_session_state`,
+/// `copy_claude_session_handles_dot_dir_paths`,
+/// `copy_claude_session_skips_when_source_has_no_session`,
+/// `copy_claude_session_skips_when_jsonl_missing`) at the bottom of this
+/// file for the regression pins.
 ///
 /// Returns `true` if the transcript was found and copied (session id is
 /// persisted for the new chat session). Returns `false` if there was no
@@ -765,8 +770,9 @@ mod tests {
     // "I don't have context from a previous session".
 
     /// Build a fake `~/.claude/projects/<slug>/<sid>.jsonl` so
-    /// `copy_claude_session` has something to copy. Returns the temp `home`
-    /// dir so the caller can keep it alive (TempDir cleans on drop).
+    /// `copy_claude_session` has something to copy. Returns the path of the
+    /// JSONL file that was written. Callers keep the surrounding `TempDir`
+    /// alive separately (test scope drops it, which removes the file too).
     fn write_fake_jsonl(
         projects_dir: &Path,
         worktree: &str,
