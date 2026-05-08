@@ -69,6 +69,14 @@ export function clearClaudeFlagRepoOverride(
   return invoke("clear_claude_flag_repo_override", { repoId, name });
 }
 
+/// Drop the global persisted state for a flag entirely. The Settings UI
+/// uses this for the Clear (×) button on a Configured row, where simply
+/// disabling the flag (`setClaudeFlagState(_, name, false, null)`) would
+/// leave the row stuck in the Configured section.
+export function clearClaudeFlagGlobal(name: string): Promise<void> {
+  return invoke("clear_claude_flag_global", { name });
+}
+
 /// One-shot fetch: pulls the cached flag definitions plus the current global
 /// + repo state for the given repo, and runs the resolver to produce the
 /// effective enabled-flag list. Used by the workspace flags slice loader.

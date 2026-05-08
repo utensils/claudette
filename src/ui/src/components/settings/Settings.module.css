@@ -1743,7 +1743,10 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-shrink: 0;
+  /* Allow the grid track to shrink past the name's intrinsic content width
+   * so a long flag name (e.g. --exclude-dynamic-system-prompt-sections)
+   * can't push the value/action columns out of the row at narrow widths. */
+  min-width: 0;
 }
 
 .flagName {
@@ -1752,6 +1755,8 @@
   font-weight: 500;
   color: var(--text-primary);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .flagShort {

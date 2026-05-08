@@ -59,7 +59,9 @@ export function ClaudeFlagRow(props: ClaudeFlagRowProps) {
       />
 
       <div className={styles.flagNameCell}>
-        <span className={styles.flagName}>{def.name}</span>
+        <span className={styles.flagName} title={def.name}>
+          {def.name}
+        </span>
         {def.short && <span className={styles.flagShort}>{def.short}</span>}
         {def.is_dangerous && (
           <span

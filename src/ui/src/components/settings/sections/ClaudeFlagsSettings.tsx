@@ -5,6 +5,7 @@ import {
   type ClaudeFlagDef,
   type FlagScope,
   type FlagStateResponse,
+  clearClaudeFlagGlobal,
   clearClaudeFlagRepoOverride,
   getClaudeFlagState,
   listClaudeFlags,
@@ -182,16 +183,29 @@ export function ClaudeFlagsSettings({
     [state, scope, loadState, invalidateScope],
   );
 
-  /// Promote a flag into a configured/repo-override entry. Mirrors the old
-  /// per-row "Override" toggle's `true` branch but is now driven from the
-  /// browse and inherited sections. The backend seeds the value from the
-  /// current effective state when value is null.
+  /// Promote a flag into a configured/repo-override entry. The action's
+  /// "enabled" semantics depend on which section it came from:
+  /// - Browse (no state at this scope): force enabled. A disabled fresh
+  ///   entry would be a no-op — the user's click would look like nothing
+  ///   happened.
+  /// - Inherited (repo scope, flag exists in state.global): mirror the
+  ///   global enabled state. Override here means "take ownership without
+  ///   flipping the active state" — matching the pre-redesign behaviour
+  ///   of the old per-row Override checkbox.
   const handlePromote = useCallback(
     async (def: ClaudeFlagDef) => {
       if (!state) return;
       const current = rowStateFor(def, state, scope);
+      const isInheritedOverride =
+        scope.kind === "repo" && state.global[def.name] !== undefined;
+      const nextEnabled = isInheritedOverride ? current.enabled : true;
       try {
-        await setClaudeFlagState(scope, def.name, true, current.value || null);
+        await setClaudeFlagState(
+          scope,
+          def.name,
+          nextEnabled,
+          current.value || null,
+        );
         invalidateScope();
         await loadState();
       } catch (e) {
@@ -201,16 +215,19 @@ export function ClaudeFlagsSettings({
     [state, scope, loadState, invalidateScope],
   );
 
-  /// Clear the flag's persisted state at this scope. Mirrors the old
-  /// per-row "Override" toggle's `false` branch at repo scope, and acts as
-  /// "uninstall" at global scope.
+  /// Drop the flag's persisted state at this scope so the row leaves the
+  /// Configured / Repo overrides section and returns to Browse.
+  /// At repo scope this clears the override sentinel; at global scope it
+  /// deletes both the `:enabled` and `:value` keys (`setClaudeFlagState`
+  /// with `enabled: false` would only flip the entry to disabled, leaving
+  /// it visible in `state.global` and stuck in Configured).
   const handleClear = useCallback(
     async (def: ClaudeFlagDef) => {
       try {
         if (scope.kind === "repo") {
           await clearClaudeFlagRepoOverride(scope.repoId, def.name);
         } else {
-          await setClaudeFlagState(scope, def.name, false, null);
+          await clearClaudeFlagGlobal(def.name);
         }
         invalidateScope();
         await loadState();
