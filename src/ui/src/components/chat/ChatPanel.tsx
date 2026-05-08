@@ -243,6 +243,7 @@ export function ChatPanel() {
   const addCheckpoint = useAppStore((s) => s.addCheckpoint);
   const addWorkspace = useAppStore((s) => s.addWorkspace);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
+  const toolDisplayMode = useAppStore((s) => s.toolDisplayMode);
   const activeSessionStatus = useAppStore((s) => {
     if (!activeSessionId || !selectedWorkspaceId) return "Idle" as const;
     const sessions = s.sessionsByWorkspace[selectedWorkspaceId];
@@ -1250,11 +1251,12 @@ export function ChatPanel() {
                   liveToolActivityStartedAt={
                     activitiesCount > 0 ? firstToolActivityStartedAt : null
                   }
+                  toolDisplayMode={toolDisplayMode}
                   liveToolActivityNode={
                     activitiesCount > 0 ? (
                       <ToolActivitiesSection
                         sessionId={activeSessionId}
-                        isRunning={isRunning ?? false}
+                        toolDisplayMode={toolDisplayMode}
                         searchQuery={searchQuery}
                         worktreePath={ws?.worktree_path}
                       />
@@ -1265,22 +1267,24 @@ export function ChatPanel() {
                       <CurrentTurnTaskProgress sessionId={activeSessionId} />
                     ) : null
                   }
-                />
-              )}
-
-              {activeSessionId && hasThinking && showThinkingBlocks && (
-                <StreamingThinkingBlock
-                  sessionId={activeSessionId}
-                  isStreaming={isRunning ?? false}
-                  searchQuery={searchQuery}
-                />
-              )}
-
-              {activeSessionId && (hasStreaming || hasPendingTypewriter) && (
-                <StreamingMessage
-                  sessionId={activeSessionId}
-                  isStreaming={isRunning ?? false}
-                  searchQuery={searchQuery}
+                  streamingThinkingNode={
+                    hasThinking && showThinkingBlocks ? (
+                      <StreamingThinkingBlock
+                        sessionId={activeSessionId}
+                        isStreaming={isRunning ?? false}
+                        searchQuery={searchQuery}
+                      />
+                    ) : null
+                  }
+                  streamingMessageNode={
+                    hasStreaming || hasPendingTypewriter ? (
+                      <StreamingMessage
+                        sessionId={activeSessionId}
+                        isStreaming={isRunning ?? false}
+                        searchQuery={searchQuery}
+                      />
+                    ) : null
+                  }
                 />
               )}
 

@@ -33,6 +33,8 @@ export function AppearanceSettings() {
   const systemFonts = useAppStore((s) => s.systemFonts);
   const showSidebarRunningCommands = useAppStore((s) => s.showSidebarRunningCommands);
   const setShowSidebarRunningCommands = useAppStore((s) => s.setShowSidebarRunningCommands);
+  const toolDisplayMode = useAppStore((s) => s.toolDisplayMode);
+  const setToolDisplayMode = useAppStore((s) => s.setToolDisplayMode);
 
   const isFollowSystem = themeMode === "system";
 
@@ -400,6 +402,38 @@ export function AppearanceSettings() {
             onChange={(e) => setTermFontSize(e.target.value)}
             onBlur={handleTermFontSizeBlur}
           />
+        </div>
+      </div>
+
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>{t("appearance_group_tool_calls")}</div>
+          <div className={styles.settingDescription}>
+            {t("appearance_group_tool_calls_desc")}
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          <button
+            className={styles.toggle}
+            role="switch"
+            aria-checked={toolDisplayMode === "grouped"}
+            aria-label={t("appearance_group_tool_calls")}
+            data-checked={toolDisplayMode === "grouped"}
+            onClick={async () => {
+              const previous = toolDisplayMode;
+              const next = previous === "grouped" ? "inline" : "grouped";
+              setToolDisplayMode(next);
+              try {
+                setError(null);
+                await setAppSetting("tool_display_mode", next);
+              } catch (e) {
+                setToolDisplayMode(previous);
+                setError(String(e));
+              }
+            }}
+          >
+            <div className={styles.toggleKnob} />
+          </button>
         </div>
       </div>
 

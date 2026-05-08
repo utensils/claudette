@@ -1,21 +1,15 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo } from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import type { ToolActivity } from "../../stores/useAppStore";
+import type { ToolDisplayMode } from "../../stores/slices/settingsSlice";
 import { relativizePath } from "../../hooks/toolSummary";
 import { HighlightedPlainText } from "./HighlightedPlainText";
 import styles from "./ChatPanel.module.css";
 import { toolColor } from "./chatHelpers";
 import { EMPTY_ACTIVITIES } from "./chatConstants";
-import {
-  activityMatchesSearch,
-  activitySummaryText,
-} from "./agentToolCallRendering";
+import { activitySummaryText } from "./agentToolCallRendering";
 import { AgentToolCallGroup } from "./AgentToolCallGroup";
-import {
-  groupHasRunningActivity,
-  groupToolActivitiesForDisplay,
-  isAgentActivity,
-} from "./toolActivityGroups";
+import { groupToolActivitiesForDisplay } from "./toolActivityGroups";
 
 /**
  * Current tool activities section — subscribes to toolActivities for this workspace.
@@ -23,110 +17,97 @@ import {
  */
 export const ToolActivitiesSection = memo(function ToolActivitiesSection({
   sessionId,
-  isRunning,
+  toolDisplayMode,
   searchQuery,
   worktreePath,
 }: {
   sessionId: string;
-  isRunning: boolean;
+  toolDisplayMode: ToolDisplayMode;
   searchQuery: string;
   worktreePath?: string | null;
 }) {
   const activities = useAppStore(
     (s) => s.toolActivities[sessionId] ?? EMPTY_ACTIVITIES,
   );
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(
-    {},
-  );
-
-  // Auto-collapse when a new turn starts (activities goes from 0 to non-zero)
-  const prevLengthRef = useRef(0);
-  useEffect(() => {
-    if (isRunning && activities.length > 0 && prevLengthRef.current === 0) {
-      setCollapsedGroups({});
-    }
-    prevLengthRef.current = activities.length;
-  }, [isRunning, activities.length]);
-
-  if (activities.length === 0) return null;
-
-  const groups = groupToolActivitiesForDisplay(activities);
+  const displayGroups = groupToolActivitiesForDisplay(activities, toolDisplayMode);
+  if (displayGroups.length === 0) return null;
 
   return (
-    <div className={styles.toolActivities} aria-live="polite" aria-atomic="true">
-      {groups.map((group) => {
-        const groupHasMatch =
-          !!searchQuery &&
-          group.activities.some((activity) =>
-            activityMatchesSearch(activity, searchQuery, worktreePath),
-          );
-        const isExpanded = !(collapsedGroups[group.key] ?? true) || groupHasMatch;
-        const toggleGroup = () =>
-          setCollapsedGroups((current) => ({
-            ...current,
-            [group.key]: !(current[group.key] ?? true),
-          }));
-        return (
+    <div
+      className={
+        toolDisplayMode === "inline"
+          ? `${styles.toolActivities} ${styles.inlineTurnActivities}`
+          : styles.toolActivities
+      }
+      aria-live="polite"
+      aria-atomic="true"
+    >
+      {displayGroups.map((group) =>
+        group.kind === "agent" && group.activities[0] ? (
+          <AgentToolCallGroup
+            key={group.key}
+            activity={group.activities[0]}
+            searchQuery={searchQuery}
+            worktreePath={worktreePath}
+          />
+        ) : toolDisplayMode === "inline" ? (
+          group.activities.map((act) => (
+            <ToolActivityRow
+              key={act.toolUseId}
+              activity={act}
+              searchQuery={searchQuery}
+              worktreePath={worktreePath}
+            />
+          ))
+        ) : (
           <div key={group.key} className={styles.turnSummary}>
-            <div
-              className={styles.turnHeader}
-              role="button"
-              tabIndex={0}
-              onClick={toggleGroup}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  toggleGroup();
-                }
-              }}
-            >
-              <span className={styles.toolChevron}>{isExpanded ? "⌄" : "›"}</span>
-              <span className={styles.turnLabel}>
-                {group.label}
-                {groupHasRunningActivity(group.activities, isRunning) && (
-                  <span className={styles.inProgressNote}> in progress</span>
-                )}
-              </span>
+            <div className={styles.turnHeader}>
+              <span className={styles.turnLabel}>{group.label}</span>
             </div>
-            {isExpanded && (
-              <div className={styles.turnActivities}>
-                {group.activities.map((act: ToolActivity) =>
-                  isAgentActivity(act) ? (
-                    <AgentToolCallGroup
-                      key={act.toolUseId}
-                      activity={act}
-                      searchQuery={searchQuery}
-                      worktreePath={worktreePath}
-                    />
-                  ) : (
-                    <div key={act.toolUseId} className={styles.toolActivity}>
-                      <div className={styles.toolHeader}>
-                        <span
-                          className={styles.toolName}
-                          style={{ color: toolColor(act.toolName) }}
-                        >
-                          {act.toolName}
-                        </span>
-                        {activitySummaryText(act) && (
-                          <span className={styles.toolSummary}>
-                            <HighlightedPlainText
-                              text={relativizePath(
-                                activitySummaryText(act),
-                                worktreePath,
-                              )}
-                              query={searchQuery}
-                            />
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  ),
-                )}
-              </div>
-            )}
+            <div className={styles.turnActivities}>
+              {group.activities.map((act) => (
+                <ToolActivityRow
+                  key={act.toolUseId}
+                  activity={act}
+                  searchQuery={searchQuery}
+                  worktreePath={worktreePath}
+                />
+              ))}
+            </div>
           </div>
-        );
-      })}
+        ),
+      )}
     </div>
   );
 });
+
+function ToolActivityRow({
+  activity,
+  searchQuery,
+  worktreePath,
+}: {
+  activity: ToolActivity;
+  searchQuery: string;
+  worktreePath?: string | null;
+}) {
+  return (
+    <div className={styles.toolActivity}>
+      <div className={styles.toolHeader}>
+        <span
+          className={styles.toolName}
+          style={{ color: toolColor(activity.toolName) }}
+        >
+          {activity.toolName}
+        </span>
+        {activitySummaryText(activity) && (
+          <span className={styles.toolSummary}>
+            <HighlightedPlainText
+              text={relativizePath(activitySummaryText(activity), worktreePath)}
+              query={searchQuery}
+            />
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}

@@ -54,6 +54,7 @@ function App() {
   const setUsageInsightsEnabled = useAppStore((s) => s.setUsageInsightsEnabled);
   const setClaudetteTerminalEnabled = useAppStore((s) => s.setClaudetteTerminalEnabled);
   const setShowSidebarRunningCommands = useAppStore((s) => s.setShowSidebarRunningCommands);
+  const setToolDisplayMode = useAppStore((s) => s.setToolDisplayMode);
   const setPluginManagementEnabled = useAppStore((s) => s.setPluginManagementEnabled);
   const setClaudeRemoteControlEnabled = useAppStore(
     (s) => s.setClaudeRemoteControlEnabled,
@@ -253,6 +254,11 @@ function App() {
       .catch(() => {});
     getAppSetting("show_sidebar_running_commands")
       .then((val) => { if (val === "true") setShowSidebarRunningCommands(true); })
+      .catch(() => {});
+    getAppSetting("tool_display_mode")
+      .then((val) => {
+        if (val === "inline" || val === "grouped") setToolDisplayMode(val);
+      })
       .catch(() => {});
     getAppSetting("plugin_management_enabled")
       .then((val) => { if (val === "true") setPluginManagementEnabled(true); })

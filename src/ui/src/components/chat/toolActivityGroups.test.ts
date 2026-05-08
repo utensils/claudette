@@ -21,7 +21,7 @@ function activity(
 }
 
 describe("toolActivityGroups", () => {
-  it("keeps direct tools together and splits agents into their own groups", () => {
+  it("groups adjacent regular tools and preserves chronological agent positions", () => {
     const groups = groupToolActivitiesForDisplay([
       activity("Bash"),
       activity("Glob"),
@@ -41,6 +41,28 @@ describe("toolActivityGroups", () => {
       ["Agent"],
       ["Read"],
       ["Agent"],
+    ]);
+  });
+
+  it("renders one item per top-level activity in inline mode", () => {
+    const groups = groupToolActivitiesForDisplay(
+      [
+        activity("Bash"),
+        activity("Agent", { agentDescription: "Survey UI" }),
+        activity("Glob"),
+      ],
+      "inline",
+    );
+
+    expect(groups.map((group) => group.label)).toEqual([
+      "Bash",
+      "Agent Survey UI",
+      "Glob",
+    ]);
+    expect(groups.map((group) => group.activities.map((item) => item.toolName))).toEqual([
+      ["Bash"],
+      ["Agent"],
+      ["Glob"],
     ]);
   });
 

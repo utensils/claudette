@@ -1,6 +1,7 @@
 import React, { memo, useCallback, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
+import type { ToolDisplayMode } from "../../stores/slices/settingsSlice";
 import type { CompletedTurn } from "../../stores/useAppStore";
 import { loadAttachmentData } from "../../services/tauri";
 import type { ChatMessage, ChatAttachment } from "../../types/chat";
@@ -66,8 +67,11 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   searchQuery,
   globalOffset = 0,
   liveToolActivityStartedAt,
+  toolDisplayMode,
   liveToolActivityNode,
   liveTaskProgressNode,
+  streamingThinkingNode,
+  streamingMessageNode,
 }: {
   messages: ChatMessage[];
   /** The enclosing workspace id — forwarded into rollback data so the modal
@@ -104,8 +108,11 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
    *  positions (which are global) against the local message array. */
   globalOffset?: number;
   liveToolActivityStartedAt?: string | null;
+  toolDisplayMode: ToolDisplayMode;
   liveToolActivityNode?: React.ReactNode;
   liveTaskProgressNode?: React.ReactNode;
+  streamingThinkingNode?: React.ReactNode;
+  streamingMessageNode?: React.ReactNode;
 }) {
   const { t } = useTranslation("chat");
   const completedTurns = useAppStore(
@@ -260,7 +267,10 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
       let hasFinalGroup = false;
       for (const [position, activities] of activitiesByPosition) {
         positions.add(position);
-        const displayGroups = groupToolActivitiesForDisplay(activities);
+        const displayGroups = groupToolActivitiesForDisplay(
+          activities,
+          toolDisplayMode,
+        );
         const finalGroupIndex =
           position === turn.afterMessageIndex ? displayGroups.length - 1 : -1;
         hasFinalGroup ||= finalGroupIndex >= 0;
@@ -285,7 +295,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
     });
 
     return { groupsByPosition, finalFooterByPosition, positions };
-  }, [completedTurns, findTriggeringUserIdx, globalOffset, messages]);
+  }, [completedTurns, findTriggeringUserIdx, globalOffset, messages, toolDisplayMode]);
 
   const completedTurnPositions = chronologicalTurnLayout.positions;
 
@@ -492,6 +502,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
             turn={turn}
             activities={activities}
             label={label}
+            inline={toolDisplayMode === "inline"}
             showFooter={showFooter}
             collapsed={turn.collapsed}
             onToggle={() => toggleCompletedTurn(sessionId, globalIdx)}
@@ -527,6 +538,21 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
       <React.Fragment key={`live-tool-activity-${position}`}>
         {liveToolActivityNode}
         {liveTaskProgressNode}
+      </React.Fragment>
+    );
+  };
+
+  const renderStreamingTail = (position: number) => {
+    if (
+      position !== globalOffset + messages.length ||
+      (!streamingThinkingNode && !streamingMessageNode)
+    ) {
+      return null;
+    }
+    return (
+      <React.Fragment key={`streaming-tail-${position}`}>
+        {streamingThinkingNode}
+        {streamingMessageNode}
       </React.Fragment>
     );
   };
@@ -570,7 +596,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
           <React.Fragment key={msg.id}>
             {renderTurns(globalOffset + idx)}
             {renderLiveToolActivity(globalOffset + idx)}
-            {msg.id === pendingMessageId ? null : (
+            {msg.id === pendingMessageId ? streamingMessageNode : (
               <div className={`${styles.message} ${styles[roleClassKey(msg.role, msg.content)]}`}>
                 {msg.role === "User" && (
                   <div className={styles.roleLabel}>{t("you_label")}</div>
@@ -695,6 +721,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
       })}
       {/* Turn activity groups that land after the last loaded message */}
       {renderTurns(globalOffset + messages.length)}
+      {renderStreamingTail(globalOffset + messages.length)}
       {renderLiveToolActivity(globalOffset + messages.length)}
     </>
   );

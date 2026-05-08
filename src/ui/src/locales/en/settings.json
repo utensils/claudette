@@ -83,6 +83,8 @@
   "appearance_terminal_font_size_desc": "8–24px (default: 11)",
   "appearance_show_running_commands": "Show running commands in sidebar",
   "appearance_show_running_commands_desc": "Display a collapsible list of foreground processes running in each workspace's terminals. Off by default.",
+  "appearance_group_tool_calls": "Group tool calls",
+  "appearance_group_tool_calls_desc": "Combine adjacent regular tool calls while keeping Agent calls separate and preserving conversation order.",
   "appearance_interface_font": "Interface font",
   "appearance_interface_font_desc": "Font for UI text. Themes may set a default.",
   "appearance_custom_interface_font": "Custom interface font",
