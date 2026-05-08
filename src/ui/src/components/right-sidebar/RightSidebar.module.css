@@ -37,7 +37,7 @@
   border: none;
   border-bottom: 2px solid transparent;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--body-size);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -55,7 +55,7 @@
 }
 
 .tabBadge {
-  font-size: 10px;
+  font-size: var(--body-size);
   font-weight: 600;
   background: var(--hover-bg);
   color: var(--text-dim);
@@ -154,7 +154,7 @@
   width: 14px;
   text-align: center;
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: var(--body-size);
 }
 
 .path {
@@ -167,7 +167,7 @@
 .stats {
   display: flex;
   gap: 6px;
-  font-size: 11px;
+  font-size: var(--body-size);
   font-family: var(--font-mono);
   margin-left: auto;
   flex-shrink: 0;
@@ -194,7 +194,7 @@
   width: 100%;
   padding: 4px 8px;
   color: var(--text-dim);
-  font-size: 10px;
+  font-size: var(--body-size);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -278,7 +278,7 @@
 }
 
 .groupCount {
-  font-size: 10px;
+  font-size: var(--body-size);
   font-weight: 600;
   background: var(--hover-bg);
   color: var(--text-dim);
@@ -301,7 +301,7 @@
   background: none;
   border: none;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--body-size);
   cursor: pointer;
   border-radius: 4px;
   text-align: left;
@@ -324,7 +324,7 @@
 
 .commitHash {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--body-size);
   color: var(--diff-added-text);
   flex-shrink: 0;
 }
@@ -334,11 +334,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: var(--body-size);
 }
 
 .commitDate {
-  font-size: 10px;
+  font-size: var(--body-size);
   color: var(--text-dim);
   flex-shrink: 0;
 }
@@ -353,7 +353,7 @@
 
 .commitNoFiles {
   padding: 4px 12px 4px 20px;
-  font-size: 11px;
+  font-size: var(--body-size);
   color: var(--text-dim);
   font-style: italic;
 }
