@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -115,6 +115,11 @@ pub struct AgentSessionState {
     pub claude_remote_control: ClaudeRemoteControlStatus,
     /// PID whose stdout stream is currently monitored for remote-origin turns.
     pub claude_remote_control_monitor_pid: Option<u32>,
+    /// User-message UUIDs Claudette wrote to the persistent CLI over stdin.
+    /// When `--replay-user-messages` is active, the Remote Control monitor
+    /// receives those prompts back from stdout and must not classify them as
+    /// remote-origin turns.
+    pub local_user_message_uuids: HashSet<String>,
     /// Set when MCP server config changes while a turn is in flight.
     /// The next call to `send_chat_message` tears down the persistent session
     /// and starts a fresh one with updated `--mcp-config`, then clears
@@ -196,6 +201,17 @@ impl AgentSessionState {
         self.needs_attention = false;
         self.attention_kind = None;
         self.attention_notification_sent = false;
+    }
+
+    pub fn remember_local_user_message_uuid(&mut self, uuid: String) {
+        if self.local_user_message_uuids.len() > 1024 {
+            self.local_user_message_uuids.clear();
+        }
+        self.local_user_message_uuids.insert(uuid);
+    }
+
+    pub fn take_local_user_message_uuid(&mut self, uuid: &str) -> bool {
+        self.local_user_message_uuids.remove(uuid)
     }
 }
 

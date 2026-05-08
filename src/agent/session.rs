@@ -10,7 +10,9 @@ use crate::env::WorkspaceEnv;
 use crate::process::{CommandWindowExt as _, sanitize_claude_subprocess_env};
 
 use super::AgentSettings;
-use super::args::{build_settings_json, build_stdin_message, build_steering_stdin_message};
+use super::args::{
+    build_settings_json, build_stdin_message_with_uuid, build_steering_stdin_message,
+};
 use super::binary::resolve_claude_path;
 use super::process::{AgentEvent, TurnHandle};
 use super::types::{ControlResponsePayload, FileAttachment, StreamEvent, parse_stream_line};
@@ -196,6 +198,20 @@ impl PersistentSession {
         prompt: &str,
         attachments: &[FileAttachment],
     ) -> Result<TurnHandle, String> {
+        self.send_turn_with_uuid(prompt, attachments, &uuid::Uuid::new_v4().to_string())
+            .await
+    }
+
+    /// Send a turn with a caller-provided user-message UUID.
+    ///
+    /// Claudette uses this when Remote Control is enabled so its raw monitor
+    /// can ignore `--replay-user-messages` echoes for local stdin turns.
+    pub async fn send_turn_with_uuid(
+        &self,
+        prompt: &str,
+        attachments: &[FileAttachment],
+        user_message_uuid: &str,
+    ) -> Result<TurnHandle, String> {
         // Subscribe BEFORE writing to stdin to avoid a race where a fast turn
         // emits events before the receiver exists (broadcast doesn't replay).
         let mut broadcast_rx = self.event_tx.subscribe();
@@ -212,8 +228,12 @@ impl PersistentSession {
             let _ = self.event_tx.send(event);
         }
 
-        self.write_user_message(build_stdin_message(prompt, attachments))
-            .await?;
+        self.write_user_message(build_stdin_message_with_uuid(
+            prompt,
+            attachments,
+            user_message_uuid,
+        ))
+        .await?;
         let (mpsc_tx, mpsc_rx) = mpsc::channel::<AgentEvent>(128);
         tokio::spawn(async move {
             loop {

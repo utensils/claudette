@@ -1,9 +1,14 @@
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+
 use tokio::process::Command;
 
 use crate::env::WorkspaceEnv;
 use crate::process::{CommandWindowExt as _, sanitize_claude_subprocess_env};
 
 use super::binary::resolve_claude_path;
+
+const CLAUDE_PROJECT_PATH_MAX: usize = 200;
 
 /// Sanitize a string into a valid git branch slug: lowercase ASCII
 /// alphanumeric + hyphens, no leading/trailing hyphens, max `max_len` chars.
@@ -43,6 +48,88 @@ pub fn sanitize_branch_name(raw: &str, max_len: usize) -> String {
     // Truncate at `max_len` and drop any trailing hyphens introduced by the cut.
     let truncated = &trimmed[..max_len];
     truncated.trim_end_matches('-').to_string()
+}
+
+fn sanitize_claude_project_path(path: &str) -> String {
+    let sanitized: String = path
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    if sanitized.len() <= CLAUDE_PROJECT_PATH_MAX {
+        return sanitized;
+    }
+    let mut hash: u64 = 5381;
+    for b in path.bytes() {
+        hash = hash.wrapping_mul(33).wrapping_add(u64::from(b));
+    }
+    format!(
+        "{}-{:x}",
+        &sanitized[..CLAUDE_PROJECT_PATH_MAX],
+        hash & 0x7fff_ffff
+    )
+}
+
+fn claude_config_home_dir() -> Result<PathBuf, String> {
+    if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR") {
+        return Ok(PathBuf::from(dir));
+    }
+    dirs::home_dir()
+        .map(|home| home.join(".claude"))
+        .ok_or_else(|| "No home directory found for Claude config".to_string())
+}
+
+fn claude_transcript_path(worktree_path: &str, session_id: &str) -> Result<PathBuf, String> {
+    Ok(claude_config_home_dir()?
+        .join("projects")
+        .join(sanitize_claude_project_path(worktree_path))
+        .join(format!("{session_id}.jsonl")))
+}
+
+/// Persist a Claude Code custom title for a session transcript.
+///
+/// Claude Code's Remote Control bridge treats custom titles as explicit and
+/// stops its count-based web title derivation. Claudette uses this to keep
+/// the remote session title aligned with the local chat instead of letting the
+/// web UI retitle on later mixed local/remote turns.
+pub fn persist_claude_custom_title(
+    worktree_path: &str,
+    session_id: &str,
+    title: &str,
+) -> Result<(), String> {
+    persist_claude_custom_title_at_path(
+        &claude_transcript_path(worktree_path, session_id)?,
+        session_id,
+        title,
+    )
+}
+
+fn persist_claude_custom_title_at_path(
+    path: &Path,
+    session_id: &str,
+    title: &str,
+) -> Result<(), String> {
+    let title = title.trim();
+    if title.is_empty() || session_id.trim().is_empty() {
+        return Ok(());
+    }
+    if !path.exists() {
+        return Ok(());
+    }
+    let entry = serde_json::json!({
+        "type": "custom-title",
+        "customTitle": title,
+        "sessionId": session_id,
+    });
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(path)
+        .map_err(|e| format!("Failed to open Claude transcript {}: {e}", path.display()))?;
+    writeln!(file, "{entry}").map_err(|e| {
+        format!(
+            "Failed to write Claude custom title {}: {e}",
+            path.display()
+        )
+    })
 }
 
 /// Call Claude Haiku to generate a short branch name slug from the user's
@@ -244,5 +331,41 @@ mod tests {
     #[test]
     fn test_sanitize_preserves_numbers() {
         assert_eq!(sanitize_branch_name("fix-issue-42", 40), "fix-issue-42");
+    }
+
+    #[test]
+    fn test_sanitize_claude_project_path_matches_claude_layout() {
+        assert_eq!(
+            sanitize_claude_project_path("/Users/james/claudette-workspaces/repo-name"),
+            "-Users-james-claudette-workspaces-repo-name"
+        );
+    }
+
+    #[test]
+    fn test_persist_claude_custom_title_does_not_create_missing_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("missing.jsonl");
+
+        persist_claude_custom_title_at_path(&transcript, "session-1", "Pinned Title").unwrap();
+
+        assert!(!transcript.exists());
+    }
+
+    #[test]
+    fn test_persist_claude_custom_title_appends_to_existing_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("session-1.jsonl");
+        std::fs::write(
+            &transcript,
+            r#"{"type":"summary","summary":"existing transcript"}"#,
+        )
+        .unwrap();
+
+        persist_claude_custom_title_at_path(&transcript, "session-1", "Pinned Title").unwrap();
+
+        let contents = std::fs::read_to_string(transcript).unwrap();
+        assert!(contents.contains(r#""type":"custom-title""#));
+        assert!(contents.contains(r#""customTitle":"Pinned Title""#));
+        assert!(contents.contains(r#""sessionId":"session-1""#));
     }
 }

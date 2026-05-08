@@ -161,7 +161,20 @@ pub async fn set_claude_remote_control(
         (ps, pid)
     };
 
-    if enabled {
+    if enabled && should_pin_title_before_control_request(&chat_session) {
+        let title = remote_control_title(&chat_session, &workspace);
+        let session_id = {
+            let agents = state.agents.read().await;
+            agents
+                .get(&chat_session_id)
+                .map(|session| session.session_id.clone())
+                .unwrap_or_default()
+        };
+        if let Err(err) =
+            claudette::agent::persist_claude_custom_title(&worktree_path, &session_id, &title)
+        {
+            eprintln!("[remote-control] failed to pin Claude session title: {err}");
+        }
         emit_remote_control_status(&app, &workspace_id, &chat_session_id, &state).await;
     }
 
@@ -220,6 +233,18 @@ fn should_defer_enable_until_first_turn(chat_session: &ChatSession) -> bool {
     chat_session.turn_count == 0
 }
 
+fn should_pin_title_before_control_request(chat_session: &ChatSession) -> bool {
+    chat_session.turn_count > 0
+}
+
+fn remote_control_title(chat_session: &ChatSession, workspace: &Workspace) -> String {
+    let name = chat_session.name.trim();
+    if !name.is_empty() && name != "New chat" {
+        return name.to_string();
+    }
+    workspace.name.clone()
+}
+
 async fn existing_persistent_session(
     state: &State<'_, AppState>,
     chat_session_id: &str,
@@ -261,6 +286,7 @@ async fn store_deferred_enable_status(
                 persistent_session: None,
                 claude_remote_control: ClaudeRemoteControlStatus::disabled(),
                 claude_remote_control_monitor_pid: None,
+                local_user_message_uuids: Default::default(),
                 mcp_config_dirty: false,
                 session_plan_mode: false,
                 session_allowed_tools: Vec::new(),
@@ -469,6 +495,7 @@ async fn ensure_persistent_session_for_remote_control(
                 persistent_session: None,
                 claude_remote_control: ClaudeRemoteControlStatus::disabled(),
                 claude_remote_control_monitor_pid: None,
+                local_user_message_uuids: Default::default(),
                 mcp_config_dirty: false,
                 session_plan_mode: false,
                 session_allowed_tools: Vec::new(),
@@ -543,6 +570,7 @@ async fn store_remote_control_status(
     emit_remote_control_status(app, workspace_id, chat_session_id, state).await;
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn reenable_remote_control_after_respawn(
     app: AppHandle,
     db_path: std::path::PathBuf,
@@ -551,6 +579,7 @@ pub(super) fn reenable_remote_control_after_respawn(
     worktree_path: String,
     pid: u32,
     ps: Arc<PersistentSession>,
+    title: String,
 ) {
     tokio::spawn(async move {
         let state = app.state::<AppState>();
@@ -559,6 +588,18 @@ pub(super) fn reenable_remote_control_after_respawn(
             ..get_stored_status(&state, &chat_session_id).await
         };
         store_remote_control_status(&app, &state, &workspace_id, &chat_session_id, enabling).await;
+        let session_id = {
+            let agents = state.agents.read().await;
+            agents
+                .get(&chat_session_id)
+                .map(|session| session.session_id.clone())
+                .unwrap_or_default()
+        };
+        if let Err(err) =
+            claudette::agent::persist_claude_custom_title(&worktree_path, &session_id, &title)
+        {
+            eprintln!("[remote-control] failed to pin Claude session title: {err}");
+        }
 
         match ps.set_remote_control(true).await {
             Ok(response) => {
@@ -723,6 +764,16 @@ async fn ensure_remote_control_monitor(
             }
 
             if !remote_turn_active {
+                if let AgentEvent::Stream(StreamEvent::User {
+                    uuid: Some(uuid), ..
+                }) = &event
+                {
+                    match take_local_user_message_uuid(&app, &chat_session_id, pid, uuid).await {
+                        LocalUserMessageReplay::Local => continue,
+                        LocalUserMessageReplay::RemoteOrUnknown => {}
+                        LocalUserMessageReplay::Stale => break,
+                    }
+                }
                 match remote_monitor_turn_gate(&app, &chat_session_id, pid).await {
                     RemoteMonitorTurnGate::Idle => {}
                     RemoteMonitorTurnGate::Busy => continue,
@@ -731,6 +782,7 @@ async fn ensure_remote_control_monitor(
                 let AgentEvent::Stream(StreamEvent::User {
                     message,
                     is_synthetic: false,
+                    ..
                 }) = &event
                 else {
                     continue;
@@ -817,6 +869,7 @@ async fn ensure_remote_control_monitor(
             if let AgentEvent::Stream(StreamEvent::User {
                 message,
                 is_synthetic: true,
+                ..
             }) = &event
                 && let UserMessageContent::Text(body) = &message.content
                 && let Ok(db) = Database::open(&db_path)
@@ -944,6 +997,38 @@ enum RemoteMonitorTurnGate {
     Idle,
     Busy,
     Stale,
+}
+
+enum LocalUserMessageReplay {
+    Local,
+    RemoteOrUnknown,
+    Stale,
+}
+
+async fn take_local_user_message_uuid(
+    app: &AppHandle,
+    chat_session_id: &str,
+    pid: u32,
+    uuid: &str,
+) -> LocalUserMessageReplay {
+    let app_state = app.state::<AppState>();
+    let mut agents = app_state.agents.write().await;
+    let Some(session) = agents.get_mut(chat_session_id) else {
+        return LocalUserMessageReplay::Stale;
+    };
+    if session.claude_remote_control_monitor_pid != Some(pid)
+        || session
+            .persistent_session
+            .as_ref()
+            .is_none_or(|ps| ps.pid() != pid)
+    {
+        return LocalUserMessageReplay::Stale;
+    }
+    if session.take_local_user_message_uuid(uuid) {
+        LocalUserMessageReplay::Local
+    } else {
+        LocalUserMessageReplay::RemoteOrUnknown
+    }
 }
 
 async fn remote_monitor_turn_gate(
@@ -1092,12 +1177,13 @@ async fn clear_monitor_on_exit(
 #[cfg(test)]
 mod tests {
     use super::{
-        remote_control_feature_enabled_from_value, should_defer_enable_until_first_turn,
+        remote_control_feature_enabled_from_value, remote_control_title,
+        should_defer_enable_until_first_turn, should_pin_title_before_control_request,
         status_from_control_response, user_visible_text,
     };
     use crate::state::ClaudeRemoteControlLifecycle;
     use claudette::agent::{UserContentBlock, UserEventMessage, UserMessageContent};
-    use claudette::model::{AgentStatus, ChatSession, SessionStatus};
+    use claudette::model::{AgentStatus, ChatSession, SessionStatus, Workspace, WorkspaceStatus};
 
     fn chat_session_with_turn_count(turn_count: u32) -> ChatSession {
         ChatSession {
@@ -1114,6 +1200,21 @@ mod tests {
             agent_status: AgentStatus::Idle,
             needs_attention: false,
             attention_kind: None,
+        }
+    }
+
+    fn workspace_named(name: &str) -> Workspace {
+        Workspace {
+            id: "workspace-1".to_string(),
+            repository_id: "repo-1".to_string(),
+            name: name.to_string(),
+            branch_name: format!("claudette/{name}"),
+            worktree_path: None,
+            status: WorkspaceStatus::Active,
+            agent_status: AgentStatus::Idle,
+            status_line: String::new(),
+            created_at: "2026-05-08T00:00:00Z".to_string(),
+            sort_order: 0,
         }
     }
 
@@ -1213,6 +1314,33 @@ mod tests {
         assert!(!should_defer_enable_until_first_turn(
             &chat_session_with_turn_count(1)
         ));
+    }
+
+    #[test]
+    fn remote_control_does_not_pin_title_before_first_turn_transcript_exists() {
+        assert!(!should_pin_title_before_control_request(
+            &chat_session_with_turn_count(0)
+        ));
+        assert!(should_pin_title_before_control_request(
+            &chat_session_with_turn_count(1)
+        ));
+    }
+
+    #[test]
+    fn remote_control_title_falls_back_to_workspace_for_new_chat() {
+        let mut chat_session = chat_session_with_turn_count(1);
+        let workspace = workspace_named("muddy-willow");
+
+        assert_eq!(
+            remote_control_title(&chat_session, &workspace),
+            "muddy-willow"
+        );
+
+        chat_session.name = "Ping Session".to_string();
+        assert_eq!(
+            remote_control_title(&chat_session, &workspace),
+            "Ping Session"
+        );
     }
 
     #[test]

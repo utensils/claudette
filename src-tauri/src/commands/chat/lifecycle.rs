@@ -165,6 +165,7 @@ mod tests {
             persistent_session: None,
             claude_remote_control: crate::state::ClaudeRemoteControlStatus::disabled(),
             claude_remote_control_monitor_pid: None,
+            local_user_message_uuids: Default::default(),
             mcp_config_dirty: false,
             session_plan_mode: false,
             session_allowed_tools: Vec::new(),

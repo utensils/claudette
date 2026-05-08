@@ -62,6 +62,40 @@ fn remote_control_should_survive_local_respawn(status: &ClaudeRemoteControlStatu
     )
 }
 
+fn remote_control_requested_or_active(status: &ClaudeRemoteControlStatus) -> bool {
+    !matches!(status.state, ClaudeRemoteControlLifecycle::Disabled)
+}
+
+fn remote_control_title(session_name: &str, workspace_name: &str, prompt: &str) -> String {
+    let session_name = session_name.trim();
+    if !session_name.is_empty() && session_name != "New chat" {
+        return session_name.to_string();
+    }
+    let prompt_title = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+    if !prompt_title.is_empty() {
+        return prompt_title.chars().take(75).collect();
+    }
+    workspace_name.to_string()
+}
+
+fn should_run_auto_naming(remote_control_active: bool) -> bool {
+    !remote_control_active
+}
+
+fn should_reenable_remote_control_after_turn_result(
+    should_restore: bool,
+    status: &ClaudeRemoteControlStatus,
+    persistent_pid: Option<u32>,
+    turn_pid: u32,
+) -> bool {
+    should_restore
+        && matches!(
+            status.state,
+            ClaudeRemoteControlLifecycle::Reconnecting | ClaudeRemoteControlLifecycle::Enabling
+        )
+        && persistent_pid == Some(turn_pid)
+}
+
 fn remote_control_reconnecting_status(
     current: &ClaudeRemoteControlStatus,
     should_restore: bool,
@@ -471,13 +505,28 @@ fn schedule_background_task_wake(
         .await;
 
         let prompt = build_background_task_completion_prompt(&completion);
-        let handle = match ps.send_turn(&prompt, &[]).await {
+        let local_user_message_uuid = uuid::Uuid::new_v4().to_string();
+        let ps_pid = ps.pid();
+        {
+            let mut agents = app_state.agents.write().await;
+            if let Some(session) = agents.get_mut(&chat_session_id) {
+                session.active_pid = Some(ps_pid);
+                session.remember_local_user_message_uuid(local_user_message_uuid.clone());
+            }
+        }
+        let handle = match ps
+            .send_turn_with_uuid(&prompt, &[], &local_user_message_uuid)
+            .await
+        {
             Ok(handle) => handle,
             Err(err) => {
                 eprintln!("[chat] failed to deliver background task notification: {err}");
                 let mut agents = app_state.agents.write().await;
                 if let Some(session) = agents.get_mut(&chat_session_id) {
                     session.background_wake_active = false;
+                    if session.active_pid == Some(ps_pid) {
+                        session.active_pid = None;
+                    }
                 }
                 return;
             }
@@ -1215,6 +1264,7 @@ pub async fn send_chat_message(
                 persistent_session: None,
                 claude_remote_control: crate::state::ClaudeRemoteControlStatus::disabled(),
                 claude_remote_control_monitor_pid: None,
+                local_user_message_uuids: Default::default(),
                 mcp_config_dirty: false,
                 session_plan_mode: false,
                 session_allowed_tools: Vec::new(),
@@ -1243,6 +1293,7 @@ pub async fn send_chat_message(
             persistent_session: None,
             claude_remote_control: crate::state::ClaudeRemoteControlStatus::disabled(),
             claude_remote_control_monitor_pid: None,
+            local_user_message_uuids: Default::default(),
             mcp_config_dirty: false,
             session_plan_mode: false,
             session_allowed_tools: Vec::new(),
@@ -1307,6 +1358,8 @@ pub async fn send_chat_message(
     session.last_user_msg_id = Some(user_msg.id.clone());
     let restore_remote_control_after_respawn =
         remote_control_should_survive_local_respawn(&session.claude_remote_control);
+    let remote_control_active_for_turn =
+        remote_control_requested_or_active(&session.claude_remote_control);
 
     // MCP config changed while a previous turn was in flight — tear down the
     // persistent session so the next spawn picks up updated --mcp-config.
@@ -1716,13 +1769,26 @@ pub async fn send_chat_message(
     };
 
     let turn_handle = if let Some(ref ps) = existing_persistent {
-        // Reuse existing persistent process — send turn via stdin.
-        match ps.send_turn(&prompt, &image_attachments).await {
+        // Reuse existing persistent process — send turn via stdin. Mark the
+        // process busy before writing so the Remote Control monitor does not
+        // mistake the CLI's `--replay-user-messages` echo of this local prompt
+        // for a remote-origin turn.
+        let reuse_pid = ps.pid();
+        let local_user_message_uuid = uuid::Uuid::new_v4().to_string();
+        session.active_pid = Some(reuse_pid);
+        session.remember_local_user_message_uuid(local_user_message_uuid.clone());
+        match ps
+            .send_turn_with_uuid(&prompt, &image_attachments, &local_user_message_uuid)
+            .await
+        {
             Ok(handle) => handle,
             Err(e) => {
                 // Persistent session died — drop lock before async spawn to
                 // avoid blocking other workspaces during process startup.
                 eprintln!("[chat] Persistent session failed, respawning: {e}");
+                if session.active_pid == Some(reuse_pid) {
+                    session.active_pid = None;
+                }
                 session.persistent_session = None;
                 session.claude_remote_control = remote_control_reconnecting_status(
                     &session.claude_remote_control,
@@ -1784,7 +1850,15 @@ pub async fn send_chat_message(
                         return Err(e2);
                     }
                 };
-                let handle = ps.send_turn(&prompt, &image_attachments).await?;
+                let local_user_message_uuid = uuid::Uuid::new_v4().to_string();
+                {
+                    let mut agents = state.agents.write().await;
+                    let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
+                    session.remember_local_user_message_uuid(local_user_message_uuid.clone());
+                }
+                let handle = ps
+                    .send_turn_with_uuid(&prompt, &image_attachments, &local_user_message_uuid)
+                    .await?;
 
                 agents = state.agents.write().await;
                 let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
@@ -1886,7 +1960,15 @@ pub async fn send_chat_message(
                 return Err(e);
             }
         };
-        let handle = ps.send_turn(&prompt, &image_attachments).await?;
+        let local_user_message_uuid = uuid::Uuid::new_v4().to_string();
+        {
+            let mut agents = state.agents.write().await;
+            let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
+            session.remember_local_user_message_uuid(local_user_message_uuid.clone());
+        }
+        let handle = ps
+            .send_turn_with_uuid(&prompt, &image_attachments, &local_user_message_uuid)
+            .await?;
 
         agents = state.agents.write().await;
         let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
@@ -1911,14 +1993,12 @@ pub async fn send_chat_message(
         let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
         session.active_pid = Some(spawned_pid);
         ps_for_remote_control_reenable = session.persistent_session.clone();
-        should_reenable_remote_control = restore_remote_control_after_respawn
-            && matches!(
-                session.claude_remote_control.state,
-                ClaudeRemoteControlLifecycle::Reconnecting | ClaudeRemoteControlLifecycle::Enabling
-            )
-            && ps_for_remote_control_reenable
-                .as_ref()
-                .is_some_and(|ps| ps.pid() == spawned_pid);
+        should_reenable_remote_control = should_reenable_remote_control_after_turn_result(
+            restore_remote_control_after_respawn,
+            &session.claude_remote_control,
+            ps_for_remote_control_reenable.as_ref().map(|ps| ps.pid()),
+            spawned_pid,
+        );
         let _ =
             db.save_chat_session_state(&chat_session_id, &session.session_id, session.turn_count);
         let _ = db.insert_agent_session(&session.session_id, &workspace_id, &ws.repository_id);
@@ -1949,18 +2029,6 @@ pub async fn send_chat_message(
     }
     drop(agents);
 
-    if should_reenable_remote_control && let Some(ps) = ps_for_remote_control_reenable {
-        super::remote_control::reenable_remote_control_after_respawn(
-            app.clone(),
-            state.db_path.clone(),
-            workspace_id.clone(),
-            chat_session_id.clone(),
-            worktree_path.clone(),
-            spawned_pid,
-            ps,
-        );
-    }
-
     // Capture rename context before the bridge spawn.
     let has_repo = repo.is_some();
     let rename_old_branch = ws.branch_name.clone();
@@ -1970,6 +2038,15 @@ pub async fn send_chat_message(
         .as_ref()
         .and_then(|r| r.branch_rename_preferences.clone());
     let rename_ws_env = ws_env.clone();
+    let mut remote_control_reenable_after_result =
+        if should_reenable_remote_control && let Some(ps) = ps_for_remote_control_reenable {
+            Some((
+                ps,
+                remote_control_title(&chat_session.name, &ws.name, &content),
+            ))
+        } else {
+            None
+        };
 
     // Atomically claim the one-shot auto-rename slot here — on the calling
     // task's existing DB handle — so the spawned bridge doesn't need to
@@ -1980,7 +2057,7 @@ pub async fn send_chat_message(
     // early exit) can't re-trigger a rename on a later prompt because the
     // claim has already been taken. The flag tracks the claim, not the
     // outcome: a Haiku/git failure below intentionally does not release it.
-    let claimed_rename = if has_repo {
+    let claimed_rename = if has_repo && should_run_auto_naming(remote_control_active_for_turn) {
         match db.claim_branch_auto_rename(&workspace_id) {
             Ok(claimed) => claimed,
             Err(e) => {
@@ -2033,7 +2110,10 @@ pub async fn send_chat_message(
         // name for the tab. Fires on every new session's first turn (not just
         // the first session of the workspace). Skipped if the user already
         // renamed the session manually.
-        if saved_turn_count <= 1 && !session_name_already_edited {
+        if saved_turn_count <= 1
+            && !session_name_already_edited
+            && should_run_auto_naming(remote_control_active_for_turn)
+        {
             let sid2 = chat_session_id_for_stream.clone();
             let wt_path2 = wt_path.clone();
             let prompt2 = rename_prompt.clone();
@@ -2455,6 +2535,7 @@ pub async fn send_chat_message(
             if let AgentEvent::Stream(StreamEvent::User {
                 message,
                 is_synthetic: true,
+                ..
             }) = &event
                 && let claudette::agent::UserMessageContent::Text(body) = &message.content
                 && let Ok(db) = Database::open(&db_path)
@@ -2701,6 +2782,18 @@ pub async fn send_chat_message(
                         chat_session_id_for_stream.clone(),
                     );
                 }
+                if let Some((ps, title)) = remote_control_reenable_after_result.take() {
+                    super::remote_control::reenable_remote_control_after_respawn(
+                        app.clone(),
+                        db_path.clone(),
+                        ws_id.clone(),
+                        chat_session_id_for_stream.clone(),
+                        wt_path.clone(),
+                        spawned_pid,
+                        ps,
+                        title,
+                    );
+                }
             }
 
             // Track per-assistant-message cumulative usage as the CLI streams it.
@@ -2902,8 +2995,12 @@ pub async fn send_chat_message(
 #[cfg(test)]
 mod tests {
     use super::{
-        should_defer_persistent_restart_for_state, should_resume_persistent_session, terminal_text,
+        remote_control_requested_or_active, remote_control_title,
+        should_defer_persistent_restart_for_state,
+        should_reenable_remote_control_after_turn_result, should_resume_persistent_session,
+        should_run_auto_naming, terminal_text,
     };
+    use crate::state::{ClaudeRemoteControlLifecycle, ClaudeRemoteControlStatus};
 
     #[test]
     fn terminal_text_converts_newlines_to_terminal_newlines() {
@@ -2949,5 +3046,99 @@ mod tests {
         assert!(!should_resume_persistent_session("fresh-uuid", 1, false));
         assert!(should_resume_persistent_session("fresh-uuid", 2, false));
         assert!(!should_resume_persistent_session("", 9, true));
+    }
+
+    #[test]
+    fn remote_control_active_for_any_non_disabled_state() {
+        assert!(!remote_control_requested_or_active(
+            &ClaudeRemoteControlStatus::disabled()
+        ));
+        for state in [
+            ClaudeRemoteControlLifecycle::Enabling,
+            ClaudeRemoteControlLifecycle::Ready,
+            ClaudeRemoteControlLifecycle::Connected,
+            ClaudeRemoteControlLifecycle::Reconnecting,
+            ClaudeRemoteControlLifecycle::Error,
+        ] {
+            assert!(remote_control_requested_or_active(
+                &ClaudeRemoteControlStatus {
+                    state,
+                    session_url: None,
+                    connect_url: None,
+                    environment_id: None,
+                    detail: None,
+                    last_error: None,
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn remote_control_suppresses_claudette_auto_naming_helpers() {
+        assert!(!should_run_auto_naming(true));
+        assert!(should_run_auto_naming(false));
+    }
+
+    #[test]
+    fn pre_start_remote_control_reenables_after_first_turn_result_only() {
+        let mut status = ClaudeRemoteControlStatus {
+            state: ClaudeRemoteControlLifecycle::Enabling,
+            session_url: None,
+            connect_url: None,
+            environment_id: None,
+            detail: None,
+            last_error: None,
+        };
+
+        assert!(should_reenable_remote_control_after_turn_result(
+            true,
+            &status,
+            Some(42),
+            42
+        ));
+        assert!(!should_reenable_remote_control_after_turn_result(
+            true,
+            &status,
+            Some(43),
+            42
+        ));
+        assert!(!should_reenable_remote_control_after_turn_result(
+            false,
+            &status,
+            Some(42),
+            42
+        ));
+
+        status.state = ClaudeRemoteControlLifecycle::Ready;
+        assert!(!should_reenable_remote_control_after_turn_result(
+            true,
+            &status,
+            Some(42),
+            42
+        ));
+
+        status.state = ClaudeRemoteControlLifecycle::Reconnecting;
+        assert!(should_reenable_remote_control_after_turn_result(
+            true,
+            &status,
+            Some(42),
+            42
+        ));
+    }
+
+    #[test]
+    fn remote_control_title_prefers_explicit_session_name() {
+        assert_eq!(
+            remote_control_title("Fix remote sync", "workspace-name", "ping 1"),
+            "Fix remote sync"
+        );
+        assert_eq!(
+            remote_control_title("New chat", "workspace-name", "ping   1"),
+            "ping 1"
+        );
+        assert_eq!(
+            remote_control_title("New chat", "workspace-name", "   "),
+            "workspace-name"
+        );
     }
 }
