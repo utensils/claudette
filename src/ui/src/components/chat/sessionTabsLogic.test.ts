@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildWorkspaceTabNavEntries,
   closeScopeForTabContext,
   computeSessionPersistOrder,
+  cycleNavEntries,
+  diffNavKey,
+  fileNavKey,
+  findActiveNavEntryKey,
+  sessionNavKey,
   splitUnifiedTabOrder,
+  type NavEntry,
   type UnifiedTabEntry,
 } from "./sessionTabsLogic";
 import type { ChatSession, DiffFileTab } from "../../types";
@@ -119,5 +126,152 @@ describe("closeScopeForTabContext", () => {
     expect(closeScopeForTabContext(entries, "d:b.ts").map((e) => e.key)).toEqual(
       entries.map((e) => e.key),
     );
+  });
+});
+
+describe("buildWorkspaceTabNavEntries", () => {
+  it("falls back to sessions → diffs → files when no saved order exists", () => {
+    const entries = buildWorkspaceTabNavEntries({
+      activeSessions: [session("s1"), session("s2")],
+      diffTabs: [diff("a.ts")],
+      fileTabs: ["x.ts", "y.ts"],
+      tabOrder: undefined,
+    });
+    expect(entries.map((e) => e.key)).toEqual([
+      sessionNavKey("s1"),
+      sessionNavKey("s2"),
+      diffNavKey("a.ts", null),
+      fileNavKey("x.ts"),
+      fileNavKey("y.ts"),
+    ]);
+  });
+
+  it("honors a saved drag order and appends newly-opened tabs at the end", () => {
+    const tabOrder: UnifiedTabEntry[] = [
+      { kind: "file", path: "x.ts" },
+      { kind: "session", sessionId: "s2" },
+      { kind: "diff", path: "a.ts", layer: null },
+    ];
+    const entries = buildWorkspaceTabNavEntries({
+      // y.ts is new — it wasn't in tabOrder yet, so it should append.
+      activeSessions: [session("s1"), session("s2")],
+      diffTabs: [diff("a.ts")],
+      fileTabs: ["x.ts", "y.ts"],
+      tabOrder,
+    });
+    expect(entries.map((e) => e.key)).toEqual([
+      fileNavKey("x.ts"),
+      sessionNavKey("s2"),
+      diffNavKey("a.ts", null),
+      sessionNavKey("s1"),
+      fileNavKey("y.ts"),
+    ]);
+  });
+
+  it("drops saved entries whose underlying tabs have closed", () => {
+    const tabOrder: UnifiedTabEntry[] = [
+      { kind: "session", sessionId: "s-archived" },
+      { kind: "session", sessionId: "s1" },
+      { kind: "file", path: "deleted.ts" },
+    ];
+    const entries = buildWorkspaceTabNavEntries({
+      activeSessions: [session("s1")],
+      diffTabs: [],
+      fileTabs: [],
+      tabOrder,
+    });
+    expect(entries.map((e) => e.key)).toEqual([sessionNavKey("s1")]);
+  });
+});
+
+describe("findActiveNavEntryKey", () => {
+  it("prefers an active file tab over diff or session selection", () => {
+    expect(
+      findActiveNavEntryKey({
+        selectedSessionId: "s1",
+        diffSelectedFile: "a.ts",
+        diffSelectedLayer: null,
+        activeFileTab: "x.ts",
+      }),
+    ).toBe(fileNavKey("x.ts"));
+  });
+
+  it("falls back to the diff selection when no file tab is active", () => {
+    expect(
+      findActiveNavEntryKey({
+        selectedSessionId: "s1",
+        diffSelectedFile: "a.ts",
+        diffSelectedLayer: "unstaged",
+        activeFileTab: null,
+      }),
+    ).toBe(diffNavKey("a.ts", "unstaged"));
+  });
+
+  it("falls back to the selected session when neither file nor diff is active", () => {
+    expect(
+      findActiveNavEntryKey({
+        selectedSessionId: "s1",
+        diffSelectedFile: null,
+        diffSelectedLayer: null,
+        activeFileTab: null,
+      }),
+    ).toBe(sessionNavKey("s1"));
+  });
+
+  it("returns null when nothing in the workspace is selected", () => {
+    expect(
+      findActiveNavEntryKey({
+        selectedSessionId: null,
+        diffSelectedFile: null,
+        diffSelectedLayer: null,
+        activeFileTab: null,
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("cycleNavEntries", () => {
+  const entries: NavEntry[] = [
+    { key: sessionNavKey("s1"), kind: "session", sessionId: "s1" },
+    { key: sessionNavKey("s2"), kind: "session", sessionId: "s2" },
+    { key: diffNavKey("a.ts", null), kind: "diff", path: "a.ts", layer: null },
+    { key: fileNavKey("x.ts"), kind: "file", path: "x.ts" },
+  ];
+
+  it("returns null for an empty strip and a no-op for a single tab", () => {
+    expect(cycleNavEntries([], null, "next")).toBeNull();
+    expect(cycleNavEntries([entries[0]], entries[0].key, "next")).toEqual(entries[0]);
+    expect(cycleNavEntries([entries[0]], entries[0].key, "prev")).toEqual(entries[0]);
+  });
+
+  it("advances forward with wrap-around", () => {
+    expect(cycleNavEntries(entries, sessionNavKey("s1"), "next")?.key).toBe(
+      sessionNavKey("s2"),
+    );
+    expect(cycleNavEntries(entries, fileNavKey("x.ts"), "next")?.key).toBe(
+      sessionNavKey("s1"),
+    );
+  });
+
+  it("advances backward with wrap-around", () => {
+    expect(cycleNavEntries(entries, sessionNavKey("s2"), "prev")?.key).toBe(
+      sessionNavKey("s1"),
+    );
+    expect(cycleNavEntries(entries, sessionNavKey("s1"), "prev")?.key).toBe(
+      fileNavKey("x.ts"),
+    );
+  });
+
+  it("starts at the first entry on next when nothing is active", () => {
+    expect(cycleNavEntries(entries, null, "next")?.key).toBe(sessionNavKey("s1"));
+  });
+
+  it("starts at the last entry on prev when nothing is active", () => {
+    expect(cycleNavEntries(entries, null, "prev")?.key).toBe(fileNavKey("x.ts"));
+  });
+
+  it("treats an unknown active key as 'no current tab'", () => {
+    expect(cycleNavEntries(entries, "s:bogus", "next")?.key).toBe(sessionNavKey("s1"));
+    expect(cycleNavEntries(entries, "f:bogus.ts", "prev")?.key).toBe(fileNavKey("x.ts"));
   });
 });

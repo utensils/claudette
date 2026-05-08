@@ -103,15 +103,19 @@ describe("buildRebindUpdates", () => {
   });
 
   it("keeps same shortcut bindings in different scopes", () => {
+    // global.cycle-tab-prev (cycle workspace tabs) and
+    // terminal.cycle-tab-prev (cycle terminal tabs) intentionally share the
+    // same default shortcut — scope isolation routes the keypress to the
+    // right action depending on which surface has focus.
     const updates = buildRebindUpdates(
-      "global.cycle-workspace-prev",
+      "global.cycle-tab-prev",
       "mod+shift+code:BracketLeft",
       {},
       "mac",
     );
 
     expect(updates).toEqual({
-      "global.cycle-workspace-prev": "mod+shift+code:BracketLeft",
+      "global.cycle-tab-prev": "mod+shift+code:BracketLeft",
     });
   });
 });

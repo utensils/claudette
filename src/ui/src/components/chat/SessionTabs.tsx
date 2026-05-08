@@ -22,7 +22,12 @@ import {
 } from "../../services/tauri";
 import { useTabDragReorder } from "../../hooks/useTabDragReorder";
 import { TabDragGhost } from "../shared/TabDragGhost";
-import { closeScopeForTabContext, splitUnifiedTabOrder } from "./sessionTabsLogic";
+import {
+  buildWorkspaceTabNavEntries,
+  closeScopeForTabContext,
+  type NavEntry,
+  splitUnifiedTabOrder,
+} from "./sessionTabsLogic";
 import { SessionStatusIcon, type SessionStatusKind } from "../shared/SessionStatusIcon";
 import { DangerousFlagBadge } from "./DangerousFlagBadge";
 import { hasDangerousFlag } from "../../stores/slices/workspaceClaudeFlagsSlice";
@@ -53,14 +58,10 @@ import styles from "./SessionTabs.module.css";
 
 type NavDirection = "prev" | "next" | "first" | "last";
 
-// Unified key namespace for the tab strip's keyboard nav and ref map.
-// Sessions, diff tabs, and file tabs occupy a single ordered list;
-// encoding the kind in the key keeps the navigation logic flat without
-// touching the underlying data shapes.
-const sessionNavKey = (id: string) => `s:${id}`;
-const diffNavKey = (path: string, layer: DiffLayer | null) =>
-  `d:${path}:${layer ?? "null"}`;
-const fileNavKey = (path: string) => `f:${path}`;
+// `NavEntry`, `sessionNavKey`, `diffNavKey`, `fileNavKey`, and
+// `buildWorkspaceTabNavEntries` are imported from `./sessionTabsLogic` so
+// the cycle-tabs hotkey and this component agree on the unified order
+// without each rebuilding it from scratch.
 
 interface Props {
   workspaceId: string;
@@ -263,62 +264,20 @@ export function SessionTabs({ workspaceId }: Props) {
 
   // Unified ordered list of focusable tab entries. Default layout is
   // sessions → diffs → files; once the user has dragged the strip into
-  // a custom unified order (`tabOrderByWorkspace`), we honor that order
-  // instead and reconcile against the live per-kind state on every render
-  // (drop entries whose underlying tab is gone; append newly-opened tabs
-  // at the end so they don't disappear into the abyss).
-  type NavEntry =
-    | { key: string; kind: "session"; sessionId: string }
-    | { key: string; kind: "diff"; path: string; layer: DiffLayer | null }
-    | { key: string; kind: "file"; path: string };
-  const navEntries = useMemo<NavEntry[]>(() => {
-    const sessionEntries: NavEntry[] = activeSessions.map((s) => ({
-      key: sessionNavKey(s.id),
-      kind: "session",
-      sessionId: s.id,
-    }));
-    const diffEntries: NavEntry[] = diffTabs.map((t) => ({
-      key: diffNavKey(t.path, t.layer),
-      kind: "diff",
-      path: t.path,
-      layer: t.layer,
-    }));
-    const fileEntries: NavEntry[] = fileTabs.map((p) => ({
-      key: fileNavKey(p),
-      kind: "file",
-      path: p,
-    }));
-    const defaultOrder = [...sessionEntries, ...diffEntries, ...fileEntries];
-
-    if (!tabOrderForWorkspace || tabOrderForWorkspace.length === 0) {
-      return defaultOrder;
-    }
-
-    // Reconcile saved unified order with the live per-kind state. A small
-    // map keyed by NavEntry.key lets us O(1) resolve each saved entry; new
-    // tabs (not yet in the saved order) append at the end, preserving the
-    // user's drag intent for everything they touched.
-    const byKey = new Map(defaultOrder.map((e) => [e.key, e]));
-    const out: NavEntry[] = [];
-    const used = new Set<string>();
-    for (const ord of tabOrderForWorkspace) {
-      const key =
-        ord.kind === "session"
-          ? sessionNavKey(ord.sessionId)
-          : ord.kind === "diff"
-            ? diffNavKey(ord.path, ord.layer)
-            : fileNavKey(ord.path);
-      const entry = byKey.get(key);
-      if (entry && !used.has(key)) {
-        out.push(entry);
-        used.add(key);
-      }
-    }
-    for (const e of defaultOrder) {
-      if (!used.has(e.key)) out.push(e);
-    }
-    return out;
-  }, [activeSessions, diffTabs, fileTabs, tabOrderForWorkspace]);
+  // a custom unified order (`tabOrderByWorkspace`), the helper honors that
+  // and reconciles against the live per-kind state (drops entries whose
+  // underlying tab is gone; appends newly-opened tabs at the end so they
+  // don't disappear into the abyss).
+  const navEntries = useMemo<NavEntry[]>(
+    () =>
+      buildWorkspaceTabNavEntries({
+        activeSessions,
+        diffTabs,
+        fileTabs,
+        tabOrder: tabOrderForWorkspace,
+      }),
+    [activeSessions, diffTabs, fileTabs, tabOrderForWorkspace],
+  );
 
   // Drag-reorder over the unified strip. The hook is generic over an `Id`
   // type — we use the unified nav key (`s:`/`d:`/`f:` prefix) as the

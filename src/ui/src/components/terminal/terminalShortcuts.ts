@@ -77,10 +77,12 @@ export function shouldStopTerminalEventPropagation(ev: KeyboardEvent): boolean {
  * `stopImmediatePropagation()`, and `return false` so that:
  * - xterm does not send bytes to the PTY (e.g. "t" for Cmd+T)
  * - the window-level shortcut listener in `useKeyboardShortcuts.ts` does not
- *   also fire (e.g. Cmd+Shift+[/] would otherwise cycle workspaces)
+ *   also fire (e.g. Cmd+Shift+[/] would otherwise cycle the unified
+ *   workspace tab strip via `global.cycle-tab-prev/next`)
  *
- * We intentionally shadow the global Cmd+Shift+[/] workspace-cycle when the
- * terminal has focus — this is the behavior the issue specifies.
+ * We intentionally shadow the global Cmd+Shift+[/] tab-cycle when the
+ * terminal has focus so the same keys cycle terminal tabs instead — scope
+ * isolation routes the press to whichever surface owns the focus.
  */
 export function terminalKeyAction(
   ev: KeyboardEvent,

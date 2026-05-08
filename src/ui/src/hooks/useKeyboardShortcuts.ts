@@ -111,22 +111,6 @@ export function useKeyboardShortcuts() {
       if (action === "global.toggle-plan-mode" && (!activeSessionId || isInteractive)) return;
 
       const jumpMatch = action.match(/^global\.jump-to-project-(\d)$/);
-      const cycleWorkspace = (direction: "prev" | "next") => {
-        if (!selectedWorkspaceId) return;
-        e.preventDefault();
-        const currentState = useAppStore.getState();
-        const currentWs = currentState.workspaces.find((w) => w.id === selectedWorkspaceId);
-        if (!currentWs) return;
-        const siblings = currentState.workspaces.filter(
-          (w) => w.repository_id === currentWs.repository_id && w.status === "Active",
-        );
-        if (siblings.length <= 1) return;
-        const idx = siblings.findIndex((w) => w.id === selectedWorkspaceId);
-        const next = direction === "next"
-          ? siblings[(idx + 1) % siblings.length]
-          : siblings[(idx - 1 + siblings.length) % siblings.length];
-        currentState.selectWorkspace(next.id);
-      };
 
       if (jumpMatch) {
         e.preventDefault();
@@ -149,11 +133,11 @@ export function useKeyboardShortcuts() {
           case "global.toggle-plan-mode":
             if (activeSessionId) setPlanMode(activeSessionId, !planMode);
             return;
-          case "global.cycle-workspace-prev":
-            cycleWorkspace("prev");
+          case "global.cycle-tab-prev":
+            useAppStore.getState().cycleWorkspaceTab("prev");
             return;
-          case "global.cycle-workspace-next":
-            cycleWorkspace("next");
+          case "global.cycle-tab-next":
+            useAppStore.getState().cycleWorkspaceTab("next");
             return;
           case "global.focus-toggle":
             if (isTerminalFocused()) {
