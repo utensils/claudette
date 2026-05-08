@@ -322,10 +322,18 @@ pub async fn interrupt_pty_foreground(
             return Ok(());
         }
         // SAFETY: `kill(-pgrp, SIGINT)` is the standard POSIX way to deliver
-        // SIGINT to every process in the group. ESRCH means the group is
-        // already gone — also a no-op.
-        unsafe { libc::kill(-pgrp, libc::SIGINT) };
-        Ok(())
+        // SIGINT to every process in the group.
+        let r = unsafe { libc::kill(-pgrp, libc::SIGINT) };
+        if r == 0 {
+            return Ok(());
+        }
+        let err = std::io::Error::last_os_error();
+        // ESRCH means the group exited between our `tcgetpgrp` and `kill` —
+        // race with normal termination, not a failure the user should see.
+        if err.raw_os_error() == Some(libc::ESRCH) {
+            return Ok(());
+        }
+        Err(format!("Failed to interrupt PTY foreground group: {err}"))
     }
 
     #[cfg(not(unix))]
@@ -528,10 +536,11 @@ mod tests {
     /// the PTY's foreground group gets interrupted from outside the TTY.
     #[test]
     fn pty_interrupts_foreground_via_sigint_to_pgid() {
-        // Trap-and-exit makes the assertion explicit: if the kill path
-        // works, the shell traps SIGINT and exits cleanly; if SIGINT is
-        // never delivered, `sleep 30` keeps it alive past the deadline.
-        let (master, mut child, _reader) = open_sh("trap 'exit 130' INT; sleep 30");
+        // The shell traps SIGINT and exits with a marker code (42). If
+        // the SIGINT is never delivered, `sleep 30` keeps the child
+        // alive — the wait deadline below catches that case so the
+        // test fails fast instead of dragging out for 30 seconds.
+        let (master, mut child, _reader) = open_sh("trap 'exit 42' INT; sleep 30");
 
         // Briefly let the child install the trap and start sleeping.
         std::thread::sleep(Duration::from_millis(150));
@@ -544,14 +553,44 @@ mod tests {
 
         // SAFETY: kill(-pgrp, SIGINT) is the POSIX-defined way to deliver
         // SIGINT to every process in the group identified by `pgrp`.
+        let start = Instant::now();
         let r = unsafe { libc::kill(-pgrp, libc::SIGINT) };
         assert_eq!(r, 0, "kill(-pgrp, SIGINT) should succeed");
 
-        let status = child.wait().expect("child should exit");
+        // Poll `try_wait` with a short deadline — if SIGINT was actually
+        // delivered, the trap runs and the child exits in tens of ms.
+        // A broken signal path would let the child sleep its full 30s,
+        // which we want to catch as a failure here, not let it slide.
+        let deadline = Duration::from_secs(3);
+        let status = loop {
+            match child.try_wait().expect("try_wait should not fail") {
+                Some(status) => break status,
+                None => {
+                    if start.elapsed() > deadline {
+                        // Don't leave the child running past the test —
+                        // kill it and reap before failing.
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        drop(master);
+                        panic!(
+                            "child did not exit within {deadline:?} after SIGINT — \
+                             the kill(-pgrp, SIGINT) path is not reaching the foreground group"
+                        );
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            }
+        };
         drop(master);
-        // We don't care exactly how the shell encodes the SIGINT exit; we
-        // care that it exited (didn't run for the full 30 seconds).
-        let _ = status;
+
+        // The shell ran our SIGINT trap (`exit 42`) — not just any exit.
+        // This rules out the case where the child died for an unrelated
+        // reason (e.g. PTY teardown) and still happened to exit fast.
+        assert_eq!(
+            status.exit_code(),
+            42,
+            "shell should have run the SIGINT trap (exit 42), got: {status:?}"
+        );
     }
 
     /// Verifies that `configure_pty_env` (the shared helper used by

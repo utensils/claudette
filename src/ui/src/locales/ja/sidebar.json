@@ -59,7 +59,7 @@
   "command_collapse": "実行中のコマンドを折りたたむ",
   "command_expand": "実行中のコマンドを展開する",
   "command_count_running": "{{count}} 件実行中",
-  "command_stop": "コマンドを停止 (SIGINT)",
+  "command_stop": "コマンドを停止",
   "new_workspace_remote": "新規ワークスペース",
   "workspace_connect": "接続",
   "workspace_disconnect": "切断",

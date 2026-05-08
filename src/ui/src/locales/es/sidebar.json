@@ -59,7 +59,7 @@
   "command_collapse": "Contraer comandos en ejecución",
   "command_expand": "Expandir comandos en ejecución",
   "command_count_running": "{{count}} en ejecución",
-  "command_stop": "Detener comando (SIGINT)",
+  "command_stop": "Detener comando",
   "new_workspace_remote": "Nuevo espacio de trabajo",
   "workspace_connect": "Conectar",
   "workspace_disconnect": "Desconectar",
