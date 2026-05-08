@@ -63,6 +63,18 @@
   line-height: 1;
 }
 
+.shortcutContent {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: opacity 0.5s ease;
+}
+
+.segment:has(.shortcutBadgeVisible) .shortcutContent {
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
 .effortLabel {
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
@@ -99,6 +111,14 @@
   color: var(--text-muted);
   font-size: var(--fs-xs);
   font-family: var(--font-mono);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0s;
+}
+
+.shortcutBadgeVisible {
+  opacity: 1;
+  transition: opacity 0.5s ease;
 }
 
 /* ── Dropdown ── */
