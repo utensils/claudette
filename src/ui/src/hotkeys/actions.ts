@@ -185,6 +185,32 @@ export const HOTKEY_ACTIONS = [
     suppressUnderOverlay: false,
   },
   {
+    // Cmd/Ctrl+T: context-aware "new tab".
+    //  - When the workspace's right pane is showing a file (an
+    //    `activeFileTabByWorkspace` entry exists), this triggers the
+    //    inline "create new file" flow at the workspace root in the
+    //    Files panel — matches editor muscle memory for "new tab".
+    //  - Otherwise (chat or diff is showing), it creates a new chat
+    //    session in the current workspace.
+    //
+    // `terminal.new-tab` is independently scoped to `terminal` and still
+    // owns mod+t when the user is typing inside a terminal pane, so this
+    // doesn't fight terminal tab creation. Previously Cmd+T was wired
+    // through a raw `window.addEventListener("keydown")` in
+    // `ChatToolbar`/`ComposerToolbar` to toggle thinking mode; that
+    // bypass-the-keybinding-system shortcut is removed in favor of this
+    // registered action so users can rebind it from Keyboard Settings.
+    id: "global.new-tab",
+    scope: "global",
+    category: "keyboard_category_navigation",
+    description: "keyboard_action_new_tab",
+    defaultBinding: allPlatforms("mod+t"),
+    match: "key",
+    rebindable: true,
+    suppressUnderOverlay: true,
+    suppressInInteractive: false,
+  },
+  {
     id: "global.toggle-plan-mode",
     scope: "global",
     category: "keyboard_category_navigation",

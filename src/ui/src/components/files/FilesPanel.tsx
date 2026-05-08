@@ -28,6 +28,17 @@ export function FilesPanel() {
       ? (s.fileTreeRefreshNonceByWorkspace[selectedWorkspaceId] ?? 0)
       : 0,
   );
+  // Bumped when a global hotkey (Cmd/Ctrl+T while a file is the active
+  // workspace tab) requests "new file at workspace root" — the panel is
+  // the inline-editor owner so the request lands here, not in the
+  // hotkey handler. We only react when a file tab is actually active so
+  // a Cmd+T pressed in chat context (which never bumps this nonce) can't
+  // accidentally drop the user into a "create file" flow.
+  const newFileNonce = useAppStore((s) =>
+    selectedWorkspaceId
+      ? (s.requestNewFileNonceByWorkspace[selectedWorkspaceId] ?? 0)
+      : 0,
+  );
   const openFileTab = useAppStore((s) => s.openFileTab);
   const openDiffTab = useAppStore((s) => s.openDiffTab);
   const setDiffSelectedCommitHash = useAppStore((s) => s.setDiffSelectedCommitHash);
@@ -123,6 +134,19 @@ export function FilesPanel() {
     }, IDLE_REFRESH_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [isRunning, selectedWorkspaceId, loadFiles]);
+
+  // React to the `requestNewFileAtRoot` nonce: open the inline create
+  // editor at the workspace root. The first effect run (nonce === 0) is
+  // skipped on purpose so opening a workspace doesn't auto-trigger the
+  // create flow.
+  const lastSeenNewFileNonce = useRef(newFileNonce);
+  useEffect(() => {
+    if (newFileNonce === lastSeenNewFileNonce.current) return;
+    lastSeenNewFileNonce.current = newFileNonce;
+    if (!selectedWorkspaceId) return;
+    setCreatingParentPath("");
+    refocusExplorer();
+  }, [newFileNonce, selectedWorkspaceId, refocusExplorer]);
 
   const handleActivateFile = useCallback(
     (path: string) => {

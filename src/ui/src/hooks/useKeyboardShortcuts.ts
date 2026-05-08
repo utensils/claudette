@@ -1,6 +1,10 @@
 import { useEffect } from "react";
 import { useAppStore } from "../stores/useAppStore";
-import { stopAgent, sendRemoteCommand } from "../services/tauri";
+import {
+  createChatSession,
+  sendRemoteCommand,
+  stopAgent,
+} from "../services/tauri";
 import { isAgentBusy } from "../utils/agentStatus";
 import {
   focusActiveTerminal,
@@ -195,6 +199,44 @@ export function useKeyboardShortcuts() {
             // Esc closes it via the global.dismiss-or-stop branch above.
             openModal("keyboard-shortcuts");
             return;
+          case "global.new-tab": {
+            // Context-aware "new tab":
+            //  - File context (an `activeFileTabByWorkspace` entry exists
+            //    for the current workspace): trigger the FilesPanel's
+            //    inline "create new file at root" flow. We also unhide
+            //    the right sidebar and switch it to the Files tab so the
+            //    inline editor is actually visible — the panel owns the
+            //    editor's lifecycle so we just deliver the open-it
+            //    signal via `requestNewFileAtRoot`.
+            //  - Otherwise (chat or diff): create a new chat session in
+            //    the current workspace and switch to it. Mirrors the
+            //    SessionTabs "+ new session" button so the result is
+            //    indistinguishable from clicking it.
+            if (!selectedWorkspaceId) return;
+            const store = useAppStore.getState();
+            const activeFile =
+              store.activeFileTabByWorkspace[selectedWorkspaceId] ?? null;
+            if (activeFile) {
+              if (!store.rightSidebarVisible) store.toggleRightSidebar();
+              if (store.rightSidebarTab !== "files") {
+                store.setRightSidebarTab("files");
+              }
+              store.requestNewFileAtRoot(selectedWorkspaceId);
+              return;
+            }
+            void (async () => {
+              try {
+                const session = await createChatSession(selectedWorkspaceId);
+                const post = useAppStore.getState();
+                if (post.selectedWorkspaceId !== selectedWorkspaceId) return;
+                post.addChatSession(session);
+                post.selectSession(selectedWorkspaceId, session.id);
+              } catch (err) {
+                console.error("[hotkey] global.new-tab failed:", err);
+              }
+            })();
+            return;
+          }
           default:
             return;
         }

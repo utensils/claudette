@@ -28,11 +28,6 @@ export function ReasoningPill({ sessionId, disabled }: ReasoningPillProps) {
   const setThinkingEnabled = useAppStore((s) => s.setThinkingEnabled);
   const setShowThinkingBlocks = useAppStore((s) => s.setShowThinkingBlocks);
   const setEffortLevel = useAppStore((s) => s.setEffortLevel);
-  const metaKeyHeld = useAppStore((s) => s.metaKeyHeld);
-
-  const isMac = typeof navigator !== "undefined" && navigator.platform.startsWith("Mac");
-  const mod = isMac ? "⌘" : "Ctrl+";
-
   const showEffort = isEffortSupported(selectedModel);
   const effortLabel = EFFORT_LEVELS.find((l) => l.id === effortLevel)?.label ?? effortLevel;
   const isActive = thinkingEnabled;
@@ -103,12 +98,6 @@ export function ReasoningPill({ sessionId, disabled }: ReasoningPillProps) {
             <Brain size={14} />
             <span className={styles.segmentLabel}>Thinking</span>
           </span>
-          <kbd
-            className={`${styles.shortcutBadge} ${metaKeyHeld ? styles.shortcutBadgeVisible : ""}`}
-            aria-hidden="true"
-          >
-            {mod}T
-          </kbd>
         </button>
 
         <span className={styles.divider} />

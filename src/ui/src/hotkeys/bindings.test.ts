@@ -198,6 +198,51 @@ describe("global.show-keyboard-shortcuts default binding", () => {
   });
 });
 
+describe("global.new-tab default binding", () => {
+  // Locks Cmd/Ctrl+T as the context-aware "new tab" shortcut. Pre-#???
+  // this binding lived as a raw `window.addEventListener("keydown")` in
+  // ChatToolbar/ComposerToolbar that toggled thinking mode — see the
+  // CHANGELOG entry / PR description for the rationale on the rebind.
+  // The terminal scope keeps its own `terminal.new-tab` on the same key
+  // so typing Cmd+T inside a terminal pane still creates a terminal tab.
+  it("resolves Cmd+T on macOS to global.new-tab", () => {
+    expect(
+      resolveHotkeyAction(
+        macKey({ key: "t", metaKey: true }),
+        "global",
+        {},
+        "mac",
+      ),
+    ).toBe("global.new-tab");
+  });
+
+  it("resolves Ctrl+T on Linux/Windows to global.new-tab", () => {
+    expect(
+      resolveHotkeyAction(
+        macKey({ key: "t", ctrlKey: true }),
+        "global",
+        {},
+        "linux",
+      ),
+    ).toBe("global.new-tab");
+  });
+
+  it("does not collide with terminal.new-tab in terminal scope on macOS", () => {
+    // Both global.new-tab and terminal.new-tab default to mod+t on
+    // macOS by design — the dispatcher routes by scope, not by the key
+    // alone. Inside a terminal pane the resolver is called with scope
+    // "terminal" and the terminal action wins.
+    expect(
+      resolveHotkeyAction(
+        macKey({ key: "t", metaKey: true }),
+        "terminal",
+        {},
+        "mac",
+      ),
+    ).toBe("terminal.new-tab");
+  });
+});
+
 describe("bindingMatchesEvent — modifier-only codes", () => {
   // Regression: hold-to-talk on Right Alt was bound to `code:AltRight`,
   // but pressing Alt asserts e.altKey, which the matcher used to reject

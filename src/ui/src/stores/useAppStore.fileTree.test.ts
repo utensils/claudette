@@ -210,3 +210,33 @@ describe("file path store updates", () => {
     ]);
   });
 });
+
+describe("requestNewFileAtRoot", () => {
+  beforeEach(() => {
+    useAppStore.setState({ requestNewFileNonceByWorkspace: {} });
+  });
+
+  it("bumps a per-workspace nonce so FilesPanel can detect the request", () => {
+    expect(
+      useAppStore.getState().requestNewFileNonceByWorkspace[WS],
+    ).toBeUndefined();
+
+    useAppStore.getState().requestNewFileAtRoot(WS);
+    const first = useAppStore.getState().requestNewFileNonceByWorkspace[WS];
+    expect(first).toBe(1);
+
+    useAppStore.getState().requestNewFileAtRoot(WS);
+    const second = useAppStore.getState().requestNewFileNonceByWorkspace[WS];
+    expect(second).toBe(2);
+  });
+
+  it("scopes the nonce per workspace so unrelated workspaces are unaffected", () => {
+    useAppStore.getState().requestNewFileAtRoot("workspace-a");
+    useAppStore.getState().requestNewFileAtRoot("workspace-a");
+    useAppStore.getState().requestNewFileAtRoot("workspace-b");
+
+    const state = useAppStore.getState();
+    expect(state.requestNewFileNonceByWorkspace["workspace-a"]).toBe(2);
+    expect(state.requestNewFileNonceByWorkspace["workspace-b"]).toBe(1);
+  });
+});
