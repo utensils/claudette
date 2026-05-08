@@ -63,9 +63,10 @@ You can also run `codex login` yourself in any terminal — Claudette reads `aut
 
 ### Auth lifecycle
 
-- Tokens in `~/.codex/auth.json` expire and are auto-refreshed by Claudette before each request.
-- If the refresh fails (the subscription was canceled, the JWT was revoked, etc.), the next agent turn fails with an auth error and you'll need to re-run **Run codex login**.
-- Signing out: `codex logout` in any terminal removes the credentials. Next turn will fail until you re-sign-in.
+- Claudette **reads `~/.codex/auth.json` fresh from disk on every agent turn** (`load_codex_auth_material`). It does not cache tokens in memory and does not refresh them itself.
+- The `codex` CLI manages token refresh as part of its own auth flow — running `codex` for any reason (including `codex login status`, which Claudette's **Test** button triggers) will refresh `auth.json` if needed.
+- If you go a long time using Codex *only* through Claudette and the access token expires, the next agent turn will fail with an auth error from the upstream. Fix it by clicking **Run codex login** in Settings (or running `codex login` in any terminal) — the file gets a fresh JWT and the next turn works.
+- Signing out: `codex logout` in any terminal removes the credentials. The next agent turn will fail until you re-sign-in.
 
 ## How requests flow
 

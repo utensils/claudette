@@ -4,6 +4,13 @@ import starlight from '@astrojs/starlight';
 export default defineConfig({
   site: 'https://utensils.github.io',
   base: '/claudette',
+  // Redirects from old slugs that have been published. Keep these even after
+  // the slug is renamed so external links / bookmarks don't 404.
+  // Note: Astro applies the `base` prefix to source paths but not to
+  // destination paths, so the destination must include `/claudette` itself.
+  redirects: {
+    '/features/alternative-backends': '/claudette/features/providers',
+  },
   integrations: [
     starlight({
       title: 'Claudette',
