@@ -49,13 +49,15 @@ The supervisor lives in the `claudette` library crate, so the same behavior appl
 
 ## Transports
 
-The transport for each server is inferred from its config:
+A server's transport is read from the explicit `type` field in its config: `"stdio"`, `"http"`, or `"sse"`.
 
-- **`stdio`** — the default. Spawns a command and talks JSON-RPC over stdin/stdout. Recognized by `command` (or by the absence of `url`).
-- **`http`** — JSON-RPC over HTTP. Recognized by `url` ending in something other than `/sse`.
-- **`sse`** — Server-Sent Events. Recognized by `type: "sse"` or `url` ending in `/sse`.
+When detection runs, Claudette **normalizes** every parsed config by inserting `"type": "stdio"` if no `type` is present — so a config with a `url` but no `type` is persisted and validated as stdio (the runtime fallback heuristic for URL-only configs is unreachable for saved servers). In practice this means:
 
-You can force the transport explicitly by setting `"type": "stdio"`, `"http"`, or `"sse"` in the server's config object.
+- For HTTP servers, you must set `"type": "http"` explicitly.
+- For SSE servers, you must set `"type": "sse"` explicitly.
+- For stdio servers, `"type"` is optional — you can omit it and the normalizer will fill it in.
+
+If an HTTP/SSE server's config arrives without a `type`, validation will run the wrong transport check and the supervisor will mark it Failed.
 
 ## Example: committed `.mcp.json`
 

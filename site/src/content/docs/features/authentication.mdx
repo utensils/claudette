@@ -3,31 +3,37 @@ title: Authentication
 description: How Claudette delegates Claude authentication to the official CLI and what that means for Pro/Max plans, API keys, and stored credentials.
 ---
 
-Claudette **does not authenticate to Anthropic on your behalf**. It spawns the official `claude` CLI you have installed locally as a subprocess; the CLI authenticates itself using credentials you've already configured. This is intentional: a tool that orchestrates Claude Code shouldn't have to be trusted with your tokens.
+Claudette **does not authenticate to Anthropic on your behalf for agent runs**. It spawns the official `claude` CLI you have installed locally as a subprocess; the CLI authenticates itself using credentials you've already configured. This is intentional: a tool that orchestrates Claude Code shouldn't have to be trusted with the tokens that drive agent traffic.
 
-## What this means in practice
+## Where Claudette does and doesn't touch your credentials
 
-- Claudette never reads, copies, or forwards your Claude OAuth tokens.
-- Claudette **strips inherited subscription tokens** from spawned subprocess environments so they can't leak through the agent.
-- Your Claude Code credentials live where the official CLI puts them: macOS Keychain entry **`Claude Code-credentials`**, or `~/.claude/.credentials.json` on Linux. Claudette doesn't touch these.
+For agent traffic — the bulk of what Claudette does — credentials are off-limits:
 
-If you sign in or out of Claude Code outside Claudette, Claudette picks it up automatically the next time it spawns an agent.
+- Claudette does **not** read or forward your Claude OAuth tokens to spawned agent subprocesses.
+- Claudette **strips inherited subscription tokens** from spawned subprocess environments so they can't leak into the agent.
+- Your Claude Code credentials live where the official CLI puts them: macOS Keychain entry **`Claude Code-credentials`**, or `~/.claude/.credentials.json` on Linux.
 
-## First-run flow
+There is one exception: the **Usage panel**. To surface your subscription type, rate-limit tier, and current consumption, Claudette reads the OAuth tokens from the keychain / credentials file, refreshes them when expired, and calls Anthropic's usage API directly. Tokens never leave the local process boundary except as the standard `Authorization` header on those requests. If you don't open the Usage panel, this code path never runs.
 
-The first time you start a workspace, Claudette runs `claude auth login` for you and pipes the output into the chat. The CLI:
+If you sign in or out of Claude Code outside Claudette, Claudette picks it up automatically the next time it spawns an agent (and the next time the Usage panel refreshes).
+
+## Signing in from inside Claudette
+
+The **Settings > Usage** panel is the only surface that triggers `claude auth login` from inside Claudette — it does so when no usable credentials exist, when an existing token has expired and refresh fails, or on a manual click of the sign-in button. There is no automatic workspace-creation login flow; if you create a workspace before signing in, the agent's first turn fails with a credentials error and you'll need to authenticate via the Usage panel (or `claude auth login` in any terminal).
+
+When the panel triggers it, the CLI:
 
 1. Starts a localhost HTTP listener.
 2. Opens your browser to the OAuth URL.
 3. Captures the authorization code via the local callback.
 4. Writes the resulting credentials to the keychain (or `.credentials.json` on Linux).
 
-Two events stream to the UI while this runs:
+Two events stream from the Tauri backend to the panel while this runs:
 
 - `auth://login-progress` — one entry per line of stdout/stderr from the CLI subprocess.
 - `auth://login-complete` — fired once when the process exits, indicating success or the error message.
 
-If you cancel the flow mid-stream (closing the browser tab, killing the process), Claudette surfaces the error and you can retry.
+Cancel via the in-panel cancel button (kills the subprocess) or by closing the browser tab; the panel surfaces the error and you can retry.
 
 ## Pro and Max plans (OAuth)
 
