@@ -64,10 +64,12 @@ export function FilesPanel() {
       try {
         const result = await listWorkspaceFiles(workspaceId);
         if (version !== loadVersionRef.current) return;
+        if (useAppStore.getState().selectedWorkspaceId !== workspaceId) return;
         setEntries(result);
         setLoading(false);
       } catch (e) {
         if (version !== loadVersionRef.current) return;
+        if (useAppStore.getState().selectedWorkspaceId !== workspaceId) return;
         setError(String(e));
         setLoading(false);
       }

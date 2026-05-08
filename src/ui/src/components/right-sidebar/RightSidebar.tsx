@@ -206,6 +206,7 @@ export const RightSidebar = memo(function RightSidebar() {
       loadDiff(selectedWorkspaceId)
         .then((result) => {
           if (version !== diffLoadVersion.current) return;
+          if (useAppStore.getState().selectedWorkspaceId !== selectedWorkspaceId) return;
           applyDiffResult(result);
         })
         .catch(() => {});
