@@ -81,9 +81,11 @@ export default defineConfig({
           ],
         },
         {
-          label: 'Alternative Backends',
+          label: 'Alternative Providers',
           items: [
-            { slug: 'features/alternative-backends' },
+            { slug: 'features/providers' },
+            { slug: 'features/providers/ollama' },
+            { slug: 'features/providers/openai-codex' },
           ],
         },
         {

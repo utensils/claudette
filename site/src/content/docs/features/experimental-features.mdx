@@ -11,9 +11,9 @@ Six toggles live there today.
 
 Exposes Ollama (local), the OpenAI API, and OpenAI Codex (subscription) in addition to the default Claude Code path. Custom Anthropic / OpenAI endpoint kinds exist in the data model but the GUI doesn't yet have an "Add backend" flow.
 
-When this is off, every workspace runs the official `claude` CLI authenticated against Anthropic. When on, the chat header gets a backend picker and **Settings > Models** grows configuration sections for each backend.
+When this is off, every workspace runs the official `claude` CLI authenticated against Anthropic. When on, the chat header gets a provider picker and **Settings > Models** grows configuration sections for each provider.
 
-→ Full setup and capability matrix: **[Alternative Backends](/claudette/features/alternative-backends/)**
+→ Full setup and capability matrix: **[Alternative Providers](/claudette/features/providers/)**
 
 ## Claudette Terminal
 
@@ -55,7 +55,7 @@ When this is off, Claudette never reads your Claude Code OAuth tokens — they s
 
 | Toggle | What's still moving |
 |---|---|
-| Alternative Backends | Per-backend capability surfaces; gateway translation edge cases on long streamed responses. |
+| Alternative Providers | Per-provider capability surfaces; gateway translation edge cases on long streamed responses. |
 | Claudette Terminal | Layout and persistence story for the read-only tab. |
 | Plugin Management | Marketplace UI; settings persistence for per-plugin config. |
 | Claude Remote Control | Reconnect / device-handoff UX; deferred-feature list. |

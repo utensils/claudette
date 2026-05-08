@@ -79,17 +79,17 @@ claudette chat steer <session-id> "Also update the integration tests"
 
 The **Settings > Claude CLI flags** panel exposes the underlying `claude` command flags Claudette is passing for each turn — useful for diagnosing "why didn't this work like I expected" issues. The chat header banner above each turn shows the model, effort, and any non-default flags in a structured chip so the active configuration is always visible.
 
-## Alternative Claude Code Backends
+## Alternative Providers
 
-Claudette can run agents against alternative backends — Ollama (local), OpenAI API, or OpenAI Codex (subscription) — instead of the official `claude` CLI. This is gated by the **Alternative Claude Code backends** experimental flag.
+Claudette can run agents against alternative providers — [Ollama](/claudette/features/providers/ollama/) (local), or [OpenAI / Codex](/claudette/features/providers/openai-codex/) (gateway-translated) — instead of the official `claude` CLI. This is gated by the **Alternative Claude Code backends** experimental flag (the toggle keeps that wording in the UI).
 
-Several chat-header toggles on this page only apply to certain backends. The capability matrix in the dedicated page shows the full picture, but the highlights:
+Several chat-header toggles on this page only apply to certain providers. The capability matrix in the dedicated section shows the full picture, but the highlights:
 
 - **Effort, fast mode, 1M-context auto-upgrade** — Anthropic only.
 - **Extended thinking** — Anthropic and Ollama (when the model supports it).
-- **All Claude-side toggles** — hidden on gateway backends (OpenAI / Codex), because the OpenAI Responses API has no equivalents.
+- **All Claude-side toggles** — hidden on gateway providers (OpenAI / Codex), because the OpenAI Responses API has no equivalents.
 
-→ Full setup, capability matrix, and per-backend instructions: **[Alternative Backends](/claudette/features/alternative-backends/)**
+→ Full setup, capability matrix, and per-provider instructions: **[Alternative Providers](/claudette/features/providers/)**
 
 ## File References (@-mentions)
 

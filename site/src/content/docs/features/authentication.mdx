@@ -59,9 +59,9 @@ Claude Code plugins may require their own secrets (API keys, OAuth tokens for th
 
 Your Claude OAuth tokens (`claudeAiOauth.*`) are never read or written by Claudette's plugin code. The two namespaces are isolated by key prefix.
 
-## Alternative backends
+## Alternative providers
 
-Claudette supports running an agent against alternative Claude Code backends (Codex, self-hosted, etc.) via **Settings > Agent Backends**. Each backend has its own credential expectations — see the backend's documentation. The Anthropic Pro/Max OAuth flow described above only applies when the backend is the official `claude` CLI.
+Claudette supports running an agent against [alternative providers](/claudette/features/providers/) (Ollama, OpenAI, Codex) via **Settings > Models**. Each provider has its own credential expectations — see the per-provider docs. The Anthropic Pro/Max OAuth flow described above only applies when the active provider is the official `claude` CLI.
 
 ## Signing out
 
