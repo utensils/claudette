@@ -16,8 +16,8 @@ Native commands ship with the app and always work. They split into two flavors:
 | `/clear` | Clear the chat history (UI-only). |
 | `/compact` | Compact the conversation (mirrors Claude Code's behavior). |
 | `/plan` | Toggle plan mode on for the next turn. |
-| `/model` | Open the model picker. |
-| `/permissions` | Open the permissions panel. |
+| `/model` `[<model>]` | Show the active workspace model, or set it inline (`/model opus`, `/model claude-3-5-sonnet`, ...). |
+| `/permissions` `[readonly\|standard\|full]` | Show the current permission mode, or set it inline (`/permissions full`). Alias: `/allowed-tools`. |
 | `/status` | Show session/permission status. |
 | `/help` | Show available commands. |
 | `/init` | Generate a `CLAUDE.md` for the current repo. |

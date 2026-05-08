@@ -62,7 +62,7 @@ For gateway providers, Claudette spins up an HTTP listener on `127.0.0.1:0` (ran
 - `ANTHROPIC_AUTH_TOKEN` — the one-time token (rotated per launch).
 - `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` — tells the CLI to query the gateway for available models.
 
-The gateway translates Claude's request into the OpenAI Responses API (`POST /v1/responses` for OpenAI; `POST /v1/codex/responses` for the Codex subscription path) and translates the streaming response back. It's an in-process tokio task; no external service.
+The gateway translates Claude's request into the OpenAI Responses API (`POST /v1/responses` for OpenAI; `POST /codex/responses` for the Codex subscription path — note the absence of `/v1/`, since `https://chatgpt.com/backend-api` already includes it) and translates the streaming response back. It's an in-process tokio task; no external service.
 
 If the provider config or model changes, the gateway restarts on the next agent turn. There's no manual lifecycle to manage.
 
@@ -70,7 +70,7 @@ If the provider config or model changes, the gateway restarts on the next agent 
 
 The model picker in the chat header is scoped to the active provider. Switching the provider resets the model to that provider's default.
 
-Per-session model selection is persisted in `app_settings` as `model:<session_id>` and `model_provider:<session_id>`. Disabling the experimental flag wipes these and resets every session to `anthropic` (with the cleanup also resetting the agent so the next turn starts fresh against Claude).
+Per-session model selection is persisted in `app_settings` as `model:<session_id>` and `model_provider:<session_id>`. Disabling the experimental flag triggers a cleanup pass: only sessions whose persisted model or provider was actually pointing at a non-Anthropic backend (or a non-built-in Claude model) get rewritten to the defaults `anthropic` / `opus` — sessions already on a built-in Claude model are left alone. The cleanup writes new values rather than deleting keys, and resets the live agent on rewritten sessions so the next turn starts fresh against Claude.
 
 ## When to choose what
 

@@ -75,7 +75,7 @@ Both providers route the same way:
 1. Claudette spins up a per-provider, per-model HTTP listener on `127.0.0.1:0` and mints a one-time auth token.
 2. The spawned `claude` subprocess gets `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, and `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` in its environment.
 3. The `claude` CLI thinks it's talking to api.anthropic.com; it's actually hitting Claudette's local listener.
-4. The listener translates the request body into an OpenAI Responses API call (`POST /v1/responses` for OpenAI; `POST /v1/codex/responses` for the Codex subscription path) and translates the streaming response back into Anthropic's event format.
+4. The listener translates the request body into an OpenAI Responses API call (`POST /v1/responses` for OpenAI; `POST /codex/responses` for the Codex subscription path — `chatgpt.com/backend-api` already includes the API version, so the listener doesn't add `/v1/`) and translates the streaming response back into Anthropic's event format.
 
 This is why the chat-header **Thinking**, **Effort**, **Fast mode**, and **1M-context** toggles are hidden when either provider is active — there are no equivalents in the OpenAI Responses shape.
 
