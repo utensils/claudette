@@ -1230,6 +1230,37 @@ mod compaction_tests {
     }
 
     #[test]
+    fn deserializes_replayed_remote_user_event() {
+        let line = r#"{
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": "ping from remote"
+            },
+            "session_id": "sess-remote",
+            "parent_tool_use_id": null,
+            "uuid": "remote-msg-1",
+            "isReplay": true
+        }"#;
+        let ev: StreamEvent = serde_json::from_str(line).unwrap();
+        match ev {
+            StreamEvent::User {
+                message,
+                is_synthetic,
+            } => {
+                assert!(!is_synthetic);
+                match message.content {
+                    UserMessageContent::Text(t) => {
+                        assert_eq!(t, "ping from remote");
+                    }
+                    UserMessageContent::Blocks(_) => panic!("expected Text"),
+                }
+            }
+            other => panic!("expected User replay event, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn deserializes_synthetic_user_event() {
         let line = r#"{
             "type": "user",

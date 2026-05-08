@@ -1066,4 +1066,16 @@ mod tests {
 
         assert_eq!(user_visible_text(&message).as_deref(), Some("one\ntwo"));
     }
+
+    #[test]
+    fn user_visible_text_extracts_replayed_remote_text() {
+        let message = UserEventMessage {
+            content: UserMessageContent::Text("ping from remote".to_string()),
+        };
+
+        assert_eq!(
+            user_visible_text(&message).as_deref(),
+            Some("ping from remote")
+        );
+    }
 }
