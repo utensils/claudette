@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../../stores/useAppStore";
 import {
@@ -43,6 +43,7 @@ export function ClaudeFlagsSettings({
   const [defsLoading, setDefsLoading] = useState(false);
   const [state, setState] = useState<FlagStateResponse | null>(null);
   const [stateError, setStateError] = useState<string | null>(null);
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadDefs = useCallback(async () => {
     setDefsLoading(true);
@@ -54,7 +55,8 @@ export function ClaudeFlagsSettings({
       if (isStillLoading(e)) {
         // Don't surface a Retry banner during the boot-time discovery
         // window — re-poll until discovery resolves to Ok or a real error.
-        setTimeout(() => {
+        if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = setTimeout(() => {
           if (useAppStore.getState().claudeFlagDefs === null) {
             void loadDefs();
           }
@@ -82,6 +84,15 @@ export function ClaudeFlagsSettings({
       void loadDefs();
     }
   }, [cachedDefs, loadDefs]);
+
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current) {
+        clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     void loadState();
