@@ -204,6 +204,18 @@ pub fn clear_repo_override(
     Ok(())
 }
 
+/// Drop the global persisted state for a flag entirely. Differs from
+/// `set_global_flag(_, _, false, None)`, which only flips `:enabled` to
+/// `"false"` and leaves the entry visible to `load_global` — fine for
+/// "user has explicitly disabled this" semantics, but the wrong primitive
+/// for "user no longer wants this configured" (e.g. the Settings UI's
+/// Clear button on a Configured row).
+pub fn clear_global_flag(db: &Database, name: &str) -> Result<(), rusqlite::Error> {
+    db.delete_app_setting(&global_enabled_key(name))?;
+    db.delete_app_setting(&global_value_key(name))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -416,6 +428,31 @@ mod tests {
             "malformed :enabled string should drop the flag, got {:?}",
             loaded.get("--add-dir"),
         );
+    }
+
+    #[test]
+    fn clear_global_flag_removes_entry_from_load_global() {
+        // Without this primitive, `set_global_flag(_, _, false, None)` would
+        // be the only way to "clear" a global flag, but that leaves the
+        // entry in `load_global` with `enabled: false` — the Settings UI
+        // would never see the row leave its Configured section.
+        let (db, _td) = open_db();
+        set_global_flag(&db, "--add-dir", true, Some("/foo")).unwrap();
+        clear_global_flag(&db, "--add-dir").unwrap();
+        let loaded = load_global(&db).unwrap();
+        assert!(
+            !loaded.contains_key("--add-dir"),
+            "cleared global flag should not appear in load_global, got {:?}",
+            loaded.get("--add-dir"),
+        );
+    }
+
+    #[test]
+    fn clear_global_flag_is_idempotent_when_nothing_persisted() {
+        let (db, _td) = open_db();
+        // Should silently succeed even if the flag was never set.
+        clear_global_flag(&db, "--never-set").unwrap();
+        assert!(load_global(&db).unwrap().is_empty());
     }
 
     #[test]

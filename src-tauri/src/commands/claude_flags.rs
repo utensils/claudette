@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use claudette::claude_flags_store::{
-    self, FlagValue, clear_repo_override, set_global_flag, set_repo_override,
+    self, FlagValue, clear_global_flag, clear_repo_override, set_global_flag, set_repo_override,
 };
 use claudette::claude_help::{ClaudeFlagDef, discover_claude_flags};
 use claudette::db::Database;
@@ -159,4 +159,17 @@ pub async fn clear_claude_flag_repo_override(
 ) -> Result<(), String> {
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     clear_repo_override(&db, &repo_id, &name).map_err(|e| e.to_string())
+}
+
+/// Drop the global persisted state for a flag entirely. Used by the
+/// Settings UI's Clear (×) button on a Configured row — `set_global_flag`
+/// with `enabled: false` would only flip the flag to disabled, leaving
+/// the entry visible to `load_global` and stuck in the Configured section.
+#[tauri::command]
+pub async fn clear_claude_flag_global(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<(), String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    clear_global_flag(&db, &name).map_err(|e| e.to_string())
 }

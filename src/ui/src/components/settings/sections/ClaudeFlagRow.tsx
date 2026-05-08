@@ -1,90 +1,107 @@
 import { useTranslation } from "react-i18next";
 import type { ClaudeFlagDef } from "../../../services/claudeFlags";
 import {
-  type FlagRowScope,
+  type FlagRowVariant,
   flagInputKind,
-  rowIsReadOnly,
+  rowVariantIsEditable,
 } from "./claudeFlagRowLogic";
 import styles from "../Settings.module.css";
 
 export interface ClaudeFlagRowProps {
   def: ClaudeFlagDef;
+  variant: FlagRowVariant;
   enabled: boolean;
   value: string;
-  scope: FlagRowScope;
-  /// Repo scope only: is the row currently overriding global? When false in
-  /// repo scope, inputs render disabled showing the inherited values.
-  isOverride?: boolean;
-  onToggleEnabled: (next: boolean) => void;
-  onValueChange: (next: string) => void;
-  /// Repo scope only.
-  onToggleOverride?: (next: boolean) => void;
+  /// Inherited rows display this badge when a repo override of the same name
+  /// is shadowing the global entry rendered here.
+  isOverridden?: boolean;
+  /// Editable variants only.
+  onToggleEnabled?: (next: boolean) => void;
+  onValueChange?: (next: string) => void;
+  /// Editable variants — remove the row's persisted state entirely.
+  /// At global scope this disables the flag; at repo scope it clears the
+  /// repo override and falls back to the inherited global.
+  onClear?: () => void;
+  /// `browse` and (un-shadowed) `inherited` variants — promote the flag
+  /// into a configured / repo-override entry.
+  onPromote?: () => void;
+  /// Label for the promote button; the parent picks the wording because it
+  /// depends on scope ("Add" vs "Override").
+  promoteLabel?: string;
 }
 
 export function ClaudeFlagRow(props: ClaudeFlagRowProps) {
   const {
     def,
+    variant,
     enabled,
     value,
-    scope,
-    isOverride = false,
+    isOverridden = false,
     onToggleEnabled,
     onValueChange,
-    onToggleOverride,
+    onClear,
+    onPromote,
+    promoteLabel,
   } = props;
   const { t } = useTranslation("settings");
-  const readOnly = rowIsReadOnly(scope, isOverride);
+  const editable = rowVariantIsEditable(variant);
   const inputKind = flagInputKind(def);
 
   return (
-    <div className={styles.flagRow}>
+    <div className={styles.flagRow} data-variant={variant}>
       <input
         type="checkbox"
+        className={styles.flagCheckbox}
         checked={enabled}
-        disabled={readOnly}
-        onChange={(e) => onToggleEnabled(e.target.checked)}
+        disabled={!editable}
+        onChange={(e) => onToggleEnabled?.(e.target.checked)}
         aria-label={def.name}
       />
-      <div className={styles.flagInfo}>
-        <div>
-          <span className={styles.flagName}>{def.name}</span>
-          {def.short && <span className={styles.flagShort}>{def.short}</span>}
-          {def.is_dangerous && (
-            <span
-              className={styles.flagDangerBadge}
-              title={t("claude_flags_danger_warning")}
-            >
-              {t("claude_flags_danger_badge")}
-            </span>
-          )}
-        </div>
-        {def.description && (
-          <div className={styles.flagDescription}>{def.description}</div>
-        )}
-      </div>
-      <div className={styles.flagControls}>
-        {scope === "repo" && !isOverride && (
-          <span className={styles.flagInheritedHint}>
-            {t("claude_flags_inheriting_global")}
+
+      <div className={styles.flagNameCell}>
+        <span className={styles.flagName} title={def.name}>
+          {def.name}
+        </span>
+        {def.short && <span className={styles.flagShort}>{def.short}</span>}
+        {def.is_dangerous && (
+          <span
+            className={styles.flagDangerBadge}
+            title={t("claude_flags_danger_warning")}
+          >
+            {t("claude_flags_danger_badge")}
           </span>
         )}
-        {inputKind === "text" && (
+        {variant === "inherited" && isOverridden && (
+          <span className={styles.flagOverriddenBadge}>
+            {t("claude_flags_overridden_badge")}
+          </span>
+        )}
+      </div>
+
+      {def.description ? (
+        <span className={styles.flagDescription} title={def.description}>
+          {def.description}
+        </span>
+      ) : (
+        <span className={styles.flagDescription} />
+      )}
+
+      <div className={styles.flagValueCell}>
+        {inputKind === "text" && editable && (
           <input
             type="text"
             className={styles.flagInput}
             value={value}
-            disabled={readOnly}
             placeholder={def.value_placeholder ?? ""}
-            onChange={(e) => onValueChange(e.target.value)}
+            onChange={(e) => onValueChange?.(e.target.value)}
             aria-label={`${def.name} value`}
           />
         )}
-        {inputKind === "select" && def.enum_choices && (
+        {inputKind === "select" && editable && def.enum_choices && (
           <select
             className={styles.flagInput}
             value={value}
-            disabled={readOnly}
-            onChange={(e) => onValueChange(e.target.value)}
+            onChange={(e) => onValueChange?.(e.target.value)}
             aria-label={`${def.name} value`}
           >
             <option value="">--</option>
@@ -95,15 +112,37 @@ export function ClaudeFlagRow(props: ClaudeFlagRowProps) {
             ))}
           </select>
         )}
-        {scope === "repo" && onToggleOverride && (
-          <label className={styles.flagOverrideRow}>
-            <input
-              type="checkbox"
-              checked={isOverride}
-              onChange={(e) => onToggleOverride(e.target.checked)}
-            />
-            {t("claude_flags_override_label")}
-          </label>
+        {!editable && inputKind !== "none" && value && (
+          <span
+            className={styles.flagValueReadonly}
+            title={value}
+            aria-label={`${def.name} value`}
+          >
+            {value}
+          </span>
+        )}
+      </div>
+
+      <div className={styles.flagActionCell}>
+        {editable && onClear && (
+          <button
+            type="button"
+            className={styles.flagIconBtn}
+            onClick={onClear}
+            aria-label={t("claude_flags_clear")}
+            title={t("claude_flags_clear")}
+          >
+            ×
+          </button>
+        )}
+        {!editable && onPromote && !isOverridden && (
+          <button
+            type="button"
+            className={styles.flagPromoteBtn}
+            onClick={onPromote}
+          >
+            {promoteLabel ?? t("claude_flags_add")}
+          </button>
         )}
       </div>
     </div>

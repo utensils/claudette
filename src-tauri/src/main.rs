@@ -743,6 +743,7 @@ fn main() {
             commands::claude_flags::get_claude_flag_state,
             commands::claude_flags::set_claude_flag_state,
             commands::claude_flags::clear_claude_flag_repo_override,
+            commands::claude_flags::clear_claude_flag_global,
             // Updater
             commands::updater::check_for_updates_with_channel,
             commands::updater::install_pending_update,
