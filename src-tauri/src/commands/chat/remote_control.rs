@@ -461,6 +461,33 @@ async fn ensure_persistent_session_for_remote_control(
         resolved_model.as_deref(),
     )
     .await?;
+    let extra_claude_flags = {
+        let db = Database::open(db_path).map_err(|e| e.to_string())?;
+        let guard = state.claude_flag_defs.read().await;
+        match &*guard {
+            crate::state::ClaudeFlagDiscovery::Ok(defs) => {
+                match claudette::claude_flags_store::resolve_for_repo(
+                    &db,
+                    defs,
+                    Some(workspace.repository_id.as_str()),
+                ) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        eprintln!(
+                            "[remote-control] failed to resolve claude flags for repo {}: {e}",
+                            workspace.repository_id
+                        );
+                        Vec::new()
+                    }
+                }
+            }
+            crate::state::ClaudeFlagDiscovery::Err(msg) => {
+                eprintln!("[remote-control] claude flag discovery failed: {msg}");
+                Vec::new()
+            }
+            crate::state::ClaudeFlagDiscovery::Loading => Vec::new(),
+        }
+    };
     let mut agent_settings = AgentSettings {
         model: resolved_model,
         fast_mode: launch_options.fast_mode.unwrap_or(false),
@@ -472,6 +499,7 @@ async fn ensure_persistent_session_for_remote_control(
         disable_1m_context: launch_options.disable_1m_context.unwrap_or(false),
         backend_runtime,
         hook_bridge: None,
+        extra_claude_flags,
     };
     let bridge = if send_to_user_enabled {
         let (bridge, mcp_with_claudette) = start_bridge_and_inject_mcp(
@@ -1266,6 +1294,7 @@ mod tests {
             status: SessionStatus::Active,
             created_at: "2026-05-08T00:00:00Z".to_string(),
             archived_at: None,
+            cli_invocation: None,
             agent_status: AgentStatus::Idle,
             needs_attention: false,
             attention_kind: None,

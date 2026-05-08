@@ -63,7 +63,6 @@ pub struct TaskUsage {
 
 /// Top-level JSON line from Claude CLI stdout.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(clippy::large_enum_variant)]
 #[serde(tag = "type")]
 // Variants are constructed one at a time from streaming JSON; we never
 // hold them in collections, so the size delta between variants doesn't
