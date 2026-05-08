@@ -9,6 +9,7 @@ use tokio::sync::{RwLock, Semaphore};
 
 use claudette::claude_help::ClaudeFlagDef;
 use claudette::env_provider::{EnvCache, EnvWatcher};
+use claudette::file_watcher::FileWatcher;
 use claudette::plugin_runtime::PluginRegistry;
 use claudette::scm::types::{CiCheck, PullRequest};
 use serde::{Deserialize, Serialize};
@@ -450,6 +451,14 @@ pub struct AppState {
     /// event; `None` before setup finishes or if watcher construction
     /// failed (logged, lazy mtime invalidation still covers).
     pub env_watcher: RwLock<Option<Arc<EnvWatcher>>>,
+    /// Filesystem watcher for the file viewer's open buffers. Lets the
+    /// frontend follow disk changes (agent edits, external git ops,
+    /// out-of-app saves) without polling. Set at startup from
+    /// `main.rs` once the `AppHandle` is available so the change
+    /// callback can emit a `workspace-file-changed` Tauri event.
+    /// `None` before setup finishes or if construction failed (logged;
+    /// the file viewer falls back to its initial-load-only path).
+    pub file_watcher: RwLock<Option<Arc<FileWatcher>>>,
     /// Cached PR/CI status data keyed by (repo_id, branch_name).
     pub scm_cache: ScmCache,
     /// Limits concurrent SCM CLI invocations.
@@ -495,6 +504,7 @@ impl AppState {
             )),
             env_cache: Arc::new(EnvCache::new()),
             env_watcher: RwLock::new(None),
+            file_watcher: RwLock::new(None),
             scm_cache: ScmCache::new(),
             scm_semaphore: Arc::new(Semaphore::new(4)),
             pending_update: tokio::sync::Mutex::new(None),

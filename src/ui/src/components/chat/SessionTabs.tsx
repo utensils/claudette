@@ -18,6 +18,7 @@ import {
   createChatSession,
   renameChatSession,
   archiveChatSession,
+  readWorkspaceFileForViewer,
   reorderChatSessions,
 } from "../../services/tauri";
 import { useTabDragReorder } from "../../hooks/useTabDragReorder";
@@ -958,6 +959,19 @@ function FileTab({
       s.fileBuffers[fileBufferKey(workspaceId, path)].buffer !==
         s.fileBuffers[fileBufferKey(workspaceId, path)].baseline,
   );
+  // Mirror selector for the "external change pending" flag. Set by
+  // `applyExternalFileChange` when an on-disk write lands while the
+  // buffer was dirty (so the watcher couldn't auto-update without
+  // clobbering edits). Clicking the badge opens disk content via
+  // `reloadFileBufferFromDisk`, dropping the in-flight edit.
+  const externallyChanged = useAppStore(
+    (s) =>
+      s.fileBuffers[fileBufferKey(workspaceId, path)]?.externallyChanged ===
+      true,
+  );
+  const reloadFileBufferFromDisk = useAppStore(
+    (s) => s.reloadFileBufferFromDisk,
+  );
   const basename = path.split("/").pop() || path;
   const Icon = getFileIcon(basename);
   const statusTitle =
@@ -1032,6 +1046,37 @@ function FileTab({
           {basename}
           {dirty && (
             <span className={styles.dirtyDot} aria-label={t("file_dirty_aria")} />
+          )}
+          {externallyChanged && (
+            // Click-to-reload affordance — re-reads disk and applies via
+            // `reloadFileBufferFromDisk`, which drops the in-flight
+            // dirty buffer in exchange for the new disk content. Stops
+            // propagation so the click doesn't also activate the tab.
+            <button
+              type="button"
+              className={styles.externalDot}
+              title={t("file_external_change_reload_tooltip")}
+              aria-label={t("file_external_change_reload_aria")}
+              onClick={(e) => {
+                e.stopPropagation();
+                void readWorkspaceFileForViewer(workspaceId, path)
+                  .then((res) => {
+                    reloadFileBufferFromDisk(
+                      workspaceId,
+                      path,
+                      res.content ?? "",
+                      res.size_bytes,
+                      res.truncated,
+                    );
+                  })
+                  .catch((err) => {
+                    console.error(
+                      "[file-tab] reload-from-disk failed",
+                      err,
+                    );
+                  });
+              }}
+            />
           )}
         </span>
       )}

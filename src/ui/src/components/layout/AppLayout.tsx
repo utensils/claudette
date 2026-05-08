@@ -20,6 +20,7 @@ import { useAgentStream } from "../../hooks/useAgentStream";
 import { useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
 import { useBranchRefresh } from "../../hooks/useBranchRefresh";
 import { useAutoUpdater } from "../../hooks/useAutoUpdater";
+import { useWorkspaceFileWatcher } from "../../hooks/useWorkspaceFileWatcher";
 import styles from "./AppLayout.module.css";
 
 export function AppLayout() {
@@ -43,6 +44,7 @@ export function AppLayout() {
   useKeyboardShortcuts();
   useBranchRefresh();
   useAutoUpdater();
+  useWorkspaceFileWatcher();
 
 
   // Main-pane priority: an explicitly opened file from the Files tree

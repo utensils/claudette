@@ -167,6 +167,8 @@
   "file_save_success": "Saved",
   "file_save_failed": "Save failed: {{error}}",
   "file_dirty_aria": "Unsaved changes",
+  "file_external_change_reload_tooltip": "File changed on disk — click to reload (your unsaved edits will be lost)",
+  "file_external_change_reload_aria": "Reload from disk",
 
   "terminal_failed_to_start": "Failed to start shell"
 }

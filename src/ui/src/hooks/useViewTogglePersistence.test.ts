@@ -116,6 +116,7 @@ describe("view state persistence", () => {
           loaded: true,
           loadError: null,
           preview: "source",
+          externallyChanged: false,
         },
       },
       terminalPaneTrees: {

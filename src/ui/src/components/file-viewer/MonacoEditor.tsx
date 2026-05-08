@@ -13,10 +13,18 @@ import styles from "./MonacoEditor.module.css";
 interface MonacoEditorProps {
   /** Workspace id used to scope HEAD-blob lookups for the git gutter. */
   workspaceId: string;
-  /** Initial document text. The parent uses `key={path}` so that switching
-   *  files remounts the editor with a fresh undo history; mode toggles
-   *  (view↔edit) reuse the same instance via `updateOptions`. */
-  initialValue: string;
+  /** Live document text. Driven from the store so external changes
+   *  (agent edits, manual saves in another editor, `git checkout`) flow
+   *  in via `applyExternalFileChange` and Monaco's controlled-value
+   *  path: `@monaco-editor/react` translates each `value` change into
+   *  `editor.executeEdits` with full-range replacement + `pushUndoStop`,
+   *  preserving the user's cursor position and making the external
+   *  change reversible via Cmd+Z.
+   *
+   *  The parent uses `key={path}` so switching files still remounts the
+   *  editor with a fresh undo stack; this prop only flows in-place
+   *  updates for the currently-open file. */
+  value: string;
   /** File path used to derive the language id. Monaco's built-in detection
    *  works off URI extensions, so we pass the path through as a `path` prop
    *  and let Monaco pick the language. */
@@ -25,7 +33,10 @@ interface MonacoEditorProps {
    *  view/edit doesn't lose cursor position or undo stack. */
   readOnly: boolean;
   /** Fired on every document change. The parent compares against the
-   *  baseline to update the per-tab dirty flag. */
+   *  baseline to update the per-tab dirty flag. The `@monaco-editor/react`
+   *  wrapper internally suppresses this callback while it's applying a
+   *  `value`-prop update via `executeEdits`, so external updates do not
+   *  bounce back through `onChange` and create an apply loop. */
   onChange: (value: string) => void;
   /** Save callback bound to Cmd/Ctrl+S. The shortcut fires only when the
    *  editor has focus, matching the spec. */
@@ -34,7 +45,7 @@ interface MonacoEditorProps {
 
 export const MonacoEditor = memo(function MonacoEditor({
   workspaceId,
-  initialValue,
+  value,
   filename,
   readOnly,
   onChange,
@@ -64,9 +75,14 @@ export const MonacoEditor = memo(function MonacoEditor({
   const gutterCollectionRef = useRef<DecorationsCollection | null>(null);
 
   // Mirror the editor's text into React state so the git-gutter hook can
-  // recompute on every change. Seeded from `initialValue`; the parent
-  // remounts via `key={path}` on file switches so the seed stays correct.
-  const [currentBuffer, setCurrentBuffer] = useState(initialValue);
+  // recompute on every change. Seeded from `value`; user typing updates
+  // it via `handleEditorChange`, and external `value`-prop updates sync
+  // it via the effect below — the latter keeps the gutter accurate
+  // when the file is rewritten on disk while the user isn't typing.
+  const [currentBuffer, setCurrentBuffer] = useState(value);
+  useEffect(() => {
+    setCurrentBuffer(value);
+  }, [value]);
 
   const minimapEnabled = useAppStore((s) => s.editorMinimapEnabled);
 
@@ -134,7 +150,7 @@ export const MonacoEditor = memo(function MonacoEditor({
       <Editor
         height="100%"
         path={filename}
-        defaultValue={initialValue}
+        value={value}
         theme="claudette"
         beforeMount={handleBeforeMount}
         onMount={handleMount}

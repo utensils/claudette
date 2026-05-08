@@ -981,6 +981,25 @@ export function readWorkspaceFileForViewer(
   });
 }
 
+/** Replace the watch set for `workspaceId` with `paths`. Idempotent —
+ *  the file-viewer hook re-asserts the full open-tab list whenever
+ *  files are opened or closed. The backend's `FileWatcher` deduplicates
+ *  paths and emits `workspace-file-changed` events on change. */
+export function watchWorkspaceFiles(
+  workspaceId: string,
+  paths: string[],
+): Promise<void> {
+  return invoke("watch_workspace_files", { workspaceId, paths });
+}
+
+/** Drop every file watch belonging to `workspaceId`. Called when a
+ *  workspace is deleted or archived; the active-workspace switch path
+ *  uses `watchWorkspaceFiles` to install the new set, which implicitly
+ *  drops paths the previous workspace cared about. */
+export function unwatchWorkspaceFiles(workspaceId: string): Promise<void> {
+  return invoke("unwatch_workspace_files", { workspaceId });
+}
+
 export function readWorkspaceFileBytes(
   workspaceId: string,
   relativePath: string,
