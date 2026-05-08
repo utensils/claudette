@@ -124,13 +124,40 @@ fn should_reenable_remote_control_after_turn_result(
     status: &ClaudeRemoteControlStatus,
     persistent_pid: Option<u32>,
     turn_pid: u32,
+    was_respawned: bool,
 ) -> bool {
-    should_restore
+    // Only re-enable the bridge when the persistent CC was actually
+    // (re-)spawned during this turn. A pure-reuse turn already owns the
+    // existing bridge handle, so calling `set_remote_control(true)` again is
+    // at best a no-op and at worst — if the upstream CLI changes that
+    // contract — would tear down and re-create the bridge, fragmenting the
+    // remote conversation across distinct claude.ai sessions.
+    was_respawned
+        && should_restore
         && matches!(
             status.state,
             ClaudeRemoteControlLifecycle::Reconnecting | ClaudeRemoteControlLifecycle::Enabling
         )
         && persistent_pid == Some(turn_pid)
+}
+
+/// Defer drift-driven persistent-session teardowns while Claude Remote Control
+/// is live. Tearing down the persistent CC kills the bridge environment in the
+/// process; the post-respawn `set_remote_control(true)` call then creates a
+/// fresh bridge and the user sees a brand-new session/URL on claude.ai.
+///
+/// This trades off "drift takes effect mid-conversation" for "bridge identity
+/// stays stable across alternating local/remote turns". Drift applies on the
+/// next disable→enable cycle. Mirrors `should_defer_persistent_restart`'s
+/// pattern for in-flight background tasks.
+fn remote_control_should_defer_drift_teardown(status: &ClaudeRemoteControlStatus) -> bool {
+    matches!(
+        status.state,
+        ClaudeRemoteControlLifecycle::Enabling
+            | ClaudeRemoteControlLifecycle::Ready
+            | ClaudeRemoteControlLifecycle::Connected
+            | ClaudeRemoteControlLifecycle::Reconnecting
+    )
 }
 
 fn remote_control_reconnecting_status(
@@ -1408,9 +1435,21 @@ pub async fn send_chat_message(
     // MCP config changed while a previous turn was in flight — tear down the
     // persistent session so the next spawn picks up updated --mcp-config.
     // The session is idle between turns so a graceful SIGTERM is sufficient.
+    //
+    // When Claude Remote Control is live we defer instead — the teardown
+    // would close the bridge and the post-respawn re-enable would create a
+    // new session/URL on claude.ai, fragmenting the remote conversation.
+    // The dirty flag stays set so the change applies once Remote Control is
+    // disabled and the next turn lands here without the deferral.
     if session.mcp_config_dirty && should_defer_persistent_restart(session) {
         eprintln!(
             "[chat] MCP config dirty, but background tasks are running — deferring persistent session restart for {workspace_id}"
+        );
+    } else if session.mcp_config_dirty
+        && remote_control_should_defer_drift_teardown(&session.claude_remote_control)
+    {
+        eprintln!(
+            "[chat] MCP config dirty, but Claude Remote Control is active — deferring persistent session restart for {workspace_id}"
         );
     } else if session.mcp_config_dirty {
         eprintln!("[chat] MCP config dirty — tearing down persistent session for {workspace_id}");
@@ -1569,6 +1608,30 @@ pub async fn send_chat_message(
         eprintln!(
             "[chat] session flags drifted, but background tasks are running — deferring persistent session restart for {workspace_id}"
         );
+    } else if remote_control_should_defer_drift_teardown(&session.claude_remote_control)
+        && session.persistent_session.is_some()
+        && persistent_session_flags_drifted(
+            SessionFlags {
+                plan_mode: session.session_plan_mode,
+                allowed_tools: &session.session_allowed_tools,
+                exited_plan: session.session_exited_plan,
+                disable_1m_context: session.session_disable_1m_context,
+                backend_hash: &session.session_backend_hash,
+            },
+            RequestedFlags {
+                plan_mode: agent_settings.plan_mode,
+                allowed_tools: &allowed_tools,
+                disable_1m_context: agent_settings.disable_1m_context,
+                backend_hash: &agent_settings.backend_runtime.hash,
+            },
+        )
+    {
+        // Same trade-off as the MCP-dirty branch above: keep the bridge
+        // alive across local turns. The flags-drift state remains so the
+        // teardown happens after Remote Control is disabled.
+        eprintln!(
+            "[chat] session flags drifted, but Claude Remote Control is active — deferring persistent session restart for {workspace_id}"
+        );
     } else if session.persistent_session.is_some()
         && persistent_session_flags_drifted(
             SessionFlags {
@@ -1696,6 +1759,20 @@ pub async fn send_chat_message(
         eprintln!(
             "[chat] env-provider output changed, but background tasks are running — deferring persistent session restart for {workspace_id}"
         );
+    } else if remote_control_should_defer_drift_teardown(&session.claude_remote_control)
+        && session.persistent_session.is_some()
+        && session.session_resolved_env != resolved_env.vars
+    {
+        // Env-provider output can drift spuriously between turns when the
+        // workspace files Claude touched bumped a watched mtime (e.g. a
+        // direnv .envrc rerun returns the same vars in a different
+        // HashMap iteration order, or an idempotent mise plugin re-emits
+        // identical exports). Deferring keeps the bridge identity stable
+        // across alternating local/remote turns; real env changes apply
+        // on the next disable→enable cycle.
+        eprintln!(
+            "[chat] env-provider output changed, but Claude Remote Control is active — deferring persistent session restart for {workspace_id}"
+        );
     } else if session.persistent_session.is_some()
         && session.session_resolved_env != resolved_env.vars
     {
@@ -1777,6 +1854,7 @@ pub async fn send_chat_message(
     // First turn or after restart: start a PersistentSession.
     // Subsequent turns in same session: reuse the existing process via stdin.
     let existing_persistent = session.persistent_session.clone();
+    let existing_persistent_pid = existing_persistent.as_ref().map(|ps| ps.pid());
     let saved_session_id = session.session_id.clone();
     let saved_turn_count = session.turn_count;
 
@@ -2031,6 +2109,11 @@ pub async fn send_chat_message(
     };
 
     let spawned_pid = turn_handle.pid;
+    // The persistent CC was respawned this turn whenever the captured pid
+    // differs from the pre-turn snapshot — covers fresh spawns (no prior
+    // session), drift-driven teardowns, and reuse-failure respawns. A pure
+    // reuse keeps the same pid and must NOT trigger a bridge re-enable.
+    let persistent_session_was_respawned = existing_persistent_pid != Some(spawned_pid);
     let ps_for_remote_control_reenable;
     let should_reenable_remote_control;
     {
@@ -2042,6 +2125,7 @@ pub async fn send_chat_message(
             &session.claude_remote_control,
             ps_for_remote_control_reenable.as_ref().map(|ps| ps.pid()),
             spawned_pid,
+            persistent_session_was_respawned,
         );
         let _ =
             db.save_chat_session_state(&chat_session_id, &session.session_id, session.turn_count);
@@ -3048,8 +3132,8 @@ pub async fn send_chat_message(
 mod tests {
     use super::{
         remote_control_requested_or_active, remote_control_requested_or_active_for_turn,
-        remote_control_should_restore_for_turn, remote_control_title,
-        should_defer_persistent_restart_for_state,
+        remote_control_should_defer_drift_teardown, remote_control_should_restore_for_turn,
+        remote_control_title, should_defer_persistent_restart_for_state,
         should_reenable_remote_control_after_turn_result, should_resume_persistent_session,
         should_run_auto_naming, terminal_text,
     };
@@ -3179,23 +3263,29 @@ mod tests {
             last_error: None,
         };
 
+        // Cold-enable + first spawn: state=Enabling, was_respawned=true.
         assert!(should_reenable_remote_control_after_turn_result(
             true,
             &status,
             Some(42),
-            42
+            42,
+            true,
         ));
+        // PID mismatch (race): no re-enable.
         assert!(!should_reenable_remote_control_after_turn_result(
             true,
             &status,
             Some(43),
-            42
+            42,
+            true,
         ));
+        // Restore disabled (e.g. feature flag off): no re-enable.
         assert!(!should_reenable_remote_control_after_turn_result(
             false,
             &status,
             Some(42),
-            42
+            42,
+            true,
         ));
 
         status.state = ClaudeRemoteControlLifecycle::Ready;
@@ -3203,7 +3293,8 @@ mod tests {
             true,
             &status,
             Some(42),
-            42
+            42,
+            true,
         ));
 
         status.state = ClaudeRemoteControlLifecycle::Connected;
@@ -3211,15 +3302,83 @@ mod tests {
             true,
             &status,
             Some(42),
-            42
+            42,
+            true,
         ));
 
         status.state = ClaudeRemoteControlLifecycle::Reconnecting;
+        // Reconnecting + respawned: re-enable.
         assert!(should_reenable_remote_control_after_turn_result(
             true,
             &status,
             Some(42),
-            42
+            42,
+            true,
+        ));
+        // Reconnecting but reuse (not respawned): NO re-enable. The bridge
+        // is already alive in the existing CC; another set_remote_control
+        // is at best a no-op and at worst forks the conversation.
+        assert!(!should_reenable_remote_control_after_turn_result(
+            true,
+            &status,
+            Some(42),
+            42,
+            false,
+        ));
+
+        status.state = ClaudeRemoteControlLifecycle::Enabling;
+        // ping3 reuse path scenario: state happens to be Enabling but the
+        // CC was reused — must not fork.
+        assert!(!should_reenable_remote_control_after_turn_result(
+            true,
+            &status,
+            Some(42),
+            42,
+            false,
+        ));
+    }
+
+    #[test]
+    fn alternating_local_remote_local_reuse_keeps_bridge_identity() {
+        // Models the user's ping1→ping2(remote)→ping3 sequence at the
+        // decision-point level: by the time send_chat_message reaches the
+        // post-spawn re-enable check on ping3, the persistent CC was reused
+        // (same pid as captured before the turn) and the lifecycle is
+        // Connected. should_reenable must be false so set_remote_control(true)
+        // is NOT re-issued — the bridge stays attached to the same remote
+        // session URL across the alternating turns.
+        let connected = ClaudeRemoteControlStatus {
+            state: ClaudeRemoteControlLifecycle::Connected,
+            session_url: Some("https://claude.ai/code/sess-1".to_string()),
+            connect_url: Some("https://claude.ai/code?bridge=env_1".to_string()),
+            environment_id: Some("env_1".to_string()),
+            detail: None,
+            last_error: None,
+        };
+
+        // ping3 reuse: same pid, was_respawned=false → no re-enable.
+        assert!(!should_reenable_remote_control_after_turn_result(
+            true,
+            &connected,
+            Some(7777),
+            7777,
+            false,
+        ));
+
+        // Sanity: if the same scenario somehow tripped a respawn (e.g.
+        // CC died), we DO re-enable so the new CC gets a bridge again —
+        // a fork is unavoidable in that case but the alternative is a
+        // dead remote panel.
+        let after_respawn = ClaudeRemoteControlStatus {
+            state: ClaudeRemoteControlLifecycle::Reconnecting,
+            ..connected
+        };
+        assert!(should_reenable_remote_control_after_turn_result(
+            true,
+            &after_respawn,
+            Some(8888),
+            8888,
+            true,
         ));
     }
 
@@ -3253,5 +3412,36 @@ mod tests {
             remote_control_title("New chat", "workspace-name", "ping 3", &messages),
             "ping 1"
         );
+    }
+
+    #[test]
+    fn remote_control_should_defer_drift_teardown_matches_live_states() {
+        let mut status = ClaudeRemoteControlStatus {
+            state: ClaudeRemoteControlLifecycle::Disabled,
+            session_url: None,
+            connect_url: None,
+            environment_id: None,
+            detail: None,
+            last_error: None,
+        };
+
+        // Disabled / Error: drift teardowns proceed normally.
+        assert!(!remote_control_should_defer_drift_teardown(&status));
+        status.state = ClaudeRemoteControlLifecycle::Error;
+        assert!(!remote_control_should_defer_drift_teardown(&status));
+
+        // Live states: defer drift teardowns to keep bridge identity stable.
+        for state in [
+            ClaudeRemoteControlLifecycle::Enabling,
+            ClaudeRemoteControlLifecycle::Ready,
+            ClaudeRemoteControlLifecycle::Connected,
+            ClaudeRemoteControlLifecycle::Reconnecting,
+        ] {
+            status.state = state;
+            assert!(
+                remote_control_should_defer_drift_teardown(&status),
+                "expected defer for state {state:?}"
+            );
+        }
     }
 }
