@@ -47,6 +47,8 @@ export type TerminalKeyAction =
   | { kind: "split-pane"; direction: "horizontal" | "vertical" }
   | { kind: "close-pane" }
   | { kind: "focus-pane"; direction: "left" | "right" | "up" | "down" }
+  | { kind: "copy" }
+  | { kind: "paste" }
   | null;
 
 /**
@@ -116,6 +118,10 @@ export function terminalKeyAction(
       return { kind: "focus-pane", direction: "up" };
     case "terminal.focus-pane-down":
       return { kind: "focus-pane", direction: "down" };
+    case "terminal.copy-selection":
+      return { kind: "copy" };
+    case "terminal.paste":
+      return { kind: "paste" };
     default:
       return null;
   }
@@ -153,6 +159,14 @@ function legacyTerminalKeyAction(ev: KeyboardEvent): string | null {
     if (ev.key === "ArrowUp") return "terminal.focus-pane-up";
     if (ev.key === "ArrowDown") return "terminal.focus-pane-down";
   }
+  const isC = ev.code === "KeyC";
+  const isV = ev.code === "KeyV";
+  // macOS: Cmd+C/V (without Ctrl or Shift — Ctrl+C must reach the PTY as SIGINT)
+  if (isC && ev.metaKey && !ev.ctrlKey && !ev.shiftKey) return "terminal.copy-selection";
+  if (isV && ev.metaKey && !ev.ctrlKey && !ev.shiftKey) return "terminal.paste";
+  // Linux/Windows: Ctrl+Shift+C/V (bare Ctrl+C stays as SIGINT)
+  if (isC && ev.ctrlKey && ev.shiftKey && !ev.metaKey) return "terminal.copy-selection";
+  if (isV && ev.ctrlKey && ev.shiftKey && !ev.metaKey) return "terminal.paste";
   return null;
 }
 import { resolveHotkeyAction, type KeybindingMap } from "../../hotkeys/bindings";

@@ -14,6 +14,10 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { listen } from "@tauri-apps/api/event";
+import {
+  writeText as clipboardWriteText,
+  readText as clipboardReadText,
+} from "@tauri-apps/plugin-clipboard-manager";
 import { useAppStore } from "../../stores/useAppStore";
 import { getTerminalTheme } from "../../utils/theme";
 import {
@@ -379,6 +383,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
     y: number;
     tabId: number;
     leafId?: string;
+    hasSelection?: boolean;
   } | null>(null);
   // Pointer-event-based tab drag — native HTML5 DnD does not deliver
   // dragover/drop events under the html `zoom` we apply for UI font scaling
@@ -740,6 +745,23 @@ export const TerminalPanel = memo(function TerminalPanel() {
         }
         case "zoom":
           return;
+        case "copy": {
+          const copyInst = activePaneId ? instancesRef.current.get(activePaneId) : null;
+          if (!copyInst?.term.hasSelection()) return;
+          const copyText = trimSelectionTrailingWhitespace(copyInst.term.getSelection());
+          void clipboardWriteText(copyText)
+            .then(() => { copyInst.term.clearSelection(); })
+            .catch(() => {});
+          return;
+        }
+        case "paste": {
+          const pasteInst = activePaneId ? instancesRef.current.get(activePaneId) : null;
+          if (!pasteInst) return;
+          void clipboardReadText()
+            .then((text) => { if (text) pasteInst.term.paste(text); })
+            .catch(() => {});
+          return;
+        }
       }
     },
     [
@@ -764,6 +786,22 @@ export const TerminalPanel = memo(function TerminalPanel() {
           ev.stopPropagation();
         }
         return true;
+      }
+      // Always consume the copy key so Ctrl+Shift+C (Linux/Windows) never
+      // reaches the PTY — xterm encodes Ctrl+letter regardless of Shift, so
+      // forwarding could produce 0x03 (SIGINT). Without a selection we still
+      // intercept but skip the clipboard write.
+      if (action.kind === "copy") {
+        const tabId = activeTerminalTabIdRef.current;
+        const activePaneId = tabId
+          ? (useAppStore.getState().activeTerminalPaneId[tabId] ?? null)
+          : null;
+        const inst = activePaneId ? instancesRef.current.get(activePaneId) : null;
+        if (!inst?.term.hasSelection()) {
+          ev.preventDefault();
+          ev.stopImmediatePropagation();
+          return false;
+        }
       }
       ev.preventDefault();
       if (action.kind === "zoom") return false;
@@ -821,6 +859,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
           y: ev.clientY,
           tabId: spec.tabId,
           leafId: spec.leafId,
+          hasSelection: term.hasSelection(),
         });
       };
       container.addEventListener(
@@ -1200,15 +1239,44 @@ export const TerminalPanel = memo(function TerminalPanel() {
     setContextMenu(null);
   }, [contextMenu]);
 
-  const terminalContextMenuItems = useMemo<AttachmentContextMenuItem[]>(
-    () => [
-      {
-        label: "Clear terminal",
-        onSelect: handleClearContextTerminal,
-      },
-    ],
-    [handleClearContextTerminal],
-  );
+  const handleCopyContextTerminal = useCallback(() => {
+    if (!contextMenu?.leafId) return;
+    const inst = instancesRef.current.get(contextMenu.leafId);
+    if (!inst?.term.hasSelection()) { setContextMenu(null); return; }
+    const text = trimSelectionTrailingWhitespace(inst.term.getSelection());
+    void clipboardWriteText(text)
+      .then(() => { inst.term.clearSelection(); })
+      .catch(() => {});
+    setContextMenu(null);
+  }, [contextMenu]);
+
+  const handlePasteContextTerminal = useCallback(() => {
+    if (!contextMenu?.leafId) return;
+    const inst = instancesRef.current.get(contextMenu.leafId);
+    if (!inst) { setContextMenu(null); return; }
+    void clipboardReadText()
+      .then((text) => { if (text) inst.term.paste(text); })
+      .catch(() => {});
+    setContextMenu(null);
+  }, [contextMenu]);
+
+  const terminalContextMenuItems = useMemo<AttachmentContextMenuItem[]>(() => {
+    const items: AttachmentContextMenuItem[] = [];
+    if (contextMenu?.hasSelection) {
+      items.push({ label: "Copy", onSelect: handleCopyContextTerminal });
+    }
+    if (contextMenu?.leafId) {
+      items.push({ label: "Paste", onSelect: handlePasteContextTerminal });
+    }
+    items.push({ label: "Clear terminal", onSelect: handleClearContextTerminal });
+    return items;
+  }, [
+    contextMenu?.hasSelection,
+    contextMenu?.leafId,
+    handleCopyContextTerminal,
+    handlePasteContextTerminal,
+    handleClearContextTerminal,
+  ]);
 
   const handleTabContextMenu = useCallback(
     (ev: ReactMouseEvent<HTMLDivElement>, tab: TerminalTab) => {
