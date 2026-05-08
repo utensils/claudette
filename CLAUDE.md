@@ -6,6 +6,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Cross-platform desktop orchestrator for parallel Claude Code agents, built with Rust (Tauri 2) and React/TypeScript.
 
+## AI assistant configuration
+
+This file is the source of truth for project conventions. Several companion configs read by other AI tools live alongside it and need to stay aligned when the rules here change:
+
+- `.github/copilot-instructions.md` — repo-wide guidance read by GitHub Copilot on every PR review and code suggestion.
+- `.github/instructions/rust.instructions.md` — scoped to `**/*.rs` via `applyTo` frontmatter.
+- `.github/instructions/frontend.instructions.md` — scoped to `src/ui/**/*.{ts,tsx,css}`.
+- `.github/instructions/regression-review.instructions.md` — scoped to all files; used during PR review for regression-first checking.
+- `AGENTS.md` — symlink to this CLAUDE.md, read by Codex / OpenCode / other agent tools that look for that filename. **Edit CLAUDE.md, never AGENTS.md.**
+
+When you change architecture, commands, code-style, regression rules, or god-file lists in this CLAUDE.md, scan the Copilot files for the same statement and update both. Drift here causes Copilot's PR reviews to flag (or miss) issues that don't match what we tell humans.
+
 ## Build & test commands
 
 ```bash
@@ -13,7 +25,7 @@ Cross-platform desktop orchestrator for parallel Claude Code agents, built with 
 cargo test --all-features                        # Run all backend tests
 cargo test -p claudette --test diff_tests        # Run a single test file
 cargo test -p claudette parse_unified -- --exact # Run a single test by name
-cargo clippy --workspace --all-targets           # Lint (must pass with zero warnings)
+cargo clippy -p claudette -p claudette-server -p claudette-cli --all-targets --all-features  # Lint (CI command — must pass with zero warnings)
 cargo fmt --all --check                          # Check formatting
 
 # Frontend (React/TypeScript)
@@ -34,7 +46,7 @@ IMPORTANT: CI sets `RUSTFLAGS="-Dwarnings"` — all compiler warnings are errors
 
 IMPORTANT: Always run `cd src/ui && bunx tsc -b` after modifying TypeScript files (including tests). CI runs `tsc -b` via `bun run build` — `vitest` does **not** type-check (it uses esbuild), so tests can pass locally while types are broken. Run `tsc -b` as the final check before committing any frontend change.
 
-CI also enforces `bun install --frozen-lockfile` — do not modify `bun.lock` without intention. CI runs `cargo llvm-cov` for Rust test coverage (uploaded to Codecov, informational/non-blocking). CI lints only the `claudette` and `claudette-server` crates (not `claudette-tauri`, which requires system libs).
+CI also enforces `bun install --frozen-lockfile` — do not modify `bun.lock` without intention. CI runs `cargo llvm-cov` for Rust test coverage (uploaded to Codecov, informational/non-blocking). CI clippy lints `claudette`, `claudette-server`, and `claudette-cli` (not `claudette-tauri`, which requires system libs that aren't installed on the lint runner). Frontend CI runs `bunx tsc --noEmit` as a dedicated type-check step before `bun run build`.
 
 ## Code style
 
@@ -158,6 +170,21 @@ A single sandboxed Lua runtime (`src/plugin_runtime/`) serves multiple plugin ki
 - **Streaming data** (agent events, PTY output) flows via Tauri events, consumed by React hooks
 - **Colors and styling** use CSS custom properties defined in `styles/theme.css` — all colors must be `var(--token-name)` references; raw hex/rgba literals anywhere outside `theme.css` fail `bun run lint:css` (CI-blocking). Allowed exceptions: `rgba(var(--*-rgb), <alpha>)` for alpha layering, `getPropertyValue(...) || "#..."` safety fallbacks in `theme.ts`, and `accentPreview` swatches in CommandPalette that mirror existing theme hex values.
 
+### God files — keep diffs surgical
+
+These files are already large enough that adding more responsibility makes them harder to reason about. When touching them, prefer extracting cohesive behavior into a focused helper / hook / slice / child component near the owning feature, then wire it through the existing entry point. The goal is to reduce or isolate complexity, not pile on another unrelated concern.
+
+- **Rust**: `src/diff.rs`, `src/git.rs`, `src/plugin.rs`, `src/mcp.rs`, `src/mcp_supervisor.rs`, `src-tauri/src/ipc.rs`, `src-tauri/src/voice.rs`, anything in `src-tauri/src/commands/*` that's already a few hundred lines.
+- **Frontend**: `src/ui/src/components/sidebar/Sidebar.tsx`, `src/ui/src/components/chat/ChatPanel.tsx`, `src/ui/src/components/chat/ChatInputArea.tsx`, `src/ui/src/components/terminal/TerminalPanel.tsx`, `src/ui/src/services/tauri.ts`, large CSS modules (e.g. `Settings.module.css`).
+
+If a god file grew because the right home for the new behavior didn't exist yet, build that home first and land it as a separate (or stacked) commit before adding the new responsibility.
+
+### Regression discipline
+
+Treat regressions as the main risk before style or aesthetic concerns. Before changing behavior, identify the current contract: persisted DB fields, Tauri command payloads, CLI output, plugin manifests, settings keys, localized strings, terminal/session semantics, worktree behavior, and visible UI workflows. Do not remove, rename, or silently reinterpret any of these unless the task explicitly asks for that change.
+
+If a behavior change is intentional, call it out plainly in the PR summary or review response and add or update tests that pin the new behavior. If it was incidental, preserve compatibility instead. Never fix a type / lint / test failure by deleting tests, removing UI controls, dropping state fields, weakening assertions, or broadening types — fix the underlying mismatch and keep existing user-visible capabilities intact.
+
 ### Testing patterns
 
 - **Rust**: tests use `tempfile::tempdir()` to create ephemeral git repos — no fixtures or test databases. Async tests use `#[tokio::test]`. Test modules live at the bottom of each file (`#[cfg(test)] mod tests`).
@@ -176,7 +203,6 @@ Do not trigger CoreAudio or Speech.framework permission prompts at app launch �
 
 ### Windows specifics
 
-- `AGENTS.md` is a symlink to `CLAUDE.md` for Codex/other agent-tool compatibility — edit `CLAUDE.md`, never `AGENTS.md`.
 - Windows builds use MSVC toolchain; `[target.'cfg(windows)'.dependencies]` in `Cargo.toml` pulls in Windows-only crates. Gate Windows-specific code with `#[cfg(windows)]` / `#[cfg(not(windows))]` rather than Unix-only paths.
 - **Cross-compilation** (Nix devshell): `build-win-arm64` / `build-win-x64` via `cargo xwin` (requires `XWIN_ACCEPT_LICENSE=1`); `deploy-win-arm64` / `deploy-win-x64` build and push to the test VM.
 - **Ephemeral Windows EC2** (Nix devshell): `aws-win-spinup` launches a Windows Server 2022 instance (state in `.claudette/aws-win/`, gitignored); `aws-win-rdp` opens RDP; `aws-win-destroy` terminates. Defaults: `AWS_PROFILE=dev.urandom.io`, `AWS_REGION=us-west-2`.
