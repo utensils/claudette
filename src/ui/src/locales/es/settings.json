@@ -416,5 +416,6 @@
   "claude_flags_inheriting_global": "Heredando de global",
   "claude_flags_tab_badge_tooltip": "La omisión peligrosa de permisos está activada en este espacio de trabajo",
   "claude_flags_footer_tooltip_empty": "No hay flags adicionales configurados",
-  "claude_flags_tooltip_aria_label": "Flags activos de la CLI de Claude"
+  "claude_flags_tooltip_aria_label": "Flags activos de la CLI de Claude",
+  "claude_flags_tooltip_overflow": "…y {{count}} más"
 }

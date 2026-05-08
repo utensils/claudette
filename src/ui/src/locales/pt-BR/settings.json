@@ -416,5 +416,6 @@
   "claude_flags_inheriting_global": "Herdando do global",
   "claude_flags_tab_badge_tooltip": "Pular permissões perigosamente está ativado para este espaço de trabalho",
   "claude_flags_footer_tooltip_empty": "Nenhum flag extra configurado",
-  "claude_flags_tooltip_aria_label": "Flags ativos da CLI do Claude"
+  "claude_flags_tooltip_aria_label": "Flags ativos da CLI do Claude",
+  "claude_flags_tooltip_overflow": "…e mais {{count}}"
 }

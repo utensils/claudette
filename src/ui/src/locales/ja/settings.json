@@ -416,5 +416,6 @@
   "claude_flags_inheriting_global": "グローバルから継承中",
   "claude_flags_tab_badge_tooltip": "このワークスペースで危険な権限スキップが有効になっています",
   "claude_flags_footer_tooltip_empty": "追加フラグが設定されていません",
-  "claude_flags_tooltip_aria_label": "アクティブな Claude CLI フラグ"
+  "claude_flags_tooltip_aria_label": "アクティブな Claude CLI フラグ",
+  "claude_flags_tooltip_overflow": "…他 {{count}} 件"
 }

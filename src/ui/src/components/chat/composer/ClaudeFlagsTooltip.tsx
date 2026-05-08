@@ -56,7 +56,9 @@ export function ClaudeFlagsTooltip({ resolved }: ClaudeFlagsTooltipProps) {
               ))}
             </ul>
             {hidden > 0 && (
-              <div className={styles.more}>…and {hidden} more</div>
+              <div className={styles.more}>
+                {t("claude_flags_tooltip_overflow", { count: hidden })}
+              </div>
             )}
           </>
         )}

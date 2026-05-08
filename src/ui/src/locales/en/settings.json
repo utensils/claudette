@@ -460,5 +460,6 @@
   "claude_flags_override_label": "Override global",
   "claude_flags_inheriting_global": "Inheriting from global",
   "claude_flags_tab_badge_tooltip": "Dangerously skip permissions is enabled for this workspace",
-  "claude_flags_footer_tooltip_empty": "No extra flags configured"
+  "claude_flags_footer_tooltip_empty": "No extra flags configured",
+  "claude_flags_tooltip_overflow": "…and {{count}} more"
 }
