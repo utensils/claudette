@@ -210,6 +210,21 @@ jobs:
         run: scripts/stage-cli-sidecar.sh ${{ matrix.rust-target }}
 
       # ---- macOS + Linux: tauri-action drives the bundled build ------------
+      # `includeUpdaterJson: false` is intentional. tauri-action's default
+      # behavior is to download the release's existing `latest.json`, merge
+      # this leg's platform entry in, and re-upload — which races on the
+      # GitHub Releases API across parallel matrix legs. Concrete failures
+      # observed on run #25543925342:
+      #   * linux-x86_64 lost the merge-upload race outright with
+      #     `Validation Failed: ReleaseAsset already_exists` (non-recoverable
+      #     within the action), failing the whole job.
+      #   * darwin-aarch64 succeeded as a job but its manifest entry was
+      #     silently overwritten when macos-x86_64's parallel merge clobbered
+      #     it on upload, so the published manifest would have advertised no
+      #     update path for Apple Silicon Macs.
+      # The `publish` job below now constructs `latest.json` once from each
+      # platform's `.sig` files (which are uploaded by tauri-action with
+      # unique names, no race), eliminating the conflict surface entirely.
       - name: Build and upload desktop app (non-Windows)
         if: ${{ !startsWith(matrix.platform, 'windows') }}
         uses: tauri-apps/tauri-action@v0
@@ -228,6 +243,7 @@ jobs:
           releaseName: "Nightly ${{ needs.compute-version.outputs.version }}"
           releaseDraft: true
           prerelease: true
+          includeUpdaterJson: false
           args: --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundles }}
 
       # ---- Windows: direct cargo build, ship the bare .exe -----------------
@@ -328,10 +344,16 @@ jobs:
   # Nightly builds are not announced to Discord — too noisy. Stable releases only.
   publish:
     name: Publish Nightly
-    needs: build
+    needs: [compute-version, build]
     if: always() && needs.build.result == 'success'
     runs-on: ubuntu-latest
     steps:
+      # We need the repo checked out to run scripts/build-updater-manifest.sh.
+      # Everything else this job does runs against the GitHub Releases API,
+      # so a default shallow checkout is sufficient.
+      - name: Checkout
+        uses: actions/checkout@v6
+
       # Atomic-ish promote: verify the staging release is intact, delete the
       # live `nightly` release+tag, then retag `nightly-staging` to
       # `nightly` and un-draft. The blackout window between the delete and
@@ -341,6 +363,7 @@ jobs:
       - name: Promote staging to nightly
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.compute-version.outputs.version }}
         run: |
           set -euo pipefail
 
@@ -353,52 +376,58 @@ jobs:
             exit 1
           fi
 
-          # `tauri-action` generated `latest.json` while the release was
-          # tagged `nightly-staging`, so its embedded asset URLs are
-          # hardcoded to `releases/download/nightly-staging/...`. After the
-          # retag below those URLs would 404, breaking the in-app updater's
-          # download step. The Tauri signature covers binary contents — not
-          # the URL field — so rewriting URLs here does not invalidate
-          # verification.
+          # Build `latest.json` from the per-platform `.sig` files uploaded
+          # by tauri-action. Each matrix leg uploaded its own signed
+          # updater bundle plus its `.sig` companion under unique asset
+          # names (no collision), but the legs no longer write
+          # `latest.json` themselves (`includeUpdaterJson: false` in the
+          # build step) — so we synthesize the manifest here, in a single
+          # writer with no race surface. URLs are emitted directly with
+          # the `nightly` tag (the tag they will live at after the retag
+          # below), so no after-the-fact URL rewriting is needed. The
+          # Tauri signature covers binary content, not the URL field, so
+          # this URL choice does not affect verification.
           #
-          # Fetch and rewrite *before* the retag, while staging still
-          # exists. We upload the rewritten file after the retag. This avoids
-          # depending on the freshly-retagged `nightly/...` URL being
-          # reachable via the public CDN, whose propagation delay previously
-          # exceeded our retry window and left a stale manifest live (#449
-          # follow-up). Aborting here is safe — `nightly` is still intact.
+          # Build the manifest *before* the retag, while staging still
+          # exists, then upload it back to staging. Assets follow the
+          # release through the retag, so when the retag below succeeds
+          # the new manifest appears at the `nightly/...` URL atomically.
+          mkdir -p staging-sigs
           for attempt in 1 2 3; do
-            rm -f latest.json
+            rm -f staging-sigs/*.sig
             if gh release download nightly-staging \
               --repo "$GITHUB_REPOSITORY" \
-              --pattern "latest.json" \
-              --dir . \
+              --pattern "*.sig" \
+              --dir staging-sigs \
               --clobber; then
               break
             fi
             if [ "$attempt" -eq 3 ]; then
-              echo "::error::Failed to fetch nightly-staging/latest.json after 3 attempts"
+              echo "::error::Failed to fetch nightly-staging .sig files after 3 attempts"
               exit 1
             fi
             backoff=$((attempt * 5))
-            echo "latest.json fetch attempt $attempt failed; retrying in ${backoff}s"
+            echo ".sig fetch attempt $attempt failed; retrying in ${backoff}s"
             sleep "$backoff"
           done
 
-          sed -i 's|releases/download/nightly-staging/|releases/download/nightly/|g' latest.json
-          # Hard-fail if the rewrite was a no-op AND staging URLs are still
-          # present — retrying with the same input won't help, and shipping
-          # a manifest with staging URLs would break the updater. (A no-op
-          # because the manifest was already rewritten on a prior crashed
-          # run is fine: grep will find nothing, and we proceed.)
+          scripts/build-updater-manifest.sh \
+            staging-sigs \
+            "$VERSION" \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/nightly" \
+            > latest.json
+
+          # Belt-and-braces: catch any regression in the script that could
+          # ship a manifest with staging URLs (which would 404 after the
+          # retag and break the updater).
           if grep -q 'releases/download/nightly-staging/' latest.json; then
-            echo "::error::latest.json still contains nightly-staging URLs after rewrite; aborting"
+            echo "::error::latest.json contains nightly-staging URLs; aborting"
             exit 1
           fi
 
-          # Upload the rewritten manifest back to `nightly-staging` *before*
+          # Upload the synthesized manifest to `nightly-staging` *before*
           # we touch `nightly`. Assets follow the release when its tag
-          # changes, so when the retag below succeeds the corrected manifest
+          # changes, so when the retag below succeeds the manifest
           # appears at the `nightly/...` URL atomically — no separate
           # post-retag upload that could fail and leave a broken manifest
           # live on the promoted release.
@@ -407,7 +436,7 @@ jobs:
               break
             fi
             if [ "$attempt" -eq 3 ]; then
-              echo "::error::Failed to upload rewritten latest.json to nightly-staging after 3 attempts"
+              echo "::error::Failed to upload latest.json to nightly-staging after 3 attempts"
               exit 1
             fi
             backoff=$((attempt * 5))
@@ -421,7 +450,7 @@ jobs:
           # (rate limits, brief outages). If all retries fail, the workflow
           # exits non-zero and a follow-up run can recover by re-promoting
           # the still-intact `nightly-staging` release (which now carries
-          # the already-rewritten manifest).
+          # the synthesized manifest).
           for attempt in 1 2 3; do
             if gh release edit nightly-staging \
               --repo "$GITHUB_REPOSITORY" \
