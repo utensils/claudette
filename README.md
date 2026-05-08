@@ -13,10 +13,6 @@
   <a href="https://www.reddit.com/r/ClaudetteApp"><img src="https://img.shields.io/reddit/subreddit-subscribers/ClaudetteApp?style=social" alt="Reddit"/></a>
 </p>
 
-Claudette is a cross-platform desktop application built with [Tauri 2](https://tauri.app) (Rust backend) and React/TypeScript (frontend). It provides a lightweight interface for managing and orchestrating Claude Code sessions, similar in spirit to [Conductor.build](https://conductor.build) but with a focused feature set. Unlike most similar tools, Claudette runs natively on **macOS** (Apple Silicon + Intel), **Linux** (x86_64 + aarch64, Wayland + X11), and **Windows** (x86_64 + ARM64).
-
-Full documentation lives at **[utensils.github.io/claudette](https://utensils.github.io/claudette/)**.
-
 ## Highlights
 
 - **[Parallel agents in isolated git worktrees](https://utensils.github.io/claudette/features/parallel-agents/)** — run multiple Claude Code agents simultaneously, each on its own branch with no merge conflicts.
@@ -27,6 +23,12 @@ Full documentation lives at **[utensils.github.io/claudette](https://utensils.gi
 - **[SCM providers (GitHub, GitLab, extensible)](https://utensils.github.io/claudette/features/scm-providers/)** — pull request status, CI checks, and one-click merge without leaving the app, powered by sandboxed Lua plugins.
 - **[MCP supervision and env-providers](https://utensils.github.io/claudette/features/mcp-servers/)** — per-repo MCP server config with health monitoring, plus a pluggable env stack ([direnv, mise, dotenv, nix-devshell](https://utensils.github.io/claudette/features/scm-providers/#environment-provider-plugins)).
 - **[Voice input](https://utensils.github.io/claudette/features/voice-input/)** — push-to-talk dictation with Apple Speech (macOS) or bundled Whisper, all on-device.
+
+Full documentation lives at **[utensils.github.io/claudette](https://utensils.github.io/claudette/)**.
+
+## About
+
+Claudette is a cross-platform desktop application built with [Tauri 2](https://tauri.app) (Rust backend) and React/TypeScript (frontend). It provides a lightweight interface for managing and orchestrating Claude Code sessions, similar in spirit to [Conductor.build](https://conductor.build) but with a focused feature set. Unlike most similar tools, Claudette runs natively on **macOS** (Apple Silicon + Intel), **Linux** (x86_64 + aarch64, Wayland + X11), and **Windows** (x86_64 + ARM64).
 
 ## Prerequisites
 
