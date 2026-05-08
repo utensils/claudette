@@ -76,6 +76,13 @@
   color: var(--text-muted);
 }
 
+/* When a tinted row is also selected, the previous `.rowSelected .icon`
+ * rule wins by source order (same specificity), which would blank the
+ * status tint. Re-assert the tint with a higher-specificity selector. */
+.rowSelected.rowStatusTinted .icon {
+  color: var(--row-status-color);
+}
+
 .name {
   flex: 1;
   overflow: hidden;

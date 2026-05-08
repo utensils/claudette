@@ -434,7 +434,6 @@ function Row({
   const Icon = isDir ? getFolderIcon(expanded) : getFileIcon(node.name);
   const status = node.kind === "file" ? node.git_status : null;
   const statusLayer = node.kind === "file" ? node.git_layer : null;
-  const dirChanged = node.kind === "dir" && node.statusCount > 0;
   const folderStatus = node.kind === "dir" ? node.folderStatus : null;
   const tintStatus = status ?? folderStatus;
   const statusTitle =
@@ -447,7 +446,6 @@ function Row({
     styles.row,
     selected ? styles.rowSelected : "",
     status === "Deleted" ? styles.rowDeleted : "",
-    dirChanged ? styles.rowDirChanged : "",
     tintStatus ? styles.rowStatusTinted : "",
   ]
     .filter(Boolean)
