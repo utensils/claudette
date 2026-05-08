@@ -1,9 +1,14 @@
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+
 use tokio::process::Command;
 
 use crate::env::WorkspaceEnv;
-use crate::process::CommandWindowExt as _;
+use crate::process::{CommandWindowExt as _, sanitize_claude_subprocess_env};
 
 use super::binary::resolve_claude_path;
+
+const CLAUDE_PROJECT_PATH_MAX: usize = 200;
 
 /// Sanitize a string into a valid git branch slug: lowercase ASCII
 /// alphanumeric + hyphens, no leading/trailing hyphens, max `max_len` chars.
@@ -43,6 +48,109 @@ pub fn sanitize_branch_name(raw: &str, max_len: usize) -> String {
     // Truncate at `max_len` and drop any trailing hyphens introduced by the cut.
     let truncated = &trimmed[..max_len];
     truncated.trim_end_matches('-').to_string()
+}
+
+fn sanitize_claude_project_path(path: &str) -> String {
+    let sanitized: String = path
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    if sanitized.len() <= CLAUDE_PROJECT_PATH_MAX {
+        return sanitized;
+    }
+    let mut hash: u64 = 5381;
+    for b in path.bytes() {
+        hash = hash.wrapping_mul(33).wrapping_add(u64::from(b));
+    }
+    // The masked hash is 31 bits, formatted as up to 8 lowercase hex digits;
+    // with the joining `-` that's a 9-char suffix. Reserve room so the final
+    // string honors the documented cap (otherwise long paths produce up to
+    // CLAUDE_PROJECT_PATH_MAX + 9 chars and the constant becomes a lie).
+    const SUFFIX_RESERVED: usize = 9;
+    let prefix_max = CLAUDE_PROJECT_PATH_MAX.saturating_sub(SUFFIX_RESERVED);
+    format!("{}-{:x}", &sanitized[..prefix_max], hash & 0x7fff_ffff)
+}
+
+fn claude_config_home_dir() -> Result<PathBuf, String> {
+    if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR") {
+        return Ok(PathBuf::from(dir));
+    }
+    dirs::home_dir()
+        .map(|home| home.join(".claude"))
+        .ok_or_else(|| "No home directory found for Claude config".to_string())
+}
+
+fn claude_transcript_path(worktree_path: &str, session_id: &str) -> Result<PathBuf, String> {
+    Ok(claude_config_home_dir()?
+        .join("projects")
+        .join(sanitize_claude_project_path(worktree_path))
+        .join(format!("{session_id}.jsonl")))
+}
+
+/// Persist a Claude Code custom title for a session transcript.
+///
+/// Claude Code's Remote Control bridge treats custom titles as explicit and
+/// stops its count-based web title derivation. Claudette uses this to keep
+/// the remote session title aligned with the local chat instead of letting the
+/// web UI retitle on later mixed local/remote turns.
+pub fn persist_claude_custom_title(
+    worktree_path: &str,
+    session_id: &str,
+    title: &str,
+) -> Result<(), String> {
+    persist_claude_custom_title_at_path(
+        &claude_transcript_path(worktree_path, session_id)?,
+        session_id,
+        title,
+    )
+}
+
+fn persist_claude_custom_title_at_path(
+    path: &Path,
+    session_id: &str,
+    title: &str,
+) -> Result<(), String> {
+    let title = title.trim();
+    if title.is_empty() || session_id.trim().is_empty() {
+        return Ok(());
+    }
+    if !path.exists() {
+        return Ok(());
+    }
+    if transcript_has_custom_title(path, session_id)? {
+        return Ok(());
+    }
+    let entry = serde_json::json!({
+        "type": "custom-title",
+        "customTitle": title,
+        "sessionId": session_id,
+    });
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(path)
+        .map_err(|e| format!("Failed to open Claude transcript {}: {e}", path.display()))?;
+    writeln!(file, "{entry}").map_err(|e| {
+        format!(
+            "Failed to write Claude custom title {}: {e}",
+            path.display()
+        )
+    })
+}
+
+fn transcript_has_custom_title(path: &Path, session_id: &str) -> Result<bool, String> {
+    let contents = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read Claude transcript {}: {e}", path.display()))?;
+    for line in contents.lines() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if value.get("type").and_then(|v| v.as_str()) == Some("custom-title")
+            && value.get("sessionId").and_then(|v| v.as_str()) == Some(session_id)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Call Claude Haiku to generate a short branch name slug from the user's
@@ -92,14 +200,7 @@ pub async fn generate_branch_name(
         &user_message,
     ]);
 
-    // Strip env vars that interfere with subprocess auth — same as run_turn.
-    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY")
-        && !key.starts_with("sk-ant-api")
-    {
-        cmd.env_remove("ANTHROPIC_API_KEY");
-    }
-    cmd.env_remove("CLAUDECODE");
-    cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
+    sanitize_claude_subprocess_env(&mut cmd);
 
     if let Some(env) = ws_env {
         env.apply(&mut cmd);
@@ -162,13 +263,7 @@ pub async fn generate_session_name(
         &user_message,
     ]);
 
-    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY")
-        && !key.starts_with("sk-ant-api")
-    {
-        cmd.env_remove("ANTHROPIC_API_KEY");
-    }
-    cmd.env_remove("CLAUDECODE");
-    cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
+    sanitize_claude_subprocess_env(&mut cmd);
 
     if let Some(env) = ws_env {
         env.apply(&mut cmd);
@@ -257,5 +352,79 @@ mod tests {
     #[test]
     fn test_sanitize_preserves_numbers() {
         assert_eq!(sanitize_branch_name("fix-issue-42", 40), "fix-issue-42");
+    }
+
+    #[test]
+    fn test_sanitize_claude_project_path_matches_claude_layout() {
+        assert_eq!(
+            sanitize_claude_project_path("/Users/james/claudette-workspaces/repo-name"),
+            "-Users-james-claudette-workspaces-repo-name"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_claude_project_path_honors_max_with_hash_suffix() {
+        // Long path that triggers the hash branch — output must include the
+        // hash AND stay within CLAUDE_PROJECT_PATH_MAX (200). Before the
+        // SUFFIX_RESERVED fix the result was up to 209 chars.
+        let long_path = format!("/Users/{}", "a".repeat(300));
+        let sanitized = sanitize_claude_project_path(&long_path);
+        assert!(
+            sanitized.len() <= CLAUDE_PROJECT_PATH_MAX,
+            "expected sanitized len {} <= {}",
+            sanitized.len(),
+            CLAUDE_PROJECT_PATH_MAX,
+        );
+        // Hash suffix is `-` + up to 8 hex chars; verify the format actually
+        // appended one (otherwise a regression that drops the suffix would
+        // pass the length assertion above by accident).
+        let last_dash = sanitized.rfind('-').unwrap();
+        let suffix = &sanitized[last_dash + 1..];
+        assert!(!suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_persist_claude_custom_title_does_not_create_missing_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("missing.jsonl");
+
+        persist_claude_custom_title_at_path(&transcript, "session-1", "Pinned Title").unwrap();
+
+        assert!(!transcript.exists());
+    }
+
+    #[test]
+    fn test_persist_claude_custom_title_appends_to_existing_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("session-1.jsonl");
+        std::fs::write(
+            &transcript,
+            r#"{"type":"summary","summary":"existing transcript"}"#,
+        )
+        .unwrap();
+
+        persist_claude_custom_title_at_path(&transcript, "session-1", "Pinned Title").unwrap();
+
+        let contents = std::fs::read_to_string(transcript).unwrap();
+        assert!(contents.contains(r#""type":"custom-title""#));
+        assert!(contents.contains(r#""customTitle":"Pinned Title""#));
+        assert!(contents.contains(r#""sessionId":"session-1""#));
+    }
+
+    #[test]
+    fn test_persist_claude_custom_title_keeps_first_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("session-1.jsonl");
+        std::fs::write(
+            &transcript,
+            r#"{"type":"custom-title","customTitle":"First Title","sessionId":"session-1"}"#,
+        )
+        .unwrap();
+
+        persist_claude_custom_title_at_path(&transcript, "session-1", "Second Title").unwrap();
+
+        let contents = std::fs::read_to_string(transcript).unwrap();
+        assert!(contents.contains(r#""customTitle":"First Title""#));
+        assert!(!contents.contains(r#""customTitle":"Second Title""#));
     }
 }

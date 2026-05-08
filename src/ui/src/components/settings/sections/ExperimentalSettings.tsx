@@ -22,6 +22,12 @@ export function ExperimentalSettings() {
   const setUsageInsightsEnabled = useAppStore((s) => s.setUsageInsightsEnabled);
   const pluginManagementEnabled = useAppStore((s) => s.pluginManagementEnabled);
   const setPluginManagementEnabled = useAppStore((s) => s.setPluginManagementEnabled);
+  const claudeRemoteControlEnabled = useAppStore(
+    (s) => s.claudeRemoteControlEnabled,
+  );
+  const setClaudeRemoteControlEnabled = useAppStore(
+    (s) => s.setClaudeRemoteControlEnabled,
+  );
   const communityRegistryEnabled = useAppStore(
     (s) => s.communityRegistryEnabled,
   );
@@ -74,6 +80,18 @@ export function ExperimentalSettings() {
       await setAppSetting("plugin_management_enabled", next ? "true" : "false");
     } catch (e) {
       setPluginManagementEnabled(!next);
+      setError(String(e));
+    }
+  };
+
+  const handleClaudeRemoteControlToggle = async () => {
+    const next = !claudeRemoteControlEnabled;
+    setClaudeRemoteControlEnabled(next);
+    try {
+      setError(null);
+      await setAppSetting("claude_remote_control_enabled", next ? "true" : "false");
+    } catch (e) {
+      setClaudeRemoteControlEnabled(!next);
       setError(String(e));
     }
   };
@@ -216,6 +234,29 @@ export function ExperimentalSettings() {
             aria-label={t("experimental_plugin_mgmt_aria")}
             data-checked={pluginManagementEnabled}
             onClick={handlePluginManagementToggle}
+          >
+            <div className={styles.toggleKnob} />
+          </button>
+        </div>
+      </div>
+
+      <div className={styles.settingRow}>
+        <div className={styles.settingInfo}>
+          <div className={styles.settingLabel}>
+            {t("experimental_claude_remote_control")}
+          </div>
+          <div className={styles.settingDescription}>
+            {t("experimental_claude_remote_control_desc")}
+          </div>
+        </div>
+        <div className={styles.settingControl}>
+          <button
+            className={styles.toggle}
+            role="switch"
+            aria-checked={claudeRemoteControlEnabled}
+            aria-label={t("experimental_claude_remote_control_aria")}
+            data-checked={claudeRemoteControlEnabled}
+            onClick={handleClaudeRemoteControlToggle}
           >
             <div className={styles.toggleKnob} />
           </button>

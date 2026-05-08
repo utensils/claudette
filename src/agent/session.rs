@@ -1,5 +1,7 @@
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
@@ -7,13 +9,21 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 
 use crate::env::WorkspaceEnv;
-use crate::process::CommandWindowExt as _;
+use crate::process::{CommandWindowExt as _, sanitize_claude_subprocess_env};
 
 use super::AgentSettings;
-use super::args::{build_settings_json, build_stdin_message, build_steering_stdin_message};
+use super::args::{
+    build_settings_json, build_stdin_message_with_uuid, build_steering_stdin_message,
+};
 use super::binary::resolve_claude_path;
 use super::process::{AgentEvent, TurnHandle};
-use super::types::{FileAttachment, StreamEvent, parse_stream_line};
+use super::types::{ControlResponsePayload, FileAttachment, StreamEvent, parse_stream_line};
+
+const CLAUDE_CODE_EXIT_AFTER_STOP_DELAY: &str = "CLAUDE_CODE_EXIT_AFTER_STOP_DELAY";
+const PERSISTENT_SESSION_IDLE_KEEPALIVE_MS: &str = "2147483647";
+const PERSISTENT_SESSION_STDIN_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(1);
+
+type PersistentStdin = Arc<tokio::sync::Mutex<tokio::process::ChildStdin>>;
 
 /// A persistent Claude CLI process that stays alive across turns.
 ///
@@ -23,7 +33,7 @@ use super::types::{FileAttachment, StreamEvent, parse_stream_line};
 /// playwright browser) persist for the session lifetime.
 pub struct PersistentSession {
     pid: u32,
-    stdin: tokio::sync::Mutex<tokio::process::ChildStdin>,
+    stdin: PersistentStdin,
     event_tx: tokio::sync::broadcast::Sender<AgentEvent>,
     /// Redacted `claude …` argv captured at process spawn. Replayed into
     /// `event_tx` from inside [`send_turn`] (after the first subscribe)
@@ -35,6 +45,7 @@ pub struct PersistentSession {
     /// The DB and UI both gate on first-emit-wins, but skipping the
     /// re-broadcast avoids wasted work on every turn.
     invocation_emitted: AtomicBool,
+    keep_alive_task: tokio::task::JoinHandle<()>,
 }
 
 impl PersistentSession {
@@ -72,14 +83,7 @@ impl PersistentSession {
             .stderr(std::process::Stdio::piped())
             .env("PATH", crate::env::enriched_path());
 
-        // Strip OAuth tokens (same as run_turn).
-        if let Ok(key) = std::env::var("ANTHROPIC_API_KEY")
-            && !key.starts_with("sk-ant-api")
-        {
-            cmd.env_remove("ANTHROPIC_API_KEY");
-        }
-        cmd.env_remove("CLAUDECODE");
-        cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
+        sanitize_claude_subprocess_env(&mut cmd);
 
         // See run_turn for layering rationale — env-provider output under
         // the CLAUDETTE_* markers, under the settings-driven context toggle.
@@ -92,7 +96,6 @@ impl PersistentSession {
         if settings.disable_1m_context {
             cmd.env("CLAUDE_CODE_DISABLE_1M_CONTEXT", "1");
         }
-
         if let Some(ref bridge) = settings.hook_bridge {
             cmd.env(
                 crate::agent_mcp::server::ENV_SOCKET_ADDR,
@@ -104,6 +107,11 @@ impl PersistentSession {
         if let Some(env) = ws_env {
             env.apply(&mut cmd);
         }
+
+        // Claude Code's headless SDK path can otherwise let the process exit
+        // after a Remote Control-origin turn leaves stdin idle. Claudette owns
+        // process lifetime for PersistentSession, so keep the child alive.
+        apply_persistent_session_idle_keepalive(&mut cmd);
 
         let mut child = cmd.spawn().map_err(|e| {
             crate::missing_cli::map_spawn_err(&e, "claude", || {
@@ -127,6 +135,9 @@ impl PersistentSession {
             .stderr
             .take()
             .ok_or_else(|| "Failed to capture stderr".to_string())?;
+
+        let stdin = Arc::new(tokio::sync::Mutex::new(stdin));
+        let keep_alive_task = start_persistent_session_stdin_keep_alive(stdin.clone());
 
         let (event_tx, _) = tokio::sync::broadcast::channel::<AgentEvent>(2048);
 
@@ -178,10 +189,11 @@ impl PersistentSession {
 
         Ok(Self {
             pid,
-            stdin: tokio::sync::Mutex::new(stdin),
+            stdin,
             event_tx,
             invocation_line,
             invocation_emitted: AtomicBool::new(false),
+            keep_alive_task,
         })
     }
 
@@ -203,6 +215,20 @@ impl PersistentSession {
         prompt: &str,
         attachments: &[FileAttachment],
     ) -> Result<TurnHandle, String> {
+        self.send_turn_with_uuid(prompt, attachments, &uuid::Uuid::new_v4().to_string())
+            .await
+    }
+
+    /// Send a turn with a caller-provided user-message UUID.
+    ///
+    /// Claudette uses this when Remote Control is enabled so its raw monitor
+    /// can ignore `--replay-user-messages` echoes for local stdin turns.
+    pub async fn send_turn_with_uuid(
+        &self,
+        prompt: &str,
+        attachments: &[FileAttachment],
+        user_message_uuid: &str,
+    ) -> Result<TurnHandle, String> {
         // Subscribe BEFORE writing to stdin to avoid a race where a fast turn
         // emits events before the receiver exists (broadcast doesn't replay).
         let mut broadcast_rx = self.event_tx.subscribe();
@@ -219,8 +245,12 @@ impl PersistentSession {
             let _ = self.event_tx.send(event);
         }
 
-        self.write_user_message(build_stdin_message(prompt, attachments))
-            .await?;
+        self.write_user_message(build_stdin_message_with_uuid(
+            prompt,
+            attachments,
+            user_message_uuid,
+        ))
+        .await?;
         let (mpsc_tx, mpsc_rx) = mpsc::channel::<AgentEvent>(128);
         tokio::spawn(async move {
             loop {
@@ -348,9 +378,77 @@ impl PersistentSession {
         Ok(())
     }
 
+    /// Enable or disable Claude Code Remote Control for this persistent
+    /// stream-json session. The Claude CLI owns the actual bridge; Claudette
+    /// only sends the control request and waits for the matching response.
+    pub async fn set_remote_control(
+        &self,
+        enabled: bool,
+    ) -> Result<ControlResponsePayload, String> {
+        use tokio::io::AsyncWriteExt;
+
+        let request_id = format!("claudette-remote-control-{}", uuid::Uuid::new_v4());
+        let mut broadcast_rx = self.event_tx.subscribe();
+        let message = build_remote_control_message(&request_id, enabled);
+
+        {
+            let mut stdin = self.stdin.lock().await;
+            stdin
+                .write_all(message.as_bytes())
+                .await
+                .map_err(|e| format!("Failed to write remote_control control_request: {e}"))?;
+            stdin.write_all(b"\n").await.map_err(|e| {
+                format!("Failed to write remote_control control_request newline: {e}")
+            })?;
+            stdin
+                .flush()
+                .await
+                .map_err(|e| format!("Failed to flush remote_control control_request: {e}"))?;
+        }
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let Some(remaining) = deadline.checked_duration_since(tokio::time::Instant::now())
+            else {
+                return Err("Timed out waiting for Claude Remote Control response".to_string());
+            };
+            let event = match tokio::time::timeout(remaining, broadcast_rx.recv()).await {
+                Ok(Ok(event)) => event,
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                    return Err("Claude process closed before Remote Control responded".to_string());
+                }
+                Err(_) => {
+                    return Err("Timed out waiting for Claude Remote Control response".to_string());
+                }
+            };
+
+            match event {
+                AgentEvent::Stream(StreamEvent::ControlResponse { response })
+                    if response.request_id == request_id =>
+                {
+                    if response.subtype == "success" {
+                        return Ok(response);
+                    }
+                    return Err(control_response_error_message(&response));
+                }
+                AgentEvent::ProcessExited(_) => {
+                    return Err("Claude process exited before Remote Control responded".to_string());
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Get the process ID.
     pub fn pid(&self) -> u32 {
         self.pid
+    }
+}
+
+impl Drop for PersistentSession {
+    fn drop(&mut self) {
+        self.keep_alive_task.abort();
     }
 }
 
@@ -364,6 +462,64 @@ fn build_task_stop_message(request_id: &str, task_id: &str) -> String {
         },
     })
     .to_string()
+}
+
+fn build_remote_control_message(request_id: &str, enabled: bool) -> String {
+    serde_json::json!({
+        "type": "control_request",
+        "request_id": request_id,
+        "request": {
+            "subtype": "remote_control",
+            "enabled": enabled,
+        },
+    })
+    .to_string()
+}
+
+fn build_keep_alive_message() -> String {
+    serde_json::json!({
+        "type": "keep_alive",
+    })
+    .to_string()
+}
+
+fn control_response_error_message(response: &ControlResponsePayload) -> String {
+    response
+        .error
+        .as_deref()
+        .or(response.message.as_deref())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("Claude Remote Control failed: {}", response.subtype))
+}
+
+fn apply_persistent_session_idle_keepalive(cmd: &mut Command) {
+    cmd.env(
+        CLAUDE_CODE_EXIT_AFTER_STOP_DELAY,
+        PERSISTENT_SESSION_IDLE_KEEPALIVE_MS,
+    );
+}
+
+fn start_persistent_session_stdin_keep_alive(
+    stdin: PersistentStdin,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(PERSISTENT_SESSION_STDIN_KEEP_ALIVE_INTERVAL).await;
+            if write_keep_alive_to_stdin(&stdin).await.is_err() {
+                break;
+            }
+        }
+    })
+}
+
+async fn write_keep_alive_to_stdin(stdin: &PersistentStdin) -> std::io::Result<()> {
+    use tokio::io::AsyncWriteExt;
+
+    let message = build_keep_alive_message();
+    let mut stdin = stdin.lock().await;
+    stdin.write_all(message.as_bytes()).await?;
+    stdin.write_all(b"\n").await?;
+    stdin.flush().await
 }
 
 /// Build CLI arguments for a persistent session (no prompt, with `--input-format stream-json`).
@@ -383,6 +539,11 @@ fn build_persistent_args(
         "stream-json".to_string(),
         "--input-format".to_string(),
         "stream-json".to_string(),
+        // Claude Remote Control's bridge runner uses this flag so inbound
+        // remote prompts are echoed back on stdout with their UUID. Claudette's
+        // monitor relies on that replay to persist remote-origin user turns
+        // into the local chat instead of letting the browser side fork ahead.
+        "--replay-user-messages".to_string(),
         "--verbose".to_string(),
         "--include-partial-messages".to_string(),
         // See build_claude_args for rationale.
@@ -486,6 +647,13 @@ mod tests {
     }
 
     #[test]
+    fn test_build_persistent_args_replays_user_messages() {
+        let settings = AgentSettings::default();
+        let args = build_persistent_args("sess-1", false, &[], None, &settings);
+        assert!(args.contains(&"--replay-user-messages".to_string()));
+    }
+
+    #[test]
     fn test_build_persistent_args_resume_mode() {
         let settings = AgentSettings::default();
         let args = build_persistent_args("old-session-id", true, &[], None, &settings);
@@ -582,6 +750,38 @@ mod tests {
             non_flag_args.is_empty(),
             "Found unexpected non-flag args: {non_flag_args:?}"
         );
+    }
+
+    #[test]
+    fn persistent_session_idle_keepalive_uses_valid_node_timeout() {
+        let delay: u64 = PERSISTENT_SESSION_IDLE_KEEPALIVE_MS.parse().unwrap();
+        assert_eq!(
+            CLAUDE_CODE_EXIT_AFTER_STOP_DELAY,
+            "CLAUDE_CODE_EXIT_AFTER_STOP_DELAY"
+        );
+        assert_eq!(delay, i32::MAX as u64);
+        assert_eq!(
+            PERSISTENT_SESSION_STDIN_KEEP_ALIVE_INTERVAL,
+            Duration::from_secs(1)
+        );
+    }
+
+    #[test]
+    fn persistent_session_idle_keepalive_is_applied_to_command_env() {
+        let mut cmd = Command::new("claude");
+        apply_persistent_session_idle_keepalive(&mut cmd);
+
+        let actual = cmd
+            .as_std()
+            .get_envs()
+            .find_map(|(key, value)| {
+                (key == std::ffi::OsStr::new(CLAUDE_CODE_EXIT_AFTER_STOP_DELAY))
+                    .then_some(value)
+                    .flatten()
+            })
+            .and_then(std::ffi::OsStr::to_str);
+
+        assert_eq!(actual, Some(PERSISTENT_SESSION_IDLE_KEEPALIVE_MS));
     }
 
     #[test]
@@ -772,5 +972,23 @@ mod tests {
         assert_eq!(parsed["request_id"], "req_123");
         assert_eq!(parsed["request"]["subtype"], "stop_task");
         assert_eq!(parsed["request"]["task_id"], "task_123");
+    }
+
+    #[test]
+    fn build_remote_control_message_writes_expected_control_shape() {
+        let raw = build_remote_control_message("req_remote", true);
+        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(parsed["type"], "control_request");
+        assert_eq!(parsed["request_id"], "req_remote");
+        assert_eq!(parsed["request"]["subtype"], "remote_control");
+        assert_eq!(parsed["request"]["enabled"], true);
+    }
+
+    #[test]
+    fn build_keep_alive_message_writes_supported_stdin_shape() {
+        let raw = build_keep_alive_message();
+        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(parsed["type"], "keep_alive");
+        assert_eq!(parsed.as_object().unwrap().len(), 1);
     }
 }

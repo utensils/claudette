@@ -74,6 +74,7 @@ export default defineConfig({
             { slug: 'features/file-editor' },
             { slug: 'features/integrated-terminal' },
             { slug: 'features/remote-workspaces' },
+            { slug: 'features/claude-remote-control' },
             { slug: 'features/agent-configuration' },
             { slug: 'features/pinned-prompts' },
             { slug: 'features/theming' },

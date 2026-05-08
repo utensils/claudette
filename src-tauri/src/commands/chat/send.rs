@@ -23,7 +23,10 @@ use claudette::mcp_supervisor::McpSupervisor;
 use claudette::model::{ChatMessage, ChatRole, TerminalTab, TerminalTabKind};
 use claudette::permissions::tools_for_level;
 
-use crate::state::{AgentSessionState, AppState, PendingPermission};
+use crate::state::{
+    AgentSessionState, AppState, ClaudeRemoteControlLifecycle, ClaudeRemoteControlStatus,
+    PendingPermission,
+};
 
 use super::interaction::{deny_drained_permissions, drain_pending_permissions};
 use super::naming::{try_auto_rename, try_generate_session_name};
@@ -47,6 +50,146 @@ fn emit_agent_background_task_event(
         tab,
     };
     let _ = app.emit("agent-background-task", &payload);
+}
+
+fn remote_control_should_survive_local_respawn(status: &ClaudeRemoteControlStatus) -> bool {
+    matches!(
+        status.state,
+        ClaudeRemoteControlLifecycle::Enabling
+            | ClaudeRemoteControlLifecycle::Ready
+            | ClaudeRemoteControlLifecycle::Connected
+            | ClaudeRemoteControlLifecycle::Reconnecting
+    )
+}
+
+fn remote_control_requested_or_active(status: &ClaudeRemoteControlStatus) -> bool {
+    !matches!(status.state, ClaudeRemoteControlLifecycle::Disabled)
+}
+
+fn remote_control_should_restore_for_turn(
+    feature_enabled: bool,
+    status: &ClaudeRemoteControlStatus,
+) -> bool {
+    feature_enabled && remote_control_should_survive_local_respawn(status)
+}
+
+fn remote_control_requested_or_active_for_turn(
+    feature_enabled: bool,
+    status: &ClaudeRemoteControlStatus,
+) -> bool {
+    feature_enabled && remote_control_requested_or_active(status)
+}
+
+fn first_user_message_text(messages: &[ChatMessage]) -> Option<String> {
+    messages.iter().find_map(|message| {
+        if message.role == ChatRole::User {
+            let text = message
+                .content
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            (!text.is_empty()).then_some(text)
+        } else {
+            None
+        }
+    })
+}
+
+fn remote_control_title(
+    session_name: &str,
+    workspace_name: &str,
+    prompt: &str,
+    messages: &[ChatMessage],
+) -> String {
+    let session_name = session_name.trim();
+    if !session_name.is_empty() && session_name != "New chat" {
+        return session_name.to_string();
+    }
+    if let Some(first_user_text) = first_user_message_text(messages) {
+        return first_user_text.chars().take(75).collect();
+    }
+    let prompt_title = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+    if !prompt_title.is_empty() {
+        return prompt_title.chars().take(75).collect();
+    }
+    workspace_name.to_string()
+}
+
+fn should_run_auto_naming(_remote_control_active: bool) -> bool {
+    true
+}
+
+fn should_reenable_remote_control_after_turn_result(
+    should_restore: bool,
+    status: &ClaudeRemoteControlStatus,
+    persistent_pid: Option<u32>,
+    turn_pid: u32,
+    was_respawned: bool,
+) -> bool {
+    // Only re-enable the bridge when the persistent CC was actually
+    // (re-)spawned during this turn. A pure-reuse turn already owns the
+    // existing bridge handle, so calling `set_remote_control(true)` again is
+    // at best a no-op and at worst — if the upstream CLI changes that
+    // contract — would tear down and re-create the bridge, fragmenting the
+    // remote conversation across distinct claude.ai sessions.
+    was_respawned
+        && should_restore
+        && matches!(
+            status.state,
+            ClaudeRemoteControlLifecycle::Reconnecting | ClaudeRemoteControlLifecycle::Enabling
+        )
+        && persistent_pid == Some(turn_pid)
+}
+
+/// Defer drift-driven persistent-session teardowns while Claude Remote Control
+/// is live. Tearing down the persistent CC kills the bridge environment in the
+/// process; the post-respawn `set_remote_control(true)` call then creates a
+/// fresh bridge and the user sees a brand-new session/URL on claude.ai.
+///
+/// This trades off "drift takes effect mid-conversation" for "bridge identity
+/// stays stable across alternating local/remote turns". Drift applies on the
+/// next disable→enable cycle. Mirrors `should_defer_persistent_restart`'s
+/// pattern for in-flight background tasks.
+///
+/// Gated behind the experimental feature flag — when Remote Control is
+/// disabled in settings, behavior matches the pre-feature implementation
+/// regardless of any stale lifecycle state in the agent session.
+fn remote_control_should_defer_drift_teardown_for_turn(
+    feature_enabled: bool,
+    status: &ClaudeRemoteControlStatus,
+) -> bool {
+    feature_enabled
+        && matches!(
+            status.state,
+            ClaudeRemoteControlLifecycle::Enabling
+                | ClaudeRemoteControlLifecycle::Ready
+                | ClaudeRemoteControlLifecycle::Connected
+                | ClaudeRemoteControlLifecycle::Reconnecting
+        )
+}
+
+fn remote_control_reconnecting_status(
+    current: &ClaudeRemoteControlStatus,
+    should_restore: bool,
+) -> ClaudeRemoteControlStatus {
+    if should_restore {
+        ClaudeRemoteControlStatus {
+            state: ClaudeRemoteControlLifecycle::Reconnecting,
+            detail: Some("Reconnecting Claude Remote Control.".to_string()),
+            last_error: None,
+            ..current.clone()
+        }
+    } else {
+        ClaudeRemoteControlStatus::disabled()
+    }
+}
+
+fn should_resume_persistent_session(
+    saved_session_id: &str,
+    saved_turn_count: u32,
+    has_persisted_claude_session: bool,
+) -> bool {
+    !saved_session_id.trim().is_empty() && (has_persisted_claude_session || saved_turn_count > 1)
 }
 
 fn terminal_text(text: &str) -> String {
@@ -434,13 +577,28 @@ fn schedule_background_task_wake(
         .await;
 
         let prompt = build_background_task_completion_prompt(&completion);
-        let handle = match ps.send_turn(&prompt, &[]).await {
+        let local_user_message_uuid = uuid::Uuid::new_v4().to_string();
+        let ps_pid = ps.pid();
+        {
+            let mut agents = app_state.agents.write().await;
+            if let Some(session) = agents.get_mut(&chat_session_id) {
+                session.active_pid = Some(ps_pid);
+                session.remember_local_user_message_uuid(local_user_message_uuid.clone());
+            }
+        }
+        let handle = match ps
+            .send_turn_with_uuid(&prompt, &[], &local_user_message_uuid)
+            .await
+        {
             Ok(handle) => handle,
             Err(err) => {
                 eprintln!("[chat] failed to deliver background task notification: {err}");
                 let mut agents = app_state.agents.write().await;
                 if let Some(session) = agents.get_mut(&chat_session_id) {
                     session.background_wake_active = false;
+                    if session.active_pid == Some(ps_pid) {
+                        session.active_pid = None;
+                    }
                 }
                 return;
             }
@@ -1079,6 +1237,10 @@ pub async fn send_chat_message(
         .get_chat_session(&chat_session_id)
         .map_err(|e| e.to_string())?
         .ok_or("Chat session not found")?;
+    let has_persisted_claude_session = chat_session
+        .session_id
+        .as_deref()
+        .is_some_and(|sid| !sid.trim().is_empty());
     let workspace_id = chat_session.workspace_id.clone();
     let _is_first_session = chat_session.sort_order == 0;
     let session_name_already_edited = chat_session.name_edited;
@@ -1172,6 +1334,9 @@ pub async fn send_chat_message(
                 attention_kind: None,
                 attention_notification_sent: false,
                 persistent_session: None,
+                claude_remote_control: crate::state::ClaudeRemoteControlStatus::disabled(),
+                claude_remote_control_monitor_pid: None,
+                local_user_message_uuids: Default::default(),
                 mcp_config_dirty: false,
                 session_plan_mode: false,
                 session_allowed_tools: Vec::new(),
@@ -1193,11 +1358,14 @@ pub async fn send_chat_message(
             session_id: uuid::Uuid::new_v4().to_string(),
             turn_count: 0,
             active_pid: None,
-            custom_instructions: instructions,
+            custom_instructions: instructions.clone(),
             needs_attention: false,
             attention_kind: None,
             attention_notification_sent: false,
             persistent_session: None,
+            claude_remote_control: crate::state::ClaudeRemoteControlStatus::disabled(),
+            claude_remote_control_monitor_pid: None,
+            local_user_message_uuids: Default::default(),
             mcp_config_dirty: false,
             session_plan_mode: false,
             session_allowed_tools: Vec::new(),
@@ -1213,6 +1381,14 @@ pub async fn send_chat_message(
             posted_env_trust_warning: false,
         }
     });
+    if session.turn_count == 0 {
+        // A pre-first-turn Remote Control enable creates a placeholder
+        // AgentSessionState so the desired lifecycle survives until the user's
+        // first real prompt. Refresh instructions here so that placeholder
+        // still launches with the same repo-level prompt a normal first turn
+        // would have used.
+        session.custom_instructions = instructions.clone();
+    }
 
     // Clear any unresolved permission requests so the CLI doesn't hang when
     // we send the next turn. This replaces the old behaviour where the
@@ -1252,19 +1428,50 @@ pub async fn send_chat_message(
     // for any agent-authored attachments produced during this turn (see
     // `agent_mcp_sink::ChatBridgeSink`).
     session.last_user_msg_id = Some(user_msg.id.clone());
+    let remote_control_feature_enabled =
+        super::remote_control::remote_control_feature_enabled_for_db_path(&state.db_path)
+            .unwrap_or(false);
+    let restore_remote_control_after_respawn = remote_control_should_restore_for_turn(
+        remote_control_feature_enabled,
+        &session.claude_remote_control,
+    );
+    let remote_control_active_for_turn = remote_control_requested_or_active_for_turn(
+        remote_control_feature_enabled,
+        &session.claude_remote_control,
+    );
 
     // MCP config changed while a previous turn was in flight — tear down the
     // persistent session so the next spawn picks up updated --mcp-config.
     // The session is idle between turns so a graceful SIGTERM is sufficient.
+    //
+    // When Claude Remote Control is live we defer instead — the teardown
+    // would close the bridge and the post-respawn re-enable would create a
+    // new session/URL on claude.ai, fragmenting the remote conversation.
+    // The dirty flag stays set so the change applies once Remote Control is
+    // disabled and the next turn lands here without the deferral.
     if session.mcp_config_dirty && should_defer_persistent_restart(session) {
         eprintln!(
             "[chat] MCP config dirty, but background tasks are running — deferring persistent session restart for {workspace_id}"
+        );
+    } else if session.mcp_config_dirty
+        && remote_control_should_defer_drift_teardown_for_turn(
+            remote_control_feature_enabled,
+            &session.claude_remote_control,
+        )
+    {
+        eprintln!(
+            "[chat] MCP config dirty, but Claude Remote Control is active — deferring persistent session restart for {workspace_id}"
         );
     } else if session.mcp_config_dirty {
         eprintln!("[chat] MCP config dirty — tearing down persistent session for {workspace_id}");
         let to_deny_mcp = drain_pending_permissions(session);
         let stale_pid = session.persistent_session.as_ref().map(|ps| ps.pid());
         session.persistent_session = None;
+        session.claude_remote_control = remote_control_reconnecting_status(
+            &session.claude_remote_control,
+            restore_remote_control_after_respawn,
+        );
+        session.claude_remote_control_monitor_pid = None;
         // Tear down the agent-MCP bridge alongside the persistent session.
         // Drop runs the listener cancellation + socket file unlink.
         session.mcp_bridge = None;
@@ -1412,6 +1619,32 @@ pub async fn send_chat_message(
         eprintln!(
             "[chat] session flags drifted, but background tasks are running — deferring persistent session restart for {workspace_id}"
         );
+    } else if remote_control_should_defer_drift_teardown_for_turn(
+        remote_control_feature_enabled,
+        &session.claude_remote_control,
+    ) && session.persistent_session.is_some()
+        && persistent_session_flags_drifted(
+            SessionFlags {
+                plan_mode: session.session_plan_mode,
+                allowed_tools: &session.session_allowed_tools,
+                exited_plan: session.session_exited_plan,
+                disable_1m_context: session.session_disable_1m_context,
+                backend_hash: &session.session_backend_hash,
+            },
+            RequestedFlags {
+                plan_mode: agent_settings.plan_mode,
+                allowed_tools: &allowed_tools,
+                disable_1m_context: agent_settings.disable_1m_context,
+                backend_hash: &agent_settings.backend_runtime.hash,
+            },
+        )
+    {
+        // Same trade-off as the MCP-dirty branch above: keep the bridge
+        // alive across local turns. The flags-drift state remains so the
+        // teardown happens after Remote Control is disabled.
+        eprintln!(
+            "[chat] session flags drifted, but Claude Remote Control is active — deferring persistent session restart for {workspace_id}"
+        );
     } else if session.persistent_session.is_some()
         && persistent_session_flags_drifted(
             SessionFlags {
@@ -1444,6 +1677,11 @@ pub async fn send_chat_message(
         let to_deny_drift = drain_pending_permissions(session);
         let stale_pid = session.persistent_session.as_ref().map(|ps| ps.pid());
         session.persistent_session = None;
+        session.claude_remote_control = remote_control_reconnecting_status(
+            &session.claude_remote_control,
+            restore_remote_control_after_respawn,
+        );
+        session.claude_remote_control_monitor_pid = None;
         session.mcp_bridge = None;
         // Clear active_pid alongside persistent_session. A concurrent turn
         // streaming this process at drift time would leave active_pid set;
@@ -1534,6 +1772,22 @@ pub async fn send_chat_message(
         eprintln!(
             "[chat] env-provider output changed, but background tasks are running — deferring persistent session restart for {workspace_id}"
         );
+    } else if remote_control_should_defer_drift_teardown_for_turn(
+        remote_control_feature_enabled,
+        &session.claude_remote_control,
+    ) && session.persistent_session.is_some()
+        && session.session_resolved_env != resolved_env.vars
+    {
+        // Env-provider output can drift spuriously between turns when the
+        // workspace files Claude touched bumped a watched mtime (e.g. a
+        // direnv .envrc rerun returns the same vars in a different
+        // HashMap iteration order, or an idempotent mise plugin re-emits
+        // identical exports). Deferring keeps the bridge identity stable
+        // across alternating local/remote turns; real env changes apply
+        // on the next disable→enable cycle.
+        eprintln!(
+            "[chat] env-provider output changed, but Claude Remote Control is active — deferring persistent session restart for {workspace_id}"
+        );
     } else if session.persistent_session.is_some()
         && session.session_resolved_env != resolved_env.vars
     {
@@ -1545,6 +1799,11 @@ pub async fn send_chat_message(
         let to_deny_env = drain_pending_permissions(session);
         let stale_pid = session.persistent_session.as_ref().map(|ps| ps.pid());
         session.persistent_session = None;
+        session.claude_remote_control = remote_control_reconnecting_status(
+            &session.claude_remote_control,
+            restore_remote_control_after_respawn,
+        );
+        session.claude_remote_control_monitor_pid = None;
         session.mcp_bridge = None;
         session.active_pid = None;
         session.session_exited_plan = false;
@@ -1610,6 +1869,7 @@ pub async fn send_chat_message(
     // First turn or after restart: start a PersistentSession.
     // Subsequent turns in same session: reuse the existing process via stdin.
     let existing_persistent = session.persistent_session.clone();
+    let existing_persistent_pid = existing_persistent.as_ref().map(|ps| ps.pid());
     let saved_session_id = session.session_id.clone();
     let saved_turn_count = session.turn_count;
 
@@ -1646,14 +1906,32 @@ pub async fn send_chat_message(
     };
 
     let turn_handle = if let Some(ref ps) = existing_persistent {
-        // Reuse existing persistent process — send turn via stdin.
-        match ps.send_turn(&prompt, &image_attachments).await {
+        // Reuse existing persistent process — send turn via stdin. Mark the
+        // process busy before writing so the Remote Control monitor does not
+        // mistake the CLI's `--replay-user-messages` echo of this local prompt
+        // for a remote-origin turn.
+        let reuse_pid = ps.pid();
+        let local_user_message_uuid = uuid::Uuid::new_v4().to_string();
+        session.active_pid = Some(reuse_pid);
+        session.remember_local_user_message_uuid(local_user_message_uuid.clone());
+        match ps
+            .send_turn_with_uuid(&prompt, &image_attachments, &local_user_message_uuid)
+            .await
+        {
             Ok(handle) => handle,
             Err(e) => {
                 // Persistent session died — drop lock before async spawn to
                 // avoid blocking other workspaces during process startup.
                 eprintln!("[chat] Persistent session failed, respawning: {e}");
+                if session.active_pid == Some(reuse_pid) {
+                    session.active_pid = None;
+                }
                 session.persistent_session = None;
+                session.claude_remote_control = remote_control_reconnecting_status(
+                    &session.claude_remote_control,
+                    restore_remote_control_after_respawn,
+                );
+                session.claude_remote_control_monitor_pid = None;
                 session.mcp_bridge = None;
                 drop(agents);
 
@@ -1674,7 +1952,11 @@ pub async fn send_chat_message(
                 };
                 respawn_settings.hook_bridge = Some(build_agent_hook_bridge(&bridge)?);
 
-                let is_resume = saved_turn_count > 1;
+                let is_resume = should_resume_persistent_session(
+                    &saved_session_id,
+                    saved_turn_count,
+                    has_persisted_claude_session,
+                );
                 let (ps, final_sid) = match start_persistent(
                     worktree_path.clone(),
                     saved_session_id.clone(),
@@ -1705,7 +1987,15 @@ pub async fn send_chat_message(
                         return Err(e2);
                     }
                 };
-                let handle = ps.send_turn(&prompt, &image_attachments).await?;
+                let local_user_message_uuid = uuid::Uuid::new_v4().to_string();
+                {
+                    let mut agents = state.agents.write().await;
+                    let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
+                    session.remember_local_user_message_uuid(local_user_message_uuid.clone());
+                }
+                let handle = ps
+                    .send_turn_with_uuid(&prompt, &image_attachments, &local_user_message_uuid)
+                    .await?;
 
                 agents = state.agents.write().await;
                 let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
@@ -1728,7 +2018,11 @@ pub async fn send_chat_message(
     } else {
         // No persistent session — start one. Use --resume if we have a saved
         // session from the DB (app restart), fresh ID if brand new.
-        let is_resume = saved_turn_count > 1;
+        let is_resume = should_resume_persistent_session(
+            &saved_session_id,
+            saved_turn_count,
+            has_persisted_claude_session,
+        );
         let sid = if is_resume {
             saved_session_id.clone()
         } else {
@@ -1803,7 +2097,15 @@ pub async fn send_chat_message(
                 return Err(e);
             }
         };
-        let handle = ps.send_turn(&prompt, &image_attachments).await?;
+        let local_user_message_uuid = uuid::Uuid::new_v4().to_string();
+        {
+            let mut agents = state.agents.write().await;
+            let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
+            session.remember_local_user_message_uuid(local_user_message_uuid.clone());
+        }
+        let handle = ps
+            .send_turn_with_uuid(&prompt, &image_attachments, &local_user_message_uuid)
+            .await?;
 
         agents = state.agents.write().await;
         let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
@@ -1822,9 +2124,24 @@ pub async fn send_chat_message(
     };
 
     let spawned_pid = turn_handle.pid;
+    // The persistent CC was respawned this turn whenever the captured pid
+    // differs from the pre-turn snapshot — covers fresh spawns (no prior
+    // session), drift-driven teardowns, and reuse-failure respawns. A pure
+    // reuse keeps the same pid and must NOT trigger a bridge re-enable.
+    let persistent_session_was_respawned = existing_persistent_pid != Some(spawned_pid);
+    let ps_for_remote_control_reenable;
+    let should_reenable_remote_control;
     {
         let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
         session.active_pid = Some(spawned_pid);
+        ps_for_remote_control_reenable = session.persistent_session.clone();
+        should_reenable_remote_control = should_reenable_remote_control_after_turn_result(
+            restore_remote_control_after_respawn,
+            &session.claude_remote_control,
+            ps_for_remote_control_reenable.as_ref().map(|ps| ps.pid()),
+            spawned_pid,
+            persistent_session_was_respawned,
+        );
         let _ =
             db.save_chat_session_state(&chat_session_id, &session.session_id, session.turn_count);
         let _ = db.insert_agent_session(&session.session_id, &workspace_id, &ws.repository_id);
@@ -1864,6 +2181,23 @@ pub async fn send_chat_message(
         .as_ref()
         .and_then(|r| r.branch_rename_preferences.clone());
     let rename_ws_env = ws_env.clone();
+    let remote_control_title_messages = db
+        .list_chat_messages_for_session(&chat_session_id)
+        .unwrap_or_default();
+    let mut remote_control_reenable_after_result =
+        if should_reenable_remote_control && let Some(ps) = ps_for_remote_control_reenable {
+            Some((
+                ps,
+                remote_control_title(
+                    &chat_session.name,
+                    &ws.name,
+                    &content,
+                    &remote_control_title_messages,
+                ),
+            ))
+        } else {
+            None
+        };
 
     // Atomically claim the one-shot auto-rename slot here — on the calling
     // task's existing DB handle — so the spawned bridge doesn't need to
@@ -1874,7 +2208,7 @@ pub async fn send_chat_message(
     // early exit) can't re-trigger a rename on a later prompt because the
     // claim has already been taken. The flag tracks the claim, not the
     // outcome: a Haiku/git failure below intentionally does not release it.
-    let claimed_rename = if has_repo {
+    let claimed_rename = if has_repo && should_run_auto_naming(remote_control_active_for_turn) {
         match db.claim_branch_auto_rename(&workspace_id) {
             Ok(claimed) => claimed,
             Err(e) => {
@@ -1927,7 +2261,10 @@ pub async fn send_chat_message(
         // name for the tab. Fires on every new session's first turn (not just
         // the first session of the workspace). Skipped if the user already
         // renamed the session manually.
-        if saved_turn_count <= 1 && !session_name_already_edited {
+        if saved_turn_count <= 1
+            && !session_name_already_edited
+            && should_run_auto_naming(remote_control_active_for_turn)
+        {
             let sid2 = chat_session_id_for_stream.clone();
             let wt_path2 = wt_path.clone();
             let prompt2 = rename_prompt.clone();
@@ -1966,10 +2303,51 @@ pub async fn send_chat_message(
         let mut notified_via_result = false;
         while let Some(event) = rx.recv().await {
             // Track whether the CLI initialized successfully.
-            if let AgentEvent::Stream(StreamEvent::System { subtype, .. }) = &event
+            if let AgentEvent::Stream(StreamEvent::System {
+                subtype,
+                session_id,
+                ..
+            }) = &event
                 && subtype == "init"
             {
                 got_init = true;
+                if let Some(canonical_sid) = session_id.as_deref().map(str::trim)
+                    && !canonical_sid.is_empty()
+                {
+                    let app_state = app.state::<AppState>();
+                    let turn_count = {
+                        let mut agents = app_state.agents.write().await;
+                        if let Some(session) = agents.get_mut(&chat_session_id_for_stream) {
+                            if session
+                                .persistent_session
+                                .as_ref()
+                                .is_some_and(|ps| ps.pid() == spawned_pid)
+                                || session.active_pid == Some(spawned_pid)
+                            {
+                                if session.session_id != canonical_sid {
+                                    session.session_id = canonical_sid.to_string();
+                                }
+                                session.turn_count
+                            } else {
+                                0
+                            }
+                        } else {
+                            0
+                        }
+                    };
+                    if turn_count > 0
+                        && let Ok(db) = Database::open(&db_path)
+                    {
+                        let _ = db.save_chat_session_state(
+                            &chat_session_id_for_stream,
+                            canonical_sid,
+                            turn_count,
+                        );
+                        let _ = db.insert_agent_session(canonical_sid, &ws_id, &repo_id_for_mcp);
+                        let _ = db.reopen_agent_session(canonical_sid);
+                        let _ = db.update_agent_session_turn(canonical_sid, turn_count);
+                    }
+                }
             }
 
             // Claude Code emits a structured SDK event for terminal
@@ -2308,6 +2686,7 @@ pub async fn send_chat_message(
             if let AgentEvent::Stream(StreamEvent::User {
                 message,
                 is_synthetic: true,
+                ..
             }) = &event
                 && let claudette::agent::UserMessageContent::Text(body) = &message.content
                 && let Ok(db) = Database::open(&db_path)
@@ -2554,6 +2933,18 @@ pub async fn send_chat_message(
                         chat_session_id_for_stream.clone(),
                     );
                 }
+                if let Some((ps, title)) = remote_control_reenable_after_result.take() {
+                    super::remote_control::reenable_remote_control_after_respawn(
+                        app.clone(),
+                        db_path.clone(),
+                        ws_id.clone(),
+                        chat_session_id_for_stream.clone(),
+                        wt_path.clone(),
+                        spawned_pid,
+                        ps,
+                        title,
+                    );
+                }
             }
 
             // Track per-assistant-message cumulative usage as the CLI streams it.
@@ -2606,6 +2997,9 @@ pub async fn send_chat_message(
                     // gets a fresh socket + token rather than reusing a bridge
                     // whose grandchild is gone.
                     session.persistent_session = None;
+                    session.claude_remote_control =
+                        crate::state::ClaudeRemoteControlStatus::disabled();
+                    session.claude_remote_control_monitor_pid = None;
                     session.mcp_bridge = None;
                     ended_own_session = true;
                 }
@@ -2751,7 +3145,34 @@ pub async fn send_chat_message(
 
 #[cfg(test)]
 mod tests {
-    use super::{should_defer_persistent_restart_for_state, terminal_text};
+    use super::{
+        remote_control_requested_or_active, remote_control_requested_or_active_for_turn,
+        remote_control_should_defer_drift_teardown_for_turn,
+        remote_control_should_restore_for_turn, remote_control_title,
+        should_defer_persistent_restart_for_state,
+        should_reenable_remote_control_after_turn_result, should_resume_persistent_session,
+        should_run_auto_naming, terminal_text,
+    };
+    use crate::state::{ClaudeRemoteControlLifecycle, ClaudeRemoteControlStatus};
+    use claudette::model::{ChatMessage, ChatRole};
+
+    fn test_chat_message(role: ChatRole, content: &str) -> ChatMessage {
+        ChatMessage {
+            id: uuid::Uuid::new_v4().to_string(),
+            workspace_id: "workspace-1".to_string(),
+            chat_session_id: "chat-1".to_string(),
+            role,
+            content: content.to_string(),
+            cost_usd: None,
+            duration_ms: None,
+            created_at: "2026-05-08T00:00:00Z".to_string(),
+            thinking: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+        }
+    }
 
     #[test]
     fn terminal_text_converts_newlines_to_terminal_newlines() {
@@ -2785,5 +3206,282 @@ mod tests {
         assert!(!should_defer_persistent_restart_for_state(true, false));
         assert!(!should_defer_persistent_restart_for_state(false, true));
         assert!(!should_defer_persistent_restart_for_state(false, false));
+    }
+
+    #[test]
+    fn resume_uses_persisted_claude_session_even_when_turn_count_is_stale() {
+        assert!(should_resume_persistent_session("sess-abc", 1, true));
+    }
+
+    #[test]
+    fn resume_does_not_treat_fresh_first_turn_uuid_as_history() {
+        assert!(!should_resume_persistent_session("fresh-uuid", 1, false));
+        assert!(should_resume_persistent_session("fresh-uuid", 2, false));
+        assert!(!should_resume_persistent_session("", 9, true));
+    }
+
+    #[test]
+    fn remote_control_active_for_any_non_disabled_state() {
+        assert!(!remote_control_requested_or_active(
+            &ClaudeRemoteControlStatus::disabled()
+        ));
+        for state in [
+            ClaudeRemoteControlLifecycle::Enabling,
+            ClaudeRemoteControlLifecycle::Ready,
+            ClaudeRemoteControlLifecycle::Connected,
+            ClaudeRemoteControlLifecycle::Reconnecting,
+            ClaudeRemoteControlLifecycle::Error,
+        ] {
+            assert!(remote_control_requested_or_active(
+                &ClaudeRemoteControlStatus {
+                    state,
+                    session_url: None,
+                    connect_url: None,
+                    environment_id: None,
+                    detail: None,
+                    last_error: None,
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn remote_control_feature_flag_disables_turn_restore_and_active_state() {
+        let status = ClaudeRemoteControlStatus {
+            state: ClaudeRemoteControlLifecycle::Connected,
+            session_url: None,
+            connect_url: None,
+            environment_id: None,
+            detail: None,
+            last_error: None,
+        };
+
+        assert!(remote_control_should_restore_for_turn(true, &status));
+        assert!(remote_control_requested_or_active_for_turn(true, &status));
+        assert!(!remote_control_should_restore_for_turn(false, &status));
+        assert!(!remote_control_requested_or_active_for_turn(false, &status));
+    }
+
+    #[test]
+    fn remote_control_does_not_suppress_claudette_auto_naming_helpers() {
+        assert!(should_run_auto_naming(true));
+        assert!(should_run_auto_naming(false));
+    }
+
+    #[test]
+    fn pre_start_remote_control_reenables_after_first_turn_result_only() {
+        let mut status = ClaudeRemoteControlStatus {
+            state: ClaudeRemoteControlLifecycle::Enabling,
+            session_url: None,
+            connect_url: None,
+            environment_id: None,
+            detail: None,
+            last_error: None,
+        };
+
+        // Cold-enable + first spawn: state=Enabling, was_respawned=true.
+        assert!(should_reenable_remote_control_after_turn_result(
+            true,
+            &status,
+            Some(42),
+            42,
+            true,
+        ));
+        // PID mismatch (race): no re-enable.
+        assert!(!should_reenable_remote_control_after_turn_result(
+            true,
+            &status,
+            Some(43),
+            42,
+            true,
+        ));
+        // Restore disabled (e.g. feature flag off): no re-enable.
+        assert!(!should_reenable_remote_control_after_turn_result(
+            false,
+            &status,
+            Some(42),
+            42,
+            true,
+        ));
+
+        status.state = ClaudeRemoteControlLifecycle::Ready;
+        assert!(!should_reenable_remote_control_after_turn_result(
+            true,
+            &status,
+            Some(42),
+            42,
+            true,
+        ));
+
+        status.state = ClaudeRemoteControlLifecycle::Connected;
+        assert!(!should_reenable_remote_control_after_turn_result(
+            true,
+            &status,
+            Some(42),
+            42,
+            true,
+        ));
+
+        status.state = ClaudeRemoteControlLifecycle::Reconnecting;
+        // Reconnecting + respawned: re-enable.
+        assert!(should_reenable_remote_control_after_turn_result(
+            true,
+            &status,
+            Some(42),
+            42,
+            true,
+        ));
+        // Reconnecting but reuse (not respawned): NO re-enable. The bridge
+        // is already alive in the existing CC; another set_remote_control
+        // is at best a no-op and at worst forks the conversation.
+        assert!(!should_reenable_remote_control_after_turn_result(
+            true,
+            &status,
+            Some(42),
+            42,
+            false,
+        ));
+
+        status.state = ClaudeRemoteControlLifecycle::Enabling;
+        // ping3 reuse path scenario: state happens to be Enabling but the
+        // CC was reused — must not fork.
+        assert!(!should_reenable_remote_control_after_turn_result(
+            true,
+            &status,
+            Some(42),
+            42,
+            false,
+        ));
+    }
+
+    #[test]
+    fn alternating_local_remote_local_reuse_keeps_bridge_identity() {
+        // Models the user's ping1→ping2(remote)→ping3 sequence at the
+        // decision-point level: by the time send_chat_message reaches the
+        // post-spawn re-enable check on ping3, the persistent CC was reused
+        // (same pid as captured before the turn) and the lifecycle is
+        // Connected. should_reenable must be false so set_remote_control(true)
+        // is NOT re-issued — the bridge stays attached to the same remote
+        // session URL across the alternating turns.
+        let connected = ClaudeRemoteControlStatus {
+            state: ClaudeRemoteControlLifecycle::Connected,
+            session_url: Some("https://claude.ai/code/sess-1".to_string()),
+            connect_url: Some("https://claude.ai/code?bridge=env_1".to_string()),
+            environment_id: Some("env_1".to_string()),
+            detail: None,
+            last_error: None,
+        };
+
+        // ping3 reuse: same pid, was_respawned=false → no re-enable.
+        assert!(!should_reenable_remote_control_after_turn_result(
+            true,
+            &connected,
+            Some(7777),
+            7777,
+            false,
+        ));
+
+        // Sanity: if the same scenario somehow tripped a respawn (e.g.
+        // CC died), we DO re-enable so the new CC gets a bridge again —
+        // a fork is unavoidable in that case but the alternative is a
+        // dead remote panel.
+        let after_respawn = ClaudeRemoteControlStatus {
+            state: ClaudeRemoteControlLifecycle::Reconnecting,
+            ..connected
+        };
+        assert!(should_reenable_remote_control_after_turn_result(
+            true,
+            &after_respawn,
+            Some(8888),
+            8888,
+            true,
+        ));
+    }
+
+    #[test]
+    fn remote_control_title_prefers_explicit_session_name() {
+        assert_eq!(
+            remote_control_title("Fix remote sync", "workspace-name", "ping 1", &[]),
+            "Fix remote sync"
+        );
+        assert_eq!(
+            remote_control_title("New chat", "workspace-name", "ping   1", &[]),
+            "ping 1"
+        );
+        assert_eq!(
+            remote_control_title("New chat", "workspace-name", "   ", &[]),
+            "workspace-name"
+        );
+    }
+
+    #[test]
+    fn remote_control_title_keeps_first_user_prompt_across_respawns() {
+        let messages = vec![
+            test_chat_message(ChatRole::User, "ping 1"),
+            test_chat_message(ChatRole::Assistant, "pong"),
+            test_chat_message(ChatRole::User, "ping 2"),
+            test_chat_message(ChatRole::Assistant, "pong"),
+            test_chat_message(ChatRole::User, "ping 3"),
+        ];
+
+        assert_eq!(
+            remote_control_title("New chat", "workspace-name", "ping 3", &messages),
+            "ping 1"
+        );
+    }
+
+    #[test]
+    fn remote_control_should_defer_drift_teardown_matches_live_states() {
+        let mut status = ClaudeRemoteControlStatus {
+            state: ClaudeRemoteControlLifecycle::Disabled,
+            session_url: None,
+            connect_url: None,
+            environment_id: None,
+            detail: None,
+            last_error: None,
+        };
+
+        // Disabled / Error: drift teardowns proceed normally.
+        assert!(!remote_control_should_defer_drift_teardown_for_turn(
+            true, &status
+        ));
+        status.state = ClaudeRemoteControlLifecycle::Error;
+        assert!(!remote_control_should_defer_drift_teardown_for_turn(
+            true, &status
+        ));
+
+        // Live states: defer drift teardowns to keep bridge identity stable.
+        for state in [
+            ClaudeRemoteControlLifecycle::Enabling,
+            ClaudeRemoteControlLifecycle::Ready,
+            ClaudeRemoteControlLifecycle::Connected,
+            ClaudeRemoteControlLifecycle::Reconnecting,
+        ] {
+            status.state = state;
+            assert!(
+                remote_control_should_defer_drift_teardown_for_turn(true, &status),
+                "expected defer for state {state:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_control_drift_teardown_deferral_respects_feature_flag() {
+        // Feature flag off: never defer drift teardowns, even if a stale
+        // session lifecycle state somehow lingered after the flag flipped.
+        let status = ClaudeRemoteControlStatus {
+            state: ClaudeRemoteControlLifecycle::Connected,
+            session_url: Some("https://claude.ai/code/sess-1".to_string()),
+            connect_url: Some("https://claude.ai/code?bridge=env_1".to_string()),
+            environment_id: Some("env_1".to_string()),
+            detail: None,
+            last_error: None,
+        };
+        assert!(!remote_control_should_defer_drift_teardown_for_turn(
+            false, &status
+        ));
+        assert!(remote_control_should_defer_drift_teardown_for_turn(
+            true, &status
+        ));
     }
 }

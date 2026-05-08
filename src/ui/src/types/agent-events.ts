@@ -16,6 +16,10 @@ export type StreamEvent =
       /** Rust serializes `Option<String>` as `null` (no `skip_serializing_if`),
        * so the wire payload carries `null` when absent. */
       session_id?: string | null;
+      /** Present on `subtype: "bridge_state"` events from Claude Remote Control. */
+      state?: string | null;
+      /** Optional lifecycle detail on bridge-state events. */
+      detail?: string | null;
       /** Only present on `subtype: "status"` events. */
       status?: string | null;
       /** Only present on `subtype: "task_notification"` events. */
@@ -54,6 +58,16 @@ export type StreamEvent =
     }
   | { type: "stream_event"; event: InnerStreamEvent }
   | { type: "assistant"; message: AssistantMessage }
+  | {
+      type: "control_response";
+      response: {
+        subtype: string;
+        request_id: string;
+        response?: unknown;
+        error?: string | null;
+        message?: string | null;
+      };
+    }
   | {
       type: "result";
       subtype: string;
@@ -140,5 +154,6 @@ export interface UserEventMessage {
 }
 
 export type UserContentBlock =
+  | { type: "text"; text: string }
   | { type: "tool_result"; tool_use_id: string; content: unknown }
   | { type: "Unknown" };

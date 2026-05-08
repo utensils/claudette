@@ -7,7 +7,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 
 use crate::env::WorkspaceEnv;
-use crate::process::CommandWindowExt as _;
+use crate::process::{CommandWindowExt as _, sanitize_claude_subprocess_env};
 
 use super::AgentSettings;
 use super::args::{build_claude_args, build_stdin_message};
@@ -96,17 +96,7 @@ pub async fn run_turn(
         cmd.stdin(std::process::Stdio::null());
     }
 
-    // Strip OAuth tokens inherited from a parent Claude Code session — these
-    // use the sk-ant-oat* prefix and are not valid for subprocess API calls.
-    // Preserve real API keys (sk-ant-api*) so users who authenticate that way
-    // continue to work.
-    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY")
-        && !key.starts_with("sk-ant-api")
-    {
-        cmd.env_remove("ANTHROPIC_API_KEY");
-    }
-    cmd.env_remove("CLAUDECODE");
-    cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
+    sanitize_claude_subprocess_env(&mut cmd);
 
     // Apply user-provided env-provider output (direnv / mise / nix-devshell /
     // dotenv) BEFORE the workspace's CLAUDETTE_* markers so those always win,

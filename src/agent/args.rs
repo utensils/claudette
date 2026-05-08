@@ -294,18 +294,36 @@ pub(super) fn build_settings_json(settings: &AgentSettings) -> Option<String> {
 /// prompt, then one block per attachment — text files become `"text"` blocks,
 /// PDFs become `"document"` blocks, and images become `"image"` blocks.
 pub fn build_stdin_message(prompt: &str, attachments: &[FileAttachment]) -> String {
-    build_stdin_message_inner(prompt, attachments, None)
+    build_stdin_message_with_uuid(prompt, attachments, &uuid::Uuid::new_v4().to_string())
+}
+
+/// Build a stdin SDK user message using a caller-provided UUID.
+///
+/// Hosts that also subscribe to `--replay-user-messages` can use this UUID to
+/// distinguish their own stdin echoes from messages that originated elsewhere.
+pub fn build_stdin_message_with_uuid(
+    prompt: &str,
+    attachments: &[FileAttachment],
+    uuid: &str,
+) -> String {
+    build_stdin_message_inner(prompt, attachments, None, uuid)
 }
 
 /// Build a stdin SDK user message that should be delivered to the active turn.
 pub fn build_steering_stdin_message(prompt: &str, attachments: &[FileAttachment]) -> String {
-    build_stdin_message_inner(prompt, attachments, Some("next"))
+    build_stdin_message_inner(
+        prompt,
+        attachments,
+        Some("next"),
+        &uuid::Uuid::new_v4().to_string(),
+    )
 }
 
 fn build_stdin_message_inner(
     prompt: &str,
     attachments: &[FileAttachment],
     priority: Option<&str>,
+    uuid: &str,
 ) -> String {
     let mut content_blocks = Vec::new();
 
@@ -343,7 +361,7 @@ fn build_stdin_message_inner(
 
     let mut payload = serde_json::json!({
         "type": "user",
-        "uuid": uuid::Uuid::new_v4().to_string(),
+        "uuid": uuid,
         "message": {
             "role": "user",
             "content": content_blocks,
@@ -806,6 +824,15 @@ mod tests {
         assert_eq!(content.len(), 1);
         assert_eq!(content[0]["type"], "text");
         assert_eq!(content[0]["text"], "hello");
+    }
+
+    #[test]
+    fn test_build_stdin_message_with_caller_uuid() {
+        let msg = build_stdin_message_with_uuid("hello", &[], "local-msg-1");
+        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+        assert_eq!(parsed["type"], "user");
+        assert_eq!(parsed["uuid"], "local-msg-1");
+        assert_eq!(parsed["message"]["role"], "user");
     }
 
     #[test]

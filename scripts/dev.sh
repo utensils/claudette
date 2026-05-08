@@ -5,13 +5,10 @@
 # Tauri's stock 1420, so other Tauri starter-template dev builds can't
 # accidentally rebind our port and swap their bundle into our webview) and
 # the first free debug eval port (starting at 19432), exports them for the
-# child processes, then starts `tauri dev` with an inline config override
-# so the webview loads from the port Vite actually bound. We invoke `tauri`
-# directly rather than `cargo tauri` because the project's mise.toml pins
-# the npm `@tauri-apps/cli` package, which only ships a `tauri` binary and
-# not the `cargo-tauri` cargo subcommand shim. Nix devshell users get
-# `cargo-tauri` from `pkgs.cargo-tauri`, but `tauri dev` works in both
-# environments.
+# child processes, then starts the available Tauri CLI with an inline config
+# override so the webview loads from the port Vite actually bound. The mise
+# toolchain exposes `tauri`; the Nix devshell exposes `cargo tauri` /
+# `cargo-tauri`, so support both launch paths.
 #
 # A discovery file is written to ${TMPDIR:-/tmp}/claudette-dev/<pid>.json so
 # helpers like `debug-eval.sh` can find the matching instance when multiple
@@ -26,14 +23,20 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 
+has_tauri_launcher() {
+  command -v tauri >/dev/null 2>&1 \
+    || cargo tauri --version >/dev/null 2>&1 \
+    || command -v cargo-tauri >/dev/null 2>&1
+}
+
 # Self-bootstrap mise. `mise exec` only activates the toolchain in mise.toml
 # when invoked from a directory that contains it, so `mise exec -- bash
 # scripts/dev.sh` from elsewhere silently runs without the npm-installed
-# `tauri` on PATH. Re-exec under mise once we've cd'd into the repo so the
+# Tauri CLI on PATH. Re-exec under mise once we've cd'd into the repo so the
 # script can be invoked plain (`bash scripts/dev.sh`) or via `mise exec`,
 # from any cwd, without divergent behaviour. The sentinel guards against
 # infinite re-exec when mise lacks the toolchain.
-if ! command -v tauri >/dev/null 2>&1 \
+if ! has_tauri_launcher \
    && [[ -z "${CLAUDETTE_DEV_MISE_REEXEC:-}" ]] \
    && command -v mise >/dev/null 2>&1 \
    && [[ -f mise.toml ]]; then
@@ -41,9 +44,15 @@ if ! command -v tauri >/dev/null 2>&1 \
     exec mise exec -- "$0" "$@"
 fi
 
-if ! command -v tauri >/dev/null 2>&1; then
+if command -v tauri >/dev/null 2>&1; then
+    tauri_cmd=(tauri)
+elif cargo tauri --version >/dev/null 2>&1; then
+    tauri_cmd=(cargo tauri)
+elif command -v cargo-tauri >/dev/null 2>&1; then
+    tauri_cmd=(cargo-tauri)
+else
     cat >&2 <<'EOF'
-[dev.sh] `tauri` not found on PATH. Install one of:
+[dev.sh] Tauri CLI not found on PATH. Install one of:
   - mise:  install mise (https://mise.jdx.dev), then run `mise install`.
   - Nix:   `nix develop` activates a devshell with cargo-tauri.
   - Cargo: `cargo install tauri-cli --version "^2.0" --locked`
@@ -115,6 +124,6 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   runner_args=(--runner "$repo_root/scripts/macos-dev-app-runner.sh")
 fi
 
-exec tauri dev --features "$features" \
+exec "${tauri_cmd[@]}" dev --features "$features" \
   "${runner_args[@]}" \
   -c "{\"build\":{\"devUrl\":\"http://localhost:$vite_port\"}}"

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -11,6 +11,7 @@ use claudette::claude_help::ClaudeFlagDef;
 use claudette::env_provider::{EnvCache, EnvWatcher};
 use claudette::plugin_runtime::PluginRegistry;
 use claudette::scm::types::{CiCheck, PullRequest};
+use serde::{Deserialize, Serialize};
 
 use crate::commands::agent_backends::BackendGateway;
 use crate::commands::apps::DetectedApp;
@@ -44,6 +45,41 @@ pub struct PendingPermission {
     pub original_input: serde_json::Value,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaudeRemoteControlLifecycle {
+    Disabled,
+    Enabling,
+    Ready,
+    Connected,
+    Reconnecting,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeRemoteControlStatus {
+    pub state: ClaudeRemoteControlLifecycle,
+    pub session_url: Option<String>,
+    pub connect_url: Option<String>,
+    pub environment_id: Option<String>,
+    pub detail: Option<String>,
+    pub last_error: Option<String>,
+}
+
+impl ClaudeRemoteControlStatus {
+    pub fn disabled() -> Self {
+        Self {
+            state: ClaudeRemoteControlLifecycle::Disabled,
+            session_url: None,
+            connect_url: None,
+            environment_id: None,
+            detail: None,
+            last_error: None,
+        }
+    }
+}
+
 /// Per-session agent state managed on the Rust side. One of these per
 /// active chat session (i.e. per tab). The parent workspace is tracked so
 /// tray/notification code can aggregate across sessions in the same worktree.
@@ -74,6 +110,16 @@ pub struct AgentSessionState {
     /// When present, subsequent turns write to this process's stdin instead of
     /// spawning new processes.
     pub persistent_session: Option<Arc<PersistentSession>>,
+    /// Ephemeral Claude Code Remote Control status for the current persistent
+    /// process. This is intentionally not persisted across app restarts.
+    pub claude_remote_control: ClaudeRemoteControlStatus,
+    /// PID whose stdout stream is currently monitored for remote-origin turns.
+    pub claude_remote_control_monitor_pid: Option<u32>,
+    /// User-message UUIDs Claudette wrote to the persistent CLI over stdin.
+    /// When `--replay-user-messages` is active, the Remote Control monitor
+    /// receives those prompts back from stdout and must not classify them as
+    /// remote-origin turns.
+    pub local_user_message_uuids: HashSet<String>,
     /// Set when MCP server config changes while a turn is in flight.
     /// The next call to `send_chat_message` tears down the persistent session
     /// and starts a fresh one with updated `--mcp-config`, then clears
@@ -155,6 +201,21 @@ impl AgentSessionState {
         self.needs_attention = false;
         self.attention_kind = None;
         self.attention_notification_sent = false;
+    }
+
+    pub fn remember_local_user_message_uuid(&mut self, uuid: String) {
+        // Cap the set at 1024 entries — clear before inserting the entry that
+        // would push us past the cap so the post-insert size never exceeds it.
+        // `>` would let one extra entry slip in (cap → 1025) before the next
+        // insert noticed; `>=` keeps the post-insert max at exactly 1024.
+        if self.local_user_message_uuids.len() >= 1024 {
+            self.local_user_message_uuids.clear();
+        }
+        self.local_user_message_uuids.insert(uuid);
+    }
+
+    pub fn take_local_user_message_uuid(&mut self, uuid: &str) -> bool {
+        self.local_user_message_uuids.remove(uuid)
     }
 }
 

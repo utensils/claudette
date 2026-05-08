@@ -668,6 +668,8 @@ fn main() {
             commands::chat::interaction::clear_attention,
             commands::chat::interaction::submit_agent_answer,
             commands::chat::interaction::submit_plan_approval,
+            commands::chat::remote_control::get_claude_remote_control_status,
+            commands::chat::remote_control::set_claude_remote_control,
             commands::chat::checkpoint::list_checkpoints,
             commands::chat::checkpoint::rollback_to_checkpoint,
             commands::chat::checkpoint::clear_conversation,
