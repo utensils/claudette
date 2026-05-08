@@ -295,6 +295,62 @@ describe("terminalKeyAction", () => {
         .toBeNull();
     });
   });
+
+  describe("copy-selection", () => {
+    it("macOS: Cmd+C returns copy", () => {
+      expect(terminalKeyAction(mk({ key: "c", metaKey: true })))
+        .toEqual({ kind: "copy" });
+      expect(terminalKeyAction(mk({ key: "C", metaKey: true })))
+        .toEqual({ kind: "copy" });
+    });
+
+    it("macOS: Cmd+C with Shift does NOT return copy", () => {
+      expect(terminalKeyAction(mk({ key: "c", metaKey: true, shiftKey: true })))
+        .toBeNull();
+    });
+
+    it("does NOT intercept bare Ctrl+C — shell SIGINT must reach the PTY", () => {
+      expect(terminalKeyAction(mk({ key: "c", ctrlKey: true }))).toBeNull();
+      expect(terminalKeyAction(mk({ key: "C", ctrlKey: true }))).toBeNull();
+    });
+
+    it("Linux/Windows: Ctrl+Shift+C returns copy", () => {
+      expect(terminalKeyAction(mk({ key: "c", ctrlKey: true, shiftKey: true })))
+        .toEqual({ kind: "copy" });
+      expect(terminalKeyAction(mk({ key: "C", ctrlKey: true, shiftKey: true })))
+        .toEqual({ kind: "copy" });
+    });
+
+    it("works via code even when key differs (Dvorak layout)", () => {
+      expect(terminalKeyAction(mk({ code: "KeyC", key: "j", metaKey: true })))
+        .toEqual({ kind: "copy" });
+    });
+  });
+
+  describe("paste", () => {
+    it("macOS: Cmd+V returns paste", () => {
+      expect(terminalKeyAction(mk({ key: "v", metaKey: true })))
+        .toEqual({ kind: "paste" });
+      expect(terminalKeyAction(mk({ key: "V", metaKey: true })))
+        .toEqual({ kind: "paste" });
+    });
+
+    it("macOS: Cmd+V with Shift does NOT return paste", () => {
+      expect(terminalKeyAction(mk({ key: "v", metaKey: true, shiftKey: true })))
+        .toBeNull();
+    });
+
+    it("does NOT intercept bare Ctrl+V — may be used by shell", () => {
+      expect(terminalKeyAction(mk({ key: "v", ctrlKey: true }))).toBeNull();
+    });
+
+    it("Linux/Windows: Ctrl+Shift+V returns paste", () => {
+      expect(terminalKeyAction(mk({ key: "v", ctrlKey: true, shiftKey: true })))
+        .toEqual({ kind: "paste" });
+      expect(terminalKeyAction(mk({ key: "V", ctrlKey: true, shiftKey: true })))
+        .toEqual({ kind: "paste" });
+    });
+  });
 });
 
 describe("shouldStopTerminalEventPropagation", () => {

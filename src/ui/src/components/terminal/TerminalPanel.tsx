@@ -379,6 +379,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
     y: number;
     tabId: number;
     leafId?: string;
+    hasSelection?: boolean;
   } | null>(null);
   // Pointer-event-based tab drag — native HTML5 DnD does not deliver
   // dragover/drop events under the html `zoom` we apply for UI font scaling
@@ -740,6 +741,23 @@ export const TerminalPanel = memo(function TerminalPanel() {
         }
         case "zoom":
           return;
+        case "copy": {
+          const copyInst = activePaneId ? instancesRef.current.get(activePaneId) : null;
+          if (!copyInst?.term.hasSelection()) return;
+          void navigator.clipboard.writeText(
+            trimSelectionTrailingWhitespace(copyInst.term.getSelection()),
+          );
+          copyInst.term.clearSelection();
+          return;
+        }
+        case "paste": {
+          const pasteInst = activePaneId ? instancesRef.current.get(activePaneId) : null;
+          if (!pasteInst) return;
+          void navigator.clipboard.readText().then((text) => {
+            if (text) pasteInst.term.paste(text);
+          });
+          return;
+        }
       }
     },
     [
@@ -764,6 +782,17 @@ export const TerminalPanel = memo(function TerminalPanel() {
           ev.stopPropagation();
         }
         return true;
+      }
+      // Copy only intercepts when there's a selection. Without one, let the
+      // event fall through — on macOS Cmd+C is harmless; on Linux/Windows
+      // Ctrl+Shift+C without a selection is a no-op anyway.
+      if (action.kind === "copy") {
+        const tabId = activeTerminalTabIdRef.current;
+        const activePaneId = tabId
+          ? (useAppStore.getState().activeTerminalPaneId[tabId] ?? null)
+          : null;
+        const inst = activePaneId ? instancesRef.current.get(activePaneId) : null;
+        if (!inst?.term.hasSelection()) return true;
       }
       ev.preventDefault();
       if (action.kind === "zoom") return false;
@@ -821,6 +850,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
           y: ev.clientY,
           tabId: spec.tabId,
           leafId: spec.leafId,
+          hasSelection: term.hasSelection(),
         });
       };
       container.addEventListener(
@@ -1200,15 +1230,44 @@ export const TerminalPanel = memo(function TerminalPanel() {
     setContextMenu(null);
   }, [contextMenu]);
 
-  const terminalContextMenuItems = useMemo<AttachmentContextMenuItem[]>(
-    () => [
-      {
-        label: "Clear terminal",
-        onSelect: handleClearContextTerminal,
-      },
-    ],
-    [handleClearContextTerminal],
-  );
+  const handleCopyContextTerminal = useCallback(() => {
+    if (!contextMenu?.leafId) return;
+    const inst = instancesRef.current.get(contextMenu.leafId);
+    if (!inst?.term.hasSelection()) return;
+    void navigator.clipboard.writeText(
+      trimSelectionTrailingWhitespace(inst.term.getSelection()),
+    );
+    inst.term.clearSelection();
+    setContextMenu(null);
+  }, [contextMenu]);
+
+  const handlePasteContextTerminal = useCallback(() => {
+    if (!contextMenu?.leafId) return;
+    const inst = instancesRef.current.get(contextMenu.leafId);
+    if (!inst) return;
+    void navigator.clipboard.readText().then((text) => {
+      if (text) inst.term.paste(text);
+    });
+    setContextMenu(null);
+  }, [contextMenu]);
+
+  const terminalContextMenuItems = useMemo<AttachmentContextMenuItem[]>(() => {
+    const items: AttachmentContextMenuItem[] = [];
+    if (contextMenu?.hasSelection) {
+      items.push({ label: "Copy", onSelect: handleCopyContextTerminal });
+    }
+    if (contextMenu?.leafId) {
+      items.push({ label: "Paste", onSelect: handlePasteContextTerminal });
+    }
+    items.push({ label: "Clear terminal", onSelect: handleClearContextTerminal });
+    return items;
+  }, [
+    contextMenu?.hasSelection,
+    contextMenu?.leafId,
+    handleCopyContextTerminal,
+    handlePasteContextTerminal,
+    handleClearContextTerminal,
+  ]);
 
   const handleTabContextMenu = useCallback(
     (ev: ReactMouseEvent<HTMLDivElement>, tab: TerminalTab) => {
