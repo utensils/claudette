@@ -63,13 +63,6 @@ pub struct CreateParams<'a> {
     /// Branch prefix already resolved by the caller (e.g.
     /// `"jamesbrink/"`). Empty string is allowed.
     pub branch_prefix: &'a str,
-    /// Preserve the supplied workspace name/branch after the first prompt.
-    ///
-    /// GUI-created workspaces use the normal first-prompt auto-rename path.
-    /// CLI and batch callers pass an explicit script-facing name and need it
-    /// to remain stable, so they pre-claim the one-shot rename slot at
-    /// creation time.
-    pub preserve_supplied_name: bool,
 }
 
 /// Result of a successful [`create`]. `default_session_id` is the chat
@@ -108,6 +101,29 @@ pub async fn create(
     hooks: &dyn OpsHooks,
     worktree_base: &Path,
     params: CreateParams<'_>,
+) -> Result<CreateOutput, OpsError> {
+    create_inner(db, hooks, worktree_base, params, false).await
+}
+
+/// Create a workspace while preserving the supplied display name and branch
+/// name after the first prompt. This is intended for script-driven callers
+/// such as the CLI and batch runner, where the provided name is a stable
+/// handle rather than a throwaway default.
+pub async fn create_preserving_supplied_name(
+    db: &mut Database,
+    hooks: &dyn OpsHooks,
+    worktree_base: &Path,
+    params: CreateParams<'_>,
+) -> Result<CreateOutput, OpsError> {
+    create_inner(db, hooks, worktree_base, params, true).await
+}
+
+async fn create_inner(
+    db: &mut Database,
+    hooks: &dyn OpsHooks,
+    worktree_base: &Path,
+    params: CreateParams<'_>,
+    preserve_supplied_name: bool,
 ) -> Result<CreateOutput, OpsError> {
     if !is_valid_workspace_name(params.name) {
         return Err(OpsError::Validation(format!(
@@ -195,7 +211,7 @@ pub async fn create(
         ws.sort_order = o;
     }
 
-    if params.preserve_supplied_name {
+    if preserve_supplied_name {
         db.claim_branch_auto_rename(&ws.id)?;
     }
 
@@ -817,7 +833,6 @@ mod tests {
                 repo_id: &repo.id,
                 name: "scratch",
                 branch_prefix: "test/",
-                preserve_supplied_name: false,
             },
         )
         .await
@@ -836,7 +851,7 @@ mod tests {
         let worktree_base = tempfile::tempdir().unwrap();
         let hooks = RecordingHooks::default();
 
-        let created = create(
+        let created = create_preserving_supplied_name(
             &mut db,
             &hooks,
             worktree_base.path(),
@@ -844,7 +859,6 @@ mod tests {
                 repo_id: &repo.id,
                 name: "agent-pipeline",
                 branch_prefix: "test/",
-                preserve_supplied_name: true,
             },
         )
         .await
@@ -877,7 +891,6 @@ mod tests {
                 repo_id: &repo.id,
                 name: "feature",
                 branch_prefix: "test/",
-                preserve_supplied_name: false,
             },
         )
         .await
@@ -925,7 +938,6 @@ mod tests {
                 repo_id: &repo.id,
                 name: "feature",
                 branch_prefix: "test/",
-                preserve_supplied_name: false,
             },
         )
         .await

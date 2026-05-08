@@ -821,18 +821,22 @@ async fn handle_create_workspace(
     // prefix from app settings; harmonizing the two is a follow-up.
     let branch_prefix = format!("{}/", repo.path_slug);
 
-    let out = ops_workspace::create(
-        &mut db,
-        &NoopHooks,
-        worktree_base_dir.as_path(),
-        ops_workspace::CreateParams {
-            repo_id: repository_id,
-            name,
-            branch_prefix: &branch_prefix,
-            preserve_supplied_name,
-        },
-    )
-    .await
+    let params = ops_workspace::CreateParams {
+        repo_id: repository_id,
+        name,
+        branch_prefix: &branch_prefix,
+    };
+    let out = if preserve_supplied_name {
+        ops_workspace::create_preserving_supplied_name(
+            &mut db,
+            &NoopHooks,
+            worktree_base_dir.as_path(),
+            params,
+        )
+        .await
+    } else {
+        ops_workspace::create(&mut db, &NoopHooks, worktree_base_dir.as_path(), params).await
+    }
     .map_err(|e| e.to_string())?;
 
     // Run the setup script (if configured) for parity with the GUI path.

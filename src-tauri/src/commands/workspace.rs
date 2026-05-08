@@ -68,18 +68,23 @@ pub(crate) async fn create_workspace_inner(
     let prefix = ops_workspace::resolve_branch_prefix(&prefix_mode, &prefix_custom).await;
     let worktree_base = state.worktree_base_dir.read().await.clone();
 
-    let out = ops_workspace::create(
-        &mut db,
-        TauriHooks::new(app.clone()).as_ref(),
-        worktree_base.as_path(),
-        CreateParams {
-            repo_id,
-            name,
-            branch_prefix: &prefix,
-            preserve_supplied_name,
-        },
-    )
-    .await
+    let hooks = TauriHooks::new(app.clone());
+    let params = CreateParams {
+        repo_id,
+        name,
+        branch_prefix: &prefix,
+    };
+    let out = if preserve_supplied_name {
+        ops_workspace::create_preserving_supplied_name(
+            &mut db,
+            hooks.as_ref(),
+            worktree_base.as_path(),
+            params,
+        )
+        .await
+    } else {
+        ops_workspace::create(&mut db, hooks.as_ref(), worktree_base.as_path(), params).await
+    }
     .map_err(|e| e.to_string())?;
 
     // Setup script runs after the workspace exists so we can resolve the
