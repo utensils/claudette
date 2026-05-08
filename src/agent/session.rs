@@ -149,6 +149,7 @@ impl PersistentSession {
 
         // Background stdout reader — runs for the session lifetime.
         let tx = event_tx.clone();
+        let reader_pid = pid;
         tokio::spawn(async move {
             let reader = BufReader::new(stdout);
             let mut lines = reader.lines();
@@ -161,19 +162,34 @@ impl PersistentSession {
                         let _ = tx.send(AgentEvent::Stream(event));
                     }
                     Err(e) => {
-                        eprintln!("[persistent] Failed to parse: {e}\nLine: {line}");
+                        // Stamp the persistent CLI's PID so concurrent
+                        // sessions in a multi-instance dev run can be
+                        // demuxed in the log file.
+                        tracing::warn!(
+                            target: "agent::persistent",
+                            pid = reader_pid,
+                            error = %e,
+                            line = %line,
+                            "stream-json parse failed"
+                        );
                     }
                 }
             }
         });
 
         // Background stderr reader.
+        let stderr_pid = pid;
         tokio::spawn(async move {
             let reader = BufReader::new(stderr);
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 if !line.trim().is_empty() {
-                    eprintln!("[persistent stderr] {line}");
+                    tracing::warn!(
+                        target: "agent::persistent",
+                        pid = stderr_pid,
+                        line = %line,
+                        "claude stderr"
+                    );
                 }
             }
         });
@@ -269,7 +285,18 @@ impl PersistentSession {
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        eprintln!("[persistent] Broadcast lagged by {n} events");
+                        // Lag here means events were produced faster
+                        // than the per-turn receiver consumed them and
+                        // the broadcast buffer dropped some — directly
+                        // observable as missing tool calls or a frozen
+                        // streaming UI for the affected session.
+                        // Logging at WARN with the count makes this
+                        // diagnosable from the log file alone.
+                        tracing::warn!(
+                            target: "agent::persistent",
+                            dropped_events = n,
+                            "broadcast lag — per-turn receiver missed events"
+                        );
                     }
                 }
             }

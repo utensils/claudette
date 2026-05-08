@@ -1419,7 +1419,13 @@ pub async fn send_chat_message(
     if session.persistent_session.is_none()
         && let Some(old_pid) = session.active_pid.take()
     {
-        eprintln!("[chat] Stopping stale process {old_pid} before new turn");
+        tracing::info!(
+            target: "chat",
+            workspace_id = %workspace_id,
+            chat_session_id = %chat_session_id,
+            stale_pid = old_pid,
+            "stopping stale process before new turn"
+        );
         drop(agents); // release lock while waiting
         if let Some((ref ps, drained)) = to_deny_new_turn {
             deny_drained_permissions(drained, ps, "User sent a new message instead of answering.")
@@ -1466,8 +1472,12 @@ pub async fn send_chat_message(
     // The dirty flag stays set so the change applies once Remote Control is
     // disabled and the next turn lands here without the deferral.
     if session.mcp_config_dirty && should_defer_persistent_restart(session) {
-        eprintln!(
-            "[chat] MCP config dirty, but background tasks are running — deferring persistent session restart for {workspace_id}"
+        tracing::info!(
+            target: "chat",
+            workspace_id = %workspace_id,
+            chat_session_id = %chat_session_id,
+            reason = "background_tasks_running",
+            "MCP config dirty — deferring persistent session restart"
         );
     } else if session.mcp_config_dirty
         && remote_control_should_defer_drift_teardown_for_turn(
@@ -1475,11 +1485,20 @@ pub async fn send_chat_message(
             &session.claude_remote_control,
         )
     {
-        eprintln!(
-            "[chat] MCP config dirty, but Claude Remote Control is active — deferring persistent session restart for {workspace_id}"
+        tracing::info!(
+            target: "chat",
+            workspace_id = %workspace_id,
+            chat_session_id = %chat_session_id,
+            reason = "remote_control_active",
+            "MCP config dirty — deferring persistent session restart"
         );
     } else if session.mcp_config_dirty {
-        eprintln!("[chat] MCP config dirty — tearing down persistent session for {workspace_id}");
+        tracing::info!(
+            target: "chat",
+            workspace_id = %workspace_id,
+            chat_session_id = %chat_session_id,
+            "MCP config dirty — tearing down persistent session"
+        );
         let to_deny_mcp = drain_pending_permissions(session);
         let stale_pid = session.persistent_session.as_ref().map(|ps| ps.pid());
         session.persistent_session = None;
@@ -1632,8 +1651,12 @@ pub async fn send_chat_message(
             },
         )
     {
-        eprintln!(
-            "[chat] session flags drifted, but background tasks are running — deferring persistent session restart for {workspace_id}"
+        tracing::info!(
+            target: "chat",
+            workspace_id = %workspace_id,
+            chat_session_id = %chat_session_id,
+            reason = "background_tasks_running",
+            "session flags drifted — deferring persistent session restart"
         );
     } else if remote_control_should_defer_drift_teardown_for_turn(
         remote_control_feature_enabled,
@@ -1658,8 +1681,12 @@ pub async fn send_chat_message(
         // Same trade-off as the MCP-dirty branch above: keep the bridge
         // alive across local turns. The flags-drift state remains so the
         // teardown happens after Remote Control is disabled.
-        eprintln!(
-            "[chat] session flags drifted, but Claude Remote Control is active — deferring persistent session restart for {workspace_id}"
+        tracing::info!(
+            target: "chat",
+            workspace_id = %workspace_id,
+            chat_session_id = %chat_session_id,
+            reason = "remote_control_active",
+            "session flags drifted — deferring persistent session restart"
         );
     } else if session.persistent_session.is_some()
         && persistent_session_flags_drifted(
@@ -1678,15 +1705,16 @@ pub async fn send_chat_message(
             },
         )
     {
-        eprintln!(
-            "[chat] session flags drifted (plan_mode {} -> {}, allowed_tools changed: {}, exited_plan: {}, disable_1m_context {} -> {}, backend_hash changed: {}) — tearing down persistent session for {workspace_id}",
-            session.session_plan_mode,
-            agent_settings.plan_mode,
-            session.session_allowed_tools != allowed_tools,
-            session.session_exited_plan,
-            session.session_disable_1m_context,
-            agent_settings.disable_1m_context,
-            session.session_backend_hash != agent_settings.backend_runtime.hash,
+        tracing::info!(
+            target: "chat",
+            workspace_id = %workspace_id,
+            chat_session_id = %chat_session_id,
+            plan_mode_drifted = session.session_plan_mode != agent_settings.plan_mode,
+            allowed_tools_changed = session.session_allowed_tools != allowed_tools,
+            exited_plan = session.session_exited_plan,
+            disable_1m_context_drifted = session.session_disable_1m_context != agent_settings.disable_1m_context,
+            backend_hash_changed = session.session_backend_hash != agent_settings.backend_runtime.hash,
+            "session flags drifted — tearing down persistent session"
         );
         // Resolve any pending permission requests against the doomed process
         // before we kill it, so the next turn doesn't carry stale tool_use_ids.
@@ -1938,7 +1966,14 @@ pub async fn send_chat_message(
             Err(e) => {
                 // Persistent session died — drop lock before async spawn to
                 // avoid blocking other workspaces during process startup.
-                eprintln!("[chat] Persistent session failed, respawning: {e}");
+                tracing::warn!(
+                    target: "chat",
+                    workspace_id = %workspace_id,
+                    chat_session_id = %chat_session_id,
+                    pid = reuse_pid,
+                    error = %e,
+                    "persistent session failed — respawning"
+                );
                 if session.active_pid == Some(reuse_pid) {
                     session.active_pid = None;
                 }
@@ -2001,7 +2036,13 @@ pub async fn send_chat_message(
                 {
                     Ok(ps) => (ps, spawn_sid.clone()),
                     Err(e2) if is_resume => {
-                        eprintln!("[chat] --resume respawn failed ({e2}), starting fresh");
+                        tracing::warn!(
+                            target: "chat",
+                            workspace_id = %workspace_id,
+                            chat_session_id = %chat_session_id,
+                            error = %e2,
+                            "--resume respawn failed — starting fresh"
+                        );
                         let fresh = uuid::Uuid::new_v4().to_string();
                         let ps = start_persistent(
                             worktree_path.clone(),
@@ -2117,7 +2158,13 @@ pub async fn send_chat_message(
             Ok(ps) => (ps, sid),
             Err(e) if is_resume => {
                 // Resume failed (stale/corrupt session) — start fresh instead.
-                eprintln!("[chat] --resume failed ({e}), starting fresh session");
+                tracing::warn!(
+                    target: "chat",
+                    workspace_id = %workspace_id,
+                    chat_session_id = %chat_session_id,
+                    error = %e,
+                    "--resume failed — starting fresh session"
+                );
                 let fresh_sid = uuid::Uuid::new_v4().to_string();
                 let ps = start_persistent(
                     worktree_path.clone(),

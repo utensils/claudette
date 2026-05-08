@@ -104,10 +104,29 @@ impl BackendGateway {
         if let Some(existing) = self.servers.read().await.get(&config.id)
             && existing.hash == hash
         {
+            // Reuse path: every chat session that hits the same backend
+            // with matching (config, secret, model) shares this single
+            // gateway URL + auth token. Stamp the reuse so a postmortem
+            // can tell when N concurrent sessions are funneling through
+            // one process — the cardinality matters for diagnosing
+            // whether a leak rides on the shared surface.
+            tracing::debug!(
+                target: "agent-backend-gateway",
+                backend_id = %config.id,
+                model = ?model,
+                base_url = %existing.base_url,
+                "gateway reuse"
+            );
             return Ok((existing.base_url.clone(), existing.auth_token.clone(), hash));
         }
 
         if let Some(existing) = self.servers.write().await.remove(&config.id) {
+            tracing::info!(
+                target: "agent-backend-gateway",
+                backend_id = %config.id,
+                model = ?model,
+                "config drift — tearing down old gateway"
+            );
             existing.cancel.notify_waiters();
         }
 
@@ -1002,19 +1021,49 @@ async fn run_gateway(
     upstream_secret: Option<String>,
     auth_token: String,
 ) {
+    let local_addr = listener
+        .local_addr()
+        .map(|a| a.to_string())
+        .unwrap_or_else(|_| "<unknown>".to_string());
+    tracing::info!(
+        target: "agent-backend-gateway",
+        backend_id = %config.id,
+        backend_label = %config.label,
+        addr = %local_addr,
+        "gateway listening"
+    );
     loop {
         tokio::select! {
-            _ = cancel.notified() => break,
+            _ = cancel.notified() => {
+                tracing::info!(
+                    target: "agent-backend-gateway",
+                    backend_id = %config.id,
+                    addr = %local_addr,
+                    "gateway shutting down"
+                );
+                break;
+            }
             accepted = listener.accept() => {
-                let Ok((stream, _)) = accepted else { continue };
+                let Ok((stream, peer)) = accepted else { continue };
                 let config = config.clone();
                 let upstream_secret = upstream_secret.clone();
                 let auth_token = auth_token.clone();
+                let backend_id = config.id.clone();
                 tokio::spawn(async move {
                     if let Err(err) =
                         handle_gateway_connection(stream, config, upstream_secret, &auth_token).await
                     {
-                        eprintln!("[agent-backend-gateway] {err}");
+                        // Connection-scoped errors carry both the
+                        // backend id and the peer endpoint so a
+                        // postmortem can tie a failure to the specific
+                        // Claude CLI process that hit the gateway.
+                        tracing::warn!(
+                            target: "agent-backend-gateway",
+                            backend_id = %backend_id,
+                            peer = %peer,
+                            error = %err,
+                            "gateway connection error"
+                        );
                     }
                 });
             }

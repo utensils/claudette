@@ -23,7 +23,7 @@ mod voice;
 mod webview2_check;
 mod window_state;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// RAII holder for the running IPC server + its discovery file. Tauri's
 /// managed-state container drops both on shutdown, ensuring the socket
@@ -38,6 +38,104 @@ struct IpcGuard {
 /// in this file), so we just delegate.
 fn chrono_iso_now() -> String {
     chrono::Utc::now().to_rfc3339()
+}
+
+/// Best-effort warning when another live Claudette dev instance is
+/// likely running against the same database. We do **not** block the
+/// second launch — multi-instance dev is a supported workflow — but
+/// two processes against the same SQLite file is the most plausible
+/// origin of cross-session message bleed-through (insert paths race
+/// on `chat_messages.chat_session_id`, transcript JSONLs in
+/// `~/.claude/projects/<encoded-cwd>/<sid>.jsonl` interleave). Surfacing
+/// the collision in the log lets postmortems start with "two PIDs were
+/// alive at the same time" rather than guessing.
+///
+/// `scripts/dev.sh` drops `${TMPDIR}/claudette-dev/<pid>.json` when it
+/// launches; we scan that directory, cross-reference with the live
+/// process table, and emit a `tracing::warn!` if any other live PID is
+/// found. Stale files from crashed dev runs are ignored (PID not
+/// alive). Release builds without `dev.sh` simply find an empty
+/// directory and log nothing.
+fn warn_if_concurrent_dev_instance(db_path: &Path) {
+    use std::fs;
+
+    let dir = std::env::temp_dir().join("claudette-dev");
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return;
+    };
+    let our_pid = std::process::id();
+    let mut peers: Vec<(u32, String)> = Vec::new();
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(raw) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        let Some(pid) = parsed.get("pid").and_then(|v| v.as_u64()) else {
+            continue;
+        };
+        let pid = pid as u32;
+        if pid == our_pid {
+            continue;
+        }
+        if !is_pid_alive(pid) {
+            continue;
+        }
+        let cwd = parsed
+            .get("cwd")
+            .and_then(|v| v.as_str())
+            .unwrap_or("(unknown)")
+            .to_string();
+        peers.push((pid, cwd));
+    }
+
+    for (pid, cwd) in &peers {
+        tracing::warn!(
+            target: "startup",
+            our_pid,
+            peer_pid = pid,
+            peer_cwd = %cwd,
+            db_path = %db_path.display(),
+            "another Claudette dev instance is alive against the same DB \
+             — concurrent SQLite writers can cross-pollute chat_messages \
+             rows and corrupt resumed Claude CLI transcripts; consider \
+             setting CLAUDETTE_LOG_DIR (and a per-instance data dir) \
+             before continuing"
+        );
+    }
+}
+
+#[cfg(unix)]
+fn is_pid_alive(pid: u32) -> bool {
+    // `kill(pid, 0)` is the standard "is this PID alive?" probe — it
+    // performs the permission check without sending a signal. EPERM
+    // means the process exists but we're not allowed to signal it
+    // (still alive); only ESRCH means it's gone.
+    let r = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    if r == 0 {
+        return true;
+    }
+    // Read errno via `std::io::Error::last_os_error` rather than
+    // platform-specific `__error` / `__errno_location` symbols — keeps
+    // the helper portable across macOS and Linux without a second
+    // cfg-split.
+    std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+}
+
+#[cfg(not(unix))]
+fn is_pid_alive(_pid: u32) -> bool {
+    // Windows has its own ergonomics for liveness probing
+    // (`OpenProcess` + `GetExitCodeProcess`). The dev-launcher
+    // discovery file is currently only written on macOS/Linux by
+    // `scripts/dev.sh`, so a true cross-platform implementation can
+    // follow when the launcher gains a Windows analog.
+    true
 }
 
 #[cfg(target_os = "macos")]
@@ -76,6 +174,19 @@ fn main() {
     // aws-lc-rs and ring are active (tauri-plugin-updater pulls in ring),
     // so rustls cannot auto-detect — we must pick one explicitly.
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    // Initialize tracing as early as possible — before plugin discovery
+    // and DB open so their `tracing::info!`/`warn!` events land in the
+    // log file. The handle is held for the whole `main` so the
+    // non-blocking file appender's worker thread flushes pending writes
+    // on process exit. Errors here are non-fatal: stderr-only logging
+    // still covers us.
+    //
+    // The subsidiary entry points below (`--server`, `--agent-mcp`,
+    // `--agent-hook`) intentionally skip this so they don't fight the
+    // GUI process for the same daily log file. They run as short-lived
+    // children whose stderr is captured by the parent anyway.
+    let _log_handle = claudette::logging::init();
 
     // When spawned with `--server`, run the embedded claudette-server
     // instead of the GUI. This enables single-binary distribution while
@@ -135,6 +246,27 @@ fn main() {
         .join("claudette");
     let db_path = data_dir.join("claudette.db");
 
+    // Stamp the resolved primary paths so a multi-instance dev session
+    // can be reconstructed from the log file alone — knowing which DB
+    // and worktree base each PID was holding is the first question
+    // when investigating cross-session contamination.
+    tracing::info!(
+        target: "startup",
+        pid = std::process::id(),
+        data_dir = %data_dir.display(),
+        db_path = %db_path.display(),
+        "claudette paths resolved"
+    );
+
+    // Heuristic warning when another live Claudette dev process appears
+    // to be running against this same DB path. Tauri's GUI build does
+    // not enforce single-instance (multi-instance is intentional for
+    // dev work), but two processes against the same SQLite file is the
+    // most plausible source of cross-session message bleed-through.
+    // The dev launcher (`scripts/dev.sh`) drops a discovery file at
+    // `${TMPDIR}/claudette-dev/<pid>.json` we can scan here.
+    warn_if_concurrent_dev_instance(&db_path);
+
     // Ensure DB exists and migrations are applied. Stamp the install date on
     // first-ever startup so lifetime stats ("days using Claudette") have an
     // anchor. Errors here are non-fatal — downstream code re-opens the DB.
@@ -179,18 +311,19 @@ fn main() {
     let _ = std::fs::create_dir_all(&plugin_dir);
     let seed_warnings = claudette::plugin_runtime::seed::seed_bundled_plugins(&plugin_dir);
     for warning in &seed_warnings {
-        eprintln!("[plugin] {warning}");
+        tracing::warn!(target: "plugin", "{warning}");
     }
     let plugins = claudette::plugin_runtime::PluginRegistry::discover(&plugin_dir);
-    eprintln!(
-        "[plugin] Discovered {} plugin(s): {}",
-        plugins.plugins.len(),
-        plugins
+    tracing::info!(
+        target: "plugin",
+        count = plugins.plugins.len(),
+        plugins = %plugins
             .plugins
             .keys()
             .cloned()
             .collect::<Vec<_>>()
-            .join(", ")
+            .join(", "),
+        "plugins discovered"
     );
 
     // Hydrate the registry's in-memory state (globally disabled plugins,

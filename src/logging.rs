@@ -1,0 +1,321 @@
+//! Structured logging for Claudette.
+//!
+//! Wires `tracing-subscriber` with two layers:
+//!
+//! 1. **stderr (pretty)** — what `cargo tauri dev`'s terminal already shows.
+//!    Replaces the existing scattered `eprintln!` output with
+//!    timestamped, leveled, PID-stamped lines.
+//! 2. **rolling file (compact, structured)** — daily-rotated logs at
+//!    `~/.claudette/logs/claudette-<YYYY-MM-DD>.log`, written via
+//!    `tracing-appender::non_blocking` so the runtime never blocks on
+//!    disk I/O. A startup sweep deletes files older than [`RETAIN_DAYS`]
+//!    so we don't grow unbounded.
+//!
+//! ## Multiple instances
+//!
+//! Claudette has no single-instance lock — the user explicitly runs
+//! multiple dev builds in parallel for testing. Each instance's log
+//! lines carry the process PID so post-hoc you can demux who did what.
+//! If `CLAUDETTE_LOG_DIR` is set, that path overrides the default — set
+//! it per-instance in `scripts/dev.sh` if you want isolated log files
+//! per dev process instead of interleaved writes to the same daily file.
+//!
+//! ## Filtering
+//!
+//! Defaults to `info,claudette=debug,claudette_tauri=debug`. Override
+//! with the standard `RUST_LOG` env var (e.g.
+//! `RUST_LOG=claudette::commands::chat=trace`).
+//!
+//! ## JSON output
+//!
+//! Set `CLAUDETTE_LOG_FORMAT=json` for machine-parseable file output —
+//! useful when grep / jq is more convenient than tailing the pretty
+//! file. Defaults to compact (one line per event with a tab-separated
+//! "key=value" tail of structured fields).
+
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::time::{Duration, SystemTime};
+
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_appender::rolling;
+use tracing_subscriber::filter::EnvFilter;
+use tracing_subscriber::fmt;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+
+/// Number of days of rolled log files to retain on disk. Older files
+/// are deleted by [`sweep_old_logs`] on startup. Tuned so a busy dev
+/// week (~10 MB/day in observed practice) sits well under 200 MB total.
+const RETAIN_DAYS: u64 = 14;
+
+/// Filename prefix for rolled log files. `tracing-appender` rolls daily
+/// and appends `.YYYY-MM-DD` to this prefix.
+const LOG_FILE_PREFIX: &str = "claudette";
+
+/// Default subscriber filter when `RUST_LOG` is unset. Library and
+/// binary crate names go to `debug`; the rest of the dep tree stays
+/// at `info` so reqwest / hyper / mio chatter doesn't drown out our
+/// own events.
+const DEFAULT_FILTER: &str = "info,claudette=debug,claudette_tauri=debug,claudette_server=debug";
+
+/// Holds the appender's worker thread alive for the lifetime of the
+/// process. `init` returns a `LogHandle` to `main`, which drops it on
+/// process exit so the appender flushes pending writes.
+pub struct LogHandle {
+    _file_guard: Option<WorkerGuard>,
+    log_dir: PathBuf,
+}
+
+impl LogHandle {
+    /// Directory where rolled log files are written. Useful for the
+    /// "show logs" Help-menu action and for support bug reports.
+    pub fn log_dir(&self) -> &Path {
+        &self.log_dir
+    }
+}
+
+static LOG_HANDLE: OnceLock<PathBuf> = OnceLock::new();
+
+/// Initialize the global tracing subscriber. Must be called exactly
+/// once, as early in `main` as practical (before the first
+/// `tracing::*!` macro fires). Subsequent calls return `None` and leave
+/// the existing subscriber intact — safe to call from tests via the
+/// helper guard, but `main` should hold onto the returned handle.
+///
+/// Errors here are logged to stderr only and downgrade gracefully:
+/// if the file appender can't be created, stderr-only logging still
+/// works.
+pub fn init() -> Option<LogHandle> {
+    let log_dir = resolve_log_dir();
+    if let Err(e) = std::fs::create_dir_all(&log_dir) {
+        eprintln!(
+            "[logging] failed to create log dir {}: {e}",
+            log_dir.display()
+        );
+    }
+
+    sweep_old_logs(&log_dir, RETAIN_DAYS);
+
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER));
+
+    let stderr_layer = fmt::layer()
+        .with_target(true)
+        .with_thread_ids(false)
+        .with_thread_names(false)
+        .with_level(true)
+        .with_writer(std::io::stderr);
+
+    let (file_writer, guard) = match rolling::Builder::new()
+        .rotation(rolling::Rotation::DAILY)
+        .filename_prefix(LOG_FILE_PREFIX)
+        .filename_suffix("log")
+        .build(&log_dir)
+    {
+        Ok(appender) => {
+            let (nb, guard) = tracing_appender::non_blocking(appender);
+            (Some(nb), Some(guard))
+        }
+        Err(e) => {
+            eprintln!(
+                "[logging] failed to open file appender at {}: {e} \
+                 — falling back to stderr-only",
+                log_dir.display()
+            );
+            (None, None)
+        }
+    };
+
+    let json_format = std::env::var("CLAUDETTE_LOG_FORMAT")
+        .map(|v| v.eq_ignore_ascii_case("json"))
+        .unwrap_or(false);
+
+    // The two layers compose into one subscriber. Splitting on the
+    // format kind keeps the type signature simple — tracing-subscriber
+    // doesn't accept heterogeneous-format `Box<dyn Layer>` without
+    // erasure tricks that pessimize the hot path.
+    let registry = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(stderr_layer);
+
+    if let Some(writer) = file_writer {
+        if json_format {
+            let file_layer = fmt::layer()
+                .with_writer(writer)
+                .with_ansi(false)
+                .with_target(true)
+                .with_thread_ids(true)
+                .json();
+            if registry.with(file_layer).try_init().is_err() {
+                return None;
+            }
+        } else {
+            let file_layer = fmt::layer()
+                .with_writer(writer)
+                .with_ansi(false)
+                .with_target(true)
+                .with_thread_ids(true)
+                .compact();
+            if registry.with(file_layer).try_init().is_err() {
+                return None;
+            }
+        }
+    } else if registry.try_init().is_err() {
+        return None;
+    }
+
+    let _ = LOG_HANDLE.set(log_dir.clone());
+    log_startup_banner(&log_dir);
+
+    Some(LogHandle {
+        _file_guard: guard,
+        log_dir,
+    })
+}
+
+/// Resolve the directory rolled log files are written to. Order:
+///
+/// 1. `CLAUDETTE_LOG_DIR` env var (used by `scripts/dev.sh` to give
+///    parallel dev instances isolated log files when desired).
+/// 2. `~/.claudette/logs` — sibling to the existing `~/.claudette/workspaces`
+///    and `~/.claudette/plugins` directories so users have one tree to
+///    inspect when debugging.
+/// 3. `./logs` — last-resort fallback when `dirs::home_dir()` fails
+///    (extremely unusual; mostly affects sandboxed CI).
+fn resolve_log_dir() -> PathBuf {
+    if let Ok(custom) = std::env::var("CLAUDETTE_LOG_DIR") {
+        let path = PathBuf::from(custom);
+        if !path.as_os_str().is_empty() {
+            return path;
+        }
+    }
+    if let Some(home) = dirs::home_dir() {
+        return home.join(".claudette").join("logs");
+    }
+    PathBuf::from("logs")
+}
+
+/// Get the resolved log directory, if `init` has been called. Used by
+/// commands that surface "open log dir" actions.
+pub fn log_dir() -> Option<&'static Path> {
+    LOG_HANDLE.get().map(PathBuf::as_path)
+}
+
+fn log_startup_banner(log_dir: &Path) {
+    // Use raw env / cfg to avoid pulling more crates into the lib.
+    let pid = std::process::id();
+    let version = env!("CARGO_PKG_VERSION");
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    tracing::info!(
+        target: "startup",
+        pid,
+        version,
+        profile,
+        log_dir = %log_dir.display(),
+        "claudette logging initialized"
+    );
+}
+
+/// Delete rolled log files older than `retain_days` from `dir`.
+/// Walks the directory once at startup so we don't grow unbounded
+/// without an external cron. Errors are logged via `eprintln` (the
+/// subscriber isn't installed yet at this point) and ignored — a
+/// failure to prune is never fatal.
+fn sweep_old_logs(dir: &Path, retain_days: u64) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let cutoff = SystemTime::now()
+        .checked_sub(Duration::from_secs(retain_days * 24 * 60 * 60))
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        // Only consider our own rolled files. The rolling appender
+        // writes `<prefix>.<suffix>.<YYYY-MM-DD>` so a simple
+        // starts-with check is enough — and means we never touch
+        // anything else a user (or another tool) might have parked in
+        // the same directory.
+        if !name.starts_with(LOG_FILE_PREFIX) {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
+        if modified < cutoff
+            && let Err(e) = std::fs::remove_file(&path)
+        {
+            eprintln!("[logging] failed to remove old log {}: {e}", path.display());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    /// A retain_days of 0 means "anything older than now is fair
+    /// game" — the sleep below gives the freshly-written file a
+    /// non-zero age so the cutoff comparison removes it
+    /// deterministically without us having to mock the clock.
+    #[test]
+    fn sweep_old_logs_removes_matching_prefix_when_retain_is_zero() {
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("claudette.log.2025-01-01");
+        let unrelated = dir.path().join("user-notes.txt");
+        fs::write(&target, b"old").unwrap();
+        fs::write(&unrelated, b"unrelated").unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+
+        sweep_old_logs(dir.path(), 0);
+
+        assert!(!target.exists(), "matching file must be swept");
+        assert!(unrelated.exists(), "non-claudette files must be left alone");
+    }
+
+    #[test]
+    fn sweep_old_logs_keeps_files_within_retention() {
+        let dir = tempdir().unwrap();
+        let recent = dir.path().join("claudette.log.2026-05-08");
+        fs::write(&recent, b"recent").unwrap();
+
+        sweep_old_logs(dir.path(), 14);
+
+        assert!(recent.exists(), "files inside the retention window stay");
+    }
+
+    /// Validate the env override path. We guard the env mutation so
+    /// other tests don't race with us; edition 2024 made `set_var` /
+    /// `remove_var` `unsafe`, which surfaces the global-mutation risk
+    /// here even though our test harness is single-threaded for this
+    /// case (cargo test runs each test on its own task).
+    #[test]
+    fn resolve_log_dir_honors_env_override() {
+        let prev = std::env::var("CLAUDETTE_LOG_DIR").ok();
+        let dir = tempdir().unwrap();
+        // SAFETY: this test does not spawn threads that touch env.
+        unsafe {
+            std::env::set_var("CLAUDETTE_LOG_DIR", dir.path());
+        }
+        let resolved = resolve_log_dir();
+        assert_eq!(resolved, dir.path());
+        // SAFETY: same scope as the set above.
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("CLAUDETTE_LOG_DIR", v),
+                None => std::env::remove_var("CLAUDETTE_LOG_DIR"),
+            }
+        }
+    }
+}

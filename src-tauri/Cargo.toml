@@ -50,6 +50,8 @@ gethostname = "1"
 urlencoding = "2"
 parking_lot = "0.12"
 chrono = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "registry"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "stream"] }
 url = "2"
 cpal = { version = "0.17", optional = true }
