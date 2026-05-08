@@ -209,4 +209,9 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("20260508142050_drop_legacy_workspace_session_columns.sql"),
         legacy_version: None,
     },
+    Migration {
+        id: "20260508181215_rename_cycle_workspace_keybindings",
+        sql: include_str!("20260508181215_rename_cycle_workspace_keybindings.sql"),
+        legacy_version: None,
+    },
 ];

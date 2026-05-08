@@ -520,6 +520,12 @@ fn main() {
             // back to pure lazy mtime invalidation.
             commands::env::setup_env_watcher(app.handle().clone());
 
+            // Build the file-viewer fs watcher. Construction failure
+            // here only disables realtime buffer refresh — file viewer
+            // continues to work via the initial-load path. Same
+            // fallback shape as the env watcher above.
+            commands::files::setup_file_watcher(app.handle().clone());
+
             // Start the local IPC server the `claudette` CLI talks to.
             // Spawned async on the Tauri runtime; the resulting
             // `IpcServer` + discovery file are managed so they live for
@@ -655,6 +661,8 @@ fn main() {
             commands::files::open_attachment_in_browser,
             commands::files::open_attachment_with_default_app,
             commands::files::copy_attachment_file_to_clipboard,
+            commands::files::watch_workspace_files,
+            commands::files::unwatch_workspace_files,
             // Chat
             commands::chat::send::load_chat_history,
             commands::chat::send::load_chat_history_page,

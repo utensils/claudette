@@ -128,20 +128,27 @@ export const HOTKEY_ACTIONS = [
     suppressUnderOverlay: true,
   },
   {
-    id: "global.cycle-workspace-prev",
+    // Cycles the unified workspace tab strip (chat sessions, diff tabs,
+    // file tabs) one slot left/right with wrap-around. Earlier this binding
+    // navigated across workspaces (`global.cycle-workspace-prev/next`), but
+    // the unified tab strip subsumed enough per-workspace surfaces that
+    // tab-cycle became the higher-frequency intent. Workspace navigation
+    // now lives in the sidebar, the fuzzy finder, and the existing
+    // `global.jump-to-project-1..9` hotkeys.
+    id: "global.cycle-tab-prev",
     scope: "global",
     category: "keyboard_category_navigation",
-    description: "keyboard_action_cycle_workspace_prev",
+    description: "keyboard_action_cycle_tab_prev",
     defaultBinding: allPlatforms("mod+shift+code:BracketLeft"),
     match: "code",
     rebindable: true,
     suppressUnderOverlay: true,
   },
   {
-    id: "global.cycle-workspace-next",
+    id: "global.cycle-tab-next",
     scope: "global",
     category: "keyboard_category_navigation",
-    description: "keyboard_action_cycle_workspace_next",
+    description: "keyboard_action_cycle_tab_next",
     defaultBinding: allPlatforms("mod+shift+code:BracketRight"),
     match: "code",
     rebindable: true,

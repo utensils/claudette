@@ -111,6 +111,22 @@
   vertical-align: middle;
 }
 
+/* "File changed on disk" indicator. Shown when an external write lands
+ * while the buffer is dirty — the watcher leaves the user's edits in
+ * place and raises this flag instead. Distinct from `.dirtyDot`: hollow
+ * (just a ring) and uses the in-progress / needs-attention hue rather
+ * than the accent so the two states never visually fuse when both apply. */
+.externalDot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 6px;
+  border-radius: 50%;
+  border: 1.5px solid var(--tool-task);
+  background: transparent;
+  vertical-align: middle;
+}
+
 .fileStatus {
   width: 14px;
   flex-shrink: 0;

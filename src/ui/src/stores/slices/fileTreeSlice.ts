@@ -25,6 +25,16 @@ export interface FileBufferState {
   loaded: boolean;
   loadError: string | null;
   preview: FileViewerPreviewMode;
+  /** Set by `applyExternalFileChange` when an external write (agent edit,
+   *  manual save in another editor, `git checkout`, …) lands on disk while
+   *  the buffer was dirty. Drives the tab strip's "external change" badge:
+   *  the user's edits stay intact, the baseline isn't bumped, and they
+   *  can choose to reload via `reloadFileBufferFromDisk`.
+   *
+   *  Cleared automatically when the user resolves the conflict — either
+   *  by saving (last-write-wins; their save overrides disk) or by
+   *  reloading from disk (drops their edits, picks up the new content). */
+  externallyChanged: boolean;
 }
 
 export interface RemovedFilePathSnapshot {
@@ -75,6 +85,7 @@ export function makeUnloadedBuffer(): FileBufferState {
     loaded: false,
     loadError: null,
     preview: "source",
+    externallyChanged: false,
   };
 }
 
@@ -194,11 +205,52 @@ export interface FileTreeSlice {
   ) => void;
   /** Mark the buffer as saved by snapshotting the current buffer as the new
    *  baseline. Clears dirty without touching the buffer (so a save during
-   *  active typing doesn't lose the in-flight edit). */
+   *  active typing doesn't lose the in-flight edit). Also clears the
+   *  `externallyChanged` badge — the user's save resolves the conflict by
+   *  overriding disk (last-write-wins, by design of the dirty-conflict
+   *  policy in `applyExternalFileChange`). */
   setFileBufferSaved: (
     workspaceId: string,
     path: string,
     baseline: string,
+  ) => void;
+  /** Apply an external on-disk change to an open file buffer. Called by
+   *  the file-watcher hook when the backend emits
+   *  `workspace-file-changed`.
+   *
+   *  Behavior is split by dirty-state:
+   *   - **Clean buffer** (no unsaved edits): silently bring `baseline`
+   *     and `buffer` to the new disk content so Monaco picks it up via
+   *     its controlled-`value` path (which uses `executeEdits` and
+   *     therefore preserves the cursor + makes the change reversible
+   *     via Cmd+Z).
+   *   - **Dirty buffer** (unsaved edits in flight): keep both the
+   *     buffer and the original baseline intact, set
+   *     `externallyChanged: true` so the tab strip can flag the
+   *     conflict, and let the user resolve it by saving (override) or
+   *     calling `reloadFileBufferFromDisk` (drop edits).
+   *
+   *  Idempotency: if `nextContent === baseline` the action is a no-op,
+   *  so echoes from our own `writeWorkspaceFile` don't bounce back as
+   *  spurious updates. */
+  applyExternalFileChange: (
+    workspaceId: string,
+    path: string,
+    nextContent: string,
+    sizeBytes: number,
+    truncated: boolean,
+  ) => void;
+  /** User-driven reload from disk for a tab that has the
+   *  `externallyChanged` badge set. Replaces both the baseline and the
+   *  buffer with the disk content — same shape as a clean-buffer
+   *  external update. The caller fetches the content via
+   *  `readWorkspaceFileForViewer` and passes it in here. */
+  reloadFileBufferFromDisk: (
+    workspaceId: string,
+    path: string,
+    nextContent: string,
+    sizeBytes: number,
+    truncated: boolean,
   ) => void;
   setFileTabPreview: (
     workspaceId: string,
@@ -428,7 +480,76 @@ export const createFileTreeSlice: StateCreator<AppState, [], [], FileTreeSlice> 
       return {
         fileBuffers: {
           ...s.fileBuffers,
-          [key]: { ...prev, baseline },
+          // The save resolves any prior external-change conflict by
+          // overriding disk — the user picked their version. Clear the
+          // badge in lockstep with the new baseline so the tab strip
+          // doesn't keep flagging a conflict that's already settled.
+          [key]: { ...prev, baseline, externallyChanged: false },
+        },
+      };
+    }),
+
+  applyExternalFileChange: (workspaceId, path, nextContent, sizeBytes, truncated) =>
+    set((s) => {
+      const key = fileBufferKey(workspaceId, path);
+      const prev = s.fileBuffers[key];
+      if (!prev || !prev.loaded) return s;
+      // Echo defense: when our own `writeWorkspaceFile` lands, the OS
+      // watcher fires and the hook calls back into here with the content
+      // we just wrote. Bail out if there's nothing new to apply.
+      if (nextContent === prev.baseline) return s;
+
+      const isDirty = prev.buffer !== prev.baseline;
+      if (!isDirty) {
+        // Clean path: silent realtime follow. Both baseline and buffer
+        // advance to the new disk content; Monaco's controlled-value
+        // wrapper picks up the change via `executeEdits` next render.
+        return {
+          fileBuffers: {
+            ...s.fileBuffers,
+            [key]: {
+              ...prev,
+              baseline: nextContent,
+              buffer: nextContent,
+              sizeBytes,
+              truncated,
+              externallyChanged: false,
+            },
+          },
+        };
+      }
+      // Dirty path: never clobber the user's in-flight edits. Keep
+      // both buffer AND original baseline (so their dirty-diff stays
+      // anchored against the version they started editing from), and
+      // raise the conflict badge for the tab strip to render.
+      return {
+        fileBuffers: {
+          ...s.fileBuffers,
+          [key]: { ...prev, externallyChanged: true },
+        },
+      };
+    }),
+
+  reloadFileBufferFromDisk: (workspaceId, path, nextContent, sizeBytes, truncated) =>
+    set((s) => {
+      const key = fileBufferKey(workspaceId, path);
+      const prev = s.fileBuffers[key];
+      if (!prev) return s;
+      // Manual "reload": user clicked the external-change badge and
+      // accepts losing their dirty buffer in exchange for what's on
+      // disk. Same shape as the clean-buffer auto-update branch in
+      // applyExternalFileChange.
+      return {
+        fileBuffers: {
+          ...s.fileBuffers,
+          [key]: {
+            ...prev,
+            baseline: nextContent,
+            buffer: nextContent,
+            sizeBytes,
+            truncated,
+            externallyChanged: false,
+          },
         },
       };
     }),

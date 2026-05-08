@@ -478,7 +478,11 @@ function FileViewerInner({ workspaceId, path, t }: FileViewerInnerProps) {
             <MonacoEditor
               key={path}
               workspaceId={workspaceId}
-              initialValue={bufferState.buffer}
+              // Drive Monaco from the store's buffer so external file
+              // changes (agent edits, disk rewrites) flow in via
+              // `applyExternalFileChange` → controlled-`value` →
+              // `executeEdits` (preserves cursor + undo).
+              value={bufferState.buffer}
               filename={path}
               readOnly={editDisabled}
               onChange={handleBufferChange}

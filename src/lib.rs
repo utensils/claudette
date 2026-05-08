@@ -12,6 +12,7 @@ pub mod diff;
 pub mod env;
 pub mod env_provider;
 pub mod file_expand;
+pub mod file_watcher;
 pub mod fork;
 pub mod git;
 pub mod global_prompt;

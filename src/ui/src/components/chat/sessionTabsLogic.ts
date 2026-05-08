@@ -12,6 +12,123 @@ export type UnifiedTabEntry =
   | { kind: "diff"; path: string; layer: DiffLayer | null }
   | { kind: "file"; path: string };
 
+// A `NavEntry` is a `UnifiedTabEntry` enriched with a stable `key` derived
+// from its identity. The key namespace is shared with the in-component refs
+// used for arrow-key focus, so cycling logic, ref maps, and `aria-selected`
+// state all agree on which tab is "this" tab.
+export type NavEntry =
+  | { key: string; kind: "session"; sessionId: string }
+  | { key: string; kind: "diff"; path: string; layer: DiffLayer | null }
+  | { key: string; kind: "file"; path: string };
+
+// Unified key namespace used by the tab strip's keyboard nav, ref map, and
+// the cycle-tabs hotkey handler. Encoding the kind in the key keeps the
+// navigation flat and ergonomic without leaking the underlying data shape.
+// Kept verbatim from the original definitions in SessionTabs so existing
+// in-component refs continue to resolve.
+export const sessionNavKey = (id: string) => `s:${id}`;
+export const diffNavKey = (path: string, layer: DiffLayer | null) =>
+  `d:${path}:${layer ?? "null"}`;
+export const fileNavKey = (path: string) => `f:${path}`;
+
+/** Build the visible left-to-right tab order for a workspace, layered as
+ *  sessions → diffs → files by default but honoring any saved unified order
+ *  from drag-reorder. Newly-opened tabs (not yet in the saved order) append
+ *  at the end so they don't disappear into the abyss. */
+export function buildWorkspaceTabNavEntries(args: {
+  activeSessions: readonly ChatSession[];
+  diffTabs: readonly DiffFileTab[];
+  fileTabs: readonly string[];
+  tabOrder: readonly UnifiedTabEntry[] | undefined;
+}): NavEntry[] {
+  const { activeSessions, diffTabs, fileTabs, tabOrder } = args;
+  const sessionEntries: NavEntry[] = activeSessions.map((s) => ({
+    key: sessionNavKey(s.id),
+    kind: "session",
+    sessionId: s.id,
+  }));
+  const diffEntries: NavEntry[] = diffTabs.map((t) => ({
+    key: diffNavKey(t.path, t.layer),
+    kind: "diff",
+    path: t.path,
+    layer: t.layer,
+  }));
+  const fileEntries: NavEntry[] = fileTabs.map((p) => ({
+    key: fileNavKey(p),
+    kind: "file",
+    path: p,
+  }));
+  const defaultOrder = [...sessionEntries, ...diffEntries, ...fileEntries];
+
+  if (!tabOrder || tabOrder.length === 0) return defaultOrder;
+
+  // Reconcile saved unified order with the live per-kind state. A small
+  // map keyed by NavEntry.key lets us O(1) resolve each saved entry; new
+  // tabs (not yet in the saved order) append at the end, preserving the
+  // user's drag intent for everything they touched.
+  const byKey = new Map(defaultOrder.map((e) => [e.key, e]));
+  const out: NavEntry[] = [];
+  const used = new Set<string>();
+  for (const ord of tabOrder) {
+    const key =
+      ord.kind === "session"
+        ? sessionNavKey(ord.sessionId)
+        : ord.kind === "diff"
+          ? diffNavKey(ord.path, ord.layer)
+          : fileNavKey(ord.path);
+    const entry = byKey.get(key);
+    if (entry && !used.has(key)) {
+      out.push(entry);
+      used.add(key);
+    }
+  }
+  for (const e of defaultOrder) {
+    if (!used.has(e.key)) out.push(e);
+  }
+  return out;
+}
+
+/** Resolve which entry in the unified strip is currently "active" (the one
+ *  the workspace's main pane is rendering). Mirrors the precedence used by
+ *  AppLayout: an active file tab wins, then diff selection, then the
+ *  selected chat session. Returns `null` when there's no active entry — for
+ *  the cycle-tabs hotkey, the caller treats that as "start at the first
+ *  entry on next, last on prev." */
+export function findActiveNavEntryKey(args: {
+  selectedSessionId: string | null;
+  diffSelectedFile: string | null;
+  diffSelectedLayer: DiffLayer | null;
+  activeFileTab: string | null;
+}): string | null {
+  const { selectedSessionId, diffSelectedFile, diffSelectedLayer, activeFileTab } = args;
+  if (activeFileTab !== null) return fileNavKey(activeFileTab);
+  if (diffSelectedFile !== null) return diffNavKey(diffSelectedFile, diffSelectedLayer);
+  if (selectedSessionId !== null) return sessionNavKey(selectedSessionId);
+  return null;
+}
+
+/** Pure cycle helper. Returns the entry the caller should activate next, or
+ *  `null` if cycling is a no-op (empty / single-tab strip).
+ *
+ *  When no entry is currently active (`activeKey === null`), `next` lands on
+ *  index 0 and `prev` lands on the last entry — symmetric with how Chrome,
+ *  VS Code, and most tabbed apps treat "no current tab." */
+export function cycleNavEntries(
+  entries: readonly NavEntry[],
+  activeKey: string | null,
+  direction: "prev" | "next",
+): NavEntry | null {
+  if (entries.length === 0) return null;
+  if (entries.length === 1) return entries[0];
+  const idx = activeKey ? entries.findIndex((e) => e.key === activeKey) : -1;
+  if (idx < 0) return direction === "next" ? entries[0] : entries[entries.length - 1];
+  const target =
+    direction === "next"
+      ? (idx + 1) % entries.length
+      : (idx - 1 + entries.length) % entries.length;
+  return entries[target];
+}
+
 export interface SplitTabOrder {
   sessions: ChatSession[];
   diffs: DiffFileTab[];
