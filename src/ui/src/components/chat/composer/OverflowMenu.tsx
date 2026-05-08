@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { Copy, ExternalLink, Globe, LoaderCircle, Radio, Zap } from "lucide-react";
+import { Copy, ExternalLink, Globe, LoaderCircle, Power, Radio, Zap } from "lucide-react";
 import { useAppStore } from "../../../stores/useAppStore";
 import {
   getClaudeRemoteControlStatus,
@@ -180,12 +180,12 @@ function RemoteControlMenuItem({
   status: ClaudeRemoteControlStatus;
   onStatus: (status: ClaudeRemoteControlStatus) => void;
 }) {
-  const url = status.connectUrl ?? status.sessionUrl;
+  const url = remoteControlUrl(status);
   const busy = status.state === "enabling";
   const active = status.state !== "disabled" && status.state !== "error";
   const meta = remoteControlMeta(status);
   const detail = status.lastError ?? status.detail;
-  const displayDetail = remoteControlDisplayDetail(detail);
+  const displayDetail = remoteControlDisplayDetail(status, detail, url);
 
   const toggle = useCallback(async () => {
     if (busy) return;
@@ -197,24 +197,28 @@ function RemoteControlMenuItem({
       const next = await setClaudeRemoteControl(sessionId, nextEnabled);
       onStatus(next);
     } catch (err) {
+      const message = formatRemoteControlError(err);
       onStatus({
         state: "error",
         sessionUrl: null,
         connectUrl: null,
         environmentId: null,
         detail: null,
-        lastError: formatRemoteControlError(err),
+        lastError: message,
       });
     }
   }, [active, busy, onStatus, sessionId, status]);
 
   return (
-    <div className={styles.remoteGroup}>
+    <div
+      className={`${styles.remoteGroup} ${active ? styles.remoteGroupActive : ""} ${status.state === "error" ? styles.remoteGroupError : ""}`}
+    >
       <button
         type="button"
-        className={`${styles.item} ${active ? styles.itemActive : ""} ${status.state === "error" ? styles.itemError : ""}`}
-        onClick={toggle}
+        className={styles.remoteSummary}
+        onClick={active ? undefined : toggle}
         disabled={disabled || busy}
+        aria-disabled={active}
         title={detail ?? "Claude Remote Control"}
       >
         <span className={styles.itemIcon}>
@@ -226,12 +230,15 @@ function RemoteControlMenuItem({
         </span>
         <span className={styles.itemMeta}>{meta}</span>
       </button>
-      {url && active && (
+      {active && (
         <div className={styles.remoteActions}>
           <button
             type="button"
             className={styles.actionButton}
-            onClick={() => void openUrl(url).catch(() => {})}
+            onClick={() => {
+              if (url) void openUrl(url).catch(() => {});
+            }}
+            disabled={!url}
             title="Open Remote Control"
           >
             <ExternalLink size={13} />
@@ -239,10 +246,22 @@ function RemoteControlMenuItem({
           <button
             type="button"
             className={styles.actionButton}
-            onClick={() => void writeText(url).catch(() => {})}
+            onClick={() => {
+              if (url) void writeText(url).catch(() => {});
+            }}
+            disabled={!url}
             title="Copy Remote Control link"
           >
             <Copy size={13} />
+          </button>
+          <button
+            type="button"
+            className={styles.actionButton}
+            onClick={toggle}
+            disabled={disabled || busy}
+            title="Turn off Remote Control"
+          >
+            <Power size={13} />
           </button>
         </div>
       )}
@@ -250,7 +269,32 @@ function RemoteControlMenuItem({
   );
 }
 
-function remoteControlDisplayDetail(detail: string | null): string | null {
+function remoteControlUrl(status: ClaudeRemoteControlStatus): string | null {
+  if (status.connectUrl && !hasEmptyBridgeQuery(status.connectUrl)) return status.connectUrl;
+  if (status.sessionUrl && status.sessionUrl.trim()) return status.sessionUrl;
+  return null;
+}
+
+function hasEmptyBridgeQuery(rawUrl: string): boolean {
+  try {
+    const url = new URL(rawUrl);
+    return (
+      (url.searchParams.has("bridge") && !url.searchParams.get("bridge")) ||
+      (url.searchParams.has("environment") && !url.searchParams.get("environment"))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function remoteControlDisplayDetail(
+  status: ClaudeRemoteControlStatus,
+  detail: string | null,
+  url: string | null,
+): string | null {
+  if ((status.state === "ready" || status.state === "connected") && !url) {
+    return "Waiting for Claude to publish the session link.";
+  }
   if (!detail) return null;
   if (detail === "Session creation failed — see debug log") {
     return "Session creation failed. Refresh Claude login, then retry.";

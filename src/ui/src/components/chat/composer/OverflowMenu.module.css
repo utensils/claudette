@@ -51,7 +51,7 @@
   position: absolute;
   bottom: calc(100% + 8px);
   left: 0;
-  width: min(300px, calc(100vw - 28px));
+  width: min(340px, calc(100vw - 28px));
   background: var(--sidebar-bg);
   border: 1px solid var(--sidebar-border);
   border-radius: var(--radius-lg);
@@ -139,13 +139,61 @@
 }
 
 .remoteGroup {
-  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--radius-md);
+}
+
+.remoteGroupActive {
+  background: var(--selected-bg);
+  color: var(--accent-primary);
+}
+
+.remoteGroupError {
+  color: var(--diff-removed-text);
+}
+
+.remoteGroupActive .itemMeta,
+.remoteGroupError .itemIcon,
+.remoteGroupError .itemMeta {
+  color: currentColor;
+}
+
+.remoteSummary {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  background: transparent;
+  color: inherit;
+  border: none;
+  border-radius: var(--radius-md);
+  text-align: left;
+  cursor: pointer;
+  font-size: var(--fs-base);
+  font-family: inherit;
+  transition: background var(--transition-fast);
+}
+
+.remoteSummary:hover:not(:disabled):not([aria-disabled="true"]) {
+  background: var(--hover-bg);
+}
+
+.remoteSummary[aria-disabled="true"] {
+  cursor: default;
+}
+
+.remoteSummary:disabled {
+  cursor: default;
 }
 
 .remoteActions {
   display: flex;
   gap: 4px;
-  padding: 0 8px 6px 36px;
+  padding-right: 8px;
 }
 
 .actionButton {
@@ -161,9 +209,14 @@
   cursor: pointer;
 }
 
-.actionButton:hover {
+.actionButton:hover:not(:disabled) {
   color: var(--text-primary);
   background: var(--selected-bg);
+}
+
+.actionButton:disabled {
+  cursor: default;
+  opacity: 0.45;
 }
 
 .spin {

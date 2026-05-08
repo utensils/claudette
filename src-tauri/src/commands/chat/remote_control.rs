@@ -1,20 +1,27 @@
 use std::sync::Arc;
 
 use claudette::agent::{
-    AgentEvent, PersistentSession, StreamEvent, TokenUsage, UserContentBlock, UserEventMessage,
-    UserMessageContent,
+    AgentEvent, AgentSettings, PersistentSession, StreamEvent, TokenUsage, UserContentBlock,
+    UserEventMessage, UserMessageContent,
 };
 use claudette::chat::{
     BuildAssistantArgs, CheckpointArgs, build_assistant_chat_message, create_turn_checkpoint,
     extract_assistant_text, extract_event_thinking,
 };
 use claudette::db::Database;
-use claudette::model::{ChatMessage, ChatRole};
+use claudette::env::WorkspaceEnv;
+use claudette::model::{ChatMessage, ChatRole, ChatSession, Workspace};
+use claudette::permissions::tools_for_level;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::state::{AppState, ClaudeRemoteControlLifecycle, ClaudeRemoteControlStatus};
+use crate::state::{
+    AgentSessionState, AppState, ClaudeRemoteControlLifecycle, ClaudeRemoteControlStatus,
+};
 
-use super::{AgentStreamPayload, now_iso};
+use super::{
+    AgentStreamPayload, build_agent_hook_bridge, now_iso, start_bridge_and_inject_mcp,
+    start_chat_bridge,
+};
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -66,24 +73,24 @@ pub async fn set_claude_remote_control(
         .worktree_path
         .clone()
         .ok_or("Workspace has no worktree")?;
+    drop(db);
 
-    let (ps, pid) = {
-        let mut agents = state.agents.write().await;
-        let session = agents
-            .get_mut(&chat_session_id)
-            .ok_or("Send a message first, then enable Claude Remote Control.")?;
-        let ps = session
-            .persistent_session
-            .clone()
-            .ok_or("Send a message first, then enable Claude Remote Control.")?;
-        let pid = ps.pid();
-        session.claude_remote_control = if enabled {
-            ClaudeRemoteControlStatus {
-                state: ClaudeRemoteControlLifecycle::Enabling,
-                ..session.claude_remote_control.clone()
-            }
-        } else {
-            session.claude_remote_control.clone()
+    let (ps, pid) = if enabled {
+        ensure_persistent_session_for_remote_control(
+            &app,
+            &state,
+            &state.db_path,
+            &chat_session,
+            &workspace,
+            &worktree_path,
+        )
+        .await?
+    } else {
+        let Some((ps, pid)) = existing_persistent_session(&state, &chat_session_id).await else {
+            let disabled = ClaudeRemoteControlStatus::disabled();
+            store_remote_control_status(&app, &state, &workspace_id, &chat_session_id, disabled)
+                .await;
+            return Ok(get_stored_status(&state, &chat_session_id).await);
         };
         (ps, pid)
     };
@@ -131,6 +138,240 @@ pub async fn set_claude_remote_control(
     }
 }
 
+async fn existing_persistent_session(
+    state: &State<'_, AppState>,
+    chat_session_id: &str,
+) -> Option<(Arc<PersistentSession>, u32)> {
+    let agents = state.agents.read().await;
+    let ps = agents.get(chat_session_id)?.persistent_session.clone()?;
+    let pid = ps.pid();
+    Some((ps, pid))
+}
+
+async fn ensure_persistent_session_for_remote_control(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    db_path: &std::path::Path,
+    chat_session: &ChatSession,
+    workspace: &Workspace,
+    worktree_path: &str,
+) -> Result<(Arc<PersistentSession>, u32), String> {
+    let chat_session_id = chat_session.id.clone();
+    let workspace_id = chat_session.workspace_id.clone();
+    {
+        let mut agents = state.agents.write().await;
+        if let Some(session) = agents.get_mut(&chat_session_id) {
+            session.claude_remote_control = ClaudeRemoteControlStatus {
+                state: ClaudeRemoteControlLifecycle::Enabling,
+                detail: Some("Starting Claude Remote Control.".to_string()),
+                last_error: None,
+                ..session.claude_remote_control.clone()
+            };
+            if let Some(ps) = session.persistent_session.clone() {
+                let pid = ps.pid();
+                return Ok((ps, pid));
+            }
+        }
+    }
+
+    emit_remote_control_status(app, &workspace_id, &chat_session_id, state).await;
+
+    let repo = {
+        let db = Database::open(db_path).map_err(|e| e.to_string())?;
+        db.get_repository(&workspace.repository_id)
+            .map_err(|e| e.to_string())?
+    };
+    let repo_path = repo.as_ref().map(|r| r.path.as_str()).unwrap_or("");
+    let default_branch = match repo.as_ref().and_then(|r| r.base_branch.as_deref()) {
+        Some(branch) => branch.to_string(),
+        None => claudette::git::default_branch(
+            repo_path,
+            repo.as_ref().and_then(|r| r.default_remote.as_deref()),
+        )
+        .await
+        .unwrap_or_else(|_| "main".to_string()),
+    };
+    let ws_env = WorkspaceEnv::from_workspace(workspace, repo_path, default_branch);
+    let ws_info_for_env = claudette::plugin_runtime::host_api::WorkspaceInfo {
+        id: workspace.id.clone(),
+        name: workspace.name.clone(),
+        branch: workspace.branch_name.clone(),
+        worktree_path: worktree_path.to_string(),
+        repo_path: repo_path.to_string(),
+    };
+    let disabled_env_providers = {
+        let db = Database::open(db_path).map_err(|e| e.to_string())?;
+        crate::commands::env::load_disabled_providers(
+            &db,
+            repo.as_ref().map_or("", |r| r.id.as_str()),
+        )
+    };
+    let resolved_env = {
+        let registry = state.plugins.read().await;
+        claudette::env_provider::resolve_with_registry(
+            &registry,
+            &state.env_cache,
+            std::path::Path::new(worktree_path),
+            &ws_info_for_env,
+            &disabled_env_providers,
+        )
+        .await
+    };
+    crate::commands::env::register_resolved_with_watcher(
+        state,
+        std::path::Path::new(worktree_path),
+        &resolved_env.sources,
+    )
+    .await;
+
+    let db_rows = {
+        let db = Database::open(db_path).map_err(|e| e.to_string())?;
+        db.list_repository_mcp_servers(&workspace.repository_id)
+            .map_err(|e| e.to_string())?
+    };
+    let mcp_config = claudette::mcp::cli_config_from_rows(&db_rows);
+    let send_to_user_enabled = {
+        let db = Database::open(db_path).map_err(|e| e.to_string())?;
+        claudette::agent_mcp::is_builtin_plugin_enabled(&db, "send_to_user")
+    };
+    let instructions = {
+        let from_config = repo.as_ref().and_then(|r| {
+            let path = r.path.clone();
+            claudette::config::load_config(std::path::Path::new(&path))
+                .ok()
+                .flatten()
+                .and_then(|c| c.instructions)
+        });
+        from_config.or_else(|| repo.as_ref().and_then(|r| r.custom_instructions.clone()))
+    };
+    let nudge = send_to_user_enabled.then_some(claudette::agent_mcp::SYSTEM_PROMPT_NUDGE);
+    let custom_instructions =
+        claudette::global_prompt::compose_system_prompt(instructions.as_deref(), nudge);
+    let allowed_tools = tools_for_level("full");
+    let (resolved_backend_id, resolved_model) = {
+        let db = Database::open(db_path).map_err(|e| e.to_string())?;
+        crate::commands::agent_backends::resolve_backend_request_defaults(&db, None, None)?
+    };
+    let backend_runtime = crate::commands::agent_backends::resolve_backend_runtime(
+        state,
+        resolved_backend_id.as_deref(),
+        resolved_model.as_deref(),
+    )
+    .await?;
+    let mut agent_settings = AgentSettings {
+        model: resolved_model,
+        fast_mode: false,
+        thinking_enabled: false,
+        plan_mode: false,
+        effort: None,
+        chrome_enabled: false,
+        mcp_config,
+        disable_1m_context: false,
+        backend_runtime,
+        hook_bridge: None,
+    };
+    let bridge = if send_to_user_enabled {
+        let (bridge, mcp_with_claudette) = start_bridge_and_inject_mcp(
+            app,
+            &state.db_path,
+            &workspace_id,
+            &chat_session_id,
+            agent_settings.mcp_config.clone(),
+        )
+        .await?;
+        agent_settings.mcp_config = mcp_with_claudette;
+        bridge
+    } else {
+        start_chat_bridge(app, &state.db_path, &workspace_id, &chat_session_id).await?
+    };
+    agent_settings.hook_bridge = Some(build_agent_hook_bridge(&bridge)?);
+
+    let persisted_sid = chat_session
+        .session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|sid| !sid.is_empty())
+        .map(ToOwned::to_owned);
+    let is_resume = persisted_sid.is_some();
+    let claude_session_id = persisted_sid.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let ps = PersistentSession::start(
+        std::path::Path::new(worktree_path),
+        &claude_session_id,
+        is_resume,
+        &allowed_tools,
+        custom_instructions.as_deref(),
+        &agent_settings,
+        Some(&ws_env),
+        Some(&resolved_env),
+    )
+    .await
+    .map_err(|err| crate::missing_cli::handle_err(app, &err).unwrap_or(err))?;
+    let ps = Arc::new(ps);
+    let pid = ps.pid();
+
+    {
+        let mut agents = state.agents.write().await;
+        let session = agents
+            .entry(chat_session_id.clone())
+            .or_insert_with(|| AgentSessionState {
+                workspace_id: workspace_id.clone(),
+                session_id: claude_session_id.clone(),
+                turn_count: chat_session.turn_count,
+                active_pid: None,
+                custom_instructions: instructions.clone(),
+                needs_attention: false,
+                attention_kind: None,
+                attention_notification_sent: false,
+                persistent_session: None,
+                claude_remote_control: ClaudeRemoteControlStatus::disabled(),
+                claude_remote_control_monitor_pid: None,
+                mcp_config_dirty: false,
+                session_plan_mode: false,
+                session_allowed_tools: Vec::new(),
+                session_disable_1m_context: false,
+                session_backend_hash: String::new(),
+                pending_permissions: std::collections::HashMap::new(),
+                running_background_tasks: std::collections::HashSet::new(),
+                background_wake_active: false,
+                session_exited_plan: false,
+                session_resolved_env: Default::default(),
+                mcp_bridge: None,
+                last_user_msg_id: None,
+                posted_env_trust_warning: false,
+            });
+        session.workspace_id = workspace_id.clone();
+        session.session_id = claude_session_id.clone();
+        session.custom_instructions = instructions;
+        session.persistent_session = Some(ps.clone());
+        session.mcp_bridge = Some(bridge);
+        session.claude_remote_control = ClaudeRemoteControlStatus {
+            state: ClaudeRemoteControlLifecycle::Enabling,
+            detail: Some("Starting Claude Remote Control.".to_string()),
+            last_error: None,
+            ..session.claude_remote_control.clone()
+        };
+        session.claude_remote_control_monitor_pid = None;
+        session.session_plan_mode = agent_settings.plan_mode;
+        session.session_allowed_tools = allowed_tools.clone();
+        session.session_disable_1m_context = agent_settings.disable_1m_context;
+        session.session_backend_hash = agent_settings.backend_runtime.hash.clone();
+        session.session_exited_plan = false;
+        session.session_resolved_env = resolved_env.vars.clone();
+    }
+    if let Ok(db) = Database::open(db_path) {
+        let _ = db.save_chat_session_state(
+            &chat_session_id,
+            &claude_session_id,
+            chat_session.turn_count,
+        );
+        let _ =
+            db.insert_agent_session(&claude_session_id, &workspace_id, &workspace.repository_id);
+        let _ = db.reopen_agent_session(&claude_session_id);
+        let _ = db.update_agent_session_turn(&claude_session_id, chat_session.turn_count);
+    }
+    Ok((ps, pid))
+}
+
 async fn get_stored_status(
     state: &State<'_, AppState>,
     chat_session_id: &str,
@@ -158,6 +399,67 @@ async fn store_remote_control_status(
     emit_remote_control_status(app, workspace_id, chat_session_id, state).await;
 }
 
+pub(super) fn reenable_remote_control_after_respawn(
+    app: AppHandle,
+    db_path: std::path::PathBuf,
+    workspace_id: String,
+    chat_session_id: String,
+    worktree_path: String,
+    pid: u32,
+    ps: Arc<PersistentSession>,
+) {
+    tokio::spawn(async move {
+        let state = app.state::<AppState>();
+        let enabling = ClaudeRemoteControlStatus {
+            state: ClaudeRemoteControlLifecycle::Enabling,
+            ..get_stored_status(&state, &chat_session_id).await
+        };
+        store_remote_control_status(&app, &state, &workspace_id, &chat_session_id, enabling).await;
+
+        match ps.set_remote_control(true).await {
+            Ok(response) => {
+                if matches!(
+                    get_stored_status(&state, &chat_session_id).await.state,
+                    ClaudeRemoteControlLifecycle::Disabled
+                ) {
+                    return;
+                }
+                let status = status_from_control_response(response.response.as_ref());
+                store_remote_control_status(&app, &state, &workspace_id, &chat_session_id, status)
+                    .await;
+                ensure_remote_control_monitor(
+                    app,
+                    db_path,
+                    workspace_id,
+                    chat_session_id,
+                    worktree_path,
+                    pid,
+                    ps,
+                )
+                .await;
+            }
+            Err(err) => {
+                if matches!(
+                    get_stored_status(&state, &chat_session_id).await.state,
+                    ClaudeRemoteControlLifecycle::Disabled
+                ) {
+                    return;
+                }
+                let status = ClaudeRemoteControlStatus {
+                    state: ClaudeRemoteControlLifecycle::Error,
+                    session_url: None,
+                    connect_url: None,
+                    environment_id: None,
+                    detail: None,
+                    last_error: Some(err),
+                };
+                store_remote_control_status(&app, &state, &workspace_id, &chat_session_id, status)
+                    .await;
+            }
+        }
+    });
+}
+
 async fn emit_remote_control_status(
     app: &AppHandle,
     workspace_id: &str,
@@ -176,19 +478,41 @@ async fn emit_remote_control_status(
 fn status_from_control_response(response: Option<&serde_json::Value>) -> ClaudeRemoteControlStatus {
     ClaudeRemoteControlStatus {
         state: ClaudeRemoteControlLifecycle::Ready,
-        session_url: response.and_then(|v| string_field(v, "session_url")),
-        connect_url: response.and_then(|v| string_field(v, "connect_url")),
-        environment_id: response.and_then(|v| string_field(v, "environment_id")),
+        session_url: response.and_then(|v| url_field(v, "session_url")),
+        connect_url: response.and_then(|v| connect_url_field(v, "connect_url")),
+        environment_id: response.and_then(|v| non_empty_string_field(v, "environment_id")),
         detail: None,
         last_error: None,
     }
 }
 
-fn string_field(value: &serde_json::Value, key: &str) -> Option<String> {
+fn non_empty_string_field(value: &serde_json::Value, key: &str) -> Option<String> {
     value
         .get(key)
         .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn url_field(value: &serde_json::Value, key: &str) -> Option<String> {
+    non_empty_string_field(value, key)
+}
+
+fn connect_url_field(value: &serde_json::Value, key: &str) -> Option<String> {
+    let url = non_empty_string_field(value, key)?;
+    if has_empty_bridge_query(&url) {
+        return None;
+    }
+    Some(url)
+}
+
+fn has_empty_bridge_query(raw_url: &str) -> bool {
+    let Ok(url) = url::Url::parse(raw_url) else {
+        return false;
+    };
+    url.query_pairs()
+        .any(|(key, value)| matches!(key.as_ref(), "bridge" | "environment") && value.is_empty())
 }
 
 async fn ensure_remote_control_monitor(
@@ -641,6 +965,40 @@ mod tests {
         assert_eq!(
             status.connect_url.as_deref(),
             Some("https://claude.ai/connect/abc")
+        );
+        assert_eq!(status.environment_id.as_deref(), Some("env_123"));
+    }
+
+    #[test]
+    fn status_from_control_response_drops_empty_bridge_connect_url() {
+        let response = serde_json::json!({
+            "session_url": "https://claude.ai/code/session_123",
+            "connect_url": "https://claude.ai/code?environment=",
+            "environment_id": ""
+        });
+
+        let status = status_from_control_response(Some(&response));
+
+        assert_eq!(
+            status.session_url.as_deref(),
+            Some("https://claude.ai/code/session_123")
+        );
+        assert_eq!(status.connect_url, None);
+        assert_eq!(status.environment_id, None);
+    }
+
+    #[test]
+    fn status_from_control_response_keeps_non_empty_bridge_connect_url() {
+        let response = serde_json::json!({
+            "connect_url": "https://claude.ai/code?bridge=env_123",
+            "environment_id": "env_123"
+        });
+
+        let status = status_from_control_response(Some(&response));
+
+        assert_eq!(
+            status.connect_url.as_deref(),
+            Some("https://claude.ai/code?bridge=env_123")
         );
         assert_eq!(status.environment_id.as_deref(), Some("env_123"));
     }

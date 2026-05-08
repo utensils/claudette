@@ -23,7 +23,10 @@ use claudette::mcp_supervisor::McpSupervisor;
 use claudette::model::{ChatMessage, ChatRole, TerminalTab, TerminalTabKind};
 use claudette::permissions::tools_for_level;
 
-use crate::state::{AgentSessionState, AppState, PendingPermission};
+use crate::state::{
+    AgentSessionState, AppState, ClaudeRemoteControlLifecycle, ClaudeRemoteControlStatus,
+    PendingPermission,
+};
 
 use super::interaction::{deny_drained_permissions, drain_pending_permissions};
 use super::naming::{try_auto_rename, try_generate_session_name};
@@ -47,6 +50,40 @@ fn emit_agent_background_task_event(
         tab,
     };
     let _ = app.emit("agent-background-task", &payload);
+}
+
+fn remote_control_should_survive_local_respawn(status: &ClaudeRemoteControlStatus) -> bool {
+    matches!(
+        status.state,
+        ClaudeRemoteControlLifecycle::Enabling
+            | ClaudeRemoteControlLifecycle::Ready
+            | ClaudeRemoteControlLifecycle::Connected
+            | ClaudeRemoteControlLifecycle::Reconnecting
+    )
+}
+
+fn remote_control_reconnecting_status(
+    current: &ClaudeRemoteControlStatus,
+    should_restore: bool,
+) -> ClaudeRemoteControlStatus {
+    if should_restore {
+        ClaudeRemoteControlStatus {
+            state: ClaudeRemoteControlLifecycle::Reconnecting,
+            detail: Some("Reconnecting Claude Remote Control.".to_string()),
+            last_error: None,
+            ..current.clone()
+        }
+    } else {
+        ClaudeRemoteControlStatus::disabled()
+    }
+}
+
+fn should_resume_persistent_session(
+    saved_session_id: &str,
+    saved_turn_count: u32,
+    has_persisted_claude_session: bool,
+) -> bool {
+    !saved_session_id.trim().is_empty() && (has_persisted_claude_session || saved_turn_count > 1)
 }
 
 fn terminal_text(text: &str) -> String {
@@ -1079,6 +1116,10 @@ pub async fn send_chat_message(
         .get_chat_session(&chat_session_id)
         .map_err(|e| e.to_string())?
         .ok_or("Chat session not found")?;
+    let has_persisted_claude_session = chat_session
+        .session_id
+        .as_deref()
+        .is_some_and(|sid| !sid.trim().is_empty());
     let workspace_id = chat_session.workspace_id.clone();
     let _is_first_session = chat_session.sort_order == 0;
     let session_name_already_edited = chat_session.name_edited;
@@ -1256,6 +1297,8 @@ pub async fn send_chat_message(
     // for any agent-authored attachments produced during this turn (see
     // `agent_mcp_sink::ChatBridgeSink`).
     session.last_user_msg_id = Some(user_msg.id.clone());
+    let restore_remote_control_after_respawn =
+        remote_control_should_survive_local_respawn(&session.claude_remote_control);
 
     // MCP config changed while a previous turn was in flight — tear down the
     // persistent session so the next spawn picks up updated --mcp-config.
@@ -1269,7 +1312,10 @@ pub async fn send_chat_message(
         let to_deny_mcp = drain_pending_permissions(session);
         let stale_pid = session.persistent_session.as_ref().map(|ps| ps.pid());
         session.persistent_session = None;
-        session.claude_remote_control = crate::state::ClaudeRemoteControlStatus::disabled();
+        session.claude_remote_control = remote_control_reconnecting_status(
+            &session.claude_remote_control,
+            restore_remote_control_after_respawn,
+        );
         session.claude_remote_control_monitor_pid = None;
         // Tear down the agent-MCP bridge alongside the persistent session.
         // Drop runs the listener cancellation + socket file unlink.
@@ -1450,7 +1496,10 @@ pub async fn send_chat_message(
         let to_deny_drift = drain_pending_permissions(session);
         let stale_pid = session.persistent_session.as_ref().map(|ps| ps.pid());
         session.persistent_session = None;
-        session.claude_remote_control = crate::state::ClaudeRemoteControlStatus::disabled();
+        session.claude_remote_control = remote_control_reconnecting_status(
+            &session.claude_remote_control,
+            restore_remote_control_after_respawn,
+        );
         session.claude_remote_control_monitor_pid = None;
         session.mcp_bridge = None;
         // Clear active_pid alongside persistent_session. A concurrent turn
@@ -1553,7 +1602,10 @@ pub async fn send_chat_message(
         let to_deny_env = drain_pending_permissions(session);
         let stale_pid = session.persistent_session.as_ref().map(|ps| ps.pid());
         session.persistent_session = None;
-        session.claude_remote_control = crate::state::ClaudeRemoteControlStatus::disabled();
+        session.claude_remote_control = remote_control_reconnecting_status(
+            &session.claude_remote_control,
+            restore_remote_control_after_respawn,
+        );
         session.claude_remote_control_monitor_pid = None;
         session.mcp_bridge = None;
         session.active_pid = None;
@@ -1664,7 +1716,10 @@ pub async fn send_chat_message(
                 // avoid blocking other workspaces during process startup.
                 eprintln!("[chat] Persistent session failed, respawning: {e}");
                 session.persistent_session = None;
-                session.claude_remote_control = crate::state::ClaudeRemoteControlStatus::disabled();
+                session.claude_remote_control = remote_control_reconnecting_status(
+                    &session.claude_remote_control,
+                    restore_remote_control_after_respawn,
+                );
                 session.claude_remote_control_monitor_pid = None;
                 session.mcp_bridge = None;
                 drop(agents);
@@ -1686,7 +1741,11 @@ pub async fn send_chat_message(
                 };
                 respawn_settings.hook_bridge = Some(build_agent_hook_bridge(&bridge)?);
 
-                let is_resume = saved_turn_count > 1;
+                let is_resume = should_resume_persistent_session(
+                    &saved_session_id,
+                    saved_turn_count,
+                    has_persisted_claude_session,
+                );
                 let (ps, final_sid) = match start_persistent(
                     worktree_path.clone(),
                     saved_session_id.clone(),
@@ -1740,7 +1799,11 @@ pub async fn send_chat_message(
     } else {
         // No persistent session — start one. Use --resume if we have a saved
         // session from the DB (app restart), fresh ID if brand new.
-        let is_resume = saved_turn_count > 1;
+        let is_resume = should_resume_persistent_session(
+            &saved_session_id,
+            saved_turn_count,
+            has_persisted_claude_session,
+        );
         let sid = if is_resume {
             saved_session_id.clone()
         } else {
@@ -1834,9 +1897,20 @@ pub async fn send_chat_message(
     };
 
     let spawned_pid = turn_handle.pid;
+    let ps_for_remote_control_reenable;
+    let should_reenable_remote_control;
     {
         let session = agents.get_mut(&chat_session_id).ok_or("Session lost")?;
         session.active_pid = Some(spawned_pid);
+        ps_for_remote_control_reenable = session.persistent_session.clone();
+        should_reenable_remote_control = restore_remote_control_after_respawn
+            && matches!(
+                session.claude_remote_control.state,
+                ClaudeRemoteControlLifecycle::Reconnecting | ClaudeRemoteControlLifecycle::Enabling
+            )
+            && ps_for_remote_control_reenable
+                .as_ref()
+                .is_some_and(|ps| ps.pid() == spawned_pid);
         let _ =
             db.save_chat_session_state(&chat_session_id, &session.session_id, session.turn_count);
         let _ = db.insert_agent_session(&session.session_id, &workspace_id, &ws.repository_id);
@@ -1866,6 +1940,18 @@ pub async fn send_chat_message(
         }
     }
     drop(agents);
+
+    if should_reenable_remote_control && let Some(ps) = ps_for_remote_control_reenable {
+        super::remote_control::reenable_remote_control_after_respawn(
+            app.clone(),
+            state.db_path.clone(),
+            workspace_id.clone(),
+            chat_session_id.clone(),
+            worktree_path.clone(),
+            spawned_pid,
+            ps,
+        );
+    }
 
     // Capture rename context before the bridge spawn.
     let has_repo = repo.is_some();
@@ -2766,7 +2852,9 @@ pub async fn send_chat_message(
 
 #[cfg(test)]
 mod tests {
-    use super::{should_defer_persistent_restart_for_state, terminal_text};
+    use super::{
+        should_defer_persistent_restart_for_state, should_resume_persistent_session, terminal_text,
+    };
 
     #[test]
     fn terminal_text_converts_newlines_to_terminal_newlines() {
@@ -2800,5 +2888,17 @@ mod tests {
         assert!(!should_defer_persistent_restart_for_state(true, false));
         assert!(!should_defer_persistent_restart_for_state(false, true));
         assert!(!should_defer_persistent_restart_for_state(false, false));
+    }
+
+    #[test]
+    fn resume_uses_persisted_claude_session_even_when_turn_count_is_stale() {
+        assert!(should_resume_persistent_session("sess-abc", 1, true));
+    }
+
+    #[test]
+    fn resume_does_not_treat_fresh_first_turn_uuid_as_history() {
+        assert!(!should_resume_persistent_session("fresh-uuid", 1, false));
+        assert!(should_resume_persistent_session("fresh-uuid", 2, false));
+        assert!(!should_resume_persistent_session("", 9, true));
     }
 }
