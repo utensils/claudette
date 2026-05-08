@@ -64,9 +64,9 @@ import { StreamingThinkingBlock } from "./StreamingThinkingBlock";
 import { StreamingMessage } from "./StreamingMessage";
 import { MessagesWithTurns } from "./MessagesWithTurns";
 import { CliInvocationBanner } from "./CliInvocationBanner";
-import { ToolActivitiesSection } from "./ToolActivitiesSection";
 import { CurrentTurnTaskProgress } from "./CurrentTurnTaskProgress";
 import { ChatInputArea } from "./ChatInputArea";
+import { EMPTY_ACTIVITIES } from "./chatConstants";
 
 export function ChatPanel() {
   const { t } = useTranslation("chat");
@@ -204,19 +204,10 @@ export function ChatPanel() {
   const showThinkingBlocks = useAppStore(
     (s) => activeSessionId ? s.showThinkingBlocks[activeSessionId] === true : false
   );
-  // Subscribe only to count — avoids re-render on tool activity content changes
-  const activitiesCount = useAppStore(
-    (s) => (activeSessionId ? (s.toolActivities[activeSessionId] || []).length : 0)
+  const liveToolActivities = useAppStore((s) =>
+    activeSessionId ? (s.toolActivities[activeSessionId] ?? EMPTY_ACTIVITIES) : EMPTY_ACTIVITIES,
   );
-  const firstToolActivityStartedAt = useAppStore((s) => {
-    if (!activeSessionId) return null;
-    return (
-      (s.toolActivities[activeSessionId] || [])
-        .map((activity) => activity.startedAt)
-        .filter((startedAt): startedAt is string => !!startedAt)
-        .sort()[0] ?? null
-    );
-  });
+  const activitiesCount = liveToolActivities.length;
   const completedTurnsCount = useAppStore(
     (s) => (activeSessionId ? (s.completedTurns[activeSessionId] || []).length : 0)
   );
@@ -1248,20 +1239,8 @@ export function ChatPanel() {
                   onAttachmentClick={openLightbox}
                   searchQuery={searchQuery}
                   globalOffset={globalOffset}
-                  liveToolActivityStartedAt={
-                    activitiesCount > 0 ? firstToolActivityStartedAt : null
-                  }
+                  liveToolActivities={liveToolActivities}
                   toolDisplayMode={toolDisplayMode}
-                  liveToolActivityNode={
-                    activitiesCount > 0 ? (
-                      <ToolActivitiesSection
-                        sessionId={activeSessionId}
-                        toolDisplayMode={toolDisplayMode}
-                        searchQuery={searchQuery}
-                        worktreePath={ws?.worktree_path}
-                      />
-                    ) : null
-                  }
                   liveTaskProgressNode={
                     activitiesCount > 0 ? (
                       <CurrentTurnTaskProgress sessionId={activeSessionId} />

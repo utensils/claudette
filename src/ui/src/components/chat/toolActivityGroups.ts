@@ -9,7 +9,7 @@ export type ToolActivityDisplayGroup = {
 };
 
 export function groupToolActivitiesForDisplay(
-  activities: ToolActivity[],
+  activities: readonly ToolActivity[],
   mode: ToolDisplayMode = "grouped",
 ): ToolActivityDisplayGroup[] {
   if (mode === "inline") {
@@ -48,7 +48,7 @@ export function isAgentActivity(activity: ToolActivity): boolean {
 }
 
 export function groupHasRunningActivity(
-  activities: ToolActivity[],
+  activities: readonly ToolActivity[],
   parentIsRunning = false,
 ): boolean {
   return activities.some((activity) => {

@@ -2,7 +2,7 @@ import React, { memo, useCallback, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import type { ToolDisplayMode } from "../../stores/slices/settingsSlice";
-import type { CompletedTurn } from "../../stores/useAppStore";
+import type { CompletedTurn, ToolActivity } from "../../stores/useAppStore";
 import { loadAttachmentData } from "../../services/tauri";
 import type { ChatMessage, ChatAttachment } from "../../types/chat";
 import { roleClassKey, shouldRenderAsMarkdown } from "./messageRendering";
@@ -26,7 +26,6 @@ import {
   buildPlainTurnFooters,
   findTriggeringUserIndex,
 } from "../../utils/chatTurnFooter";
-import { parseChatTimestamp } from "../../utils/parseChatTimestamp";
 import {
   parseCompactionSentinel,
   parseSyntheticSummarySentinel,
@@ -40,6 +39,7 @@ import type { TaskTrackerResult, TrackedTask } from "../../hooks/useTaskTracker"
 import { debugChat } from "../../utils/chatDebug";
 import styles from "./ChatPanel.module.css";
 import { TurnSummary } from "./TurnSummary";
+import { ToolActivitiesSection } from "./ToolActivitiesSection";
 import { TurnFooter } from "./TurnFooter";
 import { PdfThumbnail } from "./PdfThumbnail";
 import { MessageCopyButton } from "./MessageCopyButton";
@@ -66,9 +66,8 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   onAttachmentClick,
   searchQuery,
   globalOffset = 0,
-  liveToolActivityStartedAt,
+  liveToolActivities,
   toolDisplayMode,
-  liveToolActivityNode,
   liveTaskProgressNode,
   streamingThinkingNode,
   streamingMessageNode,
@@ -107,9 +106,8 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
    *  have not been fetched yet (pagination). Used to match CompletedTurn
    *  positions (which are global) against the local message array. */
   globalOffset?: number;
-  liveToolActivityStartedAt?: string | null;
+  liveToolActivities: readonly ToolActivity[];
   toolDisplayMode: ToolDisplayMode;
-  liveToolActivityNode?: React.ReactNode;
   liveTaskProgressNode?: React.ReactNode;
   streamingThinkingNode?: React.ReactNode;
   streamingMessageNode?: React.ReactNode;
@@ -299,18 +297,44 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
 
   const completedTurnPositions = chronologicalTurnLayout.positions;
 
-  const liveToolActivityPosition = useMemo(() => {
-    if (!liveToolActivityStartedAt || !liveToolActivityNode) return null;
-    const startedAtMs = parseChatTimestamp(liveToolActivityStartedAt);
-    if (!Number.isFinite(startedAtMs)) return globalOffset + messages.length;
-    const laterIndex = messages.findIndex((msg) => {
-      const createdAtMs = parseChatTimestamp(msg.created_at);
-      return Number.isFinite(createdAtMs) && createdAtMs > startedAtMs;
-    });
-    return laterIndex === -1
-      ? globalOffset + messages.length
-      : globalOffset + laterIndex;
-  }, [globalOffset, liveToolActivityNode, liveToolActivityStartedAt, messages]);
+  const liveToolActivitiesByPosition = useMemo(() => {
+    const activitiesByPosition = new Map<number, ToolActivity[]>();
+    if (liveToolActivities.length === 0) return activitiesByPosition;
+
+    let userIdx = -1;
+    for (let idx = messages.length - 1; idx >= 0; idx--) {
+      if (messages[idx]?.role === "User") {
+        userIdx = idx;
+        break;
+      }
+    }
+
+    const assistantPositions: number[] = [];
+    if (userIdx !== -1) {
+      for (let idx = userIdx + 1; idx < messages.length; idx++) {
+        if (messages[idx]?.role === "Assistant") {
+          assistantPositions.push(globalOffset + idx + 1);
+        }
+      }
+    }
+
+    const positionForOrdinal = (ordinal: number | undefined) => {
+      const tailPosition = globalOffset + messages.length;
+      if (userIdx === -1) return tailPosition;
+      if (typeof ordinal !== "number" || ordinal < 0) return tailPosition;
+      if (ordinal === 0) return globalOffset + userIdx + 1;
+      return assistantPositions[ordinal - 1] ?? tailPosition;
+    };
+
+    for (const activity of liveToolActivities) {
+      const position = positionForOrdinal(activity.assistantMessageOrdinal);
+      const existing = activitiesByPosition.get(position);
+      if (existing) existing.push(activity);
+      else activitiesByPosition.set(position, [activity]);
+    }
+
+    return activitiesByPosition;
+  }, [globalOffset, liveToolActivities, messages]);
 
   // Local version of completedTurnPositions with global indices shifted to
   // local array indices. Used by buildPlainTurnFooters, which works in local
@@ -531,14 +555,17 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   };
 
   const renderLiveToolActivity = (position: number) => {
-    if (liveToolActivityPosition !== position || !liveToolActivityNode) {
-      return null;
-    }
+    const activities = liveToolActivitiesByPosition.get(position);
+    if (!activities) return null;
     return (
-      <React.Fragment key={`live-tool-activity-${position}`}>
-        {liveToolActivityNode}
-        {liveTaskProgressNode}
-      </React.Fragment>
+      <ToolActivitiesSection
+        key={`live-tool-activity-${position}`}
+        sessionId={sessionId}
+        toolDisplayMode={toolDisplayMode}
+        searchQuery={searchQuery}
+        worktreePath={worktreePath}
+        activities={activities}
+      />
     );
   };
 
@@ -723,6 +750,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
       {renderTurns(globalOffset + messages.length)}
       {renderStreamingTail(globalOffset + messages.length)}
       {renderLiveToolActivity(globalOffset + messages.length)}
+      {liveTaskProgressNode}
     </>
   );
 });

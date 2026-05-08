@@ -20,15 +20,18 @@ export const ToolActivitiesSection = memo(function ToolActivitiesSection({
   toolDisplayMode,
   searchQuery,
   worktreePath,
+  activities: activityOverride,
 }: {
   sessionId: string;
   toolDisplayMode: ToolDisplayMode;
   searchQuery: string;
   worktreePath?: string | null;
+  activities?: readonly ToolActivity[];
 }) {
-  const activities = useAppStore(
+  const storeActivities = useAppStore(
     (s) => s.toolActivities[sessionId] ?? EMPTY_ACTIVITIES,
   );
+  const activities = activityOverride ?? storeActivities;
   const displayGroups = groupToolActivitiesForDisplay(activities, toolDisplayMode);
   if (displayGroups.length === 0) return null;
 
