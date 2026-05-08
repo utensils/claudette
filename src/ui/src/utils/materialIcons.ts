@@ -6,8 +6,8 @@
 //
 // SVGs are eager-bundled via `import.meta.glob` with `?raw` so each icon is
 // inlined as a string at build time, then URL-encoded once per icon into a
-// data URL (`data:image/svg+xml;utf8,...`) at module load. Lookups are pure
-// table reads after that.
+// data URL (`data:image/svg+xml;charset=utf-8,...`) at module load. Lookups
+// are pure table reads after that.
 
 import manifestJson from "material-icon-theme/dist/material-icons.json";
 
@@ -45,7 +45,7 @@ const SVG_DATA_URLS: Record<string, string> = (() => {
   const out: Record<string, string> = {};
   for (const [path, raw] of Object.entries(SVG_RAW_MODULES)) {
     const filename = path.slice(path.lastIndexOf("/") + 1);
-    out[filename] = `data:image/svg+xml;utf8,${encodeURIComponent(raw)}`;
+    out[filename] = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(raw)}`;
   }
   return out;
 })();
@@ -58,10 +58,25 @@ function dataUrlForIconName(name: string | undefined): string | null {
   return SVG_DATA_URLS[filename] ?? null;
 }
 
-const FALLBACK_FILE_URL = dataUrlForIconName(manifest.file ?? "file") ?? "";
-const FALLBACK_FOLDER_URL = dataUrlForIconName(manifest.folder ?? "folder") ?? "";
-const FALLBACK_FOLDER_OPEN_URL =
-  dataUrlForIconName(manifest.folderExpanded ?? "folder-open") ?? FALLBACK_FOLDER_URL;
+// Resolve a required fallback once at module init. Throwing here instead of
+// silently returning "" surfaces an upstream package change loudly during
+// build/dev — `<img src="">` would otherwise re-request the document URL
+// and produce a noisy broken-image render.
+function requireDataUrl(name: string): string {
+  const url = dataUrlForIconName(name);
+  if (!url) {
+    throw new Error(
+      `material-icon-theme: required fallback icon "${name}" not found in manifest`,
+    );
+  }
+  return url;
+}
+
+const FALLBACK_FILE_URL = requireDataUrl(manifest.file ?? "file");
+const FALLBACK_FOLDER_URL = requireDataUrl(manifest.folder ?? "folder");
+const FALLBACK_FOLDER_OPEN_URL = requireDataUrl(
+  manifest.folderExpanded ?? "folder-open",
+);
 
 /**
  * Resolve the data URL for a file's material icon. Lookup order matches the
