@@ -29,6 +29,7 @@ export function TurnSummary({
   searchQuery,
   worktreePath,
   label,
+  inline = false,
 }: {
   turn: CompletedTurn;
   activities?: ToolActivity[];
@@ -50,6 +51,7 @@ export function TurnSummary({
   searchQuery: string;
   worktreePath?: string | null;
   label?: string;
+  inline?: boolean;
 }) {
   const visibleActivities = activities ?? turn.activities;
   const hasElapsed = typeof turn.durationMs === "number" && turn.durationMs > 0;
@@ -73,66 +75,67 @@ export function TurnSummary({
     visibleActivities.some((activity) =>
       activityMatchesSearch(activity, searchQuery, worktreePath),
     );
-  const isExpanded = !collapsed || queryHasMatch;
+  const isExpanded = inline || !collapsed || queryHasMatch;
+  const renderedActivities = visibleActivities.map((act: ToolActivity) =>
+    isAgentActivity(act) ? (
+      <AgentToolCallGroup
+        key={act.toolUseId}
+        activity={act}
+        searchQuery={searchQuery}
+        worktreePath={worktreePath}
+      />
+    ) : (
+      <div key={act.toolUseId} className={styles.toolActivity}>
+        <div className={styles.toolHeader}>
+          <span className={styles.toolName} style={{ color: toolColor(act.toolName) }}>
+            {act.toolName}
+          </span>
+          {activitySummaryText(act) && (
+            <span className={styles.toolSummary}>
+              <HighlightedPlainText
+                text={relativizePath(activitySummaryText(act), worktreePath)}
+                query={searchQuery}
+              />
+            </span>
+          )}
+        </div>
+      </div>
+    ),
+  );
 
   return (
     <div className={styles.turnSummaryWrapper}>
-      <div
-        className={styles.turnSummary}
-        role="button"
-        tabIndex={0}
-        onClick={onToggle}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            onToggle();
-          }
-        }}
-      >
-        <div className={styles.turnHeader}>
-          <span className={styles.toolChevron}>
-            {isExpanded ? "⌄" : "›"}
-          </span>
-          <span className={styles.turnLabel}>
-            {label ??
-              `${visibleActivities.length} tool call${
-                visibleActivities.length !== 1 ? "s" : ""
-              }`}
-            {showFooter && turn.messageCount > 0 &&
-              `, ${turn.messageCount} message${turn.messageCount !== 1 ? "s" : ""}`}
-          </span>
-        </div>
-        {isExpanded && (
-          <div className={styles.turnActivities}>
-            {visibleActivities.map((act: ToolActivity) =>
-              isAgentActivity(act) ? (
-                <AgentToolCallGroup
-                  key={act.toolUseId}
-                  activity={act}
-                  searchQuery={searchQuery}
-                  worktreePath={worktreePath}
-                />
-              ) : (
-                <div key={act.toolUseId} className={styles.toolActivity}>
-                  <div className={styles.toolHeader}>
-                    <span className={styles.toolName} style={{ color: toolColor(act.toolName) }}>
-                      {act.toolName}
-                    </span>
-                    {activitySummaryText(act) && (
-                      <span className={styles.toolSummary}>
-                        <HighlightedPlainText
-                          text={relativizePath(activitySummaryText(act), worktreePath)}
-                          query={searchQuery}
-                        />
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ),
-            )}
+      {inline ? (
+        <div className={styles.inlineTurnActivities}>{renderedActivities}</div>
+      ) : (
+        <div
+          className={styles.turnSummary}
+          role="button"
+          tabIndex={0}
+          onClick={onToggle}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              onToggle();
+            }
+          }}
+        >
+          <div className={styles.turnHeader}>
+            <span className={styles.toolChevron}>{isExpanded ? "⌄" : "›"}</span>
+            <span className={styles.turnLabel}>
+              {label ??
+                `${visibleActivities.length} tool call${
+                  visibleActivities.length !== 1 ? "s" : ""
+                }`}
+              {showFooter && turn.messageCount > 0 &&
+                `, ${turn.messageCount} message${turn.messageCount !== 1 ? "s" : ""}`}
+            </span>
           </div>
-        )}
-      </div>
+          {isExpanded && (
+            <div className={styles.turnActivities}>{renderedActivities}</div>
+          )}
+        </div>
+      )}
       {taskProgress && taskProgress.totalCount > 0 && (
         <TaskProgressBar
           completedCount={taskProgress.completedCount}

@@ -64,9 +64,9 @@ import { StreamingThinkingBlock } from "./StreamingThinkingBlock";
 import { StreamingMessage } from "./StreamingMessage";
 import { MessagesWithTurns } from "./MessagesWithTurns";
 import { CliInvocationBanner } from "./CliInvocationBanner";
-import { ToolActivitiesSection } from "./ToolActivitiesSection";
 import { CurrentTurnTaskProgress } from "./CurrentTurnTaskProgress";
 import { ChatInputArea } from "./ChatInputArea";
+import { EMPTY_ACTIVITIES } from "./chatConstants";
 
 export function ChatPanel() {
   const { t } = useTranslation("chat");
@@ -204,19 +204,9 @@ export function ChatPanel() {
   const showThinkingBlocks = useAppStore(
     (s) => activeSessionId ? s.showThinkingBlocks[activeSessionId] === true : false
   );
-  // Subscribe only to count — avoids re-render on tool activity content changes
   const activitiesCount = useAppStore(
-    (s) => (activeSessionId ? (s.toolActivities[activeSessionId] || []).length : 0)
+    (s) => (activeSessionId ? (s.toolActivities[activeSessionId] ?? EMPTY_ACTIVITIES).length : 0),
   );
-  const firstToolActivityStartedAt = useAppStore((s) => {
-    if (!activeSessionId) return null;
-    return (
-      (s.toolActivities[activeSessionId] || [])
-        .map((activity) => activity.startedAt)
-        .filter((startedAt): startedAt is string => !!startedAt)
-        .sort()[0] ?? null
-    );
-  });
   const completedTurnsCount = useAppStore(
     (s) => (activeSessionId ? (s.completedTurns[activeSessionId] || []).length : 0)
   );
@@ -243,6 +233,7 @@ export function ChatPanel() {
   const addCheckpoint = useAppStore((s) => s.addCheckpoint);
   const addWorkspace = useAppStore((s) => s.addWorkspace);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
+  const toolDisplayMode = useAppStore((s) => s.toolDisplayMode);
   const activeSessionStatus = useAppStore((s) => {
     if (!activeSessionId || !selectedWorkspaceId) return "Idle" as const;
     const sessions = s.sessionsByWorkspace[selectedWorkspaceId];
@@ -1247,40 +1238,30 @@ export function ChatPanel() {
                   onAttachmentClick={openLightbox}
                   searchQuery={searchQuery}
                   globalOffset={globalOffset}
-                  liveToolActivityStartedAt={
-                    activitiesCount > 0 ? firstToolActivityStartedAt : null
-                  }
-                  liveToolActivityNode={
-                    activitiesCount > 0 ? (
-                      <ToolActivitiesSection
-                        sessionId={activeSessionId}
-                        isRunning={isRunning ?? false}
-                        searchQuery={searchQuery}
-                        worktreePath={ws?.worktree_path}
-                      />
-                    ) : null
-                  }
+                  toolDisplayMode={toolDisplayMode}
                   liveTaskProgressNode={
                     activitiesCount > 0 ? (
                       <CurrentTurnTaskProgress sessionId={activeSessionId} />
                     ) : null
                   }
-                />
-              )}
-
-              {activeSessionId && hasThinking && showThinkingBlocks && (
-                <StreamingThinkingBlock
-                  sessionId={activeSessionId}
-                  isStreaming={isRunning ?? false}
-                  searchQuery={searchQuery}
-                />
-              )}
-
-              {activeSessionId && (hasStreaming || hasPendingTypewriter) && (
-                <StreamingMessage
-                  sessionId={activeSessionId}
-                  isStreaming={isRunning ?? false}
-                  searchQuery={searchQuery}
+                  streamingThinkingNode={
+                    hasThinking && showThinkingBlocks ? (
+                      <StreamingThinkingBlock
+                        sessionId={activeSessionId}
+                        isStreaming={isRunning ?? false}
+                        searchQuery={searchQuery}
+                      />
+                    ) : null
+                  }
+                  streamingMessageNode={
+                    hasStreaming || hasPendingTypewriter ? (
+                      <StreamingMessage
+                        sessionId={activeSessionId}
+                        isStreaming={isRunning ?? false}
+                        searchQuery={searchQuery}
+                      />
+                    ) : null
+                  }
                 />
               )}
 

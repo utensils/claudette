@@ -1,3 +1,4 @@
+import type { ToolDisplayMode } from "../../stores/slices/settingsSlice";
 import type { ToolActivity } from "../../stores/useAppStore";
 
 export type ToolActivityDisplayGroup = {
@@ -8,8 +9,13 @@ export type ToolActivityDisplayGroup = {
 };
 
 export function groupToolActivitiesForDisplay(
-  activities: ToolActivity[],
+  activities: readonly ToolActivity[],
+  mode: ToolDisplayMode = "grouped",
 ): ToolActivityDisplayGroup[] {
+  if (mode === "inline") {
+    return activities.map((activity) => activityDisplayGroup(activity));
+  }
+
   const groups: ToolActivityDisplayGroup[] = [];
   let directTools: ToolActivity[] = [];
 
@@ -27,12 +33,7 @@ export function groupToolActivitiesForDisplay(
   for (const activity of activities) {
     if (isAgentActivity(activity)) {
       flushDirectTools();
-      groups.push({
-        key: `agent:${activity.toolUseId}`,
-        kind: "agent",
-        label: agentGroupLabel(activity),
-        activities: [activity],
-      });
+      groups.push(activityDisplayGroup(activity));
       continue;
     }
     directTools.push(activity);
@@ -47,7 +48,7 @@ export function isAgentActivity(activity: ToolActivity): boolean {
 }
 
 export function groupHasRunningActivity(
-  activities: ToolActivity[],
+  activities: readonly ToolActivity[],
   parentIsRunning = false,
 ): boolean {
   return activities.some((activity) => {
@@ -62,6 +63,16 @@ export function groupHasRunningActivity(
 
 function toolCallLabel(count: number): string {
   return `${count} tool call${count !== 1 ? "s" : ""}`;
+}
+
+function activityDisplayGroup(activity: ToolActivity): ToolActivityDisplayGroup {
+  const agent = isAgentActivity(activity);
+  return {
+    key: `${agent ? "agent" : "tool"}:${activity.toolUseId}`,
+    kind: agent ? "agent" : "tools",
+    label: agent ? agentGroupLabel(activity) : activity.toolName,
+    activities: [activity],
+  };
 }
 
 function agentGroupLabel(activity: ToolActivity): string {

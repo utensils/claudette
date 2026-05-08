@@ -386,6 +386,26 @@
   margin: 0;
 }
 
+.inlineTurnActivities {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.inlineTurnActivities .toolActivity {
+  border: none;
+  border-radius: 0;
+}
+
+.inlineTurnActivities .toolHeader {
+  padding: 2px 8px;
+  cursor: default;
+}
+
+.inlineTurnActivities .toolHeader:hover {
+  background: transparent;
+}
+
 /* Footer below a completed turn: elapsed time + copy + fork actions. */
 .turnFooter {
   display: flex;
@@ -549,7 +569,8 @@
 }
 
 .agentToolGroup {
-  border-top: 1px solid var(--divider);
+  border: 1px solid var(--divider);
+  border-radius: 6px;
 }
 
 .agentToolGroupHeader {

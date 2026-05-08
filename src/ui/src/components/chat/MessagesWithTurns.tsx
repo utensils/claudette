@@ -1,7 +1,8 @@
 import React, { memo, useCallback, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
-import type { CompletedTurn } from "../../stores/useAppStore";
+import type { ToolDisplayMode } from "../../stores/slices/settingsSlice";
+import type { CompletedTurn, ToolActivity } from "../../stores/useAppStore";
 import { loadAttachmentData } from "../../services/tauri";
 import type { ChatMessage, ChatAttachment } from "../../types/chat";
 import { roleClassKey, shouldRenderAsMarkdown } from "./messageRendering";
@@ -25,7 +26,6 @@ import {
   buildPlainTurnFooters,
   findTriggeringUserIndex,
 } from "../../utils/chatTurnFooter";
-import { parseChatTimestamp } from "../../utils/parseChatTimestamp";
 import {
   parseCompactionSentinel,
   parseSyntheticSummarySentinel,
@@ -39,11 +39,13 @@ import type { TaskTrackerResult, TrackedTask } from "../../hooks/useTaskTracker"
 import { debugChat } from "../../utils/chatDebug";
 import styles from "./ChatPanel.module.css";
 import { TurnSummary } from "./TurnSummary";
+import { ToolActivitiesSection } from "./ToolActivitiesSection";
 import { TurnFooter } from "./TurnFooter";
 import { PdfThumbnail } from "./PdfThumbnail";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { groupToolActivitiesForDisplay } from "./toolActivityGroups";
 import {
+  EMPTY_ACTIVITIES,
   EMPTY_ATTACHMENTS,
   EMPTY_CHECKPOINTS,
   EMPTY_COMPLETED_TURNS,
@@ -65,9 +67,10 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   onAttachmentClick,
   searchQuery,
   globalOffset = 0,
-  liveToolActivityStartedAt,
-  liveToolActivityNode,
+  toolDisplayMode,
   liveTaskProgressNode,
+  streamingThinkingNode,
+  streamingMessageNode,
 }: {
   messages: ChatMessage[];
   /** The enclosing workspace id — forwarded into rollback data so the modal
@@ -103,9 +106,10 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
    *  have not been fetched yet (pagination). Used to match CompletedTurn
    *  positions (which are global) against the local message array. */
   globalOffset?: number;
-  liveToolActivityStartedAt?: string | null;
-  liveToolActivityNode?: React.ReactNode;
+  toolDisplayMode: ToolDisplayMode;
   liveTaskProgressNode?: React.ReactNode;
+  streamingThinkingNode?: React.ReactNode;
+  streamingMessageNode?: React.ReactNode;
 }) {
   const { t } = useTranslation("chat");
   const completedTurns = useAppStore(
@@ -130,6 +134,9 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   );
   const worktreePath = useAppStore(
     (s) => s.workspaces.find((w) => w.id === workspaceId)?.worktree_path,
+  );
+  const liveToolActivities = useAppStore(
+    (s) => s.toolActivities[sessionId] ?? EMPTY_ACTIVITIES,
   );
 
   // Pre-build a Map keyed by message_id for O(1) lookup in the render loop.
@@ -260,7 +267,10 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
       let hasFinalGroup = false;
       for (const [position, activities] of activitiesByPosition) {
         positions.add(position);
-        const displayGroups = groupToolActivitiesForDisplay(activities);
+        const displayGroups = groupToolActivitiesForDisplay(
+          activities,
+          toolDisplayMode,
+        );
         const finalGroupIndex =
           position === turn.afterMessageIndex ? displayGroups.length - 1 : -1;
         hasFinalGroup ||= finalGroupIndex >= 0;
@@ -285,22 +295,48 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
     });
 
     return { groupsByPosition, finalFooterByPosition, positions };
-  }, [completedTurns, findTriggeringUserIdx, globalOffset, messages]);
+  }, [completedTurns, findTriggeringUserIdx, globalOffset, messages, toolDisplayMode]);
 
   const completedTurnPositions = chronologicalTurnLayout.positions;
 
-  const liveToolActivityPosition = useMemo(() => {
-    if (!liveToolActivityStartedAt || !liveToolActivityNode) return null;
-    const startedAtMs = parseChatTimestamp(liveToolActivityStartedAt);
-    if (!Number.isFinite(startedAtMs)) return globalOffset + messages.length;
-    const laterIndex = messages.findIndex((msg) => {
-      const createdAtMs = parseChatTimestamp(msg.created_at);
-      return Number.isFinite(createdAtMs) && createdAtMs > startedAtMs;
-    });
-    return laterIndex === -1
-      ? globalOffset + messages.length
-      : globalOffset + laterIndex;
-  }, [globalOffset, liveToolActivityNode, liveToolActivityStartedAt, messages]);
+  const liveToolActivitiesByPosition = useMemo(() => {
+    const activitiesByPosition = new Map<number, ToolActivity[]>();
+    if (liveToolActivities.length === 0) return activitiesByPosition;
+
+    let userIdx = -1;
+    for (let idx = messages.length - 1; idx >= 0; idx--) {
+      if (messages[idx]?.role === "User") {
+        userIdx = idx;
+        break;
+      }
+    }
+
+    const assistantPositions: number[] = [];
+    if (userIdx !== -1) {
+      for (let idx = userIdx + 1; idx < messages.length; idx++) {
+        if (messages[idx]?.role === "Assistant") {
+          assistantPositions.push(globalOffset + idx + 1);
+        }
+      }
+    }
+
+    const positionForOrdinal = (ordinal: number | undefined) => {
+      const tailPosition = globalOffset + messages.length;
+      if (userIdx === -1) return tailPosition;
+      if (typeof ordinal !== "number" || ordinal < 0) return tailPosition;
+      if (ordinal === 0) return globalOffset + userIdx + 1;
+      return assistantPositions[ordinal - 1] ?? tailPosition;
+    };
+
+    for (const activity of liveToolActivities) {
+      const position = positionForOrdinal(activity.assistantMessageOrdinal);
+      const existing = activitiesByPosition.get(position);
+      if (existing) existing.push(activity);
+      else activitiesByPosition.set(position, [activity]);
+    }
+
+    return activitiesByPosition;
+  }, [globalOffset, liveToolActivities, messages]);
 
   // Local version of completedTurnPositions with global indices shifted to
   // local array indices. Used by buildPlainTurnFooters, which works in local
@@ -492,6 +528,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
             turn={turn}
             activities={activities}
             label={label}
+            inline={toolDisplayMode === "inline"}
             showFooter={showFooter}
             collapsed={turn.collapsed}
             onToggle={() => toggleCompletedTurn(sessionId, globalIdx)}
@@ -520,13 +557,37 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   };
 
   const renderLiveToolActivity = (position: number) => {
-    if (liveToolActivityPosition !== position || !liveToolActivityNode) {
+    const activities = liveToolActivitiesByPosition.get(position);
+    if (!activities) return null;
+    return (
+      <ToolActivitiesSection
+        key={`live-tool-activity-${position}`}
+        sessionId={sessionId}
+        toolDisplayMode={toolDisplayMode}
+        searchQuery={searchQuery}
+        worktreePath={worktreePath}
+        activities={activities}
+      />
+    );
+  };
+
+  const pendingMessageInWindow = useMemo(
+    () => !!pendingMessageId && messages.some((msg) => msg.id === pendingMessageId),
+    [messages, pendingMessageId],
+  );
+
+  const renderStreamingTail = (position: number) => {
+    if (
+      pendingMessageInWindow ||
+      position !== globalOffset + messages.length ||
+      (!streamingThinkingNode && !streamingMessageNode)
+    ) {
       return null;
     }
     return (
-      <React.Fragment key={`live-tool-activity-${position}`}>
-        {liveToolActivityNode}
-        {liveTaskProgressNode}
+      <React.Fragment key={`streaming-tail-${position}`}>
+        {streamingThinkingNode}
+        {streamingMessageNode}
       </React.Fragment>
     );
   };
@@ -570,7 +631,7 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
           <React.Fragment key={msg.id}>
             {renderTurns(globalOffset + idx)}
             {renderLiveToolActivity(globalOffset + idx)}
-            {msg.id === pendingMessageId ? null : (
+            {msg.id === pendingMessageId ? streamingMessageNode : (
               <div className={`${styles.message} ${styles[roleClassKey(msg.role, msg.content)]}`}>
                 {msg.role === "User" && (
                   <div className={styles.roleLabel}>{t("you_label")}</div>
@@ -695,7 +756,9 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
       })}
       {/* Turn activity groups that land after the last loaded message */}
       {renderTurns(globalOffset + messages.length)}
+      {renderStreamingTail(globalOffset + messages.length)}
       {renderLiveToolActivity(globalOffset + messages.length)}
+      {liveTaskProgressNode}
     </>
   );
 });

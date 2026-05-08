@@ -4,6 +4,8 @@ import type { ClaudeFlagDef } from "../../services/claudeFlags";
 import type { AppState } from "../useAppStore";
 import type { AgentBackendConfig } from "../../services/tauri";
 
+export type ToolDisplayMode = "grouped" | "inline";
+
 export interface SettingsSlice {
   worktreeBaseDir: string;
   setWorktreeBaseDir: (dir: string) => void;
@@ -33,6 +35,8 @@ export interface SettingsSlice {
   /// Off by default — opt in via Settings → Appearance.
   showSidebarRunningCommands: boolean;
   setShowSidebarRunningCommands: (v: boolean) => void;
+  toolDisplayMode: ToolDisplayMode;
+  setToolDisplayMode: (mode: ToolDisplayMode) => void;
 
   // Experimental
   claudetteTerminalEnabled: boolean;
@@ -114,6 +118,8 @@ export const createSettingsSlice: StateCreator<
 
   showSidebarRunningCommands: false,
   setShowSidebarRunningCommands: (v) => set({ showSidebarRunningCommands: v }),
+  toolDisplayMode: "grouped",
+  setToolDisplayMode: (mode) => set({ toolDisplayMode: mode }),
 
   claudetteTerminalEnabled: false,
   setClaudetteTerminalEnabled: (enabled) =>
