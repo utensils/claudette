@@ -22,7 +22,7 @@ When you change architecture, commands, code-style, regression rules, or god-fil
 
 ```bash
 # Backend (Rust)
-cargo test --all-features                        # Run all backend tests
+cargo test -p claudette -p claudette-server -p claudette-cli --all-features  # Run all backend tests (CI command)
 cargo test -p claudette --test diff_tests        # Run a single test file
 cargo test -p claudette parse_unified -- --exact # Run a single test by name
 cargo clippy -p claudette -p claudette-server -p claudette-cli --all-targets --all-features  # Lint (CI command — must pass with zero warnings)
