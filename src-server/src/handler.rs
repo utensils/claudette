@@ -208,6 +208,16 @@ pub async fn handle_request(
             let chat_session_id = param_chat_session_id(&params);
             handle_archive_chat_session(state, &chat_session_id).await
         }
+        "refresh_claude_flags" => {
+            // Drop the cache so the next `cached_claude_flag_defs` call
+            // re-runs `discover_claude_flags()`. Useful when `claude` has
+            // been upgraded while the server is running. Returns null —
+            // the next turn (or an explicit list call, if the wire ever
+            // grows one) re-fetches lazily.
+            let mut guard = state.claude_flag_defs.write().await;
+            *guard = None;
+            Ok(json!(null))
+        }
         _ => Err(format!("Unknown method: {method}")),
     };
 

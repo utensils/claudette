@@ -58,13 +58,20 @@ fn strip_suffix<'a>(key: &'a str, prefix: &str, suffix: &str) -> Option<&'a str>
 pub fn load_global(db: &Database) -> Result<HashMap<String, FlagValue>, rusqlite::Error> {
     let rows = db.list_app_settings_with_prefix(GLOBAL_PREFIX)?;
     let mut map: HashMap<String, FlagValue> = HashMap::new();
+    let mut has_valid_enabled: HashMap<String, bool> = HashMap::new();
     for (key, val) in rows {
         if let Some(name) = strip_suffix(&key, GLOBAL_PREFIX, ":enabled") {
-            let entry = map.entry(name.to_string()).or_insert(FlagValue {
-                enabled: false,
-                value: None,
-            });
-            entry.enabled = val == "true";
+            // Only accept canonical "true"/"false" — malformed strings
+            // (e.g. legacy "yes"/"no") drop the flag entirely so the
+            // resolver doesn't surface a half-written entry.
+            if val == "true" || val == "false" {
+                let entry = map.entry(name.to_string()).or_insert(FlagValue {
+                    enabled: false,
+                    value: None,
+                });
+                entry.enabled = val == "true";
+                has_valid_enabled.insert(name.to_string(), true);
+            }
         } else if let Some(name) = strip_suffix(&key, GLOBAL_PREFIX, ":value") {
             let entry = map.entry(name.to_string()).or_insert(FlagValue {
                 enabled: false,
@@ -73,6 +80,7 @@ pub fn load_global(db: &Database) -> Result<HashMap<String, FlagValue>, rusqlite
             entry.value = Some(val);
         }
     }
+    map.retain(|name, _| has_valid_enabled.get(name).copied().unwrap_or(false));
     Ok(map)
 }
 
@@ -390,5 +398,57 @@ mod tests {
         let loaded = load_repo_overrides(&db, "r1").unwrap();
         let entry = loaded.get("--add-dir").expect("override should exist");
         assert!(entry.value.is_none(), "stale value should be cleared");
+    }
+
+    #[test]
+    fn load_global_skips_malformed_enabled_value() {
+        let (db, _td) = open_db();
+        // Manually write a bad :enabled value (not "true" or "false").
+        // The loader must skip the entry rather than crash.
+        db.set_app_setting("claude_flag:--add-dir:enabled", "yes")
+            .unwrap();
+        db.set_app_setting("claude_flag:--add-dir:value", "/tmp")
+            .unwrap();
+
+        let loaded = load_global(&db).unwrap();
+        assert!(
+            !loaded.contains_key("--add-dir"),
+            "malformed :enabled string should drop the flag, got {:?}",
+            loaded.get("--add-dir"),
+        );
+    }
+
+    #[test]
+    fn load_repo_overrides_skips_entries_without_sentinel() {
+        let (db, _td) = open_db();
+        // :enabled and :value present but no :override sentinel — must
+        // be filtered out of the repo overrides map.
+        db.set_app_setting("repo:r1:claude_flag:--add-dir:enabled", "true")
+            .unwrap();
+        db.set_app_setting("repo:r1:claude_flag:--add-dir:value", "/x")
+            .unwrap();
+        let loaded = load_repo_overrides(&db, "r1").unwrap();
+        assert!(
+            loaded.is_empty(),
+            "entries without :override sentinel should be skipped, got {:?}",
+            loaded,
+        );
+    }
+
+    #[test]
+    fn resolve_for_repo_with_none_repo_uses_global() {
+        let (db, _td) = open_db();
+        set_global_flag(&db, "--debug", true, None).unwrap();
+        let defs = vec![ClaudeFlagDef {
+            name: "--debug".to_string(),
+            short: None,
+            takes_value: false,
+            value_placeholder: None,
+            enum_choices: None,
+            description: String::new(),
+            is_dangerous: false,
+        }];
+        let resolved = resolve_for_repo(&db, &defs, None).unwrap();
+        assert_eq!(resolved, vec![("--debug".to_string(), None)]);
     }
 }

@@ -23,6 +23,7 @@ import { debugChat } from "../utils/chatDebug";
 import { extractLatestCallUsage } from "../utils/extractLatestCallUsage";
 import { buildCompactionSentinel } from "../utils/compactionSentinel";
 import { pickMeterUsageFromResult } from "./pickMeterUsageFromResult";
+import { applyCommandLineEvent } from "./useAgentStreamLogic";
 
 const ASK_USER_QUESTION_TOOL = "AskUserQuestion";
 
@@ -172,27 +173,22 @@ export function useAgentStream() {
       if ("type" in streamEvent) {
         switch (streamEvent.type) {
           case "system": {
-            if (
-              streamEvent.subtype === "command_line" &&
-              typeof streamEvent.command_line === "string"
-            ) {
-              const line = streamEvent.command_line;
+            if (streamEvent.subtype === "command_line") {
               const store = useAppStore.getState();
-              // Mirror the backend's first-emit-wins semantics: never
-              // overwrite a captured invocation with a later respawn's
-              // argv, so the live banner stays in sync with what reload
-              // would show.
-              const current = store.sessionsByWorkspace[wsId]?.find(
-                (cs) => cs.id === sessionId,
-              )?.cli_invocation ?? null;
-              if (current === null || current === "") {
-                store.updateChatSession(sessionId, { cli_invocation: line });
-                void setSessionCliInvocation(sessionId, line).catch((e) => {
-                  // Banner is UX-cosmetic — log and move on.
-                  console.warn("[stream] persist cli_invocation failed:", e);
-                });
-              }
-              break;
+              const handled = applyCommandLineEvent(
+                streamEvent,
+                sessionId,
+                {
+                  getCurrent: (id) =>
+                    store.sessionsByWorkspace[wsId]?.find(
+                      (cs) => cs.id === id,
+                    )?.cli_invocation ?? null,
+                  updateSession: (id, line) =>
+                    store.updateChatSession(id, { cli_invocation: line }),
+                  persist: setSessionCliInvocation,
+                },
+              );
+              if (handled) break;
             }
             if (
               (streamEvent.subtype === "task_started" ||

@@ -217,3 +217,42 @@ describe("invalidateClaudeFlagsForRepo (F1)", () => {
     expect(after.wsC).toBeDefined(); // different repo — keep
   });
 });
+
+describe("loadWorkspaceClaudeFlags state transitions (Coverage 4.5)", () => {
+  beforeEach(() => {
+    useAppStore.setState({ claudeFlagsByWorkspace: {} });
+  });
+
+  it("returns ready+empty when repoId is null", async () => {
+    await useAppStore.getState().loadWorkspaceClaudeFlags("ws1", null);
+    const state = useAppStore.getState().claudeFlagsByWorkspace["ws1"];
+    expect(state).toBeDefined();
+    expect(state!.status).toBe("ready");
+    expect(state!.defs).toEqual([]);
+    expect(state!.resolved).toEqual([]);
+  });
+
+  it("transitions loading → ready on success", async () => {
+    const spy = vi.spyOn(svc, "getResolvedRepoFlags").mockResolvedValue({
+      defs: [],
+      state: { global: {}, repo: {} },
+      resolved: [],
+    });
+    await useAppStore.getState().loadWorkspaceClaudeFlags("ws1", "r1");
+    expect(useAppStore.getState().claudeFlagsByWorkspace["ws1"]?.status).toBe(
+      "ready",
+    );
+    spy.mockRestore();
+  });
+
+  it("transitions loading → error on failure", async () => {
+    const spy = vi
+      .spyOn(svc, "getResolvedRepoFlags")
+      .mockRejectedValue(new Error("boom"));
+    await useAppStore.getState().loadWorkspaceClaudeFlags("ws1", "r1");
+    expect(useAppStore.getState().claudeFlagsByWorkspace["ws1"]?.status).toBe(
+      "error",
+    );
+    spy.mockRestore();
+  });
+});
