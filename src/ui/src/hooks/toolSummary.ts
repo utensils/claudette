@@ -1,95 +1,69 @@
-/** Extract a short human-readable summary from a tool's input JSON. */
+import { resolveToolSummary } from "../components/chat/toolMetadata";
+
+/**
+ * Extract a short human-readable summary from a tool's input JSON.
+ *
+ * Most logic lives in `components/chat/toolMetadata.ts` so the same
+ * registry can power richer surfaces (e.g. a future expand-to-code-block
+ * view with syntax highlighting). This wrapper exists because a few
+ * built-in tools (`Grep`, `SendMessage`, `Skill`, `TaskUpdate`, …)
+ * compose two fields into the displayed summary, which the registry's
+ * single-content-field model can't express. Those keep their bespoke
+ * formatting here; everything else delegates to the registry.
+ */
 export function extractToolSummary(
   toolName: string,
-  inputJson: string
+  inputJson: string,
 ): string {
+  // Composite-summary tools: keep their hand-rolled formatting because
+  // the registry returns a single `contentField`'s value, not a
+  // string built from multiple fields.
   try {
     const input = JSON.parse(inputJson);
-
     switch (toolName) {
-      case "Bash":
-        return truncate(input.command ?? input.description ?? "", 80);
-      case "Read":
-        return input.file_path ?? "";
-      case "Edit":
-        return input.file_path ?? "";
-      case "Write":
-        return input.file_path ?? "";
-      case "Glob":
-        return input.pattern ?? "";
       case "Grep":
         return input.pattern
-          ? truncate(`${input.pattern}${input.path ? ` in ${input.path}` : ""}`, 80)
+          ? truncate(
+              `${input.pattern}${input.path ? ` in ${input.path}` : ""}`,
+              80,
+            )
           : "";
-      case "WebFetch":
-        return input.url ?? "";
-      case "WebSearch":
-        return input.query ?? "";
-      case "NotebookEdit":
-        return input.notebook_path ?? "";
-      case "Agent":
-        return truncate(input.description ?? input.prompt ?? "", 80);
       case "SendMessage":
         return input.to
-          ? truncate(`to ${input.to}${input.summary ? `: ${input.summary}` : ""}`, 80)
+          ? truncate(
+              `to ${input.to}${input.summary ? `: ${input.summary}` : ""}`,
+              80,
+            )
           : "";
-      case "ToolSearch":
-        return input.query ?? "";
-      case "TeamCreate":
-        return input.name ?? "";
-      case "TeamDelete":
-        return input.name ?? "";
-      case "TaskCreate":
-        return truncate(input.description ?? "", 80);
+      case "Skill":
+        return input.skill
+          ? truncate(
+              `${input.skill}${input.args ? ` ${input.args}` : ""}`,
+              80,
+            )
+          : "";
       case "TaskUpdate":
         return input.status ? `#${input.id ?? "?"} → ${input.status}` : "";
       case "TaskGet":
       case "TaskStop":
       case "TaskOutput":
         return input.id ? `#${input.id}` : "";
-      case "Skill":
-        return input.skill
-          ? truncate(`${input.skill}${input.args ? ` ${input.args}` : ""}`, 80)
-          : "";
-      case "AskUserQuestion":
-        return truncate(input.question ?? "", 80);
       case "Monitor":
         return input.id ? `task #${input.id}` : "";
-      case "CronCreate":
-        return truncate(input.schedule ?? input.name ?? "", 80);
       case "CronDelete":
         return input.id ?? input.name ?? "";
       case "RemoteTrigger":
         return truncate(input.name ?? input.prompt ?? "", 80);
       case "LSP":
         return input.action ?? "";
-      case "TodoWrite":
-        return Array.isArray(input.todos)
-          ? `${input.todos.length} items`
-          : "";
-      default: {
-        // MCP tools: strip the mcp__ prefix for readability.
-        if (toolName.startsWith("mcp__")) {
-          return truncate(
-            input.description ?? input.url ?? input.query ?? input.command ?? "",
-            80
-          );
-        }
-        // For unknown tools, try common field names.
-        return truncate(
-          input.command ??
-            input.file_path ??
-            input.path ??
-            input.query ??
-            input.url ??
-            "",
-          80
-        );
-      }
     }
   } catch {
     return "";
   }
+  // Default path: registry → tool-name heuristics → field-name
+  // heuristics → longest string. The registry caps its summary at
+  // 120 chars; trim to 80 here for the inline row-summary surface.
+  return truncate(resolveToolSummary(toolName, inputJson).summary, 80);
 }
 
 function truncate(s: string, max: number): string {
