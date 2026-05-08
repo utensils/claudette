@@ -2064,10 +2064,51 @@ pub async fn send_chat_message(
         let mut notified_via_result = false;
         while let Some(event) = rx.recv().await {
             // Track whether the CLI initialized successfully.
-            if let AgentEvent::Stream(StreamEvent::System { subtype, .. }) = &event
+            if let AgentEvent::Stream(StreamEvent::System {
+                subtype,
+                session_id,
+                ..
+            }) = &event
                 && subtype == "init"
             {
                 got_init = true;
+                if let Some(canonical_sid) = session_id.as_deref().map(str::trim)
+                    && !canonical_sid.is_empty()
+                {
+                    let app_state = app.state::<AppState>();
+                    let turn_count = {
+                        let mut agents = app_state.agents.write().await;
+                        if let Some(session) = agents.get_mut(&chat_session_id_for_stream) {
+                            if session
+                                .persistent_session
+                                .as_ref()
+                                .is_some_and(|ps| ps.pid() == spawned_pid)
+                                || session.active_pid == Some(spawned_pid)
+                            {
+                                if session.session_id != canonical_sid {
+                                    session.session_id = canonical_sid.to_string();
+                                }
+                                session.turn_count
+                            } else {
+                                0
+                            }
+                        } else {
+                            0
+                        }
+                    };
+                    if turn_count > 0
+                        && let Ok(db) = Database::open(&db_path)
+                    {
+                        let _ = db.save_chat_session_state(
+                            &chat_session_id_for_stream,
+                            canonical_sid,
+                            turn_count,
+                        );
+                        let _ = db.insert_agent_session(canonical_sid, &ws_id, &repo_id_for_mcp);
+                        let _ = db.reopen_agent_session(canonical_sid);
+                        let _ = db.update_agent_session_turn(canonical_sid, turn_count);
+                    }
+                }
             }
 
             // Claude Code emits a structured SDK event for terminal

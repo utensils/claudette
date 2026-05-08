@@ -38,6 +38,19 @@ pub struct ClaudeRemoteControlStatusPayload {
     status: ClaudeRemoteControlStatus,
 }
 
+#[derive(Debug, Clone, Default)]
+struct RemoteControlLaunchOptions {
+    permission_level: Option<String>,
+    model: Option<String>,
+    fast_mode: Option<bool>,
+    thinking_enabled: Option<bool>,
+    plan_mode: Option<bool>,
+    effort: Option<String>,
+    chrome_enabled: Option<bool>,
+    disable_1m_context: Option<bool>,
+    backend_id: Option<String>,
+}
+
 #[tauri::command]
 pub async fn get_claude_remote_control_status(
     chat_session_id: String,
@@ -51,12 +64,33 @@ pub async fn get_claude_remote_control_status(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn set_claude_remote_control(
     chat_session_id: String,
     enabled: bool,
+    permission_level: Option<String>,
+    model: Option<String>,
+    fast_mode: Option<bool>,
+    thinking_enabled: Option<bool>,
+    plan_mode: Option<bool>,
+    effort: Option<String>,
+    chrome_enabled: Option<bool>,
+    disable_1m_context: Option<bool>,
+    backend_id: Option<String>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<ClaudeRemoteControlStatus, String> {
+    let launch_options = RemoteControlLaunchOptions {
+        permission_level,
+        model,
+        fast_mode,
+        thinking_enabled,
+        plan_mode,
+        effort,
+        chrome_enabled,
+        disable_1m_context,
+        backend_id,
+    };
     let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
     let chat_session = db
         .get_chat_session(&chat_session_id)
@@ -83,6 +117,7 @@ pub async fn set_claude_remote_control(
             &chat_session,
             &workspace,
             &worktree_path,
+            launch_options,
         )
         .await?
     } else {
@@ -155,6 +190,7 @@ async fn ensure_persistent_session_for_remote_control(
     chat_session: &ChatSession,
     workspace: &Workspace,
     worktree_path: &str,
+    launch_options: RemoteControlLaunchOptions,
 ) -> Result<(Arc<PersistentSession>, u32), String> {
     let chat_session_id = chat_session.id.clone();
     let workspace_id = chat_session.workspace_id.clone();
@@ -247,10 +283,18 @@ async fn ensure_persistent_session_for_remote_control(
     let nudge = send_to_user_enabled.then_some(claudette::agent_mcp::SYSTEM_PROMPT_NUDGE);
     let custom_instructions =
         claudette::global_prompt::compose_system_prompt(instructions.as_deref(), nudge);
-    let allowed_tools = tools_for_level("full");
+    let level = launch_options.permission_level.as_deref().unwrap_or("full");
+    if !matches!(level, "readonly" | "standard" | "full") {
+        eprintln!("[remote-control] Unknown permission level {level:?}, falling back to readonly");
+    }
+    let allowed_tools = tools_for_level(level);
     let (resolved_backend_id, resolved_model) = {
         let db = Database::open(db_path).map_err(|e| e.to_string())?;
-        crate::commands::agent_backends::resolve_backend_request_defaults(&db, None, None)?
+        crate::commands::agent_backends::resolve_backend_request_defaults(
+            &db,
+            launch_options.backend_id.as_deref(),
+            launch_options.model.as_deref(),
+        )?
     };
     let backend_runtime = crate::commands::agent_backends::resolve_backend_runtime(
         state,
@@ -260,13 +304,13 @@ async fn ensure_persistent_session_for_remote_control(
     .await?;
     let mut agent_settings = AgentSettings {
         model: resolved_model,
-        fast_mode: false,
-        thinking_enabled: false,
-        plan_mode: false,
-        effort: None,
-        chrome_enabled: false,
+        fast_mode: launch_options.fast_mode.unwrap_or(false),
+        thinking_enabled: launch_options.thinking_enabled.unwrap_or(false),
+        plan_mode: launch_options.plan_mode.unwrap_or(false),
+        effort: launch_options.effort,
+        chrome_enabled: launch_options.chrome_enabled.unwrap_or(false),
         mcp_config,
-        disable_1m_context: false,
+        disable_1m_context: launch_options.disable_1m_context.unwrap_or(false),
         backend_runtime,
         hook_bridge: None,
     };

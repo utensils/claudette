@@ -12,6 +12,7 @@ import {
   setClaudeRemoteControl,
   type ClaudeRemoteControlStatus,
 } from "../../../services/tauri";
+import { shouldDisable1mContext } from "../chatHelpers";
 import { isFastSupported } from "../modelCapabilities";
 import styles from "./OverflowMenu.module.css";
 
@@ -35,7 +36,12 @@ export function OverflowMenu({ sessionId, disabled, isRemote }: OverflowMenuProp
   const containerRef = useRef<HTMLDivElement>(null);
 
   const selectedModel = useAppStore((s) => s.selectedModel[sessionId] ?? "opus");
+  const selectedProvider = useAppStore((s) => s.selectedModelProvider[sessionId] ?? "anthropic");
+  const permissionLevel = useAppStore((s) => s.permissionLevel[sessionId] ?? "full");
   const fastMode = useAppStore((s) => s.fastMode[sessionId] ?? false);
+  const thinkingEnabled = useAppStore((s) => s.thinkingEnabled[sessionId] ?? false);
+  const planMode = useAppStore((s) => s.planMode[sessionId] ?? false);
+  const effortLevel = useAppStore((s) => s.effortLevel[sessionId] ?? "auto");
   const chromeEnabled = useAppStore((s) => s.chromeEnabled[sessionId] ?? false);
   const setFastMode = useAppStore((s) => s.setFastMode);
   const setChromeEnabled = useAppStore((s) => s.setChromeEnabled);
@@ -160,6 +166,15 @@ export function OverflowMenu({ sessionId, disabled, isRemote }: OverflowMenuProp
               sessionId={sessionId}
               disabled={disabled}
               status={remoteControlStatus}
+              permissionLevel={permissionLevel}
+              model={selectedModel}
+              backendId={selectedProvider}
+              fastMode={fastMode}
+              thinkingEnabled={thinkingEnabled}
+              planMode={planMode}
+              effort={effortLevel}
+              chromeEnabled={chromeEnabled}
+              disable1mContext={shouldDisable1mContext(selectedModel)}
               onStatus={setRemoteControlStatus}
             />
           )}
@@ -173,11 +188,29 @@ function RemoteControlMenuItem({
   sessionId,
   disabled,
   status,
+  permissionLevel,
+  model,
+  backendId,
+  fastMode,
+  thinkingEnabled,
+  planMode,
+  effort,
+  chromeEnabled,
+  disable1mContext,
   onStatus,
 }: {
   sessionId: string;
   disabled: boolean;
   status: ClaudeRemoteControlStatus;
+  permissionLevel: string;
+  model: string;
+  backendId: string;
+  fastMode: boolean;
+  thinkingEnabled: boolean;
+  planMode: boolean;
+  effort: string;
+  chromeEnabled: boolean;
+  disable1mContext: boolean;
   onStatus: (status: ClaudeRemoteControlStatus) => void;
 }) {
   const url = remoteControlUrl(status);
@@ -194,7 +227,17 @@ function RemoteControlMenuItem({
       onStatus({ ...status, state: "enabling", lastError: null });
     }
     try {
-      const next = await setClaudeRemoteControl(sessionId, nextEnabled);
+      const next = await setClaudeRemoteControl(sessionId, nextEnabled, {
+        permissionLevel,
+        model,
+        backendId,
+        fastMode,
+        thinkingEnabled,
+        planMode,
+        effort,
+        chromeEnabled,
+        disable1mContext,
+      });
       onStatus(next);
     } catch (err) {
       const message = formatRemoteControlError(err);
@@ -207,7 +250,22 @@ function RemoteControlMenuItem({
         lastError: message,
       });
     }
-  }, [active, busy, onStatus, sessionId, status]);
+  }, [
+    active,
+    backendId,
+    busy,
+    chromeEnabled,
+    disable1mContext,
+    effort,
+    fastMode,
+    model,
+    onStatus,
+    permissionLevel,
+    planMode,
+    sessionId,
+    status,
+    thinkingEnabled,
+  ]);
 
   return (
     <div

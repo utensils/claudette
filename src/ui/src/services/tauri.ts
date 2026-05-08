@@ -729,8 +729,31 @@ export function getClaudeRemoteControlStatus(
 export function setClaudeRemoteControl(
   chatSessionId: string,
   enabled: boolean,
+  options: {
+    permissionLevel?: string;
+    model?: string;
+    fastMode?: boolean;
+    thinkingEnabled?: boolean;
+    planMode?: boolean;
+    effort?: string | null;
+    chromeEnabled?: boolean;
+    disable1mContext?: boolean;
+    backendId?: string;
+  } = {},
 ): Promise<ClaudeRemoteControlStatus> {
-  return invoke("set_claude_remote_control", { chatSessionId, enabled });
+  return invoke("set_claude_remote_control", {
+    chatSessionId,
+    enabled,
+    permissionLevel: options.permissionLevel ?? null,
+    model: options.model ?? null,
+    fastMode: options.fastMode ?? null,
+    thinkingEnabled: options.thinkingEnabled ?? null,
+    planMode: options.planMode ?? null,
+    effort: options.effort ?? null,
+    chromeEnabled: options.chromeEnabled ?? null,
+    disable1mContext: options.disable1mContext ?? null,
+    backendId: options.backendId ?? null,
+  });
 }
 
 /**
