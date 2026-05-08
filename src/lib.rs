@@ -3,6 +3,8 @@ pub mod agent_backend;
 pub mod agent_mcp;
 pub mod cesp;
 pub mod chat;
+pub mod claude_flags_store;
+pub mod claude_help;
 pub mod community;
 pub mod config;
 pub mod db;

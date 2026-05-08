@@ -215,6 +215,7 @@ fn main() {
     }
 
     let app_state = state::AppState::new(db_path, worktree_base_dir, plugins);
+
     let remote_manager = remote::RemoteConnectionManager::new();
     let mcp_supervisor = std::sync::Arc::new(claudette::mcp_supervisor::McpSupervisor::new());
 
@@ -327,6 +328,33 @@ fn main() {
             if let Err(e) = mdns::start_mdns_browser(app.handle(), saved_fingerprints) {
                 eprintln!("[mdns] Failed to start browser: {e}");
             }
+
+            // Discover `claude --help` flags BEFORE the first turn can fire,
+            // so user-toggled flags from Settings are honoured even on a
+            // turn started in the first ~100ms after launch. We block_on
+            // here (rather than spawn) because:
+            //   - `claude --help` returns in ~50-100ms typically;
+            //   - the alternative (spawn) leaves a race where send_chat_message
+            //     hits the `Loading` arm in `cached_claude_flag_defs` and
+            //     silently delivers `extra_claude_flags = Vec::new()`.
+            // The existing `Loading` arm in `list_claude_flags` and
+            // `cached_claude_flag_defs` stays as a defensive belt against
+            // any future async-init regression.
+            let flag_defs_handle =
+                std::sync::Arc::clone(&app.state::<state::AppState>().claude_flag_defs);
+            tauri::async_runtime::block_on(async move {
+                match claudette::claude_help::discover_claude_flags().await {
+                    Ok(defs) => {
+                        let mut guard = flag_defs_handle.write().await;
+                        *guard = state::ClaudeFlagDiscovery::Ok(defs);
+                    }
+                    Err(msg) => {
+                        eprintln!("[claude-flags] discovery failed: {msg}");
+                        let mut guard = flag_defs_handle.write().await;
+                        *guard = state::ClaudeFlagDiscovery::Err(msg);
+                    }
+                }
+            });
 
             // macOS native menu — built and applied here (rather than via
             // tauri::Builder::menu) so AppKit doesn't auto-promote the
@@ -649,6 +677,7 @@ fn main() {
             commands::chat::session::get_chat_session,
             commands::chat::session::create_chat_session,
             commands::chat::session::rename_chat_session,
+            commands::chat::session::set_session_cli_invocation,
             commands::chat::session::reorder_chat_sessions,
             commands::chat::session::archive_chat_session,
             // Plan
@@ -706,6 +735,12 @@ fn main() {
             commands::agent_backends::refresh_agent_backend_models,
             commands::agent_backends::test_agent_backend,
             commands::agent_backends::launch_codex_login,
+            // Claude flags
+            commands::claude_flags::list_claude_flags,
+            commands::claude_flags::refresh_claude_flags,
+            commands::claude_flags::get_claude_flag_state,
+            commands::claude_flags::set_claude_flag_state,
+            commands::claude_flags::clear_claude_flag_repo_override,
             // Updater
             commands::updater::check_for_updates_with_channel,
             commands::updater::install_pending_update,

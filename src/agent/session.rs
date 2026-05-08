@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
@@ -24,6 +25,16 @@ pub struct PersistentSession {
     pid: u32,
     stdin: tokio::sync::Mutex<tokio::process::ChildStdin>,
     event_tx: tokio::sync::broadcast::Sender<AgentEvent>,
+    /// Redacted `claude …` argv captured at process spawn. Replayed into
+    /// `event_tx` from inside [`send_turn`] (after the first subscribe)
+    /// because `broadcast::Sender::send` silently drops messages when
+    /// the receiver count is zero — emitting at start time would lose
+    /// the banner before any subscriber attaches.
+    invocation_line: String,
+    /// Set to true on first replay so subsequent turns don't re-emit.
+    /// The DB and UI both gate on first-emit-wins, but skipping the
+    /// re-broadcast avoids wasted work on every turn.
+    invocation_emitted: AtomicBool,
 }
 
 impl PersistentSession {
@@ -119,6 +130,12 @@ impl PersistentSession {
 
         let (event_tx, _) = tokio::sync::broadcast::channel::<AgentEvent>(2048);
 
+        // Capture the redacted invocation here (argv is only built once for
+        // a persistent session) and replay it on the first `send_turn` —
+        // see the field doc on `invocation_line` for why we don't emit now.
+        let invocation_line =
+            super::args::format_redacted_invocation(claude_path.as_os_str(), &args);
+
         // Background stdout reader — runs for the session lifetime.
         let tx = event_tx.clone();
         tokio::spawn(async move {
@@ -163,6 +180,8 @@ impl PersistentSession {
             pid,
             stdin: tokio::sync::Mutex::new(stdin),
             event_tx,
+            invocation_line,
+            invocation_emitted: AtomicBool::new(false),
         })
     }
 
@@ -187,6 +206,18 @@ impl PersistentSession {
         // Subscribe BEFORE writing to stdin to avoid a race where a fast turn
         // emits events before the receiver exists (broadcast doesn't replay).
         let mut broadcast_rx = self.event_tx.subscribe();
+
+        // Replay the captured invocation now that we have a receiver. Gated
+        // by the AtomicBool so we only do the round-trip once per session;
+        // both the DB write helper and the UI's `applyCommandLineEvent` are
+        // first-emit-wins anyway, so a missed gate would be cosmetic, not
+        // correctness — but skipping is cheap.
+        if !self.invocation_emitted.swap(true, Ordering::Relaxed) {
+            let event = AgentEvent::Stream(StreamEvent::system_command_line(
+                self.invocation_line.clone(),
+            ));
+            let _ = self.event_tx.send(event);
+        }
 
         self.write_user_message(build_stdin_message(prompt, attachments))
             .await?;
@@ -425,6 +456,16 @@ fn build_persistent_args(
         args.push(instructions.to_string());
     }
 
+    // Append user-toggled extra flags (Settings → Claude flags).
+    // Mirrors the loop in `build_claude_args` so persistent sessions and
+    // one-shot turns deliver the same argv shape.
+    for (name, value) in &settings.extra_claude_flags {
+        args.push(name.clone());
+        if let Some(v) = value {
+            args.push(v.clone());
+        }
+    }
+
     // No prompt argument — prompts come via stdin as SDKUserMessage.
 
     args
@@ -491,6 +532,35 @@ mod tests {
             .position(|a| a == "--model")
             .expect("--model should be present");
         assert_eq!(args[idx + 1], "gpt-5.4");
+    }
+
+    #[test]
+    fn test_build_persistent_args_extra_claude_flags() {
+        let settings = AgentSettings {
+            extra_claude_flags: vec![
+                ("--debug".to_string(), None),
+                ("--add-dir".to_string(), Some("/tmp/foo".to_string())),
+            ],
+            ..Default::default()
+        };
+        let args = build_persistent_args("sess-1", false, &[], None, &settings);
+
+        let debug_idx = args
+            .iter()
+            .position(|a| a == "--debug")
+            .expect("--debug should be in args");
+        let add_idx = args
+            .iter()
+            .position(|a| a == "--add-dir")
+            .expect("--add-dir should be in args");
+        // Value-taking flag has its value adjacent.
+        assert_eq!(args[add_idx + 1], "/tmp/foo");
+        // Boolean flag has nothing or another flag adjacent (NOT a value).
+        let next = args.get(debug_idx + 1).map(String::as_str).unwrap_or("");
+        assert!(
+            next.is_empty() || next.starts_with("--"),
+            "boolean --debug should not have a value adjacent, got: {next:?}",
+        );
     }
 
     #[test]

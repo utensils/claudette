@@ -399,5 +399,23 @@
   "help_menu_docs": "Documentación",
   "help_menu_changelog": "Cambios",
   "help_menu_issues": "Informar problema",
-  "help_menu_devtools": "Abrir herramientas de desarrollo"
+  "help_menu_devtools": "Abrir herramientas de desarrollo",
+
+  "nav_claude_flags": "Flags de Claude",
+  "claude_flags_title": "Flags de la CLI de Claude",
+  "claude_flags_description": "Activa cualquier flag que admita la CLI `claude` instalada. Se añaden en cada turno del agente. Los flags que Claudette gestiona internamente (modelo, sesión, formato de salida) se filtran.",
+  "claude_flags_repo_label": "Flags de la CLI de Claude",
+  "claude_flags_repo_description": "Sobrescribe la configuración global de flags para este repositorio.",
+  "claude_flags_error_load": "No se pudieron cargar los flags de la CLI desde `claude --help`.",
+  "claude_flags_retry": "Reintentar",
+  "claude_flags_loading": "Cargando flags desde `claude --help`…",
+  "claude_flags_empty": "No se encontraron flags.",
+  "claude_flags_danger_badge": "Peligroso",
+  "claude_flags_danger_warning": "Flag peligroso — desactiva las comprobaciones de seguridad. Úsalo con cuidado.",
+  "claude_flags_override_label": "Sobrescribir global",
+  "claude_flags_inheriting_global": "Heredando de global",
+  "claude_flags_tab_badge_tooltip": "La omisión peligrosa de permisos está activada en este espacio de trabajo",
+  "claude_flags_footer_tooltip_empty": "No hay flags adicionales configurados",
+  "claude_flags_tooltip_aria_label": "Flags activos de la CLI de Claude",
+  "claude_flags_tooltip_overflow": "…y {{count}} más"
 }

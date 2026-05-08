@@ -64,6 +64,11 @@ pub struct TaskUsage {
 /// Top-level JSON line from Claude CLI stdout.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
+// Variants are constructed one at a time from streaming JSON; we never
+// hold them in collections, so the size delta between variants doesn't
+// matter in practice. Boxing the larger payloads would force a deref
+// at every pattern-match callsite.
+#[allow(clippy::large_enum_variant)]
 pub enum StreamEvent {
     #[serde(rename = "system")]
     System {
@@ -106,6 +111,12 @@ pub enum StreamEvent {
         /// Only present on `subtype: "compact_boundary"` events.
         #[serde(default)]
         compact_metadata: Option<CompactMetadata>,
+        /// Present on `subtype: "command_line"` events emitted at session
+        /// start by the agent runner. Contains the shell-quoted, redacted
+        /// `claude ...` command line for display in the chat tab. See
+        /// `crate::agent::args::format_redacted_invocation`.
+        #[serde(default)]
+        command_line: Option<String>,
     },
 
     #[serde(rename = "stream_event")]
@@ -150,6 +161,29 @@ pub enum StreamEvent {
 
     #[serde(other)]
     Unknown,
+}
+
+impl StreamEvent {
+    /// Construct a `command_line` System event carrying the redacted
+    /// invocation string. Centralizes the 13-field initialization so call
+    /// sites in `process.rs` and `session.rs` don't duplicate it.
+    pub fn system_command_line(line: String) -> Self {
+        Self::System {
+            subtype: "command_line".to_string(),
+            session_id: None,
+            task_id: None,
+            tool_use_id: None,
+            output_file: None,
+            summary: None,
+            description: None,
+            last_tool_name: None,
+            usage: None,
+            status: None,
+            compact_result: None,
+            compact_metadata: None,
+            command_line: Some(line),
+        }
+    }
 }
 
 /// Inner payload of a `control_request`. We only care about `can_use_tool` for

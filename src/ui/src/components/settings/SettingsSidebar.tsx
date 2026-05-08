@@ -13,6 +13,7 @@ import {
   Keyboard,
   Terminal,
   HelpCircle,
+  Flag,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
@@ -32,6 +33,7 @@ export function getAppSections(
     { id: "git", icon: GitBranch },
     { id: "keyboard", icon: Keyboard },
     { id: "cli", icon: Terminal },
+    { id: "claude-flags", icon: Flag },
     { id: "pinned-prompts", icon: Bookmark },
     { id: "plugins", icon: Puzzle },
     ...(communityRegistryEnabled
@@ -65,6 +67,7 @@ export function SettingsSidebar() {
     if (id === "git") return t("settings:nav_git");
     if (id === "keyboard") return t("settings:nav_keyboard");
     if (id === "cli") return t("settings:nav_cli");
+    if (id === "claude-flags") return t("settings:nav_claude_flags");
     if (id === "plugins") return t("settings:nav_plugins");
     if (id === "claude-code-plugins") return t("settings:nav_claude_code_plugins");
     if (id === "community") return t("settings:nav_community");

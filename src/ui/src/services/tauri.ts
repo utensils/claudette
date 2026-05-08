@@ -813,6 +813,16 @@ export function renameChatSession(
   return invoke("rename_chat_session", { sessionId, name });
 }
 
+export function setSessionCliInvocation(
+  chatSessionId: string,
+  invocation: string,
+): Promise<void> {
+  return invoke("set_session_cli_invocation", {
+    chatSessionId,
+    invocation,
+  });
+}
+
 /**
  * Reassign chat-session sort_order to match the supplied id sequence.
  * Used by the unified workspace-tab drag-reorder; only sessions persist —

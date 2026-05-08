@@ -208,6 +208,16 @@ pub async fn handle_request(
             let chat_session_id = param_chat_session_id(&params);
             handle_archive_chat_session(state, &chat_session_id).await
         }
+        "refresh_claude_flags" => {
+            // Drop the cache so the next `cached_claude_flag_defs` call
+            // re-runs `discover_claude_flags()`. Useful when `claude` has
+            // been upgraded while the server is running. Returns null —
+            // the next turn (or an explicit list call, if the wire ever
+            // grows one) re-fetches lazily.
+            let mut guard = state.claude_flag_defs.write().await;
+            *guard = None;
+            Ok(json!(null))
+        }
         _ => Err(format!("Unknown method: {method}")),
     };
 
@@ -594,6 +604,15 @@ async fn handle_send_chat_message(
         claudette::mcp::cli_config_from_rows(&db_rows)
     };
 
+    // Lazily resolve user-toggled `claude --help` flags. The server has no
+    // UI to render the catalog, so we don't pre-warm at boot — instead we
+    // discover on first need and cache the result for subsequent turns.
+    // Fetch the defs (which may .await on discovery) BEFORE touching the
+    // `!Send` `Database`, then resolve synchronously, so this future stays
+    // `Send` for `tokio::spawn`.
+    let claude_flag_defs = cached_claude_flag_defs(state).await;
+    let extra_claude_flags = resolve_extra_claude_flags(&claude_flag_defs, &db, &ws.repository_id);
+
     let agent_settings = AgentSettings {
         model: if !is_resume { model } else { None },
         fast_mode: fast_mode.unwrap_or(false),
@@ -605,6 +624,7 @@ async fn handle_send_chat_message(
         disable_1m_context: disable_1m_context.unwrap_or(false),
         backend_runtime: Default::default(),
         hook_bridge: None,
+        extra_claude_flags,
     };
     if backend_id.as_deref().is_some_and(|id| id != "anthropic") {
         eprintln!("[handler] alternate backends are not supported over remote transport yet");
@@ -655,6 +675,25 @@ async fn handle_send_chat_message(
                 && subtype == "init"
             {
                 got_init = true;
+            }
+
+            // Persist the captured `claude` invocation on first emit.
+            // Mirrors the desktop path's `set_session_cli_invocation` Tauri
+            // command — the underlying DB helper is first-emit-wins, so a
+            // respawn within the same session leaves the original recorded
+            // value in place. Banner is UX-cosmetic; drop on error.
+            if let AgentEvent::Stream(StreamEvent::System {
+                ref subtype,
+                ref command_line,
+                ..
+            }) = event
+                && subtype == "command_line"
+                && let Some(line) = command_line.as_deref()
+                && let Ok(db) = Database::open(&db_path)
+                && let Err(e) =
+                    db.set_chat_session_cli_invocation(&chat_session_id_for_stream, line)
+            {
+                eprintln!("[server] persist cli_invocation failed: {e}");
             }
 
             if let AgentEvent::ProcessExited(code) = &event
@@ -1206,4 +1245,52 @@ async fn handle_archive_chat_session(
     }
 
     Ok(json!(null))
+}
+
+/// Resolve the cached `claude --help` defs (running discovery on first
+/// call) into a clone the caller can use synchronously alongside a
+/// `!Send` `Database`. Returning a clone — rather than holding the
+/// `RwLock` guard across the resolver call — keeps the handler future
+/// `Send`, which `tokio::spawn` requires.
+async fn cached_claude_flag_defs(
+    state: &Arc<crate::ws::ServerState>,
+) -> Result<Vec<claudette::claude_help::ClaudeFlagDef>, String> {
+    {
+        let guard = state.claude_flag_defs.read().await;
+        if let Some(cached) = guard.as_ref() {
+            return cached.clone();
+        }
+    }
+    let result = claudette::claude_help::discover_claude_flags().await;
+    let mut guard = state.claude_flag_defs.write().await;
+    if guard.is_none() {
+        *guard = Some(result.clone());
+    }
+    guard.as_ref().expect("just populated").clone()
+}
+
+/// Synchronous resolver: combine the cached defs with persisted enable /
+/// value state and produce the `(flag, optional_value)` list ready to
+/// feed into `AgentSettings.extra_claude_flags`. Pulled out so the call
+/// site can keep the `!Send` `Database` reference off the await stack.
+fn resolve_extra_claude_flags(
+    defs: &Result<Vec<claudette::claude_help::ClaudeFlagDef>, String>,
+    db: &Database,
+    repo_id: &str,
+) -> Vec<(String, Option<String>)> {
+    match defs {
+        Ok(defs) => {
+            match claudette::claude_flags_store::resolve_for_repo(db, defs, Some(repo_id)) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("[handler] failed to resolve claude flags for repo {repo_id}: {e}");
+                    Vec::new()
+                }
+            }
+        }
+        Err(msg) => {
+            eprintln!("[handler] claude flag discovery failed: {msg}");
+            Vec::new()
+        }
+    }
 }

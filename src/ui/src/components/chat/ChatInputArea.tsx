@@ -1173,6 +1173,8 @@ export function ChatInputArea({
           </div>
           <ComposerToolbar
             sessionId={sessionId}
+            workspaceId={selectedWorkspaceId}
+            repoId={repoId ?? null}
             disabled={isRunning}
           />
         </div>

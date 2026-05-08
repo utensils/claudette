@@ -56,6 +56,11 @@ pub struct AgentSettings {
     /// command hooks and process env points those hook children back at the
     /// parent-side bridge.
     pub hook_bridge: Option<AgentHookBridge>,
+    /// User-toggled extra `claude` CLI flags discovered from `claude --help`
+    /// and resolved via `claude_flags_store`. Each entry is `(flag_name,
+    /// optional_value)`; boolean flags carry `None`. Appended to argv on
+    /// every turn after Claudette's own args.
+    pub extra_claude_flags: Vec<(String, Option<String>)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

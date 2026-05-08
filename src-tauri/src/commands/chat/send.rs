@@ -1320,6 +1320,36 @@ pub async fn send_chat_message(
     )
     .await?;
 
+    // Resolve user-toggled `claude --help` flags from the cached defs.
+    // Treat "still discovering" / "discovery failed" as no extra flags so
+    // we never block a turn — the Settings panel shows the error state.
+    let extra_claude_flags = {
+        let guard = state.claude_flag_defs.read().await;
+        match &*guard {
+            crate::state::ClaudeFlagDiscovery::Ok(defs) => {
+                match claudette::claude_flags_store::resolve_for_repo(
+                    &db,
+                    defs,
+                    Some(ws.repository_id.as_str()),
+                ) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        eprintln!(
+                            "[chat] failed to resolve claude flags for repo {}: {e}",
+                            ws.repository_id
+                        );
+                        Vec::new()
+                    }
+                }
+            }
+            crate::state::ClaudeFlagDiscovery::Err(msg) => {
+                eprintln!("[chat] claude flag discovery failed: {msg}");
+                Vec::new()
+            }
+            crate::state::ClaudeFlagDiscovery::Loading => Vec::new(),
+        }
+    };
+
     // Build agent settings from frontend params.
     let agent_settings = AgentSettings {
         model: resolved_model,
@@ -1332,6 +1362,7 @@ pub async fn send_chat_message(
         disable_1m_context: disable_1m_context.unwrap_or(false),
         backend_runtime,
         hook_bridge: None,
+        extra_claude_flags,
     };
 
     // Tell the frontend toolbar what this turn is actually using so the input

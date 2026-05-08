@@ -1,0 +1,19 @@
+.banner {
+  margin: 8px 0 12px 0;
+  font-size: var(--fs-sm);
+}
+
+.codeBlock {
+  margin: 0;
+  padding: 8px 12px;
+  background: var(--sidebar-bg);
+  border: 1px solid var(--sidebar-border);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.code {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}

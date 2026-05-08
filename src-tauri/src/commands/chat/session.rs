@@ -99,6 +99,17 @@ pub async fn rename_chat_session(
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn set_session_cli_invocation(
+    state: State<'_, AppState>,
+    chat_session_id: String,
+    invocation: String,
+) -> Result<(), String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    db.set_chat_session_cli_invocation(&chat_session_id, &invocation)
+        .map_err(|e| e.to_string())
+}
+
 /// Reassign `sort_order` of chat sessions in the given workspace to match the
 /// supplied id sequence. Used by the unified workspace-tab drag-reorder; for
 /// files/diffs the order is volatile and only needs frontend state, so this
@@ -224,6 +235,7 @@ mod tests {
             status: claudette::model::SessionStatus::Active,
             created_at: String::new(),
             archived_at: None,
+            cli_invocation: None,
             agent_status: AgentStatus::Idle,
             needs_attention: false,
             attention_kind: None,

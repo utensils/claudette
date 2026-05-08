@@ -10,14 +10,17 @@ import { applyPlanModeMountDefault } from "../applyPlanModeMountDefault";
 import { ToolbarPill } from "./ToolbarPill";
 import { ReasoningPill } from "./ReasoningPill";
 import { OverflowMenu } from "./OverflowMenu";
+import { ClaudeFlagsTooltip } from "./ClaudeFlagsTooltip";
 import styles from "./ComposerToolbar.module.css";
 
 interface ComposerToolbarProps {
   sessionId: string;
+  workspaceId: string;
+  repoId: string | null;
   disabled: boolean;
 }
 
-export function ComposerToolbar({ sessionId, disabled }: ComposerToolbarProps) {
+export function ComposerToolbar({ sessionId, workspaceId, repoId, disabled }: ComposerToolbarProps) {
   const selectedModel = useAppStore((s) => s.selectedModel[sessionId] ?? "opus");
   const selectedProvider = useAppStore((s) => s.selectedModelProvider[sessionId] ?? "anthropic");
   const disable1mContext = useAppStore((s) => s.disable1mContext);
@@ -34,6 +37,20 @@ export function ComposerToolbar({ sessionId, disabled }: ComposerToolbarProps) {
   const setChromeEnabled = useAppStore((s) => s.setChromeEnabled);
   const setShowThinkingBlocks = useAppStore((s) => s.setShowThinkingBlocks);
   const setModelSelectorOpen = useAppStore((s) => s.setModelSelectorOpen);
+  const claudeFlagsState = useAppStore(
+    (s) => s.claudeFlagsByWorkspace[workspaceId],
+  );
+  const loadWorkspaceClaudeFlags = useAppStore(
+    (s) => s.loadWorkspaceClaudeFlags,
+  );
+
+  useEffect(() => {
+    if (!claudeFlagsState) {
+      void loadWorkspaceClaudeFlags(workspaceId, repoId);
+    }
+  }, [workspaceId, repoId, claudeFlagsState, loadWorkspaceClaudeFlags]);
+
+  const resolvedFlags = claudeFlagsState?.resolved ?? [];
 
   const [loaded, setLoaded] = useState(false);
 
@@ -171,6 +188,8 @@ export function ComposerToolbar({ sessionId, disabled }: ComposerToolbarProps) {
       />
 
       <ReasoningPill sessionId={sessionId} disabled={disabled} />
+
+      <ClaudeFlagsTooltip resolved={resolvedFlags} />
 
       <OverflowMenu sessionId={sessionId} disabled={disabled} />
     </div>

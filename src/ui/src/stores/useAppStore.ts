@@ -66,6 +66,10 @@ import {
   createWorkspacesSlice,
   type WorkspacesSlice,
 } from "./slices/workspacesSlice";
+import {
+  createWorkspaceClaudeFlagsSlice,
+  type WorkspaceClaudeFlagsSlice,
+} from "./slices/workspaceClaudeFlagsSlice";
 
 export type {
   AgentQuestion,
@@ -97,7 +101,8 @@ export type AppState = RepositoriesSlice &
   SettingsSlice &
   RemoteSlice &
   SystemSlice &
-  TabOrderSlice;
+  TabOrderSlice &
+  WorkspaceClaudeFlagsSlice;
 
 export const useAppStore = create<AppState>()((...a) => ({
   ...createRepositoriesSlice(...a),
@@ -119,6 +124,7 @@ export const useAppStore = create<AppState>()((...a) => ({
   ...createRemoteSlice(...a),
   ...createSystemSlice(...a),
   ...createTabOrderSlice(...a),
+  ...createWorkspaceClaudeFlagsSlice(...a),
 }));
 
 /**

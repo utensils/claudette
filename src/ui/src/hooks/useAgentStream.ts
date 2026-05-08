@@ -1,7 +1,11 @@
 import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "../stores/useAppStore";
-import { loadChatHistory, saveTurnToolActivities } from "../services/tauri";
+import {
+  loadChatHistory,
+  saveTurnToolActivities,
+  setSessionCliInvocation,
+} from "../services/tauri";
 import type { AgentStreamPayload } from "../types/agent-events";
 import type { AgentToolCall } from "../stores/useAppStore";
 import type { ChatMessage } from "../types/chat";
@@ -19,6 +23,7 @@ import { debugChat } from "../utils/chatDebug";
 import { extractLatestCallUsage } from "../utils/extractLatestCallUsage";
 import { buildCompactionSentinel } from "../utils/compactionSentinel";
 import { pickMeterUsageFromResult } from "./pickMeterUsageFromResult";
+import { applyCommandLineEvent } from "./useAgentStreamLogic";
 
 const ASK_USER_QUESTION_TOOL = "AskUserQuestion";
 
@@ -168,6 +173,23 @@ export function useAgentStream() {
       if ("type" in streamEvent) {
         switch (streamEvent.type) {
           case "system": {
+            if (streamEvent.subtype === "command_line") {
+              const store = useAppStore.getState();
+              const handled = applyCommandLineEvent(
+                streamEvent,
+                sessionId,
+                {
+                  getCurrent: (id) =>
+                    store.sessionsByWorkspace[wsId]?.find(
+                      (cs) => cs.id === id,
+                    )?.cli_invocation ?? null,
+                  updateSession: (id, line) =>
+                    store.updateChatSession(id, { cli_invocation: line }),
+                  persist: setSessionCliInvocation,
+                },
+              );
+              if (handled) break;
+            }
             if (
               (streamEvent.subtype === "task_started" ||
                 streamEvent.subtype === "task_progress" ||

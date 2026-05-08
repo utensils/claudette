@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use claudette::claude_help::ClaudeFlagDef;
 use claudette::env_provider::EnvCache;
 use claudette::env_provider::types::EnvMap;
 use claudette::plugin_runtime::PluginRegistry;
@@ -36,6 +37,14 @@ pub struct ServerState {
     /// keep ownership cheap when the handler hands a reference into
     /// `resolve_with_registry`.
     pub env_cache: Arc<EnvCache>,
+    /// Cached `claude --help` parse, populated lazily on the first
+    /// `send_chat_message` call and reused on subsequent turns. Mirrors
+    /// the Tauri `AppState::claude_flag_defs` cache; the server doesn't
+    /// run an explicit boot-time discovery task because there's no UI
+    /// surface here that needs the flags eagerly. `None` means "not yet
+    /// attempted"; `Some(Ok(_))` / `Some(Err(_))` cache the result so
+    /// repeated turns don't re-spawn `claude --help`.
+    pub claude_flag_defs: RwLock<Option<Result<Vec<ClaudeFlagDef>, String>>>,
 }
 
 pub struct AgentSessionState {
@@ -75,6 +84,7 @@ impl ServerState {
             next_pty_id: AtomicU64::new(1),
             plugins: None,
             env_cache: Arc::new(EnvCache::new()),
+            claude_flag_defs: RwLock::new(None),
         }
     }
 
@@ -95,6 +105,7 @@ impl ServerState {
             next_pty_id: AtomicU64::new(1),
             plugins: Some(RwLock::new(plugins)),
             env_cache: Arc::new(EnvCache::new()),
+            claude_flag_defs: RwLock::new(None),
         }
     }
 

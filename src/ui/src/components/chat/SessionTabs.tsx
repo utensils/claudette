@@ -24,6 +24,8 @@ import { useTabDragReorder } from "../../hooks/useTabDragReorder";
 import { TabDragGhost } from "../shared/TabDragGhost";
 import { closeScopeForTabContext, splitUnifiedTabOrder } from "./sessionTabsLogic";
 import { SessionStatusIcon, type SessionStatusKind } from "../shared/SessionStatusIcon";
+import { DangerousFlagBadge } from "./DangerousFlagBadge";
+import { hasDangerousFlag } from "../../stores/slices/workspaceClaudeFlagsSlice";
 import {
   AttachmentContextMenu,
   type AttachmentContextMenuItem,
@@ -805,12 +807,31 @@ function SessionTab({
   const [draft, setDraft] = useState(session.name);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
+  const repoId = useAppStore(
+    (s) =>
+      s.workspaces.find((w) => w.id === session.workspace_id)?.repository_id ??
+      null,
+  );
+  const flagsEntry = useAppStore(
+    (s) => s.claudeFlagsByWorkspace[session.workspace_id],
+  );
+  const resolved = flagsEntry?.resolved ?? [];
+  const loadWorkspaceClaudeFlags = useAppStore(
+    (s) => s.loadWorkspaceClaudeFlags,
+  );
+
   useEffect(() => {
     if (editing) {
       inputRef.current?.focus();
       inputRef.current?.select();
     }
   }, [editing]);
+
+  useEffect(() => {
+    if (!flagsEntry && repoId) {
+      void loadWorkspaceClaudeFlags(session.workspace_id, repoId);
+    }
+  }, [flagsEntry, repoId, session.workspace_id, loadWorkspaceClaudeFlags]);
 
   const startEditing = () => {
     setDraft(session.name);
@@ -897,6 +918,8 @@ function SessionTab({
       <span className={`${styles.icon} ${session.needs_attention ? styles.pulse : ""}`}>
         <SessionStatusIcon status={statusFor(session)} size={12} />
       </span>
+      <DangerousFlagBadge active={hasDangerousFlag(resolved)} />
+
       {editing ? (
         <input
           ref={inputRef}

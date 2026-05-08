@@ -199,4 +199,9 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("20260506230001_archive_script_auto_run_column.sql"),
         legacy_version: None,
     },
+    Migration {
+        id: "20260507180353_chat_sessions_cli_invocation",
+        sql: include_str!("20260507180353_chat_sessions_cli_invocation.sql"),
+        legacy_version: None,
+    },
 ];

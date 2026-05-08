@@ -1,6 +1,123 @@
 use super::AgentSettings;
 use super::types::FileAttachment;
 
+/// Flags whose value is large or sensitive and should be redacted in the
+/// chat-tab CLI invocation banner. Renders as `<flag> <redacted>` in
+/// `format_redacted_invocation`.
+///
+/// Add a flag here when:
+///   - the value can carry secrets (auth tokens, API keys, hook bridge
+///     socket addresses, …); OR
+///   - the value is plausibly large enough to dominate the banner
+///     (multi-line system prompts, JSON schemas, agent definitions).
+pub(crate) const REDACTED_VALUE_FLAGS: &[&str] = &[
+    "--mcp-config",           // inline JSON, may carry tokens
+    "--settings",             // inline JSON, hook bridge socket+token
+    "--append-system-prompt", // potentially huge user prompt
+    "--system-prompt",        // twin of --append-system-prompt
+    "--agents",               // inline JSON, agent definitions
+    "--betas",                // experimental flag set
+    "--json-schema",          // user-supplied JSON schema
+];
+
+/// Render `(claude_path, argv)` as a shell-quoted, single-line command string
+/// suitable for display in the chat tab. Sensitive values are replaced with
+/// `<redacted>`. The trailing prompt positional (if present) is replaced with
+/// `<prompt>` so we don't duplicate the user's first message.
+pub(crate) fn format_redacted_invocation(claude_path: &std::ffi::OsStr, args: &[String]) -> String {
+    let mut tokens: Vec<String> = Vec::with_capacity(args.len() + 1);
+    tokens.push(shell_quote(&claude_path.to_string_lossy()));
+
+    // Determine whether the last argv element is a trailing prompt positional.
+    // It is a prompt when:
+    //   - argv is non-empty, AND
+    //   - the last token does NOT itself look like a flag, AND
+    //   - the predecessor (if any) is NOT a flag (i.e. the last token is not
+    //     the value to that flag — `--resume <id>`, `--effort high`, etc.).
+    // If argv has only one element and it's not a flag, treat it as prompt.
+    let prompt_index: Option<usize> = if args.is_empty() {
+        None
+    } else {
+        let last_idx = args.len() - 1;
+        let last = &args[last_idx];
+        let last_is_flag = looks_like_flag(last);
+        if last_is_flag {
+            None
+        } else if last_idx == 0 {
+            Some(last_idx)
+        } else {
+            let prev = &args[last_idx - 1];
+            if looks_like_flag(prev) {
+                None // last is value to that flag
+            } else {
+                Some(last_idx)
+            }
+        }
+    };
+
+    let mut prev_is_redacted_flag = false;
+
+    for (i, raw) in args.iter().enumerate() {
+        if Some(i) == prompt_index {
+            tokens.push("<prompt>".to_string());
+            break;
+        }
+        if prev_is_redacted_flag {
+            tokens.push("<redacted>".to_string());
+            prev_is_redacted_flag = false;
+            continue;
+        }
+        let is_redact_flag = REDACTED_VALUE_FLAGS.contains(&raw.as_str());
+        tokens.push(shell_quote(raw));
+        prev_is_redacted_flag = is_redact_flag;
+    }
+
+    tokens.join(" ")
+}
+
+fn looks_like_flag(s: &str) -> bool {
+    s.starts_with("--") || s.starts_with('-')
+}
+
+/// POSIX-style shell quoting: empty -> `""`; contains whitespace or shell
+/// metacharacters -> single-quoted with embedded `'` escaped as `'\''`;
+/// otherwise emit verbatim.
+fn shell_quote(s: &str) -> String {
+    if s.is_empty() {
+        return "\"\"".to_string();
+    }
+    let needs_quoting = s.chars().any(|c| {
+        c.is_whitespace()
+            || matches!(
+                c,
+                '$' | '`'
+                    | '\''
+                    | '"'
+                    | '\\'
+                    | '*'
+                    | '?'
+                    | '!'
+                    | '#'
+                    | '&'
+                    | '|'
+                    | ';'
+                    | '<'
+                    | '>'
+                    | '('
+                    | ')'
+                    | '['
+                    | ']'
+                    | '{'
+                    | '}'
+            )
+    });
+    if !needs_quoting {
+        return s.to_string();
+    }
+    let escaped = s.replace('\'', r"'\''");
+    format!("'{escaped}'")
+}
+
 /// Build the CLI arguments for a `claude -p` invocation.
 ///
 /// When `has_attachments` is true, the prompt is omitted from the args and
@@ -93,6 +210,16 @@ pub fn build_claude_args(
     {
         args.push("--append-system-prompt".to_string());
         args.push(instructions.to_string());
+    }
+
+    // User-toggled extra flags (from the Claude flags settings UI). Inserted
+    // before --resume/--session-id and the trailing prompt so the prompt
+    // remains the last positional arg.
+    for (name, value) in &settings.extra_claude_flags {
+        args.push(name.clone());
+        if let Some(v) = value {
+            args.push(v.clone());
+        }
     }
 
     if is_resume {
@@ -900,6 +1027,49 @@ mod tests {
     }
 
     #[test]
+    fn test_build_args_appends_extra_flags() {
+        let settings = AgentSettings {
+            extra_claude_flags: vec![
+                ("--debug".to_string(), None),
+                ("--add-dir".to_string(), Some("/foo".to_string())),
+            ],
+            ..Default::default()
+        };
+        let args = build_claude_args("sess-1", "hello", false, &[], None, &settings, false);
+
+        let debug_idx = args
+            .iter()
+            .position(|a| a == "--debug")
+            .expect("--debug should be present");
+        // Boolean flag — the next arg should not be its "value".
+        let after_debug = args.get(debug_idx + 1).map(String::as_str);
+        assert_ne!(after_debug, Some("/foo"), "--debug should not consume /foo");
+
+        let add_dir_idx = args
+            .iter()
+            .position(|a| a == "--add-dir")
+            .expect("--add-dir should be present");
+        assert_eq!(args[add_dir_idx + 1], "/foo");
+    }
+
+    #[test]
+    fn test_build_args_extra_flags_dont_consume_prompt() {
+        let settings = AgentSettings {
+            extra_claude_flags: vec![
+                ("--debug".to_string(), None),
+                ("--add-dir".to_string(), Some("/foo".to_string())),
+            ],
+            ..Default::default()
+        };
+        let args = build_claude_args("sess-1", "hello world", false, &[], None, &settings, false);
+        assert_eq!(
+            args.last().map(String::as_str),
+            Some("hello world"),
+            "prompt must remain the last positional arg"
+        );
+    }
+
+    #[test]
     fn build_claude_args_omits_stdio_permission_prompt() {
         let args = build_claude_args(
             "sid",
@@ -914,5 +1084,143 @@ mod tests {
             !args.iter().any(|a| a == "--permission-prompt-tool"),
             "build_claude_args must not enable the stdio permission prompt"
         );
+    }
+
+    #[test]
+    fn format_redacts_known_sensitive_values() {
+        let args: Vec<String> = vec![
+            "--print".into(),
+            "--mcp-config".into(),
+            r#"{"mcpServers":{"a":{}}}"#.into(),
+            "--settings".into(),
+            r#"{"hooks":{}}"#.into(),
+            "--append-system-prompt".into(),
+            "You are helpful".into(),
+            "--model".into(),
+            "opus".into(),
+        ];
+        let line = format_redacted_invocation(std::ffi::OsStr::new("/bin/claude"), &args);
+        assert!(line.contains("--mcp-config <redacted>"), "{line}");
+        assert!(line.contains("--settings <redacted>"), "{line}");
+        assert!(line.contains("--append-system-prompt <redacted>"), "{line}");
+        assert!(line.contains("--model opus"), "{line}");
+    }
+
+    #[test]
+    fn format_redacts_system_prompt() {
+        let args: Vec<String> = vec![
+            "--system-prompt".into(),
+            "You are a senior engineer. Always think before acting.".into(),
+        ];
+        let line = format_redacted_invocation(std::ffi::OsStr::new("/bin/claude"), &args);
+        assert!(line.contains("--system-prompt <redacted>"), "{line}");
+        assert!(!line.contains("senior engineer"), "{line}");
+    }
+
+    #[test]
+    fn format_redacts_agents_betas_and_json_schema() {
+        for flag in ["--agents", "--betas", "--json-schema"] {
+            let args: Vec<String> = vec![flag.into(), "secret-value".into()];
+            let line = format_redacted_invocation(std::ffi::OsStr::new("/bin/claude"), &args);
+            assert!(
+                line.contains(&format!("{flag} <redacted>")),
+                "flag {flag} should be redacted: {line}",
+            );
+            assert!(
+                !line.contains("secret-value"),
+                "value for {flag} leaked into output: {line}",
+            );
+        }
+    }
+
+    #[test]
+    fn format_replaces_trailing_prompt_positional() {
+        let args: Vec<String> = vec![
+            "--print".into(),
+            "--session-id".into(),
+            "abc-123".into(),
+            "please read the README".into(),
+        ];
+        let line = format_redacted_invocation(std::ffi::OsStr::new("/bin/claude"), &args);
+        assert!(line.ends_with(" <prompt>"), "{line}");
+        assert!(!line.contains("please read"), "{line}");
+    }
+
+    #[test]
+    fn format_keeps_resume_argv_without_prompt_tail() {
+        // Persistent session: no prompt positional. Last arg is `--resume <id>`.
+        let args: Vec<String> = vec![
+            "--print".into(),
+            "--input-format".into(),
+            "stream-json".into(),
+            "--resume".into(),
+            "abc-123".into(),
+        ];
+        let line = format_redacted_invocation(std::ffi::OsStr::new("/bin/claude"), &args);
+        assert!(line.ends_with("--resume abc-123"), "{line}");
+        assert!(!line.contains("<prompt>"), "{line}");
+    }
+
+    #[test]
+    fn format_quotes_special_chars_in_non_redacted_values() {
+        let args: Vec<String> = vec![
+            "--allowedTools".into(),
+            "Bash,Read,Edit".into(),
+            "--effort".into(),
+            "high".into(),
+            "--mcp-config".into(),
+            "should be redacted".into(),
+            "what is $HOME?".into(),
+        ];
+        let line = format_redacted_invocation(std::ffi::OsStr::new("/bin/claude"), &args);
+        assert!(line.contains("--allowedTools Bash,Read,Edit"), "{line}");
+        assert!(line.contains("--mcp-config <redacted>"), "{line}");
+        assert!(line.ends_with("<prompt>"), "{line}");
+    }
+
+    #[test]
+    fn format_quotes_path_with_spaces() {
+        let args: Vec<String> = vec!["--model".into(), "opus".into()];
+        let line = format_redacted_invocation(
+            std::ffi::OsStr::new("/Users/me/Application Support/claude"),
+            &args,
+        );
+        assert!(
+            line.starts_with("'/Users/me/Application Support/claude' "),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn format_handles_empty_string_value() {
+        let args: Vec<String> = vec!["--effort".into(), "".into()];
+        let line = format_redacted_invocation(std::ffi::OsStr::new("/bin/claude"), &args);
+        assert!(line.contains("--effort \"\""), "{line}");
+    }
+
+    #[test]
+    fn format_real_first_turn_argv_round_trip() {
+        let settings = AgentSettings {
+            model: Some("opus".to_string()),
+            mcp_config: Some(r#"{"mcpServers":{}}"#.to_string()),
+            effort: Some("high".to_string()),
+            ..Default::default()
+        };
+        let args = build_claude_args(
+            "session-uuid",
+            "hello there",
+            false,
+            &["Bash".into(), "Read".into()],
+            None,
+            &settings,
+            false,
+        );
+        let line = format_redacted_invocation(std::ffi::OsStr::new("/bin/claude"), &args);
+        assert!(line.starts_with("/bin/claude --print"), "{line}");
+        assert!(line.contains("--mcp-config <redacted>"), "{line}");
+        assert!(line.contains("--model opus"), "{line}");
+        assert!(line.contains("--allowedTools Bash,Read"), "{line}");
+        assert!(line.contains("--session-id session-uuid"), "{line}");
+        assert!(line.ends_with(" <prompt>"), "{line}");
     }
 }

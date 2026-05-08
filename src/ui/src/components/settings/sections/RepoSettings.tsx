@@ -15,6 +15,7 @@ import type { SavedMcpServer, McpSource } from "../../../types/mcp";
 import { MCP_SOURCE_LABELS } from "../../../types/mcp";
 import { RepoIcon } from "../../shared/RepoIcon";
 import { IconPicker } from "../../modals/IconPicker";
+import { ClaudeFlagsSettings } from "./ClaudeFlagsSettings";
 import { EnvPanel } from "./EnvPanel";
 import {
   InheritedGlobalsList,
@@ -546,6 +547,14 @@ export function RepoSettings({ repoId }: RepoSettingsProps) {
       </div>
 
       <RepoPinnedPromptsField repoId={repoId} />
+
+      <div className={styles.fieldGroup}>
+        <div className={styles.fieldLabel}>{t("claude_flags_repo_label")}</div>
+        <div className={`${styles.fieldHint} ${styles.fieldHintSpaced}`}>
+          {t("claude_flags_repo_description")}
+        </div>
+        <ClaudeFlagsSettings scope={{ kind: "repo", repoId }} hideHeader />
+      </div>
 
       <div className={styles.fieldGroup}>
         <div className={styles.fieldLabel}>{t("repo_branch_rename")}</div>

@@ -1661,3 +1661,106 @@
   opacity: 0.45;
   pointer-events: none;
 }
+
+/* ── Claude flags section ── */
+
+.flagRow {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--divider);
+}
+
+.flagInfo {
+  min-width: 0;
+}
+
+.flagName {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.flagShort {
+  color: var(--text-dim);
+  font-weight: 400;
+  margin-left: 6px;
+}
+
+.flagDescription {
+  color: var(--text-dim);
+  font-size: 12px;
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
+.flagControls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-end;
+  flex-shrink: 0;
+  min-width: 200px;
+}
+
+.flagDangerBadge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--error-hover);
+  color: var(--status-stopped);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-left: 8px;
+}
+
+.flagInheritedHint {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.flagInput {
+  composes: input;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  min-width: 200px;
+}
+
+.flagInput:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.flagOverrideRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.flagErrorBanner {
+  margin: 12px 0 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--error-border);
+  border-radius: 8px;
+  background: var(--error-bg);
+  color: var(--text-primary);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.flagErrorMessage {
+  flex: 1;
+  font-size: 13px;
+  line-height: 1.4;
+}
