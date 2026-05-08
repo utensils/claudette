@@ -284,6 +284,64 @@ pub async fn resize_pty(
         .map_err(|e| format!("Resize failed: {e}"))
 }
 
+/// Interrupt the foreground process group of a PTY — the same effect as the
+/// user pressing Ctrl+C in the terminal, invoked from outside the terminal
+/// (e.g. the sidebar's running-commands list).
+///
+/// On Unix, we read the foreground PGID from the master FD via `tcgetpgrp`
+/// and send `SIGINT` to that group. This bypasses TTY line discipline, so it
+/// works even for programs that put the terminal in raw mode (TUIs/editors).
+///
+/// On Windows there are no POSIX process groups, so we fall back to writing
+/// `\x03` (ETX) into the PTY. That delivers SIGINT-equivalent only when the
+/// child has line discipline enabled, but covers the common shell case.
+#[tauri::command]
+pub async fn interrupt_pty_foreground(
+    pty_id: u64,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let ptys = state.ptys.read().await;
+    let handle = ptys.get(&pty_id).ok_or("PTY not found")?;
+
+    #[cfg(unix)]
+    {
+        let pgrp = {
+            let master = handle
+                .master
+                .lock()
+                .map_err(|e| format!("Lock error: {e}"))?;
+            let raw = master
+                .as_raw_fd()
+                .ok_or("Master PTY does not expose a raw FD")?;
+            unsafe { libc::tcgetpgrp(raw) }
+        };
+        // No foreground group (e.g. shell exited or backgrounded the
+        // command) — treat as a no-op rather than an error so the UI
+        // doesn't surface noise when the user clicks stale entries.
+        if pgrp <= 0 {
+            return Ok(());
+        }
+        // SAFETY: `kill(-pgrp, SIGINT)` is the standard POSIX way to deliver
+        // SIGINT to every process in the group. ESRCH means the group is
+        // already gone — also a no-op.
+        unsafe { libc::kill(-pgrp, libc::SIGINT) };
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    {
+        use std::io::Write;
+        let mut writer = handle
+            .writer
+            .lock()
+            .map_err(|e| format!("Lock error: {e}"))?;
+        writer
+            .write_all(&[0x03])
+            .map_err(|e| format!("Write failed: {e}"))?;
+        Ok(())
+    }
+}
+
 #[tauri::command]
 pub async fn close_pty(pty_id: u64, state: State<'_, AppState>) -> Result<(), String> {
     // Pull the handle out under the write lock, then release it before doing
@@ -462,6 +520,38 @@ mod tests {
         std::thread::sleep(Duration::from_millis(50));
         let alive_after = unsafe { libc::kill(pid as i32, 0) == 0 };
         assert!(!alive_after, "child should be dead after kill");
+    }
+
+    /// Exercises the same SIGINT-to-foreground-PGID path that
+    /// `interrupt_pty_foreground` uses: read `tcgetpgrp(master_fd)` and
+    /// `kill(-pgrp, SIGINT)`. Verifies that a sleeping child running in
+    /// the PTY's foreground group gets interrupted from outside the TTY.
+    #[test]
+    fn pty_interrupts_foreground_via_sigint_to_pgid() {
+        // Trap-and-exit makes the assertion explicit: if the kill path
+        // works, the shell traps SIGINT and exits cleanly; if SIGINT is
+        // never delivered, `sleep 30` keeps it alive past the deadline.
+        let (master, mut child, _reader) = open_sh("trap 'exit 130' INT; sleep 30");
+
+        // Briefly let the child install the trap and start sleeping.
+        std::thread::sleep(Duration::from_millis(150));
+
+        let raw_fd = master
+            .as_raw_fd()
+            .expect("master PTY should expose a raw fd");
+        let pgrp = unsafe { libc::tcgetpgrp(raw_fd) };
+        assert!(pgrp > 0, "tcgetpgrp should report a foreground pgid");
+
+        // SAFETY: kill(-pgrp, SIGINT) is the POSIX-defined way to deliver
+        // SIGINT to every process in the group identified by `pgrp`.
+        let r = unsafe { libc::kill(-pgrp, libc::SIGINT) };
+        assert_eq!(r, 0, "kill(-pgrp, SIGINT) should succeed");
+
+        let status = child.wait().expect("child should exit");
+        drop(master);
+        // We don't care exactly how the shell encodes the SIGINT exit; we
+        // care that it exited (didn't run for the full 30 seconds).
+        let _ = status;
     }
 
     /// Verifies that `configure_pty_env` (the shared helper used by

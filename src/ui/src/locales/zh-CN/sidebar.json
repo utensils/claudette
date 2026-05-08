@@ -59,6 +59,7 @@
   "command_collapse": "折叠运行中的命令",
   "command_expand": "展开运行中的命令",
   "command_count_running": "{{count}} 个运行中",
+  "command_stop": "停止命令 (SIGINT)",
   "new_workspace_remote": "新建工作区",
   "workspace_connect": "连接",
   "workspace_disconnect": "断开连接",

@@ -722,6 +722,7 @@ fn main() {
             pty::write_pty,
             pty::resize_pty,
             pty::close_pty,
+            pty::interrupt_pty_foreground,
             pty::detect_shell,
             // Settings
             // CLI install/uninstall (Settings → CLI)

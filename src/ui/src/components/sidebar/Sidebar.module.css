@@ -564,6 +564,40 @@
   margin-left: 32px;
 }
 
+.terminalCommandItem .commandText {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Stop button to interrupt the foreground command on a PTY (sends SIGINT
+   to the foreground process group on Unix, writes \x03 on Windows). Hidden
+   until the row is hovered to keep the dense list visually quiet. */
+.commandStopBtn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  padding: 1px;
+  margin: 0;
+  color: var(--text-dim);
+  cursor: pointer;
+  opacity: 0;
+  border-radius: 2px;
+  line-height: 1;
+}
+
+.terminalCommandItem:hover .commandStopBtn,
+.commandStopBtn:focus-visible {
+  opacity: 1;
+}
+
+.commandStopBtn:hover {
+  color: var(--status-stopped);
+  background: var(--hover-bg);
+}
+
 .runningIcon {
   color: var(--status-running);
   animation: spin 2s linear infinite;
