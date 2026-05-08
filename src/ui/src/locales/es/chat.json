@@ -115,6 +115,12 @@
   "message_copied": "Copiado",
   "attachment_close_lightbox": "Cerrar vista previa de imagen",
 
+  "cli_invocation_expand": "Mostrar comando claude completo",
+  "cli_invocation_collapse": "Ocultar comando claude",
+  "cli_invocation_copy": "Copiar comando claude",
+  "cli_invocation_copied": "Copiado",
+  "cli_invocation_prompt_label": "prompt",
+
   "mcp_unknown_error": "desconocido",
 
   "diff_loading": "Cargando diff...",
