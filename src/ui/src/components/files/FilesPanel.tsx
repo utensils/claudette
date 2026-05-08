@@ -105,6 +105,16 @@ export function FilesPanel() {
     return () => clearTimeout(timer);
   }, [isRunning, selectedWorkspaceId, loadFiles]);
 
+  // Idle polling: refresh file tree while agent is not running (every 10s) so
+  // manually-edited files surface without navigating away.
+  useEffect(() => {
+    if (!selectedWorkspaceId || isRunning) return;
+    const interval = setInterval(() => {
+      void loadFiles(selectedWorkspaceId, false);
+    }, 10_000);
+    return () => clearInterval(interval);
+  }, [isRunning, selectedWorkspaceId, loadFiles]);
+
   const handleActivateFile = useCallback(
     (path: string) => {
       // With tabs, opening a file is unconditional: either it's already

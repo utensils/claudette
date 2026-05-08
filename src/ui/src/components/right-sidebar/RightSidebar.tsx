@@ -196,6 +196,24 @@ export const RightSidebar = memo(function RightSidebar() {
     return () => clearTimeout(timer);
   }, [isRunning, selectedWorkspaceId, loadDiff, applyDiffResult, setDiffLoading]);
 
+  // Idle polling: refresh diff while agent is not running (every 10s) so
+  // manually-edited files and external git ops surface without navigating away.
+  useEffect(() => {
+    if (!selectedWorkspaceId || isRunning) return;
+
+    const interval = setInterval(() => {
+      const version = ++diffLoadVersion.current;
+      loadDiff(selectedWorkspaceId)
+        .then((result) => {
+          if (version !== diffLoadVersion.current) return;
+          applyDiffResult(result);
+        })
+        .catch(() => {});
+    }, 10_000);
+
+    return () => clearInterval(interval);
+  }, [isRunning, selectedWorkspaceId, loadDiff, applyDiffResult]);
+
   const statusLabel = (status: string | { Renamed: { from: string } }) => {
     if (typeof status === "string") {
       return status === "Added"
