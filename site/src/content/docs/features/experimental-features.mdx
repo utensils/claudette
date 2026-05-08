@@ -1,0 +1,70 @@
+---
+title: Experimental Features
+description: Opt-in toggles for features that are still maturing — what each one gates and where to read more.
+---
+
+**Settings > Experimental** holds toggles for features that are still maturing. "Experimental" doesn't mean unsafe — these are shipped and tested — but the surface area, defaults, or persistence shape may shift between releases. Toggling one off is always reversible.
+
+Six toggles live there today.
+
+## Alternative Claude Code backends
+
+Exposes Ollama, OpenAI-compatible providers, OpenAI Codex (subscription), and custom Anthropic / OpenAI endpoints in addition to the default Claude Code path.
+
+When this is off, every workspace runs the official `claude` CLI authenticated against Anthropic. When on, the chat header gets a backend picker and **Settings > Models** grows configuration sections for each backend.
+
+→ Full setup and capability matrix: **[Alternative Backends](/claudette/features/alternative-backends/)**
+
+## Claudette Terminal
+
+Adds a **read-only** terminal tab that mirrors the agent's shell commands and any background-task output as the agent runs. Useful for watching what an agent is actually doing in real time without scrubbing through the chat transcript, and for catching long-running shell processes the agent forgot to wait on.
+
+Background-task completion handling stays enabled even when this toggle is off — the toggle only controls whether the dedicated tab shows up in the terminal panel.
+
+## Plugin Management
+
+Surfaces the Claude Code plugin marketplace inside Claudette: install, enable, disable, update, and remove Claude Code plugins from a settings panel rather than the CLI. Adds the `/plugin` and `/marketplace` slash commands to the picker (these are reserved when the toggle is on, so user/project commands of the same name yield).
+
+This is distinct from Claudette's own [Lua plugin system](/claudette/features/scm-providers/) (SCM providers, env-providers, etc.), which is always available.
+
+→ Where the commands live: **[Slash Commands](/claudette/features/slash-commands/#built-in-commands)**
+
+## Claude Remote Control
+
+Bridges your local Claudette workspace to a Claude Code session running on `claude.ai` (web or mobile). Drive an agent from your phone while looking at the diff on a laptop, or hand off a session between devices.
+
+Has its own setup flow, troubleshooting steps, and constraints (some Claudette features are deferred while a bridge is live).
+
+→ Full doc: **[Claude Remote Control](/claudette/features/claude-remote-control/)**
+
+## Community Registry
+
+Enables the Plugins / Themes / Grammars community catalog inside Claudette. Browse third-party content, verify signatures, and install with one click. Off by default because it broadens the trust surface — you're running code from people who aren't you or Anthropic.
+
+→ Trust model and signature verification: **[Community Registry & Trust](/claudette/features/community-registry-trust/)**
+
+## Usage Insights
+
+Gates the **Settings > Usage** panel that shows Claude Code subscription details (session limits, weekly limits, extra usage) by querying Anthropic's usage API directly. Requires a Pro or Max plan with standard login (env-var auth tokens don't have the OAuth scopes the API needs).
+
+When this is off, Claudette never reads your Claude Code OAuth tokens — they stay strictly in the keychain / `.credentials.json` for the `claude` CLI's own use.
+
+→ What the panel shows and how it's cached: **[Usage & Metrics](/claudette/features/usage-and-metrics/)**
+
+## Stability outlook
+
+| Toggle | What's still moving |
+|---|---|
+| Alternative Backends | Per-backend capability surfaces; gateway translation edge cases on long streamed responses. |
+| Claudette Terminal | Layout and persistence story for the read-only tab. |
+| Plugin Management | Marketplace UI; settings persistence for per-plugin config. |
+| Claude Remote Control | Reconnect / device-handoff UX; deferred-feature list. |
+| Community Registry | Content moderation; revocation flow; theme runtime loading. |
+| Usage Insights | Cache invalidation around tier changes; richer breakdown views. |
+
+If a toggle moves to "default-on" or graduates out of experimental, the upgrade path leaves your existing settings in place — toggles are independent, never bundled.
+
+## See also
+
+- [Settings](/claudette/features/settings/) — the full settings layout that the Experimental section sits inside
+- [Privacy](/claudette/privacy/) — what data each experimental feature does or doesn't send

@@ -1,0 +1,154 @@
+---
+title: Alternative Backends
+description: Run Claudette agents against Ollama, OpenAI-compatible APIs, OpenAI Codex, or any custom Anthropic/OpenAI-compatible endpoint instead of the default Claude Code path.
+---
+
+By default Claudette spawns the official `claude` CLI authenticated against Anthropic. Behind the **Alternative Claude Code backends** experimental flag you can also run agents against:
+
+- **Ollama** — local LLMs running on your own machine
+- **OpenAI API** — `gpt-*` models via OpenAI's API
+- **Codex (OpenAI subscription)** — drives the `codex` CLI's ChatGPT subscription auth
+- **Custom Anthropic** — any Anthropic-compatible endpoint (alternate hosts, proxies, self-hosted gateways)
+- **Custom OpenAI** — any OpenAI-compatible endpoint (Together, Groq, OpenRouter, vLLM, ...)
+
+This is **experimental** because some Claude-specific features (extended thinking, effort levels, fast mode, the 1M-context auto-upgrade) only have meaningful equivalents on the official Anthropic backend.
+
+## Enabling the feature
+
+1. Open **Settings > Experimental** and toggle on **Alternative Claude Code backends**.
+2. Open **Settings > Models** and configure each backend you want to use (URL, secret, models).
+3. Pick a default in **Settings > Models > Default backend**, or override per session from the chat header.
+
+When the feature is off, only the built-in `Anthropic` backend is exposed — every workspace runs `claude` as before.
+
+## Built-in backends
+
+| ID | Kind | Default base URL | Auth |
+|---|---|---|---|
+| `anthropic` | `Anthropic` | (uses `claude` CLI) | Inherits from Claude Code |
+| `ollama` | `Ollama` | `http://localhost:11434` | None (or optional bearer token) |
+| `openai-api` | `OpenAiApi` | `https://api.openai.com` | API key (required) |
+| `codex-subscription` | `CodexSubscription` | `https://chatgpt.com/backend-api` | `codex login` (managed by `codex` CLI) |
+
+You can also add as many **Custom Anthropic** and **Custom OpenAI** backends as you need from **Settings > Models**.
+
+## Two execution paths: native vs gateway
+
+Claudette splits backends into two architectural categories:
+
+**Anthropic-compatible** (`Anthropic`, `Ollama`, `CustomAnthropic`) — talk Claude's wire format directly. The `claude` CLI just gets a different base URL and auth token. All Claude-side controls (thinking, effort, fast mode, 1M context) work if the upstream supports them.
+
+**Gateway** (`OpenAiApi`, `CodexSubscription`, `CustomOpenAi`) — Claudette spawns a tiny in-process HTTP gateway that translates Claude's wire format into the OpenAI Chat Completions format (and back). The spawned `claude` process is pointed at the gateway instead of `api.anthropic.com`. This is how the OpenAI-shaped backends work without forking the CLI.
+
+When a gateway backend is in use, the per-turn capabilities reflect what the OpenAI shape actually supports:
+
+| Capability | Anthropic / Ollama / Custom Anthropic | Gateway (OpenAI / Codex / Custom OpenAI) |
+|---|---|---|
+| Extended thinking | ✅ (when model supports) | ❌ |
+| Effort levels | ✅ | ❌ |
+| Fast mode | ✅ | ❌ |
+| 1M-context auto-upgrade | ✅ | ❌ |
+| Tool use | ✅ | ✅ |
+| Vision | ✅ | ✅ |
+
+If you switch a session to a gateway backend, you'll see those toggles disappear from the chat header. That's intentional — they have no equivalent on the OpenAI shape.
+
+## Per-backend setup
+
+### Ollama
+
+1. Install Ollama (`brew install ollama` on macOS, or [ollama.com/download](https://ollama.com/download)) and start the daemon. By default it listens on `http://localhost:11434`.
+2. Pull a few models, e.g. `ollama pull qwen3-coder` or `ollama pull llama3.1:8b`.
+3. In **Settings > Models**, enable the `ollama` backend. The base URL is pre-filled.
+4. Click **Refresh models** — Claudette queries `ollama list` over the HTTP API and discovers the models you've pulled.
+5. (Optional) Set a default model for the backend.
+
+Ollama is the simplest non-Anthropic setup: no API key, no gateway, all local. Tool use and vision work for models that support them.
+
+### OpenAI API
+
+1. Get an API key from [platform.openai.com](https://platform.openai.com/).
+2. In **Settings > Models**, enable the `openai-api` backend.
+3. Paste the key into the **API key** field and save.
+4. Click **Refresh models** — Claudette queries the OpenAI `/v1/models` endpoint and populates the model list.
+5. Pick a default model (`gpt-4.1`, `gpt-4o`, `o3-mini`, etc.).
+
+Resolves through the gateway. The Claude-side thinking / effort / fast / 1M-context toggles are hidden when this backend is selected.
+
+### Codex (OpenAI subscription)
+
+The Codex backend reuses the `codex` CLI's ChatGPT subscription auth instead of an API key — useful if you have a ChatGPT Plus / Pro / Team subscription that includes Codex access.
+
+1. Install the `codex` CLI ([npmjs.com/package/@openai/codex](https://www.npmjs.com/package/@openai/codex)).
+2. In **Settings > Models**, enable the `codex-subscription` backend.
+3. Click **Sign in to Codex** — Claudette runs `codex login` for you, which opens your browser to the OpenAI OAuth page and writes the resulting JWT to `~/.codex/auth.json`.
+4. Click **Refresh models** to discover the models your subscription has access to.
+
+Claudette reads `auth.json` directly to extract the access token and account ID, so this works whether you authenticated via Claudette or by running `codex login` yourself in a terminal.
+
+Resolves through the gateway. Same capability caveats as the OpenAI API backend.
+
+### Custom Anthropic-compatible
+
+For self-hosted Anthropic-compatible gateways (LiteLLM in Anthropic mode, proxies, or self-hosted Claude clones).
+
+1. In **Settings > Models > Add backend**, choose **Custom Anthropic**.
+2. Set:
+   - **Label** — display name shown in the chat header picker.
+   - **Base URL** — your endpoint, e.g. `https://my-llm-proxy.example.com`.
+   - **API key** — the bearer token your endpoint expects (sent as `Authorization`).
+3. Add models in the **Manual models** list (Claude-style IDs like `claude-3-5-sonnet-20241022`), or enable **Discover models** if your endpoint exposes a compatible discovery API.
+
+Behaves like the native Anthropic backend — the `claude` CLI is pointed at your URL with your token.
+
+### Custom OpenAI-compatible
+
+For Together, Groq, OpenRouter, Fireworks, vLLM, llama.cpp, etc.
+
+1. In **Settings > Models > Add backend**, choose **Custom OpenAI**.
+2. Set:
+   - **Label**.
+   - **Base URL** — typically ends in `/v1` (e.g. `https://api.together.xyz/v1`).
+   - **API key**.
+3. Add models in **Manual models** or use discovery if the endpoint implements `/v1/models`.
+
+Resolves through the gateway. Same capability caveats as the other OpenAI-shaped backends.
+
+## How the gateway runtime works
+
+For gateway backends, Claudette spins up an HTTP listener on `127.0.0.1:0` (random port) per backend and per model. It mints a one-time auth token, then exports three env vars into the spawned `claude` subprocess:
+
+- `ANTHROPIC_BASE_URL` — the local gateway URL.
+- `ANTHROPIC_AUTH_TOKEN` — the one-time token (rotated per launch).
+- `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` — tells the CLI to query the gateway for available models.
+
+The gateway translates Claude's request into OpenAI Chat Completions, calls the upstream, and translates the streaming response back. It's an in-process tokio task; no external service.
+
+If the backend config or model changes, the gateway restarts on the next agent turn. There's no manual lifecycle to manage.
+
+## Model selection
+
+The model picker in the chat header is scoped to the active backend. Switching the backend resets the model to that backend's default.
+
+Per-session model selection is persisted in `app_settings` as `model:<session_id>` and `model_provider:<session_id>`. Disabling the experimental flag wipes these and resets every session to `anthropic` (with the cleanup also resetting the agent so the next turn starts fresh against Claude).
+
+## When to choose what
+
+- **Default Claude Code (`anthropic`)** — best feature parity. Keep this unless you have a specific reason to switch.
+- **Ollama** — air-gapped work, privacy-sensitive code, or offline travel. Quality varies wildly by model.
+- **OpenAI API** — if you specifically want `gpt-*` models or have prepaid OpenAI credit you'd rather burn than your Claude quota.
+- **Codex** — if you're already paying for ChatGPT Plus/Pro/Team and want to reuse that quota.
+- **Custom Anthropic** — staging environments, internal proxies, alternate hosts.
+- **Custom OpenAI** — niche providers (Groq for speed, Together for fine-tunes, etc.).
+
+## Caveats
+
+- The Anthropic-compatible backends should accept the full Claude Code request shape; not all proxies and self-hosted gateways implement everything (especially the `system` prompt format and tool-use protocol). If a backend silently drops fields, agents may behave oddly.
+- Gateway backends translate tool calls and vision payloads, but lossy edge cases exist around streaming partial messages. Test on a small turn before running long agent sessions on a new backend.
+- The Usage panel ([Settings > Usage](/claudette/features/usage-and-metrics/)) only reads Anthropic subscription telemetry. Token consumption on alternative backends is whatever the upstream provider reports, not visible inside Claudette.
+
+## See also
+
+- [Experimental Features](/claudette/features/experimental-features/) — the wider experimental flag set
+- [Agent Configuration](/claudette/features/agent-configuration/) — model selection, effort, thinking, and which knobs apply per backend
+- [Authentication](/claudette/features/authentication/) — credential handling for the default Anthropic backend

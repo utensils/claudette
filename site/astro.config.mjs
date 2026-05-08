@@ -89,6 +89,7 @@ export default defineConfig({
             { slug: 'features/pinned-prompts' },
             { slug: 'features/authentication' },
             { slug: 'features/usage-and-metrics' },
+            { slug: 'features/alternative-backends' },
           ],
         },
         {
@@ -111,6 +112,7 @@ export default defineConfig({
           label: 'Settings & Trust',
           items: [
             { slug: 'features/settings' },
+            { slug: 'features/experimental-features' },
             { slug: 'features/community-registry-trust' },
             { slug: 'privacy' },
           ],
