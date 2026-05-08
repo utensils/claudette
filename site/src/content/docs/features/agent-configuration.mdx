@@ -81,9 +81,13 @@ The **Settings > Claude CLI flags** panel exposes the underlying `claude` comman
 
 ## Alternative Claude Code Backends
 
-Claudette can run agents against alternative backends — Ollama (local), OpenAI API, OpenAI Codex (subscription), and any custom Anthropic / OpenAI-compatible endpoint — instead of the official `claude` CLI. This is gated by the **Alternative Claude Code backends** experimental flag.
+Claudette can run agents against alternative backends — Ollama (local), OpenAI API, or OpenAI Codex (subscription) — instead of the official `claude` CLI. This is gated by the **Alternative Claude Code backends** experimental flag.
 
-Some chat-header toggles on this page (extended thinking, effort, fast mode, the 1M-context auto-upgrade) only apply to the default Anthropic backend and to local Ollama / Custom Anthropic backends. They're hidden when a gateway-style backend (OpenAI, Codex, Custom OpenAI) is selected, because the OpenAI wire format has no equivalents.
+Several chat-header toggles on this page only apply to certain backends. The capability matrix in the dedicated page shows the full picture, but the highlights:
+
+- **Effort, fast mode, 1M-context auto-upgrade** — Anthropic only.
+- **Extended thinking** — Anthropic and Ollama (when the model supports it).
+- **All Claude-side toggles** — hidden on gateway backends (OpenAI / Codex), because the OpenAI Responses API has no equivalents.
 
 → Full setup, capability matrix, and per-backend instructions: **[Alternative Backends](/claudette/features/alternative-backends/)**
 
