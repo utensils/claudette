@@ -150,14 +150,22 @@ fn should_reenable_remote_control_after_turn_result(
 /// stays stable across alternating local/remote turns". Drift applies on the
 /// next disable→enable cycle. Mirrors `should_defer_persistent_restart`'s
 /// pattern for in-flight background tasks.
-fn remote_control_should_defer_drift_teardown(status: &ClaudeRemoteControlStatus) -> bool {
-    matches!(
-        status.state,
-        ClaudeRemoteControlLifecycle::Enabling
-            | ClaudeRemoteControlLifecycle::Ready
-            | ClaudeRemoteControlLifecycle::Connected
-            | ClaudeRemoteControlLifecycle::Reconnecting
-    )
+///
+/// Gated behind the experimental feature flag — when Remote Control is
+/// disabled in settings, behavior matches the pre-feature implementation
+/// regardless of any stale lifecycle state in the agent session.
+fn remote_control_should_defer_drift_teardown_for_turn(
+    feature_enabled: bool,
+    status: &ClaudeRemoteControlStatus,
+) -> bool {
+    feature_enabled
+        && matches!(
+            status.state,
+            ClaudeRemoteControlLifecycle::Enabling
+                | ClaudeRemoteControlLifecycle::Ready
+                | ClaudeRemoteControlLifecycle::Connected
+                | ClaudeRemoteControlLifecycle::Reconnecting
+        )
 }
 
 fn remote_control_reconnecting_status(
@@ -1446,7 +1454,10 @@ pub async fn send_chat_message(
             "[chat] MCP config dirty, but background tasks are running — deferring persistent session restart for {workspace_id}"
         );
     } else if session.mcp_config_dirty
-        && remote_control_should_defer_drift_teardown(&session.claude_remote_control)
+        && remote_control_should_defer_drift_teardown_for_turn(
+            remote_control_feature_enabled,
+            &session.claude_remote_control,
+        )
     {
         eprintln!(
             "[chat] MCP config dirty, but Claude Remote Control is active — deferring persistent session restart for {workspace_id}"
@@ -1608,8 +1619,10 @@ pub async fn send_chat_message(
         eprintln!(
             "[chat] session flags drifted, but background tasks are running — deferring persistent session restart for {workspace_id}"
         );
-    } else if remote_control_should_defer_drift_teardown(&session.claude_remote_control)
-        && session.persistent_session.is_some()
+    } else if remote_control_should_defer_drift_teardown_for_turn(
+        remote_control_feature_enabled,
+        &session.claude_remote_control,
+    ) && session.persistent_session.is_some()
         && persistent_session_flags_drifted(
             SessionFlags {
                 plan_mode: session.session_plan_mode,
@@ -1759,8 +1772,10 @@ pub async fn send_chat_message(
         eprintln!(
             "[chat] env-provider output changed, but background tasks are running — deferring persistent session restart for {workspace_id}"
         );
-    } else if remote_control_should_defer_drift_teardown(&session.claude_remote_control)
-        && session.persistent_session.is_some()
+    } else if remote_control_should_defer_drift_teardown_for_turn(
+        remote_control_feature_enabled,
+        &session.claude_remote_control,
+    ) && session.persistent_session.is_some()
         && session.session_resolved_env != resolved_env.vars
     {
         // Env-provider output can drift spuriously between turns when the
@@ -3132,8 +3147,9 @@ pub async fn send_chat_message(
 mod tests {
     use super::{
         remote_control_requested_or_active, remote_control_requested_or_active_for_turn,
-        remote_control_should_defer_drift_teardown, remote_control_should_restore_for_turn,
-        remote_control_title, should_defer_persistent_restart_for_state,
+        remote_control_should_defer_drift_teardown_for_turn,
+        remote_control_should_restore_for_turn, remote_control_title,
+        should_defer_persistent_restart_for_state,
         should_reenable_remote_control_after_turn_result, should_resume_persistent_session,
         should_run_auto_naming, terminal_text,
     };
@@ -3426,9 +3442,13 @@ mod tests {
         };
 
         // Disabled / Error: drift teardowns proceed normally.
-        assert!(!remote_control_should_defer_drift_teardown(&status));
+        assert!(!remote_control_should_defer_drift_teardown_for_turn(
+            true, &status
+        ));
         status.state = ClaudeRemoteControlLifecycle::Error;
-        assert!(!remote_control_should_defer_drift_teardown(&status));
+        assert!(!remote_control_should_defer_drift_teardown_for_turn(
+            true, &status
+        ));
 
         // Live states: defer drift teardowns to keep bridge identity stable.
         for state in [
@@ -3439,9 +3459,29 @@ mod tests {
         ] {
             status.state = state;
             assert!(
-                remote_control_should_defer_drift_teardown(&status),
+                remote_control_should_defer_drift_teardown_for_turn(true, &status),
                 "expected defer for state {state:?}"
             );
         }
+    }
+
+    #[test]
+    fn remote_control_drift_teardown_deferral_respects_feature_flag() {
+        // Feature flag off: never defer drift teardowns, even if a stale
+        // session lifecycle state somehow lingered after the flag flipped.
+        let status = ClaudeRemoteControlStatus {
+            state: ClaudeRemoteControlLifecycle::Connected,
+            session_url: Some("https://claude.ai/code/sess-1".to_string()),
+            connect_url: Some("https://claude.ai/code?bridge=env_1".to_string()),
+            environment_id: Some("env_1".to_string()),
+            detail: None,
+            last_error: None,
+        };
+        assert!(!remote_control_should_defer_drift_teardown_for_turn(
+            false, &status
+        ));
+        assert!(remote_control_should_defer_drift_teardown_for_turn(
+            true, &status
+        ));
     }
 }
