@@ -1350,7 +1350,6 @@ pub async fn send_chat_message(
         }
     };
 
-
     // Build agent settings from frontend params.
     let agent_settings = AgentSettings {
         model: resolved_model,
