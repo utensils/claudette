@@ -159,8 +159,8 @@ function legacyTerminalKeyAction(ev: KeyboardEvent): string | null {
     if (ev.key === "ArrowUp") return "terminal.focus-pane-up";
     if (ev.key === "ArrowDown") return "terminal.focus-pane-down";
   }
-  const isC = ev.code === "KeyC" || ev.key === "c" || ev.key === "C";
-  const isV = ev.code === "KeyV" || ev.key === "v" || ev.key === "V";
+  const isC = ev.code === "KeyC";
+  const isV = ev.code === "KeyV";
   // macOS: Cmd+C/V (without Ctrl or Shift — Ctrl+C must reach the PTY as SIGINT)
   if (isC && ev.metaKey && !ev.ctrlKey && !ev.shiftKey) return "terminal.copy-selection";
   if (isV && ev.metaKey && !ev.ctrlKey && !ev.shiftKey) return "terminal.paste";

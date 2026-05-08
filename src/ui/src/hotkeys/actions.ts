@@ -292,8 +292,8 @@ export const HOTKEY_ACTIONS = [
     scope: "terminal",
     category: "keyboard_category_terminal",
     description: "keyboard_action_terminal_copy_selection",
-    defaultBinding: { mac: "mod+c", linux: "mod+shift+c", windows: "mod+shift+c" },
-    match: "key",
+    defaultBinding: { mac: "mod+code:KeyC", linux: "mod+shift+code:KeyC", windows: "mod+shift+code:KeyC" },
+    match: "code",
     rebindable: true,
   },
   {
@@ -301,8 +301,8 @@ export const HOTKEY_ACTIONS = [
     scope: "terminal",
     category: "keyboard_category_terminal",
     description: "keyboard_action_terminal_paste",
-    defaultBinding: { mac: "mod+v", linux: "mod+shift+v", windows: "mod+shift+v" },
-    match: "key",
+    defaultBinding: { mac: "mod+code:KeyV", linux: "mod+shift+code:KeyV", windows: "mod+shift+code:KeyV" },
+    match: "code",
     rebindable: true,
   },
   {

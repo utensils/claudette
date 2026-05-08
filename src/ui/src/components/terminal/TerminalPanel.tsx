@@ -14,6 +14,10 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { listen } from "@tauri-apps/api/event";
+import {
+  writeText as clipboardWriteText,
+  readText as clipboardReadText,
+} from "@tauri-apps/plugin-clipboard-manager";
 import { useAppStore } from "../../stores/useAppStore";
 import { getTerminalTheme } from "../../utils/theme";
 import {
@@ -744,18 +748,18 @@ export const TerminalPanel = memo(function TerminalPanel() {
         case "copy": {
           const copyInst = activePaneId ? instancesRef.current.get(activePaneId) : null;
           if (!copyInst?.term.hasSelection()) return;
-          void navigator.clipboard.writeText(
-            trimSelectionTrailingWhitespace(copyInst.term.getSelection()),
-          );
-          copyInst.term.clearSelection();
+          const copyText = trimSelectionTrailingWhitespace(copyInst.term.getSelection());
+          void clipboardWriteText(copyText)
+            .then(() => { copyInst.term.clearSelection(); })
+            .catch(() => {});
           return;
         }
         case "paste": {
           const pasteInst = activePaneId ? instancesRef.current.get(activePaneId) : null;
           if (!pasteInst) return;
-          void navigator.clipboard.readText().then((text) => {
-            if (text) pasteInst.term.paste(text);
-          });
+          void clipboardReadText()
+            .then((text) => { if (text) pasteInst.term.paste(text); })
+            .catch(() => {});
           return;
         }
       }
@@ -1234,10 +1238,10 @@ export const TerminalPanel = memo(function TerminalPanel() {
     if (!contextMenu?.leafId) return;
     const inst = instancesRef.current.get(contextMenu.leafId);
     if (!inst?.term.hasSelection()) return;
-    void navigator.clipboard.writeText(
-      trimSelectionTrailingWhitespace(inst.term.getSelection()),
-    );
-    inst.term.clearSelection();
+    const text = trimSelectionTrailingWhitespace(inst.term.getSelection());
+    void clipboardWriteText(text)
+      .then(() => { inst.term.clearSelection(); })
+      .catch(() => {});
     setContextMenu(null);
   }, [contextMenu]);
 
@@ -1245,9 +1249,9 @@ export const TerminalPanel = memo(function TerminalPanel() {
     if (!contextMenu?.leafId) return;
     const inst = instancesRef.current.get(contextMenu.leafId);
     if (!inst) return;
-    void navigator.clipboard.readText().then((text) => {
-      if (text) inst.term.paste(text);
-    });
+    void clipboardReadText()
+      .then((text) => { if (text) inst.term.paste(text); })
+      .catch(() => {});
     setContextMenu(null);
   }, [contextMenu]);
 
