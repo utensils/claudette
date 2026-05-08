@@ -100,6 +100,12 @@ voice = [
     "dep:hound",
 ]
 
+[lints.rust]
+# objc 0.2.x uses the old `feature = "cargo-clippy"` pattern to detect Clippy
+# (predating `cfg(clippy)`). Declare it as a known value so rustc's check-cfg
+# exhaustiveness check doesn't flag macro expansion sites in this crate.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
+
 [dev-dependencies]
 tempfile = "3"
 
