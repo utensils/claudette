@@ -928,6 +928,7 @@ fn main() {
             commands::files::open_attachment_in_browser,
             commands::files::open_attachment_with_default_app,
             commands::files::copy_attachment_file_to_clipboard,
+            commands::files::copy_image_to_clipboard,
             commands::files::watch_workspace_files,
             commands::files::unwatch_workspace_files,
             // Chat

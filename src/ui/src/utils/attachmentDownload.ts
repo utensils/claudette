@@ -158,24 +158,19 @@ export async function copyAttachmentFileToClipboard(
 }
 
 /**
- * Copy the attachment image to the system clipboard using the native
- * `navigator.clipboard.write()` API. Zero IPC, zero base64→number[]
- * serialization, zero Rust round-trip — the webview writes directly to
- * the OS clipboard the same way any browser's "Copy Image" does.
+ * Copy the attachment to the system clipboard.
  *
- * Text/data files are written through Tauri's text clipboard path instead
- * of ClipboardItem because WebKit and Chromium do not reliably accept
- * arbitrary MIME ClipboardItems such as `text/csv`.
- *
- * SVG is also special-cased: WebKit's ClipboardItem implementation silently
- * drops `image/svg+xml`, so a copied SVG would never reach the system
- * clipboard. Since SVG is XML, write it as `text/plain` (the markup itself)
- * so it survives the round-trip.
+ * - PDFs → Tauri `copy_attachment_file_to_clipboard` (file reference)
+ * - SVG / text-typed files → Tauri `writeText` plugin (WebKit silently drops
+ *   non-text ClipboardItems for these types)
+ * - Raster images → Tauri `copy_image_to_clipboard` (image data via native
+ *   OS APIs). WKWebView rejects `navigator.clipboard.write()` after the async
+ *   byte-loading hop invalidates the user-activation gate, so all image types
+ *   are routed through the Rust backend.
  */
 export async function copyAttachmentToClipboard(
   attachment: DownloadableAttachment,
   deps: {
-    clipboard?: Clipboard;
     invoke?: typeof invoke;
     /** Injectable text-clipboard writer — bypasses the W3C clipboard
      *  permission gate. Production wires this to Tauri's plugin so SVGs
@@ -184,9 +179,6 @@ export async function copyAttachmentToClipboard(
     writeText?: (text: string) => Promise<void>;
   } = {},
 ): Promise<void> {
-  const clipboard =
-    deps.clipboard ??
-    (typeof navigator === "undefined" ? undefined : navigator.clipboard);
   const bytes = base64ToBytes(attachment.data_base64);
   if (attachment.media_type === "application/pdf") {
     await copyAttachmentFileToClipboard(attachment, { invoke: deps.invoke });
@@ -203,18 +195,15 @@ export async function copyAttachmentToClipboard(
     // text/data files (CSV, Markdown, JSON, plain text), because WebKit
     // and Chromium do not reliably accept arbitrary MIME ClipboardItems
     // such as `text/csv`.
-    await writeDecodedTextToClipboard(bytes, { ...deps, clipboard });
+    await writeDecodedTextToClipboard(bytes, deps);
     return;
   }
-  // Non-SVG path uses the W3C ClipboardItem API directly — this is the
-  // only branch that requires `navigator.clipboard.write`.
-  if (!clipboard) {
-    throw new Error("Clipboard API not available");
-  }
-  const blob = new Blob([bytes], { type: attachment.media_type });
-  await clipboard.write([
-    new ClipboardItem({ [attachment.media_type]: blob }),
-  ]);
+  const invoker = deps.invoke ?? invoke;
+  await invoker("copy_image_to_clipboard", {
+    bytes: Array.from(bytes),
+    filename: attachment.filename,
+    mediaType: attachment.media_type,
+  });
 }
 
 /**

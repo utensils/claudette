@@ -1747,6 +1747,128 @@ pub async fn copy_attachment_file_to_clipboard(
     .map_err(|e| format!("join error: {e}"))?
 }
 
+/// Copy raster image bytes to the system clipboard as image data. Bypasses
+/// the W3C ClipboardItem API, which WKWebView rejects after async IPC
+/// boundaries invalidate the user-activation gate.
+#[tauri::command]
+pub async fn copy_image_to_clipboard(
+    bytes: Vec<u8>,
+    filename: String,
+    media_type: String,
+) -> Result<(), String> {
+    let dir = std::env::temp_dir().join("claudette-attachments");
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        create_staging_dir(&dir).map_err(|e| format!("mkdir temp dir: {e}"))?;
+        cleanup_stale_attachments(&dir, std::time::Duration::from_secs(24 * 60 * 60));
+        copy_image_bytes_to_clipboard(&dir, &bytes, &filename, &media_type)
+    })
+    .await
+    .map_err(|e| format!("join error: {e}"))?
+}
+
+#[cfg(target_os = "macos")]
+fn copy_image_bytes_to_clipboard(
+    dir: &Path,
+    bytes: &[u8],
+    filename: &str,
+    media_type: &str,
+) -> Result<(), String> {
+    let path = write_attachment_to_temp_file(dir, filename, media_type, bytes)
+        .map_err(|e| format!("write attachment: {e}"))?;
+    // ASObjC bridge: create an NSImage from the file and write it to the
+    // general pasteboard as image data (not a Finder file reference).
+    let output = std::process::Command::new("osascript")
+        .args([
+            "-e",
+            "use framework \"AppKit\"",
+            "-e",
+            "use scripting additions",
+            "-e",
+            "on run argv",
+            "-e",
+            "set img to (current application's NSImage's alloc()'s initWithContentsOfFile:(item 1 of argv))",
+            "-e",
+            "set pb to current application's NSPasteboard's generalPasteboard()",
+            "-e",
+            "pb's clearContents()",
+            "-e",
+            "pb's writeObjects:{img}",
+            "-e",
+            "end run",
+        ])
+        .arg(&path)
+        .output()
+        .map_err(|e| format!("failed to run osascript: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("osascript failed: {}", stderr.trim()))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn copy_image_bytes_to_clipboard(
+    _dir: &Path,
+    bytes: &[u8],
+    _filename: &str,
+    media_type: &str,
+) -> Result<(), String> {
+    let attempts: [(&str, &[&str]); 2] = [
+        ("wl-copy", &["--type", media_type]),
+        ("xclip", &["-selection", "clipboard", "-t", media_type]),
+    ];
+    let mut errors = Vec::new();
+    for (program, args) in attempts {
+        match pipe_to_command(program, args, bytes) {
+            Ok(()) => return Ok(()),
+            Err(e) => errors.push(format!("{program}: {e}")),
+        }
+    }
+    Err(format!(
+        "copying image requires wl-copy or xclip on Linux ({})",
+        errors.join("; ")
+    ))
+}
+
+#[cfg(windows)]
+fn copy_image_bytes_to_clipboard(
+    dir: &Path,
+    bytes: &[u8],
+    filename: &str,
+    media_type: &str,
+) -> Result<(), String> {
+    let path = write_attachment_to_temp_file(dir, filename, media_type, bytes)
+        .map_err(|e| format!("write attachment: {e}"))?;
+    let path_str = path.to_string_lossy().replace('\'', "''");
+    let script = format!(
+        "Add-Type -AssemblyName System.Windows.Forms; \
+         Add-Type -AssemblyName System.Drawing; \
+         [System.Windows.Forms.Clipboard]::SetImage(\
+           [System.Drawing.Image]::FromFile('{path_str}'))"
+    );
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .output()
+        .map_err(|e| format!("failed to run powershell: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("powershell failed: {}", stderr.trim()))
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+fn copy_image_bytes_to_clipboard(
+    _dir: &Path,
+    _bytes: &[u8],
+    _filename: &str,
+    _media_type: &str,
+) -> Result<(), String> {
+    Err("image clipboard copy is not supported on this platform".to_string())
+}
+
 /// Payload for the `workspace-file-changed` Tauri event. The frontend
 /// hook subscribes once at app start and routes every event by
 /// `(workspace_id, path)` against its open file tabs.

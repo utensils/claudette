@@ -1,22 +1,4 @@
-import { describe, it, expect, vi, beforeAll } from "vitest";
-
-// vitest runs in Node; ClipboardItem is a browser global. Stub a minimal
-// constructor that records its input so the tests can assert on the data
-// the real browser/webview would see.
-beforeAll(() => {
-  if (typeof (globalThis as unknown as { ClipboardItem?: unknown }).ClipboardItem === "undefined") {
-    class FakeClipboardItem {
-      readonly types: string[];
-      readonly data: Record<string, Blob>;
-      constructor(data: Record<string, Blob>) {
-        this.data = data;
-        this.types = Object.keys(data);
-      }
-    }
-    (globalThis as unknown as { ClipboardItem: typeof FakeClipboardItem }).ClipboardItem =
-      FakeClipboardItem;
-  }
-});
+import { describe, it, expect, vi } from "vitest";
 import {
   extensionFor,
   downloadAttachment,
@@ -167,34 +149,26 @@ describe("copyAttachmentFileToClipboard", () => {
 });
 
 describe("copyAttachmentToClipboard", () => {
-  it("writes a ClipboardItem via navigator.clipboard.write", async () => {
-    const write = vi.fn().mockResolvedValue(undefined);
-    await copyAttachmentToClipboard(fixture, {
-      clipboard: { write } as unknown as Clipboard,
+  // Raster images bypass WKWebView's clipboard gate by routing through the
+  // Tauri backend command, which writes image data via native OS APIs.
+  it("routes raster image attachments through copy_image_to_clipboard", async () => {
+    const invoke = vi.fn().mockResolvedValue(undefined);
+    await copyAttachmentToClipboard(fixture, { invoke });
+    expect(invoke).toHaveBeenCalledWith("copy_image_to_clipboard", {
+      bytes: [104, 101, 108, 108, 111], // base64 "aGVsbG8=" → "hello"
+      filename: "screenshot.png",
+      mediaType: "image/png",
     });
-    expect(write).toHaveBeenCalledOnce();
-    const items = write.mock.calls[0][0] as ClipboardItem[];
-    expect(items).toHaveLength(1);
-    expect(items[0].types).toContain("image/png");
   });
 
-  it("throws when the clipboard API is unavailable", async () => {
+  it("propagates errors from copy_image_to_clipboard", async () => {
+    const invoke = vi.fn().mockRejectedValue(new Error("denied"));
     await expect(
-      copyAttachmentToClipboard(fixture, { clipboard: undefined }),
-    ).rejects.toThrow(/not available/);
-  });
-
-  it("propagates errors from clipboard.write", async () => {
-    const write = vi.fn().mockRejectedValue(new Error("denied"));
-    await expect(
-      copyAttachmentToClipboard(fixture, {
-        clipboard: { write } as unknown as Clipboard,
-      }),
+      copyAttachmentToClipboard(fixture, { invoke }),
     ).rejects.toThrow("denied");
   });
 
   it("routes PDF attachments through the backend file clipboard command", async () => {
-    const write = vi.fn().mockResolvedValue(undefined);
     const invoke = vi.fn().mockResolvedValue(undefined);
     const pdfFixture: DownloadableAttachment = {
       filename: "doc.pdf",
@@ -202,21 +176,16 @@ describe("copyAttachmentToClipboard", () => {
       media_type: "application/pdf",
     };
 
-    await copyAttachmentToClipboard(pdfFixture, {
-      clipboard: { write } as unknown as Clipboard,
-      invoke,
-    });
+    await copyAttachmentToClipboard(pdfFixture, { invoke });
 
     expect(invoke).toHaveBeenCalledWith("copy_attachment_file_to_clipboard", {
       bytes: [37, 80, 68, 70, 45],
       filename: "doc.pdf",
       mediaType: "application/pdf",
     });
-    expect(write).not.toHaveBeenCalled();
   });
 
   it("writes CSV attachments as text via the injected writeText", async () => {
-    const write = vi.fn().mockResolvedValue(undefined);
     const writeText = vi.fn().mockResolvedValue(undefined);
     const csvFixture: DownloadableAttachment = {
       filename: "people.csv",
@@ -224,17 +193,12 @@ describe("copyAttachmentToClipboard", () => {
       media_type: "text/csv",
     };
 
-    await copyAttachmentToClipboard(csvFixture, {
-      clipboard: { write } as unknown as Clipboard,
-      writeText,
-    });
+    await copyAttachmentToClipboard(csvFixture, { writeText });
 
     expect(writeText).toHaveBeenCalledWith("id,name\n1,Ada\n");
-    expect(write).not.toHaveBeenCalled();
   });
 
   it("writes JSON attachments as text via the injected writeText", async () => {
-    const write = vi.fn().mockResolvedValue(undefined);
     const writeText = vi.fn().mockResolvedValue(undefined);
     const jsonFixture: DownloadableAttachment = {
       filename: "data.json",
@@ -242,32 +206,23 @@ describe("copyAttachmentToClipboard", () => {
       media_type: "application/json",
     };
 
-    await copyAttachmentToClipboard(jsonFixture, {
-      clipboard: { write } as unknown as Clipboard,
-      writeText,
-    });
+    await copyAttachmentToClipboard(jsonFixture, { writeText });
 
     expect(writeText).toHaveBeenCalledWith('{"ok":true}');
-    expect(write).not.toHaveBeenCalled();
   });
 
   // WebKit silently drops image/svg+xml ClipboardItems, so a copied SVG
   // would never reach the system clipboard. Production routes SVGs
   // through Tauri's writeText, which bypasses the WKWebView allowlist.
   it("writes SVG attachments via the injected writeText (Tauri clipboard)", async () => {
-    const write = vi.fn().mockResolvedValue(undefined);
     const writeText = vi.fn().mockResolvedValue(undefined);
     const svgFixture: DownloadableAttachment = {
       filename: "drawing.svg",
       data_base64: "PHN2Zy8+", // base64 of '<svg/>'
       media_type: "image/svg+xml",
     };
-    await copyAttachmentToClipboard(svgFixture, {
-      clipboard: { write } as unknown as Clipboard,
-      writeText,
-    });
+    await copyAttachmentToClipboard(svgFixture, { writeText });
     expect(writeText).toHaveBeenCalledWith("<svg/>");
-    expect(write).not.toHaveBeenCalled();
   });
 });
 
