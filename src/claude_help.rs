@@ -25,15 +25,17 @@ pub struct ClaudeFlagDef {
     pub is_dangerous: bool,
 }
 
-/// Flags that Claudette emits itself (in `agent::args::build_claude_args`
-/// and `agent::session::build_persistent_args`) and must therefore never
-/// be exposed to users for toggling — letting them flip these would break
-/// the agent bridge invariants (output framing, session id ownership,
-/// permission-prompt protocol, etc).
+/// Flags never exposed in the "Claude flags" settings panel.
 ///
-/// Update this when `build_claude_args` or `build_persistent_args` emits
-/// a new flag.
+/// **Category 1 — emitted by Claudette** (`agent::args::build_claude_args` /
+/// `agent::session::build_persistent_args`). Users toggling these would break
+/// agent bridge invariants (output framing, session-id ownership, permission-prompt
+/// protocol, etc). Update when those functions emit a new flag.
+///
+/// **Category 2 — meaningless as persistent settings**: session-only action flags
+/// and flags documented as only functioning with `--print` (itself reserved above).
 const RESERVED_FLAGS: &[&str] = &[
+    // ── Emitted by Claudette ──────────────────────────────────────────────
     "--print",
     "--output-format",
     "--input-format",
@@ -51,6 +53,15 @@ const RESERVED_FLAGS: &[&str] = &[
     "--allowedTools",
     "--append-system-prompt",
     "--chrome",
+    // ── Not meaningful as persistent settings ─────────────────────────────
+    // Session-only action / informational flags.
+    "--continue",
+    "--help",
+    "--version",
+    // Only function when --print is active (reserved above).
+    "--max-budget-usd",
+    "--no-session-persistence",
+    "--fallback-model",
 ];
 
 /// Pure parser: take `claude --help` text, return the list of flags users
@@ -363,6 +374,30 @@ mod tests {
         assert_eq!(defs.len(), 1);
         let choices = defs[0].enum_choices.as_ref().expect("expected choices");
         assert_eq!(choices, &vec!["acceptEdits", "plan", "default"]);
+    }
+
+    #[test]
+    fn session_only_and_print_only_flags_are_filtered_out() {
+        let defs = parse_claude_help(FIXTURE);
+        // Session-only action flags — meaningless as persistent defaults.
+        for name in ["--continue", "--help", "--version"] {
+            assert!(
+                find(&defs, name).is_none(),
+                "{name} is a session-only flag and must not appear in settings"
+            );
+        }
+        // --print-only flags: the CLI documents them as only working with
+        // --print, which is itself reserved.
+        for name in [
+            "--max-budget-usd",
+            "--no-session-persistence",
+            "--fallback-model",
+        ] {
+            assert!(
+                find(&defs, name).is_none(),
+                "{name} only works with --print (reserved) and must not appear in settings"
+            );
+        }
     }
 
     #[test]
