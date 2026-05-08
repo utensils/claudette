@@ -232,7 +232,11 @@ async fn dispatch(
     let create_value = ipc::call(
         info,
         "create_workspace",
-        serde_json::json!({ "repo_id": repo_id, "name": name }),
+        serde_json::json!({
+            "repo_id": repo_id,
+            "name": name,
+            "preserve_name": true,
+        }),
     )
     .await?;
     let workspace_id = create_value
