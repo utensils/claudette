@@ -59,3 +59,22 @@ The plugin sandbox enforces strict security:
 - **30-second timeout** — per CLI invocation
 - **No filesystem or network access** — all I/O goes through the host API
 
+## Environment Provider Plugins
+
+The same Lua plugin runtime powers a second plugin kind: **env-provider**. Each env-provider activates when the workspace's worktree contains the file or signal it watches for, then merges its environment variables into every process Claudette spawns inside the worktree (terminals, agent subprocesses, [MCP servers](/claudette/features/mcp-servers/)).
+
+Bundled env-providers:
+
+| Plugin | Activates when | Required CLI |
+|---|---|---|
+| `env-direnv` | The worktree has an `.envrc` | [`direnv`](https://direnv.net/) |
+| `env-mise` | The worktree has a `mise.toml`, `.mise.toml`, or `.tool-versions` | [`mise`](https://mise.jdx.dev/) |
+| `env-dotenv` | The worktree has a `.env` file | None (parsed in-process) |
+| `env-nix-devshell` | The worktree has a `flake.nix` with a default devshell | [`nix`](https://nixos.org/) |
+
+Toggle individual providers in **Settings > Plugins**. Each plugin's manifest declares any user-configurable settings — for example, `env-direnv` exposes `auto_allow` to skip the per-path `direnv allow` safeguard if you'd rather trust your own `.envrc` files automatically.
+
+The merged environment is computed once per worktree and reused across processes; if you change `.envrc` or `mise.toml`, terminate the running agent or terminal tab and Claudette picks up the new env on the next spawn.
+
+Drop your own env-provider into `~/.claudette/plugins/<name>/` (one `plugin.json` + one `init.lua`) and Claudette discovers it at startup.
+

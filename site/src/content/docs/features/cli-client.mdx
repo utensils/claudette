@@ -1,0 +1,259 @@
+---
+title: Command-Line Client
+description: Drive the running Claudette desktop app from the terminal — script workspaces, dispatch prompts, and orchestrate multi-workspace fan-outs.
+---
+
+The `claudette` CLI talks to the running desktop app over a local socket. Every operation flows through the GUI's own command core — so tray icons, notifications, and the workspace list update live as the CLI works.
+
+The desktop app must be running. If it isn't, the CLI exits with a clear "open the desktop app first" message rather than silently degrading.
+
+## Installation
+
+The `claudette` binary ships inside the desktop app bundle. Use the in-app installer in **Settings > General > Command-line interface**, which symlinks the bundled binary onto your `PATH`. On Linux `.deb` installs the CLI is already at `/usr/bin/claudette` automatically. Standalone `claudette-cli-<platform>` release assets are also published per release for headless / CI consumers.
+
+To install shell completion:
+
+```sh
+# zsh
+claudette completion zsh > ~/.zsh/completions/_claudette
+
+# bash
+claudette completion bash > ~/.bash_completions/claudette
+
+# fish
+claudette completion fish > ~/.config/fish/completions/claudette.fish
+```
+
+Build from source:
+
+```sh
+cargo install --path src-cli
+```
+
+## Driving Claudette from a Claude Code agent
+
+The Claudette repository ships a [Claude Code skill](https://docs.anthropic.com/claude/docs/claude-code-skills) at `.claude/skills/claudette/SKILL.md` that wraps every CLI command described on this page. With the skill installed, an agent running anywhere on your machine can list workspaces, send prompts, resolve pending plan approvals, and fan out batch manifests — without you copy-pasting commands into a terminal.
+
+This is the loop that powers most agent-orchestrating-agents workflows: a "main" Claude Code session uses the skill to drive Claudette, which spawns its own Claude Code subprocesses inside isolated worktrees.
+
+### Install the skill
+
+Two paths, depending on where you want it available:
+
+**Project-local** (recommended if you only use the skill while working inside the Claudette checkout):
+
+```sh
+git clone https://github.com/utensils/Claudette.git
+# Skill is now at <repo>/.claude/skills/claudette/SKILL.md and auto-loads
+# whenever a Claude Code session opens this directory.
+```
+
+**User-global** (recommended if you want the skill available from any project):
+
+```sh
+# Symlink the skill into your user skills dir
+mkdir -p ~/.claude/skills
+ln -s "$(pwd)/.claude/skills/claudette" ~/.claude/skills/claudette
+
+# Or copy it (no auto-update; you control when to refresh):
+cp -R .claude/skills/claudette ~/.claude/skills/
+```
+
+Claude Code looks in `<repo>/.claude/skills/` and `~/.claude/skills/` automatically — no registration step.
+
+### What the skill grants
+
+The skill's frontmatter declares `allowed-tools: Bash(claudette:*)`, which pre-grants the agent permission to invoke any `claudette ...` command without per-call prompts. The skill body itself is a curated playbook of common workflows: workspace lifecycle, sending prompts with the right flags, inspecting `pending_controls`, resolving AskUserQuestion / plan-mode requests, batch fan-out, and so on.
+
+### Verify it's loaded
+
+In a Claude Code session, ask "list my Claudette workspaces" — if the skill is wired up correctly, the agent runs `claudette workspace list` directly rather than asking permission. If you see a permission prompt for `Bash(claudette ...)`, the skill isn't being discovered; double-check the directory name (`claudette`, exactly) and that `SKILL.md` lives inside it.
+
+## Quick reference
+
+```sh
+claudette --help                       # Top-level usage
+claudette capabilities                 # JSON manifest of supported IPC methods
+claudette version                      # GUI app + protocol version
+```
+
+The global `--json` flag opts into machine-readable output for the few commands that have a table-style renderer (`workspace list`, `repo list`, `pr list`, `plugin list`). Everything else always emits JSON.
+
+## Workspaces
+
+```sh
+claudette workspace list                          # Active workspaces
+claudette workspace list --json                   # Scriptable output
+claudette workspace create <repo-id> <name>       # New workspace on a fresh worktree
+claudette workspace archive <id>                  # Archive (worktree removed; chat preserved)
+claudette workspace archive <id> --delete-branch  # Force-delete the branch on archive
+```
+
+`workspace create` returns the new workspace's ID **and** a `default_session_id` that you can immediately target with `chat send`.
+
+## Chat sessions
+
+```sh
+# Inspect
+claudette chat list <workspace-id>
+claudette chat list <workspace-id> --include-archived
+claudette chat show <session-id>                  # Snapshot: metadata, recent messages, pending controls
+claudette chat show <session-id> --limit 50 --before <message-id>
+claudette chat turns <session-id>                 # Persisted completed turns + tool activity
+claudette chat attachments <session-id>           # Attachment metadata
+claudette chat attachment-data <attachment-id>    # Full body as base64
+
+# Lifecycle
+claudette chat create <workspace-id>
+claudette chat rename <session-id> <new-name>
+claudette chat archive <session-id>
+claudette chat stop <session-id>                  # Stop a running agent turn
+claudette chat reset <session-id>                 # Reset Claude resume state
+claudette chat clear-attention <session-id>
+```
+
+## Sending and steering prompts
+
+```sh
+# Send a fresh prompt (kicks off an agent turn)
+claudette chat send <session-id> "Refactor the auth middleware"
+claudette chat send <session-id> @./prompts/task.md         # @file reads from disk
+claudette chat send <session-id> -                          # `-` reads from stdin
+
+# Mid-turn steering: queue a follow-up while the agent is running
+claudette chat steer <session-id> "Also update the tests"
+```
+
+`chat send` mirrors every lever the GUI's chat input bar exposes:
+
+```sh
+claudette chat send <session-id> @./prompt.md \
+  --model opus \
+  --plan \
+  --thinking \
+  --effort high \
+  --chrome \
+  --permission acceptEdits
+```
+
+Boolean flags are tri-state — pass `--plan` to force on, `--no-plan` to force off, or omit both to inherit the GUI default. This lets a script override a workspace-level toggle in either direction without rewriting settings.
+
+| Flag | Values | Effect |
+|---|---|---|
+| `--model` | `opus`, `sonnet`, `haiku`, `claude-opus-4-6`, ... | Override model for this turn |
+| `--plan` / `--no-plan` | — | Plan mode (read-only until approved) |
+| `--thinking` / `--no-thinking` | — | Extended thinking |
+| `--fast` / `--no-fast` | — | Fast mode (Opus 4.6) |
+| `--effort` | `low`, `medium`, `high`, `xhigh`, `max` | Reasoning effort (`max` requires Opus 4.6) |
+| `--chrome` / `--no-chrome` | — | Chrome browser tool |
+| `--disable-1m-context` | — | Suppress Max-plan auto-upgrade to a 1M context window |
+| `--permission` | `default`, `acceptEdits`, `bypassPermissions` | Permission level |
+
+## Resolving pending controls
+
+Plan mode and AskUserQuestion produce **pending controls** — the agent pauses and waits for a human (or another script) to respond. Resolve them from the terminal:
+
+```sh
+# Answer an AskUserQuestion request
+claudette chat answer <session-id> <tool-use-id> \
+  --answers-json '{"Which library should we use?":"date-fns"}'
+
+# Approve a plan
+claudette chat approve-plan <session-id> <tool-use-id>
+
+# Deny a plan with feedback
+claudette chat deny-plan <session-id> <tool-use-id> \
+  "Use middleware composition instead of inheritance"
+```
+
+`tool_use_id` is in the `pending_controls` field of `chat show` output. See [Plan Mode](/claudette/features/plan-mode/) for the workflow context.
+
+## Repositories
+
+```sh
+claudette repo list           # Registered repositories
+claudette repo list --json
+```
+
+The GUI is the canonical registration surface today. Use `repo list` to map between repository IDs (used by `workspace create`) and human-readable names.
+
+## Pull requests
+
+`pr` is a friendly shortcut over the active SCM provider plugin (typically `scm-github` or `scm-gitlab`). It resolves the workspace's branch and SCM provider automatically.
+
+```sh
+claudette pr list --workspace <workspace-id>             # PRs for this branch
+claudette pr list --workspace <workspace-id> --all       # Every open PR in the repo
+claudette pr show <number> --workspace <workspace-id>
+```
+
+Set `CLAUDETTE_WORKSPACE_ID` to skip the `--workspace` flag.
+
+If no SCM provider matches the repository's remote, the command exits with a helpful message — usually because the corresponding CLI (`gh`, `glab`) is missing or the plugin is disabled.
+
+## Plugins
+
+The generic `plugin` surface lets scripts list discovered plugins and invoke any declared operation directly. Friendly per-kind shortcuts (`pr list`) are layered on top.
+
+```sh
+claudette plugin list                                    # Loaded plugins, kind, CLI status
+claudette plugin invoke github list_pull_requests \
+  --workspace <workspace-id> \
+  '{"branch":"feature/x"}'
+```
+
+The third positional argument is JSON passed verbatim as the operation's args. Defaults to `{}`.
+
+## Batch fan-out
+
+The flagship use case for the CLI: a phase-of-work plan that creates N workspaces and dispatches a prompt to each.
+
+```sh
+claudette batch validate plan.yaml    # Lint without creating
+claudette batch run plan.yaml         # Create workspaces + dispatch prompts
+```
+
+Manifest schema (YAML or JSON):
+
+```yaml
+repository: my-repo            # Name or id
+defaults:                      # Applied to each workspace before per-workspace overrides
+  model: sonnet
+  plan: false
+workspaces:
+  - name: builtins-tsx
+    prompt_file: ./prompts/43-builtins.md
+  - name: shell-rs
+    prompt: |
+      Implement issue #42 ...
+    model: opus                # Per-workspace override
+  - name: validator
+    prompt: "Add input validation tests"
+    plan: true
+    permission: acceptEdits
+```
+
+`prompt_file` paths are resolved relative to the manifest's directory. `validate` catches duplicate names, missing prompts, prompt-file paths that don't exist, and invalid workspace names.
+
+## Escape hatch: raw RPC
+
+For methods that don't have a typed subcommand yet:
+
+```sh
+claudette rpc list_workspaces
+claudette rpc create_workspace '{"repo_id":"…","name":"my-task","preserve_name":true}'
+```
+
+Use `claudette capabilities` to see the full method list.
+
+## Environment variables
+
+| Variable | Purpose |
+|---|---|
+| `CLAUDETTE_WORKSPACE_ID` | Default `--workspace` for `pr` and `plugin invoke` |
+
+## See also
+
+- [Batch manifests in practice](/claudette/features/parallel-agents/) — using the CLI to fan out a phase plan
+- [Plan Mode](/claudette/features/plan-mode/) — context for `chat answer` / `chat approve-plan` / `chat deny-plan`
+- [SCM Providers](/claudette/features/scm-providers/) — the providers `pr` resolves through

@@ -1,0 +1,103 @@
+---
+title: Slash Commands
+description: Built-in shortcuts, project-level custom commands, and how plugins contribute their own.
+---
+
+Type `/` in the chat input to open the slash-command picker. Claudette aggregates commands from four sources, deduplicates them, and ranks the picker by recency so what you used last is one keystroke away.
+
+## Built-in commands
+
+Native commands ship with the app and always work. They split into two flavors:
+
+**Local actions and settings shortcuts** — these don't contact the agent; they mutate the UI or open a settings panel.
+
+| Command | Effect |
+|---|---|
+| `/clear` | Clear the chat history (UI-only). |
+| `/compact` | Compact the conversation (mirrors Claude Code's behavior). |
+| `/plan` | Toggle plan mode on for the next turn. |
+| `/model` | Open the model picker. |
+| `/permissions` | Open the permissions panel. |
+| `/status` | Show session/permission status. |
+| `/help` | Show available commands. |
+| `/init` | Generate a `CLAUDE.md` for the current repo. |
+| `/config` `[section]` | Open Claudette settings (optional section: `general`, `models`, `usage`, `appearance`, `notifications`, `git`, `plugins`, `experimental`). |
+| `/usage` | Open the Claude Code usage panel. |
+| `/extra-usage` | Open the extra-usage view. |
+| `/release-notes` | Open the GitHub release notes. |
+| `/version` | Show app + protocol version. |
+
+**Prompt expansions** — these seed pre-written prompts that flow through the agent:
+
+| Command | Effect |
+|---|---|
+| `/review [focus]` | Seed a code review of the current branch against its base. |
+| `/security-review [focus]` | Seed a security-focused review of the current branch. |
+| `/pr-comments [PR# or guidance]` | Summarize PR comments for the current branch. |
+
+**Plugin management** (when **Settings > Experimental > Plugin management** is enabled):
+
+| Command | Effect |
+|---|---|
+| `/plugin [install\|enable\|disable\|uninstall\|update\|manage\|browse\|marketplace]` | Open or drive the Plugins panel. |
+| `/marketplace [add\|remove\|update] <source>` | Manage Claude Code marketplaces. |
+
+## Custom commands
+
+Drop a markdown file into one of these directories and it appears as a slash command:
+
+| Directory | Source | Scope |
+|---|---|---|
+| `<repo>/.claude/commands/` | `project` | Available only in this repository |
+| `~/.claude/commands/` | `user` | Available everywhere |
+
+The file's basename (without `.md`) becomes the command name. Frontmatter is optional:
+
+```markdown
+---
+description: Generate JSDoc for the selected file
+argument-hint: <file path>
+---
+
+You are a JSDoc author. Generate complete JSDoc for the file passed as an argument:
+
+@$ARGUMENTS
+```
+
+The file's body is the seeded prompt. Use `$ARGUMENTS` to interpolate whatever the user typed after the command name.
+
+## Skills
+
+A "skill" is a slash command backed by a directory rather than a single file — it can include supporting markdown, examples, and a `SKILL.md` that defines the command. Skills are discovered the same way commands are:
+
+| Directory | Source |
+|---|---|
+| `<plugin>/skills/` | Plugin-contributed |
+| `~/.claude/skills/<skill-name>/SKILL.md` | User-contributed |
+
+The skill's directory name is the command name; `SKILL.md` provides the seeded prompt and frontmatter.
+
+## Plugin-contributed commands
+
+Enabled Claude Code plugins (managed via the **Plugins** settings panel) can ship their own commands and skills. They appear in the picker tagged with their plugin's name. See the Claude Code documentation for plugin authoring; Claudette discovers them automatically once installed.
+
+## Resolution order
+
+When the same command name is contributed by multiple sources, the highest-priority one wins:
+
+1. **Built-ins** for `/plugin` and `/marketplace` — reserved; never shadowable.
+2. **Project commands** (`<repo>/.claude/commands/`) — your repo's customizations.
+3. **User commands** (`~/.claude/commands/`).
+4. **Plugin commands**.
+5. **Other built-ins** (`/review`, `/config`, ...) yield to a project- or user-defined command of the same name, so you can override them.
+
+The picker shows the source label in muted text, so you can spot conflicts at a glance.
+
+## Recency ordering
+
+The picker sorts by recency of last use, then alphabetical. Use **Tab** to autocomplete and **Enter** to dispatch.
+
+## See also
+
+- [Pinned Prompts](/claudette/features/pinned-prompts/) — for prompts you reuse but don't want polluting the slash-command namespace
+- [Per-Repo Settings](/claudette/features/per-repo-settings/) — `.claude/commands/` lives alongside other repo-scoped config
