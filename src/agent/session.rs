@@ -442,6 +442,16 @@ fn build_persistent_args(
         args.push(instructions.to_string());
     }
 
+    // Append user-toggled extra flags (Settings → Claude flags).
+    // Mirrors the loop in `build_claude_args` so persistent sessions and
+    // one-shot turns deliver the same argv shape.
+    for (name, value) in &settings.extra_claude_flags {
+        args.push(name.clone());
+        if let Some(v) = value {
+            args.push(v.clone());
+        }
+    }
+
     // No prompt argument — prompts come via stdin as SDKUserMessage.
 
     args
@@ -508,6 +518,35 @@ mod tests {
             .position(|a| a == "--model")
             .expect("--model should be present");
         assert_eq!(args[idx + 1], "gpt-5.4");
+    }
+
+    #[test]
+    fn test_build_persistent_args_extra_claude_flags() {
+        let settings = AgentSettings {
+            extra_claude_flags: vec![
+                ("--debug".to_string(), None),
+                ("--add-dir".to_string(), Some("/tmp/foo".to_string())),
+            ],
+            ..Default::default()
+        };
+        let args = build_persistent_args("sess-1", false, &[], None, &settings);
+
+        let debug_idx = args
+            .iter()
+            .position(|a| a == "--debug")
+            .expect("--debug should be in args");
+        let add_idx = args
+            .iter()
+            .position(|a| a == "--add-dir")
+            .expect("--add-dir should be in args");
+        // Value-taking flag has its value adjacent.
+        assert_eq!(args[add_idx + 1], "/tmp/foo");
+        // Boolean flag has nothing or another flag adjacent (NOT a value).
+        let next = args.get(debug_idx + 1).map(String::as_str).unwrap_or("");
+        assert!(
+            next.is_empty() || next.starts_with("--"),
+            "boolean --debug should not have a value adjacent, got: {next:?}",
+        );
     }
 
     #[test]
