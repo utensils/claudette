@@ -51,10 +51,14 @@ export function ClaudeFlagsSettings({
     try {
       const defs = await listClaudeFlags();
       setCachedDefs(defs);
+      setDefsLoading(false);
     } catch (e) {
       if (isStillLoading(e)) {
         // Don't surface a Retry banner during the boot-time discovery
         // window — re-poll until discovery resolves to Ok or a real error.
+        // Crucially, keep `defsLoading` true through the poll: a `finally`
+        // clear here would leave the user staring at a blank section
+        // between re-polls (no loading hint, no defs, no error).
         if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
         pollTimerRef.current = setTimeout(() => {
           if (useAppStore.getState().claudeFlagDefs === null) {
@@ -64,7 +68,6 @@ export function ClaudeFlagsSettings({
         return;
       }
       setDefsError(String(e));
-    } finally {
       setDefsLoading(false);
     }
   }, [setCachedDefs]);
