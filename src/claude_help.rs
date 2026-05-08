@@ -37,6 +37,7 @@ const RESERVED_FLAGS: &[&str] = &[
     "--print",
     "--output-format",
     "--input-format",
+    "--replay-user-messages",
     "--verbose",
     "--include-partial-messages",
     "--session-id",
