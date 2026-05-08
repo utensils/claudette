@@ -22,6 +22,9 @@ use crate::model::{
     WorkspaceStatus,
 };
 use crate::snapshot;
+use crate::workspace_alloc::{
+    WorkspaceAllocation, WorkspaceAllocationError, allocate_workspace_name,
+};
 
 #[derive(Debug)]
 pub enum ForkError {
@@ -33,6 +36,10 @@ pub enum ForkError {
     SourceWorktreeMissing,
     /// A checkpoint/message mapping was missing during the copy.
     InconsistentHistory(String),
+    /// Could not find a non-colliding name/branch/path triple — every
+    /// `<source>-fork[-N]` candidate hits an existing workspace, branch,
+    /// git worktree, or on-disk dir. Bubbled up from `workspace_alloc`.
+    Allocation(WorkspaceAllocationError),
     Db(rusqlite::Error),
     Git(git::GitError),
     Snapshot(String),
@@ -50,6 +57,7 @@ impl std::fmt::Display for ForkError {
                 "Source workspace has no worktree on disk; cannot determine base ref for fork"
             ),
             Self::InconsistentHistory(msg) => write!(f, "Inconsistent history: {msg}"),
+            Self::Allocation(e) => write!(f, "Could not allocate fork name: {e}"),
             Self::Db(e) => write!(f, "Database error: {e}"),
             Self::Git(e) => write!(f, "Git error: {e:?}"),
             Self::Snapshot(msg) => write!(f, "Snapshot error: {msg}"),
@@ -75,6 +83,18 @@ impl From<git::GitError> for ForkError {
 impl From<std::io::Error> for ForkError {
     fn from(e: std::io::Error) -> Self {
         Self::Io(e)
+    }
+}
+
+impl From<WorkspaceAllocationError> for ForkError {
+    fn from(e: WorkspaceAllocationError) -> Self {
+        // Allocation can fail with a wrapped GitError (when listing branches
+        // / worktrees) — collapse that into the existing Git arm so callers
+        // that already format ForkError::Git keep working unchanged.
+        match e {
+            WorkspaceAllocationError::Git(g) => Self::Git(g),
+            other => Self::Allocation(other),
+        }
     }
 }
 
@@ -146,13 +166,26 @@ pub async fn fork_workspace_at_checkpoint(
         git::head_commit(src_wt).await?
     };
 
-    let (new_name, new_branch_name) = allocate_name_and_branch(
-        db,
-        &source_ws.repository_id,
-        &source_ws.name,
+    // Reuse the GUI's name/branch/path allocator so a fork can never collide
+    // with an existing workspace, an existing git branch, an existing git
+    // worktree, OR an orphan directory under the worktree base. The fork's
+    // private dedupe used to live here and only checked DB workspace names,
+    // which let `git worktree add` later die with `'<path>' already exists`
+    // when an earlier fork's dir lingered on disk (e.g. archive without
+    // dir-cleanup, hard delete of the workspace row).
+    let workspaces = db.list_workspaces()?;
+    let WorkspaceAllocation {
+        name: new_name,
+        branch_name: new_branch_name,
+        worktree_path,
+    } = allocate_workspace_name(
+        &repo,
+        &workspaces,
+        &format!("{}-fork", source_ws.name),
         inputs.branch_prefix,
-    )?;
-    let worktree_path: PathBuf = inputs.worktree_base.join(&repo.path_slug).join(&new_name);
+        inputs.worktree_base,
+    )
+    .await?;
     let worktree_path_str = worktree_path.to_string_lossy().to_string();
 
     let actual_path =
@@ -261,37 +294,14 @@ async fn fork_after_worktree(
     })
 }
 
-/// Allocate a workspace name + branch name that do not collide with existing
-/// workspaces in the same repository. Appends `-fork`, then `-fork-2`, etc.
-fn allocate_name_and_branch(
-    db: &Database,
-    repo_id: &str,
-    source_name: &str,
-    branch_prefix: &str,
-) -> Result<(String, String), ForkError> {
-    let existing_names: std::collections::HashSet<String> = db
-        .list_workspaces()?
-        .into_iter()
-        .filter(|w| w.repository_id == repo_id)
-        .map(|w| w.name)
-        .collect();
-
-    let base = format!("{source_name}-fork");
-    let name = if !existing_names.contains(&base) {
-        base
-    } else {
-        let mut n = 2;
-        loop {
-            let candidate = format!("{source_name}-fork-{n}");
-            if !existing_names.contains(&candidate) {
-                break candidate;
-            }
-            n += 1;
-        }
-    };
-    let branch = format!("{branch_prefix}{name}");
-    Ok((name, branch))
-}
+// Name + branch + path allocation lives in `crate::workspace_alloc`, shared
+// with the GUI's "create workspace" path. Forking goes through the same helper
+// so it picks up all four collision protections (DB rows, DB branch names,
+// existing git branches, existing git worktrees, on-disk worktree directories)
+// uniformly. The fork's own dedupe used to live here and only checked DB
+// workspace names — leaving git-tracked refs and orphan dirs free to collide
+// later in `git worktree add`. See the regression pin
+// `fork_skips_orphan_worktree_dir_on_disk`.
 
 /// Copy chat messages, checkpoints and tool activities from the source
 /// workspace up to and including the checkpoint.
@@ -699,31 +709,20 @@ mod tests {
         assert_eq!(forked_cps[1].turn_index, 1);
     }
 
-    #[test]
-    fn allocate_name_suffixes_on_collision() {
-        let db = Database::open_in_memory().unwrap();
-        db.insert_repository(&make_repo("r1")).unwrap();
-        db.insert_workspace(&make_workspace("w1", "r1", "source"))
-            .unwrap();
-        db.insert_workspace(&make_workspace("w2", "r1", "source-fork"))
-            .unwrap();
-
-        let (name, branch) = allocate_name_and_branch(&db, "r1", "source", "pfx/").unwrap();
-        assert_eq!(name, "source-fork-2");
-        assert_eq!(branch, "pfx/source-fork-2");
-    }
-
-    #[test]
-    fn allocate_name_no_collision() {
-        let db = Database::open_in_memory().unwrap();
-        db.insert_repository(&make_repo("r1")).unwrap();
-        db.insert_workspace(&make_workspace("w1", "r1", "source"))
-            .unwrap();
-
-        let (name, branch) = allocate_name_and_branch(&db, "r1", "source", "").unwrap();
-        assert_eq!(name, "source-fork");
-        assert_eq!(branch, "source-fork");
-    }
+    // Fork's name/branch/path allocator now delegates to
+    // `claudette::workspace_alloc::allocate_workspace_name`, which has its
+    // own comprehensive collision tests in `workspace_alloc::tests`:
+    //
+    //   - `allocation_uses_base_name_when_available`        (no-collision)
+    //   - `allocation_suffixes_existing_workspace_name`     (DB workspace)
+    //   - `allocation_suffixes_existing_git_branch`         (git ref)
+    //   - `allocation_suffixes_existing_worktree_path_on_disk` (orphan dir)
+    //   - `allocation_ignores_same_name_in_other_repo`      (scoping)
+    //
+    // The fork-specific pin `fork_skips_orphan_worktree_dir_on_disk` below
+    // exercises the integration end-to-end (real git repo + DB + orphan
+    // dir) so a future regression that re-introduces a custom dedupe
+    // inside fork.rs still fails CI.
 
     #[test]
     fn claude_project_slug_replaces_separators() {
@@ -987,6 +986,181 @@ mod tests {
         assert!(
             !cols.iter().any(|c| c == "turn_count"),
             "workspaces.turn_count must stay dropped — live state lives on chat_sessions; cols={cols:?}"
+        );
+    }
+
+    // --- Fork allocator integration pin ---
+    //
+    // The bug this pins: forking a workspace whose ideal `<source>-fork` name
+    // collides with an orphan worktree directory on disk used to fail mid-
+    // flight with `git worktree add: '<path>' already exists`. Fork's private
+    // dedupe only checked DB workspace names; renames + hard-deletes leave
+    // stale dirs the DB no longer remembers. Fork now delegates to
+    // `workspace_alloc::allocate_workspace_name` — which checks all five
+    // collision sources — and this test pins the wiring end-to-end so a
+    // future regression that revives a custom dedupe inside fork.rs fails
+    // CI rather than the user's chat panel.
+
+    /// Init a real bare-ish git repo with one commit, returning the temp dir
+    /// (drop-cleans) and the HEAD commit hash. Mirrors the pattern used by
+    /// `workspace_alloc::tests` — kept local so the helpers don't have to
+    /// become `pub(crate)` just for this test.
+    fn setup_real_repo() -> (tempfile::TempDir, String) {
+        use std::process::Command;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+        let git_bin = crate::git::resolve_git_path_blocking();
+        let must = |args: &[&str]| {
+            let ok = Command::new(&git_bin)
+                .arg("-C")
+                .arg(path)
+                .args(args)
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?} failed in {}", path.display());
+        };
+        must(&["init", "-b", "main"]);
+        must(&["config", "user.email", "fork-test@example.com"]);
+        must(&["config", "user.name", "Fork Test"]);
+        std::fs::write(path.join("README.md"), "# fork test\n").unwrap();
+        must(&["add", "-A"]);
+        must(&["commit", "-m", "initial"]);
+        let head = std::str::from_utf8(
+            &Command::new(&git_bin)
+                .arg("-C")
+                .arg(path)
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+        (dir, head)
+    }
+
+    #[tokio::test]
+    async fn fork_skips_orphan_worktree_dir_on_disk() {
+        // Real git repo so `git worktree add` actually runs. The source
+        // workspace's worktree IS the repo root itself (we don't need a
+        // separate worktree on disk — checkpoint.commit_hash short-circuits
+        // the `git head_commit` fallback).
+        let (repo_dir, head) = setup_real_repo();
+        let repo_path = repo_dir.path().to_string_lossy().to_string();
+
+        let db = Database::open_in_memory().unwrap();
+        db.insert_repository(&Repository {
+            id: "r1".into(),
+            name: "repo1".into(),
+            path: repo_path.clone(),
+            path_slug: "repo1".into(),
+            icon: None,
+            setup_script: None,
+            custom_instructions: None,
+            sort_order: 0,
+            branch_rename_preferences: None,
+            setup_script_auto_run: false,
+            archive_script: None,
+            archive_script_auto_run: false,
+            base_branch: None,
+            default_remote: None,
+            path_valid: true,
+            created_at: String::new(),
+        })
+        .unwrap();
+        let source_ws = Workspace {
+            id: "w-src".into(),
+            repository_id: "r1".into(),
+            name: "src".into(),
+            branch_name: "main".into(),
+            worktree_path: Some(repo_path.clone()),
+            status: WorkspaceStatus::Active,
+            agent_status: AgentStatus::Idle,
+            status_line: String::new(),
+            created_at: String::new(),
+            sort_order: 0,
+        };
+        db.insert_workspace(&source_ws).unwrap();
+
+        // Seed a checkpoint anchored to a placeholder user message in the
+        // source's default chat session.
+        let chat_session_id = db
+            .default_session_id_for_workspace("w-src")
+            .unwrap()
+            .unwrap();
+        db.insert_chat_message(&ChatMessage {
+            id: "m1".into(),
+            workspace_id: "w-src".into(),
+            chat_session_id: chat_session_id.clone(),
+            role: ChatRole::User,
+            content: "hi".into(),
+            cost_usd: None,
+            duration_ms: None,
+            created_at: String::new(),
+            thinking: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+        })
+        .unwrap();
+        db.insert_checkpoint(&ConversationCheckpoint {
+            id: "cp1".into(),
+            workspace_id: "w-src".into(),
+            chat_session_id: chat_session_id.clone(),
+            message_id: "m1".into(),
+            commit_hash: Some(head.clone()),
+            has_file_state: false,
+            turn_index: 0,
+            message_count: 1,
+            created_at: String::new(),
+        })
+        .unwrap();
+
+        // Set up a worktree-base + an orphan dir at the would-be `src-fork`
+        // path. This is the exact precondition the user hit in the bug
+        // report: a dir lingering on disk that the DB doesn't know about
+        // (rename, hard delete, archive without dir-cleanup).
+        let worktree_base = tempfile::tempdir().unwrap();
+        let orphan_dir = worktree_base.path().join("repo1").join("src-fork");
+        std::fs::create_dir_all(&orphan_dir).unwrap();
+
+        let mut db_mut = db;
+        let outcome = fork_workspace_at_checkpoint(
+            &mut db_mut,
+            ForkInputs {
+                source_workspace_id: "w-src",
+                checkpoint_id: "cp1",
+                worktree_base: worktree_base.path(),
+                branch_prefix: "u/",
+                db_path: std::path::Path::new(":memory:"),
+                now_iso: || String::new(),
+            },
+        )
+        .await
+        .expect("fork must allocate around the orphan dir, not fail at git worktree add");
+
+        // Allocator must have walked past `src-fork` (orphan dir on disk)
+        // and landed on `src-fork-2`. Branch + worktree path follow suit.
+        assert_eq!(outcome.workspace.name, "src-fork-2");
+        assert_eq!(outcome.workspace.branch_name, "u/src-fork-2");
+        let new_wt = outcome
+            .workspace
+            .worktree_path
+            .as_deref()
+            .expect("fork workspace must have a worktree path");
+        assert!(
+            new_wt.ends_with("repo1/src-fork-2"),
+            "fork worktree must live at the suffixed path, got {new_wt}"
+        );
+        // Orphan dir must remain untouched — fork allocates around it,
+        // never reaches in to claim it.
+        assert!(
+            orphan_dir.exists(),
+            "fork must not have repurposed the orphan dir at {}",
+            orphan_dir.display()
         );
     }
 }
