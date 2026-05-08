@@ -84,7 +84,10 @@ pub fn parse_claude_help(text: &str) -> Vec<ClaudeFlagDef> {
 
 /// Parse a single `claude --help` option line. Returns `None` when the
 /// line doesn't look like an option entry (continuation lines, blanks,
-/// section headers, etc).
+/// section headers, etc), or when upstream has marked the flag as
+/// deprecated via a `[DEPRECATED …]` description prefix — there's no
+/// point spending settings real estate on a flag the CLI itself is
+/// telling users to stop using.
 fn parse_option_line(line: &str) -> Option<ClaudeFlagDef> {
     let trimmed = line.trim_start();
     if !trimmed.starts_with('-') {
@@ -94,6 +97,9 @@ fn parse_option_line(line: &str) -> Option<ClaudeFlagDef> {
     // "right part" (description). `claude --help` separates the two with
     // 2+ spaces; we use that as the split.
     let (sig, desc) = split_signature_and_description(trimmed)?;
+    if desc.trim_start().starts_with("[DEPRECATED") {
+        return None;
+    }
     let (short, name, value_token) = parse_signature(sig)?;
 
     let (takes_value, value_placeholder, enum_choices) = match value_token {
@@ -357,6 +363,49 @@ mod tests {
         assert_eq!(defs.len(), 1);
         let choices = defs[0].enum_choices.as_ref().expect("expected choices");
         assert_eq!(choices, &vec!["acceptEdits", "plan", "default"]);
+    }
+
+    #[test]
+    fn deprecated_flags_are_filtered_out() {
+        // Precondition: the fixture must actually contain a deprecated
+        // `--mcp-debug` entry — otherwise this test would silently pass
+        // even if upstream removed the flag entirely (or someone
+        // regenerated the fixture against a version that no longer
+        // includes it), defeating the regression guard.
+        assert!(
+            FIXTURE.contains("--mcp-debug"),
+            "fixture must contain --mcp-debug for this test to be meaningful — \
+             regenerate from a claude --help that still lists it, or update the test"
+        );
+        assert!(
+            FIXTURE.contains("[DEPRECATED"),
+            "fixture must contain a [DEPRECATED …] marker for this test to be meaningful"
+        );
+
+        let defs = parse_claude_help(FIXTURE);
+        // Upstream marks `--mcp-debug` as deprecated; the parser should
+        // drop it so the Settings UI doesn't surface a flag the CLI is
+        // telling users to stop using. Same rule applies to any future
+        // `[DEPRECATED …]`-prefixed entry.
+        assert!(
+            find(&defs, "--mcp-debug").is_none(),
+            "--mcp-debug is marked [DEPRECATED] in claude --help and must be filtered"
+        );
+    }
+
+    #[test]
+    fn deprecated_prefix_filter_is_specific_to_deprecated() {
+        // A description that merely *mentions* "DEPRECATED" mid-sentence
+        // shouldn't be filtered — only the upstream `[DEPRECATED …]`
+        // leading marker counts.
+        let synthetic = concat!(
+            "Options:\n",
+            "  --mentions-deprecated  This is not actually DEPRECATED, just discussing it\n",
+            "  --is-deprecated        [DEPRECATED. Use --new instead] Old flag\n",
+        );
+        let defs = parse_claude_help(synthetic);
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].name, "--mentions-deprecated");
     }
 
     #[test]
