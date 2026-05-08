@@ -5,6 +5,7 @@ import {
   type ClaudeFlagDef,
   type FlagScope,
   type FlagStateResponse,
+  clearClaudeFlagGlobal,
   clearClaudeFlagRepoOverride,
   getClaudeFlagState,
   listClaudeFlags,
@@ -12,8 +13,13 @@ import {
   setClaudeFlagState,
 } from "../../../services/claudeFlags";
 import { ClaudeFlagRow } from "./ClaudeFlagRow";
-import type { FlagRowScope } from "./claudeFlagRowLogic";
-import { rowStateFor, sortFlags } from "./claudeFlagsLogic";
+import type { FlagRowVariant } from "./claudeFlagRowLogic";
+import {
+  type FlagFilterMode,
+  filterFlags,
+  partitionFlags,
+  rowStateFor,
+} from "./claudeFlagsLogic";
 import { isStillLoading } from "../../../services/claudeFlagsLogic";
 import styles from "../Settings.module.css";
 
@@ -43,6 +49,8 @@ export function ClaudeFlagsSettings({
   const [defsLoading, setDefsLoading] = useState(false);
   const [state, setState] = useState<FlagStateResponse | null>(null);
   const [stateError, setStateError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [filterMode, setFilterMode] = useState<FlagFilterMode>("all");
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadDefs = useCallback(async () => {
@@ -117,105 +125,117 @@ export function ClaudeFlagsSettings({
     }
   }, [setCachedDefs, loadState]);
 
-  const rowScope: FlagRowScope = scope.kind === "repo" ? "repo" : "global";
+  const invalidateScope = useCallback(() => {
+    if (scope.kind === "repo") {
+      invalidateClaudeFlagsForRepo(scope.repoId);
+    } else {
+      invalidateAllWorkspaceClaudeFlags();
+    }
+  }, [scope, invalidateAllWorkspaceClaudeFlags, invalidateClaudeFlagsForRepo]);
 
-  const sortedDefs = useMemo(
-    () => (cachedDefs ? sortFlags(cachedDefs) : []),
-    [cachedDefs],
-  );
+  const partition = useMemo(() => {
+    if (!cachedDefs || !state) return null;
+    return partitionFlags(cachedDefs, state, scope);
+  }, [cachedDefs, state, scope]);
+
+  const filteredBrowse = useMemo(() => {
+    if (!partition) return [];
+    return filterFlags(partition.browse, searchQuery, filterMode);
+  }, [partition, searchQuery, filterMode]);
 
   const handleToggleEnabled = useCallback(
     async (def: ClaudeFlagDef, next: boolean) => {
-      const current = state ? rowStateFor(def, state, scope) : null;
+      if (!state) return;
+      const current = rowStateFor(def, state, scope);
       try {
         await setClaudeFlagState(
           scope,
           def.name,
           next,
-          current?.value ? current.value : null,
+          current.value ? current.value : null,
         );
-        if (scope.kind === "repo") {
-          invalidateClaudeFlagsForRepo(scope.repoId);
-        } else {
-          invalidateAllWorkspaceClaudeFlags();
-        }
+        invalidateScope();
         await loadState();
       } catch (e) {
         setStateError(String(e));
       }
     },
-    [
-      state,
-      scope,
-      loadState,
-      invalidateAllWorkspaceClaudeFlags,
-      invalidateClaudeFlagsForRepo,
-    ],
+    [state, scope, loadState, invalidateScope],
   );
 
   const handleValueChange = useCallback(
     async (def: ClaudeFlagDef, next: string) => {
-      const current = state ? rowStateFor(def, state, scope) : null;
+      if (!state) return;
+      const current = rowStateFor(def, state, scope);
       try {
         await setClaudeFlagState(
           scope,
           def.name,
-          current?.enabled ?? false,
+          current.enabled,
           next === "" ? null : next,
         );
-        if (scope.kind === "repo") {
-          invalidateClaudeFlagsForRepo(scope.repoId);
-        } else {
-          invalidateAllWorkspaceClaudeFlags();
-        }
+        invalidateScope();
         await loadState();
       } catch (e) {
         setStateError(String(e));
       }
     },
-    [
-      state,
-      scope,
-      loadState,
-      invalidateAllWorkspaceClaudeFlags,
-      invalidateClaudeFlagsForRepo,
-    ],
+    [state, scope, loadState, invalidateScope],
   );
 
-  const handleToggleOverride = useCallback(
-    async (def: ClaudeFlagDef, next: boolean) => {
-      if (scope.kind !== "repo") return;
+  /// Promote a flag into a configured/repo-override entry. The action's
+  /// "enabled" semantics depend on which section it came from:
+  /// - Browse (no state at this scope): force enabled. A disabled fresh
+  ///   entry would be a no-op — the user's click would look like nothing
+  ///   happened.
+  /// - Inherited (repo scope, flag exists in state.global): mirror the
+  ///   global enabled state. Override here means "take ownership without
+  ///   flipping the active state" — matching the pre-redesign behaviour
+  ///   of the old per-row Override checkbox.
+  const handlePromote = useCallback(
+    async (def: ClaudeFlagDef) => {
+      if (!state) return;
+      const current = rowStateFor(def, state, scope);
+      const isInheritedOverride =
+        scope.kind === "repo" && state.global[def.name] !== undefined;
+      const nextEnabled = isInheritedOverride ? current.enabled : true;
       try {
-        if (next) {
-          // Seed override from current effective value (the backend does the
-          // seed-from-global itself when value=null).
-          const current = state ? rowStateFor(def, state, scope) : null;
-          await setClaudeFlagState(
-            scope,
-            def.name,
-            current?.enabled ?? false,
-            null,
-          );
-        } else {
-          await clearClaudeFlagRepoOverride(scope.repoId, def.name);
-        }
-        if (scope.kind === "repo") {
-          invalidateClaudeFlagsForRepo(scope.repoId);
-        } else {
-          invalidateAllWorkspaceClaudeFlags();
-        }
+        await setClaudeFlagState(
+          scope,
+          def.name,
+          nextEnabled,
+          current.value || null,
+        );
+        invalidateScope();
         await loadState();
       } catch (e) {
         setStateError(String(e));
       }
     },
-    [
-      scope,
-      state,
-      loadState,
-      invalidateAllWorkspaceClaudeFlags,
-      invalidateClaudeFlagsForRepo,
-    ],
+    [state, scope, loadState, invalidateScope],
+  );
+
+  /// Drop the flag's persisted state at this scope so the row leaves the
+  /// Configured / Repo overrides section and returns to Browse.
+  /// At repo scope this clears the override sentinel; at global scope it
+  /// deletes both the `:enabled` and `:value` keys (`setClaudeFlagState`
+  /// with `enabled: false` would only flip the entry to disabled, leaving
+  /// it visible in `state.global` and stuck in Configured).
+  const handleClear = useCallback(
+    async (def: ClaudeFlagDef) => {
+      try {
+        if (scope.kind === "repo") {
+          await clearClaudeFlagRepoOverride(scope.repoId, def.name);
+        } else {
+          await clearClaudeFlagGlobal(def.name);
+        }
+        invalidateScope();
+        await loadState();
+      } catch (e) {
+        setStateError(String(e));
+      }
+    },
+    [scope, loadState, invalidateScope],
   );
 
   return (
@@ -251,33 +271,271 @@ export function ClaudeFlagsSettings({
         <div className={styles.fieldHint}>{t("claude_flags_loading")}</div>
       )}
 
-      {cachedDefs && state && (
-        <div>
-          {sortedDefs.map((def) => {
-            const row = rowStateFor(def, state, scope);
-            return (
-              <ClaudeFlagRow
-                key={def.name}
-                def={def}
-                enabled={row.enabled}
-                value={row.value}
-                scope={rowScope}
-                isOverride={row.isOverride}
-                onToggleEnabled={(next) => handleToggleEnabled(def, next)}
-                onValueChange={(next) => handleValueChange(def, next)}
-                onToggleOverride={
-                  rowScope === "repo"
-                    ? (next) => handleToggleOverride(def, next)
-                    : undefined
-                }
-              />
-            );
-          })}
-          {sortedDefs.length === 0 && (
-            <div className={styles.fieldHint}>{t("claude_flags_empty")}</div>
-          )}
-        </div>
+      {cachedDefs && state && partition && (
+        <ConfiguredSections
+          scope={scope}
+          state={state}
+          partition={partition}
+          onToggleEnabled={handleToggleEnabled}
+          onValueChange={handleValueChange}
+          onPromote={handlePromote}
+          onClear={handleClear}
+        />
+      )}
+
+      {cachedDefs && state && partition && (
+        <BrowseSection
+          scope={scope}
+          searchQuery={searchQuery}
+          setSearchQuery={setSearchQuery}
+          filterMode={filterMode}
+          setFilterMode={setFilterMode}
+          totalBrowse={partition.browse.length}
+          filteredBrowse={filteredBrowse}
+          onPromote={handlePromote}
+        />
       )}
     </div>
+  );
+}
+
+interface ConfiguredSectionsProps {
+  scope: FlagScope;
+  state: FlagStateResponse;
+  partition: ReturnType<typeof partitionFlags>;
+  onToggleEnabled: (def: ClaudeFlagDef, next: boolean) => void;
+  onValueChange: (def: ClaudeFlagDef, next: string) => void;
+  onPromote: (def: ClaudeFlagDef) => void;
+  onClear: (def: ClaudeFlagDef) => void;
+}
+
+function ConfiguredSections({
+  scope,
+  state,
+  partition,
+  onToggleEnabled,
+  onValueChange,
+  onPromote,
+  onClear,
+}: ConfiguredSectionsProps) {
+  const { t } = useTranslation("settings");
+  const repoNames = useMemo(
+    () => new Set(partition.repoOverrides.map((d) => d.name)),
+    [partition.repoOverrides],
+  );
+
+  if (scope.kind === "global") {
+    return (
+      <section className={styles.flagSection}>
+        <div className={styles.flagSectionHeading}>
+          {t("claude_flags_configured_heading")}
+          <span className={styles.flagSectionCount}>
+            {partition.configured.length}
+          </span>
+        </div>
+        {partition.configured.length === 0 ? (
+          <div className={styles.flagEmptyState}>
+            {t("claude_flags_no_configured")}
+          </div>
+        ) : (
+          <div className={styles.flagList}>
+            {partition.configured.map((def) =>
+              renderEditableRow({
+                def,
+                state,
+                scope,
+                variant: "configured",
+                onToggleEnabled,
+                onValueChange,
+                onClear,
+              }),
+            )}
+          </div>
+        )}
+      </section>
+    );
+  }
+
+  // Repo scope — two stacked sections (overrides + inherited).
+  return (
+    <>
+      <section className={styles.flagSection}>
+        <div className={styles.flagSectionHeading}>
+          {t("claude_flags_repo_overrides_heading")}
+          <span className={styles.flagSectionCount}>
+            {partition.repoOverrides.length}
+          </span>
+        </div>
+        {partition.repoOverrides.length === 0 ? (
+          <div className={styles.flagEmptyState}>
+            {t("claude_flags_no_overrides")}
+          </div>
+        ) : (
+          <div className={styles.flagList}>
+            {partition.repoOverrides.map((def) =>
+              renderEditableRow({
+                def,
+                state,
+                scope,
+                variant: "repo-override",
+                onToggleEnabled,
+                onValueChange,
+                onClear,
+              }),
+            )}
+          </div>
+        )}
+      </section>
+
+      {partition.inherited.length > 0 && (
+        <section className={styles.flagSection}>
+          <div className={styles.flagSectionHeading}>
+            {t("claude_flags_inherited_heading")}
+            <span className={styles.flagSectionCount}>
+              {partition.inherited.length}
+            </span>
+          </div>
+          <div className={styles.flagList}>
+            {partition.inherited.map((def) => {
+              const row = rowStateFor(def, state, { kind: "global" });
+              const overridden = repoNames.has(def.name);
+              return (
+                <ClaudeFlagRow
+                  key={def.name}
+                  def={def}
+                  variant="inherited"
+                  enabled={row.enabled}
+                  value={row.value}
+                  isOverridden={overridden}
+                  onPromote={overridden ? undefined : () => onPromote(def)}
+                  promoteLabel={t("claude_flags_override")}
+                />
+              );
+            })}
+          </div>
+        </section>
+      )}
+    </>
+  );
+}
+
+interface RenderEditableRowArgs {
+  def: ClaudeFlagDef;
+  state: FlagStateResponse;
+  scope: FlagScope;
+  variant: FlagRowVariant;
+  onToggleEnabled: (def: ClaudeFlagDef, next: boolean) => void;
+  onValueChange: (def: ClaudeFlagDef, next: string) => void;
+  onClear: (def: ClaudeFlagDef) => void;
+}
+
+function renderEditableRow(args: RenderEditableRowArgs) {
+  const { def, state, scope, variant, onToggleEnabled, onValueChange, onClear } =
+    args;
+  const row = rowStateFor(def, state, scope);
+  return (
+    <ClaudeFlagRow
+      key={def.name}
+      def={def}
+      variant={variant}
+      enabled={row.enabled}
+      value={row.value}
+      onToggleEnabled={(next) => onToggleEnabled(def, next)}
+      onValueChange={(next) => onValueChange(def, next)}
+      onClear={() => onClear(def)}
+    />
+  );
+}
+
+interface BrowseSectionProps {
+  scope: FlagScope;
+  searchQuery: string;
+  setSearchQuery: (next: string) => void;
+  filterMode: FlagFilterMode;
+  setFilterMode: (next: FlagFilterMode) => void;
+  totalBrowse: number;
+  filteredBrowse: ClaudeFlagDef[];
+  onPromote: (def: ClaudeFlagDef) => void;
+}
+
+function BrowseSection({
+  scope,
+  searchQuery,
+  setSearchQuery,
+  filterMode,
+  setFilterMode,
+  totalBrowse,
+  filteredBrowse,
+  onPromote,
+}: BrowseSectionProps) {
+  const { t } = useTranslation("settings");
+  const promoteLabel =
+    scope.kind === "repo"
+      ? t("claude_flags_override")
+      : t("claude_flags_add");
+
+  return (
+    <section className={styles.flagSection}>
+      <div className={styles.flagSectionHeading}>
+        {t("claude_flags_browse_heading")}
+      </div>
+      <div className={styles.pluginToolbar}>
+        <div className={styles.pluginFormRow}>
+          <input
+            className={styles.input}
+            placeholder={t("claude_flags_search_placeholder")}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            aria-label={t("claude_flags_search_placeholder")}
+          />
+          <select
+            className={styles.select}
+            value={filterMode}
+            onChange={(e) => setFilterMode(e.target.value as FlagFilterMode)}
+            aria-label={t("claude_flags_filter_label")}
+          >
+            <option value="all">{t("claude_flags_filter_all")}</option>
+            <option value="boolean">{t("claude_flags_filter_boolean")}</option>
+            <option value="takes_value">
+              {t("claude_flags_filter_takes_value")}
+            </option>
+            <option value="dangerous">
+              {t("claude_flags_filter_dangerous")}
+            </option>
+          </select>
+        </div>
+        <span className={styles.pluginMeta}>
+          {t("claude_flags_browse_count", {
+            shown: filteredBrowse.length,
+            total: totalBrowse,
+          })}
+        </span>
+      </div>
+
+      <div className={styles.flagBrowseList}>
+        {filteredBrowse.length === 0 ? (
+          <div className={styles.flagEmptyState}>
+            {totalBrowse === 0
+              ? t("claude_flags_empty")
+              : t("claude_flags_no_match")}
+          </div>
+        ) : (
+          filteredBrowse.map((def) => (
+            <ClaudeFlagRow
+              key={def.name}
+              def={def}
+              variant="browse"
+              enabled={false}
+              value=""
+              onPromote={() => onPromote(def)}
+              promoteLabel={promoteLabel}
+            />
+          ))
+        )}
+      </div>
+    </section>
   );
 }

@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { ClaudeFlagDef } from "../../../services/claudeFlags";
-import { flagInputKind, rowIsReadOnly } from "./claudeFlagRowLogic";
+import { flagInputKind, rowVariantIsEditable } from "./claudeFlagRowLogic";
 
 // The ClaudeFlagRow component is thin JSX over two pure decisions:
 // (1) which value-input shape to render based on the flag definition, and
-// (2) whether the row's controls should be locked (repo scope, no override
-// yet). Both are unit-tested here without a DOM harness — same convention as
-// other pure-helper tests in this tree.
+// (2) whether the row's variant is editable. Both are unit-tested here
+// without a DOM harness — same convention as other pure-helper tests in
+// this tree.
 
 function makeDef(overrides: Partial<ClaudeFlagDef> = {}): ClaudeFlagDef {
   return {
@@ -52,19 +52,20 @@ describe("flagInputKind", () => {
   });
 });
 
-describe("rowIsReadOnly", () => {
-  it("is never read-only at global scope", () => {
-    expect(rowIsReadOnly("global", undefined)).toBe(false);
-    expect(rowIsReadOnly("global", true)).toBe(false);
-    expect(rowIsReadOnly("global", false)).toBe(false);
+describe("rowVariantIsEditable", () => {
+  it("treats configured rows as editable", () => {
+    expect(rowVariantIsEditable("configured")).toBe(true);
   });
 
-  it("is read-only at repo scope when no override is active", () => {
-    expect(rowIsReadOnly("repo", false)).toBe(true);
-    expect(rowIsReadOnly("repo", undefined)).toBe(true);
+  it("treats repo-override rows as editable", () => {
+    expect(rowVariantIsEditable("repo-override")).toBe(true);
   });
 
-  it("is writable at repo scope when override is on", () => {
-    expect(rowIsReadOnly("repo", true)).toBe(false);
+  it("treats inherited rows as read-only", () => {
+    expect(rowVariantIsEditable("inherited")).toBe(false);
+  });
+
+  it("treats browse rows as read-only", () => {
+    expect(rowVariantIsEditable("browse")).toBe(false);
   });
 });
