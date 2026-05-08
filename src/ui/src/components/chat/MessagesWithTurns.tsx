@@ -45,6 +45,7 @@ import { PdfThumbnail } from "./PdfThumbnail";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { groupToolActivitiesForDisplay } from "./toolActivityGroups";
 import {
+  EMPTY_ACTIVITIES,
   EMPTY_ATTACHMENTS,
   EMPTY_CHECKPOINTS,
   EMPTY_COMPLETED_TURNS,
@@ -66,7 +67,6 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   onAttachmentClick,
   searchQuery,
   globalOffset = 0,
-  liveToolActivities,
   toolDisplayMode,
   liveTaskProgressNode,
   streamingThinkingNode,
@@ -106,7 +106,6 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
    *  have not been fetched yet (pagination). Used to match CompletedTurn
    *  positions (which are global) against the local message array. */
   globalOffset?: number;
-  liveToolActivities: readonly ToolActivity[];
   toolDisplayMode: ToolDisplayMode;
   liveTaskProgressNode?: React.ReactNode;
   streamingThinkingNode?: React.ReactNode;
@@ -135,6 +134,9 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
   );
   const worktreePath = useAppStore(
     (s) => s.workspaces.find((w) => w.id === workspaceId)?.worktree_path,
+  );
+  const liveToolActivities = useAppStore(
+    (s) => s.toolActivities[sessionId] ?? EMPTY_ACTIVITIES,
   );
 
   // Pre-build a Map keyed by message_id for O(1) lookup in the render loop.
@@ -569,8 +571,14 @@ export const MessagesWithTurns = memo(function MessagesWithTurns({
     );
   };
 
+  const pendingMessageInWindow = useMemo(
+    () => !!pendingMessageId && messages.some((msg) => msg.id === pendingMessageId),
+    [messages, pendingMessageId],
+  );
+
   const renderStreamingTail = (position: number) => {
     if (
+      pendingMessageInWindow ||
       position !== globalOffset + messages.length ||
       (!streamingThinkingNode && !streamingMessageNode)
     ) {

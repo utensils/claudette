@@ -34,10 +34,9 @@ export const ToolActivitiesSection = memo(function ToolActivitiesSection({
   worktreePath?: string | null;
   activities?: readonly ToolActivity[];
 }) {
-  const storeActivities = useAppStore(
-    (s) => s.toolActivities[sessionId] ?? EMPTY_ACTIVITIES,
+  const activities = useAppStore(
+    (s) => activityOverride ?? s.toolActivities[sessionId] ?? EMPTY_ACTIVITIES,
   );
-  const activities = activityOverride ?? storeActivities;
   const displayGroups = groupToolActivitiesForDisplay(activities, toolDisplayMode);
   if (displayGroups.length === 0) return null;
 
@@ -103,7 +102,6 @@ function GroupedToolActivityRows({
   return (
     <div className={styles.turnSummary}>
       <div className={styles.turnHeader}>
-        <span className={styles.toolChevron}>{isExpanded ? "⌄" : "›"}</span>
         <span className={styles.turnLabel}>{label}</span>
       </div>
       {isExpanded && (

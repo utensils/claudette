@@ -204,10 +204,9 @@ export function ChatPanel() {
   const showThinkingBlocks = useAppStore(
     (s) => activeSessionId ? s.showThinkingBlocks[activeSessionId] === true : false
   );
-  const liveToolActivities = useAppStore((s) =>
-    activeSessionId ? (s.toolActivities[activeSessionId] ?? EMPTY_ACTIVITIES) : EMPTY_ACTIVITIES,
+  const activitiesCount = useAppStore(
+    (s) => (activeSessionId ? (s.toolActivities[activeSessionId] ?? EMPTY_ACTIVITIES).length : 0),
   );
-  const activitiesCount = liveToolActivities.length;
   const completedTurnsCount = useAppStore(
     (s) => (activeSessionId ? (s.completedTurns[activeSessionId] || []).length : 0)
   );
@@ -1239,7 +1238,6 @@ export function ChatPanel() {
                   onAttachmentClick={openLightbox}
                   searchQuery={searchQuery}
                   globalOffset={globalOffset}
-                  liveToolActivities={liveToolActivities}
                   toolDisplayMode={toolDisplayMode}
                   liveTaskProgressNode={
                     activitiesCount > 0 ? (
