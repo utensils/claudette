@@ -961,19 +961,23 @@ async fn clear_monitor_on_exit(
         let Some(session) = agents.get_mut(chat_session_id) else {
             return;
         };
-        if session.claude_remote_control_monitor_pid == Some(pid) {
-            session.claude_remote_control_monitor_pid = None;
-        }
-        if session
+        let owns_monitor = session.claude_remote_control_monitor_pid == Some(pid);
+        let owns_process = session
             .persistent_session
             .as_ref()
-            .is_some_and(|ps| ps.pid() == pid)
-        {
+            .is_some_and(|ps| ps.pid() == pid);
+        if !owns_monitor && !owns_process {
+            return;
+        }
+        if owns_monitor {
+            session.claude_remote_control_monitor_pid = None;
+        }
+        if owns_process {
             session.persistent_session = None;
             session.mcp_bridge = None;
+            session.active_pid = None;
+            session.claude_remote_control = ClaudeRemoteControlStatus::disabled();
         }
-        session.active_pid = None;
-        session.claude_remote_control = ClaudeRemoteControlStatus::disabled();
         session.claude_remote_control.clone()
     };
     let payload = ClaudeRemoteControlStatusPayload {
