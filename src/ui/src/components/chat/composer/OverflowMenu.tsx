@@ -47,15 +47,19 @@ export function OverflowMenu({ sessionId, disabled, isRemote }: OverflowMenuProp
   const setChromeEnabled = useAppStore((s) => s.setChromeEnabled);
   const clearAgentQuestion = useAppStore((s) => s.clearAgentQuestion);
   const clearPlanApproval = useAppStore((s) => s.clearPlanApproval);
+  const claudeRemoteControlEnabled = useAppStore(
+    (s) => s.claudeRemoteControlEnabled,
+  );
 
   const showFast = isFastSupported(selectedModel);
   const [remoteControlStatus, setRemoteControlStatus] =
     useState<ClaudeRemoteControlStatus>(DISABLED_REMOTE_STATUS);
-  const remoteControlActive = remoteControlStatus.state !== "disabled";
+  const showRemoteControl = !isRemote && claudeRemoteControlEnabled;
+  const remoteControlActive = showRemoteControl && remoteControlStatus.state !== "disabled";
   const anyActive = fastMode || chromeEnabled || remoteControlActive;
 
   useEffect(() => {
-    if (isRemote) {
+    if (!showRemoteControl) {
       setRemoteControlStatus(DISABLED_REMOTE_STATUS);
       return;
     }
@@ -70,10 +74,10 @@ export function OverflowMenu({ sessionId, disabled, isRemote }: OverflowMenuProp
     return () => {
       cancelled = true;
     };
-  }, [sessionId, isRemote]);
+  }, [sessionId, showRemoteControl]);
 
   useEffect(() => {
-    if (isRemote) return;
+    if (!showRemoteControl) return;
     let active = true;
     const unlisten = listen<{
       workspaceId: string;
@@ -87,7 +91,7 @@ export function OverflowMenu({ sessionId, disabled, isRemote }: OverflowMenuProp
       active = false;
       unlisten.then((fn) => fn());
     };
-  }, [sessionId, isRemote]);
+  }, [sessionId, showRemoteControl]);
 
   useEffect(() => {
     if (!open) return;
@@ -161,7 +165,7 @@ export function OverflowMenu({ sessionId, disabled, isRemote }: OverflowMenuProp
             meta={chromeEnabled ? "on" : "off"}
             onClick={toggleChrome}
           />
-          {!isRemote && (
+          {showRemoteControl && (
             <RemoteControlMenuItem
               sessionId={sessionId}
               disabled={disabled}

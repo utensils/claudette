@@ -41,6 +41,8 @@ export interface SettingsSlice {
   setUsageInsightsEnabled: (enabled: boolean) => void;
   pluginManagementEnabled: boolean;
   setPluginManagementEnabled: (enabled: boolean) => void;
+  claudeRemoteControlEnabled: boolean;
+  setClaudeRemoteControlEnabled: (enabled: boolean) => void;
   /// Gate the Settings → Community section. When false, the section is
   /// hidden from the sidebar and direct navigation falls back to
   /// Experimental. The backend community_* commands ship unconditionally
@@ -130,6 +132,9 @@ export const createSettingsSlice: StateCreator<
       pluginSettingsRepoId: enabled ? state.pluginSettingsRepoId : null,
       pluginSettingsTab: enabled ? state.pluginSettingsTab : "available",
     })),
+  claudeRemoteControlEnabled: true,
+  setClaudeRemoteControlEnabled: (enabled) =>
+    set({ claudeRemoteControlEnabled: enabled }),
   communityRegistryEnabled: false,
   setCommunityRegistryEnabled: (enabled) =>
     set((state) => ({

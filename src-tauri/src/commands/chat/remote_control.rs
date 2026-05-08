@@ -23,6 +23,8 @@ use super::{
     start_chat_bridge,
 };
 
+const CLAUDE_REMOTE_CONTROL_ENABLED_KEY: &str = "claude_remote_control_enabled";
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RemoteChatTurnStartedPayload<'a> {
@@ -56,6 +58,9 @@ pub async fn get_claude_remote_control_status(
     chat_session_id: String,
     state: State<'_, AppState>,
 ) -> Result<ClaudeRemoteControlStatus, String> {
+    if !remote_control_feature_enabled(&state)? {
+        return Ok(ClaudeRemoteControlStatus::disabled());
+    }
     let agents = state.agents.read().await;
     Ok(agents
         .get(&chat_session_id)
@@ -80,6 +85,10 @@ pub async fn set_claude_remote_control(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<ClaudeRemoteControlStatus, String> {
+    if enabled && !remote_control_feature_enabled(&state)? {
+        return Err("Claude Remote Control is disabled in Experimental settings".to_string());
+    }
+
     let launch_options = RemoteControlLaunchOptions {
         permission_level,
         model,
@@ -193,6 +202,18 @@ pub async fn set_claude_remote_control(
             Err(err)
         }
     }
+}
+
+fn remote_control_feature_enabled_from_value(value: Option<&str>) -> bool {
+    value != Some("false")
+}
+
+fn remote_control_feature_enabled(state: &State<'_, AppState>) -> Result<bool, String> {
+    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    let value = db
+        .get_app_setting(CLAUDE_REMOTE_CONTROL_ENABLED_KEY)
+        .map_err(|e| e.to_string())?;
+    Ok(remote_control_feature_enabled_from_value(value.as_deref()))
 }
 
 fn should_defer_enable_until_first_turn(chat_session: &ChatSession) -> bool {
@@ -1071,7 +1092,8 @@ async fn clear_monitor_on_exit(
 #[cfg(test)]
 mod tests {
     use super::{
-        should_defer_enable_until_first_turn, status_from_control_response, user_visible_text,
+        remote_control_feature_enabled_from_value, should_defer_enable_until_first_turn,
+        status_from_control_response, user_visible_text,
     };
     use crate::state::ClaudeRemoteControlLifecycle;
     use claudette::agent::{UserContentBlock, UserEventMessage, UserMessageContent};
@@ -1191,5 +1213,16 @@ mod tests {
         assert!(!should_defer_enable_until_first_turn(
             &chat_session_with_turn_count(1)
         ));
+    }
+
+    #[test]
+    fn remote_control_feature_flag_defaults_on() {
+        assert!(remote_control_feature_enabled_from_value(None));
+        assert!(remote_control_feature_enabled_from_value(Some("true")));
+    }
+
+    #[test]
+    fn remote_control_feature_flag_disables_only_on_false() {
+        assert!(!remote_control_feature_enabled_from_value(Some("false")));
     }
 }
