@@ -329,16 +329,20 @@ fn main() {
                 eprintln!("[mdns] Failed to start browser: {e}");
             }
 
-            // Discover `claude --help` flags in the background so the Settings
-            // panel can render the available-flags list without blocking app
-            // boot. Must run inside `.setup` (not at the top of `main`) — the
-            // Tokio runtime isn't live until `tauri::Builder::run` boots it,
-            // so a `tokio::spawn` before that point panics with "no reactor
-            // running". `app.state::<AppState>()` works here because the
-            // state is `.manage()`-d above this `.setup` callback.
+            // Discover `claude --help` flags BEFORE the first turn can fire,
+            // so user-toggled flags from Settings are honoured even on a
+            // turn started in the first ~100ms after launch. We block_on
+            // here (rather than spawn) because:
+            //   - `claude --help` returns in ~50-100ms typically;
+            //   - the alternative (spawn) leaves a race where send_chat_message
+            //     hits the `Loading` arm in `cached_claude_flag_defs` and
+            //     silently delivers `extra_claude_flags = Vec::new()`.
+            // The existing `Loading` arm in `list_claude_flags` and
+            // `cached_claude_flag_defs` stays as a defensive belt against
+            // any future async-init regression.
             let flag_defs_handle =
                 std::sync::Arc::clone(&app.state::<state::AppState>().claude_flag_defs);
-            tauri::async_runtime::spawn(async move {
+            tauri::async_runtime::block_on(async move {
                 match claudette::claude_help::discover_claude_flags().await {
                     Ok(defs) => {
                         let mut guard = flag_defs_handle.write().await;
