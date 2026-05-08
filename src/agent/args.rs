@@ -1,12 +1,24 @@
 use super::AgentSettings;
 use super::types::FileAttachment;
 
-/// Flags whose value is large or sensitive: `--mcp-config` (inline JSON, may
-/// carry tokens), `--settings` (inline JSON, may carry hook bridge socket +
-/// auth token), `--append-system-prompt` (potentially huge user prompt).
-/// Renders these as `<flag> <redacted>` in `format_redacted_invocation`.
-pub(crate) const REDACTED_VALUE_FLAGS: &[&str] =
-    &["--mcp-config", "--settings", "--append-system-prompt"];
+/// Flags whose value is large or sensitive and should be redacted in the
+/// chat-tab CLI invocation banner. Renders as `<flag> <redacted>` in
+/// `format_redacted_invocation`.
+///
+/// Add a flag here when:
+///   - the value can carry secrets (auth tokens, API keys, hook bridge
+///     socket addresses, …); OR
+///   - the value is plausibly large enough to dominate the banner
+///     (multi-line system prompts, JSON schemas, agent definitions).
+pub(crate) const REDACTED_VALUE_FLAGS: &[&str] = &[
+    "--mcp-config",           // inline JSON, may carry tokens
+    "--settings",             // inline JSON, hook bridge socket+token
+    "--append-system-prompt", // potentially huge user prompt
+    "--system-prompt",        // twin of --append-system-prompt
+    "--agents",               // inline JSON, agent definitions
+    "--betas",                // experimental flag set
+    "--json-schema",          // user-supplied JSON schema
+];
 
 /// Render `(claude_path, argv)` as a shell-quoted, single-line command string
 /// suitable for display in the chat tab. Sensitive values are replaced with
@@ -1092,6 +1104,33 @@ mod tests {
         assert!(line.contains("--settings <redacted>"), "{line}");
         assert!(line.contains("--append-system-prompt <redacted>"), "{line}");
         assert!(line.contains("--model opus"), "{line}");
+    }
+
+    #[test]
+    fn format_redacts_system_prompt() {
+        let args: Vec<String> = vec![
+            "--system-prompt".into(),
+            "You are a senior engineer. Always think before acting.".into(),
+        ];
+        let line = format_redacted_invocation(std::ffi::OsStr::new("/bin/claude"), &args);
+        assert!(line.contains("--system-prompt <redacted>"), "{line}");
+        assert!(!line.contains("senior engineer"), "{line}");
+    }
+
+    #[test]
+    fn format_redacts_agents_betas_and_json_schema() {
+        for flag in ["--agents", "--betas", "--json-schema"] {
+            let args: Vec<String> = vec![flag.into(), "secret-value".into()];
+            let line = format_redacted_invocation(std::ffi::OsStr::new("/bin/claude"), &args);
+            assert!(
+                line.contains(&format!("{flag} <redacted>")),
+                "flag {flag} should be redacted: {line}",
+            );
+            assert!(
+                !line.contains("secret-value"),
+                "value for {flag} leaked into output: {line}",
+            );
+        }
     }
 
     #[test]
