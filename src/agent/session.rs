@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
@@ -14,18 +15,6 @@ use super::binary::resolve_claude_path;
 use super::process::{AgentEvent, TurnHandle};
 use super::types::{FileAttachment, StreamEvent, parse_stream_line};
 
-fn emit_invocation_to_broadcast(
-    tx: &tokio::sync::broadcast::Sender<super::process::AgentEvent>,
-    claude_path: &std::ffi::OsStr,
-    args: &[String],
-) {
-    let line = super::args::format_redacted_invocation(claude_path, args);
-    let event = super::process::AgentEvent::Stream(StreamEvent::system_command_line(line));
-    // broadcast::Sender::send returns the count of active receivers or an
-    // error if there are none. Either is fine for a fire-and-forget banner.
-    let _ = tx.send(event);
-}
-
 /// A persistent Claude CLI process that stays alive across turns.
 ///
 /// Instead of spawning a new `claude --print` per turn (which kills MCP server
@@ -36,6 +25,16 @@ pub struct PersistentSession {
     pid: u32,
     stdin: tokio::sync::Mutex<tokio::process::ChildStdin>,
     event_tx: tokio::sync::broadcast::Sender<AgentEvent>,
+    /// Redacted `claude …` argv captured at process spawn. Replayed into
+    /// `event_tx` from inside [`send_turn`] (after the first subscribe)
+    /// because `broadcast::Sender::send` silently drops messages when
+    /// the receiver count is zero — emitting at start time would lose
+    /// the banner before any subscriber attaches.
+    invocation_line: String,
+    /// Set to true on first replay so subsequent turns don't re-emit.
+    /// The DB and UI both gate on first-emit-wins, but skipping the
+    /// re-broadcast avoids wasted work on every turn.
+    invocation_emitted: AtomicBool,
 }
 
 impl PersistentSession {
@@ -131,10 +130,11 @@ impl PersistentSession {
 
         let (event_tx, _) = tokio::sync::broadcast::channel::<AgentEvent>(2048);
 
-        // Persistent sessions only build argv once — `start` is the right
-        // (and only) spot to capture the invocation. No `is_resume` guard
-        // because the persistent path doesn't re-spawn within a session.
-        emit_invocation_to_broadcast(&event_tx, claude_path.as_os_str(), &args);
+        // Capture the redacted invocation here (argv is only built once for
+        // a persistent session) and replay it on the first `send_turn` —
+        // see the field doc on `invocation_line` for why we don't emit now.
+        let invocation_line =
+            super::args::format_redacted_invocation(claude_path.as_os_str(), &args);
 
         // Background stdout reader — runs for the session lifetime.
         let tx = event_tx.clone();
@@ -180,6 +180,8 @@ impl PersistentSession {
             pid,
             stdin: tokio::sync::Mutex::new(stdin),
             event_tx,
+            invocation_line,
+            invocation_emitted: AtomicBool::new(false),
         })
     }
 
@@ -204,6 +206,18 @@ impl PersistentSession {
         // Subscribe BEFORE writing to stdin to avoid a race where a fast turn
         // emits events before the receiver exists (broadcast doesn't replay).
         let mut broadcast_rx = self.event_tx.subscribe();
+
+        // Replay the captured invocation now that we have a receiver. Gated
+        // by the AtomicBool so we only do the round-trip once per session;
+        // both the DB write helper and the UI's `applyCommandLineEvent` are
+        // first-emit-wins anyway, so a missed gate would be cosmetic, not
+        // correctness — but skipping is cheap.
+        if !self.invocation_emitted.swap(true, Ordering::Relaxed) {
+            let event = AgentEvent::Stream(StreamEvent::system_command_line(
+                self.invocation_line.clone(),
+            ));
+            let _ = self.event_tx.send(event);
+        }
 
         self.write_user_message(build_stdin_message(prompt, attachments))
             .await?;
