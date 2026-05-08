@@ -1,5 +1,7 @@
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
@@ -19,6 +21,9 @@ use super::types::{ControlResponsePayload, FileAttachment, StreamEvent, parse_st
 
 const CLAUDE_CODE_EXIT_AFTER_STOP_DELAY: &str = "CLAUDE_CODE_EXIT_AFTER_STOP_DELAY";
 const PERSISTENT_SESSION_IDLE_KEEPALIVE_MS: &str = "2147483647";
+const PERSISTENT_SESSION_STDIN_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(1);
+
+type PersistentStdin = Arc<tokio::sync::Mutex<tokio::process::ChildStdin>>;
 
 /// A persistent Claude CLI process that stays alive across turns.
 ///
@@ -28,7 +33,7 @@ const PERSISTENT_SESSION_IDLE_KEEPALIVE_MS: &str = "2147483647";
 /// playwright browser) persist for the session lifetime.
 pub struct PersistentSession {
     pid: u32,
-    stdin: tokio::sync::Mutex<tokio::process::ChildStdin>,
+    stdin: PersistentStdin,
     event_tx: tokio::sync::broadcast::Sender<AgentEvent>,
     /// Redacted `claude …` argv captured at process spawn. Replayed into
     /// `event_tx` from inside [`send_turn`] (after the first subscribe)
@@ -40,6 +45,7 @@ pub struct PersistentSession {
     /// The DB and UI both gate on first-emit-wins, but skipping the
     /// re-broadcast avoids wasted work on every turn.
     invocation_emitted: AtomicBool,
+    keep_alive_task: tokio::task::JoinHandle<()>,
 }
 
 impl PersistentSession {
@@ -130,6 +136,9 @@ impl PersistentSession {
             .take()
             .ok_or_else(|| "Failed to capture stderr".to_string())?;
 
+        let stdin = Arc::new(tokio::sync::Mutex::new(stdin));
+        let keep_alive_task = start_persistent_session_stdin_keep_alive(stdin.clone());
+
         let (event_tx, _) = tokio::sync::broadcast::channel::<AgentEvent>(2048);
 
         // Capture the redacted invocation here (argv is only built once for
@@ -180,10 +189,11 @@ impl PersistentSession {
 
         Ok(Self {
             pid,
-            stdin: tokio::sync::Mutex::new(stdin),
+            stdin,
             event_tx,
             invocation_line,
             invocation_emitted: AtomicBool::new(false),
+            keep_alive_task,
         })
     }
 
@@ -436,6 +446,12 @@ impl PersistentSession {
     }
 }
 
+impl Drop for PersistentSession {
+    fn drop(&mut self) {
+        self.keep_alive_task.abort();
+    }
+}
+
 fn build_task_stop_message(request_id: &str, task_id: &str) -> String {
     serde_json::json!({
         "type": "control_request",
@@ -460,6 +476,13 @@ fn build_remote_control_message(request_id: &str, enabled: bool) -> String {
     .to_string()
 }
 
+fn build_keep_alive_message() -> String {
+    serde_json::json!({
+        "type": "keep_alive",
+    })
+    .to_string()
+}
+
 fn control_response_error_message(response: &ControlResponsePayload) -> String {
     response
         .error
@@ -474,6 +497,29 @@ fn apply_persistent_session_idle_keepalive(cmd: &mut Command) {
         CLAUDE_CODE_EXIT_AFTER_STOP_DELAY,
         PERSISTENT_SESSION_IDLE_KEEPALIVE_MS,
     );
+}
+
+fn start_persistent_session_stdin_keep_alive(
+    stdin: PersistentStdin,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(PERSISTENT_SESSION_STDIN_KEEP_ALIVE_INTERVAL).await;
+            if write_keep_alive_to_stdin(&stdin).await.is_err() {
+                break;
+            }
+        }
+    })
+}
+
+async fn write_keep_alive_to_stdin(stdin: &PersistentStdin) -> std::io::Result<()> {
+    use tokio::io::AsyncWriteExt;
+
+    let message = build_keep_alive_message();
+    let mut stdin = stdin.lock().await;
+    stdin.write_all(message.as_bytes()).await?;
+    stdin.write_all(b"\n").await?;
+    stdin.flush().await
 }
 
 /// Build CLI arguments for a persistent session (no prompt, with `--input-format stream-json`).
@@ -714,6 +760,10 @@ mod tests {
             "CLAUDE_CODE_EXIT_AFTER_STOP_DELAY"
         );
         assert_eq!(delay, i32::MAX as u64);
+        assert_eq!(
+            PERSISTENT_SESSION_STDIN_KEEP_ALIVE_INTERVAL,
+            Duration::from_secs(1)
+        );
     }
 
     #[test]
@@ -932,5 +982,13 @@ mod tests {
         assert_eq!(parsed["request_id"], "req_remote");
         assert_eq!(parsed["request"]["subtype"], "remote_control");
         assert_eq!(parsed["request"]["enabled"], true);
+    }
+
+    #[test]
+    fn build_keep_alive_message_writes_supported_stdin_shape() {
+        let raw = build_keep_alive_message();
+        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(parsed["type"], "keep_alive");
+        assert_eq!(parsed.as_object().unwrap().len(), 1);
     }
 }
