@@ -787,16 +787,21 @@ export const TerminalPanel = memo(function TerminalPanel() {
         }
         return true;
       }
-      // Copy only intercepts when there's a selection. Without one, let the
-      // event fall through — on macOS Cmd+C is harmless; on Linux/Windows
-      // Ctrl+Shift+C without a selection is a no-op anyway.
+      // Always consume the copy key so Ctrl+Shift+C (Linux/Windows) never
+      // reaches the PTY — xterm encodes Ctrl+letter regardless of Shift, so
+      // forwarding could produce 0x03 (SIGINT). Without a selection we still
+      // intercept but skip the clipboard write.
       if (action.kind === "copy") {
         const tabId = activeTerminalTabIdRef.current;
         const activePaneId = tabId
           ? (useAppStore.getState().activeTerminalPaneId[tabId] ?? null)
           : null;
         const inst = activePaneId ? instancesRef.current.get(activePaneId) : null;
-        if (!inst?.term.hasSelection()) return true;
+        if (!inst?.term.hasSelection()) {
+          ev.preventDefault();
+          ev.stopImmediatePropagation();
+          return false;
+        }
       }
       ev.preventDefault();
       if (action.kind === "zoom") return false;
@@ -1237,7 +1242,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
   const handleCopyContextTerminal = useCallback(() => {
     if (!contextMenu?.leafId) return;
     const inst = instancesRef.current.get(contextMenu.leafId);
-    if (!inst?.term.hasSelection()) return;
+    if (!inst?.term.hasSelection()) { setContextMenu(null); return; }
     const text = trimSelectionTrailingWhitespace(inst.term.getSelection());
     void clipboardWriteText(text)
       .then(() => { inst.term.clearSelection(); })
@@ -1248,7 +1253,7 @@ export const TerminalPanel = memo(function TerminalPanel() {
   const handlePasteContextTerminal = useCallback(() => {
     if (!contextMenu?.leafId) return;
     const inst = instancesRef.current.get(contextMenu.leafId);
-    if (!inst) return;
+    if (!inst) { setContextMenu(null); return; }
     void clipboardReadText()
       .then((text) => { if (text) inst.term.paste(text); })
       .catch(() => {});
