@@ -1,0 +1,84 @@
+---
+title: Claude Remote Control
+description: Attach a Claudette chat to claude.ai so you can drive the same conversation from the web or mobile app.
+---
+
+Claude Remote Control bridges a Claudette chat session to **claude.ai**'s web and mobile UIs. Once attached, the same Claude Code conversation is reachable from both ends — turns you send from Claudette and turns you send from the browser stream into the same persistent CLI process and into the same Claudette chat. Everything you'd expect (tool calls, file edits, plan mode, MCP servers, the integrated terminal) keeps running locally on your machine; the bridge only relays prompts and assistant responses.
+
+:::note[Experimental feature]
+Remote Control is an opt-in experimental feature. Enable it in **Settings → Experimental → Claude Remote Control** before the toolbar surface appears.
+:::
+
+:::caution[Use with your own account only]
+The bridge runs under whatever Claude credentials Claudette is signed in with. [Anthropic's Consumer Terms](https://www.anthropic.com/legal/consumer-terms) prohibit making your account "available to anyone else." Pair claude.ai only with devices that are signed into your own account.
+:::
+
+## Requirements
+
+- A Claudette workspace with at least one chat session.
+- Signed into Claude with a **Pro** or **Max** subscription on the same machine running Claudette (the Claude Code CLI's bridge requires `allow_remote_control` to be enabled by your organization's policy).
+- Internet access — the bridge maintains a long-lived connection to Anthropic's session-ingress service.
+
+## Enabling the Feature Flag
+
+1. Open **Settings** (`⌘/Ctrl + ,`).
+2. Pick **Experimental** in the sidebar.
+3. Toggle **Claude Remote Control** on.
+
+Until the flag is enabled, the toolbar action stays hidden and the backend Tauri commands return "Claude Remote Control is disabled in Experimental settings."
+
+## Attaching a Chat to claude.ai
+
+1. Open the chat session you want to bridge.
+2. Click the **overflow menu** (⋯) at the right of the prompt composer.
+3. Select **Claude Remote Control → Enable**.
+
+The first time you enable a session, Claudette tells the persistent Claude Code CLI to start a bridge environment. The lifecycle progresses through:
+
+| State | What it means |
+| --- | --- |
+| **Enabling** | Bridge initialization in flight. Cold-enable on a fresh chat defers until your first prompt. |
+| **Ready** | Bridge handle exists; transport handshake hasn't completed yet. |
+| **Connected** | Transport is live; claude.ai and Claudette are in sync. |
+| **Reconnecting** | Transient network blip — the CLI is reconnecting on its own. |
+| **Error** | Bridge initialization failed. Hover the status chip for the detail (often `/login` or an org policy block). |
+
+Once the state is **Ready** or **Connected**, the overflow menu shows two actions:
+
+- **Open in browser** — launches the bridge `connect_url` (claude.ai/code with the right environment param).
+- **Copy link** — yanks the same URL to your clipboard so you can paste it on your phone or another device.
+
+## Using the Bridge
+
+While connected, the same conversation is live on both surfaces:
+
+- **From Claudette**, type as usual. Your prompt streams over stdin to the Claude Code CLI; assistant output renders locally and is also forwarded to claude.ai.
+- **From claude.ai**, type into the bridge session. The prompt is routed through the bridge into the same CLI process; assistant output streams back to the browser **and** is persisted into your Claudette chat with a remote-origin marker.
+
+Tool calls, file edits, MCP servers, and `Bash` runs all execute on your local machine — the remote browser only sees prompts and assistant text. Permission prompts (e.g. `AskUserQuestion`, `ExitPlanMode`, `can_use_tool`) can be answered from either side.
+
+## Disabling
+
+- **Per session**: overflow menu → **Claude Remote Control → Disable**. The bridge environment is archived; the local CLI process keeps running for future local turns.
+- **Globally**: Settings → Experimental → toggle off. The next agent event cycle tears down any active bridges.
+
+Disabling doesn't affect the underlying chat — your local Claudette transcript and any work-in-progress are preserved.
+
+## Limitations
+
+- **MCP, plan-mode, and env-provider changes are deferred while a bridge is live.** Tearing down the persistent CLI to apply a new MCP config or `--permission-mode plan` would close the bridge and force claude.ai to fork to a new session URL. Disable Remote Control to apply these changes, then re-enable.
+- **Bridge identity is owned by the Claude Code CLI.** Long network outages can cause the CLI's bridge to expire server-side and reconnect with a fresh session id; that creates a new entry in claude.ai's recents. This is rare and outside Claudette's control.
+- **One bridge per chat session.** The toolbar surface is per-session; enabling it on one chat doesn't bridge another.
+- **No proxying of attachments through the bridge yet.** Image / PDF attachments sent from claude.ai aren't currently round-tripped — send them from Claudette directly.
+
+## Troubleshooting
+
+- **Status stuck on "Enabling" with "Send your first message…"** — Claudette intentionally defers the bridge until a chat has at least one turn (otherwise the bridge would have nothing to render in claude.ai's recents). Send any prompt from Claudette to kick the bridge off.
+- **Status: Error, detail `/login`** — the Claude Code CLI couldn't reach Anthropic with its OAuth token. Run `claude` in a terminal once to refresh credentials, then retry.
+- **Status: Error, detail "disabled by your organization's policy"** — your Anthropic org disabled `allow_remote_control`. Contact your admin.
+- **claude.ai shows a different conversation entry after a turn** — should not happen; if it does, please file an issue with the lifecycle state from the overflow menu and the timestamps of the diverging turns.
+
+## Related
+
+- [Settings](./settings) — where the experimental flag lives.
+- [Remote Workspaces](./remote-workspaces) — separate feature: connect Claudette to a remote *machine* running Claudette. (Remote Control connects a chat to claude.ai; Remote Workspaces connects two Claudette installs.)
