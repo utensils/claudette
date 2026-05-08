@@ -196,48 +196,6 @@ impl Database {
         Ok(())
     }
 
-    /// Persist agent session state so it survives app restarts.
-    pub fn save_agent_session(
-        &self,
-        workspace_id: &str,
-        session_id: &str,
-        turn_count: u32,
-    ) -> Result<(), rusqlite::Error> {
-        self.conn.execute(
-            "UPDATE workspaces SET session_id = ?1, turn_count = ?2 WHERE id = ?3",
-            params![session_id, turn_count, workspace_id],
-        )?;
-        Ok(())
-    }
-
-    /// Load persisted agent session state. Returns `(session_id, turn_count)`.
-    pub fn get_agent_session(
-        &self,
-        workspace_id: &str,
-    ) -> Result<Option<(String, u32)>, rusqlite::Error> {
-        self.conn
-            .query_row(
-                "SELECT session_id, turn_count FROM workspaces WHERE id = ?1",
-                params![workspace_id],
-                |row| {
-                    let sid: Option<String> = row.get(0)?;
-                    let tc: u32 = row.get(1)?;
-                    Ok(sid.map(|s| (s, tc)))
-                },
-            )
-            .optional()
-            .map(|opt| opt.flatten())
-    }
-
-    /// Clear persisted agent session (e.g. after a reset or failed init).
-    pub fn clear_agent_session(&self, workspace_id: &str) -> Result<(), rusqlite::Error> {
-        self.conn.execute(
-            "UPDATE workspaces SET session_id = NULL, turn_count = 0 WHERE id = ?1",
-            params![workspace_id],
-        )?;
-        Ok(())
-    }
-
     // --- Metrics: agent session lifecycle ---
 
     /// Record the start of an agent session. Idempotent (INSERT OR IGNORE) so
@@ -907,47 +865,10 @@ mod tests {
         assert!(workspaces.is_empty());
     }
 
-    // --- Agent session persistence tests ---
-
-    #[test]
-    fn test_save_and_get_agent_session() {
-        let db = setup_db_with_workspace();
-        db.save_agent_session("w1", "sess-abc", 3).unwrap();
-        let result = db.get_agent_session("w1").unwrap();
-        assert_eq!(result, Some(("sess-abc".into(), 3)));
-    }
-
-    #[test]
-    fn test_get_agent_session_returns_none_when_no_session() {
-        let db = setup_db_with_workspace();
-        let result = db.get_agent_session("w1").unwrap();
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_get_agent_session_returns_none_for_missing_workspace() {
-        let db = Database::open_in_memory().unwrap();
-        let result = db.get_agent_session("nonexistent").unwrap();
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_clear_agent_session() {
-        let db = setup_db_with_workspace();
-        db.save_agent_session("w1", "sess-abc", 5).unwrap();
-        db.clear_agent_session("w1").unwrap();
-        let result = db.get_agent_session("w1").unwrap();
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_save_agent_session_overwrites() {
-        let db = setup_db_with_workspace();
-        db.save_agent_session("w1", "sess-1", 1).unwrap();
-        db.save_agent_session("w1", "sess-2", 4).unwrap();
-        let result = db.get_agent_session("w1").unwrap();
-        assert_eq!(result, Some(("sess-2".into(), 4)));
-    }
+    // --- Workspaces table no longer carries `session_id` / `turn_count`;
+    // those columns moved to `chat_sessions` in 20260422000000 and were
+    // dropped in 20260508142050. Per-session state tests live in
+    // `chat.rs` (see `test_save_chat_session_state_persists_session_id`).
 
     // --- Metrics capture tests ---
 

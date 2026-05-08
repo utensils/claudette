@@ -192,6 +192,22 @@ fn should_resume_persistent_session(
     !saved_session_id.trim().is_empty() && (has_persisted_claude_session || saved_turn_count > 1)
 }
 
+/// Resolve the session id to launch claude with, given whether we intend to
+/// resume the saved session or start fresh. When `is_resume` is false we MUST
+/// generate a fresh UUID — passing `--session-id <existing-saved-sid>` to
+/// `claude` (without `--resume`) tells the CLI to *create* a new session at
+/// that id, which silently nukes the prior transcript stored under that id
+/// and leaves the agent with no conversational context. The respawn path
+/// previously skipped this branch and reused `saved_session_id` regardless,
+/// which is the bug `respawn_uses_fresh_sid_when_not_resuming` pins.
+fn resolve_spawn_session_id(saved_session_id: &str, is_resume: bool) -> String {
+    if is_resume {
+        saved_session_id.to_string()
+    } else {
+        uuid::Uuid::new_v4().to_string()
+    }
+}
+
 fn terminal_text(text: &str) -> String {
     let normalized = text.replace("\r\n", "\n");
     let mut rendered = String::with_capacity(normalized.len());
@@ -1957,9 +1973,25 @@ pub async fn send_chat_message(
                     saved_turn_count,
                     has_persisted_claude_session,
                 );
+                // When `is_resume` is false we MUST NOT reuse `saved_session_id` —
+                // see the doc comment on `resolve_spawn_session_id`. The
+                // non-respawn branch below uses the same helper; keep them in
+                // lockstep so a subtle inconsistency between paths can't
+                // silently overwrite an existing JSONL again.
+                let spawn_sid = resolve_spawn_session_id(&saved_session_id, is_resume);
+                if !is_resume {
+                    // Mirror non-respawn line ~2030: persist the fresh sid in
+                    // memory before the spawn so the post-spawn save_chat_session_state
+                    // writes the right value back to the DB.
+                    let mut agents = state.agents.write().await;
+                    if let Some(session) = agents.get_mut(&chat_session_id) {
+                        session.session_id = spawn_sid.clone();
+                    }
+                    drop(agents);
+                }
                 let (ps, final_sid) = match start_persistent(
                     worktree_path.clone(),
-                    saved_session_id.clone(),
+                    spawn_sid.clone(),
                     is_resume,
                     allowed_tools.clone(),
                     custom_instructions.clone(),
@@ -1967,7 +1999,7 @@ pub async fn send_chat_message(
                 )
                 .await
                 {
-                    Ok(ps) => (ps, saved_session_id.clone()),
+                    Ok(ps) => (ps, spawn_sid.clone()),
                     Err(e2) if is_resume => {
                         eprintln!("[chat] --resume respawn failed ({e2}), starting fresh");
                         let fresh = uuid::Uuid::new_v4().to_string();
@@ -1983,7 +2015,23 @@ pub async fn send_chat_message(
                         (ps, fresh)
                     }
                     Err(e2) => {
+                        // Clear DB AND in-memory together — the sibling
+                        // failure path at ~line 2089 does both, and leaving
+                        // them out of sync left a window where the next turn
+                        // saw `has_persisted=false` but `saved_session_id`
+                        // non-empty, which made `should_resume` return false
+                        // and the respawn logic above launched
+                        // `claude --session-id <stale-sid>` (fresh session
+                        // pinned to an existing transcript id) instead of
+                        // either resuming or starting cleanly. Mirror the
+                        // sibling so the asymmetry can't reopen.
                         let _ = db.clear_chat_session_state(&chat_session_id);
+                        let mut agents = state.agents.write().await;
+                        if let Some(session) = agents.get_mut(&chat_session_id) {
+                            session.session_id = String::new();
+                            session.turn_count = 0;
+                        }
+                        drop(agents);
                         return Err(e2);
                     }
                 };
@@ -2023,13 +2071,14 @@ pub async fn send_chat_message(
             saved_turn_count,
             has_persisted_claude_session,
         );
-        let sid = if is_resume {
-            saved_session_id.clone()
-        } else {
-            let fresh = uuid::Uuid::new_v4().to_string();
-            session.session_id = fresh.clone();
-            fresh
-        };
+        // Lockstep with the respawn branch above (~line 1955) so both spawn
+        // paths agree on "fresh sid for fresh sessions, never reuse a saved
+        // sid without `--resume`". `resolve_spawn_session_id`'s doc comment
+        // has the consequence-of-mismatch.
+        let sid = resolve_spawn_session_id(&saved_session_id, is_resume);
+        if !is_resume {
+            session.session_id = sid.clone();
+        }
         // Drop lock before async process spawn.
         drop(agents);
 
@@ -3148,7 +3197,7 @@ mod tests {
     use super::{
         remote_control_requested_or_active, remote_control_requested_or_active_for_turn,
         remote_control_should_defer_drift_teardown_for_turn,
-        remote_control_should_restore_for_turn, remote_control_title,
+        remote_control_should_restore_for_turn, remote_control_title, resolve_spawn_session_id,
         should_defer_persistent_restart_for_state,
         should_reenable_remote_control_after_turn_result, should_resume_persistent_session,
         should_run_auto_naming, terminal_text,
@@ -3218,6 +3267,50 @@ mod tests {
         assert!(!should_resume_persistent_session("fresh-uuid", 1, false));
         assert!(should_resume_persistent_session("fresh-uuid", 2, false));
         assert!(!should_resume_persistent_session("", 9, true));
+    }
+
+    #[test]
+    fn respawn_uses_fresh_sid_when_not_resuming() {
+        // Regression pin for the agent-resume bug observed in test-breaking-ci:
+        // a respawn after a stdin-write failure was passing `saved_session_id`
+        // straight to `claude --session-id <saved>`, which Claude treats as
+        // "create a new session at this id" and silently nukes the prior
+        // transcript stored under that id. The right behaviour is to mint a
+        // fresh UUID whenever we cannot honour `--resume`. The non-respawn
+        // path at the bottom of `chat_send_persistent` already did this; the
+        // respawn path now uses the same helper.
+        let saved = "abc-prior-session";
+        let resumed = resolve_spawn_session_id(saved, true);
+        assert_eq!(resumed, saved, "resume must reuse the saved sid verbatim");
+
+        let fresh = resolve_spawn_session_id(saved, false);
+        assert_ne!(
+            fresh, saved,
+            "non-resume MUST mint a new uuid; reusing the saved sid pins claude to an existing transcript id"
+        );
+        assert!(
+            !fresh.is_empty(),
+            "fresh sid must be a real uuid the CLI can route by"
+        );
+        // The minted value must look like a uuid so `claude --session-id <it>`
+        // and downstream `~/.claude/projects/.../{sid}.jsonl` paths are
+        // well-formed. Hyphen count alone is enough to flag a regression
+        // where someone short-circuited to `String::new()` or similar.
+        assert_eq!(
+            fresh.matches('-').count(),
+            4,
+            "fresh sid must be uuid-shaped, got `{fresh}`"
+        );
+    }
+
+    #[test]
+    fn respawn_fresh_sids_do_not_collide_back_to_back() {
+        // Cheap belt-and-suspenders: two fresh mints in a row must differ.
+        // Catches accidental "same sid every call" regressions (e.g. a
+        // stub left in for tests that leaks into prod via a feature flag).
+        let a = resolve_spawn_session_id("saved", false);
+        let b = resolve_spawn_session_id("saved", false);
+        assert_ne!(a, b);
     }
 
     #[test]
