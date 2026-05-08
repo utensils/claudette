@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClaudeFlagDef, FlagValue } from "../../services/claudeFlags";
+import * as svc from "../../services/claudeFlags";
+import { useAppStore } from "../useAppStore";
 import {
   hasDangerousFlag,
   resolveEnabledExtraFlags,
@@ -127,5 +129,58 @@ describe("hasDangerousFlag", () => {
         { name: "--dangerously-foo", value: undefined, isDangerous: true },
       ]),
     ).toBe(false);
+  });
+});
+
+describe("loadWorkspaceClaudeFlags idempotency (B2)", () => {
+  beforeEach(() => {
+    useAppStore.setState({ claudeFlagsByWorkspace: {} });
+  });
+
+  it("short-circuits a second call while the first is in-flight", async () => {
+    let resolveFn!: (v: {
+      defs: unknown[];
+      state: { global: Record<string, unknown>; repo: Record<string, unknown> };
+      resolved: unknown[];
+    }) => void;
+    const fetchPromise = new Promise<{
+      defs: unknown[];
+      state: { global: Record<string, unknown>; repo: Record<string, unknown> };
+      resolved: unknown[];
+    }>((r) => {
+      resolveFn = r;
+    });
+    const spy = vi
+      .spyOn(svc, "getResolvedRepoFlags")
+      .mockReturnValue(fetchPromise as unknown as ReturnType<typeof svc.getResolvedRepoFlags>);
+
+    const { loadWorkspaceClaudeFlags } = useAppStore.getState();
+    const p1 = loadWorkspaceClaudeFlags("ws1", "r1");
+    const p2 = loadWorkspaceClaudeFlags("ws1", "r1"); // should short-circuit
+
+    resolveFn({ defs: [], state: { global: {}, repo: {} }, resolved: [] });
+    await Promise.all([p1, p2]);
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
+  it("re-fetches after invalidation removes the entry", async () => {
+    const spy = vi
+      .spyOn(svc, "getResolvedRepoFlags")
+      .mockResolvedValue({
+        defs: [],
+        state: { global: {}, repo: {} },
+        resolved: [],
+      });
+
+    const { loadWorkspaceClaudeFlags, invalidateWorkspaceClaudeFlags } =
+      useAppStore.getState();
+    await loadWorkspaceClaudeFlags("ws1", "r1");
+    invalidateWorkspaceClaudeFlags("ws1");
+    await loadWorkspaceClaudeFlags("ws1", "r1");
+
+    expect(spy).toHaveBeenCalledTimes(2);
+    spy.mockRestore();
   });
 });

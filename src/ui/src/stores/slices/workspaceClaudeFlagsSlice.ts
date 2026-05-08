@@ -43,6 +43,18 @@ export const createWorkspaceClaudeFlagsSlice: StateCreator<
   claudeFlagsByWorkspace: {},
 
   loadWorkspaceClaudeFlags: async (workspaceId, repoId) => {
+    const existing = get().claudeFlagsByWorkspace[workspaceId];
+    // Mirror the backend's "already loaded" gate: a sibling consumer
+    // (SessionTab + ComposerToolbar both mount at the same time) can race
+    // on a missing cache entry. Short-circuit when there's already an
+    // in-flight or completed load for this workspace; the entry is wiped
+    // by invalidation, returning to the undefined state below.
+    if (
+      existing &&
+      (existing.status === "loading" || existing.status === "ready")
+    ) {
+      return;
+    }
     if (!repoId) {
       set((s) => ({
         claudeFlagsByWorkspace: {
