@@ -36,7 +36,15 @@ pub async fn create_workspace(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<CreateWorkspaceResult, String> {
-    create_workspace_inner(&repo_id, &name, skip_setup.unwrap_or(false), &app, &state).await
+    create_workspace_inner(
+        &repo_id,
+        &name,
+        skip_setup.unwrap_or(false),
+        false,
+        &app,
+        &state,
+    )
+    .await
 }
 
 /// Shared implementation of the GUI's `create_workspace` command.
@@ -51,6 +59,7 @@ pub(crate) async fn create_workspace_inner(
     repo_id: &str,
     name: &str,
     skip_setup: bool,
+    preserve_supplied_name: bool,
     app: &AppHandle,
     state: &AppState,
 ) -> Result<CreateWorkspaceResult, String> {
@@ -67,6 +76,7 @@ pub(crate) async fn create_workspace_inner(
             repo_id,
             name,
             branch_prefix: &prefix,
+            preserve_supplied_name,
         },
     )
     .await

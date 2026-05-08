@@ -56,7 +56,11 @@ pub async fn run(action: Action, json: bool) -> Result<(), Box<dyn Error>> {
             let value = ipc::call(
                 &info,
                 "create_workspace",
-                serde_json::json!({ "repo_id": repo, "name": name }),
+                serde_json::json!({
+                    "repo_id": repo,
+                    "name": name,
+                    "preserve_name": true,
+                }),
             )
             .await?;
             output::print_json(&value)?;

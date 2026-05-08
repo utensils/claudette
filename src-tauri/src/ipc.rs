@@ -457,12 +457,22 @@ async fn handle_create_workspace(
         .get("skip_setup")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let preserve_supplied_name = params
+        .get("preserve_name")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let state = app_state(app)?;
 
-    let result =
-        crate::commands::workspace::create_workspace_inner(repo_id, name, skip_setup, app, &state)
-            .await?;
+    let result = crate::commands::workspace::create_workspace_inner(
+        repo_id,
+        name,
+        skip_setup,
+        preserve_supplied_name,
+        app,
+        &state,
+    )
+    .await?;
 
     Ok(json!({
         "workspace": result.workspace,

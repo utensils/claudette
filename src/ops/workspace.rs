@@ -63,6 +63,13 @@ pub struct CreateParams<'a> {
     /// Branch prefix already resolved by the caller (e.g.
     /// `"jamesbrink/"`). Empty string is allowed.
     pub branch_prefix: &'a str,
+    /// Preserve the supplied workspace name/branch after the first prompt.
+    ///
+    /// GUI-created workspaces use the normal first-prompt auto-rename path.
+    /// CLI and batch callers pass an explicit script-facing name and need it
+    /// to remain stable, so they pre-claim the one-shot rename slot at
+    /// creation time.
+    pub preserve_supplied_name: bool,
 }
 
 /// Result of a successful [`create`]. `default_session_id` is the chat
@@ -186,6 +193,10 @@ pub async fn create(
     // of rendering at sort_order=0 until the next workspace-list reload.
     if let Ok(Some(o)) = db.lookup_workspace_sort_order(&ws.id) {
         ws.sort_order = o;
+    }
+
+    if params.preserve_supplied_name {
+        db.claim_branch_auto_rename(&ws.id)?;
     }
 
     let default_session_id = db
@@ -792,6 +803,62 @@ mod tests {
         (repo_dir, db_dir, db, repo)
     }
 
+    #[tokio::test]
+    async fn create_leaves_auto_rename_available_by_default() {
+        let (_repo_dir, _db_dir, mut db, repo) = setup_repo_and_db().await;
+        let worktree_base = tempfile::tempdir().unwrap();
+        let hooks = RecordingHooks::default();
+
+        let created = create(
+            &mut db,
+            &hooks,
+            worktree_base.path(),
+            CreateParams {
+                repo_id: &repo.id,
+                name: "scratch",
+                branch_prefix: "test/",
+                preserve_supplied_name: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            !db.is_branch_auto_rename_claimed(&created.workspace.id)
+                .unwrap()
+        );
+        assert!(db.claim_branch_auto_rename(&created.workspace.id).unwrap());
+    }
+
+    #[tokio::test]
+    async fn create_can_preserve_supplied_name_by_claiming_auto_rename() {
+        let (_repo_dir, _db_dir, mut db, repo) = setup_repo_and_db().await;
+        let worktree_base = tempfile::tempdir().unwrap();
+        let hooks = RecordingHooks::default();
+
+        let created = create(
+            &mut db,
+            &hooks,
+            worktree_base.path(),
+            CreateParams {
+                repo_id: &repo.id,
+                name: "agent-pipeline",
+                branch_prefix: "test/",
+                preserve_supplied_name: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(created.workspace.name, "agent-pipeline");
+        assert_eq!(created.workspace.branch_name, "test/agent-pipeline");
+        assert!(
+            db.is_branch_auto_rename_claimed(&created.workspace.id)
+                .unwrap()
+        );
+        assert!(!db.claim_branch_auto_rename(&created.workspace.id).unwrap());
+    }
+
     /// Regression for the `claudette workspace archive --delete-branch`
     /// IPC flow: when the row is hard-deleted, the hook must announce
     /// `Deleted` (not `Archived`) so the frontend can `removeWorkspace`
@@ -810,6 +877,7 @@ mod tests {
                 repo_id: &repo.id,
                 name: "feature",
                 branch_prefix: "test/",
+                preserve_supplied_name: false,
             },
         )
         .await
@@ -857,6 +925,7 @@ mod tests {
                 repo_id: &repo.id,
                 name: "feature",
                 branch_prefix: "test/",
+                preserve_supplied_name: false,
             },
         )
         .await

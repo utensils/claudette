@@ -114,7 +114,11 @@ pub async fn handle_request(
         "create_workspace" => {
             let repository_id = param_str(&params, "repository_id");
             let name = param_str(&params, "name");
-            handle_create_workspace(state, &repository_id, &name).await
+            let preserve_supplied_name = params
+                .get("preserve_name")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            handle_create_workspace(state, &repository_id, &name, preserve_supplied_name).await
         }
         "archive_workspace" => {
             let workspace_id = param_str(&params, "workspace_id");
@@ -801,6 +805,7 @@ async fn handle_create_workspace(
     state: &ServerState,
     repository_id: &str,
     name: &str,
+    preserve_supplied_name: bool,
 ) -> Result<serde_json::Value, String> {
     use claudette::ops::{NoopHooks, workspace as ops_workspace};
 
@@ -824,6 +829,7 @@ async fn handle_create_workspace(
             repo_id: repository_id,
             name,
             branch_prefix: &branch_prefix,
+            preserve_supplied_name,
         },
     )
     .await
