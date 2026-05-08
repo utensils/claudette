@@ -29,7 +29,9 @@ const SKIP_DIR_PREFIXES: &[&str] = &[
 ];
 
 fn is_high_volume_path(path: &str) -> bool {
-    SKIP_DIR_PREFIXES.iter().any(|prefix| path.starts_with(prefix))
+    SKIP_DIR_PREFIXES
+        .iter()
+        .any(|prefix| path.starts_with(prefix))
 }
 
 #[derive(Clone, Serialize)]
@@ -199,10 +201,7 @@ async fn collect_workspace_file_entries(worktree_path: &str) -> Result<Vec<FileE
     let _ = child.wait().await;
 
     for (path, status) in &git_status {
-        if entries.len() >= MAX_FILES
-            || seen_files.contains(path)
-            || is_high_volume_path(path)
-        {
+        if entries.len() >= MAX_FILES || seen_files.contains(path) || is_high_volume_path(path) {
             continue;
         }
         let mut pos = 0;
