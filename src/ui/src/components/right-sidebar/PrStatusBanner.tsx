@@ -3,6 +3,7 @@ import {
   Check,
   ChevronRight,
   Circle,
+  CircleSlash,
   GitPullRequestArrow,
   GitPullRequestDraft,
   GitMerge,
@@ -150,6 +151,9 @@ function checkSummaryStatus(summary: ReturnType<typeof summarizeCiChecks>): CiCh
   if (summary.failed > 0) return "failure";
   if (summary.pending > 0) return "pending";
   if (summary.cancelled > 0) return "cancelled";
+  // `skipped` does not contribute to the overall status icon: a PR
+  // whose only checks were skipped reads as success at the banner
+  // level, with the per-check rows below disambiguating.
   return "success";
 }
 
@@ -189,5 +193,10 @@ function CheckStatusIcon({ status }: { status: CiCheck["status"] }) {
       return <Circle size={10} className={styles.checkIconCancelled} aria-hidden="true" />;
     case "pending":
       return <LoaderCircle size={14} className={styles.checkIconPending} aria-hidden="true" />;
+    case "skipped":
+      // CircleSlash reads as "didn't run" at a glance; the
+      // checkIconSkipped class tints it neutral / muted so it doesn't
+      // pull attention away from real CI signal.
+      return <CircleSlash size={12} className={styles.checkIconSkipped} aria-hidden="true" />;
   }
 }
