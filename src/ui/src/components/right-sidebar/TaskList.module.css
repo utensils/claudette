@@ -27,7 +27,7 @@
 
 .statusIcon {
   flex-shrink: 0;
-  width: 14px;
+  width: 1.1em;
   text-align: center;
   font-size: var(--body-size);
   line-height: 18px;

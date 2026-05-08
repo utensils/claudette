@@ -151,7 +151,7 @@
 
 .status {
   font-weight: 700;
-  width: 14px;
+  width: 1.1em;
   text-align: center;
   flex-shrink: 0;
   font-size: var(--body-size);
