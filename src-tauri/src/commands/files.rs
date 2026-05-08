@@ -1777,6 +1777,8 @@ fn copy_image_bytes_to_clipboard(
         .map_err(|e| format!("write attachment: {e}"))?;
     // ASObjC bridge: create an NSImage from the file and write it to the
     // general pasteboard as image data (not a Finder file reference).
+    // Error on nil NSImage (unsupported format) and on writeObjects: returning
+    // false — both would otherwise produce a silent success (exit 0).
     let output = std::process::Command::new("osascript")
         .args([
             "-e",
@@ -1788,11 +1790,13 @@ fn copy_image_bytes_to_clipboard(
             "-e",
             "set img to (current application's NSImage's alloc()'s initWithContentsOfFile:(item 1 of argv))",
             "-e",
+            "if img is missing value then error \"Failed to load image from file\" number 1",
+            "-e",
             "set pb to current application's NSPasteboard's generalPasteboard()",
             "-e",
             "pb's clearContents()",
             "-e",
-            "pb's writeObjects:{img}",
+            "if (pb's writeObjects:{img}) is false then error \"NSPasteboard writeObjects: failed\" number 1",
             "-e",
             "end run",
         ])
@@ -1841,11 +1845,18 @@ fn copy_image_bytes_to_clipboard(
     let path = write_attachment_to_temp_file(dir, filename, media_type, bytes)
         .map_err(|e| format!("write attachment: {e}"))?;
     let path_str = path.to_string_lossy().replace('\'', "''");
+    // Use WPF/WIC (PresentationCore) instead of System.Drawing — WIC handles
+    // more formats including WebP (Windows 10 v1903+) and HEIC.
     let script = format!(
-        "Add-Type -AssemblyName System.Windows.Forms; \
-         Add-Type -AssemblyName System.Drawing; \
-         [System.Windows.Forms.Clipboard]::SetImage(\
-           [System.Drawing.Image]::FromFile('{path_str}'))"
+        "Add-Type -AssemblyName PresentationCore; \
+         $fs = [System.IO.File]::OpenRead('{path_str}'); \
+         $dec = [System.Windows.Media.Imaging.BitmapDecoder]::Create($fs, \
+           [System.Windows.Media.Imaging.BitmapCreateOptions]::None, \
+           [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad); \
+         $fs.Dispose(); \
+         $frame = $dec.Frames[0]; \
+         $frame.Freeze(); \
+         [System.Windows.Clipboard]::SetImage($frame)"
     );
     let output = std::process::Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
