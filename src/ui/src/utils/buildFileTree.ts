@@ -8,6 +8,9 @@ export type FileTreeNode =
       path: string;
       name: string;
       statusCount: number;
+      /** Dominant status across descendants for tinting. Modified wins over
+       *  Deleted, Renamed, then Added — see `folderStatusPriority`. */
+      folderStatus: FileStatus | null;
       children: FileTreeNode[];
     }
   | {
@@ -47,6 +50,7 @@ export function buildFileTree(entries: FileEntry[]): FileTreeNode[] {
           path: currentPath,
           name: segment,
           statusCount: 0,
+          folderStatus: null,
           children: [],
         };
         dirNodes.set(currentPath, dir);
@@ -63,22 +67,53 @@ export function buildFileTree(entries: FileEntry[]): FileTreeNode[] {
     });
   }
 
-  computeStatusCounts(root);
+  aggregateFolders(root);
   sortNodes(root);
   return root;
 }
 
-function computeStatusCounts(nodes: FileTreeNode[]): number {
-  let count = 0;
+interface FolderAggregate {
+  count: number;
+  dominant: FileStatus | null;
+}
+
+/** Post-order walk: each dir absorbs its children's count and the highest-
+ *  priority status seen below it. Modified outranks Deleted, Renamed, then
+ *  Added so a folder containing a single edit doesn't read as "added" just
+ *  because its sibling files were also new. */
+function aggregateFolders(nodes: FileTreeNode[]): FolderAggregate {
+  const result: FolderAggregate = { count: 0, dominant: null };
   for (const node of nodes) {
     if (node.kind === "file") {
-      if (node.git_status) count += 1;
+      if (node.git_status) {
+        result.count += 1;
+        result.dominant = pickHigherStatus(result.dominant, node.git_status);
+      }
     } else {
-      node.statusCount = computeStatusCounts(node.children);
-      count += node.statusCount;
+      const child = aggregateFolders(node.children);
+      node.statusCount = child.count;
+      node.folderStatus = child.dominant;
+      result.count += child.count;
+      result.dominant = pickHigherStatus(result.dominant, child.dominant);
     }
   }
-  return count;
+  return result;
+}
+
+function pickHigherStatus(
+  a: FileStatus | null,
+  b: FileStatus | null,
+): FileStatus | null {
+  if (a == null) return b;
+  if (b == null) return a;
+  return folderStatusPriority(b) > folderStatusPriority(a) ? b : a;
+}
+
+function folderStatusPriority(status: FileStatus): number {
+  if (status === "Modified") return 4;
+  if (status === "Deleted") return 3;
+  if (typeof status !== "string") return 2; // Renamed
+  return 1; // Added (covers untracked too — layer is per-file, not per-folder)
 }
 
 function sortNodes(nodes: FileTreeNode[]): void {

@@ -41,6 +41,51 @@ describe("buildFileTree", () => {
     });
   });
 
+  it("picks Modified over Added when aggregating folder status", () => {
+    const entries: FileEntry[] = [
+      {
+        path: "src/added.ts",
+        is_directory: false,
+        git_status: "Added",
+        git_layer: "untracked",
+      },
+      {
+        path: "src/changed.ts",
+        is_directory: false,
+        git_status: "Modified",
+        git_layer: "unstaged",
+      },
+    ];
+
+    const tree = buildFileTree(entries);
+    const src = tree[0];
+    expect(src).toMatchObject({
+      kind: "dir",
+      folderStatus: "Modified",
+      statusCount: 2,
+    });
+  });
+
+  it("propagates folder status up through nested directories", () => {
+    const entries: FileEntry[] = [
+      {
+        path: "src/deep/nested/added.ts",
+        is_directory: false,
+        git_status: "Added",
+        git_layer: "untracked",
+      },
+    ];
+
+    const tree = buildFileTree(entries);
+    const src = tree[0];
+    expect(src.kind === "dir" ? src.folderStatus : null).toBe("Added");
+    const deep =
+      src.kind === "dir" && src.children[0].kind === "dir"
+        ? src.children[0]
+        : null;
+    expect(deep?.folderStatus).toBe("Added");
+  });
+
   it("keeps deleted virtual entries in the tree", () => {
     const entries: FileEntry[] = [
       {

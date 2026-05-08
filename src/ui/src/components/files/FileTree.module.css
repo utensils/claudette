@@ -47,13 +47,18 @@
 }
 
 .rowDeleted .name {
-  color: var(--text-dim);
   text-decoration: line-through;
   text-decoration-color: var(--diff-removed-text);
 }
 
-.rowDirChanged .icon {
-  color: var(--tool-task);
+/* When set, --row-status-color comes from inline style on the row and
+ * carries the change-status tint (yellow=Modified, green=Added,
+ * red=Deleted, blue=Renamed). It governs filename, folder name, folder
+ * icon, and the status badge so a row reads as a single colored unit. */
+.rowStatusTinted .name,
+.rowStatusTinted .icon,
+.rowStatusTinted .status {
+  color: var(--row-status-color);
 }
 
 .chevron {
@@ -69,6 +74,13 @@
 .rowSelected .icon,
 .rowSelected .chevron {
   color: var(--text-muted);
+}
+
+/* When a tinted row is also selected, the previous `.rowSelected .icon`
+ * rule wins by source order (same specificity), which would blank the
+ * status tint. Re-assert the tint with a higher-specificity selector. */
+.rowSelected.rowStatusTinted .icon {
+  color: var(--row-status-color);
 }
 
 .name {
@@ -111,23 +123,19 @@
   height: 16px;
   padding: 0 5px;
   flex-shrink: 0;
-  border: 1px solid color-mix(in srgb, var(--tool-task) 30%, transparent);
+  border: 1px solid
+    color-mix(in srgb, var(--row-status-color, var(--tool-task)) 30%, transparent);
   border-radius: var(--radius-pill);
-  background: color-mix(in srgb, var(--tool-task) 12%, transparent);
-  color: var(--tool-task);
+  background: color-mix(
+    in srgb,
+    var(--row-status-color, var(--tool-task)) 12%,
+    transparent
+  );
+  color: var(--row-status-color, var(--tool-task));
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 700;
   line-height: 14px;
-}
-
-.dirStatus:empty {
-  width: 8px;
-  min-width: 8px;
-  height: 8px;
-  padding: 0;
-  border-color: var(--tool-task);
-  background: var(--tool-task);
 }
 
 .empty {

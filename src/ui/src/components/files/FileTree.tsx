@@ -434,7 +434,8 @@ function Row({
   const Icon = isDir ? getFolderIcon(expanded) : getFileIcon(node.name);
   const status = node.kind === "file" ? node.git_status : null;
   const statusLayer = node.kind === "file" ? node.git_layer : null;
-  const dirChanged = node.kind === "dir" && node.statusCount > 0;
+  const folderStatus = node.kind === "dir" ? node.folderStatus : null;
+  const tintStatus = status ?? folderStatus;
   const statusTitle =
     status == null
       ? null
@@ -445,16 +446,26 @@ function Row({
     styles.row,
     selected ? styles.rowSelected : "",
     status === "Deleted" ? styles.rowDeleted : "",
-    dirChanged ? styles.rowDirChanged : "",
+    tintStatus ? styles.rowStatusTinted : "",
   ]
     .filter(Boolean)
     .join(" ");
+
+  // Publish the row's tint as a custom property so the icon, name, and
+  // dirStatus badge rules in FileTree.module.css can all reference one
+  // source of truth without each receiving its own inline `style`.
+  const rowStyle = {
+    ["--depth" as string]: depth,
+    ...(tintStatus
+      ? { ["--row-status-color" as string]: statusColor(tintStatus) }
+      : {}),
+  };
 
   return (
     <div
       ref={rowRef}
       className={rowClassName}
-      style={{ ["--depth" as string]: depth }}
+      style={rowStyle}
       role="treeitem"
       tabIndex={tabbable ? 0 : -1}
       aria-selected={selected}
@@ -504,13 +515,12 @@ function Row({
           title={`${node.statusCount} changed ${node.statusCount === 1 ? "file" : "files"}`}
           aria-label={`${node.statusCount} changed ${node.statusCount === 1 ? "file" : "files"}`}
         >
-          {node.statusCount > 1 ? node.statusCount : ""}
+          {node.statusCount}
         </span>
       )}
       {status && (
         <span
           className={styles.status}
-          style={{ color: statusColor(status) }}
           title={statusTitle ?? undefined}
           aria-label={statusTitle ?? undefined}
         >
