@@ -74,7 +74,7 @@
   padding: 16px;
   text-align: center;
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: var(--body-size);
 }
 
 .file {
@@ -84,7 +84,7 @@
   padding: 5px 8px;
   border-radius: 6px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--body-size);
   font-family: var(--font-mono);
   transition: background var(--transition-fast);
 }

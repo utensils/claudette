@@ -9,5 +9,5 @@
   padding: 16px;
   text-align: center;
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: var(--body-size);
 }

@@ -273,7 +273,7 @@
 .invalidBadge {
   color: var(--status-stopped);
   font-weight: bold;
-  font-size: 12px;
+  font-size: var(--body-size);
 }
 
 .repoIcon {
@@ -621,7 +621,7 @@
 }
 
 .emptyStateMessage {
-  font-size: 12px;
+  font-size: var(--body-size);
   line-height: 1.4;
   color: var(--text-muted);
 }
@@ -639,7 +639,7 @@
   color: var(--text-primary);
   padding: 4px 10px;
   border-radius: 4px;
-  font-size: 12px;
+  font-size: var(--body-size);
   cursor: pointer;
   transition: color var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast);
 }
