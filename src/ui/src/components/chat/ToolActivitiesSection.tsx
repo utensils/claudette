@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useState } from "react";
 import { useAppStore } from "../../stores/useAppStore";
 import type { ToolActivity } from "../../stores/useAppStore";
 import type { ToolDisplayMode } from "../../stores/slices/settingsSlice";
@@ -68,8 +68,14 @@ export const ToolActivitiesSection = memo(function ToolActivitiesSection({
             />
           ))
         ) : (
+          // Key by the first activity's toolUseId so the component
+          // instance survives across renders that append more
+          // activities to the same direct-tools run. Without this, the
+          // group key (which embeds every member's toolUseId) changes
+          // every time a new tool is added and React would unmount the
+          // child — losing the user's manual expand/collapse choice.
           <GroupedToolActivityRows
-            key={group.key}
+            key={`grouped:${group.activities[0]?.toolUseId ?? group.key}`}
             label={group.label}
             activities={group.activities}
             searchQuery={searchQuery}
@@ -92,16 +98,43 @@ function GroupedToolActivityRows({
   searchQuery: string;
   worktreePath?: string | null;
 }) {
+  // User-override expand state. `null` means "follow the default": the
+  // group auto-expands while a member is running and auto-collapses
+  // once everything has finished — matching the post-#696 default.
+  // A click overrides the default to `true`/`false` for the rest of
+  // this group's lifetime, so the user can drill into a finished group
+  // or hide a noisy still-running one. The override persists across
+  // rerenders because the parent keys this component by its first
+  // toolUseId (stable across appended activities).
+  const [userOverride, setUserOverride] = useState<boolean | null>(null);
+
   const queryHasMatch =
     !!searchQuery &&
     activities.some((activity) =>
       activityMatchesSearch(activity, searchQuery, worktreePath),
     );
-  const isExpanded = groupHasRunningActivity(activities, true) || queryHasMatch;
+  const defaultExpanded =
+    groupHasRunningActivity(activities, true) || queryHasMatch;
+  const isExpanded = userOverride ?? defaultExpanded;
+  const toggle = () => setUserOverride(!isExpanded);
 
   return (
     <div className={styles.turnSummary}>
-      <div className={styles.turnHeader}>
+      <div
+        className={styles.turnHeader}
+        role="button"
+        tabIndex={0}
+        aria-expanded={isExpanded}
+        aria-label={`${isExpanded ? "Collapse" : "Expand"} ${label}`}
+        onClick={toggle}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            toggle();
+          }
+        }}
+      >
+        <span className={styles.toolChevron}>{isExpanded ? "⌄" : "›"}</span>
         <span className={styles.turnLabel}>{label}</span>
       </div>
       {isExpanded && (
