@@ -78,7 +78,7 @@ const MAX_VIEWER_FILE_SIZE: usize = 10 * 1024 * 1024;
 
 /// List files in a workspace's worktree using `git ls-files`.
 ///
-/// Returns tracked files plus untracked-but-not-ignored files, capped at 10,000
+/// Returns all files — tracked, untracked, and gitignored — capped at 10,000
 /// entries. Paths are relative to the worktree root.
 #[tauri::command]
 pub async fn list_workspace_files(
@@ -99,7 +99,7 @@ pub async fn list_workspace_files(
     let output = Command::new(claudette::git::resolve_git_path_blocking())
         .no_console_window()
         .args(["-C", worktree_path])
-        .args(["ls-files", "--cached", "--others", "--exclude-standard"])
+        .args(["ls-files", "--cached", "--others"])
         .output()
         .await
         .map_err(|e| format!("Failed to run git ls-files: {e}"))?;
