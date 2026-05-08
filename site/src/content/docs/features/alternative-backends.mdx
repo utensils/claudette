@@ -1,6 +1,6 @@
 ---
 title: Alternative Backends
-description: Run Claudette agents against Ollama, OpenAI-compatible APIs, OpenAI Codex, or any custom Anthropic/OpenAI-compatible endpoint instead of the default Claude Code path.
+description: Run Claudette agents against Ollama, OpenAI, or OpenAI Codex instead of the default Claude Code path — architecture, setup, and capability differences.
 ---
 
 By default Claudette spawns the official `claude` CLI authenticated against Anthropic. Behind the **Alternative Claude Code backends** experimental flag you can also run agents against:
@@ -38,11 +38,11 @@ Claudette splits backends into two architectural categories:
 
 **Gateway** (`OpenAiApi`, `CodexSubscription`, `CustomOpenAi`) — Claudette spawns a tiny in-process HTTP listener that translates Claude's wire format into the **OpenAI Responses API** (`/v1/responses`) and back. The spawned `claude` process is pointed at the gateway instead of `api.anthropic.com`. This is how the OpenAI-shaped backends work without forking the CLI.
 
-> **Heads up if you're configuring a custom OpenAI endpoint**: Claudette posts to `/v1/responses`, not `/v1/chat/completions`. Providers that only implement Chat Completions won't work behind the gateway.
+> **Heads up if you ever configure a custom OpenAI endpoint**: Claudette posts to `/v1/responses`, not `/v1/chat/completions`. Providers that only implement Chat Completions won't work behind the gateway.
 
 The per-turn capabilities differ by backend (`AgentBackendCapabilities` in `src/agent_backend.rs`). The chat-header toggles for unsupported capabilities are hidden / disabled automatically:
 
-| Capability | Anthropic | Ollama | Gateway (OpenAI / Codex / Custom OpenAI) |
+| Capability | Anthropic | Ollama | Gateway (OpenAI / Codex) |
 |---|---|---|---|
 | Extended thinking | ✅ | ✅ (when model supports) | ❌ |
 | Effort levels | ✅ | ❌ | ❌ |
@@ -57,20 +57,36 @@ So Ollama gets thinking / tools / vision, but not the Anthropic-only knobs. Swit
 
 ### Ollama
 
-1. Install Ollama (`brew install ollama` on macOS, or [ollama.com/download](https://ollama.com/download)) and start the daemon. By default it listens on `http://localhost:11434`.
-2. Pull a few models, e.g. `ollama pull qwen3-coder` or `ollama pull llama3.1:8b`.
-3. In **Settings > Models**, enable the `ollama` backend. The base URL is pre-filled.
-4. Click **Refresh models** — Claudette queries `ollama list` over the HTTP API and discovers the models you've pulled.
-5. (Optional) Set a default model for the backend.
+The simplest non-Anthropic setup: no API key, no gateway translation, everything stays on your machine. Useful for air-gapped work, privacy-sensitive code, or running offline.
 
-Ollama is the simplest non-Anthropic setup: no API key, no gateway, all local. Tool use and vision work for models that support them.
+1. Install Ollama:
+   - **macOS**: `brew install ollama` or download from [ollama.com/download](https://ollama.com/download).
+   - **Linux**: `curl -fsSL https://ollama.com/install.sh | sh`.
+   - **Windows**: download the installer from [ollama.com/download](https://ollama.com/download).
+2. Start the daemon (the installer typically registers a system service that auto-starts; otherwise `ollama serve`). Confirm: `curl http://localhost:11434/api/tags` should return JSON.
+3. Pull at least one model — pick something tool-tuned for agent workflows:
+
+   ```sh
+   ollama pull qwen3-coder         # solid coding model
+   ollama pull llama3.1:8b         # general-purpose, smaller
+   ollama pull qwen2.5-coder:7b    # smaller coding model
+   ```
+
+4. In **Settings > Models**, the `ollama` backend appears with the base URL pre-filled to `http://localhost:11434`. Change it if your daemon listens elsewhere.
+5. (Optional) Add a bearer token in the **API key** field if you've put Ollama behind an authenticating proxy.
+6. Click **Test** to confirm reachability, then **Refresh models** — Claudette queries `/api/tags` and discovers everything you've pulled.
+7. (Optional) Set a default model and toggle **Enabled** on.
+
+**Capability notes**: tool use and vision are declared `true`, but real support depends on the model. Tool-tuned models (`qwen3-coder`, `llama3.1`) handle Claude-style tool calls; smaller / non-tuned models may ignore tool definitions. Vision works on multimodal models like `llama3.2-vision`. Performance: large models (70B+) need substantial RAM; first-turn latency on a cold model can be 10–60 seconds while weights load.
 
 ### OpenAI API
+
+For users who specifically want `gpt-*` or OpenAI reasoning models, or who have prepaid OpenAI credit they'd rather burn than their Claude quota.
 
 1. Get an API key from [platform.openai.com](https://platform.openai.com/).
 2. In **Settings > Models**, enable the `openai-api` backend.
 3. Paste the key into the **API key** field and save.
-4. Click **Refresh models** — Claudette queries the OpenAI `/v1/models` endpoint and populates the model list.
+4. Click **Test**, then **Refresh models** — Claudette queries OpenAI's `/v1/models` endpoint and populates the model list.
 5. Pick a default model (`gpt-4.1`, `gpt-4o`, `o3-mini`, etc.).
 
 Resolves through the gateway. The Claude-side thinking / effort / fast / 1M-context toggles are hidden when this backend is selected.
@@ -81,7 +97,7 @@ The Codex backend reuses the `codex` CLI's ChatGPT subscription auth instead of 
 
 1. Install the `codex` CLI ([npmjs.com/package/@openai/codex](https://www.npmjs.com/package/@openai/codex)).
 2. In **Settings > Models**, enable the `codex-subscription` backend.
-3. Click **Sign in to Codex** — Claudette runs `codex login` for you, which opens your browser to the OpenAI OAuth page and writes the resulting JWT to `~/.codex/auth.json`.
+3. Click **Run codex login** — Claudette runs `codex login` for you, which opens your browser to the OpenAI OAuth page and writes the resulting JWT to `~/.codex/auth.json`.
 4. Click **Refresh models** to discover the models your subscription has access to.
 
 Claudette reads `auth.json` directly to extract the access token and account ID, so this works whether you authenticated via Claudette or by running `codex login` yourself in a terminal.
