@@ -459,6 +459,11 @@ fn build_persistent_args(
         "stream-json".to_string(),
         "--input-format".to_string(),
         "stream-json".to_string(),
+        // Claude Remote Control's bridge runner uses this flag so inbound
+        // remote prompts are echoed back on stdout with their UUID. Claudette's
+        // monitor relies on that replay to persist remote-origin user turns
+        // into the local chat instead of letting the browser side fork ahead.
+        "--replay-user-messages".to_string(),
         "--verbose".to_string(),
         "--include-partial-messages".to_string(),
         // See build_claude_args for rationale.
@@ -559,6 +564,13 @@ mod tests {
         assert!(args.contains(&"stream-json".to_string()));
         assert!(args.contains(&"--session-id".to_string()));
         assert!(!args.contains(&"--resume".to_string()));
+    }
+
+    #[test]
+    fn test_build_persistent_args_replays_user_messages() {
+        let settings = AgentSettings::default();
+        let args = build_persistent_args("sess-1", false, &[], None, &settings);
+        assert!(args.contains(&"--replay-user-messages".to_string()));
     }
 
     #[test]
