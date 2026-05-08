@@ -11,7 +11,11 @@ import {
   recordSlashCommandUsage,
 } from "../../services/tauri";
 import type { FileEntry, PinnedPrompt, SlashCommand } from "../../services/tauri";
-import type { AttachmentInput, PendingAttachment } from "../../types/chat";
+import type {
+  AttachmentInput,
+  PendingAttachment,
+  StoredAttachment,
+} from "../../types/chat";
 import { base64ToBytes } from "../../utils/base64";
 import {
   MAX_ATTACHMENTS,
@@ -58,6 +62,40 @@ function serializeComposerDraft(mode: ComposerMode, text: string): string {
 function normalizeShellCommand(value: string): string {
   const trimmed = value.trim();
   return trimmed.startsWith("!") ? trimmed.slice(1).trimStart() : trimmed;
+}
+
+/** Rebuild a `PendingAttachment[]` for a session from the slice's
+ * `StoredAttachment[]`. Image preview blob URLs are regenerated from
+ * `data_base64` (the underlying Blob is GC'd once the previous mount
+ * dropped its reference). PDFs and non-image attachments don't get a
+ * thumbnail re-generated here — that work is asynchronous and gated
+ * inside `addAttachment`; on rehydration we leave `preview_url` empty
+ * for those, so the row still renders the filename + size with no
+ * thumbnail rather than blocking the mount on PDF.js. */
+function hydratePendingFromSlice(sessionId: string): PendingAttachment[] {
+  const stored = useAppStore.getState().pendingAttachmentsBySession[sessionId];
+  if (!stored || stored.length === 0) return [];
+  return stored.map((a) => ({
+    id: a.id,
+    filename: a.filename,
+    media_type: a.media_type,
+    data_base64: a.data_base64,
+    preview_url: rehydrateImagePreviewUrl(a),
+    size_bytes: a.size_bytes,
+    text_content: a.text_content,
+  }));
+}
+
+function rehydrateImagePreviewUrl(a: StoredAttachment): string {
+  if (!SUPPORTED_IMAGE_TYPES.has(a.media_type)) return "";
+  try {
+    const bytes = base64ToBytes(a.data_base64);
+    const blob = new Blob([bytes], { type: a.media_type });
+    return URL.createObjectURL(blob);
+  } catch (e) {
+    console.error("[chat-input] failed to rehydrate preview URL", e);
+    return "";
+  }
 }
 
 /** Extract the @-query based on cursor position in the textarea. */
@@ -186,7 +224,41 @@ export function ChatInputArea({
   const { t } = useTranslation("chat");
   const filesCache = useRef<Record<string, FileEntry[]>>({});
   const mentionedFilesRef = useRef<Set<string>>(new Set());
-  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  // `pendingAttachments` is the local view (with transient blob URLs);
+  // the slice (`pendingAttachmentsBySession`) is the per-session source
+  // of truth so attachments survive any composer remount — including
+  // the unmount that fires when `<ChatPanel>` is conditionally rendered
+  // out of `AppLayout` whenever the user opens a file or diff. The
+  // unmount cleanup further down revokes blob URLs on tear-down so we
+  // don't leak them; the next mount calls `hydratePendingFromSlice` to
+  // recreate the URLs from the persisted `data_base64` payload.
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>(
+    () => hydratePendingFromSlice(sessionId),
+  );
+  const setPendingAttachmentsBoth = useCallback(
+    (
+      sessionForUpdate: string,
+      updater: (prev: PendingAttachment[]) => PendingAttachment[],
+    ) => {
+      setPendingAttachments((prev) => {
+        const next = updater(prev);
+        // Mirror to slice (without `preview_url` since it's transient).
+        const stored: StoredAttachment[] = next.map((a) => ({
+          id: a.id,
+          filename: a.filename,
+          media_type: a.media_type,
+          data_base64: a.data_base64,
+          size_bytes: a.size_bytes,
+          text_content: a.text_content,
+        }));
+        useAppStore
+          .getState()
+          .setPendingAttachmentsForSession(sessionForUpdate, stored);
+        return next;
+      });
+    },
+    [],
+  );
   const [dragActive, setDragActive] = useState(false);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [contextPopoverOpen, setContextPopoverOpen] = useState(false);
@@ -308,7 +380,7 @@ export function ChatInputArea({
           if (a.preview_url.startsWith("blob:"))
             URL.revokeObjectURL(a.preview_url);
         }
-        setPendingAttachments([]);
+        setPendingAttachmentsBoth(sessionId, () => []);
         mentionedFilesRef.current = new Set();
         return;
       }
@@ -343,11 +415,16 @@ export function ChatInputArea({
       setFilesLoaded(false);
       setWorkspaceFiles([]);
       mentionedFilesRef.current = new Set();
-      setPendingAttachments((prev) => {
-        for (const a of prev) {
+      // Switch the local view to the new session's persisted
+      // attachments (rehydrated with fresh blob URLs). Revoke the
+      // previous mount's blob URLs first so we don't leak them — but
+      // leave the *slice* entry for the previous session intact, so
+      // its attachments come back when the user navigates back to it.
+      setPendingAttachments((prevList) => {
+        for (const a of prevList) {
           if (a.preview_url.startsWith("blob:")) URL.revokeObjectURL(a.preview_url);
         }
-        return [];
+        return hydratePendingFromSlice(sessionId);
       });
       voice.cancel();
     }
@@ -537,22 +614,22 @@ export function ChatInputArea({
       size_bytes: file.size,
       text_content: isText ? (textContent ?? await file.text()) : null,
     };
-    setPendingAttachments((prev) => {
+    setPendingAttachmentsBoth(sessionId, (prev) => {
       if (prev.length >= MAX_ATTACHMENTS) {
         if (preview_url.startsWith("blob:")) URL.revokeObjectURL(preview_url);
         return prev;
       }
       return [...prev, att];
     });
-  }, [isRemote]);
+  }, [isRemote, sessionId, setPendingAttachmentsBoth]);
 
   const removeAttachment = useCallback((id: string) => {
-    setPendingAttachments((prev) => {
+    setPendingAttachmentsBoth(sessionId, (prev) => {
       const att = prev.find((a) => a.id === id);
       if (att?.preview_url.startsWith("blob:")) URL.revokeObjectURL(att.preview_url);
       return prev.filter((a) => a.id !== id);
     });
-  }, []);
+  }, [sessionId, setPendingAttachmentsBoth]);
 
   // Track current attachments in a ref so the unmount cleanup always
   // revokes the latest blob URLs (not the stale initial-render snapshot).
@@ -781,7 +858,7 @@ export function ChatInputArea({
     for (const a of pendingAttachments) {
       if (a.preview_url.startsWith("blob:")) URL.revokeObjectURL(a.preview_url);
     }
-    setPendingAttachments([]);
+    setPendingAttachmentsBoth(sessionId, () => []);
     mentionedFilesRef.current = new Set();
     return { content, files, attachmentPayload };
   };
