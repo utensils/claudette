@@ -81,6 +81,12 @@ export default defineConfig({
           ],
         },
         {
+          label: 'Alternative Backends',
+          items: [
+            { slug: 'features/alternative-backends' },
+          ],
+        },
+        {
           label: 'Agent Workflow',
           items: [
             { slug: 'features/agent-configuration' },
@@ -89,7 +95,6 @@ export default defineConfig({
             { slug: 'features/pinned-prompts' },
             { slug: 'features/authentication' },
             { slug: 'features/usage-and-metrics' },
-            { slug: 'features/alternative-backends' },
           ],
         },
         {
