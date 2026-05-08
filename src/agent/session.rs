@@ -17,6 +17,9 @@ use super::binary::resolve_claude_path;
 use super::process::{AgentEvent, TurnHandle};
 use super::types::{ControlResponsePayload, FileAttachment, StreamEvent, parse_stream_line};
 
+const CLAUDE_CODE_EXIT_AFTER_STOP_DELAY: &str = "CLAUDE_CODE_EXIT_AFTER_STOP_DELAY";
+const PERSISTENT_SESSION_IDLE_KEEPALIVE_MS: &str = "2147483647";
+
 /// A persistent Claude CLI process that stays alive across turns.
 ///
 /// Instead of spawning a new `claude --print` per turn (which kills MCP server
@@ -87,7 +90,6 @@ impl PersistentSession {
         if settings.disable_1m_context {
             cmd.env("CLAUDE_CODE_DISABLE_1M_CONTEXT", "1");
         }
-
         if let Some(ref bridge) = settings.hook_bridge {
             cmd.env(
                 crate::agent_mcp::server::ENV_SOCKET_ADDR,
@@ -99,6 +101,11 @@ impl PersistentSession {
         if let Some(env) = ws_env {
             env.apply(&mut cmd);
         }
+
+        // Claude Code's headless SDK path can otherwise let the process exit
+        // after a Remote Control-origin turn leaves stdin idle. Claudette owns
+        // process lifetime for PersistentSession, so keep the child alive.
+        apply_persistent_session_idle_keepalive(&mut cmd);
 
         let mut child = cmd.spawn().map_err(|e| {
             crate::missing_cli::map_spawn_err(&e, "claude", || {
@@ -462,6 +469,13 @@ fn control_response_error_message(response: &ControlResponsePayload) -> String {
         .unwrap_or_else(|| format!("Claude Remote Control failed: {}", response.subtype))
 }
 
+fn apply_persistent_session_idle_keepalive(cmd: &mut Command) {
+    cmd.env(
+        CLAUDE_CODE_EXIT_AFTER_STOP_DELAY,
+        PERSISTENT_SESSION_IDLE_KEEPALIVE_MS,
+    );
+}
+
 /// Build CLI arguments for a persistent session (no prompt, with `--input-format stream-json`).
 ///
 /// When `is_resume` is true, uses `--resume` to restore conversation history
@@ -690,6 +704,34 @@ mod tests {
             non_flag_args.is_empty(),
             "Found unexpected non-flag args: {non_flag_args:?}"
         );
+    }
+
+    #[test]
+    fn persistent_session_idle_keepalive_uses_valid_node_timeout() {
+        let delay: u64 = PERSISTENT_SESSION_IDLE_KEEPALIVE_MS.parse().unwrap();
+        assert_eq!(
+            CLAUDE_CODE_EXIT_AFTER_STOP_DELAY,
+            "CLAUDE_CODE_EXIT_AFTER_STOP_DELAY"
+        );
+        assert_eq!(delay, i32::MAX as u64);
+    }
+
+    #[test]
+    fn persistent_session_idle_keepalive_is_applied_to_command_env() {
+        let mut cmd = Command::new("claude");
+        apply_persistent_session_idle_keepalive(&mut cmd);
+
+        let actual = cmd
+            .as_std()
+            .get_envs()
+            .find_map(|(key, value)| {
+                (key == std::ffi::OsStr::new(CLAUDE_CODE_EXIT_AFTER_STOP_DELAY))
+                    .then_some(value)
+                    .flatten()
+            })
+            .and_then(std::ffi::OsStr::to_str);
+
+        assert_eq!(actual, Some(PERSISTENT_SESSION_IDLE_KEEPALIVE_MS));
     }
 
     #[test]

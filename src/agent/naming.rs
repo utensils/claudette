@@ -115,6 +115,9 @@ fn persist_claude_custom_title_at_path(
     if !path.exists() {
         return Ok(());
     }
+    if transcript_has_custom_title(path, session_id)? {
+        return Ok(());
+    }
     let entry = serde_json::json!({
         "type": "custom-title",
         "customTitle": title,
@@ -130,6 +133,22 @@ fn persist_claude_custom_title_at_path(
             path.display()
         )
     })
+}
+
+fn transcript_has_custom_title(path: &Path, session_id: &str) -> Result<bool, String> {
+    let contents = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read Claude transcript {}: {e}", path.display()))?;
+    for line in contents.lines() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if value.get("type").and_then(|v| v.as_str()) == Some("custom-title")
+            && value.get("sessionId").and_then(|v| v.as_str()) == Some(session_id)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Call Claude Haiku to generate a short branch name slug from the user's
@@ -367,5 +386,22 @@ mod tests {
         assert!(contents.contains(r#""type":"custom-title""#));
         assert!(contents.contains(r#""customTitle":"Pinned Title""#));
         assert!(contents.contains(r#""sessionId":"session-1""#));
+    }
+
+    #[test]
+    fn test_persist_claude_custom_title_keeps_first_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("session-1.jsonl");
+        std::fs::write(
+            &transcript,
+            r#"{"type":"custom-title","customTitle":"First Title","sessionId":"session-1"}"#,
+        )
+        .unwrap();
+
+        persist_claude_custom_title_at_path(&transcript, "session-1", "Second Title").unwrap();
+
+        let contents = std::fs::read_to_string(transcript).unwrap();
+        assert!(contents.contains(r#""customTitle":"First Title""#));
+        assert!(!contents.contains(r#""customTitle":"Second Title""#));
     }
 }

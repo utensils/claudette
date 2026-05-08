@@ -162,7 +162,12 @@ pub async fn set_claude_remote_control(
     };
 
     if enabled && should_pin_title_before_control_request(&chat_session) {
-        let title = remote_control_title(&chat_session, &workspace);
+        let title_messages = {
+            let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+            db.list_chat_messages_for_session(&chat_session_id)
+                .unwrap_or_default()
+        };
+        let title = remote_control_title(&chat_session, &workspace, &title_messages);
         let session_id = {
             let agents = state.agents.read().await;
             agents
@@ -222,7 +227,13 @@ fn remote_control_feature_enabled_from_value(value: Option<&str>) -> bool {
 }
 
 fn remote_control_feature_enabled(state: &State<'_, AppState>) -> Result<bool, String> {
-    let db = Database::open(&state.db_path).map_err(|e| e.to_string())?;
+    remote_control_feature_enabled_for_db_path(&state.db_path)
+}
+
+pub(super) fn remote_control_feature_enabled_for_db_path(
+    db_path: &std::path::Path,
+) -> Result<bool, String> {
+    let db = Database::open(db_path).map_err(|e| e.to_string())?;
     let value = db
         .get_app_setting(CLAUDE_REMOTE_CONTROL_ENABLED_KEY)
         .map_err(|e| e.to_string())?;
@@ -237,10 +248,32 @@ fn should_pin_title_before_control_request(chat_session: &ChatSession) -> bool {
     chat_session.turn_count > 0
 }
 
-fn remote_control_title(chat_session: &ChatSession, workspace: &Workspace) -> String {
+fn first_user_message_text(messages: &[ChatMessage]) -> Option<String> {
+    messages.iter().find_map(|message| {
+        if message.role == ChatRole::User {
+            let text = message
+                .content
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            (!text.is_empty()).then_some(text)
+        } else {
+            None
+        }
+    })
+}
+
+fn remote_control_title(
+    chat_session: &ChatSession,
+    workspace: &Workspace,
+    messages: &[ChatMessage],
+) -> String {
     let name = chat_session.name.trim();
     if !name.is_empty() && name != "New chat" {
         return name.to_string();
+    }
+    if let Some(first_user_text) = first_user_message_text(messages) {
+        return first_user_text.chars().take(75).collect();
     }
     workspace.name.clone()
 }
@@ -735,6 +768,12 @@ async fn ensure_remote_control_monitor(
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
+            if !remote_control_feature_enabled_for_db_path(&db_path).unwrap_or(false) {
+                let _ = ps.set_remote_control(false).await;
+                clear_monitor_when_feature_disabled(&app, &workspace_id, &chat_session_id, pid)
+                    .await;
+                break;
+            }
 
             if let AgentEvent::Stream(StreamEvent::System {
                 subtype,
@@ -1174,6 +1213,34 @@ async fn clear_monitor_on_exit(
     crate::tray::rebuild_tray(app);
 }
 
+async fn clear_monitor_when_feature_disabled(
+    app: &AppHandle,
+    workspace_id: &str,
+    chat_session_id: &str,
+    pid: u32,
+) {
+    let app_state = app.state::<AppState>();
+    let status = {
+        let mut agents = app_state.agents.write().await;
+        let Some(session) = agents.get_mut(chat_session_id) else {
+            return;
+        };
+        if session.claude_remote_control_monitor_pid != Some(pid) {
+            return;
+        }
+        session.claude_remote_control_monitor_pid = None;
+        session.claude_remote_control = ClaudeRemoteControlStatus::disabled();
+        session.claude_remote_control.clone()
+    };
+    let payload = ClaudeRemoteControlStatusPayload {
+        workspace_id: workspace_id.to_string(),
+        chat_session_id: chat_session_id.to_string(),
+        status,
+    };
+    let _ = app.emit("claude-remote-control-status", &payload);
+    crate::tray::rebuild_tray(app);
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1183,7 +1250,9 @@ mod tests {
     };
     use crate::state::ClaudeRemoteControlLifecycle;
     use claudette::agent::{UserContentBlock, UserEventMessage, UserMessageContent};
-    use claudette::model::{AgentStatus, ChatSession, SessionStatus, Workspace, WorkspaceStatus};
+    use claudette::model::{
+        AgentStatus, ChatMessage, ChatRole, ChatSession, SessionStatus, Workspace, WorkspaceStatus,
+    };
 
     fn chat_session_with_turn_count(turn_count: u32) -> ChatSession {
         ChatSession {
@@ -1215,6 +1284,24 @@ mod tests {
             status_line: String::new(),
             created_at: "2026-05-08T00:00:00Z".to_string(),
             sort_order: 0,
+        }
+    }
+
+    fn test_chat_message(role: ChatRole, content: &str) -> ChatMessage {
+        ChatMessage {
+            id: uuid::Uuid::new_v4().to_string(),
+            workspace_id: "workspace-1".to_string(),
+            chat_session_id: "chat-1".to_string(),
+            role,
+            content: content.to_string(),
+            cost_usd: None,
+            duration_ms: None,
+            created_at: "2026-05-08T00:00:00Z".to_string(),
+            thinking: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
         }
     }
 
@@ -1332,14 +1419,30 @@ mod tests {
         let workspace = workspace_named("muddy-willow");
 
         assert_eq!(
-            remote_control_title(&chat_session, &workspace),
+            remote_control_title(&chat_session, &workspace, &[]),
             "muddy-willow"
         );
 
         chat_session.name = "Ping Session".to_string();
         assert_eq!(
-            remote_control_title(&chat_session, &workspace),
+            remote_control_title(&chat_session, &workspace, &[]),
             "Ping Session"
+        );
+    }
+
+    #[test]
+    fn remote_control_title_prefers_first_user_prompt_for_new_chat() {
+        let chat_session = chat_session_with_turn_count(3);
+        let workspace = workspace_named("muddy-willow");
+        let messages = vec![
+            test_chat_message(ChatRole::User, "ping 1"),
+            test_chat_message(ChatRole::Assistant, "pong"),
+            test_chat_message(ChatRole::User, "ping 3"),
+        ];
+
+        assert_eq!(
+            remote_control_title(&chat_session, &workspace, &messages),
+            "ping 1"
         );
     }
 

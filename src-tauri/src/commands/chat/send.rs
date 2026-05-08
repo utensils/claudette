@@ -66,10 +66,47 @@ fn remote_control_requested_or_active(status: &ClaudeRemoteControlStatus) -> boo
     !matches!(status.state, ClaudeRemoteControlLifecycle::Disabled)
 }
 
-fn remote_control_title(session_name: &str, workspace_name: &str, prompt: &str) -> String {
+fn remote_control_should_restore_for_turn(
+    feature_enabled: bool,
+    status: &ClaudeRemoteControlStatus,
+) -> bool {
+    feature_enabled && remote_control_should_survive_local_respawn(status)
+}
+
+fn remote_control_requested_or_active_for_turn(
+    feature_enabled: bool,
+    status: &ClaudeRemoteControlStatus,
+) -> bool {
+    feature_enabled && remote_control_requested_or_active(status)
+}
+
+fn first_user_message_text(messages: &[ChatMessage]) -> Option<String> {
+    messages.iter().find_map(|message| {
+        if message.role == ChatRole::User {
+            let text = message
+                .content
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            (!text.is_empty()).then_some(text)
+        } else {
+            None
+        }
+    })
+}
+
+fn remote_control_title(
+    session_name: &str,
+    workspace_name: &str,
+    prompt: &str,
+    messages: &[ChatMessage],
+) -> String {
     let session_name = session_name.trim();
     if !session_name.is_empty() && session_name != "New chat" {
         return session_name.to_string();
+    }
+    if let Some(first_user_text) = first_user_message_text(messages) {
+        return first_user_text.chars().take(75).collect();
     }
     let prompt_title = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
     if !prompt_title.is_empty() {
@@ -78,8 +115,8 @@ fn remote_control_title(session_name: &str, workspace_name: &str, prompt: &str) 
     workspace_name.to_string()
 }
 
-fn should_run_auto_naming(remote_control_active: bool) -> bool {
-    !remote_control_active
+fn should_run_auto_naming(_remote_control_active: bool) -> bool {
+    true
 }
 
 fn should_reenable_remote_control_after_turn_result(
@@ -1356,10 +1393,17 @@ pub async fn send_chat_message(
     // for any agent-authored attachments produced during this turn (see
     // `agent_mcp_sink::ChatBridgeSink`).
     session.last_user_msg_id = Some(user_msg.id.clone());
-    let restore_remote_control_after_respawn =
-        remote_control_should_survive_local_respawn(&session.claude_remote_control);
-    let remote_control_active_for_turn =
-        remote_control_requested_or_active(&session.claude_remote_control);
+    let remote_control_feature_enabled =
+        super::remote_control::remote_control_feature_enabled_for_db_path(&state.db_path)
+            .unwrap_or(false);
+    let restore_remote_control_after_respawn = remote_control_should_restore_for_turn(
+        remote_control_feature_enabled,
+        &session.claude_remote_control,
+    );
+    let remote_control_active_for_turn = remote_control_requested_or_active_for_turn(
+        remote_control_feature_enabled,
+        &session.claude_remote_control,
+    );
 
     // MCP config changed while a previous turn was in flight — tear down the
     // persistent session so the next spawn picks up updated --mcp-config.
@@ -2038,11 +2082,19 @@ pub async fn send_chat_message(
         .as_ref()
         .and_then(|r| r.branch_rename_preferences.clone());
     let rename_ws_env = ws_env.clone();
+    let remote_control_title_messages = db
+        .list_chat_messages_for_session(&chat_session_id)
+        .unwrap_or_default();
     let mut remote_control_reenable_after_result =
         if should_reenable_remote_control && let Some(ps) = ps_for_remote_control_reenable {
             Some((
                 ps,
-                remote_control_title(&chat_session.name, &ws.name, &content),
+                remote_control_title(
+                    &chat_session.name,
+                    &ws.name,
+                    &content,
+                    &remote_control_title_messages,
+                ),
             ))
         } else {
             None
@@ -2995,12 +3047,32 @@ pub async fn send_chat_message(
 #[cfg(test)]
 mod tests {
     use super::{
-        remote_control_requested_or_active, remote_control_title,
+        remote_control_requested_or_active, remote_control_requested_or_active_for_turn,
+        remote_control_should_restore_for_turn, remote_control_title,
         should_defer_persistent_restart_for_state,
         should_reenable_remote_control_after_turn_result, should_resume_persistent_session,
         should_run_auto_naming, terminal_text,
     };
     use crate::state::{ClaudeRemoteControlLifecycle, ClaudeRemoteControlStatus};
+    use claudette::model::{ChatMessage, ChatRole};
+
+    fn test_chat_message(role: ChatRole, content: &str) -> ChatMessage {
+        ChatMessage {
+            id: uuid::Uuid::new_v4().to_string(),
+            workspace_id: "workspace-1".to_string(),
+            chat_session_id: "chat-1".to_string(),
+            role,
+            content: content.to_string(),
+            cost_usd: None,
+            duration_ms: None,
+            created_at: "2026-05-08T00:00:00Z".to_string(),
+            thinking: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+        }
+    }
 
     #[test]
     fn terminal_text_converts_newlines_to_terminal_newlines() {
@@ -3074,8 +3146,25 @@ mod tests {
     }
 
     #[test]
-    fn remote_control_suppresses_claudette_auto_naming_helpers() {
-        assert!(!should_run_auto_naming(true));
+    fn remote_control_feature_flag_disables_turn_restore_and_active_state() {
+        let status = ClaudeRemoteControlStatus {
+            state: ClaudeRemoteControlLifecycle::Connected,
+            session_url: None,
+            connect_url: None,
+            environment_id: None,
+            detail: None,
+            last_error: None,
+        };
+
+        assert!(remote_control_should_restore_for_turn(true, &status));
+        assert!(remote_control_requested_or_active_for_turn(true, &status));
+        assert!(!remote_control_should_restore_for_turn(false, &status));
+        assert!(!remote_control_requested_or_active_for_turn(false, &status));
+    }
+
+    #[test]
+    fn remote_control_does_not_suppress_claudette_auto_naming_helpers() {
+        assert!(should_run_auto_naming(true));
         assert!(should_run_auto_naming(false));
     }
 
@@ -3117,6 +3206,14 @@ mod tests {
             42
         ));
 
+        status.state = ClaudeRemoteControlLifecycle::Connected;
+        assert!(!should_reenable_remote_control_after_turn_result(
+            true,
+            &status,
+            Some(42),
+            42
+        ));
+
         status.state = ClaudeRemoteControlLifecycle::Reconnecting;
         assert!(should_reenable_remote_control_after_turn_result(
             true,
@@ -3129,16 +3226,32 @@ mod tests {
     #[test]
     fn remote_control_title_prefers_explicit_session_name() {
         assert_eq!(
-            remote_control_title("Fix remote sync", "workspace-name", "ping 1"),
+            remote_control_title("Fix remote sync", "workspace-name", "ping 1", &[]),
             "Fix remote sync"
         );
         assert_eq!(
-            remote_control_title("New chat", "workspace-name", "ping   1"),
+            remote_control_title("New chat", "workspace-name", "ping   1", &[]),
             "ping 1"
         );
         assert_eq!(
-            remote_control_title("New chat", "workspace-name", "   "),
+            remote_control_title("New chat", "workspace-name", "   ", &[]),
             "workspace-name"
+        );
+    }
+
+    #[test]
+    fn remote_control_title_keeps_first_user_prompt_across_respawns() {
+        let messages = vec![
+            test_chat_message(ChatRole::User, "ping 1"),
+            test_chat_message(ChatRole::Assistant, "pong"),
+            test_chat_message(ChatRole::User, "ping 2"),
+            test_chat_message(ChatRole::Assistant, "pong"),
+            test_chat_message(ChatRole::User, "ping 3"),
+        ];
+
+        assert_eq!(
+            remote_control_title("New chat", "workspace-name", "ping 3", &messages),
+            "ping 1"
         );
     }
 }
