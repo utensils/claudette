@@ -24,6 +24,7 @@ import {
   openInEditor,
   openWorkspaceInTerminal,
   listChatSessions,
+  interruptPtyForeground,
 } from "../../services/tauri";
 import { Settings, Link, X, Share2, Plus, Globe, Archive, Trash2, CircleCheck, CircleAlert, CircleQuestionMark, Cog, Filter, LayoutDashboard, CircleDashed, CircleStop, GitPullRequestArrow, GitPullRequestDraft, GitMerge, GitPullRequestClosed, ChevronRight, ChevronDown, ArrowDownAZ } from "lucide-react";
 import { RepoIcon } from "../shared/RepoIcon";
@@ -799,6 +800,20 @@ export const Sidebar = memo(function Sidebar() {
                         <span className={styles.commandText} title={command ?? ""}>
                           {truncateCommand(command ?? t("command_running_placeholder"), 40)}
                         </span>
+                        <button
+                          type="button"
+                          className={styles.commandStopBtn}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void interruptPtyForeground(Number(ptyId)).catch((err) =>
+                              console.error("[Sidebar] Failed to interrupt PTY command:", err),
+                            );
+                          }}
+                          title={t("command_stop")}
+                          aria-label={t("command_stop")}
+                        >
+                          <X size={10} />
+                        </button>
                       </div>
                     ))}
                   </div>

@@ -1241,6 +1241,10 @@ export function closePty(ptyId: number): Promise<void> {
   return invoke("close_pty", { ptyId });
 }
 
+export function interruptPtyForeground(ptyId: number): Promise<void> {
+  return invoke("interrupt_pty_foreground", { ptyId });
+}
+
 export function startAgentTaskTail(
   tabId: number,
   outputPath: string,
