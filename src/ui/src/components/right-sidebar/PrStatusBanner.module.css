@@ -95,7 +95,7 @@
 }
 
 .prNumber {
-  font-size: 12px;
+  font-size: var(--body-size);
   font-weight: 600;
   white-space: nowrap;
 }
@@ -106,7 +106,7 @@
 }
 
 .statusText {
-  font-size: 12px;
+  font-size: var(--body-size);
   font-weight: 500;
   white-space: nowrap;
 }
@@ -190,7 +190,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: var(--body-size);
   font-weight: 600;
 }
 
@@ -233,7 +233,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: var(--body-size);
 }
 
 .checkStatus {
