@@ -9,6 +9,10 @@ import { useAppStore } from "../../stores/useAppStore";
 import { listWorkspaceFiles, type FileEntry } from "../../services/tauri";
 import { resolveHotkeyAction } from "../../hotkeys/bindings";
 import { isAgentBusy } from "../../utils/agentStatus";
+import {
+  FILES_AGENT_RUNNING_INTERVAL_MS,
+  IDLE_REFRESH_INTERVAL_MS,
+} from "../../utils/pollingIntervals";
 import type { DiffLayer } from "../../types/diff";
 import { FilePathContextMenu } from "./FilePathContextMenu";
 import type { FileContextTarget } from "./fileContextMenu";
@@ -92,7 +96,7 @@ export function FilesPanel() {
     if (!selectedWorkspaceId || !isRunning) return;
     const interval = setInterval(() => {
       void loadFiles(selectedWorkspaceId, false);
-    }, 5000);
+    }, FILES_AGENT_RUNNING_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [isRunning, selectedWorkspaceId, loadFiles]);
 
@@ -107,13 +111,16 @@ export function FilesPanel() {
     return () => clearTimeout(timer);
   }, [isRunning, selectedWorkspaceId, loadFiles]);
 
-  // Idle polling: refresh file tree while agent is not running (every 10s) so
-  // manually-edited files surface without navigating away.
+  // Idle polling: refresh file tree while agent is not running so
+  // manually-edited files surface without navigating away. The cadence
+  // lives in `utils/pollingIntervals` alongside the diff panel's idle
+  // interval so the two stay in lockstep — see that module for the
+  // full three-tier rationale.
   useEffect(() => {
     if (!selectedWorkspaceId || isRunning) return;
     const interval = setInterval(() => {
       void loadFiles(selectedWorkspaceId, false);
-    }, 10_000);
+    }, IDLE_REFRESH_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [isRunning, selectedWorkspaceId, loadFiles]);
 

@@ -1,5 +1,9 @@
 import { Fragment, memo, useCallback, useEffect, useRef, useState } from "react";
 import { isAgentBusy } from "../../utils/agentStatus";
+import {
+  DIFF_AGENT_RUNNING_INTERVAL_MS,
+  IDLE_REFRESH_INTERVAL_MS,
+} from "../../utils/pollingIntervals";
 import { ChevronRight, Undo2, Trash2, Plus, Minus, FilePenLine } from "lucide-react";
 import { useAppStore, selectActiveSessionId } from "../../stores/useAppStore";
 import { useTaskTracker } from "../../hooks/useTaskTracker";
@@ -132,6 +136,29 @@ export const RightSidebar = memo(function RightSidebar() {
     [setDiffFiles]
   );
 
+  // Two-part staleness guard for in-flight diff fetches:
+  //
+  //   1. The version-token check catches the case where a *newer* fetch has
+  //      since been dispatched (initial load, post-stop refresh, active
+  //      poll, idle poll) — the latest one wins.
+  //   2. The selectedWorkspaceId getState check catches the case where the
+  //      user has switched workspaces but the new workspace's effect has
+  //      not yet bumped the version — without this, a late response from
+  //      the previous workspace can sneak through and overwrite the new
+  //      workspace's diff list.
+  //
+  // The version ref is bumped synchronously when each fetch is dispatched,
+  // but `diffLoadVersion` was originally only consulted by the same effect
+  // that dispatched, so prior work to add the second guard only landed on
+  // the new idle path. Centralizing the check protects every call site —
+  // mirrors how `FilesPanel.loadFiles` guards its own fetches.
+  const isDiffResultStillValid = useCallback(
+    (workspaceId: string, version: number): boolean =>
+      version === diffLoadVersion.current &&
+      useAppStore.getState().selectedWorkspaceId === workspaceId,
+    [],
+  );
+
   useEffect(() => {
     if (!selectedWorkspaceId) return;
     // Clear before fetching so the file list, badge, and selection from the
@@ -141,34 +168,36 @@ export const RightSidebar = memo(function RightSidebar() {
     clearDiff();
     setDiffLoading(true);
     const version = ++diffLoadVersion.current;
-    loadDiff(selectedWorkspaceId)
+    const workspaceId = selectedWorkspaceId;
+    loadDiff(workspaceId)
       .then((result) => {
-        if (version !== diffLoadVersion.current) return;
+        if (!isDiffResultStillValid(workspaceId, version)) return;
         applyDiffResult(result);
         setDiffLoading(false);
       })
       .catch(() => {
-        if (version !== diffLoadVersion.current) return;
+        if (!isDiffResultStillValid(workspaceId, version)) return;
         setDiffLoading(false);
       });
-  }, [selectedWorkspaceId, loadDiff, applyDiffResult, setDiffLoading, clearDiff]);
+  }, [selectedWorkspaceId, loadDiff, applyDiffResult, setDiffLoading, clearDiff, isDiffResultStillValid]);
 
-  // Live-refresh diff files while agent is running (every 3s).
+  // Live-refresh diff files while agent is running.
   useEffect(() => {
     if (!selectedWorkspaceId || !isRunning) return;
+    const workspaceId = selectedWorkspaceId;
 
     const interval = setInterval(() => {
       const version = ++diffLoadVersion.current;
-      loadDiff(selectedWorkspaceId)
+      loadDiff(workspaceId)
         .then((result) => {
-          if (version !== diffLoadVersion.current) return;
+          if (!isDiffResultStillValid(workspaceId, version)) return;
           applyDiffResult(result);
         })
         .catch(() => {});
-    }, 3000);
+    }, DIFF_AGENT_RUNNING_INTERVAL_MS);
 
     return () => clearInterval(interval);
-  }, [isRunning, selectedWorkspaceId, loadDiff, applyDiffResult]);
+  }, [isRunning, selectedWorkspaceId, loadDiff, applyDiffResult, isDiffResultStillValid]);
 
   // Final refresh when agent stops running (after making changes).
   useEffect(() => {
@@ -176,44 +205,47 @@ export const RightSidebar = memo(function RightSidebar() {
     prevIsRunning.current = isRunning;
 
     if (!selectedWorkspaceId || wasRunning !== true || isRunning) return;
+    const workspaceId = selectedWorkspaceId;
 
     const timer = setTimeout(() => {
       setDiffLoading(true);
       const version = ++diffLoadVersion.current;
-      loadDiff(selectedWorkspaceId)
+      loadDiff(workspaceId)
         .then((result) => {
-          if (version !== diffLoadVersion.current) return;
+          if (!isDiffResultStillValid(workspaceId, version)) return;
           applyDiffResult(result);
           setDiffLoading(false);
         })
         .catch((e) => {
-          if (version !== diffLoadVersion.current) return;
+          if (!isDiffResultStillValid(workspaceId, version)) return;
           console.error("Failed to refresh diff files:", e);
           setDiffLoading(false);
         });
     }, 500);
 
     return () => clearTimeout(timer);
-  }, [isRunning, selectedWorkspaceId, loadDiff, applyDiffResult, setDiffLoading]);
+  }, [isRunning, selectedWorkspaceId, loadDiff, applyDiffResult, setDiffLoading, isDiffResultStillValid]);
 
-  // Idle polling: refresh diff while agent is not running (every 10s) so
-  // manually-edited files and external git ops surface without navigating away.
+  // Idle polling: refresh diff while agent is not running so manually-edited
+  // files and external git ops surface without navigating away. The cadence
+  // is shared with the Files panel via `utils/pollingIntervals` so the two
+  // stay in lockstep.
   useEffect(() => {
     if (!selectedWorkspaceId || isRunning) return;
+    const workspaceId = selectedWorkspaceId;
 
     const interval = setInterval(() => {
       const version = ++diffLoadVersion.current;
-      loadDiff(selectedWorkspaceId)
+      loadDiff(workspaceId)
         .then((result) => {
-          if (version !== diffLoadVersion.current) return;
-          if (useAppStore.getState().selectedWorkspaceId !== selectedWorkspaceId) return;
+          if (!isDiffResultStillValid(workspaceId, version)) return;
           applyDiffResult(result);
         })
         .catch(() => {});
-    }, 10_000);
+    }, IDLE_REFRESH_INTERVAL_MS);
 
     return () => clearInterval(interval);
-  }, [isRunning, selectedWorkspaceId, loadDiff, applyDiffResult]);
+  }, [isRunning, selectedWorkspaceId, loadDiff, applyDiffResult, isDiffResultStillValid]);
 
   const statusLabel = (status: string | { Renamed: { from: string } }) => {
     if (typeof status === "string") {
