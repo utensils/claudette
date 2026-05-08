@@ -387,4 +387,64 @@ mod tests {
         assert_eq!(defs.len(), 1);
         assert_eq!(defs[0].name, "--first");
     }
+
+    /// Lock-in test: every `--…` literal that appears in `build_claude_args`
+    /// (`agent/args.rs`) or `build_persistent_args` (`agent/session.rs`)
+    /// MUST be in `RESERVED_FLAGS`. Forgetting to reserve a Claudette-managed
+    /// flag would let users toggle it from the Settings panel and break the
+    /// agent bridge (output framing, session-id ownership, etc.).
+    ///
+    /// Test-only flag literals (e.g. test fixtures using real claude flag
+    /// names like `--debug`) are allowlisted explicitly.
+    #[test]
+    fn all_emitted_flags_are_reserved() {
+        let args_rs = include_str!("agent/args.rs");
+        let session_rs = include_str!("agent/session.rs");
+
+        // Hand-rolled scan — find quoted "--…" literals. Avoids a `regex`
+        // dep just for this lock-in. Catches all such literals (incl.
+        // test fixtures); use the allowlist below to exempt non-emitter
+        // occurrences.
+        let mut emitted: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for src in [args_rs, session_rs] {
+            for chunk in src.split('"').skip(1).step_by(2) {
+                if chunk.starts_with("--")
+                    && chunk.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+                    && chunk.len() >= 4
+                {
+                    emitted.insert(chunk.to_string());
+                }
+            }
+        }
+
+        // Flags that appear in those files but intentionally are NOT
+        // reserved — test fixtures and round-trip examples that use real
+        // claude flag names.
+        const ALLOWLIST: &[&str] = &[
+            "--debug",
+            "--add-dir",
+            "--effort",
+            // REDACTED_VALUE_FLAGS — recognized for display-redaction only,
+            // NOT emitted by Claudette. Users may pass these through; we
+            // redact their values in the chat-tab CLI banner.
+            "--system-prompt",
+            "--agents",
+            "--betas",
+            "--json-schema",
+        ];
+
+        let reserved: std::collections::HashSet<&str> =
+            super::RESERVED_FLAGS.iter().copied().collect();
+        let allowlist: std::collections::HashSet<&str> = ALLOWLIST.iter().copied().collect();
+
+        let mut missing: Vec<String> = emitted
+            .into_iter()
+            .filter(|f| !reserved.contains(f.as_str()) && !allowlist.contains(f.as_str()))
+            .collect();
+        missing.sort();
+        assert!(
+            missing.is_empty(),
+            "These --flags appear in build_claude_args or build_persistent_args but are not in RESERVED_FLAGS or the test allowlist: {missing:?}",
+        );
+    }
 }
