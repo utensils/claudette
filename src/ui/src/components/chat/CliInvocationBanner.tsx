@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronRight, Terminal } from "lucide-react";
 import { CopyButton } from "../shared/CopyButton";
@@ -45,6 +45,23 @@ export function CliInvocationBanner({ invocation, sessionId }: Props) {
     }
   });
 
+  // `useState`'s lazy initializer only runs on first mount. When the user
+  // switches chat tabs, ChatPanel keeps the banner mounted and just hands
+  // it a new `sessionId` — without this resync the previous tab's expand
+  // state would bleed over until the user toggled. Per-session state must
+  // really be per-session.
+  useEffect(() => {
+    if (!storageKey) {
+      setExpanded(false);
+      return;
+    }
+    try {
+      setExpanded(sessionStorage.getItem(storageKey) === "1");
+    } catch {
+      setExpanded(false);
+    }
+  }, [storageKey]);
+
   const parsed = useMemo(
     () => (invocation ? parseInvocation(invocation) : null),
     [invocation],
@@ -78,28 +95,34 @@ export function CliInvocationBanner({ invocation, sessionId }: Props) {
       className={`${styles.banner} ${expanded ? styles.expanded : ""}`}
       data-testid="cli-invocation-banner"
     >
-      <button
-        type="button"
-        className={styles.header}
-        onClick={handleToggle}
-        aria-expanded={expanded}
-        aria-controls={
-          storageKey ? `${storageKey}-body` : "cli-invocation-banner-body"
-        }
-        title={
-          expanded
-            ? t("cli_invocation_collapse")
-            : t("cli_invocation_expand")
-        }
-      >
-        <ChevronRight
-          size={14}
-          className={`${styles.chevron} ${expanded ? styles.chevronOpen : ""}`}
-          aria-hidden
-        />
-        <Terminal size={13} className={styles.binaryIcon} aria-hidden />
-        <span className={styles.summary}>{summary}</span>
-        <span className={styles.spacer} />
+      {/* Header is a non-interactive container with two sibling buttons.
+          Nesting <button>s (toggle around CopyButton) is invalid HTML and
+          breaks keyboard / screen-reader behavior — see the discussion in
+          the PR review. The toggle button takes the wide left region; the
+          copy button is its own click target on the right. */}
+      <div className={styles.header}>
+        <button
+          type="button"
+          className={styles.toggle}
+          onClick={handleToggle}
+          aria-expanded={expanded}
+          aria-controls={
+            storageKey ? `${storageKey}-body` : "cli-invocation-banner-body"
+          }
+          title={
+            expanded
+              ? t("cli_invocation_collapse")
+              : t("cli_invocation_expand")
+          }
+        >
+          <ChevronRight
+            size={14}
+            className={`${styles.chevron} ${expanded ? styles.chevronOpen : ""}`}
+            aria-hidden
+          />
+          <Terminal size={13} className={styles.binaryIcon} aria-hidden />
+          <span className={styles.summary}>{summary}</span>
+        </button>
         <CopyButton
           variant="bare"
           className={styles.copyButton}
@@ -111,7 +134,7 @@ export function CliInvocationBanner({ invocation, sessionId }: Props) {
           ariaLabel={t("cli_invocation_copy")}
           stopPropagation
         />
-      </button>
+      </div>
 
       {expanded && (
         <div

@@ -48,6 +48,18 @@ describe("tokenizeShellLine", () => {
     expect(tokenizeShellLine('a "" b')).toEqual(["a", "", "b"]);
   });
 
+  it("decodes the backend's `'\\''` idiom to a literal single quote", () => {
+    // src/agent/args.rs::shell_quote closes the single-quote span, emits
+    // an escaped quote (`\'`), and reopens. The whole thing must round-trip
+    // back to a single token containing a literal `'`.
+    expect(tokenizeShellLine("'O'\\''Reilly'")).toEqual(["O'Reilly"]);
+  });
+
+  it("treats a bare `\\x` outside quotes as the literal `x`", () => {
+    expect(tokenizeShellLine("\\'")).toEqual(["'"]);
+    expect(tokenizeShellLine("a\\ b")).toEqual(["a b"]);
+  });
+
   it("returns empty array for empty input", () => {
     expect(tokenizeShellLine("")).toEqual([]);
   });

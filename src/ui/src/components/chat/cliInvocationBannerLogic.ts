@@ -36,9 +36,11 @@ export function shouldShowBanner(invocation: string | null): boolean {
  * POSIX-ish shell tokenizer. The backend only ever emits double-/single-quoted
  * strings or unquoted bare words (see `shell_quote` in `src/agent/args.rs`),
  * so we don't need to handle environment expansion, command substitution, or
- * here-docs. We do honor backslash-escapes inside double quotes and
- * `'\''`-style literal-quote sequences inside single quotes since that's what
- * the backend emits when an argv contains a `'`.
+ * here-docs. We do honor backslash-escapes inside double quotes, and the
+ * `'\''` idiom the Rust backend emits to embed a literal single quote inside
+ * a single-quoted span — which decomposes to "close single quote, escaped
+ * single quote, open single quote" and only round-trips correctly if `\'`
+ * outside quotes is treated as a literal `'` (POSIX semantics).
  */
 export function tokenizeShellLine(line: string): string[] {
   const tokens: string[] = [];
@@ -109,6 +111,17 @@ export function tokenizeShellLine(line: string): string[] {
       inDouble = true;
       hasContent = true;
       i += 1;
+      continue;
+    }
+    if (ch === "\\" && i + 1 < line.length) {
+      // POSIX: outside quotes, backslash escapes the following character to
+      // its literal value. Critically, this is what makes the backend's
+      // `'\''` idiom round-trip correctly: the close-quote/escape-quote/
+      // open-quote sandwich emits a literal `'` between two single-quoted
+      // spans that get concatenated into a single token.
+      buf += line[i + 1];
+      hasContent = true;
+      i += 2;
       continue;
     }
     buf += ch;

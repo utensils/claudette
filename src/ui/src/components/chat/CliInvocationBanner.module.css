@@ -21,12 +21,24 @@
 
 /* ── Header (always visible — collapsed pill) ── */
 
+/* Non-interactive flex container with two sibling buttons (toggle + copy)
+   so we don't nest <button> elements — see CliInvocationBanner.tsx for
+   the rationale. */
 .header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   width: 100%;
-  padding: 8px 10px 8px 8px;
+  padding: 4px 6px 4px 4px;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
   background: transparent;
   border: 0;
   cursor: pointer;
@@ -34,12 +46,12 @@
   font-family: inherit;
   font-size: var(--fs-sm);
   text-align: left;
+  border-radius: var(--radius-md);
 }
 
-.header:focus-visible {
+.toggle:focus-visible {
   outline: 2px solid var(--accent-primary);
   outline-offset: -2px;
-  border-radius: var(--radius-lg);
 }
 
 .chevron {
@@ -65,10 +77,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
-}
-
-.spacer {
-  flex: 1;
 }
 
 .copyButton {
