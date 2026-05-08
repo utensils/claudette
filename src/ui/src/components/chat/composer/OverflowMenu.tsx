@@ -214,7 +214,8 @@ function RemoteControlMenuItem({
   onStatus: (status: ClaudeRemoteControlStatus) => void;
 }) {
   const url = remoteControlUrl(status);
-  const busy = status.state === "enabling";
+  const pendingFirstTurn = isPendingFirstTurnRemoteControl(status);
+  const busy = status.state === "enabling" && !pendingFirstTurn;
   const active = status.state !== "disabled" && status.state !== "error";
   const meta = remoteControlMeta(status);
   const detail = status.lastError ?? status.detail;
@@ -360,6 +361,13 @@ function remoteControlDisplayDetail(
   return detail;
 }
 
+function isPendingFirstTurnRemoteControl(status: ClaudeRemoteControlStatus): boolean {
+  return (
+    status.state === "enabling" &&
+    status.detail === "Send your first message to start Claude Remote Control."
+  );
+}
+
 function formatRemoteControlError(err: unknown): string {
   if (err instanceof Error && err.message.trim()) return err.message;
   if (typeof err === "string" && err.trim()) return err;
@@ -379,6 +387,7 @@ function formatRemoteControlError(err: unknown): string {
 }
 
 function remoteControlMeta(status: ClaudeRemoteControlStatus): string {
+  if (isPendingFirstTurnRemoteControl(status)) return "armed";
   switch (status.state) {
     case "disabled":
       return "off";

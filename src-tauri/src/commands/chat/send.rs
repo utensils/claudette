@@ -1236,7 +1236,7 @@ pub async fn send_chat_message(
             session_id: uuid::Uuid::new_v4().to_string(),
             turn_count: 0,
             active_pid: None,
-            custom_instructions: instructions,
+            custom_instructions: instructions.clone(),
             needs_attention: false,
             attention_kind: None,
             attention_notification_sent: false,
@@ -1258,6 +1258,14 @@ pub async fn send_chat_message(
             posted_env_trust_warning: false,
         }
     });
+    if session.turn_count == 0 {
+        // A pre-first-turn Remote Control enable creates a placeholder
+        // AgentSessionState so the desired lifecycle survives until the user's
+        // first real prompt. Refresh instructions here so that placeholder
+        // still launches with the same repo-level prompt a normal first turn
+        // would have used.
+        session.custom_instructions = instructions.clone();
+    }
 
     // Clear any unresolved permission requests so the CLI doesn't hang when
     // we send the next turn. This replaces the old behaviour where the

@@ -110,16 +110,38 @@ pub async fn set_claude_remote_control(
     drop(db);
 
     let (ps, pid) = if enabled {
-        ensure_persistent_session_for_remote_control(
-            &app,
-            &state,
-            &state.db_path,
-            &chat_session,
-            &workspace,
-            &worktree_path,
-            launch_options,
-        )
-        .await?
+        if let Some((ps, pid)) = existing_persistent_session(&state, &chat_session_id).await {
+            let enabling = ClaudeRemoteControlStatus {
+                state: ClaudeRemoteControlLifecycle::Enabling,
+                detail: Some("Starting Claude Remote Control.".to_string()),
+                last_error: None,
+                ..get_stored_status(&state, &chat_session_id).await
+            };
+            store_remote_control_status(&app, &state, &workspace_id, &chat_session_id, enabling)
+                .await;
+            (ps, pid)
+        } else if should_defer_enable_until_first_turn(&chat_session) {
+            let status = store_deferred_enable_status(
+                &app,
+                &state,
+                &workspace_id,
+                &chat_session_id,
+                chat_session.turn_count,
+            )
+            .await;
+            return Ok(status);
+        } else {
+            ensure_persistent_session_for_remote_control(
+                &app,
+                &state,
+                &state.db_path,
+                &chat_session,
+                &workspace,
+                &worktree_path,
+                launch_options,
+            )
+            .await?
+        }
     } else {
         let Some((ps, pid)) = existing_persistent_session(&state, &chat_session_id).await else {
             let disabled = ClaudeRemoteControlStatus::disabled();
@@ -173,6 +195,10 @@ pub async fn set_claude_remote_control(
     }
 }
 
+fn should_defer_enable_until_first_turn(chat_session: &ChatSession) -> bool {
+    chat_session.turn_count == 0
+}
+
 async fn existing_persistent_session(
     state: &State<'_, AppState>,
     chat_session_id: &str,
@@ -181,6 +207,59 @@ async fn existing_persistent_session(
     let ps = agents.get(chat_session_id)?.persistent_session.clone()?;
     let pid = ps.pid();
     Some((ps, pid))
+}
+
+async fn store_deferred_enable_status(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    workspace_id: &str,
+    chat_session_id: &str,
+    turn_count: u32,
+) -> ClaudeRemoteControlStatus {
+    let status = ClaudeRemoteControlStatus {
+        state: ClaudeRemoteControlLifecycle::Enabling,
+        session_url: None,
+        connect_url: None,
+        environment_id: None,
+        detail: Some("Send your first message to start Claude Remote Control.".to_string()),
+        last_error: None,
+    };
+    {
+        let mut agents = state.agents.write().await;
+        let session = agents
+            .entry(chat_session_id.to_string())
+            .or_insert_with(|| AgentSessionState {
+                workspace_id: workspace_id.to_string(),
+                session_id: String::new(),
+                turn_count,
+                active_pid: None,
+                custom_instructions: None,
+                needs_attention: false,
+                attention_kind: None,
+                attention_notification_sent: false,
+                persistent_session: None,
+                claude_remote_control: ClaudeRemoteControlStatus::disabled(),
+                claude_remote_control_monitor_pid: None,
+                mcp_config_dirty: false,
+                session_plan_mode: false,
+                session_allowed_tools: Vec::new(),
+                session_disable_1m_context: false,
+                session_backend_hash: String::new(),
+                pending_permissions: std::collections::HashMap::new(),
+                running_background_tasks: std::collections::HashSet::new(),
+                background_wake_active: false,
+                session_exited_plan: false,
+                session_resolved_env: Default::default(),
+                mcp_bridge: None,
+                last_user_msg_id: None,
+                posted_env_trust_warning: false,
+            });
+        session.workspace_id = workspace_id.to_string();
+        session.turn_count = turn_count;
+        session.claude_remote_control = status.clone();
+    }
+    emit_remote_control_status(app, workspace_id, chat_session_id, state).await;
+    status
 }
 
 async fn ensure_persistent_session_for_remote_control(
@@ -991,9 +1070,30 @@ async fn clear_monitor_on_exit(
 
 #[cfg(test)]
 mod tests {
-    use super::{status_from_control_response, user_visible_text};
+    use super::{
+        should_defer_enable_until_first_turn, status_from_control_response, user_visible_text,
+    };
     use crate::state::ClaudeRemoteControlLifecycle;
     use claudette::agent::{UserContentBlock, UserEventMessage, UserMessageContent};
+    use claudette::model::{AgentStatus, ChatSession, SessionStatus};
+
+    fn chat_session_with_turn_count(turn_count: u32) -> ChatSession {
+        ChatSession {
+            id: "chat-1".to_string(),
+            workspace_id: "workspace-1".to_string(),
+            session_id: None,
+            name: "New chat".to_string(),
+            name_edited: false,
+            turn_count,
+            sort_order: 0,
+            status: SessionStatus::Active,
+            created_at: "2026-05-08T00:00:00Z".to_string(),
+            archived_at: None,
+            agent_status: AgentStatus::Idle,
+            needs_attention: false,
+            attention_kind: None,
+        }
+    }
 
     #[test]
     fn status_from_control_response_extracts_urls() {
@@ -1077,5 +1177,19 @@ mod tests {
             user_visible_text(&message).as_deref(),
             Some("ping from remote")
         );
+    }
+
+    #[test]
+    fn remote_control_enable_defers_until_first_turn_for_new_chat() {
+        assert!(should_defer_enable_until_first_turn(
+            &chat_session_with_turn_count(0)
+        ));
+    }
+
+    #[test]
+    fn remote_control_enable_does_not_defer_after_first_turn() {
+        assert!(!should_defer_enable_until_first_turn(
+            &chat_session_with_turn_count(1)
+        ));
     }
 }
