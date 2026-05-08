@@ -513,8 +513,10 @@
 }
 .feature-card:hover { background: var(--chat-input-bg); }
 .feature-card:focus-visible {
+  /* Inset the outline so it doesn't get clipped by `.features-grid`'s
+     `overflow: hidden`, which exists to round the grid corners. */
   outline: 2px solid var(--accent-primary);
-  outline-offset: 2px;
+  outline-offset: -2px;
 }
 .feature-card .icon {
   width: 40px;

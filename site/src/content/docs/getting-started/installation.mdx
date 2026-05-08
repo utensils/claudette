@@ -76,7 +76,7 @@ cd src/ui && bun install && cd ../..
 cargo tauri build
 ```
 
-The compiled binary will be in `src-tauri/target/release/`.
+The compiled binary will be in `target/release/` at the workspace root (Claudette uses a Cargo workspace, so the `src-tauri` crate's outputs share the workspace target dir, not its own).
 
 ## Run from source
 
