@@ -99,11 +99,16 @@ export function ReasoningPill({ sessionId, disabled }: ReasoningPillProps) {
           aria-expanded={dropdownOpen}
           aria-label="Reasoning settings"
         >
-          <Brain size={14} />
-          <span className={styles.segmentLabel}>Thinking</span>
-          {metaKeyHeld && (
-            <kbd className={styles.shortcutBadge} aria-hidden="true">{mod}T</kbd>
-          )}
+          <span className={styles.shortcutContent}>
+            <Brain size={14} />
+            <span className={styles.segmentLabel}>Thinking</span>
+          </span>
+          <kbd
+            className={`${styles.shortcutBadge} ${metaKeyHeld ? styles.shortcutBadgeVisible : ""}`}
+            aria-hidden="true"
+          >
+            {mod}T
+          </kbd>
         </button>
 
         <span className={styles.divider} />
