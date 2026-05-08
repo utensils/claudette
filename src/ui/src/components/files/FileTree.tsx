@@ -8,13 +8,17 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
+import { useIsLightTheme } from "../../hooks/useIsLightTheme";
 import { useAppStore } from "../../stores/useAppStore";
 import {
   buildFileTree,
   flattenVisible,
   type FileTreeNode,
 } from "../../utils/buildFileTree";
-import { getFileIcon, getFolderIcon } from "../../utils/fileIcons";
+import {
+  getMaterialFileIconUrl,
+  getMaterialFolderIconUrl,
+} from "../../utils/materialIcons";
 import type { FileEntry } from "../../services/tauri";
 import type { DiffLayer } from "../../types/diff";
 import type { FileContextTarget } from "./fileContextMenu";
@@ -97,6 +101,9 @@ export const FileTree = memo(function FileTree({
     () => flattenVisible(tree, expanded),
     [tree, expanded],
   );
+  // Light/dark drives which material-icon-theme variant we render for
+  // folders (and the handful of files that ship a `_light` SVG).
+  const isLight = useIsLightTheme();
 
   const containerRef = useRef<HTMLDivElement>(null);
   // Map of treeitem element refs keyed by node path. Used to programmatically
@@ -281,6 +288,7 @@ export const FileTree = memo(function FileTree({
         <CreateRow
           depth={0}
           parentPath={creatingParentPath}
+          isLight={isLight}
           onCreateCommit={onCreateCommit}
           onCreateCancel={onCreateCancel}
         />
@@ -296,6 +304,7 @@ export const FileTree = memo(function FileTree({
               expanded={node.kind === "dir" ? !!expanded[node.path] : false}
               selected={selected === node.path}
               renaming={renamingPath === node.path}
+              isLight={isLight}
               // Roving tabindex: exactly one row in the tree is in the tab
               // order at any time. Tab moves focus into the tree (or out of
               // it); arrow keys move within.
@@ -348,6 +357,7 @@ export const FileTree = memo(function FileTree({
               <CreateRow
                 depth={depth + 1}
                 parentPath={creatingParentPath}
+                isLight={isLight}
                 onCreateCommit={onCreateCommit}
                 onCreateCancel={onCreateCancel}
               />
@@ -366,6 +376,7 @@ function stripTrailingSlash(path: string): string {
 interface CreateRowProps {
   depth: number;
   parentPath: string;
+  isLight: boolean;
   onCreateCommit: (parentPath: string, name: string) => Promise<boolean>;
   onCreateCancel: () => void;
 }
@@ -373,10 +384,11 @@ interface CreateRowProps {
 function CreateRow({
   depth,
   parentPath,
+  isLight,
   onCreateCommit,
   onCreateCancel,
 }: CreateRowProps) {
-  const Icon = getFileIcon("untitled");
+  const iconUrl = getMaterialFileIconUrl("untitled", isLight);
   return (
     <div
       className={styles.row}
@@ -385,8 +397,14 @@ function CreateRow({
       aria-level={depth + 1}
     >
       <span className={styles.chevron} style={{ width: 12, height: 12 }} />
-      {/* eslint-disable-next-line react-hooks/static-components -- fileIcons returns stable module-level lucide components. */}
-      <Icon size={14} className={styles.icon} aria-hidden="true" />
+      <img
+        src={iconUrl}
+        width={14}
+        height={14}
+        className={styles.icon}
+        alt=""
+        aria-hidden="true"
+      />
       <InlineRenameInput
         name="untitled"
         className={styles.renameInput}
@@ -405,6 +423,7 @@ interface RowProps {
   selected: boolean;
   renaming: boolean;
   tabbable: boolean;
+  isLight: boolean;
   rowRef: (el: HTMLDivElement | null) => void;
   onClick: () => void;
   onContextMenu: (x: number, y: number) => void;
@@ -419,6 +438,7 @@ function Row({
   selected,
   renaming,
   tabbable,
+  isLight,
   rowRef,
   onClick,
   onContextMenu,
@@ -431,7 +451,9 @@ function Row({
       ? ChevronDown
       : ChevronRight
     : null;
-  const Icon = isDir ? getFolderIcon(expanded) : getFileIcon(node.name);
+  const iconUrl = isDir
+    ? getMaterialFolderIconUrl(node.name, expanded, isLight)
+    : getMaterialFileIconUrl(node.name, isLight);
   const status = node.kind === "file" ? node.git_status : null;
   const statusLayer = node.kind === "file" ? node.git_layer : null;
   const folderStatus = node.kind === "dir" ? node.folderStatus : null;
@@ -496,8 +518,14 @@ function Row({
         // 12-px spacer keeps file rows aligned with their sibling folders.
         <span className={styles.chevron} style={{ width: 12, height: 12 }} />
       )}
-      {/* eslint-disable-next-line react-hooks/static-components -- fileIcons returns stable module-level lucide components. */}
-      <Icon size={14} className={styles.icon} aria-hidden="true" />
+      <img
+        src={iconUrl}
+        width={14}
+        height={14}
+        className={styles.icon}
+        alt=""
+        aria-hidden="true"
+      />
       {renaming ? (
         <InlineRenameInput
           name={node.name}
