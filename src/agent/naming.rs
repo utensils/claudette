@@ -1,7 +1,7 @@
 use tokio::process::Command;
 
 use crate::env::WorkspaceEnv;
-use crate::process::CommandWindowExt as _;
+use crate::process::{CommandWindowExt as _, sanitize_claude_subprocess_env};
 
 use super::binary::resolve_claude_path;
 
@@ -92,14 +92,7 @@ pub async fn generate_branch_name(
         &user_message,
     ]);
 
-    // Strip env vars that interfere with subprocess auth — same as run_turn.
-    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY")
-        && !key.starts_with("sk-ant-api")
-    {
-        cmd.env_remove("ANTHROPIC_API_KEY");
-    }
-    cmd.env_remove("CLAUDECODE");
-    cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
+    sanitize_claude_subprocess_env(&mut cmd);
 
     if let Some(env) = ws_env {
         env.apply(&mut cmd);
@@ -162,13 +155,7 @@ pub async fn generate_session_name(
         &user_message,
     ]);
 
-    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY")
-        && !key.starts_with("sk-ant-api")
-    {
-        cmd.env_remove("ANTHROPIC_API_KEY");
-    }
-    cmd.env_remove("CLAUDECODE");
-    cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
+    sanitize_claude_subprocess_env(&mut cmd);
 
     if let Some(env) = ws_env {
         env.apply(&mut cmd);

@@ -36,6 +36,24 @@ pub trait CommandWindowExt {
     fn no_console_window(&mut self) -> &mut Self;
 }
 
+/// Remove Claude Code harness environment that is valid for inference but can
+/// break nested Claude CLI features such as Remote Control. Real Anthropic API
+/// keys are preserved.
+pub fn sanitize_claude_subprocess_env(cmd: &mut tokio::process::Command) {
+    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY")
+        && !key.starts_with("sk-ant-api")
+    {
+        cmd.env_remove("ANTHROPIC_API_KEY");
+    }
+    cmd.env_remove("CLAUDECODE");
+    cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
+    cmd.env_remove("CLAUDE_CODE_OAUTH_TOKEN");
+    cmd.env_remove("CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR");
+    cmd.env_remove("CLAUDE_CODE_OAUTH_TOKEN_PRIMARY");
+    cmd.env_remove("CLAUDE_CODE_OAUTH_TOKEN_SECONDARY");
+    cmd.env_remove("CLAUDE_CURRENT_PROFILE");
+}
+
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 

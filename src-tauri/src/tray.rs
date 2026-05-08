@@ -801,6 +801,8 @@ mod tests {
             },
             attention_notification_sent: attention,
             persistent_session: None,
+            claude_remote_control: crate::state::ClaudeRemoteControlStatus::disabled(),
+            claude_remote_control_monitor_pid: None,
             mcp_config_dirty: false,
             session_plan_mode: false,
             session_allowed_tools: Vec::new(),

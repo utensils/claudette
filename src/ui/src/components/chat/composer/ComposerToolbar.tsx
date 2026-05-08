@@ -18,9 +18,16 @@ interface ComposerToolbarProps {
   workspaceId: string;
   repoId: string | null;
   disabled: boolean;
+  isRemote: boolean;
 }
 
-export function ComposerToolbar({ sessionId, workspaceId, repoId, disabled }: ComposerToolbarProps) {
+export function ComposerToolbar({
+  sessionId,
+  workspaceId,
+  repoId,
+  disabled,
+  isRemote,
+}: ComposerToolbarProps) {
   const selectedModel = useAppStore((s) => s.selectedModel[sessionId] ?? "opus");
   const selectedProvider = useAppStore((s) => s.selectedModelProvider[sessionId] ?? "anthropic");
   const disable1mContext = useAppStore((s) => s.disable1mContext);
@@ -191,7 +198,7 @@ export function ComposerToolbar({ sessionId, workspaceId, repoId, disabled }: Co
 
       <ClaudeFlagsTooltip resolved={resolvedFlags} />
 
-      <OverflowMenu sessionId={sessionId} disabled={disabled} />
+      <OverflowMenu sessionId={sessionId} disabled={disabled} isRemote={isRemote} />
     </div>
   );
 }

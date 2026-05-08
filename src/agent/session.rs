@@ -7,13 +7,13 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 
 use crate::env::WorkspaceEnv;
-use crate::process::CommandWindowExt as _;
+use crate::process::{CommandWindowExt as _, sanitize_claude_subprocess_env};
 
 use super::AgentSettings;
 use super::args::{build_settings_json, build_stdin_message, build_steering_stdin_message};
 use super::binary::resolve_claude_path;
 use super::process::{AgentEvent, TurnHandle};
-use super::types::{FileAttachment, StreamEvent, parse_stream_line};
+use super::types::{ControlResponsePayload, FileAttachment, StreamEvent, parse_stream_line};
 
 /// A persistent Claude CLI process that stays alive across turns.
 ///
@@ -72,14 +72,7 @@ impl PersistentSession {
             .stderr(std::process::Stdio::piped())
             .env("PATH", crate::env::enriched_path());
 
-        // Strip OAuth tokens (same as run_turn).
-        if let Ok(key) = std::env::var("ANTHROPIC_API_KEY")
-            && !key.starts_with("sk-ant-api")
-        {
-            cmd.env_remove("ANTHROPIC_API_KEY");
-        }
-        cmd.env_remove("CLAUDECODE");
-        cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
+        sanitize_claude_subprocess_env(&mut cmd);
 
         // See run_turn for layering rationale — env-provider output under
         // the CLAUDETTE_* markers, under the settings-driven context toggle.
@@ -348,6 +341,68 @@ impl PersistentSession {
         Ok(())
     }
 
+    /// Enable or disable Claude Code Remote Control for this persistent
+    /// stream-json session. The Claude CLI owns the actual bridge; Claudette
+    /// only sends the control request and waits for the matching response.
+    pub async fn set_remote_control(
+        &self,
+        enabled: bool,
+    ) -> Result<ControlResponsePayload, String> {
+        use tokio::io::AsyncWriteExt;
+
+        let request_id = format!("claudette-remote-control-{}", uuid::Uuid::new_v4());
+        let mut broadcast_rx = self.event_tx.subscribe();
+        let message = build_remote_control_message(&request_id, enabled);
+
+        {
+            let mut stdin = self.stdin.lock().await;
+            stdin
+                .write_all(message.as_bytes())
+                .await
+                .map_err(|e| format!("Failed to write remote_control control_request: {e}"))?;
+            stdin.write_all(b"\n").await.map_err(|e| {
+                format!("Failed to write remote_control control_request newline: {e}")
+            })?;
+            stdin
+                .flush()
+                .await
+                .map_err(|e| format!("Failed to flush remote_control control_request: {e}"))?;
+        }
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let Some(remaining) = deadline.checked_duration_since(tokio::time::Instant::now())
+            else {
+                return Err("Timed out waiting for Claude Remote Control response".to_string());
+            };
+            let event = match tokio::time::timeout(remaining, broadcast_rx.recv()).await {
+                Ok(Ok(event)) => event,
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                    return Err("Claude process closed before Remote Control responded".to_string());
+                }
+                Err(_) => {
+                    return Err("Timed out waiting for Claude Remote Control response".to_string());
+                }
+            };
+
+            match event {
+                AgentEvent::Stream(StreamEvent::ControlResponse { response })
+                    if response.request_id == request_id =>
+                {
+                    if response.subtype == "success" {
+                        return Ok(response);
+                    }
+                    return Err(control_response_error_message(&response));
+                }
+                AgentEvent::ProcessExited(_) => {
+                    return Err("Claude process exited before Remote Control responded".to_string());
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Get the process ID.
     pub fn pid(&self) -> u32 {
         self.pid
@@ -364,6 +419,27 @@ fn build_task_stop_message(request_id: &str, task_id: &str) -> String {
         },
     })
     .to_string()
+}
+
+fn build_remote_control_message(request_id: &str, enabled: bool) -> String {
+    serde_json::json!({
+        "type": "control_request",
+        "request_id": request_id,
+        "request": {
+            "subtype": "remote_control",
+            "enabled": enabled,
+        },
+    })
+    .to_string()
+}
+
+fn control_response_error_message(response: &ControlResponsePayload) -> String {
+    response
+        .error
+        .as_deref()
+        .or(response.message.as_deref())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("Claude Remote Control failed: {}", response.subtype))
 }
 
 /// Build CLI arguments for a persistent session (no prompt, with `--input-format stream-json`).
@@ -772,5 +848,15 @@ mod tests {
         assert_eq!(parsed["request_id"], "req_123");
         assert_eq!(parsed["request"]["subtype"], "stop_task");
         assert_eq!(parsed["request"]["task_id"], "task_123");
+    }
+
+    #[test]
+    fn build_remote_control_message_writes_expected_control_shape() {
+        let raw = build_remote_control_message("req_remote", true);
+        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(parsed["type"], "control_request");
+        assert_eq!(parsed["request_id"], "req_remote");
+        assert_eq!(parsed["request"]["subtype"], "remote_control");
+        assert_eq!(parsed["request"]["enabled"], true);
     }
 }

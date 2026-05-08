@@ -1176,6 +1176,7 @@ export function ChatInputArea({
             workspaceId={selectedWorkspaceId}
             repoId={repoId ?? null}
             disabled={isRunning}
+            isRemote={isRemote}
           />
         </div>
         <div className={styles.inputControlsRight}>

@@ -1172,6 +1172,8 @@ pub async fn send_chat_message(
                 attention_kind: None,
                 attention_notification_sent: false,
                 persistent_session: None,
+                claude_remote_control: crate::state::ClaudeRemoteControlStatus::disabled(),
+                claude_remote_control_monitor_pid: None,
                 mcp_config_dirty: false,
                 session_plan_mode: false,
                 session_allowed_tools: Vec::new(),
@@ -1198,6 +1200,8 @@ pub async fn send_chat_message(
             attention_kind: None,
             attention_notification_sent: false,
             persistent_session: None,
+            claude_remote_control: crate::state::ClaudeRemoteControlStatus::disabled(),
+            claude_remote_control_monitor_pid: None,
             mcp_config_dirty: false,
             session_plan_mode: false,
             session_allowed_tools: Vec::new(),
@@ -1265,6 +1269,8 @@ pub async fn send_chat_message(
         let to_deny_mcp = drain_pending_permissions(session);
         let stale_pid = session.persistent_session.as_ref().map(|ps| ps.pid());
         session.persistent_session = None;
+        session.claude_remote_control = crate::state::ClaudeRemoteControlStatus::disabled();
+        session.claude_remote_control_monitor_pid = None;
         // Tear down the agent-MCP bridge alongside the persistent session.
         // Drop runs the listener cancellation + socket file unlink.
         session.mcp_bridge = None;
@@ -1444,6 +1450,8 @@ pub async fn send_chat_message(
         let to_deny_drift = drain_pending_permissions(session);
         let stale_pid = session.persistent_session.as_ref().map(|ps| ps.pid());
         session.persistent_session = None;
+        session.claude_remote_control = crate::state::ClaudeRemoteControlStatus::disabled();
+        session.claude_remote_control_monitor_pid = None;
         session.mcp_bridge = None;
         // Clear active_pid alongside persistent_session. A concurrent turn
         // streaming this process at drift time would leave active_pid set;
@@ -1545,6 +1553,8 @@ pub async fn send_chat_message(
         let to_deny_env = drain_pending_permissions(session);
         let stale_pid = session.persistent_session.as_ref().map(|ps| ps.pid());
         session.persistent_session = None;
+        session.claude_remote_control = crate::state::ClaudeRemoteControlStatus::disabled();
+        session.claude_remote_control_monitor_pid = None;
         session.mcp_bridge = None;
         session.active_pid = None;
         session.session_exited_plan = false;
@@ -1654,6 +1664,8 @@ pub async fn send_chat_message(
                 // avoid blocking other workspaces during process startup.
                 eprintln!("[chat] Persistent session failed, respawning: {e}");
                 session.persistent_session = None;
+                session.claude_remote_control = crate::state::ClaudeRemoteControlStatus::disabled();
+                session.claude_remote_control_monitor_pid = None;
                 session.mcp_bridge = None;
                 drop(agents);
 
@@ -2606,6 +2618,9 @@ pub async fn send_chat_message(
                     // gets a fresh socket + token rather than reusing a bridge
                     // whose grandchild is gone.
                     session.persistent_session = None;
+                    session.claude_remote_control =
+                        crate::state::ClaudeRemoteControlStatus::disabled();
+                    session.claude_remote_control_monitor_pid = None;
                     session.mcp_bridge = None;
                     ended_own_session = true;
                 }

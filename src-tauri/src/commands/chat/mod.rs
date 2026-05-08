@@ -3,6 +3,7 @@ pub mod checkpoint;
 pub mod interaction;
 pub mod lifecycle;
 mod naming;
+pub mod remote_control;
 pub mod send;
 pub mod session;
 

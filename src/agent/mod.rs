@@ -16,9 +16,9 @@ pub use naming::{generate_branch_name, generate_session_name, sanitize_branch_na
 pub use process::{AgentEvent, TurnHandle, run_turn, stop_agent, stop_agent_graceful};
 pub use session::PersistentSession;
 pub use types::{
-    AssistantMessage, CompactMetadata, ContentBlock, ControlRequestInner, Delta, FileAttachment,
-    InnerStreamEvent, StartContentBlock, StreamEvent, TokenUsage, TokenUsageIteration,
-    UserContentBlock, UserEventMessage, UserMessageContent, parse_stream_line,
+    AssistantMessage, CompactMetadata, ContentBlock, ControlRequestInner, ControlResponsePayload,
+    Delta, FileAttachment, InnerStreamEvent, StartContentBlock, StreamEvent, TokenUsage,
+    TokenUsageIteration, UserContentBlock, UserEventMessage, UserMessageContent, parse_stream_line,
 };
 
 /// Per-turn settings that control CLI flags for the agent subprocess.

@@ -63,6 +63,7 @@ pub struct TaskUsage {
 
 /// Top-level JSON line from Claude CLI stdout.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)]
 #[serde(tag = "type")]
 // Variants are constructed one at a time from streaming JSON; we never
 // hold them in collections, so the size delta between variants doesn't
@@ -75,6 +76,14 @@ pub enum StreamEvent {
         subtype: String,
         #[serde(default)]
         session_id: Option<String>,
+        /// Present on `subtype: "bridge_state"` events emitted by Claude Code
+        /// Remote Control.
+        #[serde(default)]
+        state: Option<String>,
+        /// Optional detail text on `bridge_state` and related lifecycle
+        /// events.
+        #[serde(default)]
+        detail: Option<String>,
         /// Present on `subtype: "task_notification"` events emitted when a
         /// background task completes or fails.
         #[serde(default)]
@@ -159,6 +168,12 @@ pub enum StreamEvent {
         request: ControlRequestInner,
     },
 
+    /// Response to a host-originated `control_request` sent to the Claude CLI
+    /// over stream-json stdin. Remote Control enable/disable returns its
+    /// session URLs here.
+    #[serde(rename = "control_response")]
+    ControlResponse { response: ControlResponsePayload },
+
     #[serde(other)]
     Unknown,
 }
@@ -171,6 +186,8 @@ impl StreamEvent {
         Self::System {
             subtype: "command_line".to_string(),
             session_id: None,
+            state: None,
+            detail: None,
             task_id: None,
             tool_use_id: None,
             output_file: None,
@@ -184,6 +201,18 @@ impl StreamEvent {
             command_line: Some(line),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ControlResponsePayload {
+    pub subtype: String,
+    pub request_id: String,
+    #[serde(default)]
+    pub response: Option<serde_json::Value>,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
 }
 
 /// Inner payload of a `control_request`. We only care about `can_use_tool` for
@@ -768,6 +797,61 @@ mod tests {
                 assert!(matches!(request, ControlRequestInner::Unknown));
             }
             other => panic!("expected ControlRequest, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_control_response_success() {
+        let line = r#"{"type":"control_response","response":{"subtype":"success","request_id":"req-3","response":{"session_url":"https://claude.ai/session/abc","connect_url":"https://claude.ai/connect/abc","environment_id":"env_123"}}}"#;
+        let ev = parse_stream_line(line).expect("parse");
+        match ev {
+            StreamEvent::ControlResponse { response } => {
+                assert_eq!(response.subtype, "success");
+                assert_eq!(response.request_id, "req-3");
+                assert_eq!(
+                    response
+                        .response
+                        .as_ref()
+                        .and_then(|v| v.get("environment_id"))
+                        .and_then(serde_json::Value::as_str),
+                    Some("env_123")
+                );
+            }
+            other => panic!("expected ControlResponse, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_control_response_error() {
+        let line = r#"{"type":"control_response","response":{"subtype":"error","request_id":"req-4","error":"Run claude auth login"}}"#;
+        let ev = parse_stream_line(line).expect("parse");
+        match ev {
+            StreamEvent::ControlResponse { response } => {
+                assert_eq!(response.subtype, "error");
+                assert_eq!(response.request_id, "req-4");
+                assert_eq!(response.error.as_deref(), Some("Run claude auth login"));
+            }
+            other => panic!("expected ControlResponse, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_bridge_state_system_event() {
+        let line =
+            r#"{"type":"system","subtype":"bridge_state","state":"connected","detail":"ready"}"#;
+        let ev = parse_stream_line(line).expect("parse");
+        match ev {
+            StreamEvent::System {
+                subtype,
+                state,
+                detail,
+                ..
+            } => {
+                assert_eq!(subtype, "bridge_state");
+                assert_eq!(state.as_deref(), Some("connected"));
+                assert_eq!(detail.as_deref(), Some("ready"));
+            }
+            other => panic!("expected System, got {other:?}"),
         }
     }
 }

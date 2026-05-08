@@ -51,7 +51,7 @@
   position: absolute;
   bottom: calc(100% + 8px);
   left: 0;
-  width: 220px;
+  width: min(300px, calc(100vw - 28px));
   background: var(--sidebar-bg);
   border: 1px solid var(--sidebar-border);
   border-radius: var(--radius-lg);
@@ -64,7 +64,7 @@
 .item {
   width: 100%;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   padding: 8px 10px;
   background: transparent;
@@ -91,21 +91,87 @@
   background: var(--selected-bg);
 }
 
+.itemError .itemIcon,
+.itemError .itemMeta {
+  color: var(--diff-removed-text);
+}
+
 .itemIcon {
   display: flex;
+  align-items: center;
   width: 16px;
+  min-height: 18px;
   justify-content: center;
   flex-shrink: 0;
 }
 
+.itemText {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
 .itemLabel {
   flex: 1;
+  min-width: 0;
+  line-height: 1.2;
+  color: currentColor;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.itemDetail {
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .itemMeta {
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   color: var(--text-dim);
+  line-height: 1.4;
+  flex-shrink: 0;
+}
+
+.remoteGroup {
+  position: relative;
+}
+
+.remoteActions {
+  display: flex;
+  gap: 4px;
+  padding: 0 8px 6px 36px;
+}
+
+.actionButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 24px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--hover-bg);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.actionButton:hover {
+  color: var(--text-primary);
+  background: var(--selected-bg);
+}
+
+.spin {
+  animation: spin 900ms linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 @keyframes fadeUp {

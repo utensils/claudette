@@ -1,17 +1,36 @@
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Zap, Globe } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { Copy, ExternalLink, Globe, LoaderCircle, Radio, Zap } from "lucide-react";
 import { useAppStore } from "../../../stores/useAppStore";
-import { resetAgentSession, setAppSetting } from "../../../services/tauri";
+import {
+  getClaudeRemoteControlStatus,
+  openUrl,
+  resetAgentSession,
+  setAppSetting,
+  setClaudeRemoteControl,
+  type ClaudeRemoteControlStatus,
+} from "../../../services/tauri";
 import { isFastSupported } from "../modelCapabilities";
 import styles from "./OverflowMenu.module.css";
 
 interface OverflowMenuProps {
   sessionId: string;
   disabled: boolean;
+  isRemote: boolean;
 }
 
-export function OverflowMenu({ sessionId, disabled }: OverflowMenuProps) {
+const DISABLED_REMOTE_STATUS: ClaudeRemoteControlStatus = {
+  state: "disabled",
+  sessionUrl: null,
+  connectUrl: null,
+  environmentId: null,
+  detail: null,
+  lastError: null,
+};
+
+export function OverflowMenu({ sessionId, disabled, isRemote }: OverflowMenuProps) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -24,7 +43,45 @@ export function OverflowMenu({ sessionId, disabled }: OverflowMenuProps) {
   const clearPlanApproval = useAppStore((s) => s.clearPlanApproval);
 
   const showFast = isFastSupported(selectedModel);
-  const anyActive = fastMode || chromeEnabled;
+  const [remoteControlStatus, setRemoteControlStatus] =
+    useState<ClaudeRemoteControlStatus>(DISABLED_REMOTE_STATUS);
+  const remoteControlActive = remoteControlStatus.state !== "disabled";
+  const anyActive = fastMode || chromeEnabled || remoteControlActive;
+
+  useEffect(() => {
+    if (isRemote) {
+      setRemoteControlStatus(DISABLED_REMOTE_STATUS);
+      return;
+    }
+    let cancelled = false;
+    void getClaudeRemoteControlStatus(sessionId)
+      .then((status) => {
+        if (!cancelled) setRemoteControlStatus(status);
+      })
+      .catch(() => {
+        if (!cancelled) setRemoteControlStatus(DISABLED_REMOTE_STATUS);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, isRemote]);
+
+  useEffect(() => {
+    if (isRemote) return;
+    let active = true;
+    const unlisten = listen<{
+      workspaceId: string;
+      chatSessionId: string;
+      status: ClaudeRemoteControlStatus;
+    }>("claude-remote-control-status", (event) => {
+      if (!active || event.payload.chatSessionId !== sessionId) return;
+      setRemoteControlStatus(event.payload.status);
+    });
+    return () => {
+      active = false;
+      unlisten.then((fn) => fn());
+    };
+  }, [sessionId, isRemote]);
 
   useEffect(() => {
     if (!open) return;
@@ -98,10 +155,142 @@ export function OverflowMenu({ sessionId, disabled }: OverflowMenuProps) {
             meta={chromeEnabled ? "on" : "off"}
             onClick={toggleChrome}
           />
+          {!isRemote && (
+            <RemoteControlMenuItem
+              sessionId={sessionId}
+              disabled={disabled}
+              status={remoteControlStatus}
+              onStatus={setRemoteControlStatus}
+            />
+          )}
         </div>
       )}
     </div>
   );
+}
+
+function RemoteControlMenuItem({
+  sessionId,
+  disabled,
+  status,
+  onStatus,
+}: {
+  sessionId: string;
+  disabled: boolean;
+  status: ClaudeRemoteControlStatus;
+  onStatus: (status: ClaudeRemoteControlStatus) => void;
+}) {
+  const url = status.connectUrl ?? status.sessionUrl;
+  const busy = status.state === "enabling";
+  const active = status.state !== "disabled" && status.state !== "error";
+  const meta = remoteControlMeta(status);
+  const detail = status.lastError ?? status.detail;
+  const displayDetail = remoteControlDisplayDetail(detail);
+
+  const toggle = useCallback(async () => {
+    if (busy) return;
+    const nextEnabled = !active;
+    if (nextEnabled) {
+      onStatus({ ...status, state: "enabling", lastError: null });
+    }
+    try {
+      const next = await setClaudeRemoteControl(sessionId, nextEnabled);
+      onStatus(next);
+    } catch (err) {
+      onStatus({
+        state: "error",
+        sessionUrl: null,
+        connectUrl: null,
+        environmentId: null,
+        detail: null,
+        lastError: formatRemoteControlError(err),
+      });
+    }
+  }, [active, busy, onStatus, sessionId, status]);
+
+  return (
+    <div className={styles.remoteGroup}>
+      <button
+        type="button"
+        className={`${styles.item} ${active ? styles.itemActive : ""} ${status.state === "error" ? styles.itemError : ""}`}
+        onClick={toggle}
+        disabled={disabled || busy}
+        title={detail ?? "Claude Remote Control"}
+      >
+        <span className={styles.itemIcon}>
+          {busy ? <LoaderCircle size={14} className={styles.spin} /> : <Radio size={14} />}
+        </span>
+        <span className={styles.itemText}>
+          <span className={styles.itemLabel}>Claude Remote Control</span>
+          {displayDetail && <span className={styles.itemDetail}>{displayDetail}</span>}
+        </span>
+        <span className={styles.itemMeta}>{meta}</span>
+      </button>
+      {url && active && (
+        <div className={styles.remoteActions}>
+          <button
+            type="button"
+            className={styles.actionButton}
+            onClick={() => void openUrl(url).catch(() => {})}
+            title="Open Remote Control"
+          >
+            <ExternalLink size={13} />
+          </button>
+          <button
+            type="button"
+            className={styles.actionButton}
+            onClick={() => void writeText(url).catch(() => {})}
+            title="Copy Remote Control link"
+          >
+            <Copy size={13} />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function remoteControlDisplayDetail(detail: string | null): string | null {
+  if (!detail) return null;
+  if (detail === "Session creation failed — see debug log") {
+    return "Session creation failed. Refresh Claude login, then retry.";
+  }
+  return detail;
+}
+
+function formatRemoteControlError(err: unknown): string {
+  if (err instanceof Error && err.message.trim()) return err.message;
+  if (typeof err === "string" && err.trim()) return err;
+  if (err && typeof err === "object") {
+    const record = err as Record<string, unknown>;
+    for (const key of ["message", "error", "detail"]) {
+      const value = record[key];
+      if (typeof value === "string" && value.trim()) return value;
+    }
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return String(err);
+    }
+  }
+  return String(err || "Claude Remote Control failed");
+}
+
+function remoteControlMeta(status: ClaudeRemoteControlStatus): string {
+  switch (status.state) {
+    case "disabled":
+      return "off";
+    case "enabling":
+      return "starting";
+    case "ready":
+      return "ready";
+    case "connected":
+      return "live";
+    case "reconnecting":
+      return "retrying";
+    case "error":
+      return "error";
+  }
 }
 
 function MenuItem({
